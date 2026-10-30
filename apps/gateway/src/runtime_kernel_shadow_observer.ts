@@ -35,6 +35,7 @@ type ShadowRuleId =
   | "out_of_scope_below"
   | "aggregate_assert"
   | "default_suspend";
+type ShadowPolicyRuleId = Exclude<ShadowRuleId, "human_resume_transition" | "memory_approval_transition">;
 
 export type RuntimeKernelShadowObserverEvent =
   | { kind: "ready" }
@@ -45,8 +46,11 @@ export type RuntimeKernelShadowObserverEvent =
     comparison_kind: "decision" | "resume" | "memory_approval";
     comparison_status: "matched" | "mismatched";
     policy_decision_matches: boolean;
+    policy_rule_matches: boolean;
     lifecycle_matches: boolean;
     typescript_decision: ShadowDecision;
+    typescript_policy_rule_id: ShadowPolicyRuleId;
+    typescript_policy_rule_axis?: string;
     runtime_kernel_j_decision: ShadowDecision;
     rule_id: ShadowRuleId;
     rule_axis?: string;
@@ -255,12 +259,13 @@ export async function startRuntimeKernelShadowObserver(options: {
           ? "matched"
           : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
         const expectedComparisonStatus = receipt.policy_decision_matches === true &&
-          receipt.lifecycle_matches === true ? "matched" : "mismatched";
+          receipt.policy_rule_matches === true && receipt.lifecycle_matches === true ? "matched" : "mismatched";
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
             receipt.comparison_status !== comparisonStatus ||
             comparisonStatus !== expectedComparisonStatus ||
             receipt.comparison_kind !== comparisonKind ||
             typeof receipt.policy_decision_matches !== "boolean" ||
+            typeof receipt.policy_rule_matches !== "boolean" ||
             typeof receipt.lifecycle_matches !== "boolean" ||
             receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
             receipt.contract_version !== REQUEST_CONTRACT_VERSION ||
@@ -268,6 +273,9 @@ export async function startRuntimeKernelShadowObserver(options: {
             receipt.memory_revision !== 0 || receipt.effect_started !== false || receipt.m_written !== false ||
             receipt.used_for_authority !== false || receipt.may_execute !== false ||
             receipt.typescript_decision !== typescriptDecision ||
+            receipt.typescript_policy_rule_id !== projection.typescript_policy_rule_id ||
+            receipt.typescript_policy_rule_axis !== projection.typescript_policy_rule_axis ||
+            !isShadowPolicyRuleId(receipt.typescript_policy_rule_id) ||
             !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
             (projection.memory_transition
               ? receipt.memory_transition_kind !== projection.memory_transition.kind ||
@@ -288,8 +296,12 @@ export async function startRuntimeKernelShadowObserver(options: {
           comparison_kind: comparisonKind,
           comparison_status: comparisonStatus,
           policy_decision_matches: receipt.policy_decision_matches,
+          policy_rule_matches: receipt.policy_rule_matches,
           lifecycle_matches: receipt.lifecycle_matches,
           typescript_decision: typescriptDecision,
+          typescript_policy_rule_id: receipt.typescript_policy_rule_id as ShadowPolicyRuleId,
+          ...(typeof receipt.typescript_policy_rule_axis === "string"
+            ? { typescript_policy_rule_axis: receipt.typescript_policy_rule_axis } : {}),
           runtime_kernel_j_decision: receipt.runtime_kernel_j_decision,
           rule_id: receipt.rule_id,
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
@@ -439,6 +451,12 @@ function isShadowRuleId(value: unknown): value is ShadowRuleId {
     value === "detector_lifecycle" || value === "per_axis_fail" ||
     value === "per_axis_suspend_below" ||
     value === "out_of_scope_below" || value === "aggregate_assert" || value === "default_suspend";
+}
+
+function isShadowPolicyRuleId(value: unknown): value is ShadowPolicyRuleId {
+  return value === "detector_lifecycle" || value === "per_axis_fail" ||
+    value === "per_axis_suspend_below" || value === "out_of_scope_below" ||
+    value === "aggregate_assert" || value === "default_suspend";
 }
 
 function isShadowAxis(value: unknown): value is string {

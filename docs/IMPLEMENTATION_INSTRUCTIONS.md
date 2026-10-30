@@ -36,7 +36,9 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 - **この単位で未接続:** J/Mの全体意味比較、Rust shadowのsingle-writer cutover。C08.03実provider・OD-03 live外部作用・他repo書込み・P13公開／出荷GOも保留する。
 - **必要最小確認:** HDS／Gateway typecheck・build、Rust compile／test、Rust実processを通す合成4分岐とSUSPEND→resume、IPC拒否・無作用停止。全workspace suite・QE_QC／QE_QA・実provider・実外部作用・5OS実機の成功へ転記しない。
 
-今回の変更で、L3意味採用・引用判断再評価の成功commitを、本文／識別子／digestを含まないv4 projectionとしてRust実processへ接続した。Rust側は上限付き集計と意味残差を独立比較し、比較不一致もauthorityやMへ戻さない。限定確認はHDS typecheck／build・controller／IPC 81件、Gateway typecheck／build・shadow observer／実Gateway L3 memory smoke 3件、Rust cargo test 2件、cargo fmt check、`pnpm docs:check`がPASS。全workspace suite、QE_QC／QE_QA、実provider、実外部作用、5OS実機の結果ではない。K-B5はJ/Mの全体意味比較とsingle-writer cutoverが未成立のため継続する。目的version bindingは投影とIPC間の一致を確認した段階で、目的に沿ったJ採否全体の比較成立とは扱わない。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
+前段では、L3意味採用・引用判断再評価の成功commitを、本文／識別子／digestを含まないv4 projectionとしてRust実processへ接続した。今回、その有限projectionをv5へ更新し、TypeScript側が採用したpolicy rule IDと対象axisを追加した。Rustは同じ数値入力から算出したrule ID／axisと直接比較し、採否が一致してもrule provenanceが異なる場合は`mismatched`を返す。理由文・threshold値・検出証拠・目的本文等は追加送信せず、Rustは引き続き`hold`のみを返して作用・M正本更新を行わない。Gatewayの非権威receipt／logにも比較結果を接続した。
+
+この変更の限定確認は、HDS typecheck／build、controller／IPC 81件、Gateway typecheck／build・shadow observer 2件、Rust cargo test 2件、cargo fmt check、`pnpm docs:check`がPASS。全workspace suite、QE_QC／QE_QA、実provider、実外部作用、5OS実機の結果ではない。K-B5はJ/Mの全体意味比較とsingle-writer cutoverが未成立のため継続する。目的version bindingは投影とIPC間の一致を確認した段階で、目的に沿ったJ採否全体の比較成立とは扱わない。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
 
 ## Gitと復旧
 

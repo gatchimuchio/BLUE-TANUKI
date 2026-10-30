@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v4";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v4";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v5";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -37,11 +37,14 @@ struct Response {
 struct JProjectionComparison {
     comparison_kind: &'static str,
     typescript_decision: String,
+    typescript_policy_rule_id: String,
+    typescript_policy_rule_axis: Option<String>,
     runtime_kernel_j_decision: &'static str,
     rule_id: &'static str,
     rule_axis: Option<String>,
     matches: bool,
     policy_decision_matches: bool,
+    policy_rule_matches: bool,
     lifecycle_matches: bool,
     memory_transition_kind: Option<&'static str>,
     memory_transition_matches: Option<bool>,
@@ -461,10 +464,13 @@ fn decision_payload(
         "comparison_status": comparison.map(|result| if result.matches { "matched" } else { "mismatched" }),
         "comparison_kind": comparison.map(|result| result.comparison_kind),
         "typescript_decision": comparison.map(|result| result.typescript_decision.as_str()),
+        "typescript_policy_rule_id": comparison.map(|result| result.typescript_policy_rule_id.as_str()),
+        "typescript_policy_rule_axis": comparison.and_then(|result| result.typescript_policy_rule_axis.as_deref()),
         "runtime_kernel_j_decision": comparison.map(|result| result.runtime_kernel_j_decision),
         "rule_id": comparison.map(|result| result.rule_id),
         "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
         "policy_decision_matches": comparison.map(|result| result.policy_decision_matches),
+        "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
         "memory_transition_matches": comparison.and_then(|result| result.memory_transition_matches),
@@ -491,9 +497,9 @@ fn evaluate_runtime_kernel_j_projection(
     if has_resume_transition && has_memory_transition
         || object.len()
             != if has_resume_transition || has_memory_transition {
-                6
+                8
             } else {
-                5
+                7
             }
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
@@ -528,6 +534,20 @@ fn evaluate_runtime_kernel_j_projection(
         .filter(|value| is_shadow_decision(value))
         .ok_or("projection_decision_rejected")?
         .to_owned();
+    let typescript_policy_rule_id = string_value(object.get("typescript_policy_rule_id"))
+        .filter(|value| is_shadow_policy_rule_id(value))
+        .ok_or("projection_policy_rule_rejected")?
+        .to_owned();
+    let typescript_policy_rule_axis = match object.get("typescript_policy_rule_axis") {
+        Some(Value::Null) => None,
+        Some(Value::String(axis)) if valid_axis_identifier(axis) => Some(axis.clone()),
+        _ => return Err("projection_policy_rule_axis_rejected"),
+    };
+    if requires_policy_rule_axis(&typescript_policy_rule_id)
+        != typescript_policy_rule_axis.is_some()
+    {
+        return Err("projection_policy_rule_axis_rejected");
+    }
 
     let axes = object
         .get("axes")
@@ -609,17 +629,22 @@ fn evaluate_runtime_kernel_j_projection(
     };
 
     let policy_decision_matches = policy_typescript_decision == runtime_kernel_j_decision;
+    let policy_rule_matches =
+        typescript_policy_rule_id == rule_id && typescript_policy_rule_axis == rule_axis;
     if let Some(memory_value) = object.get("memory_transition") {
         let memory = compare_memory_transition(memory_value)?;
         let lifecycle_matches = memory.matches && memory.residual_status_matches;
         return Ok(JProjectionComparison {
             comparison_kind: "memory_approval",
             typescript_decision: policy_typescript_decision,
+            typescript_policy_rule_id,
+            typescript_policy_rule_axis,
             runtime_kernel_j_decision,
             rule_id: "memory_approval_transition",
             rule_axis: None,
-            matches: policy_decision_matches && lifecycle_matches,
+            matches: policy_decision_matches && policy_rule_matches && lifecycle_matches,
             policy_decision_matches,
+            policy_rule_matches,
             lifecycle_matches,
             memory_transition_kind: Some(memory.kind),
             memory_transition_matches: Some(memory.matches),
@@ -631,11 +656,14 @@ fn evaluate_runtime_kernel_j_projection(
         return Ok(JProjectionComparison {
             comparison_kind: "decision",
             typescript_decision: policy_typescript_decision,
+            typescript_policy_rule_id,
+            typescript_policy_rule_axis,
             runtime_kernel_j_decision,
             rule_id,
             rule_axis,
-            matches: policy_decision_matches,
+            matches: policy_decision_matches && policy_rule_matches,
             policy_decision_matches,
+            policy_rule_matches,
             lifecycle_matches: true,
             memory_transition_kind: None,
             memory_transition_matches: None,
@@ -680,11 +708,14 @@ fn evaluate_runtime_kernel_j_projection(
     Ok(JProjectionComparison {
         comparison_kind: "resume",
         typescript_decision: typescript_resume_decision,
+        typescript_policy_rule_id,
+        typescript_policy_rule_axis,
         runtime_kernel_j_decision,
         rule_id: "human_resume_transition",
         rule_axis: None,
-        matches: policy_decision_matches && lifecycle_matches,
+        matches: policy_decision_matches && policy_rule_matches && lifecycle_matches,
         policy_decision_matches,
+        policy_rule_matches,
         lifecycle_matches,
         memory_transition_kind: None,
         memory_transition_matches: None,
@@ -880,6 +911,25 @@ fn valid_axis_identifier(value: &str) -> bool {
 
 fn is_shadow_decision(value: &str) -> bool {
     matches!(value, "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL")
+}
+
+fn is_shadow_policy_rule_id(value: &str) -> bool {
+    matches!(
+        value,
+        "detector_lifecycle"
+            | "per_axis_fail"
+            | "per_axis_suspend_below"
+            | "out_of_scope_below"
+            | "aggregate_assert"
+            | "default_suspend"
+    )
+}
+
+fn requires_policy_rule_axis(value: &str) -> bool {
+    matches!(
+        value,
+        "detector_lifecycle" | "per_axis_fail" | "per_axis_suspend_below"
+    )
 }
 
 fn rejected_response(reason: &str, revision: i64, extra: Value) -> Response {

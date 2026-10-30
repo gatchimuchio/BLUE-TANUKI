@@ -89,13 +89,13 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     }
     const firstProjectionResult = results[0]!.runtime_kernel_j_projection;
     if (firstProjectionResult.status !== "comparable") throw new Error("synthetic J projection unavailable");
-    const mismatchedDecision = firstProjectionResult.projection.typescript_decision === "ASSERT" ? "FAIL" : "ASSERT";
     const mismatchedProjection = {
       status: "comparable" as const,
       projection: {
         ...firstProjectionResult.projection,
         purpose_binding: { goal_id_digest: "a".repeat(64), purpose_version: 3, purpose_digest: "b".repeat(64) },
-        typescript_decision: mismatchedDecision,
+        typescript_policy_rule_id: "per_axis_fail" as const,
+        typescript_policy_rule_axis: "risk_safety",
       },
     };
     const meaningAdoptionProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
@@ -153,8 +153,12 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         comparison_kind: "decision" as const,
         comparison_status: "matched" as const,
         policy_decision_matches: true,
+        policy_rule_matches: true,
         lifecycle_matches: true,
         typescript_decision: result.decision,
+        typescript_policy_rule_id: ["aggregate_assert", "per_axis_fail", "per_axis_suspend_below"][index]!,
+        ...(index === 1 ? { typescript_policy_rule_axis: "risk_safety" } : {}),
+        ...(index === 2 ? { typescript_policy_rule_axis: "compliance" } : {}),
         runtime_kernel_j_decision: result.decision,
         rule_id: ["aggregate_assert", "per_axis_fail", "per_axis_suspend_below"][index]!,
         ...(index === 1 ? { rule_axis: "risk_safety" } : {}),
@@ -166,8 +170,11 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         comparison_kind: "resume" as const,
         comparison_status: "matched" as const,
         policy_decision_matches: true,
+        policy_rule_matches: true,
         lifecycle_matches: true,
         typescript_decision: "ASSERT",
+        typescript_policy_rule_id: "per_axis_suspend_below",
+        typescript_policy_rule_axis: "compliance",
         runtime_kernel_j_decision: "ASSERT",
         rule_id: "human_resume_transition",
         command_present: true,
@@ -177,8 +184,10 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         comparison_kind: "decision" as const,
         comparison_status: "matched" as const,
         policy_decision_matches: true,
+        policy_rule_matches: true,
         lifecycle_matches: true,
         typescript_decision: results[3]!.decision,
+        typescript_policy_rule_id: "out_of_scope_below",
         runtime_kernel_j_decision: results[3]!.decision,
         rule_id: "out_of_scope_below",
         command_present: results[3]!.command_type !== undefined,
@@ -198,9 +207,12 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       shadow_revision: 6,
       comparison_kind: "decision",
       comparison_status: "mismatched",
-      policy_decision_matches: false,
+      policy_decision_matches: true,
+      policy_rule_matches: false,
       lifecycle_matches: true,
-      typescript_decision: mismatchedDecision,
+      typescript_decision: results[0]!.decision,
+      typescript_policy_rule_id: "per_axis_fail",
+      typescript_policy_rule_axis: "risk_safety",
       runtime_kernel_j_decision: results[0]!.decision,
       rule_id: "aggregate_assert",
       command_present: results[0]!.command_type !== undefined,

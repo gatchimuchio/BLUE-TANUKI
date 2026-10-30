@@ -6,6 +6,14 @@ const SCALE = 1_000_000;
 const MAX_AXES = 128;
 const AXIS_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 
+export type RuntimeKernelJPolicyRuleId =
+  | "detector_lifecycle"
+  | "per_axis_fail"
+  | "per_axis_suspend_below"
+  | "out_of_scope_below"
+  | "aggregate_assert"
+  | "default_suspend";
+
 export interface RuntimeKernelJAxisProjection {
   axis: string;
   score_micros: number;
@@ -73,8 +81,10 @@ export type RuntimeKernelJMemoryTransitionInput =
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v4";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v5";
   typescript_decision: Decision;
+  typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
+  typescript_policy_rule_axis: string | null;
   purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
   axes: RuntimeKernelJAxisProjection[];
   thresholds: {
@@ -93,6 +103,7 @@ export type RuntimeKernelJProjectionUnavailableReason =
   | "unsupported_policy_value"
   | "purpose_binding_invalid"
   | "resume_source_not_suspended"
+  | "policy_rule_unavailable"
   | "memory_transition_invalid"
   | "memory_transition_unavailable"
   | "precision_boundary"
@@ -160,6 +171,10 @@ export function projectRuntimeKernelJDecision(
   if (perAxisFail === undefined || perAxisSuspendBelow === undefined) {
     return { status: "not_comparable", reason: "unsupported_policy_value" };
   }
+  const typescriptPolicyRule = projectPolicyRule(scoring, typescript.triggered_thresholds);
+  if (typescriptPolicyRule === undefined) {
+    return { status: "not_comparable", reason: "policy_rule_unavailable" };
+  }
 
   const scoreByAxis = new Map(axes.map((axis) => [axis.axis, axis.score_micros]));
   if (axes.some((axis) => !axis.lifecycle_ok)) {
@@ -192,8 +207,10 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v4",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v5",
       typescript_decision: typescript.decision,
+      typescript_policy_rule_id: typescriptPolicyRule.id,
+      typescript_policy_rule_axis: typescriptPolicyRule.axis,
       purpose_binding: purposeBinding ? { ...purposeBinding } : null,
       axes,
       thresholds: {
@@ -289,6 +306,34 @@ export function projectRuntimeKernelJMemoryTransition(
     status: "comparable",
     projection: { ...base.projection, memory_transition: memoryTransition },
   };
+}
+
+function projectPolicyRule(
+  scoring: ScoringResult,
+  triggeredThresholds: string[],
+): { id: RuntimeKernelJPolicyRuleId; axis: string | null } | undefined {
+  const lifecycleIssue = scoring.axis_scores.find((score) => (score.lifecycle?.status ?? "ok") !== "ok");
+  if (lifecycleIssue) {
+    return AXIS_NAME_PATTERN.test(lifecycleIssue.axis)
+      ? { id: "detector_lifecycle", axis: lifecycleIssue.axis }
+      : undefined;
+  }
+
+  if (triggeredThresholds.length !== 1) return undefined;
+  const trigger = triggeredThresholds[0]!;
+  const axisRule = (prefix: string, id: "per_axis_fail" | "per_axis_suspend_below") => {
+    if (!trigger.startsWith(prefix)) return undefined;
+    const axis = trigger.slice(prefix.length).split(/<=|</, 1)[0];
+    return axis && AXIS_NAME_PATTERN.test(axis) ? { id, axis } : undefined;
+  };
+  const perAxisFail = axisRule("per_axis_fail:", "per_axis_fail");
+  if (perAxisFail) return perAxisFail;
+  const perAxisSuspend = axisRule("per_axis_suspend_below:", "per_axis_suspend_below");
+  if (perAxisSuspend) return perAxisSuspend;
+  if (trigger.startsWith("out_of_scope_below:")) return { id: "out_of_scope_below", axis: null };
+  if (trigger.startsWith("aggregate_assert:")) return { id: "aggregate_assert", axis: null };
+  if (trigger === "default_suspend") return { id: "default_suspend", axis: null };
+  return undefined;
 }
 
 function thresholdEntries(
