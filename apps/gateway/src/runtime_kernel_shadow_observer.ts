@@ -12,7 +12,7 @@ import type {
 } from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v2";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v3";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;
@@ -46,6 +46,7 @@ export type RuntimeKernelShadowObserverEvent =
     rule_id: ShadowRuleId;
     rule_axis?: string;
     command_present: boolean;
+    purpose_version: number | null;
   }
   | { kind: "comparison_unavailable"; reason: RuntimeKernelJProjectionUnavailableReason }
   | { kind: "dropped"; reason: "queue_full" }
@@ -187,6 +188,11 @@ export async function startRuntimeKernelShadowObserver(options: {
     queue = queue.then(async () => {
       if (failed) return;
       const nextSequence = sequence + 1;
+      const purposeBinding = projection.purpose_binding;
+      const goalId = purposeBinding
+        ? `goal-${purposeBinding.goal_id_digest}`
+        : "gateway-inbound-observation";
+      const goalVersion = purposeBinding?.purpose_version ?? 1;
       let inputText: string;
       try { inputText = JSON.stringify(projection); }
       catch { await fail(); return; }
@@ -205,8 +211,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           contract_version: REQUEST_CONTRACT_VERSION,
           source_id: "typescript-hds-brain",
           target_id: "blue-tanuki-runtime-kernel-shadow",
-          goal_id: "gateway-inbound-observation",
-          goal_version: 1,
+          goal_id: goalId,
+          goal_version: goalVersion,
           expected_revision: revision,
           input_text: inputText,
           content_digest: createHash("sha256").update(inputText, "utf8").digest("hex"),
@@ -224,6 +230,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
             receipt.comparison_status !== comparisonStatus ||
+            receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
+            receipt.contract_version !== REQUEST_CONTRACT_VERSION ||
             receipt.decision !== "hold" || receipt.shadow_revision !== revision + 1 ||
             receipt.memory_revision !== 0 || receipt.effect_started !== false || receipt.m_written !== false ||
             receipt.used_for_authority !== false || receipt.may_execute !== false ||
@@ -244,6 +252,7 @@ export async function startRuntimeKernelShadowObserver(options: {
           rule_id: receipt.rule_id,
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
           command_present: observation.command_present,
+          purpose_version: purposeBinding?.purpose_version ?? null,
         });
       } catch {
         await fail();

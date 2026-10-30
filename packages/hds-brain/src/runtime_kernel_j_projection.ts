@@ -18,10 +18,18 @@ export interface RuntimeKernelJThresholdProjection {
   threshold_micros: number;
 }
 
+/** 目的本文とgoal_refを含めない、shadow比較用の目的版束縛。 */
+export interface RuntimeKernelJPurposeBindingProjection {
+  goal_id_digest: string;
+  purpose_version: number;
+  purpose_digest: string;
+}
+
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v1";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v2";
   typescript_decision: Decision;
+  purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
   axes: RuntimeKernelJAxisProjection[];
   thresholds: {
     aggregate_assert_micros: number;
@@ -35,6 +43,7 @@ export type RuntimeKernelJProjectionUnavailableReason =
   | "controller_override"
   | "axis_shape_mismatch"
   | "unsupported_policy_value"
+  | "purpose_binding_invalid"
   | "precision_boundary"
   | "quantization_changes_decision"
   | "projection_error";
@@ -51,7 +60,14 @@ export type RuntimeKernelJProjectionResult =
 export function projectRuntimeKernelJDecision(
   log: DecisionLog,
   policy: PolicyConfig,
+  purposeBinding: RuntimeKernelJPurposeBindingProjection | null = null,
 ): RuntimeKernelJProjectionResult {
+  if (purposeBinding && (!/^[a-f0-9]{64}$/.test(purposeBinding.goal_id_digest) ||
+      !Number.isSafeInteger(purposeBinding.purpose_version) || purposeBinding.purpose_version < 1 ||
+      !/^[a-f0-9]{64}$/.test(purposeBinding.purpose_digest))) {
+    return { status: "not_comparable", reason: "purpose_binding_invalid" };
+  }
+
   const scoring = log.model.scoring;
   const typescript = evaluateDecision(scoring, policy);
   if (log.commit.decision !== typescript.decision || log.commit.reason !== typescript.reason ||
@@ -125,8 +141,9 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v1",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v2",
       typescript_decision: typescript.decision,
+      purpose_binding: purposeBinding ? { ...purposeBinding } : null,
       axes,
       thresholds: {
         aggregate_assert_micros: aggregateAssert,

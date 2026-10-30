@@ -10,7 +10,7 @@ import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v2";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v3";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -178,6 +178,77 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
     }
   }, 120_000);
 
+  it("Rust shadowは目的版とgoal identity digestの不一致を拒否し正本を更新しない", async () => {
+    const key = randomBytes(32);
+    const sessionId = randomUUID();
+    const hdsResult = runStandaloneHDSBrain({
+      id: "runtime-shadow-purpose-version-task",
+      channel: "webchat",
+      user: "synthetic-owner",
+      content: "synthetic purpose-bound task",
+    });
+    expect(hdsResult.runtime_kernel_j_projection.status).toBe("comparable");
+    if (hdsResult.runtime_kernel_j_projection.status !== "comparable") throw new Error("synthetic J projection unavailable");
+    const goalIdDigest = "a".repeat(64);
+    const purposeDigest = "b".repeat(64);
+    const goalId = `goal-${goalIdDigest}`;
+    const projectionText = JSON.stringify({
+      ...hdsResult.runtime_kernel_j_projection.projection,
+      purpose_binding: { goal_id_digest: goalIdDigest, purpose_version: 7, purpose_digest: purposeDigest },
+    });
+    const process = startKernel(key, sessionId);
+    try {
+      await process.nextFrame();
+      await process.send(signFrame(makeDecisionRequest(sessionId, 1, 0, projectionText, goalId, 7), key));
+      const matched = verifyFrame(await process.nextFrame(), key);
+      expect(matched.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "shadow_projection_matched",
+        decision: "hold",
+        goal_id: goalId,
+        goal_version: 7,
+        shadow_revision: 1,
+        memory_revision: 0,
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      await process.send(signFrame(makeDecisionRequest(sessionId, 2, 1, projectionText, goalId, 8), key));
+      const mismatch = verifyFrame(await process.nextFrame(), key);
+      expect(mismatch.payload).toMatchObject({
+        accepted_for_shadow: false,
+        reason: "projection_goal_binding_mismatch",
+        decision: "hold",
+        goal_id: goalId,
+        goal_version: 8,
+        shadow_revision: 1,
+        effect_started: false,
+        m_written: false,
+        may_execute: false,
+      });
+
+      await process.send(signFrame({
+        protocol_version: IPC_VERSION,
+        direction: "parent_to_kernel",
+        session_id: sessionId,
+        sequence: 3,
+        message_kind: "shutdown",
+        payload: {},
+      }, key));
+      expect(verifyFrame(await process.nextFrame(), key).payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "safe_stop_acknowledged",
+        effect_started: false,
+        m_written: false,
+      });
+      expect(await process.exitCode()).toBe(0);
+    } finally {
+      await process.close();
+    }
+  }, 120_000);
+
   it("署名済みframeの改ざんを拒否してfail-closedで停止する", async () => {
     const key = randomBytes(32);
     const sessionId = randomUUID();
@@ -292,6 +363,8 @@ function makeDecisionRequest(
   sequence: number,
   expectedRevision: number,
   inputText: string,
+  goalId = "synthetic-goal",
+  goalVersion = 1,
 ): { protocol_version: string; direction: string; session_id: string; sequence: number; message_kind: string; payload: JsonObject } {
   return {
     protocol_version: IPC_VERSION,
@@ -303,8 +376,8 @@ function makeDecisionRequest(
       contract_version: REQUEST_CONTRACT_VERSION,
       source_id: "typescript-hds-brain",
       target_id: "blue-tanuki-runtime-kernel-shadow",
-      goal_id: "synthetic-goal",
-      goal_version: 1,
+      goal_id: goalId,
+      goal_version: goalVersion,
       expected_revision: expectedRevision,
       input_text: inputText,
       content_digest: createHash("sha256").update(inputText, "utf8").digest("hex"),

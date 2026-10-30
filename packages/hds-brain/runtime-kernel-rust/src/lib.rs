@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v2";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v1";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v3";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v2";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -271,7 +271,15 @@ fn process_message(
                         .and_then(|object| object.get("input_text"))
                         .and_then(Value::as_str)
                         .ok_or("validated_input_missing")?;
-                    match evaluate_runtime_kernel_j_projection(input_text) {
+                    let payload = message
+                        .payload
+                        .as_object()
+                        .ok_or("validated_payload_missing")?;
+                    let goal_id =
+                        string_value(payload.get("goal_id")).ok_or("validated_goal_id_missing")?;
+                    let goal_version = integer_value(payload.get("goal_version"))
+                        .ok_or("validated_goal_version_missing")?;
+                    match evaluate_runtime_kernel_j_projection(input_text, goal_id, goal_version) {
                         Ok(comparison) => {
                             let reason = if comparison.matches {
                                 "shadow_projection_matched"
@@ -451,14 +459,41 @@ fn decision_payload(
 
 fn evaluate_runtime_kernel_j_projection(
     input_text: &str,
+    request_goal_id: &str,
+    request_goal_version: i64,
 ) -> Result<JProjectionComparison, &'static str> {
     let projection: Value =
         serde_json::from_str(input_text).map_err(|_| "projection_json_rejected")?;
     let object = projection.as_object().ok_or("projection_shape_rejected")?;
-    if object.len() != 4
+    if object.len() != 5
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
         return Err("projection_schema_rejected");
+    }
+    let purpose_binding = object
+        .get("purpose_binding")
+        .ok_or("projection_purpose_binding_rejected")?;
+    match purpose_binding {
+        Value::Null => {}
+        Value::Object(binding) => {
+            if binding.len() != 3 {
+                return Err("projection_purpose_binding_rejected");
+            }
+            let goal_id_digest = string_value(binding.get("goal_id_digest"))
+                .filter(|value| is_lowercase_sha256(value))
+                .ok_or("projection_purpose_binding_rejected")?;
+            let purpose_version = integer_value(binding.get("purpose_version"))
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or("projection_purpose_binding_rejected")?;
+            string_value(binding.get("purpose_digest"))
+                .filter(|value| is_lowercase_sha256(value))
+                .ok_or("projection_purpose_binding_rejected")?;
+            let expected_goal_id = format!("goal-{goal_id_digest}");
+            if purpose_version != request_goal_version || request_goal_id != expected_goal_id {
+                return Err("projection_goal_binding_mismatch");
+            }
+        }
+        _ => return Err("projection_purpose_binding_rejected"),
     }
     let typescript_decision = string_value(object.get("typescript_decision"))
         .filter(|value| is_shadow_decision(value))
@@ -828,6 +863,13 @@ fn valid_identifier(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
     })
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

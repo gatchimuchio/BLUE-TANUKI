@@ -69,7 +69,11 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     const mismatchedDecision = firstProjectionResult.projection.typescript_decision === "ASSERT" ? "FAIL" : "ASSERT";
     const mismatchedProjection = {
       status: "comparable" as const,
-      projection: { ...firstProjectionResult.projection, typescript_decision: mismatchedDecision },
+      projection: {
+        ...firstProjectionResult.projection,
+        purpose_binding: { goal_id_digest: "a".repeat(64), purpose_version: 3, purpose_digest: "b".repeat(64) },
+        typescript_decision: mismatchedDecision,
+      },
     };
 
     try {
@@ -99,6 +103,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       ...(index === 1 ? { rule_axis: "risk_safety" } : {}),
       ...(index === 2 ? { rule_axis: "compliance" } : {}),
       command_present: result.command_type !== undefined,
+      purpose_version: null,
     })));
     expect(events[5]).toMatchObject({
       kind: "observation",
@@ -109,6 +114,8 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       runtime_kernel_j_decision: results[0]!.decision,
       rule_id: "aggregate_assert",
       command_present: results[0]!.command_type !== undefined,
+      purpose_version: 3,
     });
+    expect(JSON.stringify(events)).not.toContain("a".repeat(64));
   }, 120_000);
 });

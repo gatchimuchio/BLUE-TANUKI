@@ -573,6 +573,16 @@ describe("HDS goal governance consumer", () => {
       });
       const decision = controller.decide(compute);
       expect(decision.log.commit.decision, JSON.stringify(decision.log.commit)).toBe("ASSERT");
+      const shadowProjection = controller.runtimeKernelJProjection(decision.log);
+      expect(shadowProjection.status).toBe("comparable");
+      if (shadowProjection.status !== "comparable") throw new Error("purpose-bound J projection unavailable");
+      expect(shadowProjection.projection.purpose_binding).toEqual({
+        goal_id_digest: createHash("sha256").update(delegated, "utf8").digest("hex"),
+        purpose_version: 3,
+        purpose_digest: purposeDigest,
+      });
+      expect(JSON.stringify(shadowProjection.projection)).not.toContain(delegated);
+      expect(JSON.stringify(shadowProjection.projection)).not.toContain(purposeText);
       expect(decision.command?.type).toBe("llm_call");
       if (decision.command?.type !== "llm_call") throw new Error("plan computation did not produce a C request");
       expect(decision.command.payload.session_id).toBeUndefined();

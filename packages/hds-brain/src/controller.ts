@@ -126,7 +126,8 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
-import { projectRuntimeKernelJDecision, type RuntimeKernelJProjectionResult } from "./runtime_kernel_j_projection.js";
+import { projectRuntimeKernelJDecision, type RuntimeKernelJProjectionResult,
+  type RuntimeKernelJPurposeBindingProjection } from "./runtime_kernel_j_projection.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import {
@@ -863,6 +864,10 @@ export class HDSUpperController {
   /** Requests halted by SUSPEND, awaiting human verdict via resume(). */
   private readonly suspended = new Map<string, SuspendedRequest>();
 
+  /** 非永続のshadow projection文脈。purpose本文とgoal_refは保持しない。 */
+  private readonly runtimeKernelProjectionPurposeBindings =
+    new WeakMap<DecisionLog, RuntimeKernelJPurposeBindingProjection>();
+
   /** Cached original requests for suspended ones, so resume() can re-emit. */
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
@@ -927,10 +932,24 @@ export class HDSUpperController {
   /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
   runtimeKernelJProjection(log: DecisionLog): RuntimeKernelJProjectionResult {
     try {
-      return projectRuntimeKernelJDecision(log, this.policy);
+      return projectRuntimeKernelJDecision(log, this.policy,
+        this.runtimeKernelProjectionPurposeBindings.get(log) ?? null);
     } catch {
       return { status: "not_comparable", reason: "projection_error" };
     }
+  }
+
+  private retainRuntimeKernelProjectionPurposeBinding(
+    log: DecisionLog,
+    purpose: { readonly binding: OperationPlanGoalPurposeBinding } | undefined,
+  ): void {
+    const binding = purpose?.binding;
+    if (!binding) return;
+    this.runtimeKernelProjectionPurposeBindings.set(log, {
+      goal_id_digest: createHash("sha256").update(binding.goal_ref, "utf8").digest("hex"),
+      purpose_version: binding.purpose_version,
+      purpose_digest: binding.purpose_digest,
+    });
   }
 
   /**
@@ -1402,6 +1421,7 @@ ${planControl.question}`,
           session_history_suppressed_for: isolatedContextReason,
         } : transientAudioTranscript ? { memory_retrieval_suppressed_for: "transient_audio_transcription" as const } : {}),
       };
+      this.retainRuntimeKernelProjectionPurposeBinding(log, planComputePurpose);
       this.audit.append(log);
       this.state = "SUSPENDED";
       this.suspended.set(req.id, {
@@ -1532,6 +1552,7 @@ ${planControl.question}`,
         log = { ...log, commit: c }; command = null;
       }
     }
+    this.retainRuntimeKernelProjectionPurposeBinding(log, planComputePurpose);
     this.audit.append(log);
     if (!isolatedContextReason) this.captureMemoryReference(log);
 
