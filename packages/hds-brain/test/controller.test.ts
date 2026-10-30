@@ -836,6 +836,40 @@ describe("HDSUpperController.resume()", () => {
     expect(command).toBeNull();
   });
 
+  it("projects the original policy SUSPEND and owner resume without exposing request data", () => {
+    const policy = structuredClone(DEFAULT_POLICY);
+    policy.thresholds = {
+      ...policy.thresholds,
+      per_axis_suspend_below: { ...policy.thresholds.per_axis_suspend_below, input_validity: 2 },
+    };
+    const c = new HDSUpperController({ policy });
+    const content = "ordinary synthetic input";
+    const requestId = "r-resume-shadow-projection";
+    const { log: suspended } = c.decide(inbound(content, requestId));
+    expect(suspended.commit.decision).toBe("SUSPEND");
+
+    const { log, command, runtime_kernel_j_projection } = c.resume(requestId, "approve", {
+      actor: "synthetic-owner-identity",
+      token_kind: "resume",
+    });
+    expect(log.commit.decision).toBe("ASSERT");
+    expect(command).not.toBeNull();
+    expect(runtime_kernel_j_projection.status).toBe("comparable");
+    if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v3");
+    expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
+    expect(runtime_kernel_j_projection.projection.resume_transition).toEqual({
+      owner_verdict: "approve",
+      resume_allowed: true,
+      typescript_result_decision: "ASSERT",
+      command_present: true,
+    });
+    const encoded = JSON.stringify(runtime_kernel_j_projection.projection);
+    expect(encoded).not.toContain(content);
+    expect(encoded).not.toContain(requestId);
+    expect(encoded).not.toContain("synthetic-owner-identity");
+  });
+
   it("throws when resuming a non-suspended id", () => {
     const c = new HDSUpperController();
     expect(() => c.resume("nonexistent", "approve")).toThrow();

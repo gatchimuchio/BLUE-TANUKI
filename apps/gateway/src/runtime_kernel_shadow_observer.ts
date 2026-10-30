@@ -12,7 +12,7 @@ import type {
 } from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v3";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v4";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;
@@ -27,6 +27,7 @@ export interface RuntimeKernelShadowObservation {
 
 type ShadowDecision = "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL";
 type ShadowRuleId =
+  | "human_resume_transition"
   | "detector_lifecycle"
   | "per_axis_fail"
   | "per_axis_suspend_below"
@@ -40,7 +41,10 @@ export type RuntimeKernelShadowObserverEvent =
     kind: "observation";
     sequence: number;
     shadow_revision: number;
+    comparison_kind: "decision" | "resume";
     comparison_status: "matched" | "mismatched";
+    policy_decision_matches: boolean;
+    lifecycle_matches: boolean;
     typescript_decision: ShadowDecision;
     runtime_kernel_j_decision: ShadowDecision;
     rule_id: ShadowRuleId;
@@ -48,7 +52,10 @@ export type RuntimeKernelShadowObserverEvent =
     command_present: boolean;
     purpose_version: number | null;
   }
-  | { kind: "comparison_unavailable"; reason: RuntimeKernelJProjectionUnavailableReason }
+  | {
+    kind: "comparison_unavailable";
+    reason: RuntimeKernelJProjectionUnavailableReason | "resume_command_presence_mismatch";
+  }
   | { kind: "dropped"; reason: "queue_full" }
   | { kind: "disabled" | "stopped"; reason: "binary_missing" | "startup_failed" | "ipc_exchange_failed" | "production_environment" };
 
@@ -180,6 +187,14 @@ export async function startRuntimeKernelShadowObserver(options: {
       return;
     }
     const projection = observation.j_projection.projection;
+    if (projection.resume_transition &&
+        projection.resume_transition.command_present !== observation.command_present) {
+      emit({ kind: "comparison_unavailable", reason: "resume_command_presence_mismatch" });
+      return;
+    }
+    const comparisonKind = projection.resume_transition ? "resume" : "decision";
+    const typescriptDecision = projection.resume_transition?.typescript_result_decision ??
+      projection.typescript_decision;
     if (pending >= MAX_PENDING_OBSERVATIONS) {
       emit({ kind: "dropped", reason: "queue_full" });
       return;
@@ -228,14 +243,20 @@ export async function startRuntimeKernelShadowObserver(options: {
         const comparisonStatus = receipt.reason === "shadow_projection_matched"
           ? "matched"
           : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
+        const expectedComparisonStatus = receipt.policy_decision_matches === true &&
+          receipt.lifecycle_matches === true ? "matched" : "mismatched";
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
             receipt.comparison_status !== comparisonStatus ||
+            comparisonStatus !== expectedComparisonStatus ||
+            receipt.comparison_kind !== comparisonKind ||
+            typeof receipt.policy_decision_matches !== "boolean" ||
+            typeof receipt.lifecycle_matches !== "boolean" ||
             receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
             receipt.contract_version !== REQUEST_CONTRACT_VERSION ||
             receipt.decision !== "hold" || receipt.shadow_revision !== revision + 1 ||
             receipt.memory_revision !== 0 || receipt.effect_started !== false || receipt.m_written !== false ||
             receipt.used_for_authority !== false || receipt.may_execute !== false ||
-            receipt.typescript_decision !== projection.typescript_decision ||
+            receipt.typescript_decision !== typescriptDecision ||
             !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
             (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
           throw new Error("invalid_shadow_receipt");
@@ -246,8 +267,11 @@ export async function startRuntimeKernelShadowObserver(options: {
           kind: "observation",
           sequence,
           shadow_revision: revision,
+          comparison_kind: comparisonKind,
           comparison_status: comparisonStatus,
-          typescript_decision: projection.typescript_decision,
+          policy_decision_matches: receipt.policy_decision_matches,
+          lifecycle_matches: receipt.lifecycle_matches,
+          typescript_decision: typescriptDecision,
           runtime_kernel_j_decision: receipt.runtime_kernel_j_decision,
           rule_id: receipt.rule_id,
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
@@ -387,7 +411,8 @@ function isShadowDecision(value: unknown): value is ShadowDecision {
 }
 
 function isShadowRuleId(value: unknown): value is ShadowRuleId {
-  return value === "detector_lifecycle" || value === "per_axis_fail" || value === "per_axis_suspend_below" ||
+  return value === "human_resume_transition" || value === "detector_lifecycle" || value === "per_axis_fail" ||
+    value === "per_axis_suspend_below" ||
     value === "out_of_scope_below" || value === "aggregate_assert" || value === "default_suspend";
 }
 

@@ -3235,7 +3235,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ) => {
         const pending = await resumePendingApproval(request_id, verdict, ctx);
         if (pending) return pending;
-        const { log, command, request } = hds.resume(request_id, verdict, { actor: ctx.actor, token_kind: ctx.token_kind });
+        const { log, command, request, runtime_kernel_j_projection } = hds.resume(request_id, verdict,
+          { actor: ctx.actor, token_kind: ctx.token_kind });
+        runtimeKernelShadowObserver?.observe({
+          j_projection: runtime_kernel_j_projection,
+          command_present: command !== null,
+        });
         recordCompleteHistory({
           kind: "hds_decision",
           request_id: log.request_id,
@@ -5070,7 +5075,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         gatewayLog.info("Runtime Kernel shadow J comparison", {
           sequence: event.sequence,
           shadow_revision: event.shadow_revision,
+          comparison_kind: event.comparison_kind,
           comparison_status: event.comparison_status,
+          policy_decision_matches: event.policy_decision_matches,
+          lifecycle_matches: event.lifecycle_matches,
           typescript_decision: event.typescript_decision,
           runtime_kernel_j_decision: event.runtime_kernel_j_decision,
           rule_id: event.rule_id,

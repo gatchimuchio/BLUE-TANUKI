@@ -6,7 +6,7 @@ import {
   startRuntimeKernelShadowObserver,
   type RuntimeKernelShadowObserverEvent,
 } from "../src/runtime_kernel_shadow_observer.js";
-import { DEFAULT_POLICY, runStandaloneHDSBrain } from "@blue-tanuki/hds-brain";
+import { DEFAULT_POLICY, HDSUpperController, runStandaloneHDSBrain } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const manifestPath = join(repositoryRoot, "packages", "hds-brain", "runtime-kernel-rust", "Cargo.toml");
@@ -56,6 +56,24 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       content,
       policy,
     }));
+    const resumeController = new HDSUpperController();
+    const resumeRequestId = "runtime-shadow-resume-synthetic";
+    const suspended = resumeController.decide({
+      id: resumeRequestId,
+      channel: "webchat",
+      user: "synthetic-owner",
+      content: "credit card number",
+      timestamp: Date.now(),
+    });
+    expect(suspended.log.commit.decision).toBe("SUSPEND");
+    const resumed = resumeController.resume(resumeRequestId, "approve", {
+      actor: "synthetic-owner-identity",
+      token_kind: "resume",
+    });
+    expect(resumed.runtime_kernel_j_projection.status).toBe("comparable");
+    if (resumed.runtime_kernel_j_projection.status !== "comparable") {
+      throw new Error("synthetic resume projection unavailable");
+    }
     for (const [index, result] of results.entries()) {
       expect(result.decision).toBe(inputs[index]!.expected);
       expect(result.runtime_kernel_j_projection.status).toBe("comparable");
@@ -82,6 +100,12 @@ describe("Gateway Runtime Kernel shadow observer", () => {
           j_projection: result.runtime_kernel_j_projection,
           command_present: result.command_type !== undefined,
         });
+        if (result === results[2]) {
+          observer!.observe({
+            j_projection: resumed.runtime_kernel_j_projection,
+            command_present: resumed.command !== null,
+          });
+        }
       }
       observer!.observe({
         j_projection: mismatchedProjection,
@@ -92,24 +116,58 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     }
 
     expect(events[0]).toEqual({ kind: "ready" });
-    expect(events.slice(1, 5)).toEqual(results.map((result, index) => ({
+    const expectedSeries = [
+      ...results.slice(0, 3).map((result, index) => ({
+        comparison_kind: "decision" as const,
+        comparison_status: "matched" as const,
+        policy_decision_matches: true,
+        lifecycle_matches: true,
+        typescript_decision: result.decision,
+        runtime_kernel_j_decision: result.decision,
+        rule_id: ["aggregate_assert", "per_axis_fail", "per_axis_suspend_below"][index]!,
+        ...(index === 1 ? { rule_axis: "risk_safety" } : {}),
+        ...(index === 2 ? { rule_axis: "compliance" } : {}),
+        command_present: result.command_type !== undefined,
+        purpose_version: null,
+      })),
+      {
+        comparison_kind: "resume" as const,
+        comparison_status: "matched" as const,
+        policy_decision_matches: true,
+        lifecycle_matches: true,
+        typescript_decision: "ASSERT",
+        runtime_kernel_j_decision: "ASSERT",
+        rule_id: "human_resume_transition",
+        command_present: true,
+        purpose_version: null,
+      },
+      {
+        comparison_kind: "decision" as const,
+        comparison_status: "matched" as const,
+        policy_decision_matches: true,
+        lifecycle_matches: true,
+        typescript_decision: results[3]!.decision,
+        runtime_kernel_j_decision: results[3]!.decision,
+        rule_id: "out_of_scope_below",
+        command_present: results[3]!.command_type !== undefined,
+        purpose_version: null,
+      },
+    ];
+    expect(events.slice(1, 6)).toEqual(expectedSeries.map((expected, index) => ({
       kind: "observation",
       sequence: index + 1,
       shadow_revision: index + 1,
-      comparison_status: "matched",
-      typescript_decision: result.decision,
-      runtime_kernel_j_decision: result.decision,
-      rule_id: ["aggregate_assert", "per_axis_fail", "per_axis_suspend_below", "out_of_scope_below"][index],
-      ...(index === 1 ? { rule_axis: "risk_safety" } : {}),
-      ...(index === 2 ? { rule_axis: "compliance" } : {}),
-      command_present: result.command_type !== undefined,
-      purpose_version: null,
+      ...expected,
     })));
-    expect(events[5]).toMatchObject({
+    const mismatchedEvent = events[6];
+    expect(mismatchedEvent).toMatchObject({
       kind: "observation",
-      sequence: 5,
-      shadow_revision: 5,
+      sequence: 6,
+      shadow_revision: 6,
+      comparison_kind: "decision",
       comparison_status: "mismatched",
+      policy_decision_matches: false,
+      lifecycle_matches: true,
       typescript_decision: mismatchedDecision,
       runtime_kernel_j_decision: results[0]!.decision,
       rule_id: "aggregate_assert",

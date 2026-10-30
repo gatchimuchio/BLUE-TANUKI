@@ -7,10 +7,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
+import { HDSUpperController } from "../src/controller.js";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v3";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v4";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -39,7 +40,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
     });
   }, 600_000);
 
-  it("実プロセスで認証・canonical request/decision/receipt・拒否・安全停止を往復する", async () => {
+  it("実プロセスで認証・J比較・三種のowner復帰・拒否・安全停止を往復する", async () => {
     const key = randomBytes(32);
     const sessionId = randomUUID();
     const rawInput = "BLUE-TANUKI synthetic runtime shadow input sentinel";
@@ -153,11 +154,65 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         may_execute: false,
       });
 
+      const resumeCases = [
+        { verdict: "approve" as const, expected: "ASSERT", commandPresent: true },
+        { verdict: "reject" as const, expected: "FAIL", commandPresent: false },
+        { verdict: "block" as const, expected: "OUT_OF_SCOPE", commandPresent: false },
+      ];
+      for (const [index, resumeCase] of resumeCases.entries()) {
+        const controller = new HDSUpperController();
+        const requestId = `runtime-shadow-resume-${resumeCase.verdict}`;
+        const suspended = controller.decide({
+          id: requestId,
+          channel: "webchat",
+          user: "synthetic-owner",
+          content: "credit card number",
+          timestamp: Date.now(),
+        });
+        expect(suspended.log.commit.decision).toBe("SUSPEND");
+        const resumed = controller.resume(requestId, resumeCase.verdict, {
+          actor: "synthetic-owner-identity",
+          token_kind: "resume",
+        });
+        expect(resumed.runtime_kernel_j_projection.status).toBe("comparable");
+        if (resumed.runtime_kernel_j_projection.status !== "comparable") {
+          throw new Error("synthetic resume projection unavailable");
+        }
+        const resumeObservation = JSON.stringify(resumed.runtime_kernel_j_projection.projection);
+        expect(resumeObservation).not.toContain("credit card number");
+        expect(resumeObservation).not.toContain(requestId);
+        expect(resumeObservation).not.toContain("synthetic-owner-identity");
+
+        const sequence = 6 + index;
+        await process.send(signFrame(makeDecisionRequest(sessionId, sequence, 3 + index,
+          resumeObservation), key));
+        const resumeReceipt = verifyFrame(await process.nextFrame(), key);
+        expect(resumeReceipt.payload).toMatchObject({
+          accepted_for_shadow: true,
+          reason: "shadow_projection_matched",
+          decision: "hold",
+          comparison_kind: "resume",
+          comparison_status: "matched",
+          policy_decision_matches: true,
+          lifecycle_matches: true,
+          typescript_decision: resumeCase.expected,
+          runtime_kernel_j_decision: resumeCase.expected,
+          rule_id: "human_resume_transition",
+          shadow_revision: 4 + index,
+          memory_revision: 0,
+          effect_started: false,
+          m_written: false,
+          used_for_authority: false,
+          may_execute: false,
+        });
+        expect(resumed.command !== null).toBe(resumeCase.commandPresent);
+      }
+
       await process.send(signFrame({
         protocol_version: IPC_VERSION,
         direction: "parent_to_kernel",
         session_id: sessionId,
-        sequence: 6,
+        sequence: 9,
         message_kind: "shutdown",
         payload: {},
       }, key));

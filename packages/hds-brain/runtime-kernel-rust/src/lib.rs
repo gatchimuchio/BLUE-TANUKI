@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v3";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v2";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v4";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v3";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -35,11 +35,14 @@ struct Response {
 }
 
 struct JProjectionComparison {
+    comparison_kind: &'static str,
     typescript_decision: String,
     runtime_kernel_j_decision: &'static str,
     rule_id: &'static str,
     rule_axis: Option<String>,
     matches: bool,
+    policy_decision_matches: bool,
+    lifecycle_matches: bool,
 }
 
 pub fn run() -> Result<(), &'static str> {
@@ -445,10 +448,13 @@ fn decision_payload(
         "expected_revision": object.and_then(|value| value.get("expected_revision")).and_then(Value::as_i64),
         "shadow_revision": shadow_revision,
         "comparison_status": comparison.map(|result| if result.matches { "matched" } else { "mismatched" }),
+        "comparison_kind": comparison.map(|result| result.comparison_kind),
         "typescript_decision": comparison.map(|result| result.typescript_decision.as_str()),
         "runtime_kernel_j_decision": comparison.map(|result| result.runtime_kernel_j_decision),
         "rule_id": comparison.map(|result| result.rule_id),
         "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
+        "policy_decision_matches": comparison.map(|result| result.policy_decision_matches),
+        "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_revision": 0,
         "effect_started": false,
         "m_written": false,
@@ -465,7 +471,8 @@ fn evaluate_runtime_kernel_j_projection(
     let projection: Value =
         serde_json::from_str(input_text).map_err(|_| "projection_json_rejected")?;
     let object = projection.as_object().ok_or("projection_shape_rejected")?;
-    if object.len() != 5
+    let has_resume_transition = object.contains_key("resume_transition");
+    if object.len() != if has_resume_transition { 6 } else { 5 }
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
         return Err("projection_schema_rejected");
@@ -495,7 +502,7 @@ fn evaluate_runtime_kernel_j_projection(
         }
         _ => return Err("projection_purpose_binding_rejected"),
     }
-    let typescript_decision = string_value(object.get("typescript_decision"))
+    let policy_typescript_decision = string_value(object.get("typescript_decision"))
         .filter(|value| is_shadow_decision(value))
         .ok_or("projection_decision_rejected")?
         .to_owned();
@@ -579,12 +586,62 @@ fn evaluate_runtime_kernel_j_projection(
         }
     };
 
+    let policy_decision_matches = policy_typescript_decision == runtime_kernel_j_decision;
+    let Some(resume_value) = object.get("resume_transition") else {
+        return Ok(JProjectionComparison {
+            comparison_kind: "decision",
+            typescript_decision: policy_typescript_decision,
+            runtime_kernel_j_decision,
+            rule_id,
+            rule_axis,
+            matches: policy_decision_matches,
+            policy_decision_matches,
+            lifecycle_matches: true,
+        });
+    };
+
+    let resume = resume_value
+        .as_object()
+        .ok_or("projection_resume_transition_rejected")?;
+    if resume.len() != 4 {
+        return Err("projection_resume_transition_rejected");
+    }
+    let owner_verdict = string_value(resume.get("owner_verdict"))
+        .filter(|value| matches!(*value, "approve" | "reject" | "block"))
+        .ok_or("projection_resume_verdict_rejected")?;
+    let resume_allowed = resume
+        .get("resume_allowed")
+        .and_then(Value::as_bool)
+        .ok_or("projection_resume_allowed_rejected")?;
+    let typescript_resume_decision = string_value(resume.get("typescript_result_decision"))
+        .filter(|value| is_shadow_decision(value))
+        .ok_or("projection_resume_decision_rejected")?
+        .to_owned();
+    let command_present = resume
+        .get("command_present")
+        .and_then(Value::as_bool)
+        .ok_or("projection_resume_command_rejected")?;
+    let (runtime_kernel_j_decision, expected_command_present) = if !resume_allowed {
+        ("SUSPEND", false)
+    } else {
+        match owner_verdict {
+            "approve" => ("ASSERT", true),
+            "reject" => ("FAIL", false),
+            "block" => ("OUT_OF_SCOPE", false),
+            _ => return Err("projection_resume_verdict_rejected"),
+        }
+    };
+    let lifecycle_matches = typescript_resume_decision == runtime_kernel_j_decision &&
+        command_present == expected_command_present;
     Ok(JProjectionComparison {
-        matches: typescript_decision == runtime_kernel_j_decision,
-        typescript_decision,
+        comparison_kind: "resume",
+        typescript_decision: typescript_resume_decision,
         runtime_kernel_j_decision,
-        rule_id,
-        rule_axis,
+        rule_id: "human_resume_transition",
+        rule_axis: None,
+        matches: policy_decision_matches && lifecycle_matches,
+        policy_decision_matches,
+        lifecycle_matches,
     })
 }
 

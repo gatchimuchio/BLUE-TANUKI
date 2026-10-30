@@ -126,7 +126,8 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
-import { projectRuntimeKernelJDecision, type RuntimeKernelJProjectionResult,
+import { projectRuntimeKernelJDecision, projectRuntimeKernelJResumeTransition,
+  type RuntimeKernelJProjectionResult,
   type RuntimeKernelJPurposeBindingProjection } from "./runtime_kernel_j_projection.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
@@ -1628,12 +1629,22 @@ ${planControl.question}`,
     log: DecisionLog;
     command: ExecuteCommand | null;
     request: InboundRequest;
+    runtime_kernel_j_projection: RuntimeKernelJProjectionResult;
   } {
     const susp = this.suspended.get(request_id);
     const req = this.suspendedRequests.get(request_id);
     if (!susp || !req) {
       throw new Error(`resume: no suspended request with id=${request_id}`);
     }
+
+    const purposeBinding = this.runtimeKernelProjectionPurposeBindings.get(susp.log) ?? null;
+    const projectResume = (log: DecisionLog, resumeAllowed: boolean, commandPresent: boolean) =>
+      projectRuntimeKernelJResumeTransition(susp.log, this.policy, purposeBinding, {
+        owner_verdict: verdict,
+        resume_allowed: resumeAllowed,
+        typescript_result_decision: log.commit.decision,
+        command_present: commandPresent,
+      });
 
     this.state = "AWAITING_RESUME";
     const selfHealth = this.evaluateSelfHealth();
@@ -1678,7 +1689,12 @@ ${planControl.question}`,
       };
       this.audit.append(deniedLog);
       this.state = "SUSPENDED";
-      return { log: deniedLog, command: null, request: req };
+      return {
+        log: deniedLog,
+        command: null,
+        request: req,
+        runtime_kernel_j_projection: projectResume(deniedLog, false, false),
+      };
     }
 
     // Map verdict → effective decision for the resume audit entry.
@@ -1743,9 +1759,19 @@ ${planControl.question}`,
         this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
           ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}) });
       }
-      return { log: resumeLog, command, request: req };
+      return {
+        log: resumeLog,
+        command,
+        request: req,
+        runtime_kernel_j_projection: projectResume(resumeLog, true, true),
+      };
     }
-    return { log: resumeLog, command: null, request: req };
+    return {
+      log: resumeLog,
+      command: null,
+      request: req,
+      runtime_kernel_j_projection: projectResume(resumeLog, true, false),
+    };
   }
 
   /** Record approval gate evaluation after HDS ASSERT and before executor execution. */

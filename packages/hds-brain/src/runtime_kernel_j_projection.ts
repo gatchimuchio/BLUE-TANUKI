@@ -1,5 +1,5 @@
 import type { Decision } from "@blue-tanuki/protocol";
-import type { DecisionLog, PolicyConfig, ScoringResult } from "./types.js";
+import type { DecisionLog, PolicyConfig, ResumeVerdict, ScoringResult } from "./types.js";
 import { evaluateDecision } from "./policy.js";
 
 const SCALE = 1_000_000;
@@ -25,9 +25,17 @@ export interface RuntimeKernelJPurposeBindingProjection {
   purpose_digest: string;
 }
 
+/** Human resume input and its TS outcome; identity, request, and command are excluded. */
+export interface RuntimeKernelJResumeTransitionProjection {
+  owner_verdict: ResumeVerdict;
+  resume_allowed: boolean;
+  typescript_result_decision: Decision;
+  command_present: boolean;
+}
+
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v2";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v3";
   typescript_decision: Decision;
   purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
   axes: RuntimeKernelJAxisProjection[];
@@ -37,6 +45,7 @@ export interface RuntimeKernelJProjection {
     per_axis_fail: RuntimeKernelJThresholdProjection[];
     per_axis_suspend_below: RuntimeKernelJThresholdProjection[];
   };
+  resume_transition?: RuntimeKernelJResumeTransitionProjection;
 }
 
 export type RuntimeKernelJProjectionUnavailableReason =
@@ -44,6 +53,7 @@ export type RuntimeKernelJProjectionUnavailableReason =
   | "axis_shape_mismatch"
   | "unsupported_policy_value"
   | "purpose_binding_invalid"
+  | "resume_source_not_suspended"
   | "precision_boundary"
   | "quantization_changes_decision"
   | "projection_error";
@@ -141,7 +151,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v2",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v3",
       typescript_decision: typescript.decision,
       purpose_binding: purposeBinding ? { ...purposeBinding } : null,
       axes,
@@ -151,6 +161,31 @@ export function projectRuntimeKernelJDecision(
         per_axis_fail: perAxisFail,
         per_axis_suspend_below: perAxisSuspendBelow,
       },
+    },
+  };
+}
+
+/**
+ * Project the original policy SUSPEND plus its later human resume outcome.
+ * The Rust shadow recomputes the original policy decision and the fixed
+ * resume mapping; it never receives owner identity or the resumed command.
+ */
+export function projectRuntimeKernelJResumeTransition(
+  suspendedLog: DecisionLog,
+  policy: PolicyConfig,
+  purposeBinding: RuntimeKernelJPurposeBindingProjection | null,
+  transition: RuntimeKernelJResumeTransitionProjection,
+): RuntimeKernelJProjectionResult {
+  const base = projectRuntimeKernelJDecision(suspendedLog, policy, purposeBinding);
+  if (base.status !== "comparable") return base;
+  if (base.projection.typescript_decision !== "SUSPEND") {
+    return { status: "not_comparable", reason: "resume_source_not_suspended" };
+  }
+  return {
+    status: "comparable",
+    projection: {
+      ...base.projection,
+      resume_transition: { ...transition },
     },
   };
 }
