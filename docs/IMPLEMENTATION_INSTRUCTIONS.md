@@ -74,6 +74,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、同じRust shadow observerへ接続した。owner verdictはapproveを保ち、停止理由をownerのblockへ誤分類しない。Gateway通常serveのlocalhost合成process smoke（1 test）で両停止枝を通し、M未適用・revision不変・再評価対象全件残存、停止解除後の再発行tokenによる両M更新の完了を確認した。Rust shadowの5 memory-transition eventはすべて`matched`。Gateway typecheck／smokeと`pnpm docs:check`はPASS。HDS TypeScriptが権限・唯一M writerであること、非常停止、再承認要求は変更していない。実provider・外部作用は未使用。K-B5全体意味比較・cutover・製品全体BUILD・QE_QC／QE_QAは継続する。
 
+今回のBUILD差分では、通常decisionに限られていたcommand有無の不一致観測をresumeとL3 memory approvalへ広げた。実HDS結果とprojectionのcommand有無が食い違ってもRust shadow比較を破棄せず、`command_presence_matches=false`と総合`mismatched`を非権威ログへ記録する。比較自体が不可能なprojection形式の拒否は維持する。Rustの`hold`／no-effect／no-M-write、TypeScript HDS判断・command・Approval・唯一M writerは変更していない。Gateway typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査の移行負債76件は既存注意として残る。testとGateway実process smokeは未実施。K-B5の全体J/M比較・single-writer cutover、製品全体BUILD、QE_QC／QE_QAは未成立のまま継続する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

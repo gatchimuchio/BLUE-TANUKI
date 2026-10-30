@@ -80,8 +80,7 @@ export type RuntimeKernelShadowObserverEvent =
   }
   | {
     kind: "comparison_unavailable";
-    reason: RuntimeKernelJProjectionUnavailableReason |
-      "resume_command_presence_mismatch" | "memory_transition_command_presence_mismatch";
+    reason: RuntimeKernelJProjectionUnavailableReason;
   }
   | { kind: "dropped"; reason: "queue_full" }
   | { kind: "disabled" | "stopped"; reason: "binary_missing" | "startup_failed" | "ipc_exchange_failed" | "production_environment" };
@@ -378,15 +377,6 @@ export async function startRuntimeKernelShadowObserver(options: {
     }
     const projection = observation.j_projection.projection;
     const planAdoption = classifyRuntimeKernelJPlanStepAdoption(projection.plan_step_adoption);
-    if (projection.resume_transition &&
-        projection.resume_transition.command_present !== observation.command_present) {
-      emit({ kind: "comparison_unavailable", reason: "resume_command_presence_mismatch" });
-      return;
-    }
-    if (projection.memory_transition && observation.command_present) {
-      emit({ kind: "comparison_unavailable", reason: "memory_transition_command_presence_mismatch" });
-      return;
-    }
     const comparisonKind = projection.memory_transition
       ? "memory_approval" : projection.resume_transition ? "resume" : "decision";
     const typescriptDecision = projection.resume_transition?.typescript_result_decision ??
@@ -467,8 +457,11 @@ export async function startRuntimeKernelShadowObserver(options: {
           planAdoption.status === "not_comparable";
         const expectedRuntimeComparisonStatus = !comparisonMatches ? "mismatched"
           : comparisonIncomplete ? "not_comparable" : "matched";
-        const commandPresenceMatches = comparisonKind !== "decision" ||
-          observation.command_present === (receipt.runtime_kernel_j_decision === "ASSERT");
+        const commandPresenceMatches = comparisonKind === "decision"
+          ? observation.command_present === (receipt.runtime_kernel_j_decision === "ASSERT")
+          : comparisonKind === "resume"
+            ? projection.resume_transition?.command_present === observation.command_present
+            : !observation.command_present;
         const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false
           ? "mismatched" : expectedRuntimeComparisonStatus;
         if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
