@@ -65,10 +65,13 @@ export { model } from "./model.js";
 export { commit } from "./commit.js";
 export {
   projectRuntimeKernelJDecision,
+  projectRuntimeKernelJMemoryTransition,
   projectRuntimeKernelJResumeTransition,
   type RuntimeKernelJAxisProjection,
   type RuntimeKernelJProjection,
   type RuntimeKernelJProjectionResult,
+  type RuntimeKernelJMemoryTransitionInput,
+  type RuntimeKernelJMemoryTransitionProjection,
   type RuntimeKernelJProjectionUnavailableReason,
   type RuntimeKernelJResumeTransitionProjection,
   type RuntimeKernelJThresholdProjection,

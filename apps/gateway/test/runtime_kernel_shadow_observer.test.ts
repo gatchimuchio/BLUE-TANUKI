@@ -6,7 +6,12 @@ import {
   startRuntimeKernelShadowObserver,
   type RuntimeKernelShadowObserverEvent,
 } from "../src/runtime_kernel_shadow_observer.js";
-import { DEFAULT_POLICY, HDSUpperController, runStandaloneHDSBrain } from "@blue-tanuki/hds-brain";
+import {
+  DEFAULT_POLICY,
+  HDSUpperController,
+  projectRuntimeKernelJMemoryTransition,
+  runStandaloneHDSBrain,
+} from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const manifestPath = join(repositoryRoot, "packages", "hds-brain", "runtime-kernel-rust", "Cargo.toml");
@@ -93,24 +98,51 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         typescript_decision: mismatchedDecision,
       },
     };
+    const meaningAdoptionProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
+      kind: "meaning_update_adoption",
+      reference_review_status: "prior_version_unverified",
+      pending_reassessment_required_count: 2,
+    });
+    const memoryReassessmentProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
+      kind: "memory_judgment_reassessment",
+      requested_judgment_count: 2,
+      reassessed_judgment_count: 2,
+      remaining_reassessment_required_count: 0,
+    });
+    if (meaningAdoptionProjection.status !== "comparable" || memoryReassessmentProjection.status !== "comparable") {
+      throw new Error("synthetic memory transition projection unavailable");
+    }
+    const mismatchedResidualProjection = {
+      status: "comparable" as const,
+      projection: {
+        ...meaningAdoptionProjection.projection,
+        memory_transition: {
+          ...meaningAdoptionProjection.projection.memory_transition!,
+          typescript_residual_status: "meaning_unverified" as const,
+        },
+      },
+    };
 
     try {
+      let observedCount = 0;
+      const observeAndWait = async (
+        j_projection: typeof firstProjectionResult,
+        command_present: boolean,
+      ): Promise<void> => {
+        observer!.observe({ j_projection, command_present });
+        observedCount += 1;
+        await waitForObservedEvents(events, observedCount);
+      };
       for (const result of results) {
-        observer!.observe({
-          j_projection: result.runtime_kernel_j_projection,
-          command_present: result.command_type !== undefined,
-        });
+        await observeAndWait(result.runtime_kernel_j_projection, result.command_type !== undefined);
         if (result === results[2]) {
-          observer!.observe({
-            j_projection: resumed.runtime_kernel_j_projection,
-            command_present: resumed.command !== null,
-          });
+          await observeAndWait(resumed.runtime_kernel_j_projection, resumed.command !== null);
         }
       }
-      observer!.observe({
-        j_projection: mismatchedProjection,
-        command_present: results[0]!.command_type !== undefined,
-      });
+      await observeAndWait(mismatchedProjection, results[0]!.command_type !== undefined);
+      await observeAndWait(meaningAdoptionProjection, false);
+      await observeAndWait(memoryReassessmentProjection, false);
+      await observeAndWait(mismatchedResidualProjection, false);
     } finally {
       await observer!.shutdown();
     }
@@ -174,6 +206,59 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       command_present: results[0]!.command_type !== undefined,
       purpose_version: 3,
     });
+    expect(events[7]).toMatchObject({
+      kind: "observation",
+      sequence: 7,
+      shadow_revision: 7,
+      comparison_kind: "memory_approval",
+      comparison_status: "matched",
+      policy_decision_matches: true,
+      lifecycle_matches: true,
+      typescript_decision: "ASSERT",
+      runtime_kernel_j_decision: "ASSERT",
+      rule_id: "memory_approval_transition",
+      command_present: false,
+      memory_transition_kind: "meaning_update_adoption",
+      memory_transition_matches: true,
+      residual_status: "meaning_unverified_with_reassessment_pending",
+      residual_status_matches: true,
+    });
+    expect(events[8]).toMatchObject({
+      kind: "observation",
+      sequence: 8,
+      shadow_revision: 8,
+      comparison_kind: "memory_approval",
+      comparison_status: "matched",
+      lifecycle_matches: true,
+      memory_transition_kind: "memory_judgment_reassessment",
+      memory_transition_matches: true,
+      residual_status: "named_judgments_reassessed",
+      residual_status_matches: true,
+    });
+    expect(events[9]).toMatchObject({
+      kind: "observation",
+      sequence: 9,
+      shadow_revision: 9,
+      comparison_kind: "memory_approval",
+      comparison_status: "mismatched",
+      lifecycle_matches: false,
+      memory_transition_kind: "meaning_update_adoption",
+      memory_transition_matches: true,
+      residual_status: "meaning_unverified_with_reassessment_pending",
+      residual_status_matches: false,
+    });
     expect(JSON.stringify(events)).not.toContain("a".repeat(64));
   }, 120_000);
 });
+
+async function waitForObservedEvents(events: RuntimeKernelShadowObserverEvent[], expectedCount: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (events.filter((event) => event.kind === "observation").length >= expectedCount) return;
+    if (events.some((event) => event.kind === "stopped")) {
+      throw new Error("Rust shadow stopped before observation completed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Rust shadow observation timed out at ${expectedCount}; events=${JSON.stringify(events)}`);
+}

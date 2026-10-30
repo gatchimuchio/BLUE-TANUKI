@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v4";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v3";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v4";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -43,6 +43,17 @@ struct JProjectionComparison {
     matches: bool,
     policy_decision_matches: bool,
     lifecycle_matches: bool,
+    memory_transition_kind: Option<&'static str>,
+    memory_transition_matches: Option<bool>,
+    residual_status: Option<&'static str>,
+    residual_status_matches: Option<bool>,
+}
+
+struct JMemoryTransitionComparison {
+    kind: &'static str,
+    matches: bool,
+    residual_status: &'static str,
+    residual_status_matches: bool,
 }
 
 pub fn run() -> Result<(), &'static str> {
@@ -455,6 +466,10 @@ fn decision_payload(
         "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
         "policy_decision_matches": comparison.map(|result| result.policy_decision_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
+        "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
+        "memory_transition_matches": comparison.and_then(|result| result.memory_transition_matches),
+        "residual_status": comparison.and_then(|result| result.residual_status),
+        "residual_status_matches": comparison.and_then(|result| result.residual_status_matches),
         "memory_revision": 0,
         "effect_started": false,
         "m_written": false,
@@ -472,7 +487,14 @@ fn evaluate_runtime_kernel_j_projection(
         serde_json::from_str(input_text).map_err(|_| "projection_json_rejected")?;
     let object = projection.as_object().ok_or("projection_shape_rejected")?;
     let has_resume_transition = object.contains_key("resume_transition");
-    if object.len() != if has_resume_transition { 6 } else { 5 }
+    let has_memory_transition = object.contains_key("memory_transition");
+    if has_resume_transition && has_memory_transition
+        || object.len()
+            != if has_resume_transition || has_memory_transition {
+                6
+            } else {
+                5
+            }
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
         return Err("projection_schema_rejected");
@@ -587,6 +609,24 @@ fn evaluate_runtime_kernel_j_projection(
     };
 
     let policy_decision_matches = policy_typescript_decision == runtime_kernel_j_decision;
+    if let Some(memory_value) = object.get("memory_transition") {
+        let memory = compare_memory_transition(memory_value)?;
+        let lifecycle_matches = memory.matches && memory.residual_status_matches;
+        return Ok(JProjectionComparison {
+            comparison_kind: "memory_approval",
+            typescript_decision: policy_typescript_decision,
+            runtime_kernel_j_decision,
+            rule_id: "memory_approval_transition",
+            rule_axis: None,
+            matches: policy_decision_matches && lifecycle_matches,
+            policy_decision_matches,
+            lifecycle_matches,
+            memory_transition_kind: Some(memory.kind),
+            memory_transition_matches: Some(memory.matches),
+            residual_status: Some(memory.residual_status),
+            residual_status_matches: Some(memory.residual_status_matches),
+        });
+    }
     let Some(resume_value) = object.get("resume_transition") else {
         return Ok(JProjectionComparison {
             comparison_kind: "decision",
@@ -597,6 +637,10 @@ fn evaluate_runtime_kernel_j_projection(
             matches: policy_decision_matches,
             policy_decision_matches,
             lifecycle_matches: true,
+            memory_transition_kind: None,
+            memory_transition_matches: None,
+            residual_status: None,
+            residual_status_matches: None,
         });
     };
 
@@ -631,8 +675,8 @@ fn evaluate_runtime_kernel_j_projection(
             _ => return Err("projection_resume_verdict_rejected"),
         }
     };
-    let lifecycle_matches = typescript_resume_decision == runtime_kernel_j_decision &&
-        command_present == expected_command_present;
+    let lifecycle_matches = typescript_resume_decision == runtime_kernel_j_decision
+        && command_present == expected_command_present;
     Ok(JProjectionComparison {
         comparison_kind: "resume",
         typescript_decision: typescript_resume_decision,
@@ -642,7 +686,140 @@ fn evaluate_runtime_kernel_j_projection(
         matches: policy_decision_matches && lifecycle_matches,
         policy_decision_matches,
         lifecycle_matches,
+        memory_transition_kind: None,
+        memory_transition_matches: None,
+        residual_status: None,
+        residual_status_matches: None,
     })
+}
+
+fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionComparison, &'static str> {
+    const MAX_MEMORY_TRANSITION_COUNT: i64 = 512;
+    let object = value
+        .as_object()
+        .ok_or("projection_memory_transition_rejected")?;
+    let kind = string_value(object.get("kind")).ok_or("projection_memory_transition_rejected")?;
+    match kind {
+        "meaning_update_adoption" => {
+            if object.len() != 10 {
+                return Err("projection_memory_transition_rejected");
+            }
+            let owner_verdict = string_value(object.get("owner_verdict"))
+                .filter(|value| matches!(*value, "approve" | "reject" | "block"))
+                .ok_or("projection_memory_transition_rejected")?;
+            let application_status = string_value(object.get("memory_application_status"))
+                .filter(|value| matches!(*value, "applied" | "blocked"))
+                .ok_or("projection_memory_transition_rejected")?;
+            string_value(object.get("reference_review_status"))
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "prior_version_unverified" | "counterevidence_absence_unverified"
+                    )
+                })
+                .ok_or("projection_memory_transition_rejected")?;
+            let semantic_relation_status = string_value(object.get("semantic_relation_status"))
+                .filter(|value| matches!(*value, "not_assessed" | "assessed"))
+                .ok_or("projection_memory_transition_rejected")?;
+            let follow_up_action_status = string_value(object.get("follow_up_action_status"))
+                .filter(|value| matches!(*value, "unconfirmed" | "confirmed"))
+                .ok_or("projection_memory_transition_rejected")?;
+            let pending_count = integer_value(object.get("pending_reassessment_required_count"))
+                .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+                .ok_or("projection_memory_transition_rejected")?;
+            let typescript_residual_status = string_value(object.get("typescript_residual_status"))
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "meaning_unverified" | "meaning_unverified_with_reassessment_pending"
+                    )
+                })
+                .ok_or("projection_memory_transition_rejected")?;
+            let used_for_authority = object
+                .get("used_for_authority")
+                .and_then(Value::as_bool)
+                .ok_or("projection_memory_transition_rejected")?;
+            let may_execute = object
+                .get("may_execute")
+                .and_then(Value::as_bool)
+                .ok_or("projection_memory_transition_rejected")?;
+            let transition_matches = owner_verdict == "approve"
+                && application_status == "applied"
+                && semantic_relation_status == "not_assessed"
+                && follow_up_action_status == "unconfirmed"
+                && !used_for_authority
+                && !may_execute;
+            let expected_residual_status = if pending_count == 0 {
+                "meaning_unverified"
+            } else {
+                "meaning_unverified_with_reassessment_pending"
+            };
+            let residual_status_matches = typescript_residual_status == expected_residual_status;
+            Ok(JMemoryTransitionComparison {
+                kind: "meaning_update_adoption",
+                matches: transition_matches,
+                residual_status: expected_residual_status,
+                residual_status_matches,
+            })
+        }
+        "memory_judgment_reassessment" => {
+            if object.len() != 9 {
+                return Err("projection_memory_transition_rejected");
+            }
+            let owner_verdict = string_value(object.get("owner_verdict"))
+                .filter(|value| matches!(*value, "approve" | "reject" | "block"))
+                .ok_or("projection_memory_transition_rejected")?;
+            let application_status = string_value(object.get("memory_application_status"))
+                .filter(|value| matches!(*value, "applied" | "blocked"))
+                .ok_or("projection_memory_transition_rejected")?;
+            let requested_count = integer_value(object.get("requested_judgment_count"))
+                .filter(|value| (1..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+                .ok_or("projection_memory_transition_rejected")?;
+            let reassessed_count = integer_value(object.get("reassessed_judgment_count"))
+                .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+                .ok_or("projection_memory_transition_rejected")?;
+            let remaining_count =
+                integer_value(object.get("remaining_reassessment_required_count"))
+                    .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+                    .ok_or("projection_memory_transition_rejected")?;
+            let typescript_residual_status = string_value(object.get("typescript_residual_status"))
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "named_judgments_reassessed" | "named_judgments_pending"
+                    )
+                })
+                .ok_or("projection_memory_transition_rejected")?;
+            let used_for_authority = object
+                .get("used_for_authority")
+                .and_then(Value::as_bool)
+                .ok_or("projection_memory_transition_rejected")?;
+            let may_execute = object
+                .get("may_execute")
+                .and_then(Value::as_bool)
+                .ok_or("projection_memory_transition_rejected")?;
+            let counts_are_consistent = reassessed_count + remaining_count == requested_count;
+            let transition_matches = owner_verdict == "approve"
+                && application_status == "applied"
+                && counts_are_consistent
+                && !used_for_authority
+                && !may_execute;
+            let expected_residual_status =
+                if reassessed_count == requested_count && remaining_count == 0 {
+                    "named_judgments_reassessed"
+                } else {
+                    "named_judgments_pending"
+                };
+            let residual_status_matches = typescript_residual_status == expected_residual_status;
+            Ok(JMemoryTransitionComparison {
+                kind: "memory_judgment_reassessment",
+                matches: transition_matches,
+                residual_status: expected_residual_status,
+                residual_status_matches,
+            })
+        }
+        _ => Err("projection_memory_transition_rejected"),
+    }
 }
 
 fn parse_projection_thresholds(value: Option<&Value>) -> Result<Vec<(String, i64)>, &'static str> {

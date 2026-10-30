@@ -126,8 +126,9 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
-import { projectRuntimeKernelJDecision, projectRuntimeKernelJResumeTransition,
+import { projectRuntimeKernelJDecision, projectRuntimeKernelJMemoryTransition, projectRuntimeKernelJResumeTransition,
   type RuntimeKernelJProjectionResult,
+  type RuntimeKernelJMemoryTransitionInput,
   type RuntimeKernelJPurposeBindingProjection } from "./runtime_kernel_j_projection.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
@@ -448,7 +449,8 @@ interface MemoryJudgmentReassessmentApprovalContext extends JMemoryApprovalRefer
 type MeaningUpdateCommitResult =
   | { readonly ok: true; readonly proposal_digest: string; readonly candidate_digest: string;
       readonly approval_status: "approved"; readonly memory_application_status: "applied";
-      readonly follow_up_action_status: "unconfirmed" }
+      readonly follow_up_action_status: "unconfirmed";
+      readonly pending_reassessment_required_count: number | null }
   | { readonly ok: false; readonly reason: string };
 
 function goalPurposeChangeReviewTarget(input: {
@@ -935,6 +937,17 @@ export class HDSUpperController {
     try {
       return projectRuntimeKernelJDecision(log, this.policy,
         this.runtimeKernelProjectionPurposeBindings.get(log) ?? null);
+    } catch {
+      return { status: "not_comparable", reason: "projection_error" };
+    }
+  }
+
+  runtimeKernelJMemoryTransitionProjection(
+    log: DecisionLog,
+    transition: RuntimeKernelJMemoryTransitionInput,
+  ): RuntimeKernelJProjectionResult {
+    try {
+      return projectRuntimeKernelJMemoryTransition(this.runtimeKernelJProjection(log), transition);
     } catch {
       return { status: "not_comparable", reason: "projection_error" };
     }
@@ -2168,8 +2181,15 @@ ${planControl.question}`,
         return { ok: false, reason: "commit_record_conflict" };
       }
       this.pendingMeaningUpdateCandidates.delete(input.source_command_id);
+      let pendingReassessmentRequiredCount: number | null = null;
+      try {
+        const interpretation = this.meaningUpdateMemory.readInterpretation(input.args.target_record_id)?.record;
+        if (interpretation) pendingReassessmentRequiredCount = interpretation.dependent_judgments
+          .filter((judgment) => judgment.reassessment_required).length;
+      } catch { /* a missing shadow observation does not undo the committed M record */ }
       return { ok: true, proposal_digest: existing.proposal_digest, candidate_digest: existing.candidate_digest,
-        approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed" };
+        approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+        pending_reassessment_required_count: pendingReassessmentRequiredCount };
     }
 
     const record = buildMeaningUpdateMemoryRecord(review.proposal, review.source_observation_binding);
@@ -2219,8 +2239,15 @@ ${planControl.question}`,
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
       used_for_authority: false, timestamp: evidence.timestamp });
     this.pendingMeaningUpdateCandidates.delete(input.source_command_id);
+    let pendingReassessmentRequiredCount: number | null = null;
+    try {
+      const interpretation = this.meaningUpdateMemory.readInterpretation(input.args.target_record_id)?.record;
+      if (interpretation) pendingReassessmentRequiredCount = interpretation.dependent_judgments
+        .filter((judgment) => judgment.reassessment_required).length;
+    } catch { /* a missing shadow observation does not undo the committed M record */ }
     return { ok: true, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
-      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed" };
+      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+      pending_reassessment_required_count: pendingReassessmentRequiredCount };
   }
 
   getMemoryJudgmentReassessmentProposals(sourceCommandId: string): OwnerMemoryJudgmentReassessmentProposal[] {
@@ -2282,6 +2309,8 @@ ${planControl.question}`,
     reviewer_actor: string;
     evaluation: ApprovalEvaluation;
   }): { readonly ok: true; readonly judgment_ref: string; readonly reassesses_digest: string;
+      readonly requested_judgment_count: number; readonly reassessed_judgment_count: number;
+      readonly remaining_reassessment_required_count: number;
       readonly used_for_authority: false; readonly may_execute: false } | { readonly ok: false; readonly reason: string } {
     if (!this.meaningUpdateMemory) return { ok: false, reason: "meaning_update_memory_unavailable" };
     if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
@@ -2315,6 +2344,12 @@ ${planControl.question}`,
       return event?.reassessment_judgment_ref === args.judgment_ref &&
         memoryJudgmentRefsDigest(event.affected_judgment_refs) === reassessesDigest
         ? { ok: true, judgment_ref: args.judgment_ref, reassesses_digest: reassessesDigest,
+          requested_judgment_count: proposal.reassesses_judgment_refs.length,
+          reassessed_judgment_count: record?.dependent_judgments.filter((judgment) =>
+            proposal.reassesses_judgment_refs.includes(judgment.judgment_ref) && !judgment.reassessment_required).length ?? 0,
+          remaining_reassessment_required_count: record?.dependent_judgments.filter((judgment) =>
+            proposal.reassesses_judgment_refs.includes(judgment.judgment_ref) && judgment.reassessment_required).length ??
+            proposal.reassesses_judgment_refs.length,
           used_for_authority: false, may_execute: false }
         : { ok: false, reason: "reassessment_commit_conflict" };
     }
@@ -2352,6 +2387,11 @@ ${planControl.question}`,
     } catch { committed = { ok: false, reason: "memory_judgment_reassessment_commit_failed" }; }
     finally { this.memoryJudgmentReassessmentApprovalContext = undefined; }
     if (!committed.ok) return { ok: false, reason: committed.reason };
+    const reassessedRefs = new Set(proposal.reassesses_judgment_refs);
+    const reassessedJudgmentCount = committed.record.dependent_judgments.filter((judgment) =>
+      reassessedRefs.has(judgment.judgment_ref) && !judgment.reassessment_required).length;
+    const remainingReassessmentRequiredCount = committed.record.dependent_judgments.filter((judgment) =>
+      reassessedRefs.has(judgment.judgment_ref) && judgment.reassessment_required).length;
     this.audit.append({ kind: "operation_plan", event: "memory_judgment_reassessment_committed",
       request_id: requestId, command_id: commandId, projection_digest: input.command_digest,
       citation_request_id: args.citation_request_id, citation_command_id: args.citation_command_id,
@@ -2362,6 +2402,9 @@ ${planControl.question}`,
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
       used_for_authority: false, may_execute: false, timestamp: evidence.timestamp });
     return { ok: true, judgment_ref: args.judgment_ref, reassesses_digest: reassessesDigest,
+      requested_judgment_count: proposal.reassesses_judgment_refs.length,
+      reassessed_judgment_count: reassessedJudgmentCount,
+      remaining_reassessment_required_count: remainingReassessmentRequiredCount,
       used_for_authority: false, may_execute: false };
   }
 

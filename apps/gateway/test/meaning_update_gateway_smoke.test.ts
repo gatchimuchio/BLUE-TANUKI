@@ -1,18 +1,19 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 import { meaningUpdateCandidateDigest } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-const ROOT = process.cwd();
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const WEBCHAT_TOKEN = "c0702-developer-token";
 const RESUME_TOKEN = "c0702-review-token";
 const OWNER_TOKEN = "c0702-owner-token";
@@ -30,6 +31,15 @@ afterEach(async () => {
 });
 
 describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
+  beforeAll(() => {
+    execFileSync("cargo", ["build", "--locked", "--manifest-path",
+      join(ROOT, "packages", "hds-brain", "runtime-kernel-rust", "Cargo.toml")], {
+      cwd: ROOT,
+      stdio: "pipe",
+      timeout: 600_000,
+    });
+  }, 600_000);
+
   it("persists a meaning candidate, then explicitly reassesses prior citation judgments", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0702-gateway-"));
     const auditDir = join(tempRoot, "audit");
@@ -293,6 +303,29 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       expect(await reassessmentApproved.json()).toMatchObject({ ok: true, result: { approval: "approve",
         executed: false, status: "memory_judgment_reassessment_committed", judgment_ref: freshJudgmentRef,
         used_for_authority: false, may_execute: false } });
+      const memoryShadowEvents = await waitForMemoryShadowEvents(gateway, 3);
+      expect(memoryShadowEvents.map((event) => event.memory_transition_kind)).toEqual([
+        "meaning_update_adoption", "meaning_update_adoption", "memory_judgment_reassessment",
+      ]);
+      expect(memoryShadowEvents.slice(0, 2)).toEqual([
+        expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
+          memory_transition_matches: true, residual_status_matches: true,
+          used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
+        expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
+          memory_transition_matches: true, residual_status_matches: true,
+          used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
+      ]);
+      expect(memoryShadowEvents[2]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
+        memory_transition_matches: true, residual_status: "named_judgments_reassessed", residual_status_matches: true,
+        used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
+      const encodedShadowEvents = JSON.stringify(memoryShadowEvents);
+      expect(encodedShadowEvents).not.toContain(candidateMeaning);
+      expect(encodedShadowEvents).not.toContain(revisedMeaning);
+      expect(encodedShadowEvents).not.toContain(String(review.proposal_digest));
+      expect(encodedShadowEvents).not.toContain(freshJudgmentRef);
+      expect(encodedShadowEvents).not.toContain(support.f_reference);
+      expect(encodedShadowEvents).not.toContain(counter.f_reference);
+      expect(encodedShadowEvents).not.toContain(String(reassessmentPending.command_id));
       const afterReassessment = new DatabaseSync(memoryDatabase, { readOnly: true });
       try {
         const row = afterReassessment.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
@@ -442,7 +475,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 45_000);
+  }, 180_000);
 });
 
 async function waitForMeaningUpdateApproval(port: number, gateway: CapturedProcess,
@@ -644,6 +677,7 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
     BLUE_TANUKI_FILE_ROOT: join(auditDir, "file-root"), BLUE_TANUKI_STATE_ROOT: stateRoot,
     BLUE_TANUKI_MEMORY_FILE: memoryFile, BLUE_TANUKI_AUDIT_DIR: auditDir,
     BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile, BLUE_TANUKI_SESSION_DIR: sessionDir,
+    BLUE_TANUKI_RUNTIME_KERNEL_SHADOW_ENABLED: "true",
     BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
     BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
       "c0702-local-fixture": { capabilities: ["llm.text.generate"],
@@ -670,8 +704,31 @@ function spawnGateway(env: NodeJS.ProcessEnv): CapturedProcess {
   return { child, stdout, stderr };
 }
 
+async function waitForMemoryShadowEvents(gateway: CapturedProcess, expectedCount: number): Promise<Array<Record<string, unknown>>> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const events = [...gateway.stdout, ...gateway.stderr].join("").split(/\r?\n/).flatMap((line) => {
+      if (!line.includes("comparison_kind=memory_approval")) return [];
+      const fields = Object.fromEntries(line.split(/\s+/).flatMap((token) => {
+        const separator = token.indexOf("=");
+        return separator > 0 ? [[token.slice(0, separator), token.slice(separator + 1)]] : [];
+      })) as Record<string, unknown>;
+      for (const name of ["memory_transition_matches", "residual_status_matches", "used_for_authority",
+        "may_execute", "m_written", "effect_started"]) {
+        if (fields[name] === "true" || fields[name] === "false") fields[name] = fields[name] === "true";
+      }
+      return [fields];
+    });
+    if (events.length >= expectedCount) return events.slice(0, expectedCount);
+    if (gateway.child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Rust shadow did not observe all owner-memory transitions; stdout=${gateway.stdout.join("")}; ` +
+    `stderr=${gateway.stderr.join("")}`);
+}
+
 async function waitForHealth(port: number, gateway: CapturedProcess): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
     try {
@@ -680,7 +737,8 @@ async function waitForHealth(port: number, gateway: CapturedProcess): Promise<vo
     } catch { /* Gateway is still starting. */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Gateway health did not become ready: ${gateway.stderr.join("")}`);
+  throw new Error(`Gateway health did not become ready; exit_code=${gateway.child.exitCode}; ` +
+    `stdout=${gateway.stdout.join("")}; stderr=${gateway.stderr.join("")}`);
 }
 
 async function listen(server: Server): Promise<number> {

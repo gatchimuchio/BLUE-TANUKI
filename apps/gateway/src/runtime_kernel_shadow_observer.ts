@@ -28,6 +28,7 @@ export interface RuntimeKernelShadowObservation {
 type ShadowDecision = "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL";
 type ShadowRuleId =
   | "human_resume_transition"
+  | "memory_approval_transition"
   | "detector_lifecycle"
   | "per_axis_fail"
   | "per_axis_suspend_below"
@@ -41,7 +42,7 @@ export type RuntimeKernelShadowObserverEvent =
     kind: "observation";
     sequence: number;
     shadow_revision: number;
-    comparison_kind: "decision" | "resume";
+    comparison_kind: "decision" | "resume" | "memory_approval";
     comparison_status: "matched" | "mismatched";
     policy_decision_matches: boolean;
     lifecycle_matches: boolean;
@@ -51,10 +52,15 @@ export type RuntimeKernelShadowObserverEvent =
     rule_axis?: string;
     command_present: boolean;
     purpose_version: number | null;
+    memory_transition_kind?: "meaning_update_adoption" | "memory_judgment_reassessment";
+    memory_transition_matches?: boolean;
+    residual_status?: string;
+    residual_status_matches?: boolean;
   }
   | {
     kind: "comparison_unavailable";
-    reason: RuntimeKernelJProjectionUnavailableReason | "resume_command_presence_mismatch";
+    reason: RuntimeKernelJProjectionUnavailableReason |
+      "resume_command_presence_mismatch" | "memory_transition_command_presence_mismatch";
   }
   | { kind: "dropped"; reason: "queue_full" }
   | { kind: "disabled" | "stopped"; reason: "binary_missing" | "startup_failed" | "ipc_exchange_failed" | "production_environment" };
@@ -192,7 +198,12 @@ export async function startRuntimeKernelShadowObserver(options: {
       emit({ kind: "comparison_unavailable", reason: "resume_command_presence_mismatch" });
       return;
     }
-    const comparisonKind = projection.resume_transition ? "resume" : "decision";
+    if (projection.memory_transition && observation.command_present) {
+      emit({ kind: "comparison_unavailable", reason: "memory_transition_command_presence_mismatch" });
+      return;
+    }
+    const comparisonKind = projection.memory_transition
+      ? "memory_approval" : projection.resume_transition ? "resume" : "decision";
     const typescriptDecision = projection.resume_transition?.typescript_result_decision ??
       projection.typescript_decision;
     if (pending >= MAX_PENDING_OBSERVATIONS) {
@@ -258,6 +269,13 @@ export async function startRuntimeKernelShadowObserver(options: {
             receipt.used_for_authority !== false || receipt.may_execute !== false ||
             receipt.typescript_decision !== typescriptDecision ||
             !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
+            (projection.memory_transition
+              ? receipt.memory_transition_kind !== projection.memory_transition.kind ||
+                typeof receipt.memory_transition_matches !== "boolean" ||
+                typeof receipt.residual_status !== "string" ||
+                typeof receipt.residual_status_matches !== "boolean"
+              : receipt.memory_transition_kind !== null || receipt.memory_transition_matches !== null ||
+                receipt.residual_status !== null || receipt.residual_status_matches !== null) ||
             (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
           throw new Error("invalid_shadow_receipt");
         }
@@ -277,6 +295,12 @@ export async function startRuntimeKernelShadowObserver(options: {
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
           command_present: observation.command_present,
           purpose_version: purposeBinding?.purpose_version ?? null,
+          ...(projection.memory_transition ? {
+            memory_transition_kind: projection.memory_transition.kind,
+            memory_transition_matches: receipt.memory_transition_matches as boolean,
+            residual_status: receipt.residual_status as string,
+            residual_status_matches: receipt.residual_status_matches as boolean,
+          } : {}),
         });
       } catch {
         await fail();
@@ -411,7 +435,8 @@ function isShadowDecision(value: unknown): value is ShadowDecision {
 }
 
 function isShadowRuleId(value: unknown): value is ShadowRuleId {
-  return value === "human_resume_transition" || value === "detector_lifecycle" || value === "per_axis_fail" ||
+  return value === "human_resume_transition" || value === "memory_approval_transition" ||
+    value === "detector_lifecycle" || value === "per_axis_fail" ||
     value === "per_axis_suspend_below" ||
     value === "out_of_scope_below" || value === "aggregate_assert" || value === "default_suspend";
 }

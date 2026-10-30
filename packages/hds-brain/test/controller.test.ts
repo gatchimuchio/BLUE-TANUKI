@@ -856,7 +856,7 @@ describe("HDSUpperController.resume()", () => {
     expect(command).not.toBeNull();
     expect(runtime_kernel_j_projection.status).toBe("comparable");
     if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
-    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v3");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v4");
     expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
     expect(runtime_kernel_j_projection.projection.resume_transition).toEqual({
       owner_verdict: "approve",
@@ -868,6 +868,46 @@ describe("HDSUpperController.resume()", () => {
     expect(encoded).not.toContain(content);
     expect(encoded).not.toContain(requestId);
     expect(encoded).not.toContain("synthetic-owner-identity");
+  });
+
+  it("projects bounded owner-memory outcomes without adding identities or content", () => {
+    const c = new HDSUpperController();
+    const source = "synthetic decision content must remain private";
+    const requestId = "r-memory-shadow-projection";
+    const { log } = c.decide(inbound(source, requestId));
+    const adoption = c.runtimeKernelJMemoryTransitionProjection(log, {
+      kind: "meaning_update_adoption",
+      reference_review_status: "prior_version_unverified",
+      pending_reassessment_required_count: 2,
+    });
+    expect(adoption.status).toBe("comparable");
+    if (adoption.status !== "comparable") throw new Error("memory adoption projection unavailable");
+    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v4");
+    expect(adoption.projection.memory_transition).toMatchObject({
+      kind: "meaning_update_adoption",
+      semantic_relation_status: "not_assessed",
+      pending_reassessment_required_count: 2,
+      typescript_residual_status: "meaning_unverified_with_reassessment_pending",
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const reassessment = c.runtimeKernelJMemoryTransitionProjection(log, {
+      kind: "memory_judgment_reassessment",
+      requested_judgment_count: 2,
+      reassessed_judgment_count: 2,
+      remaining_reassessment_required_count: 0,
+    });
+    expect(reassessment.status).toBe("comparable");
+    if (reassessment.status !== "comparable") throw new Error("memory reassessment projection unavailable");
+    expect(reassessment.projection.memory_transition).toMatchObject({
+      kind: "memory_judgment_reassessment",
+      typescript_residual_status: "named_judgments_reassessed",
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const encoded = JSON.stringify([adoption.projection, reassessment.projection]);
+    expect(encoded).not.toContain(source);
+    expect(encoded).not.toContain(requestId);
   });
 
   it("throws when resuming a non-suspended id", () => {

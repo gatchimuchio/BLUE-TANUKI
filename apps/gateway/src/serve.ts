@@ -2669,6 +2669,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         content_review_digest: ctx.content_review_digest ?? "", proposal_actor: proposal.proposal_actor,
         reviewer_actor: approvalActor, evaluation: pending.evaluation });
       if (!committed.ok) return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
+      runtimeKernelShadowObserver?.observe({
+        j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+          kind: "meaning_update_adoption",
+          reference_review_status: current.reference_review.review_status,
+          pending_reassessment_required_count: committed.pending_reassessment_required_count,
+        }),
+        command_present: false,
+      });
       return { approval: "approve", executed: false, status: "meaning_update_adoption_committed",
         proposal_digest: committed.proposal_digest, candidate_digest: committed.candidate_digest,
         approval_status: committed.approval_status, memory_application_status: committed.memory_application_status,
@@ -2687,6 +2695,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         proposal_actor: proposal.proposal_actor, reviewer_actor: approvalActor, evaluation: pending.evaluation });
       if (!committed.ok) return { approval: "approve", executed: false,
         status: `memory_judgment_reassessment_${committed.reason}` };
+      runtimeKernelShadowObserver?.observe({
+        j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+          kind: "memory_judgment_reassessment",
+          requested_judgment_count: committed.requested_judgment_count,
+          reassessed_judgment_count: committed.reassessed_judgment_count,
+          remaining_reassessment_required_count: committed.remaining_reassessment_required_count,
+        }),
+        command_present: false,
+      });
       return { approval: "approve", executed: false, status: "memory_judgment_reassessment_committed",
         judgment_ref: committed.judgment_ref, reassesses_digest: committed.reassesses_digest,
         used_for_authority: false, may_execute: false };
@@ -5084,6 +5101,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           rule_id: event.rule_id,
           rule_axis: event.rule_axis,
           command_present: event.command_present,
+          ...(event.comparison_kind === "memory_approval" ? {
+            memory_transition_kind: event.memory_transition_kind,
+            memory_transition_matches: event.memory_transition_matches,
+            residual_status: event.residual_status,
+            residual_status_matches: event.residual_status_matches,
+          } : {}),
           effect_started: false,
           m_written: false,
           used_for_authority: false,

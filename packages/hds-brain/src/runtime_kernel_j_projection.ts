@@ -33,9 +33,47 @@ export interface RuntimeKernelJResumeTransitionProjection {
   command_present: boolean;
 }
 
+export type RuntimeKernelJMemoryTransitionProjection =
+  | {
+    kind: "meaning_update_adoption";
+    owner_verdict: "approve";
+    memory_application_status: "applied";
+    reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified";
+    semantic_relation_status: "not_assessed";
+    follow_up_action_status: "unconfirmed";
+    pending_reassessment_required_count: number;
+    typescript_residual_status: "meaning_unverified" | "meaning_unverified_with_reassessment_pending";
+    used_for_authority: false;
+    may_execute: false;
+  }
+  | {
+    kind: "memory_judgment_reassessment";
+    owner_verdict: "approve";
+    memory_application_status: "applied";
+    requested_judgment_count: number;
+    reassessed_judgment_count: number;
+    remaining_reassessment_required_count: number;
+    typescript_residual_status: "named_judgments_reassessed" | "named_judgments_pending";
+    used_for_authority: false;
+    may_execute: false;
+  };
+
+export type RuntimeKernelJMemoryTransitionInput =
+  | {
+    kind: "meaning_update_adoption";
+    reference_review_status: string;
+    pending_reassessment_required_count: number | null;
+  }
+  | {
+    kind: "memory_judgment_reassessment";
+    requested_judgment_count: number;
+    reassessed_judgment_count: number;
+    remaining_reassessment_required_count: number;
+  };
+
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v3";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v4";
   typescript_decision: Decision;
   purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
   axes: RuntimeKernelJAxisProjection[];
@@ -46,6 +84,7 @@ export interface RuntimeKernelJProjection {
     per_axis_suspend_below: RuntimeKernelJThresholdProjection[];
   };
   resume_transition?: RuntimeKernelJResumeTransitionProjection;
+  memory_transition?: RuntimeKernelJMemoryTransitionProjection;
 }
 
 export type RuntimeKernelJProjectionUnavailableReason =
@@ -54,6 +93,8 @@ export type RuntimeKernelJProjectionUnavailableReason =
   | "unsupported_policy_value"
   | "purpose_binding_invalid"
   | "resume_source_not_suspended"
+  | "memory_transition_invalid"
+  | "memory_transition_unavailable"
   | "precision_boundary"
   | "quantization_changes_decision"
   | "projection_error";
@@ -151,7 +192,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v3",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v4",
       typescript_decision: typescript.decision,
       purpose_binding: purposeBinding ? { ...purposeBinding } : null,
       axes,
@@ -187,6 +228,66 @@ export function projectRuntimeKernelJResumeTransition(
       ...base.projection,
       resume_transition: { ...transition },
     },
+  };
+}
+
+/** Add only bounded, non-authoritative owner-memory commit outcomes to a J projection. */
+export function projectRuntimeKernelJMemoryTransition(
+  base: RuntimeKernelJProjectionResult,
+  input: RuntimeKernelJMemoryTransitionInput,
+): RuntimeKernelJProjectionResult {
+  if (base.status !== "comparable") return base;
+  if (base.projection.resume_transition || base.projection.memory_transition) {
+    return { status: "not_comparable", reason: "memory_transition_invalid" };
+  }
+
+  let memoryTransition: RuntimeKernelJMemoryTransitionProjection;
+  if (input.kind === "meaning_update_adoption") {
+    if (input.pending_reassessment_required_count === null) {
+      return { status: "not_comparable", reason: "memory_transition_unavailable" };
+    }
+    if ((input.reference_review_status !== "prior_version_unverified" &&
+        input.reference_review_status !== "counterevidence_absence_unverified") ||
+        !isBoundedCount(input.pending_reassessment_required_count)) {
+      return { status: "not_comparable", reason: "memory_transition_invalid" };
+    }
+    memoryTransition = {
+      kind: input.kind,
+      owner_verdict: "approve",
+      memory_application_status: "applied",
+      reference_review_status: input.reference_review_status,
+      semantic_relation_status: "not_assessed",
+      follow_up_action_status: "unconfirmed",
+      pending_reassessment_required_count: input.pending_reassessment_required_count,
+      typescript_residual_status: input.pending_reassessment_required_count === 0
+        ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending",
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } else {
+    if (!isBoundedCount(input.requested_judgment_count) || input.requested_judgment_count < 1 ||
+        !isBoundedCount(input.reassessed_judgment_count) ||
+        !isBoundedCount(input.remaining_reassessment_required_count)) {
+      return { status: "not_comparable", reason: "memory_transition_invalid" };
+    }
+    const complete = input.reassessed_judgment_count === input.requested_judgment_count &&
+      input.remaining_reassessment_required_count === 0;
+    memoryTransition = {
+      kind: input.kind,
+      owner_verdict: "approve",
+      memory_application_status: "applied",
+      requested_judgment_count: input.requested_judgment_count,
+      reassessed_judgment_count: input.reassessed_judgment_count,
+      remaining_reassessment_required_count: input.remaining_reassessment_required_count,
+      typescript_residual_status: complete ? "named_judgments_reassessed" : "named_judgments_pending",
+      used_for_authority: false,
+      may_execute: false,
+    };
+  }
+
+  return {
+    status: "comparable",
+    projection: { ...base.projection, memory_transition: memoryTransition },
   };
 }
 
@@ -248,6 +349,10 @@ function toUnits(value: number, minimum: number, maximum: number): number | unde
   if (!Number.isFinite(value) || value < minimum || value > maximum) return undefined;
   const units = Math.round(value * SCALE);
   return Number.isSafeInteger(units) ? units : undefined;
+}
+
+function isBoundedCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 512;
 }
 
 function sameStrings(left: string[], right: string[]): boolean {

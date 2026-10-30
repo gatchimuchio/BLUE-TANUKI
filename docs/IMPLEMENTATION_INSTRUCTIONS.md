@@ -26,17 +26,17 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。今回のactive batchはK-B5の限定J projection比較であり、K-B5全体の完了ではない。
 
-### Active batch: K-B5 — 同一合成系列のJ採否比較
+### Active batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移比較
 
-- **目的:** 現行TypeScript HDS-BRAINのpolicy採否をauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立に算出するJ projectionと、停止後の人間復帰遷移を比較する。
-- **producer／consumer:** `HDSUpperController.decide()`と`resume()`が、元の停止判断・目的版・匿名化した復帰区分・許可状態・復帰結果をprojection化する。通常Gateway inboundとresumeの既存shadow observerから同じRust processへ順に渡し、Rustの比較receiptをGatewayの非権威ログへ返す。
-- **入力・出力:** 軸名、score、weight、lifecycle状態、policy閾値、TypeScript採否を送る。resume時は元のpolicy SUSPENDと`owner_verdict`、`resume_allowed`、復帰後decision、command有無だけを追加する。検証済みのpurpose-bound plan computeに限り、`SHA-256(goal_ref)`・purpose version・purpose digestを追加し、IPCの`goal_id`／`goal_version`と相互照合する。raw入力、goal_ref、目的本文、detector evidence、owner identity、command本文、credential、request identity、M本文は送らない。Rust receiptの操作上の`decision`は常に`hold`で、比較採否は参考値のみ。
-- **対象単位:** 同一合成系列でASSERT／FAIL／SUSPEND／OUT_OF_SCOPEと、SUSPENDからapprove／reject／blockへの遷移を比較する。軸／閾値を安全に表現できない場合、policy外controller override、または固定小数点化の判断境界付近は`not_comparable`として送らず、既存Gateway判断へ影響させない。
+- **目的:** 現行TypeScript HDS-BRAINのpolicy採否とM writerをauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立算出するJ projection、停止後の人間復帰、およびL3承認済みM更新の有限な残差状態を比較する。
+- **producer／consumer:** `HDSUpperController.decide()`／`resume()`と、Gatewayの意味候補採用・引用判断再評価の成功commit分岐がprojectionを作る。通常inbound、resume、L3 memory approvalの既存observerから同じRust processへ順に渡し、比較receiptをGatewayの非権威ログへ返す。未確定のM再評価数・明示された未評価状態・再評価済み／残存数だけを集計し、IDや個々の参照は渡さない。
+- **入力・出力:** 軸名、score、weight、lifecycle状態、policy閾値、TypeScript採否を送る。resume時は元のpolicy SUSPENDと`owner_verdict`、`resume_allowed`、復帰後decision、command有無だけを追加する。L3記憶遷移では承認／適用状態、許可状態ではない固定区分、および上限512の集計数だけを追加する。検証済みのpurpose-bound plan computeに限り、`SHA-256(goal_ref)`・purpose version・purpose digestを追加し、IPCの`goal_id`／`goal_version`と相互照合する。raw入力、goal_ref、目的本文、detector evidence、owner identity、source/target/judgment ID、digest、command本文、credential、request identity、M本文は送らない。Rust receiptの操作上の`decision`は常に`hold`で、比較採否は参考値のみ。
+- **対象単位:** 同一合成系列でASSERT／FAIL／SUSPEND／OUT_OF_SCOPE、SUSPENDからapprove／reject／blockへの遷移、owner L3記憶採用時の未評価・未再評価残差、および指定J判断の再評価済み／残存数を比較する。軸／閾値を安全に表現できない場合、policy外controller override、または固定小数点化の判断境界付近は`not_comparable`として送らず、既存Gateway判断へ影響させない。
 - **継続条件:** Rust shadowは作用権限・M正本writerを持たない。Rust起動・IPC失敗・queue上限・比較不一致はTypeScript authorityへ反映しない。比較不一致は観測し、原因を次の施工へ渡す。
-- **この単位で未接続:** 停止／復帰判断、owner memory approval、残差を含むJ/M全体比較、およびsingle-writer cutover。C08.03実provider・OD-03 live外部作用・他repo書込み・P13公開／出荷GOも保留する。
+- **この単位で未接続:** J/Mの全体意味比較、Rust shadowのsingle-writer cutover。C08.03実provider・OD-03 live外部作用・他repo書込み・P13公開／出荷GOも保留する。
 - **必要最小確認:** HDS／Gateway typecheck・build、Rust compile／test、Rust実processを通す合成4分岐とSUSPEND→resume、IPC拒否・無作用停止。全workspace suite・QE_QC／QE_QA・実provider・実外部作用・5OS実機の成功へ転記しない。
 
-今回、停止／復帰の比較材料を追加し、approve／reject／blockを匿名projectionからRust実processへ通した。限定確認はHDS typecheck/build/standalone、HDS controller・IPC 80件、Gateway typecheck/build・shadow observer 2件、Rust cargo test 2件、`pnpm docs:check`がPASS。これはQE_BUILDの接続確認であり、全workspace suite、QC、QAの結果ではない。owner memory approvalと残差を含むJ/M比較は未接続であり、K-B5は継続する。目的version bindingは投影とIPC間の一致を確認した段階で、目的に沿ったJ採否全体の比較成立とは扱わない。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
+今回の変更で、L3意味採用・引用判断再評価の成功commitを、本文／識別子／digestを含まないv4 projectionとしてRust実processへ接続した。Rust側は上限付き集計と意味残差を独立比較し、比較不一致もauthorityやMへ戻さない。限定確認はHDS typecheck／build・controller／IPC 81件、Gateway typecheck／build・shadow observer／実Gateway L3 memory smoke 3件、Rust cargo test 2件、cargo fmt check、`pnpm docs:check`がPASS。全workspace suite、QE_QC／QE_QA、実provider、実外部作用、5OS実機の結果ではない。K-B5はJ/Mの全体意味比較とsingle-writer cutoverが未成立のため継続する。目的version bindingは投影とIPC間の一致を確認した段階で、目的に沿ったJ採否全体の比較成立とは扱わない。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
 
 ## Gitと復旧
 
