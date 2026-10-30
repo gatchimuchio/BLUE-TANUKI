@@ -11,7 +11,7 @@ import { HDSUpperController } from "../src/controller.js";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v4";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v5";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
