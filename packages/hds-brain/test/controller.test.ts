@@ -856,7 +856,7 @@ describe("HDSUpperController.resume()", () => {
     expect(command).not.toBeNull();
     expect(runtime_kernel_j_projection.status).toBe("comparable");
     if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
-    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v9");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v10");
     expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_id).toBe("per_axis_suspend_below");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_axis).toBe("input_validity");
@@ -881,14 +881,18 @@ describe("HDSUpperController.resume()", () => {
       kind: "meaning_update_adoption",
       owner_verdict: "approve",
       memory_application_status: "applied",
+      memory_revision_before: 1,
+      memory_revision_after: 2,
       reference_review_status: "prior_version_unverified",
       pending_reassessment_required_count: 2,
     });
     expect(adoption.status).toBe("comparable");
     if (adoption.status !== "comparable") throw new Error("memory adoption projection unavailable");
-    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v9");
+    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v10");
     expect(adoption.projection.memory_transition).toMatchObject({
       kind: "meaning_update_adoption",
+      memory_revision_before: 1,
+      memory_revision_after: 2,
       semantic_relation_status: "not_assessed",
       pending_reassessment_required_count: 2,
       typescript_residual_status: "meaning_unverified_with_reassessment_pending",
@@ -899,6 +903,8 @@ describe("HDSUpperController.resume()", () => {
       kind: "memory_judgment_reassessment",
       owner_verdict: "approve",
       memory_application_status: "applied",
+      memory_revision_before: 2,
+      memory_revision_after: 3,
       requested_judgment_count: 2,
       reassessed_judgment_count: 2,
       remaining_reassessment_required_count: 0,
@@ -907,6 +913,8 @@ describe("HDSUpperController.resume()", () => {
     if (reassessment.status !== "comparable") throw new Error("memory reassessment projection unavailable");
     expect(reassessment.projection.memory_transition).toMatchObject({
       kind: "memory_judgment_reassessment",
+      memory_revision_before: 2,
+      memory_revision_after: 3,
       typescript_residual_status: "named_judgments_reassessed",
       used_for_authority: false,
       may_execute: false,

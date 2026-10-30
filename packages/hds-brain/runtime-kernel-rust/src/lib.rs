@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v5";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v9";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v10";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -51,6 +51,7 @@ struct JProjectionComparison {
     policy_rule_matches: bool,
     lifecycle_matches: bool,
     memory_transition_kind: Option<&'static str>,
+    memory_revision_matches: Option<bool>,
     memory_transition_matches: Option<bool>,
     residual_status: Option<&'static str>,
     residual_status_matches: Option<bool>,
@@ -65,6 +66,7 @@ struct JPlanStepAdoptionComparison {
 struct JMemoryTransitionComparison {
     kind: &'static str,
     matches: bool,
+    memory_revision_matches: Option<bool>,
     residual_status: &'static str,
     residual_status_matches: bool,
 }
@@ -512,6 +514,7 @@ fn decision_payload(
         "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
+        "memory_revision_matches": comparison.and_then(|result| result.memory_revision_matches),
         "memory_transition_matches": comparison.and_then(|result| result.memory_transition_matches),
         "residual_status": comparison.and_then(|result| result.residual_status),
         "residual_status_matches": comparison.and_then(|result| result.residual_status_matches),
@@ -727,7 +730,9 @@ fn evaluate_runtime_kernel_j_projection(
         typescript_policy_rule_id == rule_id && typescript_policy_rule_axis == rule_axis;
     if let Some(memory_value) = object.get("memory_transition") {
         let memory = compare_memory_transition(memory_value)?;
-        let lifecycle_matches = memory.matches && memory.residual_status_matches;
+        let lifecycle_matches = memory.matches
+            && memory.residual_status_matches
+            && memory.memory_revision_matches != Some(false);
         let matches = purpose_binding_matches.unwrap_or(true)
             && purpose_binding_current_matches.unwrap_or(true)
             && plan_step_adoption.matches.unwrap_or(true)
@@ -756,6 +761,7 @@ fn evaluate_runtime_kernel_j_projection(
             policy_rule_matches,
             lifecycle_matches,
             memory_transition_kind: Some(memory.kind),
+            memory_revision_matches: memory.memory_revision_matches,
             memory_transition_matches: Some(memory.matches),
             residual_status: Some(memory.residual_status),
             residual_status_matches: Some(memory.residual_status_matches),
@@ -789,6 +795,7 @@ fn evaluate_runtime_kernel_j_projection(
             policy_rule_matches,
             lifecycle_matches: true,
             memory_transition_kind: None,
+            memory_revision_matches: None,
             memory_transition_matches: None,
             residual_status: None,
             residual_status_matches: None,
@@ -856,6 +863,7 @@ fn evaluate_runtime_kernel_j_projection(
         policy_rule_matches,
         lifecycle_matches,
         memory_transition_kind: None,
+        memory_revision_matches: None,
         memory_transition_matches: None,
         residual_status: None,
         residual_status_matches: None,
@@ -1042,7 +1050,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
     let kind = string_value(object.get("kind")).ok_or("projection_memory_transition_rejected")?;
     match kind {
         "meaning_update_adoption" => {
-            if object.len() != 10 {
+            if object.len() != 12 {
                 return Err("projection_memory_transition_rejected");
             }
             let owner_verdict = string_value(object.get("owner_verdict"))
@@ -1051,6 +1059,8 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             let application_status = string_value(object.get("memory_application_status"))
                 .filter(|value| matches!(*value, "applied" | "not_applied"))
                 .ok_or("projection_memory_transition_rejected")?;
+            let memory_revision_matches =
+                compare_memory_revision_transition(object, application_status)?;
             let reference_review_status = match object.get("reference_review_status") {
                 Some(Value::String(value))
                     if matches!(
@@ -1113,6 +1123,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 _ => false,
             };
             let transition_matches = application_matches
+                && memory_revision_matches != Some(false)
                 && semantic_relation_status == "not_assessed"
                 && follow_up_action_status == "unconfirmed"
                 && !used_for_authority
@@ -1133,12 +1144,13 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             Ok(JMemoryTransitionComparison {
                 kind: "meaning_update_adoption",
                 matches: transition_matches,
+                memory_revision_matches,
                 residual_status: expected_residual_status,
                 residual_status_matches,
             })
         }
         "memory_judgment_reassessment" => {
-            if object.len() != 9 {
+            if object.len() != 11 {
                 return Err("projection_memory_transition_rejected");
             }
             let owner_verdict = string_value(object.get("owner_verdict"))
@@ -1147,6 +1159,8 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             let application_status = string_value(object.get("memory_application_status"))
                 .filter(|value| matches!(*value, "applied" | "not_applied"))
                 .ok_or("projection_memory_transition_rejected")?;
+            let memory_revision_matches =
+                compare_memory_revision_transition(object, application_status)?;
             let requested_count = integer_value(object.get("requested_judgment_count"))
                 .filter(|value| (1..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
                 .ok_or("projection_memory_transition_rejected")?;
@@ -1182,7 +1196,10 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             } else {
                 not_applied
             };
-            let transition_matches = application_matches && !used_for_authority && !may_execute;
+            let transition_matches = application_matches
+                && memory_revision_matches != Some(false)
+                && !used_for_authority
+                && !may_execute;
             let expected_residual_status =
                 if reassessed_count == requested_count && remaining_count == 0 {
                     "named_judgments_reassessed"
@@ -1193,9 +1210,35 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             Ok(JMemoryTransitionComparison {
                 kind: "memory_judgment_reassessment",
                 matches: transition_matches,
+                memory_revision_matches,
                 residual_status: expected_residual_status,
                 residual_status_matches,
             })
+        }
+        _ => Err("projection_memory_transition_rejected"),
+    }
+}
+
+fn compare_memory_revision_transition(
+    object: &Map<String, Value>,
+    application_status: &str,
+) -> Result<Option<bool>, &'static str> {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    match application_status {
+        "applied" => {
+            let before = integer_value(object.get("memory_revision_before"))
+                .filter(|value| (0..=MAX_SAFE_INTEGER).contains(value))
+                .ok_or("projection_memory_transition_rejected")?;
+            let after = integer_value(object.get("memory_revision_after"))
+                .filter(|value| (1..=MAX_SAFE_INTEGER).contains(value))
+                .ok_or("projection_memory_transition_rejected")?;
+            Ok(Some(before.checked_add(1) == Some(after)))
+        }
+        "not_applied"
+            if object.get("memory_revision_before") == Some(&Value::Null)
+                && object.get("memory_revision_after") == Some(&Value::Null) =>
+        {
+            Ok(None)
         }
         _ => Err("projection_memory_transition_rejected"),
     }
@@ -1639,7 +1682,10 @@ fn current_utc_timestamp() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_utc_timestamp, days_from_civil, parse_utc_millis};
+    use super::{
+        compare_memory_transition, current_utc_timestamp, days_from_civil, parse_utc_millis,
+    };
+    use serde_json::json;
 
     #[test]
     fn timestamp_round_trip_epoch_and_leap_day() {
@@ -1660,5 +1706,57 @@ mod tests {
         let timestamp = current_utc_timestamp();
         assert_eq!(timestamp.len(), 24);
         assert!(parse_utc_millis(&timestamp).is_some());
+    }
+
+    #[test]
+    fn memory_transition_shadow_compares_the_m_receipt_revision() {
+        let projection = json!({
+            "kind": "meaning_update_adoption",
+            "owner_verdict": "approve",
+            "memory_application_status": "applied",
+            "memory_revision_before": 4,
+            "memory_revision_after": 5,
+            "reference_review_status": "prior_version_unverified",
+            "semantic_relation_status": "not_assessed",
+            "follow_up_action_status": "unconfirmed",
+            "pending_reassessment_required_count": 2,
+            "typescript_residual_status": "meaning_unverified_with_reassessment_pending",
+            "used_for_authority": false,
+            "may_execute": false
+        });
+        let matched = compare_memory_transition(&projection).expect("valid M revision transition");
+        assert_eq!(matched.memory_revision_matches, Some(true));
+        assert!(matched.matches);
+        assert!(matched.residual_status_matches);
+
+        let mut skipped_revision = projection;
+        skipped_revision["memory_revision_after"] = json!(6);
+        let mismatched =
+            compare_memory_transition(&skipped_revision).expect("well-formed revision gap");
+        assert_eq!(mismatched.memory_revision_matches, Some(false));
+        assert!(!mismatched.matches);
+        assert!(mismatched.residual_status_matches);
+    }
+
+    #[test]
+    fn memory_transition_without_application_has_no_m_revision() {
+        let projection = json!({
+            "kind": "meaning_update_adoption",
+            "owner_verdict": "reject",
+            "memory_application_status": "not_applied",
+            "memory_revision_before": null,
+            "memory_revision_after": null,
+            "reference_review_status": null,
+            "semantic_relation_status": "not_assessed",
+            "follow_up_action_status": "unconfirmed",
+            "pending_reassessment_required_count": null,
+            "typescript_residual_status": "adoption_rejected",
+            "used_for_authority": false,
+            "may_execute": false
+        });
+        let comparison =
+            compare_memory_transition(&projection).expect("valid non-applied transition");
+        assert_eq!(comparison.memory_revision_matches, None);
+        assert!(comparison.matches);
     }
 }

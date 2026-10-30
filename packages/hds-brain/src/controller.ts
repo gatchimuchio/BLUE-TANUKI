@@ -515,7 +515,8 @@ type MeaningUpdateCommitResult =
   | { readonly ok: true; readonly proposal_digest: string; readonly candidate_digest: string;
       readonly approval_status: "approved"; readonly memory_application_status: "applied";
       readonly follow_up_action_status: "unconfirmed";
-      readonly pending_reassessment_required_count: number | null }
+      readonly pending_reassessment_required_count: number | null;
+      readonly memory_revision_before?: number; readonly memory_revision_after?: number }
   | { readonly ok: false; readonly reason: string };
 
 function goalPurposeChangeReviewTarget(input: {
@@ -2361,7 +2362,9 @@ ${planControl.question}`,
     } catch { /* a missing shadow observation does not undo the committed M record */ }
     return { ok: true, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
-      pending_reassessment_required_count: pendingReassessmentRequiredCount };
+      pending_reassessment_required_count: pendingReassessmentRequiredCount,
+      memory_revision_before: committed.reconciliation.receipt.previous_revision,
+      memory_revision_after: committed.reconciliation.receipt.revision };
   }
 
   getMemoryJudgmentReassessmentProposals(sourceCommandId: string): OwnerMemoryJudgmentReassessmentProposal[] {
@@ -2425,6 +2428,7 @@ ${planControl.question}`,
   }): { readonly ok: true; readonly judgment_ref: string; readonly reassesses_digest: string;
       readonly requested_judgment_count: number; readonly reassessed_judgment_count: number;
       readonly remaining_reassessment_required_count: number;
+      readonly memory_revision_before?: number; readonly memory_revision_after?: number;
       readonly used_for_authority: false; readonly may_execute: false } | { readonly ok: false; readonly reason: string } {
     if (!this.meaningUpdateMemory) return { ok: false, reason: "meaning_update_memory_unavailable" };
     if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
@@ -2519,6 +2523,8 @@ ${planControl.question}`,
       requested_judgment_count: proposal.reassesses_judgment_refs.length,
       reassessed_judgment_count: reassessedJudgmentCount,
       remaining_reassessment_required_count: remainingReassessmentRequiredCount,
+      memory_revision_before: committed.reconciliation.receipt.previous_revision,
+      memory_revision_after: committed.reconciliation.receipt.revision,
       used_for_authority: false, may_execute: false };
   }
 

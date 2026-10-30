@@ -66,6 +66,9 @@ export type RuntimeKernelShadowObserverEvent =
     memory_transition_kind?: "meaning_update_adoption" | "memory_judgment_reassessment";
     memory_transition_owner_verdict?: "approve" | "reject" | "block";
     memory_application_status?: "applied" | "not_applied";
+    memory_revision_before?: number | null;
+    memory_revision_after?: number | null;
+    memory_revision_matches?: boolean | null;
     memory_transition_matches?: boolean;
     residual_status?: string;
     residual_status_matches?: boolean;
@@ -90,6 +93,13 @@ function memoryTransitionReceiptIsConsistent(
 ): boolean {
   let transitionMatches: boolean;
   let residualStatus: string;
+  const revisionPairValid = transition.memory_application_status === "applied"
+    ? Number.isSafeInteger(transition.memory_revision_before) && transition.memory_revision_before! >= 0 &&
+      Number.isSafeInteger(transition.memory_revision_after) && transition.memory_revision_after! >= 1
+    : transition.memory_revision_before === null && transition.memory_revision_after === null;
+  const memoryRevisionMatches = transition.memory_application_status === "applied"
+    ? revisionPairValid && transition.memory_revision_after === transition.memory_revision_before! + 1
+    : null;
 
   if (transition.kind === "meaning_update_adoption") {
     const reviewStatusIsValid = transition.reference_review_status === null ||
@@ -137,11 +147,12 @@ function memoryTransitionReceiptIsConsistent(
   }
 
   const residualStatusMatches = transition.typescript_residual_status === residualStatus;
-  return receipt.memory_transition_kind === transition.kind &&
-    receipt.memory_transition_matches === transitionMatches &&
+  return revisionPairValid && receipt.memory_revision_matches === memoryRevisionMatches &&
+    receipt.memory_transition_kind === transition.kind &&
+    receipt.memory_transition_matches === (transitionMatches && memoryRevisionMatches !== false) &&
     receipt.residual_status === residualStatus &&
     receipt.residual_status_matches === residualStatusMatches &&
-    receipt.lifecycle_matches === (transitionMatches && residualStatusMatches);
+    receipt.lifecycle_matches === (transitionMatches && memoryRevisionMatches !== false && residualStatusMatches);
 }
 
 function planStepAdoptionReceiptIsConsistent(
@@ -431,6 +442,7 @@ export async function startRuntimeKernelShadowObserver(options: {
                 typeof receipt.residual_status_matches !== "boolean" ||
                 !memoryTransitionReceiptIsConsistent(projection.memory_transition, receipt)
               : receipt.memory_transition_kind !== null || receipt.memory_transition_matches !== null ||
+                receipt.memory_revision_matches !== null ||
                 receipt.residual_status !== null || receipt.residual_status_matches !== null) ||
             (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
           throw new Error("invalid_shadow_receipt");
@@ -462,6 +474,9 @@ export async function startRuntimeKernelShadowObserver(options: {
             memory_transition_kind: projection.memory_transition.kind,
             memory_transition_owner_verdict: projection.memory_transition.owner_verdict,
             memory_application_status: projection.memory_transition.memory_application_status,
+            memory_revision_before: projection.memory_transition.memory_revision_before,
+            memory_revision_after: projection.memory_transition.memory_revision_after,
+            memory_revision_matches: receipt.memory_revision_matches as boolean | null,
             memory_transition_matches: receipt.memory_transition_matches as boolean,
             residual_status: receipt.residual_status as string,
             residual_status_matches: receipt.residual_status_matches as boolean,

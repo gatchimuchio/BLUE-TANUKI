@@ -126,6 +126,8 @@ export type RuntimeKernelJMemoryTransitionProjection =
     kind: "meaning_update_adoption";
     owner_verdict: ResumeVerdict;
     memory_application_status: "applied" | "not_applied";
+    memory_revision_before: number | null;
+    memory_revision_after: number | null;
     reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
     semantic_relation_status: "not_assessed";
     follow_up_action_status: "unconfirmed";
@@ -139,6 +141,8 @@ export type RuntimeKernelJMemoryTransitionProjection =
     kind: "memory_judgment_reassessment";
     owner_verdict: ResumeVerdict;
     memory_application_status: "applied" | "not_applied";
+    memory_revision_before: number | null;
+    memory_revision_after: number | null;
     requested_judgment_count: number;
     reassessed_judgment_count: number;
     remaining_reassessment_required_count: number;
@@ -152,6 +156,8 @@ export type RuntimeKernelJMemoryTransitionInput =
     kind: "meaning_update_adoption";
     owner_verdict: ResumeVerdict;
     memory_application_status: "applied" | "not_applied";
+    memory_revision_before: number | null;
+    memory_revision_after: number | null;
     reference_review_status: string | null;
     pending_reassessment_required_count: number | null;
   }
@@ -159,6 +165,8 @@ export type RuntimeKernelJMemoryTransitionInput =
     kind: "memory_judgment_reassessment";
     owner_verdict: ResumeVerdict;
     memory_application_status: "applied" | "not_applied";
+    memory_revision_before: number | null;
+    memory_revision_after: number | null;
     requested_judgment_count: number;
     reassessed_judgment_count: number;
     remaining_reassessment_required_count: number;
@@ -166,7 +174,7 @@ export type RuntimeKernelJMemoryTransitionInput =
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v9";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v10";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
@@ -302,7 +310,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v9",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v10",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
@@ -381,6 +389,11 @@ export function projectRuntimeKernelJMemoryTransition(
   if (input.kind === "meaning_update_adoption") {
     let referenceReviewStatus: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
     let pendingCount: number | null;
+    const revisionsValid = input.memory_application_status === "applied"
+      ? Number.isSafeInteger(input.memory_revision_before) && input.memory_revision_before! >= 0 &&
+        Number.isSafeInteger(input.memory_revision_after) && input.memory_revision_after! >= 1
+      : input.memory_revision_before === null && input.memory_revision_after === null;
+    if (!revisionsValid) return { status: "not_comparable", reason: "memory_transition_unavailable" };
     if (input.owner_verdict === "approve") {
       if (input.memory_application_status === "applied" && input.pending_reassessment_required_count === null) {
         return { status: "not_comparable", reason: "memory_transition_unavailable" };
@@ -419,6 +432,8 @@ export function projectRuntimeKernelJMemoryTransition(
       kind: input.kind,
       owner_verdict: input.owner_verdict,
       memory_application_status: input.memory_application_status,
+      memory_revision_before: input.memory_revision_before,
+      memory_revision_after: input.memory_revision_after,
       reference_review_status: referenceReviewStatus,
       semantic_relation_status: "not_assessed",
       follow_up_action_status: "unconfirmed",
@@ -428,6 +443,11 @@ export function projectRuntimeKernelJMemoryTransition(
       may_execute: false,
     };
   } else {
+    const revisionsValid = input.memory_application_status === "applied"
+      ? Number.isSafeInteger(input.memory_revision_before) && input.memory_revision_before! >= 0 &&
+        Number.isSafeInteger(input.memory_revision_after) && input.memory_revision_after! >= 1
+      : input.memory_revision_before === null && input.memory_revision_after === null;
+    if (!revisionsValid) return { status: "not_comparable", reason: "memory_transition_unavailable" };
     if (!isBoundedCount(input.requested_judgment_count) || input.requested_judgment_count < 1 ||
         !isBoundedCount(input.reassessed_judgment_count) ||
         !isBoundedCount(input.remaining_reassessment_required_count)) {
@@ -448,6 +468,8 @@ export function projectRuntimeKernelJMemoryTransition(
       kind: input.kind,
       owner_verdict: input.owner_verdict,
       memory_application_status: input.memory_application_status,
+      memory_revision_before: input.memory_revision_before,
+      memory_revision_after: input.memory_revision_after,
       requested_judgment_count: input.requested_judgment_count,
       reassessed_judgment_count: input.reassessed_judgment_count,
       remaining_reassessment_required_count: input.remaining_reassessment_required_count,
