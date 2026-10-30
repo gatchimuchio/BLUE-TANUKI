@@ -136,6 +136,32 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         },
       },
     };
+    const additionalMemoryTransitionCases: Array<{
+      input: Parameters<typeof projectRuntimeKernelJMemoryTransition>[1];
+      residual_status: string;
+    }> = [
+      { input: { kind: "meaning_update_adoption", owner_verdict: "reject", memory_application_status: "not_applied",
+        reference_review_status: null, pending_reassessment_required_count: null }, residual_status: "adoption_rejected" },
+      { input: { kind: "meaning_update_adoption", owner_verdict: "block", memory_application_status: "not_applied",
+        reference_review_status: null, pending_reassessment_required_count: null }, residual_status: "adoption_blocked" },
+      { input: { kind: "meaning_update_adoption", owner_verdict: "approve", memory_application_status: "not_applied",
+        reference_review_status: "prior_version_unverified", pending_reassessment_required_count: null },
+        residual_status: "adoption_approved_not_applied" },
+      { input: { kind: "memory_judgment_reassessment", owner_verdict: "reject", memory_application_status: "not_applied",
+        requested_judgment_count: 2, reassessed_judgment_count: 0, remaining_reassessment_required_count: 2 },
+        residual_status: "named_judgments_pending" },
+      { input: { kind: "memory_judgment_reassessment", owner_verdict: "block", memory_application_status: "not_applied",
+        requested_judgment_count: 2, reassessed_judgment_count: 0, remaining_reassessment_required_count: 2 },
+        residual_status: "named_judgments_pending" },
+      { input: { kind: "memory_judgment_reassessment", owner_verdict: "approve", memory_application_status: "not_applied",
+        requested_judgment_count: 2, reassessed_judgment_count: 0, remaining_reassessment_required_count: 2 },
+        residual_status: "named_judgments_pending" },
+    ];
+    const additionalMemoryTransitionProjections = additionalMemoryTransitionCases.map(({ input, residual_status }) => {
+      const result = projectRuntimeKernelJMemoryTransition(firstProjectionResult, input);
+      if (result.status !== "comparable") throw new Error("additional synthetic memory transition unavailable");
+      return { projection: result, residual_status };
+    });
 
     try {
       let observedCount = 0;
@@ -157,6 +183,9 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       await observeAndWait(meaningAdoptionProjection, false);
       await observeAndWait(memoryReassessmentProjection, false);
       await observeAndWait(mismatchedResidualProjection, false);
+      for (const { projection } of additionalMemoryTransitionProjections) {
+        await observeAndWait(projection, false);
+      }
     } finally {
       await observer!.shutdown();
     }
@@ -289,6 +318,24 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       residual_status: "meaning_unverified_with_reassessment_pending",
       residual_status_matches: false,
     });
+    for (const [index, { projection, residual_status }] of additionalMemoryTransitionProjections.entries()) {
+      const transition = projection.projection.memory_transition!;
+      expect(events[10 + index]).toMatchObject({
+        kind: "observation",
+        sequence: 10 + index,
+        shadow_revision: 10 + index,
+        comparison_kind: "memory_approval",
+        comparison_status: "matched",
+        lifecycle_matches: true,
+        command_present: false,
+        memory_transition_kind: transition.kind,
+        memory_transition_owner_verdict: transition.owner_verdict,
+        memory_application_status: transition.memory_application_status,
+        memory_transition_matches: true,
+        residual_status,
+        residual_status_matches: true,
+      });
+    }
     expect(JSON.stringify(events)).not.toContain("a".repeat(64));
   }, 120_000);
 
