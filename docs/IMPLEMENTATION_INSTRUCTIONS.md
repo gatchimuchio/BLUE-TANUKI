@@ -48,7 +48,7 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、既存`OperationPlanManager.goalPurposeRelationIssue()`とrequest-bound criterion gateの結果を、HDS Jが採用した個別plan stepの記録へ結んだ。候補のsupports／conflicts／unknown、引用検査状態、監査済みowner review結果、toolごとの全criterion relation（objective／safety、supports／conflicts）、根拠状態とdigestを保存する。criterion conflictは支持点との加算で相殺せず選択を止める。支持は申告に基づく未検証状態として保持し、目的関係は監査済みownerのsupports判定がなければ採用しない。実行直前に同じ記録を再計算し、選択時digestとの不一致はfail-closedにする。目的本文・task・criterion本文は新しいrecordへ含めない。既存checkpointとの互換性のため記録schemaはoptionalとし、記録のない既存bindingにも従来の鮮度・conflict gateを適用する。
 
-前段のplan adoption recordをRust shadowの同一合成系列へ接続した。HDS controllerは選択中commandのstored bindingを読み、保存assessment digestを内部検証してから目的review状態とcriterionの分類・上限64のrelation件数だけをprojection v7へ渡す。個別ID・文章・assessment digest・criterion digestは送らない。Rustは条件・件数の整合を独立分類し、Gateway observerはreceiptと比較statusを再確認してログへ記録する。legacy record欠落は`not_comparable`、plan未選択は`not_applicable`。Rustの判断は引き続き`hold`、作用なし、M正本書込みなし。
+前段のplan adoption recordをRust shadowの同一合成系列へ接続した。HDS controllerは選択中commandのstored bindingを読み、保存assessment digestを内部検証してから目的review状態とcriterionの分類・上限64のrelation件数だけをprojection v7へ渡す。個別ID・文章・assessment digest・criterion digestは送らない。Rustは条件・件数の整合を独立分類し、Gateway observerはreceiptと比較statusを再確認してログへ記録する。legacy record欠落は`not_comparable`、plan未選択は`not_applicable`。全体statusは不一致を優先し、一つも不一致がなくても現行目的台帳または選択済みplan記録が比較不能なら`not_comparable`とする。`matched`は適用対象の全比較軸が比較可能で一致した場合だけ返す。Rustの判断は引き続き`hold`、作用なし、M正本書込みなし。
 
 このコード経路は`WIRED`。`pnpm typecheck`、workspace `pnpm build`、Rust `cargo check`／`cargo fmt --check`、`pnpm docs:check`、`git diff --check`はPASS。行動test、Rust実process、Gateway runtime比較は未実施で、receiptの実行確認は`NOT_RUN`。K-B5のJ/M全体意味比較とsingle-writer cutoverは未成立のため継続する。
 

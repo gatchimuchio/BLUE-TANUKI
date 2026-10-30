@@ -36,13 +36,13 @@ struct Response {
 
 struct JProjectionComparison {
     comparison_kind: &'static str,
+    comparison_status: &'static str,
     typescript_decision: String,
     typescript_policy_rule_id: String,
     typescript_policy_rule_axis: Option<String>,
     runtime_kernel_j_decision: &'static str,
     rule_id: &'static str,
     rule_axis: Option<String>,
-    matches: bool,
     purpose_binding_matches: Option<bool>,
     current_goal_purpose_binding_status: &'static str,
     purpose_binding_current_matches: Option<bool>,
@@ -58,6 +58,7 @@ struct JProjectionComparison {
 
 struct JPlanStepAdoptionComparison {
     matches: Option<bool>,
+    comparable: bool,
     receipt: Value,
 }
 
@@ -73,6 +74,22 @@ struct GoalPurposeBinding {
     goal_id_digest: String,
     purpose_version: i64,
     purpose_digest: String,
+}
+
+fn projection_comparison_status(
+    matches: bool,
+    current_goal_purpose_binding_status: &str,
+    plan_step_adoption: &JPlanStepAdoptionComparison,
+) -> &'static str {
+    if !matches {
+        "mismatched"
+    } else if current_goal_purpose_binding_status == "ledger_unavailable"
+        || !plan_step_adoption.comparable
+    {
+        "not_comparable"
+    } else {
+        "matched"
+    }
 }
 
 pub fn run() -> Result<(), &'static str> {
@@ -314,10 +331,10 @@ fn process_message(
                         .ok_or("validated_goal_version_missing")?;
                     match evaluate_runtime_kernel_j_projection(input_text, goal_id, goal_version) {
                         Ok(comparison) => {
-                            let reason = if comparison.matches {
-                                "shadow_projection_matched"
-                            } else {
-                                "shadow_projection_mismatched"
+                            let reason = match comparison.comparison_status {
+                                "matched" => "shadow_projection_matched",
+                                "mismatched" => "shadow_projection_mismatched",
+                                _ => "shadow_projection_not_comparable",
                             };
                             let next_revision = revision.saturating_add(1);
                             (
@@ -462,7 +479,9 @@ fn decision_payload(
     let object = payload.as_object();
     let accepted = matches!(
         reason,
-        "shadow_projection_matched" | "shadow_projection_mismatched"
+        "shadow_projection_matched"
+            | "shadow_projection_mismatched"
+            | "shadow_projection_not_comparable"
     );
     json!({
         "accepted_for_shadow": accepted,
@@ -477,7 +496,7 @@ fn decision_payload(
         "expires_at_utc": object.and_then(|value| value.get("expires_at_utc")).and_then(Value::as_str),
         "expected_revision": object.and_then(|value| value.get("expected_revision")).and_then(Value::as_i64),
         "shadow_revision": shadow_revision,
-        "comparison_status": comparison.map(|result| if result.matches { "matched" } else { "mismatched" }),
+        "comparison_status": comparison.map(|result| result.comparison_status),
         "comparison_kind": comparison.map(|result| result.comparison_kind),
         "typescript_decision": comparison.map(|result| result.typescript_decision.as_str()),
         "typescript_policy_rule_id": comparison.map(|result| result.typescript_policy_rule_id.as_str()),
@@ -709,20 +728,26 @@ fn evaluate_runtime_kernel_j_projection(
     if let Some(memory_value) = object.get("memory_transition") {
         let memory = compare_memory_transition(memory_value)?;
         let lifecycle_matches = memory.matches && memory.residual_status_matches;
+        let matches = purpose_binding_matches.unwrap_or(true)
+            && purpose_binding_current_matches.unwrap_or(true)
+            && plan_step_adoption.matches.unwrap_or(true)
+            && policy_decision_matches
+            && policy_rule_matches
+            && lifecycle_matches;
+        let comparison_status = projection_comparison_status(
+            matches,
+            current_goal_purpose_binding_status,
+            &plan_step_adoption,
+        );
         return Ok(JProjectionComparison {
             comparison_kind: "memory_approval",
+            comparison_status,
             typescript_decision: policy_typescript_decision,
             typescript_policy_rule_id,
             typescript_policy_rule_axis,
             runtime_kernel_j_decision,
             rule_id: "memory_approval_transition",
             rule_axis: None,
-            matches: purpose_binding_matches.unwrap_or(true)
-                && purpose_binding_current_matches.unwrap_or(true)
-                && plan_step_adoption.matches.unwrap_or(true)
-                && policy_decision_matches
-                && policy_rule_matches
-                && lifecycle_matches,
             purpose_binding_matches,
             current_goal_purpose_binding_status,
             purpose_binding_current_matches,
@@ -737,19 +762,25 @@ fn evaluate_runtime_kernel_j_projection(
         });
     }
     let Some(resume_value) = object.get("resume_transition") else {
+        let matches = purpose_binding_matches.unwrap_or(true)
+            && purpose_binding_current_matches.unwrap_or(true)
+            && plan_step_adoption.matches.unwrap_or(true)
+            && policy_decision_matches
+            && policy_rule_matches;
+        let comparison_status = projection_comparison_status(
+            matches,
+            current_goal_purpose_binding_status,
+            &plan_step_adoption,
+        );
         return Ok(JProjectionComparison {
             comparison_kind: "decision",
+            comparison_status,
             typescript_decision: policy_typescript_decision,
             typescript_policy_rule_id,
             typescript_policy_rule_axis,
             runtime_kernel_j_decision,
             rule_id,
             rule_axis,
-            matches: purpose_binding_matches.unwrap_or(true)
-                && purpose_binding_current_matches.unwrap_or(true)
-                && plan_step_adoption.matches.unwrap_or(true)
-                && policy_decision_matches
-                && policy_rule_matches,
             purpose_binding_matches,
             current_goal_purpose_binding_status,
             purpose_binding_current_matches,
@@ -797,20 +828,26 @@ fn evaluate_runtime_kernel_j_projection(
     };
     let lifecycle_matches = typescript_resume_decision == runtime_kernel_j_decision
         && command_present == expected_command_present;
+    let matches = purpose_binding_matches.unwrap_or(true)
+        && purpose_binding_current_matches.unwrap_or(true)
+        && plan_step_adoption.matches.unwrap_or(true)
+        && policy_decision_matches
+        && policy_rule_matches
+        && lifecycle_matches;
+    let comparison_status = projection_comparison_status(
+        matches,
+        current_goal_purpose_binding_status,
+        &plan_step_adoption,
+    );
     Ok(JProjectionComparison {
         comparison_kind: "resume",
+        comparison_status,
         typescript_decision: typescript_resume_decision,
         typescript_policy_rule_id,
         typescript_policy_rule_axis,
         runtime_kernel_j_decision,
         rule_id: "human_resume_transition",
         rule_axis: None,
-        matches: purpose_binding_matches.unwrap_or(true)
-            && purpose_binding_current_matches.unwrap_or(true)
-            && plan_step_adoption.matches.unwrap_or(true)
-            && policy_decision_matches
-            && policy_rule_matches
-            && lifecycle_matches,
         purpose_binding_matches,
         current_goal_purpose_binding_status,
         purpose_binding_current_matches,
@@ -834,6 +871,7 @@ fn compare_plan_step_adoption(value: &Value) -> Result<JPlanStepAdoptionComparis
     match status {
         "not_applicable" if object.len() == 1 => Ok(JPlanStepAdoptionComparison {
             matches: None,
+            comparable: true,
             receipt: json!({ "status": "not_applicable", "matches": null }),
         }),
         "not_comparable" if object.len() == 2 => {
@@ -851,6 +889,7 @@ fn compare_plan_step_adoption(value: &Value) -> Result<JPlanStepAdoptionComparis
                 .ok_or("projection_plan_step_adoption_rejected")?;
             Ok(JPlanStepAdoptionComparison {
                 matches: None,
+                comparable: false,
                 receipt: json!({ "status": "not_comparable", "reason": reason, "matches": null }),
             })
         }
@@ -982,6 +1021,7 @@ fn compare_plan_step_adoption(value: &Value) -> Result<JPlanStepAdoptionComparis
             });
             Ok(JPlanStepAdoptionComparison {
                 matches: Some(matches),
+                comparable: true,
                 receipt: json!({
                     "status": comparison_status,
                     "matches": matches,

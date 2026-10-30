@@ -48,7 +48,7 @@ export type RuntimeKernelShadowObserverEvent =
     sequence: number;
     shadow_revision: number;
     comparison_kind: "decision" | "resume" | "memory_approval";
-    comparison_status: "matched" | "mismatched";
+    comparison_status: "matched" | "mismatched" | "not_comparable";
     policy_decision_matches: boolean;
     purpose_binding_matches: boolean | null;
     current_goal_purpose_binding_status: "not_bound" | "ledger_unavailable" | "goal_not_found" | "available";
@@ -353,7 +353,8 @@ export async function startRuntimeKernelShadowObserver(options: {
         );
         const comparisonStatus = receipt.reason === "shadow_projection_matched"
           ? "matched"
-          : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
+          : receipt.reason === "shadow_projection_mismatched" ? "mismatched"
+            : receipt.reason === "shadow_projection_not_comparable" ? "not_comparable" : undefined;
         const purposeBindingMatches: boolean | null | undefined = purposeBinding
           ? typeof receipt.purpose_binding_matches === "boolean" ? receipt.purpose_binding_matches : undefined
           : receipt.purpose_binding_matches === null ? null : undefined;
@@ -368,11 +369,15 @@ export async function startRuntimeKernelShadowObserver(options: {
           : currentPurposeBinding.status === "goal_not_found"
             ? receipt.purpose_binding_current_matches === false
             : receipt.purpose_binding_current_matches === null;
-        const expectedComparisonStatus = receipt.policy_decision_matches === true &&
+        const comparisonMatches = receipt.policy_decision_matches === true &&
           (purposeBindingMatches === true || purposeBindingMatches === null) &&
           (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
           receipt.policy_rule_matches === true &&
-          receipt.lifecycle_matches === true && planAdoption.matches !== false ? "matched" : "mismatched";
+          receipt.lifecycle_matches === true && planAdoption.matches !== false;
+        const comparisonIncomplete = currentPurposeBinding.status === "ledger_unavailable" ||
+          planAdoption.status === "not_comparable";
+        const expectedComparisonStatus = !comparisonMatches ? "mismatched"
+          : comparisonIncomplete ? "not_comparable" : "matched";
         const planStepAdoptionReceipt = planStepAdoptionReceiptIsConsistent(
           projection.plan_step_adoption,
           receipt.plan_step_adoption,
