@@ -214,11 +214,92 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         expect(resumed.command !== null).toBe(resumeCase.commandPresent);
       }
 
+      const failSafeController = new HDSUpperController({
+        self_health: { hds_available: false },
+      });
+      const failSafeInput = "synthetic fail-safe resume sentinel";
+      const failSafeRequestId = "runtime-shadow-fail-safe-resume";
+      const failSafeSuspension = failSafeController.decide({
+        id: failSafeRequestId,
+        channel: "webchat",
+        user: "synthetic-owner",
+        content: failSafeInput,
+        timestamp: Date.now(),
+      });
+      expect(failSafeSuspension.log.commit.decision).toBe("SUSPEND");
+      const failSafeResume = failSafeController.resume(failSafeRequestId, "approve", {
+        actor: "synthetic-owner-identity",
+        token_kind: "resume",
+      });
+      expect(failSafeResume.command).toBeNull();
+      expect(failSafeResume.log.commit.decision).toBe("SUSPEND");
+      expect(failSafeResume.runtime_kernel_j_projection.status).toBe("comparable");
+      if (failSafeResume.runtime_kernel_j_projection.status !== "comparable") {
+        throw new Error("synthetic fail-safe resume projection unavailable");
+      }
+      const failSafeObservation = JSON.stringify(failSafeResume.runtime_kernel_j_projection.projection);
+      expect(failSafeObservation).not.toContain(failSafeInput);
+      expect(failSafeObservation).not.toContain(failSafeRequestId);
+      expect(failSafeObservation).not.toContain("synthetic-owner-identity");
+      expect(failSafeResume.runtime_kernel_j_projection.projection).toMatchObject({
+        typescript_decision: "SUSPEND",
+        self_health_gate: { command_execution_allowed: false, downstream_execution_allowed: false },
+        resume_transition: {
+          owner_verdict: "approve",
+          resume_allowed: false,
+          typescript_result_decision: "SUSPEND",
+          command_present: false,
+        },
+      });
+
+      await process.send(signFrame(makeDecisionRequest(sessionId, 9, 6, failSafeObservation), key));
+      const failSafeReceipt = verifyFrame(await process.nextFrame(), key);
+      expect(failSafeReceipt.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "shadow_projection_matched",
+        decision: "hold",
+        comparison_kind: "resume",
+        comparison_status: "matched",
+        policy_decision_matches: true,
+        policy_rule_matches: true,
+        lifecycle_matches: true,
+        typescript_decision: "SUSPEND",
+        runtime_kernel_j_decision: "SUSPEND",
+        rule_id: "human_resume_transition",
+        shadow_revision: 7,
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      const forgedFailSafeResume = JSON.stringify({
+        ...failSafeResume.runtime_kernel_j_projection.projection,
+        resume_transition: {
+          ...failSafeResume.runtime_kernel_j_projection.projection.resume_transition!,
+          resume_allowed: true,
+          typescript_result_decision: "ASSERT",
+          command_present: true,
+        },
+      });
+      await process.send(signFrame(makeDecisionRequest(sessionId, 10, 7, forgedFailSafeResume), key));
+      const forgedFailSafeReceipt = verifyFrame(await process.nextFrame(), key);
+      expect(forgedFailSafeReceipt.payload).toMatchObject({
+        accepted_for_shadow: false,
+        reason: "projection_self_health_gate_rejected",
+        decision: "hold",
+        shadow_revision: 7,
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
       await process.send(signFrame({
         protocol_version: IPC_VERSION,
         direction: "parent_to_kernel",
         session_id: sessionId,
-        sequence: 9,
+        sequence: 11,
         message_kind: "shutdown",
         payload: {},
       }, key));

@@ -578,7 +578,7 @@ fn evaluate_runtime_kernel_j_projection(
             0
         } + if has_self_health_gate { 1 } else { 0 };
     if has_resume_transition && has_memory_transition
-        || has_self_health_gate && (has_resume_transition || has_memory_transition)
+        || has_self_health_gate && has_memory_transition
         || object.len() != expected_projection_fields
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
@@ -865,6 +865,11 @@ fn evaluate_runtime_kernel_j_projection(
         .get("command_present")
         .and_then(Value::as_bool)
         .ok_or("projection_resume_command_rejected")?;
+    if has_self_health_gate
+        && (resume_allowed || typescript_resume_decision != "SUSPEND" || command_present)
+    {
+        return Err("projection_self_health_gate_rejected");
+    }
     let (runtime_kernel_j_decision, expected_command_present) = if !resume_allowed {
         ("SUSPEND", false)
     } else {
