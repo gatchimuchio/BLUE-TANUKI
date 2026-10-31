@@ -38,6 +38,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 - **到達条件:** 通常handlerが起動した場合は従来どおり202受付、同一submissionの再送は同一request IDで再受付し、handlerを重複起動しない。handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。handler起動前の失敗と起動後の結果不明を区別し、前者は安全に新規受付可能、後者は再実行せず状態確認へ誘導する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。実行要約は`operation_core.execution.v1`の厳格なprojection・非権威flag・有効なhash chain・同一request IDをすべて確認し、nested resultとgeneric executor fallbackを区別する。欠落・不整合・履歴表示制限は未確認と表示する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。旧世代receiptの関連付けはcommand-key digestとBroker recordが一致し、verified bindingが一件で、表示上限による省略がない場合に限る。既存保存結果の読取と要約表示は再実行を起こさず、旧receiptからJ/M更新・承認復元を起こさない。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
 - **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。一般chatのraw回答本文は耐久保存・再配信しない。保存内容の再読はHDS承認済みreceiptを持つverified `file.search`に限る。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSがowner-bound plan/revision/stepを再検証して選択した単一commandに限り、既存process policyのtool区分を適用する。一般chat、C候補、Gateway／metadataによる権限昇格は認めず、L3／Approval／Broker判定を維持する。
 
+**最新BUILD差分（2026-11-01）:** 合成Cがowner指定語句によるsandbox内のread-only `file.search`を直接計画でき、検索結果のrequest binding・形状・Broker観測をHDSの結果確定／復旧照合で検証するコードを追加した。結果consumerとM receiptは既存経路を使う。全workspace typecheck/buildはPASS。専用process実行は未実施なので、この新入力形のruntime接続は`CODE_PRESENT`に留める。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QAは未成立。
+
 #### 2026-10-31 E2E-01 BUILD接続 — owner task受付の耐久重複抑止
 
 Control Centerは`sessionStorage`へUUIDv4を保持し、POSTの応答が失われた場合に同じ`submission_id`でのみ再送する。Gatewayは`BLUE_TANUKI_STATE_ROOT/private-state/webchat-owner-task-inbox/owner-task-inbox.sqlite`にsubmission ID digest、payload digest、server request ID、delivery stateだけを保存し、task本文・返信先を永続化しない。同一ID／同一内容の再送は同じrequest IDを返してHDS handlerを再呼出しせず、payload差替えは409 conflict、Gateway再起動で`dispatching`だった記録は`outcome_unknown`へ遷移して再実行を拒む。handler開始前の失敗は再送可能な固定statusに分け、開始後の例外は結果不明として保持する。HDS authority、Approval／L3、Broker、M writer、既存WebSocket deliveryの意味は変更しない。
@@ -345,6 +347,16 @@ HDSのticket digest生成試験1件、Gateway投影試験1件、WebChat相関試
 Windows隔離Gateway process test `BT-U-C08.01-P-E2E`は1 selected PASS（同fileの他4件はpattern skip）。Ownerから送った動的task本文の相対filename／一行本文がcreate-only `file.write`へ届き、目的関係L3審査・同plan/revisionのstep審査・既存Approval／Broker・write結果／M receiptを通った。Gateway再起動後に同一plan／task identityとwrite receiptを復元し、同一taskの単一file `file.search`候補・M receiptまで進み、二度目のGateway再起動後も同じ検索結果を既存`plan:result`で読み出せた。結果読取後もtest-owned fileは一件で、再検索・再書込みなし。対象task中の実provider呼出しなし。Gateway package typecheck／buildもPASS。初回実行は名前filterがVitestへ渡らず全fileを対象にしたため停止し、正しい`--testNamePattern`で対象一件を再実行した。この証拠はこの限定synthetic taskのruntime経路を`WIRED`とする範囲であり、独立した一般C、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立させない。workspace suite、provider／live外部作用、QE_QC／QE_QAはNOT_RUN。
 
 **次のproducer／consumer:** 現行rev3.0の施工順と最新実物を再照合し、QE_BUILDとして次の未接続な通常Owner仕事のproducer／consumerを一件選ぶ。既存権限・Approval／Broker・Mのwriterは維持し、実provider・live外部作用・広域QC／QA・Rust cutoverは行わない。
+
+#### 2026-11-01 E2E-01 BUILD接続 — owner task語句指定のread-only file.search候補
+
+開発用synthetic Cが、固定demo／file.write taskに加えて、`sandbox内のテキストファイルで次の語句を検索してください。\n検索語: <語句>`の厳密なtask形から、sandbox全体を対象に最大5件を返すread-only `file.search`候補を作れるようにした。語句は空文字・前後空白・制御文字を拒み、最大200文字。検索対象は既存`BLUE_TANUKI_FILE_ROOT`境界内で、HDSの`L1_observe`／Approval Gate／Broker経路を使い、外部作用・書込み・削除を行わない。
+
+新しい`file_search_result_matches`契約は、要求とdirectory targetの一致、root・query・上限、bounded match path／行番号／本文長を結び、余分なresult fieldを拒む。Broker target-version observationが含まれる場合はschema、要求root／任意file path、走査件数も照合する。検索の完全性は`unknown`のまま維持する。このvalidatorはHDSのresult確定、checkpoint検証、Gateway recovery inspectionで共用し、既存M receipt／`plan:result` consumerを再利用する。新しい検索結果をruntimeで実行・表示した証拠はまだない。
+
+`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債76件は既存注意として残る。専用process／WebChat実行、全workspace test suite、実provider／live外部作用、QE_QC／QE_QAはNOT_RUN。したがってこのtask入力形の状態は`CODE_PRESENT`であり、runtime `WIRED`、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
+
+**次のproducer／consumer:** ownerが指定した一つの相対file pathに対するread-only `file.search`候補を、既存の対象観測・結果/M・`plan:result`へ結ぶ。その後、検索で得た対象を使う変更仕事は明示的な目的束縛、L3 no-store内容審査、Approval／Broker再照合を通す別のBUILD単位として進める。
 
 ## Gitと復旧
 

@@ -3,7 +3,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { operationPlanCheckpointPlanIdDigest, operationPlanDigest, operationPlanTaskIdentityDigest, partitionOperationPlanCheckpointForRuntime,
+import { operationPlanCheckpointPlanIdDigest, operationPlanDigest, operationPlanResultValidationMatches, operationPlanTaskIdentityDigest, partitionOperationPlanCheckpointForRuntime,
   receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointEnvelopeSchema, OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema,
   type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
@@ -300,9 +300,7 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
       const resultMismatch = !binding || result.plan_id !== planId || result.request_id !== requestId ||
         result.operation !== binding.operation || result.expires_at_ms !== result.observed_at_ms + 600_000 ||
         operationPlanDigest(result.target) !== operationPlanDigest(binding.prepared_step.target) || !validations?.length ||
-        !validations.every((validation) => validation.method === "result_equals" &&
-          operationPlanDigest(validation.target) === operationPlanDigest(result.target) &&
-          operationPlanDigest(validation.expected) === operationPlanDigest(result.output));
+        !validations.every((validation) => operationPlanResultValidationMatches(validation, binding!.prepared_step, result.output));
       if (resultMismatch) {
         if (binding) invalidResultCommands.add(binding.command_id);
         else {

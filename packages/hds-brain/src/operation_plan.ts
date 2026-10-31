@@ -18,6 +18,7 @@ import {
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema, type OperationPlanExternalReceiptObservation,
+  FileSearchTargetVersionObservationSchema,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   OperationPlanComputeSourceObservationSchema,
@@ -538,6 +539,78 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+function isFileSearchResultRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFileSearchRelativeResultPath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 ||
+      value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+/**
+ * Checks an operation result against the plan's bounded validation contract.
+ * File search validates the request binding and result shape without predicting
+ * file contents or claiming that a bounded search was complete.
+ */
+export function operationPlanResultValidationMatches(
+  validation: NonNullable<OperationStep["preparation"]>["validation"][number],
+  step: OperationStep,
+  output: unknown,
+): boolean {
+  if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "result_equals") {
+    return operationPlanDigest(validation.expected) === operationPlanDigest(output);
+  }
+  if (validation.method !== "file_search_result_matches" || step.operation !== "file.search" ||
+      step.target.kind !== "directory" || !isFileSearchResultRecord(validation.expected) ||
+      !isFileSearchResultRecord(output)) return false;
+
+  const expected = validation.expected;
+  const parameters = step.parameters;
+  if (!parameters || expected.schema_version !== "blue-tanuki.file-search-result-validation.v1" ||
+      typeof expected.root !== "string" || expected.root.length === 0 ||
+      typeof expected.sandbox_root !== "string" || expected.sandbox_root.length === 0 ||
+      typeof expected.query !== "string" || expected.query.length === 0 || expected.query.length > 2_000 ||
+      /[\u0000-\u001f\u007f]/u.test(expected.query) ||
+      !Number.isInteger(expected.max_results) || typeof expected.max_results !== "number" ||
+      expected.max_results < 1 || expected.max_results > 100 ||
+      step.target.id !== expected.root || parameters.root !== expected.root || parameters.query !== expected.query ||
+      parameters.max_results !== expected.max_results) return false;
+
+  const expectedKeys = new Set(["schema_version", "root", "sandbox_root", "query", "max_results", "file_path"]);
+  if (Object.keys(expected).some((key) => !expectedKeys.has(key))) return false;
+  const hasExpectedFilePath = Object.hasOwn(expected, "file_path");
+  const expectedFilePath = expected.file_path;
+  if (hasExpectedFilePath !== Object.hasOwn(parameters, "file_path") ||
+      (hasExpectedFilePath && (typeof expectedFilePath !== "string" || parameters.file_path !== expectedFilePath ||
+        !isFileSearchRelativeResultPath(expectedFilePath)))) return false;
+
+  if (output.root !== expected.root || output.sandbox_root !== expected.sandbox_root ||
+      output.query !== expected.query || typeof output.visited_files !== "number" ||
+      !Number.isInteger(output.visited_files) || output.visited_files < 0 || output.visited_files > 1_000 ||
+      !Array.isArray(output.matches) || output.matches.length > expected.max_results ||
+      (hasExpectedFilePath && output.visited_files !== 1)) return false;
+
+  const outputKeys = new Set(["root", "sandbox_root", "query", "visited_files", "matches", "target_version_observation"]);
+  if (Object.keys(output).some((key) => !outputKeys.has(key))) return false;
+  if (Object.hasOwn(output, "target_version_observation")) {
+    const targetVersion = FileSearchTargetVersionObservationSchema.safeParse(output.target_version_observation);
+    if (!targetVersion.success || targetVersion.data.requested_root_digest !== createHash("sha256").update(expected.root, "utf8").digest("hex") ||
+        targetVersion.data.files_examined !== output.visited_files ||
+        (hasExpectedFilePath && targetVersion.data.requested_path_digest !== createHash("sha256").update(expectedFilePath as string, "utf8").digest("hex")) ||
+        (!hasExpectedFilePath && targetVersion.data.requested_path_digest !== undefined)) return false;
+  }
+
+  return output.matches.every((match) => isFileSearchResultRecord(match) &&
+    Object.keys(match).length === 3 && isFileSearchRelativeResultPath(match.path) &&
+    (!hasExpectedFilePath || match.path === expectedFilePath) &&
+    typeof match.line_number === "number" && Number.isInteger(match.line_number) && match.line_number > 0 &&
+    typeof match.line === "string" && match.line.length <= 240);
+}
+
 function gatewayExecutionReceiptEvidenceDigest(observation: OperationPlanExternalReceiptObservation): string {
   return operationPlanDigest({
     schema_version: "gateway-execution-receipt-evidence.v1",
@@ -694,9 +767,10 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
           result.operation !== binding.operation || result.expires_at_ms !== result.observed_at_ms + 600_000 ||
           operationPlanDigest(result.target) !== operationPlanDigest(binding.prepared_step.target) ||
           !binding.prepared_step.preparation?.validation.length ||
-          !binding.prepared_step.preparation.validation.every((v) => v.method === "result_equals" &&
-            operationPlanDigest(v.target) === operationPlanDigest(result.target) &&
-            operationPlanDigest(v.expected) === operationPlanDigest(result.output))) throw new Error("plan_checkpoint_result_mismatch");
+          !binding.prepared_step.preparation.validation.every((validation) =>
+            operationPlanResultValidationMatches(validation, binding.prepared_step, result.output))) {
+        throw new Error("plan_checkpoint_result_mismatch");
+      }
     }
   }
   const shellResultCommands = new Set<string>();
@@ -3726,8 +3800,8 @@ export class OperationPlanLedger {
     const output = OperationJsonValueSchema.safeParse(feedback.result);
     const verified = !!result && result.command_payload_digest === b.payload_digest && result.action_outcome === "reported_success" &&
       output.success && result.output_digest === createHash("sha256").update(JSON.stringify(feedback.result)).digest("hex") &&
-      !!step.preparation?.validation.length && step.preparation.validation.every((v) => v.method === "result_equals" &&
-        operationPlanDigest(v.target) === operationPlanDigest(step.target) && operationPlanDigest(v.expected) === operationPlanDigest(output.data));
+      !!step.preparation?.validation.length && step.preparation.validation.every((validation) =>
+        operationPlanResultValidationMatches(validation, step, output.data));
     this.change((state) => {
       const target = state.plans.find((entry) => entry.bindings.some((binding) => binding.command_id === b.command_id))!;
       const binding = target.bindings.find((binding) => binding.command_id === b.command_id)!;
