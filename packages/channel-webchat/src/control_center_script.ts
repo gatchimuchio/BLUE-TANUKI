@@ -780,22 +780,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerTokenInput = byId("owner-task-token");
         const button = byId("check-owner-task-status");
         const status = byId("owner-task-status");
+        const submissionSelect = byId("owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
         const submissionId = ownerTaskStatusSubmissionId();
         if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
         if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
+        const wasSubmissionSelectDisabled = submissionSelect.disabled;
+        const selectionChanged = function () { return ownerTaskStatusSubmissionId() !== submissionId; };
         button.disabled = true;
-        status.textContent = "Gatewayの受付記録を照会しています";
+        submissionSelect.disabled = true;
+        status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " のGateway受付記録を照会しています";
         status.className = "badge warn";
         try {
           const result = await postJson("/owner/task-submission-status", ownerToken, { submission_id: submissionId });
+          if (selectionChanged()) return;
           if (!result || typeof result !== "object" || Array.isArray(result)) {
             throw new Error("依頼状態の応答形式が不正です");
           }
           if (result.found === false) {
-            status.textContent = "受付記録がありません。これは未送信の証明ではありません。Tasks／RuntimeとGateway状態を確認し、同じ依頼IDを維持してください。";
+            status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " の受付記録がありません。これは未送信の証明ではありません。Tasks／RuntimeとGateway状態を確認し、同じ依頼IDを維持してください。";
             status.className = "badge warn";
-            if (byId("runtime-token").value.trim()) await loadRuntime("owner-task-status");
+            if (byId("runtime-token").value.trim()) {
+              await loadRuntime("owner-task-status");
+              if (selectionChanged()) return;
+            }
             return;
           }
           const validRequestId = typeof result.request_id === "string" &&
@@ -810,17 +818,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             outcome_unknown: "依頼結果は不明です。再送せず、Tasks／RuntimeとGateway状態を確認してください。",
             rejected: "依頼受付は拒否済みです。現在の委任目的とTasks／Runtimeを確認してください。"
           }[result.state];
-          const stateSummary = stateMessage + " 参照ID: " + result.request_id.slice(-12);
+          const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
             status.textContent = stateSummary + " Runtime token未入力のためplan照合は未実施です。";
           } else {
             status.textContent = stateSummary + " Runtime planを照合しています。";
             const runtimeSnapshot = await loadRuntime("owner-task-status");
-            status.textContent = stateSummary + " " + await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
+            if (selectionChanged()) return;
+            const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
+            if (selectionChanged()) return;
+            status.textContent = stateSummary + " " + correlation;
           }
+        } catch (error) {
+          if (selectionChanged()) return;
+          throw error;
         } finally {
-          ownerTokenInput.value = "";
+          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          submissionSelect.disabled = wasSubmissionSelectDisabled;
           button.disabled = false;
         }
       }
@@ -5280,7 +5295,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const status = byId("owner-task-status");
           status.textContent = error.message || "依頼状態を確認できませんでした";
           status.className = "badge bad";
-          byId("owner-task-token").value = "";
         });
       });
       byId("owner-task-status-submission-id").addEventListener("change", function () {
