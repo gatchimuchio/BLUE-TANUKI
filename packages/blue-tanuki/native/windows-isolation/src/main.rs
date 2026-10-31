@@ -8,6 +8,7 @@ fn main() {
 mod windows_provider {
     use std::ffi::{OsStr, OsString};
     use std::io::{self, BufRead};
+    use std::mem::MaybeUninit;
     use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
     use std::ptr::{null, null_mut};
@@ -24,7 +25,7 @@ mod windows_provider {
         GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::Isolation::{
-        CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+        CreateAppContainerProfile, DeleteAppContainerProfile,
     };
     use windows_sys::Win32::Security::{
         FreeSid, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
@@ -45,6 +46,7 @@ mod windows_provider {
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     };
     use windows_sys::Win32::System::Pipes::CreatePipe as CreateAnonymousPipe;
+    use windows_sys::Win32::System::Rpc::{UuidCreate, RPC_S_OK, RPC_S_UUID_LOCAL_ONLY};
     use windows_sys::Win32::System::Threading::{
         CreateEventW, CreateProcessW, DeleteProcThreadAttributeList,
         InitializeProcThreadAttributeList, ResumeThread, SetEvent, TerminateProcess,
@@ -54,7 +56,7 @@ mod windows_provider {
         STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
-    const APP_CONTAINER_NAME: &str = "BlueTanukiShellExecWindowsV1";
+    const APP_CONTAINER_NAME_PREFIX: &str = "BlueTanukiShellExecWindowsV1";
     const MAX_ROOT_ENTRIES: usize = 100_000;
     const MAX_TIMEOUT_MS: u32 = 60_000;
     const MAX_OUTPUT_BYTES: usize = 512 * 1024;
@@ -120,6 +122,98 @@ mod windows_provider {
         }
     }
 
+    struct AppContainerProfile {
+        name: Vec<u16>,
+        sid: AppContainerSid,
+        active: bool,
+    }
+
+    impl AppContainerProfile {
+        fn create() -> Result<Self, String> {
+            let mut uuid = MaybeUninit::<windows_sys::core::GUID>::uninit();
+            let uuid_result = unsafe { UuidCreate(uuid.as_mut_ptr()) };
+            if uuid_result != RPC_S_OK && uuid_result != RPC_S_UUID_LOCAL_ONLY {
+                return Err(format!(
+                    "windows_appcontainer_uuid_unavailable:{uuid_result}"
+                ));
+            }
+            let uuid = unsafe { uuid.assume_init() };
+            let name_text = format!(
+                "{APP_CONTAINER_NAME_PREFIX}-{:08x}{:04x}{:04x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                uuid.data1,
+                uuid.data2,
+                uuid.data3,
+                uuid.data4[0],
+                uuid.data4[1],
+                uuid.data4[2],
+                uuid.data4[3],
+                uuid.data4[4],
+                uuid.data4[5],
+                uuid.data4[6],
+                uuid.data4[7]
+            );
+            if name_text.len() > 64 {
+                return Err("windows_appcontainer_name_invalid".to_string());
+            }
+            let name = wide(OsStr::new(&name_text));
+            let display = wide(OsStr::new("BLUE-TANUKI shell execution"));
+            let description = wide(OsStr::new(
+                "Windows AppContainer for bounded shell execution",
+            ));
+            let mut sid = null_mut();
+            let result = unsafe {
+                CreateAppContainerProfile(
+                    name.as_ptr(),
+                    display.as_ptr(),
+                    description.as_ptr(),
+                    null(),
+                    0,
+                    &mut sid,
+                )
+            };
+            if result != 0 {
+                return Err(format!("windows_appcontainer_profile_unavailable:{result}"));
+            }
+            if sid.is_null() {
+                let cleanup = unsafe { DeleteAppContainerProfile(name.as_ptr()) };
+                return Err(if cleanup < 0 {
+                    format!("windows_appcontainer_sid_unavailable:profile_cleanup_failed:{cleanup}")
+                } else {
+                    "windows_appcontainer_sid_unavailable".to_string()
+                });
+            }
+            Ok(Self {
+                name,
+                sid: AppContainerSid(sid),
+                active: true,
+            })
+        }
+
+        fn delete(&mut self) -> Result<(), String> {
+            if !self.sid.0.is_null() {
+                unsafe { FreeSid(self.sid.0) };
+                self.sid.0 = null_mut();
+            }
+            if !self.active {
+                return Ok(());
+            }
+            let result = unsafe { DeleteAppContainerProfile(self.name.as_ptr()) };
+            if result < 0 {
+                return Err(format!(
+                    "windows_appcontainer_profile_cleanup_failed:{result}"
+                ));
+            }
+            self.active = false;
+            Ok(())
+        }
+    }
+
+    impl Drop for AppContainerProfile {
+        fn drop(&mut self) {
+            let _ = self.delete();
+        }
+    }
+
     struct AttributeList {
         ptr: *mut core::ffi::c_void,
         storage: Vec<usize>,
@@ -182,11 +276,17 @@ mod windows_provider {
             let mut grant = Self {
                 root: wide(root.as_os_str()),
                 sid: sid.0,
-                active: false,
+                active: true,
             };
-            grant.edit_acl(GRANT_ACCESS)?;
-            grant.active = true;
-            Ok(grant)
+            match grant.edit_acl(GRANT_ACCESS) {
+                Ok(()) => Ok(grant),
+                Err(apply_error) => match grant.revoke() {
+                    Ok(()) => Err(apply_error),
+                    Err(cleanup_error) => Err(format!(
+                        "windows_isolation_cleanup_failed:{apply_error}:{cleanup_error}"
+                    )),
+                },
+            }
         }
 
         fn revoke(&mut self) -> Result<(), String> {
@@ -353,12 +453,27 @@ mod windows_provider {
         let cwd = validate_cwd(&request.cwd, &root)?;
         scan_root(&root)?;
         let command = resolve_command(&request.command)?;
-        let sid = derive_app_container_sid()?;
-        let mut root_grant = TemporaryRootGrant::apply(&root, &sid)?;
-
-        let run_result = run_in_job(&request, &root, &cwd, &command, &sid);
-        let cleanup_result = root_grant.revoke();
-        match (run_result, cleanup_result) {
+        let mut profile = AppContainerProfile::create()?;
+        let run_result = {
+            let sid = &profile.sid;
+            match TemporaryRootGrant::apply(&root, sid) {
+                Ok(mut root_grant) => {
+                    let run_result = run_in_job(&request, &root, &cwd, &command, sid);
+                    let cleanup_result = root_grant.revoke();
+                    match (run_result, cleanup_result) {
+                        (Ok(result), Ok(())) => Ok(result),
+                        (Err(run_error), Ok(())) => Err(run_error),
+                        (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+                        (Err(run_error), Err(cleanup_error)) => Err(format!(
+                            "windows_isolation_cleanup_failed:{run_error}:{cleanup_error}"
+                        )),
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        };
+        let profile_cleanup = profile.delete();
+        match (run_result, profile_cleanup) {
             (Ok(result), Ok(())) => Ok(result),
             (Err(run_error), Ok(())) => Err(run_error),
             (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
@@ -525,36 +640,6 @@ mod windows_provider {
             }
         }
         Err("windows_isolation_command_unavailable".to_string())
-    }
-
-    fn derive_app_container_sid() -> Result<AppContainerSid, String> {
-        let name = wide(OsStr::new(APP_CONTAINER_NAME));
-        let mut sid = null_mut();
-        let display = wide(OsStr::new("BLUE-TANUKI shell execution"));
-        let description = wide(OsStr::new(
-            "Windows AppContainer for bounded shell execution",
-        ));
-        let result = unsafe {
-            CreateAppContainerProfile(
-                name.as_ptr(),
-                display.as_ptr(),
-                description.as_ptr(),
-                null(),
-                0,
-                &mut sid,
-            )
-        };
-        if result == 0 && !sid.is_null() {
-            return Ok(AppContainerSid(sid));
-        }
-        if result != (0x8007_00B7u32 as i32) {
-            return Err(format!("windows_appcontainer_profile_unavailable:{result}"));
-        }
-        let result = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
-        if result < 0 || sid.is_null() {
-            return Err(format!("windows_appcontainer_sid_unavailable:{result}"));
-        }
-        Ok(AppContainerSid(sid))
     }
 
     fn run_in_job(

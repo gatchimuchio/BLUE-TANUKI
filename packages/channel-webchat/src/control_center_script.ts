@@ -2068,7 +2068,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const unknown = step.status === "outcome_unknown";
               const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
               const savedResultReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
-                step.operation === "file.search" && step.status === "verified" &&
+                ["file.search", "file.edit"].includes(step.operation) && step.status === "verified" &&
                 binding.memory_status === "receipt_confirmed" && /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
                 /^[a-f0-9]{64}$/.test(binding.result_digest || "") && /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
               const savedResultButton = savedResultReady
@@ -2077,8 +2077,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-owner-reauthentication-binding="' +
                   escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
-                  '">保存済み検索結果を読む</button>' +
-                  '<p class="muted">J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。' +
+                  '">' + (step.operation === "file.edit" ? "保存済み編集結果を読む" : "保存済み検索結果を読む") + '</button>' +
+                  '<p class="muted">' + (step.operation === "file.edit"
+                    ? "J/M receipt確認済みの編集結果を表示します。変更後の内容や差分は再読込しません。"
+                    : "J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。") +
                   (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
               const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&

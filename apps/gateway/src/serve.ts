@@ -340,6 +340,15 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     return "保存済み結果を現在のJ/M状態と照合できませんでした。結果本文は返していません。Operation Plan／Recoveryから現在の状態を確認してください。";
   }
   const observedDate = new Date(projection.observed_at_ms);
+  if (projection.schema_version === "operation-plan-saved-result-return.v2") {
+    return [
+      "保存済みfile.edit結果です。J/M receiptを照合済みです。現在のファイル内容や差分は再読込していません。",
+      `対象: ${JSON.stringify(projection.path)}`,
+      `置換数: ${projection.replacements}`,
+      `書込byte数: ${projection.bytes_written}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,

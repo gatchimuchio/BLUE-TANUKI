@@ -54,8 +54,7 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
 
-export interface OperationPlanSavedResultReturnProjection {
-  readonly schema_version: "operation-plan-saved-result-return.v1";
+interface OperationPlanSavedResultReturnProjectionBase {
   readonly plan_id_digest: string;
   readonly revision_digest: string;
   readonly step_id_digest: string;
@@ -65,13 +64,25 @@ export interface OperationPlanSavedResultReturnProjection {
   readonly memory_revision: number;
   readonly memory_receipt_digest: string;
   readonly observed_at_ms: number;
-  readonly visited_files: number;
-  readonly search_completeness: "unknown";
-  readonly matches: readonly { readonly path: string; readonly line_number: number; readonly line: string }[];
   readonly used_as_world_truth: false;
   readonly used_for_authority: false;
   readonly may_execute: false;
 };
+
+export type OperationPlanSavedResultReturnProjection =
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v1";
+    readonly visited_files: number;
+    readonly search_completeness: "unknown";
+    readonly matches: readonly { readonly path: string; readonly line_number: number; readonly line: string }[];
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v2";
+    readonly operation: "file.edit";
+    readonly path: string;
+    readonly replacements: number;
+    readonly bytes_written: number;
+  });
 
 type MemoryInterpretationReviewSnapshot = {
   readonly record: {
@@ -3000,12 +3011,13 @@ export class OperationPlanLedger {
     const step = steps[0]!;
     const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
     const binding = bindings.at(-1);
-    if (bindings.length !== 1 || !binding || binding.status !== "verified" || binding.operation !== "file.search" ||
+    if (bindings.length !== 1 || !binding || binding.status !== "verified" || binding.operation !== step.operation ||
+        (step.operation !== "file.search" && step.operation !== "file.edit") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
     const results = plan.results.filter((result) => result.plan_id === current.plan.plan_id &&
       result.request_id === current.plan.request_id && result.step_id === step.step_id &&
-      result.operation === "file.search" && result.status === "succeeded");
+      result.operation === step.operation && result.status === "succeeded");
     if (results.length !== 1) throw new Error("plan_saved_result_result_unavailable");
     const result = results[0]!;
     const change = binding.memory_commit.changes[0];
@@ -3016,14 +3028,54 @@ export class OperationPlanLedger {
       throw new Error("plan_saved_result_record_mismatch");
     }
     const committedObservation = change.value as unknown as Record<string, unknown>;
-    if (operationPlanDigest(committedObservation.result) !== operationPlanDigest(result)) {
-      throw new Error("plan_saved_result_observation_mismatch");
-    }
+    if (binding.result_digest !== operationPlanDigest(result)) throw new Error("plan_saved_result_observation_mismatch");
     const parsedOutput = OperationJsonValueSchema.parse(result.output);
     if (!parsedOutput || typeof parsedOutput !== "object" || Array.isArray(parsedOutput)) {
       throw new Error("plan_saved_result_output_invalid");
     }
     const output = parsedOutput as Record<string, unknown>;
+    if (step.operation === "file.edit") {
+      const parameterValue = OperationJsonValueSchema.parse(step.parameters);
+      if (!parameterValue || typeof parameterValue !== "object" || Array.isArray(parameterValue) ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          committedObservation.operation !== "file.edit" || committedObservation.result_digest !== binding.result_digest ||
+          committedObservation.plan_binding_status !== "verified" || committedObservation.plan_validation_status !== "matched" ||
+          committedObservation.effect_observation !== "reported_success" || committedObservation.used_as_world_truth !== false ||
+          committedObservation.used_for_authority !== false || committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_observation_mismatch");
+      }
+      const parameters = parameterValue as Record<string, unknown>;
+      const path = parameters.path;
+      const expectedReplacements = parameters.expected_replacements;
+      const maxBytes = parameters.max_bytes;
+      if (typeof path !== "string" || path.length === 0 || path.length > 512 || path.startsWith("/") || path.startsWith("\\") ||
+          /^[a-z]:/i.test(path) || /[\u0000-\u001f\u007f]/.test(path) || path.split(/[\\/]/).includes("..") ||
+          !Number.isSafeInteger(expectedReplacements) || (expectedReplacements as number) < 1 ||
+          (expectedReplacements as number) > 100 || !Number.isSafeInteger(maxBytes) ||
+          (maxBytes as number) < 1 || (maxBytes as number) > 1_000_000 ||
+          Object.keys(output).sort().join(",") !== "bytes_written,edited,replacements" || output.edited !== true ||
+          output.replacements !== expectedReplacements || !Number.isSafeInteger(output.bytes_written) ||
+          (output.bytes_written as number) < 0 || (output.bytes_written as number) > (maxBytes as number)) {
+        throw new Error("plan_saved_result_output_invalid");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v2",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
+        observed_at_ms: result.observed_at_ms, operation: "file.edit", path,
+        replacements: output.replacements as number, bytes_written: output.bytes_written as number,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
+    if (step.operation !== "file.search" || operationPlanDigest(committedObservation.result) !== operationPlanDigest(result)) {
+      throw new Error("plan_saved_result_observation_mismatch");
+    }
     if (!Number.isSafeInteger(output.visited_files) || (output.visited_files as number) < 0 ||
         !Array.isArray(output.matches) || output.matches.length > 100) throw new Error("plan_saved_result_output_invalid");
     const matches = output.matches.map((value) => {
