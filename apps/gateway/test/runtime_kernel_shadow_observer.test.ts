@@ -37,6 +37,99 @@ const priorVersionReview = {
   candidate_content_digest_status: "verified" as const,
 };
 
+function createSelectedPlanAdoptionFixture() {
+  const root = mkdtempSync(join(tmpdir(), "blue-runtime-shadow-plan-adoption-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "blue.txt"), "synthetic plan adoption fixture\n", "utf8");
+  const store = new OperationPlanStateStore(join(root, "plan-state.sqlite"));
+  const requestId = "runtime-shadow-plan-adoption-request";
+  const planId = "runtime-shadow-plan-adoption-plan";
+  const query = "synthetic adoption query";
+  const goal = "Select one bounded synthetic file-search plan step for comparison.";
+  const target = { kind: "directory" as const, id: workspace };
+  let controller: HDSUpperController | undefined;
+  try {
+    const candidate: OperationPlan = {
+      version: "operation-core.v1",
+      plan_id: planId,
+      request_id: requestId,
+      state: "planned",
+      steps: [{
+        step_id: "search-synthetic-file",
+        operation: "file.search",
+        target,
+        state: "planned",
+        effects: ["read"],
+        permission: { risk: "low", approval_level: "L1_observe", final_review_required: false,
+          hds_brain_authority_required: true, approval_gate_required: true },
+        adapter: "internal_runtime",
+        adapter_is_authority: false,
+        command_generated_by_adapter_only: false,
+        parameters: { root: workspace, query, max_results: 1 },
+        preparation: { depends_on: [], bindings: [], preconditions: [],
+          validation: [{ check_id: "synthetic-search-result", method: "result_equals", target,
+            expected: { root: workspace, sandbox_root: workspace, query, visited_files: 1,
+              matches: [{ path: "blue.txt", line_number: 1, line: "synthetic plan adoption fixture" }] } }],
+          compensation: { available: false, reason: "read-only synthetic plan" } },
+      }],
+      rollback: { available: false },
+      raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    };
+    const requestCriteria = { status: "not_provided" as const, request_id: requestId,
+      content_sha256: createHash("sha256").update(goal, "utf8").digest("hex"), criteria: [], used_for_authority: false as const };
+    store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "synthetic-owner", channel: "webchat", goal, request_goal_criteria: requestCriteria,
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [] }],
+    }));
+    controller = new HDSUpperController({ operation_plan_state: store });
+    const savedPlan = controller.getRuntimeSnapshot().operation_plans.plans[0];
+    if (!savedPlan) throw new Error("synthetic plan checkpoint unavailable");
+    const review = controller.decide(createGatewayInternalInboundRequest({
+      id: "runtime-shadow-plan-adoption-review",
+      channel: "webchat",
+      user: "synthetic-owner",
+      timestamp: Date.now(),
+      content: `plan:review ${JSON.stringify({ plan_id: savedPlan.plan_id,
+        revision_digest: savedPlan.revision_digest, step_id: operationPlanDigest("search-synthetic-file") })}`,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer" },
+    }));
+    if (review.command?.type !== "tool_call") throw new Error("synthetic plan step was not selected");
+    const selectedProjection = controller.runtimeKernelJProjection(review.log, review.command);
+    if (selectedProjection.status !== "comparable") throw new Error("selected plan projection unavailable");
+    if (selectedProjection.projection.plan_step_adoption.status !== "available") {
+      throw new Error("selected plan adoption assessment unavailable");
+    }
+    return {
+      controller,
+      store,
+      root,
+      workspace,
+      planId,
+      requestId,
+      query,
+      goal,
+      selectedProjection,
+      privateValues: [workspace, planId, requestId, query, goal, "blue.txt"],
+      dispose(): void {
+        controller!.close();
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    controller?.close();
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 describe("Gateway Runtime Kernel shadow observer", () => {
   beforeAll(() => {
     execFileSync("cargo", ["build", "--locked", "--manifest-path", manifestPath], {
@@ -98,12 +191,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
 
   it("同じ合成系列のJ projectionをRustで再計算し、差分と非権限receiptを返す", async () => {
     const events: RuntimeKernelShadowObserverEvent[] = [];
-    const observer = await startRuntimeKernelShadowObserver({
-      enabled: true,
-      production: false,
-      onEvent: (event) => events.push(event),
-    });
-    expect(observer).toBeDefined();
+    let observer: Awaited<ReturnType<typeof startRuntimeKernelShadowObserver>> | undefined;
 
     const outOfScopePolicy = structuredClone(DEFAULT_POLICY);
     outOfScopePolicy.thresholds = { aggregate_assert: 0.9, out_of_scope_below: 0.8 };
@@ -235,8 +323,15 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       if (result.status !== "comparable") throw new Error("additional synthetic memory transition unavailable");
       return { projection: result, residual_status, comparison_status };
     });
+    const planFixture = createSelectedPlanAdoptionFixture();
 
     try {
+      observer = await startRuntimeKernelShadowObserver({
+        enabled: true,
+        production: false,
+        onEvent: (event) => events.push(event),
+      });
+      expect(observer).toBeDefined();
       let observedCount = 0;
       const observeAndWait = async (
         j_projection: typeof firstProjectionResult,
@@ -259,8 +354,10 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       for (const { projection } of additionalMemoryTransitionProjections) {
         await observeAndWait(projection, false);
       }
+      await observeAndWait(planFixture.selectedProjection, true);
     } finally {
-      await observer!.shutdown();
+      await observer?.shutdown();
+      planFixture.dispose();
     }
 
     expect(events[0]).toEqual({ kind: "ready" });
@@ -433,7 +530,23 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         residual_status_matches: true,
       });
     }
-    expect(JSON.stringify(events)).not.toContain("a".repeat(64));
+    expect(events[18]).toMatchObject({
+      kind: "observation",
+      sequence: 18,
+      shadow_revision: 18,
+      comparison_kind: "decision",
+      comparison_status: "matched",
+      command_presence_matches: true,
+      command_present: true,
+      plan_step_adoption: { status: "matched", matches: true },
+      typescript_plan_step_adoption_status: "matched",
+      plan_step_adoption_classification_agrees: true,
+    });
+    const serializedEvents = JSON.stringify(events);
+    for (const privateValue of planFixture.privateValues) {
+      expect(serializedEvents).not.toContain(privateValue);
+    }
+    expect(serializedEvents).not.toContain("a".repeat(64));
   }, 120_000);
 
   it("自己健全性fail-safeのSUSPENDをRust shadow receiptまで通し無作用で閉じる", async () => {
@@ -489,83 +602,19 @@ describe("Gateway Runtime Kernel shadow observer", () => {
   }, 120_000);
 
   it("選択済みplanの採否要約を実Rust processへ送り、非権威receiptで照合する", async () => {
-    const root = mkdtempSync(join(tmpdir(), "blue-runtime-shadow-plan-adoption-"));
-    const workspace = join(root, "workspace");
-    mkdirSync(workspace);
-    writeFileSync(join(workspace, "blue.txt"), "synthetic plan adoption fixture\n", "utf8");
-    const store = new OperationPlanStateStore(join(root, "plan-state.sqlite"));
-    const requestId = "runtime-shadow-plan-adoption-request";
-    const planId = "runtime-shadow-plan-adoption-plan";
-    const query = "synthetic adoption query";
-    const goal = "Select one bounded synthetic file-search plan step for comparison.";
-    const target = { kind: "directory" as const, id: workspace };
-    const candidate: OperationPlan = {
-      version: "operation-core.v1",
-      plan_id: planId,
-      request_id: requestId,
-      state: "planned",
-      steps: [{
-        step_id: "search-synthetic-file",
-        operation: "file.search",
-        target,
-        state: "planned",
-        effects: ["read"],
-        permission: { risk: "low", approval_level: "L1_observe", final_review_required: false,
-          hds_brain_authority_required: true, approval_gate_required: true },
-        adapter: "internal_runtime",
-        adapter_is_authority: false,
-        command_generated_by_adapter_only: false,
-        parameters: { root: workspace, query, max_results: 1 },
-        preparation: { depends_on: [], bindings: [], preconditions: [],
-          validation: [{ check_id: "synthetic-search-result", method: "result_equals", target,
-            expected: { root: workspace, sandbox_root: workspace, query, visited_files: 1,
-              matches: [{ path: "blue.txt", line_number: 1, line: "synthetic plan adoption fixture" }] } }],
-          compensation: { available: false, reason: "read-only synthetic plan" } },
-      }],
-      rollback: { available: false },
-      raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
-      planner_output_used_for_authority: false,
-      hds_brain_authority_required: true,
-    };
-    const requestCriteria = { status: "not_provided" as const, request_id: requestId,
-      content_sha256: createHash("sha256").update(goal, "utf8").digest("hex"), criteria: [], used_for_authority: false as const };
-    store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
-      schema_version: "operation-plan-state.v1",
-      plans: [{ owner: "synthetic-owner", channel: "webchat", goal, request_goal_criteria: requestCriteria,
-        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
-        receipt_observations: [], bindings: [], results: [] }],
-    }));
-    const controller = new HDSUpperController({ operation_plan_state: store });
+    const fixture = createSelectedPlanAdoptionFixture();
+    const { selectedProjection } = fixture;
     const events: RuntimeKernelShadowObserverEvent[] = [];
     let observer: Awaited<ReturnType<typeof startRuntimeKernelShadowObserver>> | undefined;
     try {
-      const savedPlan = controller.getRuntimeSnapshot().operation_plans.plans[0];
-      if (!savedPlan) throw new Error("synthetic plan checkpoint unavailable");
-      const review = controller.decide(createGatewayInternalInboundRequest({
-        id: "runtime-shadow-plan-adoption-review",
-        channel: "webchat",
-        user: "synthetic-owner",
-        timestamp: Date.now(),
-        content: `plan:review ${JSON.stringify({ plan_id: savedPlan.plan_id,
-          revision_digest: savedPlan.revision_digest, step_id: operationPlanDigest("search-synthetic-file") })}`,
-        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
-          "blue_tanuki.operator_surface": "developer" },
-      }));
-      expect(review.command?.type).toBe("tool_call");
-      if (!review.command) throw new Error("synthetic plan step was not selected");
-      const selectedProjection = controller.runtimeKernelJProjection(review.log, review.command);
-      expect(selectedProjection.status).toBe("comparable");
-      if (selectedProjection.status !== "comparable") throw new Error("selected plan projection unavailable");
-      expect(selectedProjection.projection.plan_step_adoption.status).toBe("available");
-      if (selectedProjection.projection.plan_step_adoption.status !== "available") {
-        throw new Error("selected plan adoption assessment unavailable");
-      }
+      const planAdoption = selectedProjection.projection.plan_step_adoption;
+      if (planAdoption.status !== "available") throw new Error("selected plan adoption assessment unavailable");
       const mismatchedProjection = {
         ...selectedProjection.projection,
         plan_step_adoption: {
-          ...selectedProjection.projection.plan_step_adoption,
+          ...planAdoption,
           criterion_relation: {
-            ...selectedProjection.projection.plan_step_adoption.criterion_relation,
+            ...planAdoption.criterion_relation,
             conflicts_count: 1,
           },
         },
@@ -580,9 +629,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       await waitForObservedEvents(events, 2);
     } finally {
       await observer?.shutdown();
-      controller.close();
-      store.close();
-      rmSync(root, { recursive: true, force: true });
+      fixture.dispose();
     }
 
     expect(events[0]).toEqual({ kind: "ready" });
@@ -593,7 +640,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       comparison_kind: "decision", comparison_status: "mismatched",
       plan_step_adoption: { status: "mismatched", matches: false } });
     const serializedEvents = JSON.stringify(events);
-    for (const privateValue of [workspace, planId, requestId, query, goal, "blue.txt"]) {
+    for (const privateValue of fixture.privateValues) {
       expect(serializedEvents).not.toContain(privateValue);
     }
   }, 120_000);
