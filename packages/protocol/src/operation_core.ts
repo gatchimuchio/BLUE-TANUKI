@@ -314,7 +314,7 @@ export const OperationStepPreparationSchema = z.object({
   }).strict()).max(100),
   validation: z.array(z.object({
     check_id: z.string().min(1).max(200),
-    method: z.enum(["result_equals", "revision_equals", "file_search_result_matches"]),
+    method: z.enum(["result_equals", "revision_equals", "file_search_result_matches", "file_edit_result_matches"]),
     target: OperationTargetSchema,
     expected: OperationJsonValueSchema,
   }).strict()).min(1).max(100),

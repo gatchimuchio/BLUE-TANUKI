@@ -358,6 +358,14 @@ Windows隔離Gateway process test `BT-U-C08.01-P-E2E`は1 selected PASS（同fil
 
 **次のproducer／consumer:** ownerが指定した一つの相対file pathに対するread-only `file.search`候補を、既存の対象観測・結果/M・`plan:result`へ結ぶ。その後、検索で得た対象を使う変更仕事は明示的な目的束縛、L3 no-store内容審査、Approval／Broker再照合を通す別のBUILD単位として進める。
 
+#### 2026-11-01 F01.01 BUILD接続 — owner指定相対pathのfile.edit候補
+
+合成C入力に厳格な3項目JSON（相対path・置換前・置換後）を追加し、固定sandbox内の安全な相対path、置換一回、512,000 byte上限を持つ単一`file.edit`候補へ接続した。候補は`goal_purpose_relation=unknown`を保ち、Jの明示目的束縛、既存L3 no-store内容審査、Approval／Broker再照合を通らなければ採用・実行できない。operation contractとHDS result validatorに編集結果のpath・置換数・byte上限確認を加えた。既存の編集実行側target／digest再照合を維持し、実ファイル編集は行っていない。
+
+`pnpm typecheck`、`pnpm build`、`pnpm docs:check`はPASS。専用process／WebChat、実LLM、実file.edit、全workspace test suite、実物QC／対象別QAはNOT_RUN。日本語基底の移行負債76件は既存注意として残る。このtask入力形は`CODE_PRESENT`であり、runtime `WIRED`や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
+
+**次のproducer／consumer:** file.edit候補の目的束縛からL3 no-store審査、Approval／Broker再照合、結果receipt、同一task identityのM／`plan:result`までを一つの合成隔離経路でつなぐ。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

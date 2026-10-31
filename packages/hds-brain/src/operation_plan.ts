@@ -564,6 +564,26 @@ export function operationPlanResultValidationMatches(
   if (validation.method === "result_equals") {
     return operationPlanDigest(validation.expected) === operationPlanDigest(output);
   }
+  if (validation.method === "file_edit_result_matches") {
+    if (step.operation !== "file.edit" || step.target.kind !== "file" ||
+        !isFileSearchResultRecord(validation.expected) || !isFileSearchResultRecord(output) || !step.parameters) return false;
+    const expected = validation.expected;
+    const parameters = step.parameters;
+    const expectedReplacements = parameters.expected_replacements ?? 1;
+    const maxBytes = parameters.max_bytes ?? 512_000;
+    if (Object.keys(expected).length !== 4 ||
+        expected.schema_version !== "blue-tanuki.file-edit-result-validation.v1" ||
+        typeof expected.path !== "string" || expected.path !== step.target.id || expected.path !== parameters.path ||
+        expected.expected_replacements !== expectedReplacements || expected.max_bytes !== maxBytes ||
+        typeof expectedReplacements !== "number" || !Number.isInteger(expectedReplacements) ||
+        expectedReplacements < 1 || expectedReplacements > 100 || typeof maxBytes !== "number" ||
+        !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_000_000 ||
+        Object.keys(output).length !== 3 || output.edited !== true ||
+        output.replacements !== expectedReplacements || typeof output.bytes_written !== "number" ||
+        !Number.isSafeInteger(output.bytes_written) || output.bytes_written < 0 || output.bytes_written > maxBytes) return false;
+    return ["schema_version", "path", "expected_replacements", "max_bytes"].every((key) => Object.hasOwn(expected, key)) &&
+      ["edited", "replacements", "bytes_written"].every((key) => Object.hasOwn(output, key));
+  }
   if (validation.method !== "file_search_result_matches" || step.operation !== "file.search" ||
       step.target.kind !== "directory" || !isFileSearchResultRecord(validation.expected) ||
       !isFileSearchResultRecord(output)) return false;
