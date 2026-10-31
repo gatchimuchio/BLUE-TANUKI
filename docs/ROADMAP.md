@@ -54,7 +54,7 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 今回のplan-step adoption observer差分では、Rust receiptの`not_comparable` status／reasonをTypeScript期待分類と分けて構造検査し、双方の固定statusとreasonを記録する。reason差は`mismatched`として観測し、未知reason・receipt形状不正・projection echo不一致は従来どおり拒否する。Gateway typecheck／buildと`pnpm docs:check`はPASS。test・Rust／Gateway process確認はNOT_RUN。HDS authorityと実行経路に影響せず、K-B5全体比較、製品全体BUILD、QC／QA、cutoverは未成立。
 
-2026-10-31、Gateway observerは受付時にRust向けwire JSONを固定し、TypeScript分類とRust process入力を同じsnapshotへ結び付けた。呼出元が`observe()`直後にprojectionを変更する合成条件でも、実Rust receiptとTypeScript分類の一致を確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust 4 testsがPASS。これはK-B5の非権威比較入力を同一化する接続であり、K-B5全体比較、製品全体BUILD、QE_QC／QE_QA、実provider、cutoverの成立を示さない。
+2026-10-31、Gateway observerは受付時にRust向けwire JSONを固定し、TypeScript分類とRust process入力を同じsnapshotへ結び付けた。呼出元が`observe()`直後にprojectionを変更する合成条件でも、実Rust receiptとTypeScript分類の一致を確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust 4 tests、`pnpm docs:check`がPASS。日本語基底監査の移行負債76件は既存注意として残る。これはK-B5の非権威比較入力を同一化する接続であり、K-B5全体比較、製品全体BUILD、QE_QC／QE_QA、実provider、cutoverの成立を示さない。
 
 ## 維持する境界
 
