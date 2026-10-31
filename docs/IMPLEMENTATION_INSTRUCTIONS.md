@@ -40,9 +40,9 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 #### 2026-10-31 E2E-01 Windows合成Gateway実processの接続済み範囲
 
-開発専用backendを通常の4役割agent-delegation経路へ接続した。子候補は固定・非権威の合成markerのみで、親候補は4役割・contract digest・固定task／目的contextが一致した場合だけ生成する。Windowsの実Gateway processで、通常`/owner/task-compute`→Jのfile.write候補→owner tokenによる目的関係L3審査→同一plan/revisionのowner step審査→HDS選択済みcommandのtool process policy→既存Approval Gate／Broker→file.write receiptとM→WebSocket結果返信まで成立した。検証済みreceiptから同一taskのread-only file.search候補も生成し、未選択のまま保持されることを確認した。試験は隔離stateと一時file rootのみを使い、作成ファイルはtest cleanupが除去、実provider呼出しは0件。対象Gateway process testはPASS（他3 casesはpatternで未実施）。workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`もPASS。この証拠は限定synthetic taskの`WIRED`接続であり、独立した意味推論、recovery/resume、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+開発専用backendを通常の4役割agent-delegation経路へ接続した。子候補は固定・非権威の合成markerのみで、親候補は4役割・contract digest・固定task／目的contextが一致した場合だけ生成する。Windowsの実Gateway processで、通常`/owner/task-compute`→Jのfile.write候補→owner tokenによる目的関係L3審査→同一plan/revisionのowner step審査→HDS選択済みcommandのtool process policy→既存Approval Gate／Broker→file.write receiptとM→WebSocket結果返信まで成立した。検証済みreceiptから同一taskのread-only file.search候補を生成し、ownerによる目的関係L3確認・step審査を経て既存read-only Broker workerを実行、検索結果を完全一致検証・M receipt確認後、保存結果を再検索せずWebChatへ返すところまで確認した。file.search候補に必須のpreparation／validationが欠けてHDSが`plan_step_not_ready`で拒否した欠陥を合成backendで修正した。候補は親plan digestに対応する初回の合成file.write pathだけを使い、HDS／ownerの再照合・承認境界は変えていない。試験は隔離stateと一時file rootのみを使い、実provider呼出しは0件、保存結果返却後も作成ファイルが一件のままで、test cleanupが除去した。Gateway実process testはPASS（1 selected、他3件pattern skip）。`pnpm --filter @blue-tanuki/core build`、workspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。日本語基底移行負債76件は既存注意として残る。この証拠は限定synthetic taskの`WIRED`接続であり、独立した意味推論、restart recovery、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
 
-**次のproducer／consumer:** 同一taskのfile.search候補をowner関係確認・step審査からread-only Broker結果、M receipt、表示／returnへつなぐ。その後、処理中断・再起動後に既存writeを重複実行せず同一taskの依存・receiptを再照合する復旧経路を接続する。provider/live外部作用は使わない。
+**次のproducer／consumer:** file.write実行中の中断・process restart後に、既存writeを重複実行せず、同一taskのcommand intent・execution receipt・M receipt・現在のplan dependencyを再照合する復旧経路を接続する。provider/live外部作用は使わない。
 
 #### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
 

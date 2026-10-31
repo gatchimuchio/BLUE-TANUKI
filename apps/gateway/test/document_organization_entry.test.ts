@@ -932,8 +932,110 @@ describe("delegated goal purpose owner review", () => {
       }, gateway, "file.write M receipt did not reach the same-task file.search planner");
       expect(verificationPlan).toMatchObject({ task_identity_digest: writePlan.task_identity_digest,
         goal_purpose_binding_status: "current", goal_purpose_relation: { candidate_outcome: "unknown" } });
-      expect((verificationPlan.steps as Array<Record<string, unknown>>).find((step) => step.operation === "file.search"))
-        .toMatchObject({ status: "not_selected" });
+      const verificationStep = (verificationPlan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.operation === "file.search");
+      expect(verificationStep).toMatchObject({ status: "not_selected" });
+
+      const verificationPlanId = String(verificationPlan.plan_id);
+      const verificationRevision = String(verificationPlan.revision_digest);
+      const verificationStepId = String(verificationStep?.step_id);
+      const verificationRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: verificationPlanId, revision_digest: verificationRevision, outcome: "supports" }),
+      });
+      expect(verificationRelationResponse.status).toBe(202);
+      const verificationRelation = await verificationRelationResponse.json() as { command_id?: string; status?: string };
+      expect(verificationRelation.status).toBe("approval_required");
+      const verificationQueue = await loadQueue();
+      const verificationPending = verificationQueue.pending_approvals
+        .find((item) => item.command_id === verificationRelation.command_id);
+      expect(verificationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        goal_purpose_relation_review: { outcome: "supports", review_status: "required", may_execute: false } });
+      const verificationRelationContentResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(verificationRelation.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(verificationRelationContentResponse.status).toBe(200);
+      const verificationRelationContent = await verificationRelationContentResponse.json() as Record<string, unknown>;
+      expect(verificationRelationContent).toMatchObject({ kind: "goal_purpose_relation",
+        task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+        purpose_text: proposedPurpose, candidate_outcome: "unknown", may_execute: false });
+      const verificationRelationApprovalResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(verificationRelation.command_id)),
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+          body: JSON.stringify({ verdict: "approve", approval_token: verificationPending?.approval_token,
+            content_review_digest: verificationRelationContent.command_digest }) },
+      );
+      expect(verificationRelationApprovalResponse.status).toBe(200);
+      expect(await verificationRelationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const verificationReviewReply = waitForWebChatSend(taskWebSocket, "synthetic file.search review");
+      const verificationReview = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: verificationPlanId, revision_digest: verificationRevision,
+          content: "plan:review " + JSON.stringify({ plan_id: verificationPlanId, revision_digest: verificationRevision,
+            step_id: verificationStepId, goal_purpose_binding: verificationPlan.goal_purpose_binding }) }),
+      });
+      expect(verificationReview.status).toBe(202);
+      const verificationReviewOutput = await verificationReviewReply;
+      expect(verificationReviewOutput.length).toBeGreaterThan(0);
+      let completedVerificationPlan: { plan: Record<string, unknown>; step: Record<string, unknown> };
+      try {
+        completedVerificationPlan = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === verificationPlanId);
+          const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+            candidate.step_id === verificationStepId);
+          return plan?.status === "results_verified" && step?.status === "verified" &&
+            (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed"
+            ? { plan, step } : null;
+        }, gateway, "synthetic same-task file.search did not reach a saved-result receipt");
+      } catch (error) {
+        const [snapshotResponse, approvalQueue] = await Promise.all([
+          fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
+          loadQueue(),
+        ]);
+        const snapshot = snapshotResponse.ok
+          ? await snapshotResponse.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } }
+          : undefined;
+        const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === verificationPlanId);
+        const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; review_reply=${verificationReviewOutput.slice(0, 2_000)}; ` +
+          `plan_status=${String(current?.status ?? "missing")}; relation=${JSON.stringify(current?.goal_purpose_relation)}; ` +
+          `steps=${JSON.stringify(steps.map((step) => ({ operation: step.operation, status: step.status, binding: step.binding })))}; ` +
+          `approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({ command_id: item.command_id,
+            approval_level: item.approval_level, final_review_required: item.final_review_required,
+            content_review_required: item.content_review_required })))}`);
+      }
+      expect(completedVerificationPlan.plan).toMatchObject({ status: "results_verified",
+        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
+      expect(completedVerificationPlan.step).toMatchObject({ operation: "file.search", status: "verified",
+        binding: { memory_status: "receipt_confirmed" } });
+
+      const savedResultReply = waitForWebChatSend(taskWebSocket, "synthetic saved file.search result return");
+      const savedResultResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: verificationPlanId, revision_digest: verificationRevision,
+          content: "plan:result " + JSON.stringify({ plan_id: verificationPlanId, revision_digest: verificationRevision,
+            step_id: verificationStepId }) }),
+      });
+      expect(savedResultResponse.status).toBe(202);
+      const savedResultOutput = await savedResultReply;
+      expect(savedResultOutput).toContain("保存時点のfile.search結果");
+      expect(savedResultOutput).toContain(createdFiles[0]!);
+      expect(savedResultOutput).toContain("現在のファイル状態は再検索していません");
+      expect(savedResultOutput).toContain("検索完全性は不明です");
+      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+        .toEqual(createdFiles);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
     } finally {
       taskWebSocket?.close();

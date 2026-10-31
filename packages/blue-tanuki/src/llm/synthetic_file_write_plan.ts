@@ -3,6 +3,7 @@ import {
   OperationPlanComputeSourceObservationSchema,
   type OperationPlan,
 } from "@blue-tanuki/protocol";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { sandboxRootFromEnv } from "../tools/file_safety.js";
 import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "./base.js";
 
@@ -21,6 +22,7 @@ type SyntheticPlanFixture = {
   readonly request_id: string;
   readonly kind: SyntheticPlanKind;
   readonly stage: SyntheticPlanStage;
+  readonly parent_plan_id_digest?: string;
   readonly worker_role?: typeof SYNTHETIC_AGENT_ROLES[number];
 };
 
@@ -155,6 +157,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   if (!requestId) return undefined;
   const task = taskMessages[0]!.content;
   let kind: SyntheticPlanKind;
+  let parentPlanIdDigest: string | undefined;
   if (task === SYNTHETIC_FILE_WRITE_PLAN_TASK && parentContexts.length === 0 && observationContexts.length === 0) {
     kind = "create";
   } else if (task === SYNTHETIC_FILE_WRITE_REPLAN_TASK && parentContexts.length === 1 && observationContexts.length === 1) {
@@ -165,17 +168,19 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
       ? OperationPlanComputeSourceObservationSchema.safeParse(observations[0])
       : undefined;
     if (parent?.original_task !== SYNTHETIC_FILE_WRITE_PLAN_TASK || !isDigest(parent.task_identity_digest) ||
+        !isDigest(parent.parent_plan_id_digest) ||
         !observation?.success || observation.data.source !== "verified_file_write_result" ||
         observation.data.operation !== "file.write" || observation.data.task_identity_digest !== parent.task_identity_digest) {
       return undefined;
     }
     kind = "verify";
+    parentPlanIdDigest = parent.parent_plan_id_digest;
   } else {
     return undefined;
   }
 
   if (delegationMessages.length === 0 && workerMessages.length === 0 && candidateMessages.length === 0 && userMessages.length === 1) {
-    return { request_id: requestId, kind, stage: "direct" };
+    return { request_id: requestId, kind, stage: "direct", ...(parentPlanIdDigest ? { parent_plan_id_digest: parentPlanIdDigest } : {}) };
   }
   if (delegationMessages.length !== 1) return undefined;
   const contract = parseAgentDelegationContract(delegationMessages[0]!.content);
@@ -187,14 +192,16 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
     const roleIndex = SYNTHETIC_AGENT_ROLES.findIndex((role) => role === roleMatch?.[1]);
     if (!roleMatch || roleIndex < 0 || roleMatch[2] !== contract.parent_goal_digest ||
         roleMatch[3] !== contract.criteria_digest || roleMatch[4] !== contract.termination_digest) return undefined;
-    return { request_id: requestId, kind, stage: "worker", worker_role: SYNTHETIC_AGENT_ROLES[roleIndex]! };
+    return { request_id: requestId, kind, stage: "worker", worker_role: SYNTHETIC_AGENT_ROLES[roleIndex]!,
+      ...(parentPlanIdDigest ? { parent_plan_id_digest: parentPlanIdDigest } : {}) };
   }
 
   if (workerMessages.length !== 0 || candidateMessages.length !== 1 || userMessages.length !== 2 ||
       !validSyntheticAgentCandidateSet(parseFinalJsonLine(candidateMessages[0]!.content), contract, requestId)) {
     return undefined;
   }
-  return { request_id: requestId, kind, stage: "parent" };
+  return { request_id: requestId, kind, stage: "parent",
+    ...(parentPlanIdDigest ? { parent_plan_id_digest: parentPlanIdDigest } : {}) };
 }
 
 /**
@@ -205,6 +212,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
 export class SyntheticFileWritePlanBackend implements LLMBackend {
   readonly name = SYNTHETIC_FILE_WRITE_PLAN_BACKEND;
   readonly capabilities = ["llm.text.generate"] as const;
+  private readonly createdPathByPlanIdDigest = new Map<string, string>();
 
   constructor(private readonly env: SyntheticPlanEnv) {}
 
@@ -238,8 +246,12 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     if (signal?.aborted) throw signal.reason ?? new Error("synthetic_plan_call_aborted");
 
     const identityDigest = createHash("sha256").update(requestId, "utf8").digest("hex");
-    const relativePath = `blue-tanuki-synthetic-${identityDigest.slice(0, 20)}.txt`;
     const isCreate = fixture.kind === "create";
+    const planId = `synthetic-plan-${identityDigest}`;
+    const generatedPath = `blue-tanuki-synthetic-${identityDigest.slice(0, 20)}.txt`;
+    const relativePath = isCreate ? generatedPath
+      : this.createdPathByPlanIdDigest.get(fixture.parent_plan_id_digest ?? "");
+    if (!relativePath) throw reject("Synthetic same-task verification requires its matching parent create candidate.");
     const target: OperationPlan["steps"][number]["target"] = isCreate
       ? { kind: "file", id: relativePath }
       : { kind: "directory", id: sandboxRoot };
@@ -297,10 +309,28 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
       adapter_is_authority: false as const,
       command_generated_by_adapter_only: false,
       parameters: { root: sandboxRoot, query: SYNTHETIC_FILE_CONTENT.trim(), max_results: 5 },
+      preparation: {
+        depends_on: [],
+        bindings: [],
+        preconditions: [],
+        validation: [{
+          check_id: "verified-synthetic-note-search",
+          method: "result_equals" as const,
+          target,
+          expected: {
+            root: sandboxRoot,
+            sandbox_root: sandboxRoot,
+            query: SYNTHETIC_FILE_CONTENT.trim(),
+            visited_files: 1,
+            matches: [{ path: relativePath, line_number: 1, line: SYNTHETIC_FILE_CONTENT.trim() }],
+          },
+        }],
+        compensation: { available: false, reason: "read-only search does not mutate the sandbox" },
+      },
     };
     const plan: OperationPlan = {
       version: "operation-core.v1",
-      plan_id: `synthetic-plan-${identityDigest}`,
+      plan_id: planId,
       request_id: requestId,
       state: "planned",
       steps: [step],
@@ -312,6 +342,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
       planner_output_used_for_authority: false,
       hds_brain_authority_required: true,
     };
+    if (isCreate) this.createdPathByPlanIdDigest.set(operationPlanDigest(planId), relativePath);
 
     return {
       content: JSON.stringify({

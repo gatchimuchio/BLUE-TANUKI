@@ -3579,3 +3579,22 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | 実provider／外部通信 | 未実施。provider呼出し0件。 |
 
 このlimited synthetic process evidenceはE2E-01全体、独立した意味推論、read-only再計画の実行・結果帰還、restart recovery、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。次は同一taskのread-only再計画候補をowner審査・実行・M・returnまで接続し、続いて復旧時の既存作用重複を防ぐ。
+
+## 2026-10-31 — E2E-01 同一task read-only再計画から保存結果return
+
+### 差分
+
+- 実process統合試験で、file.write M receiptを入力にした同一task `file.search`候補のowner目的関係L3審査・step審査・Broker worker・完全一致結果検証・M receipt・保存結果returnまで接続した。returnは保存済み結果から作られ、再検索を発生させない。対象fileが二重作成されないことも確認した。
+- 試験で合成backendのread-only stepに必須のpreparation／validationが欠け、HDSが`plan_step_not_ready`で拒否することを確認した。候補に完全一致期待値と読取専用補償条件を追加し、親plan digestに結び付いた初回合成write pathを使う。parent identityの不一致・cache欠落は候補生成を拒否し、権限やowner境界を拡張しない。
+
+### 検証
+
+| 確認 | 結果 |
+|---|---|
+| `document_organization_entry.test.ts` 対象Gateway実process test | PASS。1 selected、他3件pattern skip。 |
+| `pnpm --filter @blue-tanuki/core build` | PASS。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債76件は既存注意。 |
+| provider／実LLM／外部作用 | NOT_RUN。synthetic provider calls 0。 |
+
+この限定synthetic taskのread-only consumer接続は`WIRED`。独立した意味推論、restart recovery、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

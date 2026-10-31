@@ -12,13 +12,13 @@
 
 `/owner/task-compute`のhandler失敗時はtask本文・例外詳細・目的・credential・HDS commitを含まない固定`error` status frameを返信先へbest-effort通知し、handler未接続時は受付前に503で拒否する。またControl Centerは`channel_send`／`error`結果frame受信後、runtime tokenが入力済みなら`/runtime/snapshot`を再読込し、計画一覧を更新する。owner tokenで作成されたplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを付けたowner専用`/owner/inbound`へ接続済みである。今回、現在の目的版に結び付き、検証済みstepとM receiptを持つfile operation resultから、owner token限定で同一taskの次候補を依頼するControl Center操作を接続した。HDSは親planのowner／channel／現行revision、待機・復旧hold、目的版、結果観測とtask identityを入口および候補保持時に再照合し、親の原taskとtask identityを次候補へ引き継ぐ。候補は未実行で、既存step審査・Approval／Brokerを経る。親task contextとresult observationのprovider露出分類を分け、alternate providerは両sourceを明示許可した場合だけ使う。owner tokenのDeveloper operator経路は既存のwait／resume限定を維持し、HDSの権限・L3／Approval／Broker判定は変更しない。失敗statusは非権威の運転状態で、HDS判断・最終出力・Approval・実行receiptではない。通知は接続中WebSocketへのbest-effortまでで、切断後の永続再配送・Approval queue自動更新・runtime token未入力時の自動更新は未接続。今回の`pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS。test、Gateway実process smoke、実provider、実作用は未実施。コード経路は`WIRED`だが実行経路の一気通貫は未確認であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立のまま。
 
-最新接続の実process evidenceは下記「2026-10-31 E2E-01 現行接続点」に記録する。実WebChat相当の限定synthetic taskでcreate-only `file.write`の作用・receipt・返信までPASSし、read-only `file.search`は候補生成後のowner審査・実行consumerが未接続。provider／実LLMは呼び出していない。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+最新接続の実process evidenceは下記「2026-10-31 E2E-01 現行接続点」に記録する。実WebChat相当の限定synthetic taskでcreate-only `file.write`から同一task read-only `file.search`のowner審査・Broker結果・M receipt・保存結果returnまでPASSした。実provider／実LLMは呼び出していない。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
 ### 2026-10-31 E2E-01 現行接続点
 
-Windows上の隔離合成Gateway実processで、固定4役割delegation、目的関係のowner L3審査、同一plan/revisionのstep審査、HDSによる選択済みcommandのtool区分、既存process policy／Approval Gate／Broker、create-only file.write、検証済みM receipt、WebSocket replyまで接続した。receiptを根拠に同一taskのread-only file.search候補を再生成し、未選択を保った。対象test 1件PASS、他3件はpatternで未実施。provider呼出しなし、作成物はtestの一時file rootに限定しcleanup済み。HDSの一般chat／候補入力はtool権限を得ず、L3／Approval／Broker境界は維持されている。
+Windows上の隔離合成Gateway実processで、固定4役割delegation、目的関係のowner L3審査、同一plan/revisionのstep審査、HDSによる選択済みcommandのtool区分、既存process policy／Approval Gate／Broker、create-only file.write、検証済みM receipt、WebSocket replyまで接続した。receiptを根拠にした同一task read-only file.search候補は、owner L3関係確認・step審査後にBroker workerで検索し、完全一致検証とM receipt確認を通過した。ownerの保存結果returnは再検索を行わず、保存時点・検索完全性不明の注意を付けてWebChatへ返した。対象test 1件PASS、他3件はpatternで未実施。provider呼出しなし、作成物はtestの一時file rootに限定しcleanup済み。HDSの一般chat／候補入力はtool権限を得ず、L3／Approval／Broker境界は維持されている。
 
-この限定synthetic経路はE2E-01全体の完成ではない。次はread-only再計画候補のowner審査から実行・結果・M・returnを同一taskへ接続し、続けて中断／再起動後の復旧と既存作用の非重複を成立させる。全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、OS別QA、owner GOは未達。実provider／公開／外部作用なし。
+この限定synthetic経路はE2E-01全体の完成ではない。次は処理中断・process restart後に既存writeを重複実行せず、同一taskのcommand intent・execution receipt・M receipt・plan dependencyを再照合する復旧consumerを接続する。全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、OS別QA、owner GOは未達。実provider／公開／外部作用なし。
 
 ### 直近の過去BUILD_BATCH記録
 
