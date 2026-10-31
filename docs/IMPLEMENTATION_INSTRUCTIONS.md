@@ -28,7 +28,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 コード上、Gatewayのno-store content reviewからL3承認、同一proposal／candidate／target／source-observation digestの再照合、M適用、最終監査markerまでの既存接続を維持した。HDS 3 files／5 tests、HDS typecheck/build、HDS standalone smoke、Gateway typecheck/buildはPASS。`pnpm docs:check`はこの記録更新後に実行する。Gateway meaning-update process smokeは前バッチで起動後15秒以内にhealthへ到達せず、統合実行の証拠は未成立のまま。今回の経路抽出は既存責任境界の整理であり、新しい利用者仕事や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。K-B3全体の抽出完了は未確定、QE_QC／QE_QAは未開始。
 
-K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
+K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進めた。owner task受付状態から同一request IDのplan、同一task identityの計画表示範囲、依頼一致planのM receipt状態までをTasks consumerへread-only表示する差分を追加した。E2E-01全体は未成立のまま、次のQE_BUILDではK-B5の残る比較consumer接続を再開する。広域QC／QAは始めない。
 
 ### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。owner task受付の耐久重複抑止・read-only状態照会・Runtime plan digest相関・同一request IDの非権威な実行証拠表示をコード接続済み。詳細command resultが欠ける場合のgeneric executor feedback fallbackもUI consumerへ接続。保存済みfile.search結果はowner-bound plan:resultで再読できる。owner task照会IDは不透明IDのみ複数件をsession横断保持・選択可能で、status照会からRuntime相関まで選択IDの変化時に古い応答を捨てる。WebSocket予期切断後の最大5回再接続をコード接続（Gateway processでの確認は未実施）。ownerが選択したdigest-only file-state観測から同一taskのread-only `file.search`を審査・L3承認・M receipt・WebChat返信まで合成Gateway processで確認済み。E2E-01全体は未成立）
 
@@ -310,6 +310,14 @@ WebChat package typecheck／build、生成`CONTROL_CENTER_SCRIPT`構文解析、
 対象の`document_organization_entry.test.ts` 1件（同fileの他4件はpattern skip）、Gateway typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`は日本語基底移行負債76件の既存注意を出した。実provider／外部作用、実ブラウザー、workspace suite、全体QC／QAは未実施。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 **次:** E2E-01の次のproducer→consumer差分を最新HEADと現行正本から選び、既存のcommand intent・execution receipt・M receipt・plan dependencyの関連付けを通る仕事を一気通貫で前進させる。実provider、live外部作用、広域QCは使わない。
+
+#### 2026-11-01 E2E-01 BUILD接続 — owner task受付から同一taskのM receipt状態表示まで
+
+owner task status照会で`request_id` digestに一致したRuntime planについて、既存`task_identity_digest`が同じ計画の表示件数と、依頼一致planのstep bindingにある`memory_status`をTasks consumerへ表示するよう接続した。表示は既存の非権威`operation_plan_status` projectionに限定し、M receipt本文・task本文・raw digestを出さない。planの表示上限、stepの省略、task identityまたはbinding projectionの不備は未確認と表示し、完了・権限・再実行可否を推定しない。
+
+WebChatの対象テスト1件（同fileの他113件pattern skip）、package typecheck/build、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認した。Gateway process、実ブラウザー、全workspace suite、provider／外部作用、QE_QC／QE_QAはNOT_RUN。この接続はowner task受付からplan lineage／M receipt状態への`WIRED`表示であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOを成立させない。
+
+**次:** 全体実装を優先し、Deferred K-B5のうち、plan adoption classificationがTypeScript／Rustで異なる場合の実Rust process比較receiptを生成する残るproducer→consumer接続を最小単位で進める。HDS-BRAINを唯一のauthority／M writerに保ち、Rustは`hold`／no-effect／no-M-writeとする。全体QC／QA・single-writer cutoverは行わない。
 
 ## Gitと復旧
 

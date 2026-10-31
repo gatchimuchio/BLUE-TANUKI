@@ -553,6 +553,72 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(api.settingsPayload().llm).toMatchObject({ provider_cost_profiles_json: "", compute_budget_policy_json: "" });
   });
 
+  it("correlates owner task status with its same-task plan lineage and projected M receipts", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskExecutionEvidenceSummary(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function submitOwnerTask(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const requestId = "01a119c0-5b35-4491-8e00-000000000901";
+    const requestIdDigest = createHash("sha256").update(`operation-request:${requestId}`).digest("hex");
+    const taskIdentityDigest = "c".repeat(64);
+    const plan = {
+      plan_id: "a".repeat(64), request_id_digest: requestIdDigest, task_identity_digest: taskIdentityDigest,
+      revision: 2, status: "awaiting_step_review", step_count: 3,
+      steps: [
+        { step_id: "d".repeat(64), operation: "file.write", status: "verified",
+          binding: { command_digest: "5".repeat(64), result_digest: "6".repeat(64),
+            delivery_digest: "7".repeat(64), memory_status: "receipt_confirmed" } },
+        { step_id: "e".repeat(64), operation: "file.search", status: "selected",
+          binding: { command_digest: "8".repeat(64), memory_status: "memory_commit_pending" } },
+      ],
+    };
+    const runtimeSnapshot = {
+      operation_core_execution: {},
+      operation_plan_status: {
+        schema_version: "operation-plan.status.v1", status: "available", recovery_refresh_status: "ready",
+        used_for_authority: false, raw_payload_exposed: false, plan_count: 3, displayed_count: 3,
+        plans: [
+          plan,
+          { plan_id: "b".repeat(64), request_id_digest: "f".repeat(64), task_identity_digest: taskIdentityDigest,
+            revision: 1, status: "results_verified", step_count: 1,
+            steps: [{ step_id: "9".repeat(64), operation: "file.write", status: "verified",
+              binding: { command_digest: "a".repeat(64), result_digest: "b".repeat(64),
+                delivery_digest: "c".repeat(64), memory_status: "receipt_confirmed" } }] },
+          { plan_id: "1".repeat(64), request_id_digest: "2".repeat(64), task_identity_digest: "3".repeat(64),
+            revision: 1, status: "results_verified", step_count: 1,
+            steps: [{ step_id: "4".repeat(64), operation: "file.write", status: "verified",
+              binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64),
+                delivery_digest: "f".repeat(64), memory_status: "receipt_confirmed" } }] },
+        ],
+      },
+    };
+    const text = await new Script(`${helper}\nownerTaskRuntimeCorrelation(requestId, runtimeSnapshot)`)
+      .runInNewContext({ requestId, runtimeSnapshot, crypto: webcrypto, TextEncoder: globalThis.TextEncoder,
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        shortDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+          ? value.slice(0, 12) : "未記録" }) as string;
+
+    expect(text).toContain("Runtime snapshotで同じ依頼IDの計画 aaaaaaaaaaaa");
+    expect(text).toContain("同一task identityの計画 2件");
+    expect(text).toContain("receipt_confirmed 1、memory_commit_pending 1");
+    expect(text).toContain("stepは2/3件の表示範囲");
+    expect(text).not.toContain(taskIdentityDigest);
+    expect(text).not.toContain("3".repeat(64));
+
+    const unboundPlan = { ...plan, task_identity_digest: "invalid-task-identity" };
+    const unboundSnapshot = { ...runtimeSnapshot, operation_plan_status: {
+      ...runtimeSnapshot.operation_plan_status, plans: [unboundPlan], plan_count: 1, displayed_count: 1,
+    } };
+    const unboundText = await new Script(`${helper}\nownerTaskRuntimeCorrelation(requestId, runtimeSnapshot)`)
+      .runInNewContext({ requestId, runtimeSnapshot: unboundSnapshot, crypto: webcrypto, TextEncoder: globalThis.TextEncoder,
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        shortDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+          ? value.slice(0, 12) : "未記録" }) as string;
+    expect(unboundText).toContain("同一taskの計画系譜とM receipt状態は未確認です");
+    expect(unboundText).not.toContain("receipt_confirmed 1");
+  });
+
   it("sends explicit digest-bound plan step review through the existing Developer invoke path", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);

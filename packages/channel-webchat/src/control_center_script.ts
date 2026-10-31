@@ -938,6 +938,67 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           " 仕事全体の完了や画面への到達はこの記録だけでは確定しません。";
       }
 
+      function ownerTaskPlanLineageEvidenceSummary(plan, projection) {
+        const taskIdentityDigest = plan.task_identity_digest;
+        if (typeof taskIdentityDigest !== "string" || !/^[a-f0-9]{64}$/.test(taskIdentityDigest)) {
+          return "一致planに有効なtask identity digestがなく、同一taskの計画系譜とM receipt状態は未確認です。";
+        }
+        const lineagePlans = projection.plans.filter(function (candidate) {
+          return isObject(candidate) && candidate.task_identity_digest === taskIdentityDigest;
+        });
+        if (lineagePlans.length === 0) {
+          return "一致planのtask identityに対応するRuntime計画がなく、M receipt状態は未確認です。";
+        }
+        if (!Number.isSafeInteger(plan.step_count) || plan.step_count < 0 || !Array.isArray(plan.steps) ||
+            !plan.steps.every(function (step) {
+              return isObject(step) && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id) &&
+                typeof step.operation === "string" && /^[a-z][a-z0-9._-]{0,159}$/.test(step.operation) &&
+                ["not_selected", "selected", "intent_committed", "outcome_unknown", "not_attempted", "verified",
+                  "verification_failed", "invalidated"].includes(step.status);
+            })) {
+          return "一致planのstep projectionが不正なため、M receipt状態は未確認です。";
+        }
+        if (lineagePlans.some(function (candidate) {
+          return typeof candidate.plan_id !== "string" || !/^[a-f0-9]{64}$/.test(candidate.plan_id) ||
+            !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 ||
+            !["awaiting_step_review", "results_verified"].includes(candidate.status);
+        })) {
+          return "同一task identityの計画projectionが不正なため、系譜とM receipt状態は未確認です。";
+        }
+
+        let receiptConfirmed = 0;
+        let memoryCommitPending = 0;
+        let notRecorded = 0;
+        let bindingNotDisplayed = 0;
+        for (const step of plan.steps) {
+          if (step.binding === undefined) {
+            bindingNotDisplayed += 1;
+            continue;
+          }
+          if (!isObject(step.binding) || !/^[a-f0-9]{64}$/.test(step.binding.command_digest || "") ||
+              (step.binding.result_digest !== undefined && !/^[a-f0-9]{64}$/.test(step.binding.result_digest)) ||
+              (step.binding.delivery_digest !== undefined && !/^[a-f0-9]{64}$/.test(step.binding.delivery_digest)) ||
+              !["not_recorded", "memory_commit_pending", "receipt_confirmed"].includes(step.binding.memory_status)) {
+            return "一致planのM receipt projectionが不正なため、状態を表示しません。";
+          }
+          if (step.binding.memory_status === "receipt_confirmed") receiptConfirmed += 1;
+          else if (step.binding.memory_status === "memory_commit_pending") memoryCommitPending += 1;
+          else notRecorded += 1;
+        }
+
+        const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;
+        const total = Number.isSafeInteger(projection.plan_count) ? projection.plan_count : null;
+        const lineageRangePartial = displayed !== null && total !== null && displayed < total;
+        const stepRangePartial = plan.step_count > plan.steps.length;
+        const lineageCount = lineagePlans.length + "件" +
+          (lineageRangePartial ? "（最新" + String(displayed) + "/" + String(total) + "計画の表示範囲）" : "");
+        const stepRange = stepRangePartial ? "、stepは" + String(plan.steps.length) + "/" + String(plan.step_count) + "件の表示範囲" : "";
+        return "同一task identityの計画 " + lineageCount + "。依頼一致planのM receipt投影: receipt_confirmed " +
+          String(receiptConfirmed) + "、memory_commit_pending " + String(memoryCommitPending) + "、not_recorded " +
+          String(notRecorded) + "、binding未表示 " + String(bindingNotDisplayed) + stepRange +
+          "（非権威表示で、完了や実行権限を示しません）。";
+      }
+
       async function ownerTaskRuntimeCorrelation(requestId, runtimeSnapshot) {
         const executionEvidence = ownerTaskExecutionEvidenceSummary(requestId, runtimeSnapshot);
         const withExecutionEvidence = function (message) { return message + " " + executionEvidence; };
@@ -976,7 +1037,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           const planState = plan.status === "results_verified" ? "全stepの結果検証済み表示" : "step審査待ち";
           return withExecutionEvidence("Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
-            planState + "）。受付状態とは別で、仕事全体の完了を意味しません。");
+            planState + "）。" + ownerTaskPlanLineageEvidenceSummary(plan, projection) +
+            "受付状態とは別で、仕事全体の完了を意味しません。");
         }
         const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;
         const total = Number.isSafeInteger(projection.plan_count) ? projection.plan_count : null;
