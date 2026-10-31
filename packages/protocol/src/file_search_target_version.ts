@@ -9,6 +9,8 @@ const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const FileSearchTargetVersionObservationSchema = z.object({
   schema_version: z.literal("blue-tanuki.file-search-target-version.v1"),
   requested_root_digest: DigestSchema,
+  /** Present for an exact single-file search; binds the approved command to that relative path. */
+  requested_path_digest: DigestSchema.optional(),
   canonical_root_digest: DigestSchema,
   resource_version_digest: DigestSchema,
   /** Non-authority binding to the exact J-selected Operation Plan source, when present. */

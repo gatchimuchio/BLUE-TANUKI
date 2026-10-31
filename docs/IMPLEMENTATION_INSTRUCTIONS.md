@@ -335,9 +335,9 @@ HDSのticket digest生成試験1件、Gateway投影試験1件、WebChat相関試
 
 #### 2026-11-01 E2E-01 BUILD接続 — task指定本文からの限定file.write候補
 
-開発用synthetic Cが、従来の固定demoに加えて、owner task本文で明示された単一の相対`.txt`名と一行本文から、sandbox内のcreate-only `file.write`候補を作れるようにした。Cはsandbox内容を先読みせず、本文から書込byte数を決定する。J、Approval Gate、Broker、Executor、M、同一task再計画の契約・権限経路は変更していない。親taskの検証済みwrite receiptまたはownerが選択した不確実状態observationを照合した場合、元taskの同じ名前・本文を使って既存`file.search`候補へ進む。これはproviderを使わないboundedな開発fixtureの入力一般化であり、任意task向けの一般Cや実行済みE2Eの証拠ではない。
+開発用synthetic Cが、従来の固定demoに加えて、owner task本文で明示された単一の相対`.txt`名と一行本文から、sandbox内のcreate-only `file.write`候補を作れるようにした。Cはsandbox内容を先読みせず、本文から書込byte数を決定する。J、Approval Gate、Broker、Executor、M、同一task再計画の契約・権限経路は変更していない。親taskの検証済みwrite receiptまたはownerが選択した不確実状態observationを照合した場合、元taskの同じ名前・本文を使って既存`file.search`候補へ進む。同一task検索は`file_path`で指定した一ファイルだけを読み、承認前のtarget-version証拠で相対pathと内容を再照合する。従来のroot全体検索は維持する。これはproviderを使わないboundedな開発fixtureの入力一般化であり、任意task向けの一般Cや実行済みE2Eの証拠ではない。
 
-coreとGatewayのpackage typecheckはPASS。sandboxでのruntime、J採否、Approval／Broker実行、M receipt、同一task再計画はNOT_RUN。provider／live外部作用、workspace suite、QE_QC／QE_QAはNOT_RUN。この差分は`CODE_PRESENT`で、実物経路の`WIRED`確認と`SYSTEM_SHAPED`を成立させない。
+Protocol／HDS-BRAIN／core（Windows isolation含む）／Gatewayのpackage buildとtypecheck、`git diff --check`はPASS。sandboxでのruntime、J採否、Approval／Broker実行、M receipt、同一task再計画、testはNOT_RUN。provider／live外部作用、workspace suite、QE_QC／QE_QAもNOT_RUN。この差分は`CODE_PRESENT`で、実物経路の`WIRED`確認と`SYSTEM_SHAPED`を成立させない。
 
 **次のproducer／consumer:** 隔離sandbox・synthetic Cのまま、動的taskをOwner入口から提出し、J候補採否→Approval／Broker→write結果/M receipt→同一task search再計画までのruntime接続境界を特定する。実provider・外部送信・広域QC／QA・Rust cutoverは行わない。
 

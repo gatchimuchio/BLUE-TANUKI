@@ -366,7 +366,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
       adapter: "internal_runtime" as const,
       adapter_is_authority: false as const,
       command_generated_by_adapter_only: false,
-      parameters: { root: sandboxRoot, query: searchText, max_results: 5 },
+      parameters: { root: sandboxRoot, file_path: relativePath, query: searchText, max_results: 5 },
       preparation: {
         depends_on: [],
         bindings: [],

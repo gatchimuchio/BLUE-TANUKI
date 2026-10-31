@@ -149,6 +149,7 @@ const BROWSER_AUTOMATION_ENABLE_ENV = "BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW";
 const BROWSER_AUTOMATION_TIMEOUT_MS = 15_000;
 const BROWSER_AUTOMATION_MAX_CHARS = 20_000;
 const BROWSER_AUTOMATION_VIEWPORT = { width: 1280, height: 720 } as const;
+const FILE_SEARCH_EXACT_TARGET_MAX_BYTES = 1_000_000;
 const BLOCKED_IPS = new BlockList();
 
 for (const [address, prefix, type] of [
@@ -1508,6 +1509,88 @@ export async function invokeBrowserAutomation(
   return snapshot;
 }
 
+interface ExactFileSearchTarget {
+  filepath: string;
+  relative_path: string;
+  data: Buffer;
+}
+
+function assertExactFileSearchPath(filePath: string): void {
+  if (filePath.length === 0 || filePath.length > 512 || path.isAbsolute(filePath) || filePath.includes("\\") ||
+      filePath.includes(":") || filePath.includes("\0") || filePath.startsWith("/")) {
+    throw new Error("file.search file_path must be a bounded relative path");
+  }
+  const segments = filePath.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error("file.search file_path must not contain empty or traversal segments");
+  }
+}
+
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative.length > 0 && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function readExactFileSearchTarget(
+  filePath: string,
+  root: string,
+  sandboxRoot: string,
+): Promise<ExactFileSearchTarget> {
+  assertExactFileSearchPath(filePath);
+  const resolved = await resolveSandboxFilePath(filePath, sandboxRoot);
+  let canonicalPath: string;
+  try { canonicalPath = await fs.realpath(resolved.filepath); }
+  catch { throw new Error("file.search exact target is unavailable"); }
+  if (!isWithinDirectory(root, canonicalPath)) {
+    throw new Error("file.search exact target must stay within the requested root");
+  }
+  const before = await fs.lstat(canonicalPath, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("file.search exact target must be a regular file");
+  if (before.size > BigInt(FILE_SEARCH_EXACT_TARGET_MAX_BYTES)) {
+    throw new Error("file.search exact target exceeds the bounded read size");
+  }
+  const identity = (stat: {
+    dev: bigint; ino: bigint; size: bigint; mode: bigint; nlink: bigint; mtimeNs: bigint; ctimeNs: bigint;
+  }) => JSON.stringify([
+    stat.dev.toString(), stat.ino.toString(), stat.size.toString(), stat.mode.toString(), stat.nlink.toString(),
+    stat.mtimeNs.toString(), stat.ctimeNs.toString(),
+  ]);
+  const expectedIdentity = identity(before);
+  const handle = await fs.open(canonicalPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || identity(opened) !== expectedIdentity) {
+      throw new Error("file.search exact target changed while being opened");
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let position = 0;
+    while (total <= FILE_SEARCH_EXACT_TARGET_MAX_BYTES) {
+      const chunk = Buffer.alloc(Math.min(64_000, FILE_SEARCH_EXACT_TARGET_MAX_BYTES + 1 - total));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+      position += bytesRead;
+      if (total > FILE_SEARCH_EXACT_TARGET_MAX_BYTES) {
+        throw new Error("file.search exact target exceeds the bounded read size");
+      }
+    }
+    const openedAfter = identity(await handle.stat({ bigint: true }));
+    const after = await fs.lstat(canonicalPath, { bigint: true });
+    if (!after.isFile() || after.isSymbolicLink() || openedAfter !== expectedIdentity || identity(after) !== expectedIdentity) {
+      throw new Error("file.search exact target changed while being read");
+    }
+    return {
+      filepath: canonicalPath,
+      relative_path: path.relative(root, canonicalPath).replace(/\\/g, "/"),
+      data: Buffer.concat(chunks, total),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function invokeFileSearch(
   args: Record<string, unknown>,
   opts: FileSearchOptions = {},
@@ -1516,6 +1599,7 @@ export async function invokeFileSearch(
   const sandboxRoot = await sandboxRootFromEnv(env);
   const requestedRoot = stringArg(args, "root")!;
   const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
+  const requestedFilePath = args.file_path === undefined ? undefined : stringArg(args, "file_path")!;
   const query = stringArg(args, "query")!;
   const maxResults = positiveIntArg(args, "max_results", 20, 100);
   const stat = await fs.stat(root);
@@ -1526,30 +1610,39 @@ export async function invokeFileSearch(
   const targetVersionHasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
   const matches: Array<{ path: string; line_number: number; line: string }> = [];
   let visited = 0;
-  for await (const file of walkFiles(root, sandboxRoot)) {
-    if (visited >= 1_000) break;
-    visited += 1;
-    const data = await fs.readFile(file);
-    appendFileSearchVersionEntry(targetVersionHasher, root, file, data);
-    if (matches.length >= maxResults) continue;
-    if (data.includes(0)) continue;
+  const appendMatches = (relativeFilePath: string, data: Buffer) => {
+    if (matches.length >= maxResults || data.includes(0)) return;
     const text = data.toString("utf8");
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
       if (line.includes(query)) {
         matches.push({
-          path: path.relative(root, file).replace(/\\/g, "/"),
+          path: relativeFilePath.replace(/\\/g, "/"),
           line_number: i + 1,
           line: line.length > 240 ? `${line.slice(0, 237)}...` : line,
         });
         if (matches.length >= maxResults) break;
       }
     }
+  };
+  if (requestedFilePath !== undefined) {
+    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot);
+    visited = 1;
+    appendFileSearchVersionEntry(targetVersionHasher, root, target.filepath, target.data);
+    appendMatches(target.relative_path, target.data);
+  } else {
+    for await (const file of walkFiles(root, sandboxRoot)) {
+      if (visited >= 1_000) break;
+      visited += 1;
+      const data = await fs.readFile(file);
+      appendFileSearchVersionEntry(targetVersionHasher, root, file, data);
+      appendMatches(path.relative(root, file).replace(/\\/g, "/"), data);
+    }
   }
 
   const targetVersion = fileSearchTargetVersionObservation(requestedRoot, root, visited, targetVersionHasher.digest("hex"),
-    opts.expected_target_version?.operation_plan_binding_digest);
+    opts.expected_target_version?.operation_plan_binding_digest, requestedFilePath);
   if (opts.expected_target_version &&
       canonicalFileSearchTargetVersionObservation(targetVersion) !==
         canonicalFileSearchTargetVersionObservation(opts.expected_target_version)) {
@@ -1575,18 +1668,25 @@ export async function inspectFileSearchTargetVersion(
   const sandboxRoot = await sandboxRootFromEnv(env);
   const requestedRoot = stringArg(args, "root")!;
   const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
+  const requestedFilePath = args.file_path === undefined ? undefined : stringArg(args, "file_path")!;
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) throw new Error("root must be a directory");
   const hasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
   let filesExamined = 0;
-  for await (const file of walkFiles(root, sandboxRoot)) {
-    if (filesExamined >= 1_000) break;
-    const data = await fs.readFile(file);
-    appendFileSearchVersionEntry(hasher, root, file, data);
-    filesExamined += 1;
+  if (requestedFilePath !== undefined) {
+    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot);
+    appendFileSearchVersionEntry(hasher, root, target.filepath, target.data);
+    filesExamined = 1;
+  } else {
+    for await (const file of walkFiles(root, sandboxRoot)) {
+      if (filesExamined >= 1_000) break;
+      const data = await fs.readFile(file);
+      appendFileSearchVersionEntry(hasher, root, file, data);
+      filesExamined += 1;
+    }
   }
   return fileSearchTargetVersionObservation(requestedRoot, root, filesExamined, hasher.digest("hex"),
-    opts.operation_plan_binding_digest);
+    opts.operation_plan_binding_digest, requestedFilePath);
 }
 
 function appendFileSearchVersionEntry(hasher: ReturnType<typeof createHash>, root: string, file: string, data: Buffer): void {
@@ -1601,10 +1701,14 @@ function fileSearchTargetVersionObservation(
   filesExamined: number,
   resourceVersionDigest: string,
   operationPlanBindingDigest?: string,
+  requestedFilePath?: string,
 ): FileSearchTargetVersionObservation {
   return FileSearchTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.file-search-target-version.v1",
     requested_root_digest: createHash("sha256").update(requestedRoot, "utf8").digest("hex"),
+    ...(requestedFilePath !== undefined ? {
+      requested_path_digest: createHash("sha256").update(requestedFilePath, "utf8").digest("hex"),
+    } : {}),
     canonical_root_digest: createHash("sha256").update(canonicalRoot, "utf8").digest("hex"),
     resource_version_digest: resourceVersionDigest,
     ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
@@ -2269,7 +2373,7 @@ export async function invokeFileEdit(
 
 export const fileSearchTool: Tool = {
   name: "file.search",
-  description: "Read-only text search under a requested root directory.",
+  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;

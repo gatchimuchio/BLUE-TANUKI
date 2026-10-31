@@ -340,8 +340,13 @@ function approveCommandForExecution(
     if (snapshot.payload.tool_name === "file.search") {
       const observation = FileSearchTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const requestedRoot = snapshot.payload.arguments.root;
+      const requestedPath = snapshot.payload.arguments.file_path;
+      const requestedPathMatches = requestedPath === undefined
+        ? observation.requested_path_digest === undefined
+        : typeof requestedPath === "string" && observation.requested_path_digest ===
+          createHash("sha256").update(requestedPath, "utf8").digest("hex");
       if (typeof requestedRoot !== "string" || observation.requested_root_digest !==
-          createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
+          createHash("sha256").update(requestedRoot, "utf8").digest("hex") || !requestedPathMatches) {
         throw new Error("Executor approval rejected: file.search target version does not match command");
       }
       target_version_observation = Object.freeze(observation);
