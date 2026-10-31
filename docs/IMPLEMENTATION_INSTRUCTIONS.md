@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: owner明示結果選択時にGatewayの永続`ExecutionIntentReceipt`を再取得し、観測後の状態変化・不在・task／epoch不一致を候補生成前に拒否する）
+### Active batch: E2E-01 — WebChat task一気通貫（次: owner選択済み観測から保持した同一task候補を、owner step review・Broker実行・結果/M保存・WebChat返却consumerへつなぐ）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -148,11 +148,11 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 今回、Gateway observerがTypeScript分類を`observe()`呼出し時に行い、Rust向けJSONを非同期queue内で後から生成していたため、呼出元がprojectionを変更すると別snapshot同士を比較する隙を修正した。受付時にwire JSONを一度生成し、そのJSONをparseした専用snapshotからJ分類・purpose binding・command有無を導出し、同じbytesをRustへ送る。projection serializationに失敗した場合は先行queueを保ったままobserverを停止する。追加した実Rust process試験では、`observe()`直後に呼出元projectionを変更してもreceiptとTypeScript分類が受付時snapshotに一致することを確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust `cargo test --locked` 4 tests、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査の移行負債76件は既存注意として残る。全workspace suite、QE_QC／QE_QA、実provider・外部作用、5OS実機、実装間plan status差を意図的に発生させるprocess確認はNOT_RUN。HDS authority／M writer、Rust `hold`／no-effect／no-M-writeは不変。K-B5全体意味比較・single-writer cutover・製品全体BUILDは未成立。
 
-#### 2026-10-31 E2E-01 BUILD接続 — file state観測とGateway実行receiptの結合
+#### 2026-10-31 E2E-01 BUILD接続 — owner選択と候補保持直前のGateway receipt再照合
 
-`operation_plan_receipt_reconciliation`のcreate-only `file.write`経路で、HDSが単回発行した再調停authorizationのcommand keyを使い、Gatewayの永続`ExecutionIntentStore`から現在のreceiptを読取り専用で取得する。command key／executor command digest／execution epoch／task identity／`used_for_authority=false`がすべて一致しない場合は状態観測を記録せず拒否する。一致した場合はreceipt状態・epoch・task identity・結果配信digest等を投影し、ticketやraw値を出さず、ローカル対象状態観測と同一のevidence digest／J記録／M receiptへ結合する。HDSは記録時とownerが候補計算を要求した時に、Jの現行plan bindingと保存済みGateway receipt projectionのdigestを再照合する。Control Centerにはreceipt状態・digestだけを表示し、元stepは`outcome_unknown`、新候補は未実行を維持する。
+create-only `file.write`の結果不明状態観測とGateway永続`ExecutionIntentStore`をつなぎ、owner選択時の現行receipt読取りをHDSの一回限りの読取portとして構成した。HDSは現行plan/revision/step、`outcome_unknown` binding、task identity、command digest、epoch、状態観測の耐久M receiptを再検査し、Gatewayは指定command keyだけで`lookupCommand`する。receiptの不在、状態変化、command/task/epoch不一致、store integrity failureは候補観測の受理前にfail-closedとなる。既存J admission内のcommand keyはlookup bindingとしてだけ使い、Gateway receiptのticket・raw値はprojection・C/M・audit logへ出さない。receiptは非権威証拠のままで、元stepの`outcome_unknown`と新候補の未実行状態を維持する。
 
-`pnpm typecheck`と全workspace `pnpm build`はPASS。`pnpm docs:check`と`git diff --check`はこの記録更新後に実施する。test、Gateway実processでの所有者選択、provider呼出し、外部作用はNOT_RUN。owner選択時点にGatewayの永続receiptをもう一度直接lookupして観測後の状態変化を検出する接続は未成立であり、次のconsumerとして残す。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+C応答後の`retainCandidate`も同じHDS source-inspection consumerを通るため、候補の保持直前にGateway永続receiptをもう一度再取得する。最初のowner受付からC応答までにreceiptが変化した場合も候補を保存しない。GatewayからHDSへ渡す依存は型付き読取callback一つで、HDS standalone境界・単一J/M writer・Approval／Broker権限に変更はない。`pnpm typecheck`、全workspace `pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次は同一task候補のowner step reviewから既存Broker、結果/M保存、WebChat返却consumerまでの未接続境界をつなぐ。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 ## Gitと復旧
 

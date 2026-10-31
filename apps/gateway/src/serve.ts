@@ -93,6 +93,7 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   canonicalFileEditTargetVersionObservation,
+  OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
@@ -910,6 +911,26 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
   recoveryExecutionStore = executionStore;
+  hds.setOperationPlanGatewayReceiptRechecker((commandKey, expectedEvidence) => {
+    try {
+      const receipt = executionStore.lookupCommand(commandKey);
+      if (!receipt || receipt.command_key !== commandKey || receipt.used_for_authority !== false) return null;
+      return OperationPlanGatewayReceiptRecheckEvidenceSchema.parse({
+        ...expectedEvidence,
+        command_digest: receipt.command_digest,
+        command_key_digest: createHash("sha256").update(receipt.command_key, "utf8").digest("hex"),
+        execution_epoch_digest: createHash("sha256").update(receipt.execution_epoch, "utf8").digest("hex"),
+        task_identity_digest: receipt.task_identity_digest ?? null,
+        state: receipt.state,
+        feedback_status: receipt.feedback_status ?? null,
+        result_delivery_digest: receipt.result_delivery_digest ?? null,
+        result_delivery_acknowledged: receipt.result_delivery_acknowledged ?? null,
+        used_for_authority: false,
+      });
+    } catch {
+      return null;
+    }
+  });
   try {
     const recovery = recoverPendingToolLifecycleHistory({ execution_store: executionStore, complete_history: completeHistory,
       complete_history_persistent: Boolean(completeHistoryFile), append_history: recordCompleteHistory });

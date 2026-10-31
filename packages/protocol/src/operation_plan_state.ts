@@ -31,6 +31,23 @@ export const OperationPlanComputeSourceObservationReferenceSchema = z.union([
   OperationPlanShellResultComputeSourceObservationReferenceSchema,
 ]);
 export type OperationPlanComputeSourceObservationReference = z.infer<typeof OperationPlanComputeSourceObservationReferenceSchema>;
+/** One-request, Gateway-read projection used to revalidate an owner-selected unresolved file action. */
+export const OperationPlanGatewayReceiptRecheckEvidenceSchema = z.object({
+  schema_version: z.literal("operation-plan-gateway-receipt-recheck.v1"),
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+  step_id_digest: Digest,
+  command_digest: Digest,
+  command_key_digest: Digest,
+  execution_epoch_digest: Digest,
+  task_identity_digest: Digest.nullable(),
+  state: z.enum(["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"]),
+  feedback_status: z.enum(["success", "failed", "suspended"]).nullable(),
+  result_delivery_digest: Digest.nullable(),
+  result_delivery_acknowledged: z.boolean().nullable(),
+  used_for_authority: z.literal(false),
+}).strict();
+export type OperationPlanGatewayReceiptRecheckEvidence = z.infer<typeof OperationPlanGatewayReceiptRecheckEvidenceSchema>;
 /** Finite projections carry no target, path, query, or file content. */
 const OperationPlanComputeSourceObservationCommon = {
   schema_version: z.literal("operation-plan-compute-source-observation.v1"),

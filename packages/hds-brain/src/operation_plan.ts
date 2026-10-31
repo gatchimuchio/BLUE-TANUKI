@@ -8,6 +8,7 @@ import {
   type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
   type OperationPlanComputeParent,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
+  type OperationPlanGatewayReceiptRecheckEvidence, OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   type OperationCommandExecutionResult,
   type GatewayInternalInboundRequestInput,
@@ -504,6 +505,16 @@ export interface OperationPlanReceiptReconciliationAuthorization {
   readonly expires_at_ms: number;
 }
 
+export type OperationPlanGatewayReceiptRechecker = (
+  command_key: string,
+  expected_evidence: OperationPlanGatewayReceiptRecheckEvidence,
+) => OperationPlanGatewayReceiptRecheckEvidence | null;
+
+export interface OperationPlanOwnerLocalFileStateReceiptRecheckLookup {
+  readonly command_key: string;
+  readonly expected_evidence: OperationPlanGatewayReceiptRecheckEvidence;
+}
+
 export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
@@ -921,6 +932,7 @@ export class OperationPlanLedger {
   private readonly activePlanAttempts = new Set<string>();
   private readonly memoryStorage?: OperationPlanMemoryStorage;
   private resultMemory?: JMemoryCommitCoordinator;
+  private gatewayReceiptRechecker?: OperationPlanGatewayReceiptRechecker;
   private memoryQuiesced = false;
   private memoryReady = true;
   private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
@@ -1002,6 +1014,11 @@ export class OperationPlanLedger {
     if (operationPlanDigest([...this.recoveryHolds.entries()]) !== holdStateBeforeTaskPropagation) {
       this.persistRecoveryHoldState();
     }
+  }
+
+  setGatewayReceiptRechecker(rechecker: OperationPlanGatewayReceiptRechecker): void {
+    if (this.gatewayReceiptRechecker) throw new Error("gateway_execution_receipt_rechecker_already_configured");
+    this.gatewayReceiptRechecker = rechecker;
   }
 
   beginRecoveryRefresh(): boolean {
@@ -2967,6 +2984,83 @@ export class OperationPlanLedger {
     this.resultMemory = undefined;
   }
 
+  /** Read-only Gateway lookup context for the exact owner-selected unresolved file action. */
+  prepareOwnerLocalFileStateReceiptRecheckLookup(
+    rawReference: OperationPlanComputeSourceObservationReference,
+    caller: InboundRequest,
+  ): OperationPlanOwnerLocalFileStateReceiptRecheckLookup {
+    const reference = OperationPlanComputeSourceObservationReferenceSchema.parse(rawReference);
+    if (!("plan_id_digest" in reference) || reference.owner_selected_observation !== "local_file_state" ||
+        !isGatewayInternalInboundRequest(caller) || caller.channel !== "webchat" ||
+        caller.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+        caller.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+        caller.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+      throw new Error("owner_gateway_receipt_recheck_authority_invalid");
+    }
+    if (this.recoveryRefreshPending || this.memoryQuiesced || !this.resultMemory || !this.port || !this.memoryReady ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready" ||
+        !this.resultMemory.verify()) throw new Error("owner_gateway_receipt_recheck_unavailable");
+    const plans = this.state.plans.filter((candidate) => candidate.revisions[0] &&
+      operationPlanDigest(candidate.revisions[0].plan.plan_id) === reference.plan_id_digest);
+    if (plans.length !== 1) throw new Error("owner_gateway_receipt_recheck_plan_unavailable");
+    const plan = plans[0]!;
+    if (plan.owner !== caller.user || plan.channel !== caller.channel || this.recoveryHolds.has(reference.plan_id_digest)) {
+      throw new Error("owner_gateway_receipt_recheck_identity_mismatch");
+    }
+    const revision = plan.revisions.at(-1);
+    if (!revision || revision.digest !== reference.revision_digest) throw new Error("owner_gateway_receipt_recheck_revision_stale");
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === reference.step_id_digest);
+    if (steps.length !== 1) throw new Error("owner_gateway_receipt_recheck_step_mismatch");
+    const step = steps[0]!;
+    const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest && binding.step_id === step.step_id);
+    if (bindings.length !== 1) throw new Error("owner_gateway_receipt_recheck_binding_unavailable");
+    const binding = bindings[0]!;
+    const admission = binding.execution_admission;
+    const nowMs = Date.now();
+    if (step.operation !== "file.write" || step.parameters?.mode !== "create" ||
+        typeof step.parameters.path !== "string" || typeof step.parameters.content !== "string" ||
+        binding.operation !== "file.write" || binding.status !== "outcome_unknown" || !admission ||
+        binding.step_digest !== stepDigest(step) || !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+        !this.computeSourceObservationsAreCurrent(plan, nowMs)) {
+      throw new Error("owner_gateway_receipt_recheck_not_owner_resolvable");
+    }
+    const expectedCommandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", binding.command_id]), "utf8").digest("hex");
+    const receiptObservations = plan.receipt_observations.filter((entry) => entry.source === "local_file_state" &&
+      entry.plan_id_digest === reference.plan_id_digest && entry.revision_digest === revision.digest &&
+      entry.step_id_digest === reference.step_id_digest && entry.command_digest === binding.command_digest);
+    const observation = receiptObservations.sort((left, right) => left.observed_at_ms - right.observed_at_ms).at(-1);
+    if (!observation || admission.command_digest !== observation.executor_command_digest ||
+        admission.command_key !== expectedCommandKey || binding.command_digest !== observation.command_digest ||
+        observation.command_key_digest !== createHash("sha256").update(expectedCommandKey, "utf8").digest("hex") ||
+        !observation.gateway_execution_receipt_digest || !observation.gateway_execution_receipt_state ||
+        observation.gateway_execution_epoch_digest !== createHash("sha256").update(admission.execution_epoch, "utf8").digest("hex") ||
+        observation.gateway_task_identity_digest !== admission.task_identity_digest || observation.status !== "matched" ||
+        observation.match_count !== 1 || !observation.receipt_digest ||
+        observation.target_identity_digest !== fileWriteTargetIdentityDigest(step.parameters.path) ||
+        observation.request_payload_digest !== fileWritePayloadDigest(step.parameters.content) ||
+        observation.observed_payload_digest !== observation.request_payload_digest || observation.observed_at_ms < admission.issued_at_ms ||
+        !this.receiptObservationMemoryIsDurable(observation.evidence_digest) ||
+        gatewayExecutionReceiptEvidenceDigest(observation) !== observation.gateway_execution_receipt_digest) {
+      throw new Error("owner_gateway_receipt_recheck_observation_stale");
+    }
+    const expectedEvidence = OperationPlanGatewayReceiptRecheckEvidenceSchema.parse({
+      schema_version: "operation-plan-gateway-receipt-recheck.v1",
+      plan_id_digest: reference.plan_id_digest,
+      revision_digest: revision.digest,
+      step_id_digest: reference.step_id_digest,
+      command_digest: observation.executor_command_digest,
+      command_key_digest: observation.command_key_digest,
+      execution_epoch_digest: observation.gateway_execution_epoch_digest,
+      task_identity_digest: observation.gateway_task_identity_digest ?? null,
+      state: observation.gateway_execution_receipt_state,
+      feedback_status: observation.gateway_execution_feedback_status ?? null,
+      result_delivery_digest: observation.gateway_result_delivery_digest ?? null,
+      result_delivery_acknowledged: observation.gateway_result_delivery_acknowledged ?? null,
+      used_for_authority: false,
+    });
+    return { command_key: admission.command_key, expected_evidence: expectedEvidence };
+  }
+
   /** Resolve explicit references to durable, J-verified file action observations without exposing targets or content. */
   inspectComputeSourceObservations(
     rawReferences: readonly OperationPlanComputeSourceObservationReference[],
@@ -3090,6 +3184,13 @@ export class OperationPlanLedger {
             observation.observed_at_ms < admission.issued_at_ms ||
             !this.receiptObservationMemoryIsDurable(observation.evidence_digest)) {
           throw new Error("plan_compute_source_observation_owner_resolution_stale");
+        }
+        const lookup = this.prepareOwnerLocalFileStateReceiptRecheckLookup(reference, caller);
+        const rawRecheck = this.gatewayReceiptRechecker?.(lookup.command_key, lookup.expected_evidence);
+        const gatewayReceiptRecheck = OperationPlanGatewayReceiptRecheckEvidenceSchema.safeParse(rawRecheck);
+        if (!gatewayReceiptRecheck.success ||
+            operationPlanDigest(gatewayReceiptRecheck.data) !== operationPlanDigest(lookup.expected_evidence)) {
+          throw new Error("plan_compute_source_observation_gateway_receipt_recheck_failed");
         }
         const delivery = this.receiptMemoryDelivery(revision.plan.plan_id, observation.evidence_digest);
         const stored = delivery?.memory_commit && this.resultMemory

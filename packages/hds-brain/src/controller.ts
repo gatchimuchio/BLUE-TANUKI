@@ -64,6 +64,7 @@ import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, 
   type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
   type OperationPlanBrokerRestoreDependencyEvidence, type OperationPlanBrokerRestoreDependencyVerifier,
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
+  type OperationPlanGatewayReceiptRechecker,
   type OperationPlanSavedResultReturnProjection,
   operationPlanGoalPurposeRelationReviewAuditDigest } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
@@ -3710,6 +3711,9 @@ ${planControl.question}`,
     const recorded = this.operationPlans.recordExternalReceiptObservation(observation, caller);
     if (recorded !== null) this.planEvent("external_receipt_observed", recorded.command_id);
     return recorded !== null;
+  }
+  setOperationPlanGatewayReceiptRechecker(rechecker: OperationPlanGatewayReceiptRechecker): void {
+    this.operationPlans.setGatewayReceiptRechecker(rechecker);
   }
   takeOperationPlanReceiptReconciliationAuthorization(
     command: ExecuteCommand,
