@@ -567,14 +567,29 @@ describe("WebChatChannel — Control Center shell", () => {
       revision: 2, status: "awaiting_step_review", step_count: 3,
       steps: [
         { step_id: "d".repeat(64), operation: "file.write", status: "verified",
-          binding: { command_digest: "5".repeat(64), result_digest: "6".repeat(64),
+          binding: { command_digest: "5".repeat(64), execution_ticket_digest: "1".repeat(64), result_digest: "6".repeat(64),
             delivery_digest: "7".repeat(64), memory_status: "receipt_confirmed" } },
-        { step_id: "e".repeat(64), operation: "file.search", status: "selected",
-          binding: { command_digest: "8".repeat(64), memory_status: "memory_commit_pending" } },
+        { step_id: "e".repeat(64), operation: "file.search", status: "intent_committed",
+          binding: { command_digest: "8".repeat(64), execution_ticket_digest: "2".repeat(64),
+            memory_status: "memory_commit_pending" } },
       ],
     };
     const runtimeSnapshot = {
       operation_core_execution: {},
+      execution_receipts: {
+        used_for_authority: false,
+        execution_eligible: false,
+        records: [
+          { ticket_digest: "1".repeat(64), command_digest: "5".repeat(64), execution_epoch_digest: "a".repeat(64),
+            task_identity_digest: taskIdentityDigest, worker_task_identity_digest: taskIdentityDigest,
+            state: "adapter_returned", worker_exit_observed: true },
+          { ticket_digest: "2".repeat(64), command_digest: "8".repeat(64), execution_epoch_digest: "c".repeat(64),
+            task_identity_digest: taskIdentityDigest, state: "intent_committed", worker_exit_observed: false },
+          { ticket_digest: "3".repeat(64), command_digest: "5".repeat(64), execution_epoch_digest: "e".repeat(64),
+            task_identity_digest: "3".repeat(64), worker_task_identity_digest: "3".repeat(64),
+            state: "adapter_returned", worker_exit_observed: true, result_archived_by_epoch_digest: "f".repeat(64) },
+        ],
+      },
       operation_plan_status: {
         schema_version: "operation-plan.status.v1", status: "available", recovery_refresh_status: "ready",
         used_for_authority: false, raw_payload_exposed: false, plan_count: 3, displayed_count: 3,
@@ -601,10 +616,43 @@ describe("WebChatChannel — Control Center shell", () => {
 
     expect(text).toContain("Runtime snapshotで同じ依頼IDの計画 aaaaaaaaaaaa");
     expect(text).toContain("同一task identityの計画 2件");
+    expect(text).toContain("adapter_returned 1");
+    expect(text).toContain("intent_committed 1");
     expect(text).toContain("receipt_confirmed 1、memory_commit_pending 1");
     expect(text).toContain("stepは2/3件の表示範囲");
     expect(text).not.toContain(taskIdentityDigest);
     expect(text).not.toContain("3".repeat(64));
+    expect(text).not.toContain("5".repeat(64));
+    expect(text).not.toContain("8".repeat(64));
+    expect(text).not.toContain("1".repeat(64));
+    expect(text).not.toContain("2".repeat(64));
+    expect(text).not.toContain("f".repeat(64));
+
+    const otherTaskOnlySnapshot = { ...runtimeSnapshot, execution_receipts: {
+      ...runtimeSnapshot.execution_receipts,
+      records: [runtimeSnapshot.execution_receipts.records[2]],
+    } };
+    const otherTaskOnlyText = await new Script(`${helper}\nownerTaskRuntimeCorrelation(requestId, runtimeSnapshot)`)
+      .runInNewContext({ requestId, runtimeSnapshot: otherTaskOnlySnapshot, crypto: webcrypto, TextEncoder: globalThis.TextEncoder,
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        shortDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+          ? value.slice(0, 12) : "未記録" }) as string;
+    expect(otherTaskOnlyText).toContain("一致receiptなし");
+    expect(otherTaskOnlyText).toContain("表示範囲で未観測 2（未実行の証明ではありません）");
+    expect(otherTaskOnlyText).not.toContain("adapter_returned 1");
+
+    const duplicateReceipt = { ...runtimeSnapshot.execution_receipts.records[0] };
+    const ambiguousSnapshot = { ...runtimeSnapshot, execution_receipts: {
+      ...runtimeSnapshot.execution_receipts,
+      records: [...runtimeSnapshot.execution_receipts.records, duplicateReceipt],
+    } };
+    const ambiguousText = await new Script(`${helper}\nownerTaskRuntimeCorrelation(requestId, runtimeSnapshot)`)
+      .runInNewContext({ requestId, runtimeSnapshot: ambiguousSnapshot, crypto: webcrypto, TextEncoder: globalThis.TextEncoder,
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        shortDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+          ? value.slice(0, 12) : "未記録" }) as string;
+    expect(ambiguousText).toContain("照合不能 1");
+    expect(ambiguousText).not.toContain("adapter_returned 1");
 
     const unboundPlan = { ...plan, task_identity_digest: "invalid-task-identity" };
     const unboundSnapshot = { ...runtimeSnapshot, operation_plan_status: {

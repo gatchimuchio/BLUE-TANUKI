@@ -3834,6 +3834,8 @@ export class OperationPlanLedger {
         bindings: p.bindings.map((b) => ({ step_id: operationPlanDigest(b.step_id), revision_digest: b.revision_digest,
           step_digest: b.step_digest, command_id: b.command_id, request_id: b.request_id, commit_hash: b.commit_hash,
           payload_digest: b.payload_digest, command_digest: b.command_digest, operation: b.operation,
+          ...(b.execution_admission ? { execution_ticket_digest: createHash("sha256")
+            .update(b.execution_admission.ticket_id, "utf8").digest("hex") } : {}),
           status: b.status, result_digest: b.result_digest, delivery_digest: b.delivery_digest,
           memory_status: b.memory_receipt ? "receipt_confirmed" : b.memory_commit ? "memory_commit_pending" : "not_recorded",
           memory_content_digest: b.memory_commit?.content_digest, memory_receipt_digest: b.memory_receipt?.receipt_digest })),

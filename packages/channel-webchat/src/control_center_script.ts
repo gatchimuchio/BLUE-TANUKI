@@ -938,7 +938,89 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           " 仕事全体の完了や画面への到達はこの記録だけでは確定しません。";
       }
 
-      function ownerTaskPlanLineageEvidenceSummary(plan, projection) {
+      function ownerTaskExecutionIntentReceiptSummary(plan, taskIdentityDigest, executionReceipts) {
+        if (!isObject(executionReceipts) || executionReceipts.used_for_authority !== false ||
+            executionReceipts.execution_eligible !== false || !Array.isArray(executionReceipts.records) ||
+            executionReceipts.records.length > 200) {
+          return "Gateway execution receipt projectionは利用条件を確認できず、plan bindingとの照合は未確認です。";
+        }
+        const recordKeys = new Set(["ticket_digest", "command_digest", "execution_epoch_digest", "state", "task_identity_digest",
+          "invocation_boundary", "feedback_status", "output_digest", "error_digest", "worker_id_digest", "worker_pid",
+          "worker_platform", "worker_task_identity_digest", "worker_operation_plan_binding_digest", "worker_exit_observed",
+          "result_delivery_digest", "result_delivery_acknowledged", "result_delivery_disposition", "result_archived_by_epoch_digest"]);
+        const states = ["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"];
+        const boundaries = ["tool_adapter", "channel_adapter", "llm_adapter", "console_preview"];
+        const recordsValid = executionReceipts.records.every(function (record) {
+          return isObject(record) && Object.keys(record).every(function (key) { return recordKeys.has(key); }) &&
+            /^[a-f0-9]{64}$/.test(record.ticket_digest || "") && /^[a-f0-9]{64}$/.test(record.command_digest || "") &&
+            /^[a-f0-9]{64}$/.test(record.execution_epoch_digest || "") && states.includes(record.state) &&
+            (record.task_identity_digest === undefined || /^[a-f0-9]{64}$/.test(record.task_identity_digest)) &&
+            (record.invocation_boundary === undefined || boundaries.includes(record.invocation_boundary)) &&
+            (record.feedback_status === undefined || ["success", "failed", "suspended"].includes(record.feedback_status)) &&
+            (record.output_digest === undefined || /^[a-f0-9]{64}$/.test(record.output_digest)) &&
+            (record.error_digest === undefined || /^[a-f0-9]{64}$/.test(record.error_digest)) &&
+            (record.worker_id_digest === undefined || /^[a-f0-9]{64}$/.test(record.worker_id_digest)) &&
+            (record.worker_pid === undefined || (Number.isSafeInteger(record.worker_pid) && record.worker_pid > 0)) &&
+            (record.worker_platform === undefined || typeof record.worker_platform === "string") &&
+            (record.worker_task_identity_digest === undefined || /^[a-f0-9]{64}$/.test(record.worker_task_identity_digest)) &&
+            (record.worker_operation_plan_binding_digest === undefined || /^[a-f0-9]{64}$/.test(record.worker_operation_plan_binding_digest)) &&
+            (record.worker_exit_observed === true || record.worker_exit_observed === false) &&
+            (record.result_delivery_digest === undefined || /^[a-f0-9]{64}$/.test(record.result_delivery_digest)) &&
+            (record.result_delivery_acknowledged === undefined || typeof record.result_delivery_acknowledged === "boolean") &&
+            (record.result_delivery_disposition === undefined || ["reconciled", "stale_generation_evidence"].includes(record.result_delivery_disposition)) &&
+            (record.result_archived_by_epoch_digest === undefined || /^[a-f0-9]{64}$/.test(record.result_archived_by_epoch_digest));
+        });
+        if (!recordsValid) return "Gateway execution receipt projectionの形式が不正なため、plan bindingとの照合は未確認です。";
+
+        const planBindings = plan.steps.filter(function (step) {
+          return isObject(step.binding) && /^[a-f0-9]{64}$/.test(step.binding.command_digest || "");
+        }).map(function (step) {
+          return { command_digest: step.binding.command_digest,
+            execution_ticket_digest: /^[a-f0-9]{64}$/.test(step.binding.execution_ticket_digest || "")
+              ? step.binding.execution_ticket_digest : null };
+        });
+        if (planBindings.length === 0) return "依頼一致planに照合可能なcommand bindingがなく、execution receiptは未確認です。";
+
+        const counts = Object.create(null);
+        for (const state of states) counts[state] = 0;
+        let unobserved = 0;
+        let ambiguous = 0;
+        let bindingMismatch = 0;
+        const ticketBindings = new Map();
+        for (const binding of planBindings) {
+          if (binding.execution_ticket_digest === null) { unobserved += 1; continue; }
+          ticketBindings.set(binding.execution_ticket_digest, (ticketBindings.get(binding.execution_ticket_digest) || 0) + 1);
+        }
+        for (const [ticketDigest, bindingCount] of ticketBindings) {
+          if (bindingCount !== 1) { ambiguous += 1; continue; }
+          const binding = planBindings.find(function (candidate) { return candidate.execution_ticket_digest === ticketDigest; });
+          if (!binding) { bindingMismatch += 1; continue; }
+          const matches = executionReceipts.records.filter(function (record) {
+            return record.ticket_digest === ticketDigest;
+          });
+          if (matches.length === 0) { unobserved += 1; continue; }
+          if (matches.length !== 1) { ambiguous += 1; continue; }
+          const receipt = matches[0];
+          if (receipt.command_digest !== binding.command_digest || receipt.task_identity_digest !== taskIdentityDigest ||
+              (receipt.worker_task_identity_digest !== undefined && receipt.worker_task_identity_digest !== taskIdentityDigest)) {
+            bindingMismatch += 1;
+            continue;
+          }
+          counts[receipt.state] += 1;
+        }
+        const stateLabels = {
+          issued: "issued", intent_committed: "intent_committed", invocation_attempted: "invocation_attempted",
+          adapter_returned: "adapter_returned", not_attempted: "not_attempted", outcome_unknown: "outcome_unknown",
+        };
+        const displayedStates = states.filter(function (state) { return counts[state] > 0; })
+          .map(function (state) { return stateLabels[state] + " " + String(counts[state]); });
+        const details = displayedStates.length > 0 ? displayedStates.join("、") : "一致receiptなし";
+        return "Gateway execution intent receipt（ticket digest・command digest・task identity照合、snapshot表示範囲内・非権威）: " + details +
+          "、照合不能 " + String(ambiguous) + "、plan binding不一致 " + String(bindingMismatch) + "、表示範囲で未観測 " +
+          String(unobserved) + "（未実行の証明ではありません）。";
+      }
+
+      function ownerTaskPlanLineageEvidenceSummary(plan, projection, executionReceipts) {
         const taskIdentityDigest = plan.task_identity_digest;
         if (typeof taskIdentityDigest !== "string" || !/^[a-f0-9]{64}$/.test(taskIdentityDigest)) {
           return "一致planに有効なtask identity digestがなく、同一taskの計画系譜とM receipt状態は未確認です。";
@@ -976,6 +1058,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             continue;
           }
           if (!isObject(step.binding) || !/^[a-f0-9]{64}$/.test(step.binding.command_digest || "") ||
+              (step.binding.execution_ticket_digest !== undefined && !/^[a-f0-9]{64}$/.test(step.binding.execution_ticket_digest)) ||
               (step.binding.result_digest !== undefined && !/^[a-f0-9]{64}$/.test(step.binding.result_digest)) ||
               (step.binding.delivery_digest !== undefined && !/^[a-f0-9]{64}$/.test(step.binding.delivery_digest)) ||
               !["not_recorded", "memory_commit_pending", "receipt_confirmed"].includes(step.binding.memory_status)) {
@@ -993,7 +1076,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const lineageCount = lineagePlans.length + "件" +
           (lineageRangePartial ? "（最新" + String(displayed) + "/" + String(total) + "計画の表示範囲）" : "");
         const stepRange = stepRangePartial ? "、stepは" + String(plan.steps.length) + "/" + String(plan.step_count) + "件の表示範囲" : "";
-        return "同一task identityの計画 " + lineageCount + "。依頼一致planのM receipt投影: receipt_confirmed " +
+        const executionReceiptSummary = ownerTaskExecutionIntentReceiptSummary(plan, taskIdentityDigest, executionReceipts);
+        return "同一task identityの計画 " + lineageCount + "。" + executionReceiptSummary + " 依頼一致planのM receipt投影: receipt_confirmed " +
           String(receiptConfirmed) + "、memory_commit_pending " + String(memoryCommitPending) + "、not_recorded " +
           String(notRecorded) + "、binding未表示 " + String(bindingNotDisplayed) + stepRange +
           "（非権威表示で、完了や実行権限を示しません）。";
@@ -1037,7 +1121,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           const planState = plan.status === "results_verified" ? "全stepの結果検証済み表示" : "step審査待ち";
           return withExecutionEvidence("Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
-            planState + "）。" + ownerTaskPlanLineageEvidenceSummary(plan, projection) +
+            planState + "）。" + ownerTaskPlanLineageEvidenceSummary(plan, projection, runtimeSnapshot.execution_receipts) +
             "受付状態とは別で、仕事全体の完了を意味しません。");
         }
         const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;

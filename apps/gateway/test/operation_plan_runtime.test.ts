@@ -162,6 +162,49 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("HDS plan projection emits only the one-way execution ticket digest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-execution-ticket-projection-"));
+    const candidate = plan("ticket-projection", root);
+    const firstStep = candidate.steps[0]!;
+    const stepDefinition = JSON.parse(JSON.stringify(firstStep)) as Record<string, unknown>;
+    delete stepDefinition.state;
+    delete stepDefinition.result_digest;
+    const owner = "fixture-owner";
+    const channel = "webchat";
+    const goal = "Review one synthetic task execution receipt projection.";
+    const taskIdentityDigest = "1".repeat(64);
+    const commandId = "projection-command";
+    const ticketId = randomUUID();
+    const now = Date.now();
+    const admission = {
+      ticket_id: ticketId,
+      command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex"),
+      command_digest: "2".repeat(64), proof_digest: "3".repeat(64), task_identity_digest: taskIdentityDigest,
+      execution_epoch: randomUUID(), issued_at_ms: now, expires_at_ms: now + 500_000,
+    };
+    const stateStore = new OperationPlanStateStore(join(root, "state.sqlite"));
+    stateStore.compareAndSet(null, OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1",
+      plans: [{ owner, channel, goal, task_identity_digest: taskIdentityDigest,
+        request_goal_criteria: noRequestCriteria(goal, candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [],
+        bindings: [{ step_id: firstStep.step_id, revision_digest: operationPlanDigest(candidate),
+          step_digest: operationPlanDigest(stepDefinition), prepared_step: firstStep, command_id: commandId,
+          request_id: candidate.request_id, commit_hash: "4".repeat(64), payload_digest: "5".repeat(64),
+          command_digest: "6".repeat(64), executor_command_digest: admission.command_digest,
+          operation: firstStep.operation, status: "intent_committed", execution_admission: admission }], results: [] }] }));
+    const hds = new HDSUpperController({ operation_plan_state: stateStore });
+    try {
+      const rawProjection = hds.getRuntimeSnapshot().operation_plans;
+      const projection = projectOperationPlanStatus(rawProjection);
+      const digest = createHash("sha256").update(ticketId, "utf8").digest("hex");
+      expect(projection.plans[0]?.steps[0]?.binding?.execution_ticket_digest).toBe(digest);
+      expect(JSON.stringify(rawProjection)).not.toContain(ticketId);
+      expect(JSON.stringify(projection)).not.toContain(ticketId);
+    } finally {
+      hds.close(); stateStore.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("Telegram由来の計画はWebChat owner再認証と元identity束縛なしにstep審査できない", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-cross-channel-owner-review-"));
     const workspace = join(root, "workspace");

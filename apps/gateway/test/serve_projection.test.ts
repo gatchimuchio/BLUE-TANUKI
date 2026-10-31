@@ -367,6 +367,7 @@ describe("Operation Core execution projection", () => {
         }],
         bindings: [{
           step_id: "c".repeat(64), command_id: "SECRET-COMMAND-ID", command_digest: "e".repeat(64),
+          execution_ticket_digest: "2".repeat(64),
           status: "outcome_unknown", result_digest: "f".repeat(64), delivery_digest: "1".repeat(64),
           payload_digest: "SECRET-PAYLOAD-DIGEST", memory_status: "not_recorded",
         }],
@@ -386,7 +387,8 @@ describe("Operation Core execution projection", () => {
         record_digest: "5".repeat(64), used_for_authority: false, may_execute: false,
       }, steps: [{
         operation: "gmail.write", status: "outcome_unknown", external_receipt_observation: "not_recorded",
-        binding: { command_digest: "e".repeat(64), result_digest: "f".repeat(64), delivery_digest: "1".repeat(64) },
+        binding: { command_digest: "e".repeat(64), execution_ticket_digest: "2".repeat(64),
+          result_digest: "f".repeat(64), delivery_digest: "1".repeat(64) },
       }], recovery_hold_reason: "held_unobserved", recovery_hold_scope_relation: "collateral" }],
     });
     for (const secret of ["SECRET-REQUEST-ID", "SECRET-GOAL", "SECRET-RECIPIENT", "SECRET-BODY", "SECRET-COMMAND-ID", "SECRET-PAYLOAD-DIGEST"]) {

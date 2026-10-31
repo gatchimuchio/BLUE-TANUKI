@@ -325,6 +325,14 @@ Gateway observer process試験6件とGateway typecheck、`git diff --check`はPA
 
 **次のproducer／consumer:** 全体実装を優先し、E2E-01の既存command intent・execution receipt・M receipt・plan dependencyを同一task identityでつなぐ。最新HEADで実際に切れている辺と呼出し元／consumerを特定し、既存権限・receipt・M writerを使って合成仕事の実経路を進める。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
 
+#### 2026-11-01 E2E-01 BUILD接続 — owner task状態へGateway実行intent receiptを相関表示
+
+Runtime snapshotが既に返していた非権威`execution_receipts` projectionを、Control Centerのowner task状態照会で消費するよう接続した。HDS plan bindingに保存されたexecution admissionのticket IDを一方向digest化し、依頼一致planのticket digestに加えて、receiptのcommand digestとtask identityまで一致する一件だけを結合する。`issued`／`intent_committed`／`invocation_attempted`／`adapter_returned`／`not_attempted`／`outcome_unknown`の状態を表示する。同じcommand digestでも別ticket・別taskのreceiptは結合しない。複数receiptの一致・不正projectionは未確認、snapshot表示範囲に一致がない場合も未実行の証明にせず未観測とする。raw ticket、command digest、結果本文は表示せず、Gateway receiptは非権威・実行不許可の観測に留める。既存のplan lineageとM receipt状態表示、HDS判断・承認・Broker・M writerは変更しない。
+
+HDSのticket digest生成試験1件、Gateway投影試験1件、WebChat相関試験1件（同fileの他113件pattern skip）はPASS。HDS／Gateway／channel-webchatのtypecheckとbuild、`docs:check`、`git diff --check`もPASS（日本語基底の既存移行負債76件）。別Gateway process／実ブラウザー、provider／live外部作用、workspace suite、QE_QC／QE_QAはNOT_RUN。この接続は依頼一致plan内のexecution ticket・command・task identityをGateway receipt snapshotへ表示相関する範囲に限り、E2E-01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
+
+**次のproducer／consumer:** E2E-01の残る仕事経路を最新HEADと現行正本から選び、固定合成file.write／file.search系列を越える通常taskの目的・C候補・J採否・結果/M・同一task再計画を既存consumerへ接続する。実provider呼出し、live外部作用、広域QC／QA、Rust cutoverは保留する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

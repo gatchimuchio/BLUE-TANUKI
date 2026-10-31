@@ -308,6 +308,7 @@ export interface OperationPlanStatusProjection {
       };
       binding?: {
         command_digest: string;
+        execution_ticket_digest?: string;
         result_digest?: string;
         delivery_digest?: string;
         memory_status: "not_recorded" | "memory_commit_pending" | "receipt_confirmed";
@@ -571,6 +572,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       const matching = bindings.filter((candidate) => candidate.step_id === step.step_id);
       const binding = matching.at(-1);
       if (binding && (binding.status !== step.status || !isDigest(binding.command_digest) ||
+          (binding.execution_ticket_digest !== undefined && !isDigest(binding.execution_ticket_digest)) ||
           (binding.result_digest !== undefined && !isDigest(binding.result_digest)) ||
           (binding.delivery_digest !== undefined && !isDigest(binding.delivery_digest)) ||
           !["not_recorded", "memory_commit_pending", "receipt_confirmed"].includes(String(binding.memory_status)))) {
@@ -613,6 +615,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         } } : {}),
         ...(binding ? { binding: {
           command_digest: binding.command_digest as string,
+          ...(typeof binding.execution_ticket_digest === "string"
+            ? { execution_ticket_digest: binding.execution_ticket_digest } : {}),
           ...(typeof binding.result_digest === "string" ? { result_digest: binding.result_digest } : {}),
           ...(typeof binding.delivery_digest === "string" ? { delivery_digest: binding.delivery_digest } : {}),
           memory_status: binding.memory_status as "not_recorded" | "memory_commit_pending" | "receipt_confirmed",
