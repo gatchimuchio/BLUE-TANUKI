@@ -102,6 +102,11 @@ WebChat Control Centerに、現在の目的版に結び付き、検証済みstep
 
 Windows隔離Gateway processで、結果不明のcreate-only `file.write`を再実行せず、現状態観測→owner選択→同一task read-only `file.search`候補→目的関係L3確認→owner step審査→既存Approval／Broker worker→execution receipt／M receipt→保存結果のWebChat返信まで対象testを3回PASS（各1 selected、他4件pattern skip）。その前の同一test 1回は初期synthetic file.search review返信待ち15秒でtimeoutしており、3回の成功で変動の原因を解消したとは扱わない。合成Gateway／一時file rootを使い、実provider・外部作用は未使用。workspace `pnpm build`、HDS-BRAIN no-emit `typecheck`、`pnpm docs:check`、`git diff --check`はPASS。workspace `pnpm typecheck`は古いHDS `dist/output_audit.js`のOneDrive `EBUSY`でFAILし、そのscriptによるclean後に個別buildを行った。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
+#### 2026-11-01 E2E-01 BUILD — 受付後の状態照会ID選択
+
+owner task受付後、次回用submission IDを発行した時に状態照会欄まで未送信IDを選択していた。送信IDをPOST前に保持し、受付成功後は新IDを次回送信用に維持しながら、照会欄だけ受付済みIDを選ぶようWebChatへ接続した。依頼本文・token・結果の保存、再送、HDS判断・権限変更はない。
+
+WebChat typecheck／buildはPASS。git diff --checkはPASS。テストsuiteとブラウザー実操作は未実施。E2E-01全体、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
 ### Deferred batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
 
 - **目的:** 現行TypeScript HDS-BRAINのpolicy採否とM writerをauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立算出するJ projection、停止後の人間復帰、L3承認済みM更新の有限な残差状態、およびJが選択したplan stepの目的／criterion採否要約を比較する。

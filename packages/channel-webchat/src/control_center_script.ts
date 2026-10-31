@@ -1149,11 +1149,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
           throw new Error("委任目的を再読み込みして選び直してください");
         }
+        const submissionId = pendingOwnerTaskSubmissionId();
         const result = await postOwnerTaskCompute(ownerToken, {
           user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
-          submission_id: pendingOwnerTaskSubmissionId()
+          submission_id: submissionId
         });
         clearOwnerTaskSubmissionId();
+        renderOwnerTaskStatusSubmissionIds(submissionId);
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
         appendChat("owner", task);
