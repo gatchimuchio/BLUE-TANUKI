@@ -20,6 +20,12 @@ Windows隔離合成Gateway processで、L3目的変更審査を通過した合�
 
 証拠範囲はhandler完了後の再起動回復に限る。`dispatching`中のprocess killと`outcome_unknown`表示・再送拒否、ブラウザー再起動からのUI操作は未確認。別の既存大型Gateway integration testでは、owner選択済みfile.write状態からの再計画が`plan_control_denied:plan_compute_source_observation_authorization_failed`で拒否され、同一task file.search候補が作られなかった。再確認／認可失敗の根因は未特定である。したがってこのsliceはE2E-01全体や`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。
 
+### 2026-11-01 E2E-01 browser再起動後の再送防止UI
+
+Control Centerは保存済みの最新`submission_id`を送信IDとして復元し、status照会前の別ID切替を出さない。現在の依頼IDについてGateway受付状態とRuntime相関を確認してから専用操作を表示する（Gatewayが明示した`rejected`は非dispatch状態としてstatus確認後に切替可能）。照会ID選択、owner token、Runtime tokenを変更すると表示を無効にして再確認を要求する。明示切替時は新UUIDをsession/localStorageへ保存する。依頼本文・結果・tokenの永続化、再送・再配信・外部作用は追加していない。
+
+WebChat package typecheck/build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。実ブラウザー再起動とGateway `dispatching`中のprocess killはNOT_RUN。詳細は`docs/IMPLEMENTATION_INSTRUCTIONS.md`の同日BUILD記録を参照。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
 ### 2026-11-01 E2E-01 owner選択済み状態観測の再利用
 
 前回のowner選択再計画拒否を対象Gateway process testで再現し、`recordExternalReceiptObservation()`は同じcommand／evidence digestが既に保存済みの場合に`null`を返すこと、その重複を呼出元が認可失敗として誤分類することを原因として修正した。Jは単回permitを消費し、最新receiptを再照合し、新しいsandbox状態を読み取る。既存観測が同一plan／revision／step／commandと一致し、digest・時刻の再照合を通過する場合だけ既存の耐久記録を再利用する。新しい観測記録・権限・作用は発生させない。

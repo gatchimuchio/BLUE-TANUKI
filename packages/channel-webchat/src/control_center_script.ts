@@ -694,6 +694,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return stored;
           }
         } catch { /* keep the identifier in this page session when storage is unavailable */ }
+        const recoveredSubmissionId = ownerTaskStatusSubmissionIds()[0];
+        if (recoveredSubmissionId) {
+          ownerTaskSubmissionIdMemory = recoveredSubmissionId;
+          try { sessionStorage.setItem(storageKey, recoveredSubmissionId); }
+          catch { /* the recovered identifier remains in page memory */ }
+          return recoveredSubmissionId;
+        }
         ownerTaskSubmissionIdMemory = crypto.randomUUID();
         try { sessionStorage.setItem(storageKey, ownerTaskSubmissionIdMemory); } catch { /* page memory remains available */ }
         return ownerTaskSubmissionIdMemory;
@@ -723,12 +730,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function clearOwnerTaskSubmissionId() {
-        ownerTaskSubmissionIdMemory = null;
-        try { sessionStorage.removeItem("blue-tanuki.owner-task-submission-id.v1"); } catch { /* best effort */ }
+        ownerTaskSubmissionIdMemory = crypto.randomUUID();
+        try { sessionStorage.setItem("blue-tanuki.owner-task-submission-id.v1", ownerTaskSubmissionIdMemory); }
+        catch { /* page memory remains available */ }
+        rememberOwnerTaskStatusSubmissionId(ownerTaskSubmissionIdMemory);
         byId("owner-task-new-submission").hidden = true;
       }
 
       async function postOwnerTaskCompute(token, body) {
+        byId("owner-task-new-submission").hidden = true;
         rememberOwnerTaskStatusSubmissionId(body && body.submission_id);
         const response = await fetch("/owner/task-compute", {
           method: "POST",
@@ -746,9 +756,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             statusCode === "delegated_task_purpose_unavailable";
           if (knownNotDispatched) {
             clearOwnerTaskSubmissionId();
-          }
-          if (response.status === 409 && !knownNotDispatched) {
-            byId("owner-task-new-submission").hidden = false;
           }
           if (statusCode === "owner_task_submission_not_dispatched") {
             throw new Error("GatewayからHDSへは未送信です。内容を確認して再送できます。");
@@ -783,12 +790,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const submissionSelect = byId("owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
         const submissionId = ownerTaskStatusSubmissionId();
+        const isCurrentSubmission = submissionId !== null && submissionId === ownerTaskSubmissionIdMemory;
         if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
         if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
         const wasSubmissionSelectDisabled = submissionSelect.disabled;
         const selectionChanged = function () { return ownerTaskStatusSubmissionId() !== submissionId; };
         button.disabled = true;
         submissionSelect.disabled = true;
+        byId("owner-task-new-submission").hidden = true;
         status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " のGateway受付記録を照会しています";
         status.className = "badge warn";
         try {
@@ -822,6 +831,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
             status.textContent = stateSummary + " Runtime token未入力のためplan照合は未実施です。";
+            if (isCurrentSubmission && result.state === "rejected") {
+              byId("owner-task-new-submission").hidden = false;
+            }
           } else {
             status.textContent = stateSummary + " Runtime planを照合しています。";
             const runtimeSnapshot = await loadRuntime("owner-task-status");
@@ -829,6 +841,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
             if (selectionChanged()) return;
             status.textContent = stateSummary + " " + correlation;
+            if (isCurrentSubmission && result.state !== "dispatching") {
+              byId("owner-task-new-submission").hidden = false;
+            }
           }
         } catch (error) {
           if (selectionChanged()) return;
@@ -5298,24 +5313,32 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("owner-task-status-submission-id").addEventListener("change", function () {
+        byId("owner-task-new-submission").hidden = true;
         const submissionId = ownerTaskStatusSubmissionId();
         if (!submissionId) return;
         const status = byId("owner-task-status");
         status.textContent = "依頼ID · " + submissionId.slice(-12) + " を選択しました。owner tokenを入力して状態を再確認してください。";
         status.className = "badge warn";
       });
+      byId("owner-task-token").addEventListener("input", function () {
+        byId("owner-task-new-submission").hidden = true;
+      });
+      byId("runtime-token").addEventListener("input", function () {
+        byId("owner-task-new-submission").hidden = true;
+      });
       try {
         const storedSubmissionId = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
         if (typeof storedSubmissionId === "string" &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storedSubmissionId)) {
           ownerTaskSubmissionIdMemory = storedSubmissionId;
-          byId("owner-task-new-submission").hidden = false;
+          byId("owner-task-new-submission").hidden = true;
           const status = byId("owner-task-status");
-          status.textContent = "前回の依頼状態を確認してください。通信結果が不明な場合、先に新規IDへ切り替えないでください。";
+          status.textContent = "保存済みIDを再送防止IDとして復元しました。先にowner tokenで受付とRuntime状態を照会してください。通信結果が不明な間は同じIDを維持します。";
           status.className = "badge warn";
         } else if (ownerTaskStatusSubmissionId()) {
+          ownerTaskSubmissionIdMemory = ownerTaskStatusSubmissionId();
           const status = byId("owner-task-status");
-          status.textContent = "保存済みの依頼IDをこのGatewayで照会できます。task本文・結果・tokenは保存していません。";
+          status.textContent = "保存済みの依頼IDを再送防止IDとして復元しました。先にowner tokenで受付とRuntime状態を照会してください。task本文・結果・tokenは保存していません。";
           status.className = "badge warn";
         }
         renderOwnerTaskStatusSubmissionIds(ownerTaskStatusSubmissionId());

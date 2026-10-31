@@ -275,6 +275,12 @@ owner taskの状態照会IDは、送信中の重複防止IDとして`sessionStor
 
 WebChat typecheck/build、生成`control_center_script.js`の構文確認、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、Gateway再起動、WebSocket再接続、provider/live外部作用はNOT_RUN。これはセッション横断の状態回復導線であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
 
+#### 2026-11-01 E2E-01 BUILD接続 — 再起動後の依頼ID再送防止と状態確認後の明示切替
+
+Control Centerは起動時に保存済みの最新`submission_id`を現在の送信IDへ復元し、status照会だけでなく後続送信にも同じIDを使う。`409`や結果不明の応答だけでは新しいIDへの切替を表示せず、現在の送信IDについてGateway statusを照会し、`dispatching`でない受付状態とRuntime相関を読んだ後にだけ専用切替を使える。既知の`rejected`は非dispatch状態としてGateway照会後に切替可能。照会対象の選択またはowner/runtime tokenの変更は切替表示を無効にし、再照会を要求する。明示切替は新しいUUIDをsession/localStorageへ保存してから次の送信に使う。タスク本文・request payload・token・結果は保存せず、自動再送・結果再配信・外部作用を追加しない。
+
+WebChat package typecheck/build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`は日本語基底移行負債76件の既存注意を出した。ブラウザー再起動の実操作、Gateway `dispatching`中のprocess kill、実provider／外部作用はNOT_RUN。この接続は再送防止IDと状態確認後の明示的切替をUIへつないだ`WIRED`であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
 #### 2026-11-01 E2E-01 BUILD接続 — 複数owner task照会IDの選択回復
 
 owner task状態照会の保存先を単一の最新IDから不透明`submission_id`一覧へ拡張し、Tasks画面で照会対象を選択できるようにした。IDは送信前に記録して応答消失時の回復を保ち、同一Gateway originの`localStorage`へIDだけを保存する。task本文、payload、owner/runtime token、結果本文は追加保存しない。旧単一IDキーも読み取り候補に残し、既存利用者の回復を維持する。照会は既存のowner-token必須read-only APIを使い、受付status／Runtime相関／非権威証拠の意味は変えない。
@@ -295,7 +301,7 @@ owner task状態照会のHTTP応答、Runtime再読込、request ID digest照合
 
 WebChat package typecheck／build、生成`CONTROL_CENTER_SCRIPT`構文解析、`git diff --check`はPASS。test、Gateway実processでの再接続からstatus照会までの連続動作、実provider／外部作用はNOT_RUN。この差分は選択済み依頼IDへのUI相関を保護する`WIRED`接続であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
 
-**次のproducer／consumer:** Gateway再起動後に保存済みsubmission IDを選び、owner status APIの受付状態とRuntime snapshotのrequest ID digestを同一依頼に結ぶ回復経路は、コード接続済み・実Gatewayでの連続観測は未実施。返信再配送・task再実行を加えず、QE_BUILDでは次の未接続な実consumer実装を続ける。
+**次のproducer／consumer:** browser restart後のsubmission ID復元・再送防止とstatus／Runtime確認後の明示切替はコード接続済みだが、実ブラウザーでの連続観測は未実施。次はGatewayが`dispatching`中に失われた場合の`outcome_unknown`回復と同一ID再送拒否をproducer／consumerへつなぎ、返信再配送・task再実行を加えず、QE_BUILDを続ける。
 
 ## Gitと復旧
 
