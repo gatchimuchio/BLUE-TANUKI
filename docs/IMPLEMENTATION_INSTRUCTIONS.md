@@ -197,9 +197,15 @@ file.writeのBroker結果receipt永続化失敗後、Gateway processを再起動
 
 `plan:compute`にowner選択済み`local_file_state`参照がある場合、GatewayはHDS `decide`前に同じplan／revision／step／command／task／execution epochの照会許可を取得し、現行execution receiptを再照合した後、既存のsandbox内create-only `file.write`状態検査を再実行する。許可は30秒・単回で、HDSが発行・消費し、GatewayからJへ渡すのはdigest-only観測だけ。観測は既存receipt observationとしてJ/Mへ保存し、次のHDS計算はその最新観測を再照合する。対象不在・内容不一致・receipt変化・保存不成立・検査失敗は候補生成前にfail-closedとなる。元`file.write`は`outcome_unknown`を維持し、再送・成功推定・外部provider呼出しはない。
 
-全workspace `tsc -b`相は完了し、Gateway個別`tsc --noEmit`と`git diff --check`はPASSした。一方、typecheck後の生成物掃除、HDS個別typecheck、HDS-BRAIN buildが、原因主体未特定のWindows file lock（`dist/output_audit.js`等への`EBUSY`）で停止または未成立となった。ロック対象は削除・強制終了していないため、全workspace buildは未成立として扱う。テストとGateway実process確認も未実施（NOT_RUN）で、実行時接続の動的証拠はない。次はロック解消後に依存順buildを閉じ、その後、同一task候補のowner step reviewから既存Approval／Broker、結果・M保存、WebChat返却consumerまでをつなぐ。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+全workspace `tsc -b`相は完了し、Gateway個別`tsc --noEmit`と`git diff --check`はPASSした。一方、typecheck後の生成物掃除、HDS個別typecheck、HDS-BRAIN buildが、原因主体未特定のWindows file lock（`dist/output_audit.js`等への`EBUSY`）で停止または未成立となった。ロック対象は削除・強制終了していないため、全workspace buildは未成立として扱う。テストとGateway実process確認も未実施（NOT_RUN）で、実行時接続の動的証拠はない。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のproducer／consumer:** ownerの同一task step reviewを既存Approval／Brokerへ接続し、結果観測・M receipt・明示的WebChat返却まで一気通貫で通す。旧epoch result outboxはauthorityにせず、元`file.write`を再発行しない。provider/live外部作用は使わない。
+#### 2026-10-31 E2E-01 BUILD接続 — WebChat承認一覧の返却同期
+
+現行コードの静的追跡ではowner step reviewからHDS-bound command、既存Approval／Executor・Broker、保存済みresult reconciliation、J/M receipt gate、WebChat返却まで接続済みである。L3等で承認待ちとなった場合、Gatewayは`[approval-required]`をWebChatへ通知していたが画面側はRuntime snapshotだけを更新し、Approval一覧は手動再読込まで古い可能性があった。同通知を受信しApproval tokenが入力済みなら`/approval`を再取得するよう接続した。並行取得は最新requestだけ描画し、保留中commandのreview digestは同じcommandが引き続きpendingで内容確認を要求していない場合に限り保持する。これは表示用snapshotの再読込であり、承認・権限・実行経路を追加しない。
+
+channel-webchat `typecheck`と`git diff --check`はPASS。テスト、Gateway実process、外部providerは未実施。ソース上の接続を実行時のE2E証拠へ昇格させず、`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QAは未成立として保持する。
+
+**次:** rev3.0現行工程から次の未接続producer／consumerを特定し実装を続ける。E2E-01の実行確認は、全体実装後のQE_QC段階で同じtask・承認条件・M receipt・WebChat返却をまとめて検証する。旧epoch result outboxはauthorityにせず、元`file.write`を再発行しない。provider/live外部作用は使わない。
 
 ## Gitと復旧
 

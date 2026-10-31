@@ -51,6 +51,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         chatSocket: null,
         chatConnectionGeneration: 0,
         runtimeSnapshotRequestId: 0,
+        approvalSnapshotRequestId: 0,
         approvalTokens: Object.create(null),
         approvalContentDigests: Object.create(null),
         goalPurposeCandidates: []
@@ -537,6 +538,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if ((frame.kind === "channel_send" || frame.kind === "error") &&
               byId("runtime-token").value.trim()) {
             void loadRuntime("webchat-message");
+          }
+          if (frame.kind === "channel_send" && typeof frame.content === "string" &&
+              frame.content.startsWith("[approval-required]") && byId("approval-token").value.trim()) {
+            void loadApprovals();
           }
         });
         ws.addEventListener("close", function () {
@@ -1742,6 +1747,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function renderApprovals(body) {
         const pending = Array.isArray(body.pending_approvals) ? body.pending_approvals : Array.isArray(body.pending) ? body.pending : [];
+        const previousContentDigests = state.approvalContentDigests;
+        const refreshedContentDigests = Object.create(null);
+        for (const item of pending) {
+          if (!isObject(item) || item.content_review_required === true || typeof item.command_id !== "string") continue;
+          const digest = previousContentDigests[item.command_id];
+          if (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) refreshedContentDigests[item.command_id] = digest;
+        }
+        state.approvalContentDigests = refreshedContentDigests;
         const grants = Array.isArray(body.grants) ? body.grants : [];
         const approvalHistory = Array.isArray(body.approval_history) ? body.approval_history : [];
         const activeExecutions = Array.isArray(body.active_executions) ? body.active_executions : [];
@@ -1770,7 +1783,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("approval-history-count", approvalHistory.length);
         setText("active-execution-count", activeExecutions.length);
         state.approvalTokens = Object.create(null);
-        state.approvalContentDigests = Object.create(null);
         renderApprovalGrants(grants);
         renderApprovalHistory(approvalHistory);
         renderActiveExecutions(activeExecutions);
@@ -4085,13 +4097,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       async function loadApprovals() {
         const token = byId("approval-token").value.trim();
+        const requestId = ++state.approvalSnapshotRequestId;
         state.approvalToken = token;
-        state.approvalContentDigests = Object.create(null);
         sessionStorage.setItem("bt.approvalToken", token);
         try {
           const body = await fetchJson("/approval", token);
+          if (requestId !== state.approvalSnapshotRequestId) return;
           renderApprovals(body);
         } catch (error) {
+          if (requestId !== state.approvalSnapshotRequestId) return;
           setHtml("approval-list", '<div class="queue-item">' + escapeHtml(error.message) + '</div>');
           setText("approval-summary", "error");
           byId("approval-summary").className = "badge bad";
