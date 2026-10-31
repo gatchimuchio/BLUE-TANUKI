@@ -74,6 +74,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-10-31、開発限定の`synthetic-file-write-plan`を通常WebChat task入口へ接続し、隔離Gateway processで目的関係L3確認、owner step審査、既存Approval／Brokerによるcreate-only `file.write`、execution receipt／M receipt、同一taskのread-only `file.search`、保存結果返信までを実行した。`document_organization_entry.test.ts`のtest helperはrepo root相対entrypointを誤解決していたため`import.meta.url`基準へ修正し、対象process testを再実行してPASS（1 selected、他3件pattern skip）。書込みreceipt確定後にGateway processを再起動し、同じplan／revision／task identity／M receiptから再計画・結果返信を継続、fileは一件のまま、test provider call 0件を確認した。workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS（日本語基底移行負債76件は既存注意）。これは完了receiptからの再起動連続性に限る。実行中断とBroker作用後・result／M receipt確定前のcrash windowにおけるintent／outbox／dependency復旧はNOT_RUN。E2E-01全体、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
 
+2026-10-31の続きでは、owner選択済みdigest-only file-state observationを開発限定synthetic Cが同一taskの候補文脈として受け付ける条件を追加した。親plan ID／revision／task identityと`outcome_unknown`・観測専用flagを照合し、元`file.write`を再生成せず同じ対象に対するread-only `file.search`候補のみを返す。全workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS。test suite、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次は同一task候補のowner step reviewから既存Approval／Broker、結果/M保存、WebChat返却へ接続する。E2E-01全体、製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

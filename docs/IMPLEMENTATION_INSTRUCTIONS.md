@@ -154,6 +154,8 @@ create-only `file.write`の結果不明状態観測とGateway永続`ExecutionInt
 
 C応答後の`retainCandidate`も同じHDS source-inspection consumerを通るため、候補の保持直前にGateway永続receiptをもう一度再取得する。最初のowner受付からC応答までにreceiptが変化した場合も候補を保存しない。GatewayからHDSへ渡す依存は型付き読取callback一つで、HDS standalone境界・単一J/M writer・Approval／Broker権限に変更はない。`pnpm typecheck`、全workspace `pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次は同一task候補のowner step reviewから既存Broker、結果/M保存、WebChat返却consumerまでの未接続境界をつなぐ。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
+2026-10-31のE2E-01続きでは、開発限定`synthetic-file-write-plan`がowner選択済み`owner_selected_local_file_state`を正確なtask文・同一parent plan/revision/task identity・`outcome_unknown`・観測専用flagで受け、同じ対象に対する既存のread-only `file.search`候補だけを返すよう接続した。元`file.write`の再生成・成功推定・権限付与は行わない。全workspace `pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test suite、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次はowner step reviewから既存Approval/Broker、結果/M保存、WebChat返却へつなぐ。E2E-01全体と製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
