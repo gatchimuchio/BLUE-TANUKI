@@ -47,6 +47,8 @@ export interface InboundChannel {
 export interface SendMeta {
   command_id: string;
   upstream_commit_hash: string;
+  /** HDS request correlation for delivery/UI trace; it carries no authority. */
+  request_id?: string;
 }
 
 /** Ephemeral execution controls, kept separate from correlation/audit metadata. */

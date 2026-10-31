@@ -779,6 +779,13 @@ export const CONTROL_CENTER_STYLE = `      :root {
         font-weight: 760;
       }
 
+      .chat-request-ref {
+        display: block;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
       .chat-bubble p {
         white-space: pre-wrap;
         overflow-wrap: anywhere;

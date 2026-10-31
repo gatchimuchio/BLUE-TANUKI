@@ -62,6 +62,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-10-31、Gateway observerは受付時にRust向けwire JSONを固定し、TypeScript分類とRust process入力を同じsnapshotへ結び付けた。呼出元が`observe()`直後にprojectionを変更する合成条件でも、実Rust receiptとTypeScript分類の一致を確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust 4 tests、`pnpm docs:check`がPASS。日本語基底監査の移行負債76件は既存注意として残る。これはK-B5の非権威比較入力を同一化する接続であり、K-B5全体比較、製品全体BUILD、QE_QC／QE_QA、実provider、cutoverの成立を示さない。
 
+2026-10-31のE2E-01追加接続では、HDS commandのupstream_decision.request_idをExecutorからWebChat channel_send／owner-task failure frameへ通し、Control Centerの受理表示・結果返信を同じ依頼IDで相関した。結果返信に短い依頼ID末尾を表示し、要求ごとの運転traceを追えるようにした。値は非権威メタデータであり、判断・承認・作用・M書込みへ使わない。pnpm typecheck／pnpm build、Control Center script構文解析、pnpm docs:check、git diff --checkはPASS。test、Gateway実process smoke、実provider、実作用はNOT_RUN。この接続はE2E-01全体や製品全体SYSTEM_SHAPED／BUILD_COVEREDの証拠ではなく、同一task／目的bindingを保つ安全な合成Approval／Broker作用→receipt→M→返信→再計画／復帰を次の接続として残す。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

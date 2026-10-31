@@ -30,13 +30,17 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（今回の接続単位: M receiptから同一task候補再計画）
+### Active batch: E2E-01 — WebChat task一気通貫（次の接続単位: 安全な合成Approval／Broker作用からM receipt・結果返信・再計画まで）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
 - **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
 - **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
 - **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSの権限・L3／Approval・Broker規則は変更しない。次は同じWebChat task identity／目的bindingを保つ安全な合成Approval／Broker作用からreceipt・M・結果返信・再計画を一仕事で通す。
+
+#### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
+
+ExecutorがHDS commandのupstream_decision.request_idを送信metadataへ引き継ぎ、WebChatのchannel_send／owner-task failure frameとControl Centerのchat itemへ接続した。受理表示と返信をrequest IDで相関し、結果返信には同じ依頼IDの末尾を表示する。これは表示・追跡専用で権限を持たず、計画判断・Approval・Broker作用・M更新を変更しない。pnpm typecheck、pnpm build、Control Center script syntax parse、pnpm docs:check、git diff --checkはPASS。test、Gateway実process smoke、実provider、実作用は未実施（NOT_RUN）。この接続だけではE2E-01全体・製品全体SYSTEM_SHAPED／BUILD_COVEREDを成立させない。次は同じtask identity／目的bindingを保つ安全な合成Approval／Broker作用、receipt、M、結果返信、再計画／復帰のproducer→consumer経路である。
 
 #### 2026-10-31 E2E-01追加接続 — M receiptから同一taskの再計画候補
 

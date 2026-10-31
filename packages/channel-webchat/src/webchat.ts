@@ -483,6 +483,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       kind: "channel_send",
       command_id: meta.command_id,
       upstream_commit_hash: meta.upstream_commit_hash,
+      ...(meta.request_id ? { request_id: meta.request_id } : {}),
       content: payload.content,
     });
     let any = false;
@@ -502,6 +503,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (!connections?.size) return;
     const frame = JSON.stringify({
       kind: "error",
+      request_id: requestId,
       content: `計画作成の応答を確認できません。重複計画を避けるため、再送前にTasks／Runtimeで参照IDを確認してください。参照ID: ${requestId}`,
     });
     for (const ws of connections) {

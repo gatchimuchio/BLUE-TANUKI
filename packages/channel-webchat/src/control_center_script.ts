@@ -467,12 +467,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return String(kind || "System");
       }
 
-      function appendChat(kind, text) {
+      function appendChat(kind, text, requestId) {
         const log = byId("chat-log");
         const item = document.createElement("article");
         const role = chatRoleForKind(kind);
+        const requestRef = typeof requestId === "string" && requestId.length > 0 && requestId.length <= 200
+          ? requestId : "";
+        if (requestRef) item.dataset.requestId = requestRef;
+        const correlation = role === "assistant" && requestRef
+          ? '<small class="chat-request-ref">依頼ID末尾: ' + escapeHtml(requestRef.slice(-12)) + '</small>'
+          : "";
         item.className = "chat-item " + role;
-        item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(text) + '</p></div>';
+        item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(text) + '</p>' + correlation + '</div>';
         if (log.querySelector(".chat-item.system .chat-bubble p")?.textContent === "Ready.") log.innerHTML = "";
         log.appendChild(item);
         log.scrollTop = log.scrollHeight;
@@ -527,7 +533,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             appendChat("system", "connected as " + (frame.user || state.chatUser));
             return;
           }
-          appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)));
+          appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)), frame.request_id);
           if ((frame.kind === "channel_send" || frame.kind === "error") &&
               byId("runtime-token").value.trim()) {
             void loadRuntime("webchat-message");
@@ -559,7 +565,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("owner", content);
         const result = await postJson("/inbound", state.chatToken, { user: state.chatUser, content });
         byId("chat-content").value = "";
-        appendChat("accepted", result.request_id || "request accepted");
+        appendChat("accepted", result.request_id || "request accepted", result.request_id);
       }
 
       async function loadOwnerTaskGoals() {
@@ -606,7 +612,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
         appendChat("owner", task);
-        appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました");
+        appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);
         status.textContent = "HDSへ依頼済み。計画候補・作用は未承認です";
         status.className = "badge good";
       }
@@ -638,7 +644,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
         appendChat("owner", content);
-        appendChat("accepted", result.request_id || "read-only reconciliation accepted");
+        appendChat("accepted", result.request_id || "read-only reconciliation accepted", result.request_id);
       }
 
       async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding,
@@ -681,7 +687,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
         appendChat("owner", content);
-        appendChat("accepted", result.request_id || "J step review request accepted");
+        appendChat("accepted", result.request_id || "J step review request accepted", result.request_id);
       }
 
       async function invokeOperationPlanResult(planId, revisionDigest, stepId, ownerAuthenticationRequired,
@@ -715,7 +721,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
         appendChat("owner", content);
-        appendChat("accepted", result.request_id || "saved result read request accepted");
+        appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
       async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding) {
@@ -748,7 +754,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ownerTokenInput.value = "";
         }
         appendChat("owner", "同一taskの検証済み結果に基づく再計画を依頼しました");
-        appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました");
+        appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました", result.request_id);
       }
 
       async function invokeOperationPlanWait(planId, revisionDigest, hours) {
@@ -773,7 +779,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ownerTokenInput.value = "";
         }
         appendChat("owner", content);
-        appendChat("accepted", result.request_id || "同一planの返信待機を登録しました");
+        appendChat("accepted", result.request_id || "同一planの返信待機を登録しました", result.request_id);
       }
 
       async function replyToOperationPlanWait(planId, revisionDigest, content) {
@@ -796,7 +802,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ownerTokenInput.value = "";
         }
         appendChat("owner", content.trim());
-        appendChat("accepted", result.request_id || "同じplanの再計画をHDSへ依頼しました");
+        appendChat("accepted", result.request_id || "同じplanの再計画をHDSへ依頼しました", result.request_id);
       }
 
       async function invokeInterruptedOperationPlanWait(waitId, response, ownerAuthenticationRequired,
@@ -833,7 +839,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
         appendChat("owner", "復旧した待機へ新しい返信を送信しました。");
-        appendChat("accepted", result.request_id || "interrupted wait recovery request accepted");
+        appendChat("accepted", result.request_id || "interrupted wait recovery request accepted", result.request_id);
       }
 
       function syncInputs() {

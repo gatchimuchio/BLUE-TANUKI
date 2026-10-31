@@ -768,7 +768,7 @@ export class Executor {
           break;
         case "channel_send":
           feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash,
-            markInvoked, context.signal);
+            cmd.upstream_decision.request_id, markInvoked, context.signal);
           break;
         case "noop":
           {
@@ -1207,6 +1207,7 @@ export class Executor {
     payload: ChannelSendPayload,
     start: number,
     commit_hash: string,
+    request_id: string | undefined,
     markInvoked: (boundary: ExecutionInvocationBoundary) => void,
     signal?: AbortSignal,
   ): Promise<ExecuteFeedback> {
@@ -1220,6 +1221,7 @@ export class Executor {
       const r = await this.deps.dispatcher.dispatch(payload, {
         command_id: id,
         upstream_commit_hash: commit_hash,
+        ...(payload.channel === "webchat" && request_id ? { request_id } : {}),
       }, { ...(signal ? { signal } : {}) });
       if (r.delivery_status === "unknown") {
         return { command_id: id, status: "failed", error: "channel_send_delivery_outcome_unknown",
