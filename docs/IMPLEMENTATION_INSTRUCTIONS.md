@@ -52,6 +52,14 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 **次のproducer／consumer:** 実行中断時に現在の権限を復元せず、同じtaskのcommand intent・execution receipt／outbox・M receipt・現在のplan dependencyを安全に再照合する。結果不明なら再実行せずholdする。provider/live外部作用は使わない。
 
+#### 2026-10-31 E2E-01 — file.write後のBroker結果receipt保存失敗とGateway再起動
+
+Windowsの隔離Gateway process試験に、実`file.write`の後で`execution_intents`のBroker結果receipt更新だけをSQLite triggerで失敗させる分岐を接続した。Gatewayは合成ファイル本文・trigger理由を返さず、固定のreceipt永続化失敗をWebChatへ返す。J planは`outcome_unknown`を保持し、M receipt未記録のstepから同一taskのfile.search候補を作らない。試験用Gatewayを強制終了・再起動しても、同一plan／revision／task identity・未知step・M未記録状態が復帰し、file.write対象は一つだけ増え、その後重複しない。低層の`execution_result_reconciliation.test.ts`ではpending result outboxが空であること、fresh epoch後も同じcommand keyの再発行を拒否することを確認した。実`file.write`後の永続化失敗を作る合成試験であり、Gatewayをadapter復帰とreceipt開始の厳密な命令間で直接killした証拠ではない。異常後の明示的なowner receipt照合・解決も次工程に残す。
+
+再起動後の同task file.search候補が作成されなかった根因は、開発専用`SyntheticFileWritePlanBackend`がpath対応をprocess内Mapだけへ保持していたことだった。create-only pathを親plan digestから決定的に導出し、Cが再起動後も同じsandbox対象を再生成できるよう接続した。`document_organization_entry.test.ts`の目的L3・Approval／Broker・write・再起動・read-only再計画・receipt失敗・再起動復帰を含む選択実process試験は1 selected PASS（他3件はpattern skip）。`execution_result_reconciliation.test.ts`のreceipt失敗・store reopen試験は1 selected PASS（他47件はpattern skip）。core build、Gateway typecheck、`git diff --check`もPASS。合成ファイル作用以外の外部作用・実provider呼出しは0件。この限定証拠はE2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
+2026-10-31再同期時の再検証では、低層store reopen試験は1 selected PASS（他47件はpattern skip）、Gateway実process試験は初回に45秒health timeoutでFAIL（初回helperはstderrのみ出力しstdoutは未確認）、同じ対象の再実行で1 selected PASS（他3件はpattern skip）だった。初回timeoutの原因は未確定であり、再現時に起動出力を確認できるようhealth timeout時の診断へstdout捕捉を加えた。`pnpm --filter @blue-tanuki/core build`、`pnpm --filter @blue-tanuki/gateway typecheck`、`pnpm docs:check`はPASS（日本語基底移行負債76件は既存注意）。この再検証も限定合成環境の証拠である。
+
 #### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
 
 ExecutorがHDS commandのupstream_decision.request_idを送信metadataへ引き継ぎ、WebChatのchannel_send／owner-task failure frameとControl Centerのchat itemへ接続した。受理表示と返信をrequest IDで相関し、結果返信には同じ依頼IDの末尾を表示する。これは表示・追跡専用で権限を持たず、計画判断・Approval・Broker作用・M更新を変更しない。pnpm typecheck、pnpm build、Control Center script syntax parse、pnpm docs:check、git diff --checkはPASS。test、Gateway実process smoke、実provider、実作用は未実施（NOT_RUN）。この接続だけではE2E-01全体・製品全体SYSTEM_SHAPED／BUILD_COVEREDを成立させない。次は同じtask identity／目的bindingを保つ安全な合成Approval／Broker作用、receipt、M、結果返信、再計画／復帰のproducer→consumer経路である。

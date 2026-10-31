@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,7 @@ import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const tsxArgs = ["--import", "tsx"];
 const source = "決定事項:青\n未確認:期限";
 const firstExcerpt = "決定事項:青";
@@ -1072,6 +1074,154 @@ describe("delegated goal purpose owner review", () => {
       expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
         .toEqual(createdFiles);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+
+      const filesBeforeUnknownWrite = [...createdFiles];
+      const resultFaultDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+      let resultFaultInstalled = false;
+      let uncertainPlanId = "";
+      let uncertainTaskIdentity = "";
+      try {
+        resultFaultDb.exec(`CREATE TRIGGER fixture_process_result_receipt_failure BEFORE UPDATE ON execution_intents
+          WHEN json_extract(NEW.receipt_json,'$.result_delivery_digest') IS NOT NULL
+          BEGIN SELECT RAISE(ABORT,'fixture process result receipt failure'); END;`);
+        resultFaultInstalled = true;
+        const uncertainTaskReply = waitForWebChatSend(taskWebSocket, "synthetic unknown-result task");
+        const uncertainTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
+          method: "POST",
+          headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+          body: JSON.stringify({ user: "c0802-owner", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+            goal_ref: goalRef, purpose_version: 2 }),
+        });
+        expect(uncertainTaskSubmission.status).toBe(202);
+        expect((await uncertainTaskReply).length).toBeGreaterThan(0);
+        const uncertainWritePlan = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+          return body.operation_plan_status?.plans?.find((plan) => plan.plan_id !== writePlanId &&
+            Array.isArray(plan.steps) && (plan.steps as Array<Record<string, unknown>>)
+              .some((step) => step.operation === "file.write")) ?? null;
+        }, gateway, "second synthetic task did not reach its file.write plan");
+        uncertainPlanId = String(uncertainWritePlan.plan_id);
+        uncertainTaskIdentity = String(uncertainWritePlan.task_identity_digest);
+        const uncertainRevision = String(uncertainWritePlan.revision_digest);
+        const uncertainGoalBinding = uncertainWritePlan.goal_purpose_binding as {
+          goal_ref: string; purpose_version: number; purpose_digest: string;
+        };
+
+        const uncertainRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+          method: "POST",
+          headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+          body: JSON.stringify({ plan_id_digest: uncertainPlanId, revision_digest: uncertainRevision, outcome: "supports" }),
+        });
+        expect(uncertainRelationResponse.status).toBe(202);
+        const uncertainRelation = await uncertainRelationResponse.json() as { command_id?: string };
+        const uncertainQueue = await loadQueue();
+        const uncertainPending = uncertainQueue.pending_approvals.find((item) => item.command_id === uncertainRelation.command_id);
+        const uncertainContentResponse = await fetch(
+          "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(uncertainRelation.command_id)) + "/content",
+          { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+        );
+        expect(uncertainContentResponse.status).toBe(200);
+        const uncertainContent = await uncertainContentResponse.json() as Record<string, unknown>;
+        const uncertainApprovalResponse = await fetch(
+          "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(uncertainRelation.command_id)),
+          { method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+            body: JSON.stringify({ verdict: "approve", approval_token: uncertainPending?.approval_token,
+              content_review_digest: uncertainContent.command_digest }) },
+        );
+        expect(uncertainApprovalResponse.status).toBe(200);
+
+        const uncertainWriteStep = (uncertainWritePlan.steps as Array<Record<string, unknown>>)
+          .find((step) => step.operation === "file.write");
+        const uncertainWriteStepId = String(uncertainWriteStep?.step_id);
+        const uncertainReviewReply = waitForWebChatSend(taskWebSocket, "synthetic unknown file.write result");
+        const uncertainReviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+          method: "POST",
+          headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+          body: JSON.stringify({ user: "c0802-owner", plan_id: uncertainPlanId, revision_digest: uncertainRevision,
+            content: "plan:review " + JSON.stringify({ plan_id: uncertainPlanId, revision_digest: uncertainRevision,
+              step_id: uncertainWriteStepId, goal_purpose_binding: uncertainGoalBinding }) }),
+        });
+        expect(uncertainReviewResponse.status).toBe(202);
+        const uncertainResultOutput = await uncertainReviewReply;
+        expect(uncertainResultOutput).toContain("Executor receipt persistence failed");
+        expect(uncertainResultOutput).not.toContain("fixture process result receipt failure");
+        expect(uncertainResultOutput).not.toContain("BLUE-TANUKI synthetic create-only operation completed.");
+
+        const unknownResultPlan = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === uncertainPlanId);
+          const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+            candidate.step_id === uncertainWriteStepId);
+          return step?.status === "outcome_unknown" ? { plan, step } : null;
+        }, gateway, "Broker result receipt failure did not hold the file.write plan as outcome_unknown");
+        expect(unknownResultPlan.plan).toMatchObject({ task_identity_digest: uncertainTaskIdentity,
+          revision_digest: uncertainRevision });
+        expect(unknownResultPlan.step).toMatchObject({ operation: "file.write", status: "outcome_unknown",
+          external_receipt_observation: "not_recorded", binding: { memory_status: "not_recorded" } });
+
+        const filesWithUnknownWrite = readdirSync(fileRoot)
+          .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
+        expect(filesWithUnknownWrite).toHaveLength(filesBeforeUnknownWrite.length + 1);
+        const uncertainFile = filesWithUnknownWrite.find((name) => !filesBeforeUnknownWrite.includes(name));
+        expect(uncertainFile).toBeDefined();
+        expect(readFileSync(join(fileRoot, uncertainFile!), "utf8"))
+          .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+        expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+      } finally {
+        if (resultFaultInstalled) resultFaultDb.exec("DROP TRIGGER fixture_process_result_receipt_failure");
+        resultFaultDb.close();
+      }
+
+      const uncertainTaskWebSocket = taskWebSocket;
+      taskWebSocket = undefined;
+      uncertainTaskWebSocket.close();
+      await forceStopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const uncertainResumeTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(uncertainResumeTicketResponse.status).toBe(200);
+      const { ticket: uncertainResumeTicket } = await uncertainResumeTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(uncertainResumeTicket));
+      await once(taskWebSocket, "open");
+
+      const restoredUnknownPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === uncertainPlanId);
+        const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+          candidate.operation === "file.write");
+        return step?.status === "outcome_unknown" ? { plan, step, plans: body.operation_plan_status?.plans ?? [] } : null;
+      }, gateway, "Gateway restart did not restore the unknown file.write outcome");
+      expect(restoredUnknownPlan.plan).toMatchObject({ plan_id: uncertainPlanId,
+        task_identity_digest: uncertainTaskIdentity, status: "awaiting_step_review" });
+      expect(restoredUnknownPlan.step).toMatchObject({ status: "outcome_unknown",
+        external_receipt_observation: "not_recorded", binding: { memory_status: "not_recorded" } });
+      expect(restoredUnknownPlan.plans.filter((plan) => plan.task_identity_digest === uncertainTaskIdentity &&
+        Array.isArray(plan.steps) && (plan.steps as Array<Record<string, unknown>>)
+          .some((step) => step.operation === "file.search"))).toHaveLength(0);
+      const filesAfterRestart = readdirSync(fileRoot)
+        .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
+      expect(filesAfterRestart).toHaveLength(filesBeforeUnknownWrite.length + 1);
+      expect(filesAfterRestart).toEqual(expect.arrayContaining([...filesBeforeUnknownWrite]));
+      expect(readFileSync(join(fileRoot, filesAfterRestart.find((name) => !filesBeforeUnknownWrite.includes(name))!), "utf8"))
+        .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+      expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
@@ -1299,7 +1449,7 @@ async function waitForHealth(port: number, gateway: CapturedProcess): Promise<vo
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`gateway health timed out\n${gateway.stderr.join("")}`);
+  throw new Error(`gateway health timed out\nstdout:\n${gateway.stdout.join("")}\nstderr:\n${gateway.stderr.join("")}`);
 }
 
 function waitForWebChatSend(webSocket: WebSocket, label = "operator request"): Promise<string> {

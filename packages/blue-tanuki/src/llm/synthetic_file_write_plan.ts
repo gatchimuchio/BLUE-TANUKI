@@ -212,7 +212,6 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
 export class SyntheticFileWritePlanBackend implements LLMBackend {
   readonly name = SYNTHETIC_FILE_WRITE_PLAN_BACKEND;
   readonly capabilities = ["llm.text.generate"] as const;
-  private readonly createdPathByPlanIdDigest = new Map<string, string>();
 
   constructor(private readonly env: SyntheticPlanEnv) {}
 
@@ -248,9 +247,12 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     const identityDigest = createHash("sha256").update(requestId, "utf8").digest("hex");
     const isCreate = fixture.kind === "create";
     const planId = `synthetic-plan-${identityDigest}`;
-    const generatedPath = `blue-tanuki-synthetic-${identityDigest.slice(0, 20)}.txt`;
+    const planIdDigest = operationPlanDigest(planId);
+    const generatedPath = `blue-tanuki-synthetic-${planIdDigest.slice(0, 20)}.txt`;
     const relativePath = isCreate ? generatedPath
-      : this.createdPathByPlanIdDigest.get(fixture.parent_plan_id_digest ?? "");
+      : fixture.parent_plan_id_digest
+        ? `blue-tanuki-synthetic-${fixture.parent_plan_id_digest.slice(0, 20)}.txt`
+        : undefined;
     if (!relativePath) throw reject("Synthetic same-task verification requires its matching parent create candidate.");
     const target: OperationPlan["steps"][number]["target"] = isCreate
       ? { kind: "file", id: relativePath }
@@ -342,8 +344,6 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
       planner_output_used_for_authority: false,
       hds_brain_authority_required: true,
     };
-    if (isCreate) this.createdPathByPlanIdDigest.set(operationPlanDigest(planId), relativePath);
-
     return {
       content: JSON.stringify({
         plan,

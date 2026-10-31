@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
+  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -86,6 +87,17 @@ function fileWriteCandidate(id: string, root: string, expectedByteAdjustment = 0
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
+function fileWriteWithDependentCandidate(id: string, root: string): OperationPlan {
+  const writePlan = fileWriteCandidate(id, root);
+  const search = candidate(id, root).steps[0]!;
+  if (!search.preparation) throw new Error("synthetic dependent search preparation is missing");
+  const dependent: OperationPlan["steps"][number] = {
+    ...search,
+    step_id: "verify-note",
+    preparation: { ...search.preparation, depends_on: ["create-note"] },
+  };
+  return { ...writePlan, steps: [writePlan.steps[0]!, dependent] };
+}
 function fileDeleteCandidate(id: string): OperationPlan {
   const target = { kind: "file" as const, id: "notes.txt" };
   return { version: "operation-core.v1", plan_id: "plan-" + id, request_id: id, state: "planned",
@@ -153,8 +165,20 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const actualWorker = createFileSearchWorker({ execution_epoch: executionEpoch,
     env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } });
   const invoke = vi.fn(actualWorker.invoke); const worker = { invoke };
-  const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker,
-    llm: { name: "fixture", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
+  const fixtureLlmCall = vi.fn(async () => ({ content: JSON.stringify(plan), model: "fixture-model", tokens_used: 0 }));
+  const fixtureBackend = { name: "fixture", call: fixtureLlmCall };
+  const llm = new LLMRegistry({ retry: { max_attempts: 1 } }).register(fixtureBackend, [], {
+    capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.01, currency: "USD" },
+  }).setDefault("fixture");
+  const computeBudget: ComputeBudgetPort = {
+    reserve(input) {
+      return { reservation_id: randomUUID(), reserved_tokens: input.reserved_tokens,
+        reserved_compute_ms: input.reserved_compute_ms, reserved_cost: structuredClone(input.reserved_cost) };
+    },
+    settle() {},
+  };
+  const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker, llm,
+    compute: new LLMComputeAdapter(llm, computeBudget), on_agent_worker_lifecycle: () => true });
   async function approve(cmd: ExecuteCommand) {
     const a = evaluateApproval(cmd, [], { actor: "fixture-owner", default_mode: "full_access" });
     const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
@@ -287,6 +311,62 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       expect(c.invoke).toHaveBeenCalledTimes(1); expect((await c.executor.execute(c.approved)).status).toBe("failed");
     } finally { reopened.close(); j.close(); }
   }));
+
+  it("実file.write後・Broker result receipt前の中断は再起動後も同taskを未知保留し、Mと依存stepを進めない", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const fault = new DatabaseSync(c.executionPath);
+    fault.exec(`CREATE TRIGGER fixture_file_write_result_failure BEFORE UPDATE ON execution_intents
+      WHEN json_extract(NEW.receipt_json,'$.result_delivery_digest') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT,'fixture Broker result receipt failure'); END;`);
+    try {
+      const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+      expect(feedback.status).toBe("failed");
+      expect(feedback.error).toMatch(/receipt persistence failed/);
+      expect(feedback.operation_core_result).toMatchObject({ action_outcome: "unknown", execution_boundary: "tool_adapter" });
+      expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic planned file content\n");
+      expect(c.execution.lookupCommand(c.admission.command_key)).toMatchObject({
+        state: "outcome_unknown", task_identity_digest: c.admission.task_identity_digest,
+      });
+      expect(c.execution.pendingResults()).toHaveLength(0);
+      expect(c.j.load()?.plans[0]?.bindings[0]?.status).toBe("intent_committed");
+      expect(inspectMemory(c)).toMatchObject({ revision: 0, records: [], receipts: [] });
+    } finally {
+      fault.exec("DROP TRIGGER fixture_file_write_result_failure");
+      fault.close();
+    }
+
+    // Re-open both durable ledgers as a fresh runtime would after process loss.
+    c.hds.closeOperationPlanMemory();
+    const restartedEpoch = randomUUID();
+    const restartedExecution = new GatewayExecutionIntentStore(c.executionPath, restartedEpoch);
+    const restartedJ = new OperationPlanStateStore(c.jPath);
+    try {
+      const restarted = c.createHds(restartedJ);
+      expect(reconcileStartupExecutionState(restarted, restartedExecution, restartedEpoch)).toMatchObject({
+        ready: true, adopted: 0, deferred: 0, memory_ready: true, result_store_readable: true,
+      });
+      const plan = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+      expect(plan.task_identity_digest).toBe(c.admission.task_identity_digest);
+      expect(plan.steps.find((step) => step.step_id === operationPlanDigest("create-note"))?.status).toBe("outcome_unknown");
+      expect(restartedJ.load()?.plans[0]?.results).toHaveLength(0);
+      expect(restartedExecution.lookupCommand(c.admission.command_key)).toMatchObject({
+        state: "outcome_unknown", task_identity_digest: c.admission.task_identity_digest,
+      });
+      expect(restartedExecution.pendingResults()).toHaveLength(0);
+      expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+      expect(inspectMemory(c)).toMatchObject({ revision: 0, records: [], receipts: [] });
+      expect(review(restarted, c.plan, "create-note")).toBeNull();
+      expect(review(restarted, c.plan, "verify-note")).toBeNull();
+
+      const now = Date.now();
+      expect(() => restartedExecution.issue({ ...c.admission, ticket_id: randomUUID(),
+        execution_epoch: restartedEpoch, issued_at_ms: now, expires_at_ms: now + 60_000 })).toThrow(/command already issued/);
+      expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic planned file content\n");
+    } finally {
+      restartedExecution.close();
+      restartedJ.close();
+    }
+  }, fileWriteWithDependentCandidate));
 
   it("Jで検証したfile.write結果だけをdigest観測としてMへ返し、C反省へ渡さない", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
