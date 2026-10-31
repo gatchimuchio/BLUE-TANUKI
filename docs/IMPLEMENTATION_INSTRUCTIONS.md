@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: file.write作用後・Gateway result receipt／M確定前のcrash windowを、同一task状態の再照合で安全に閉じる）
+### Active batch: E2E-01 — WebChat task一気通貫（次: result outbox確定後・J/M receipt／acknowledgement前のprocess crashを、実Gateway startup recoveryで安全に閉じる）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -164,7 +164,22 @@ file.writeのBroker結果receipt永続化失敗後、Gateway processを再起動
 
 対象Windows Gateway実process testは1 selected PASS、同file内の他3件はpattern skip。HDS typecheck/build、Gateway typecheck/build、`git diff --check`はPASS。実provider呼出し0件、外部業務作用なし。全workspace suite、実provider、全OS、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOの証拠ではない。
 
-**次のproducer／consumer:** file.write adapter作用後、Gatewayのresult receipt／M receiptが確定する前のprocess crash windowを合成条件で再現し、command intent・Gateway receipt／outbox・M receipt・現plan dependencyを照合する。結果不明なら元commandを再発行せずholdする。provider/live外部作用は使わない。
+#### 2026-10-31 E2E-01 BUILD接続 — file.write作用後のGateway process crash recovery
+
+直前のSQLite triggerによるreceipt保存拒否を、Broker結果receipt更新中にGateway processそのものを強制終了するfixtureへ置き換えた。合成create-only `file.write`の効果がfile rootに現れた時点で、永続intentが`invocation_attempted`、result receipt digestなし、execution result outboxなしであることを確認してGatewayを停止した。再起動後、SQLite transaction rollbackとstartup recoveryを通し、同じtask identity／plan dependencyを`outcome_unknown`で保持した。元writeのM action-result receipt・依存stepは進めず、ownerのsandbox file-state照合だけをdigest-only observationとしてMへ記録。その観測をownerが選択後、同一taskのread-only `file.search`候補をL3／step review・既存Brokerへ通し、結果M receiptと明示WebChat返却まで続けた。元writeは再発行されず、sandbox fileは一件、対象taskのprovider callは0件。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `BT-U-C08.01-P-E2E` Gateway process test | PASS。1 selected、同fileの他3件はpattern skip。実Gateway強制終了後の再起動・同task復帰を確認。 |
+| crash時の永続状態 | `invocation_attempted`、result receipt digestなし、outbox 0件。作用済みfileは一件。 |
+| 再起動後の継続 | 元writeは`outcome_unknown`／action-result M receipt未記録を保持。digest-only local observation→owner選択→read-only search→J/M receipt→明示結果返却まで接続。 |
+| Gateway typecheck／build | PASS。 |
+| provider／live外部作用／別repo | provider call 0件。外部業務作用・Actions・D4-Pocket／ミニドラ変更なし。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機 | 未実施。 |
+
+この接続は`invocation_attempted`のままGatewayが落ち、result outboxがないcrash窓を閉じるものである。result outboxがcommitした後、J/M receipt／outbox acknowledgement前にprocessが停止した場合の実Gateway再起動consumerは次のBUILD接続とする。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** Gateway result outboxがdurable commitした直後、J/M receipt採用またはoutbox acknowledgement前のprocess crashを合成taskで捕捉する。startup recoveryが同じcommand／task identity／現在plan dependencyに照合して保存済み結果を採用し、outboxを重複適用せず、元file.writeを再実行しないことを実Gateway processで接続する。provider/live外部作用は使わない。
 
 ## Gitと復旧
 

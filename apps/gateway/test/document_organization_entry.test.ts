@@ -1083,15 +1083,17 @@ describe("delegated goal purpose owner review", () => {
       const filesBeforeUnknownWrite: string[] = [];
       expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
         .toHaveLength(0);
-      const resultFaultDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
-      let resultFaultInstalled = false;
+      const crashWindowDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+      let crashBarrierInstalled = false;
       let uncertainPlanId = "";
       let uncertainTaskIdentity = "";
       try {
-        resultFaultDb.exec(`CREATE TRIGGER fixture_process_result_receipt_failure BEFORE UPDATE ON execution_intents
+        // Hold the private result-receipt transaction after file.write so this test can kill the Gateway process.
+        // The barrier is fixture-only and is removed after SQLite recovery on restart.
+        crashWindowDb.exec(`CREATE TRIGGER fixture_process_result_crash_barrier BEFORE UPDATE ON execution_intents
           WHEN json_extract(NEW.receipt_json,'$.result_delivery_digest') IS NOT NULL
-          BEGIN SELECT RAISE(ABORT,'fixture process result receipt failure'); END;`);
-        resultFaultInstalled = true;
+          BEGIN SELECT length(randomblob(134217728)); END;`);
+        crashBarrierInstalled = true;
         const uncertainTaskReply = waitForWebChatSend(taskWebSocket, "synthetic unknown-result task");
         const uncertainTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
           method: "POST",
@@ -1144,7 +1146,6 @@ describe("delegated goal purpose owner review", () => {
         const uncertainWriteStep = (uncertainWritePlan.steps as Array<Record<string, unknown>>)
           .find((step) => step.operation === "file.write");
         const uncertainWriteStepId = String(uncertainWriteStep?.step_id);
-        const uncertainReviewReply = waitForWebChatSend(taskWebSocket, "synthetic unknown file.write result");
         const uncertainReviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
           method: "POST",
           headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
@@ -1153,38 +1154,38 @@ describe("delegated goal purpose owner review", () => {
               step_id: uncertainWriteStepId, goal_purpose_binding: uncertainGoalBinding }) }),
         });
         expect(uncertainReviewResponse.status).toBe(202);
-        const uncertainResultOutput = await uncertainReviewReply;
-        expect(uncertainResultOutput).toContain("Executor receipt persistence failed");
-        expect(uncertainResultOutput).not.toContain("fixture process result receipt failure");
-        expect(uncertainResultOutput).not.toContain("BLUE-TANUKI synthetic create-only operation completed.");
-
-        const unknownResultPlan = await waitFor(async () => {
-          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
-            headers: { authorization: "Bearer " + token },
-          });
-          if (!response.ok) return null;
-          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
-          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === uncertainPlanId);
-          const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
-            candidate.step_id === uncertainWriteStepId);
-          return step?.status === "outcome_unknown" ? { plan, step } : null;
-        }, gateway, "Broker result receipt failure did not hold the file.write plan as outcome_unknown");
-        expect(unknownResultPlan.plan).toMatchObject({ task_identity_digest: uncertainTaskIdentity,
-          revision_digest: uncertainRevision });
-        expect(unknownResultPlan.step).toMatchObject({ operation: "file.write", status: "outcome_unknown",
-          external_receipt_observation: "not_recorded", binding: { memory_status: "not_recorded" } });
-
-        const filesWithUnknownWrite = readdirSync(fileRoot)
-          .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
-        expect(filesWithUnknownWrite).toHaveLength(filesBeforeUnknownWrite.length + 1);
-        const uncertainFile = filesWithUnknownWrite.find((name) => !filesBeforeUnknownWrite.includes(name));
-        expect(uncertainFile).toBeDefined();
-        expect(readFileSync(join(fileRoot, uncertainFile!), "utf8"))
+        const effectDeadline = Date.now() + 15_000;
+        let filesAtCrash: string[] = [];
+        while (Date.now() < effectDeadline && filesAtCrash.length === filesBeforeUnknownWrite.length) {
+          if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
+            throw new Error(`Gateway exited before crash-window capture: ${gateway.stderr.join("")}`);
+          }
+          filesAtCrash = readdirSync(fileRoot)
+            .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
+          if (filesAtCrash.length === filesBeforeUnknownWrite.length) await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(filesAtCrash).toHaveLength(filesBeforeUnknownWrite.length + 1);
+        const unsettledIntentRow = crashWindowDb.prepare(`SELECT receipt_json FROM execution_intents
+          WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
+          .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
+        expect(unsettledIntentRow).toBeDefined();
+        const unsettledIntent = JSON.parse(unsettledIntentRow!.receipt_json) as {
+          ticket_id?: string; state?: string; task_identity_digest?: string; result_delivery_digest?: string;
+        };
+        expect(unsettledIntent).toMatchObject({ state: "invocation_attempted", task_identity_digest: uncertainTaskIdentity });
+        expect(unsettledIntent.result_delivery_digest).toBeUndefined();
+        expect(Number((crashWindowDb.prepare("SELECT COUNT(*) AS count FROM execution_result_outbox WHERE ticket_id=?")
+          .get(unsettledIntent.ticket_id) as { count: number }).count)).toBe(0);
+        expect(readFileSync(join(fileRoot, filesAtCrash.find((name) => !filesBeforeUnknownWrite.includes(name))!), "utf8"))
           .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
         expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+        await forceStopChild(gateway.child);
       } finally {
-        if (resultFaultInstalled) resultFaultDb.exec("DROP TRIGGER fixture_process_result_receipt_failure");
-        resultFaultDb.close();
+        if (gateway && gateway.child.exitCode === null && gateway.child.signalCode === null) {
+          await forceStopChild(gateway.child);
+        }
+        if (crashBarrierInstalled) crashWindowDb.exec("DROP TRIGGER fixture_process_result_crash_barrier");
+        crashWindowDb.close();
       }
 
       const uncertainTaskWebSocket = taskWebSocket;
