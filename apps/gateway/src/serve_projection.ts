@@ -289,6 +289,22 @@ export interface OperationPlanStatusProjection {
         used_for_authority: false;
         raw_receipt_exposed: false;
       };
+      local_file_state_observation?: {
+        source: "local_file_state";
+        status: "matched" | "not_found" | "mismatch";
+        match_count: number;
+        target_identity_digest: string;
+        evidence_digest: string;
+        gateway_execution_receipt_digest?: string;
+        gateway_execution_receipt_state?: "issued" | "intent_committed" | "invocation_attempted" | "adapter_returned" | "not_attempted" | "outcome_unknown";
+        gateway_execution_epoch_digest?: string;
+        gateway_task_identity_digest?: string;
+        file_state_digest?: string;
+        observed_at_ms: number;
+        memory_status: "not_recorded" | "memory_commit_pending" | "receipt_confirmed";
+        used_for_authority: false;
+        raw_receipt_exposed: false;
+      };
       binding?: {
         command_digest: string;
         result_digest?: string;
@@ -500,6 +516,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           !OPERATION_PLAN_STEP_STATUSES.has(step.status)) return invalidOperationPlanStatusProjection();
       const observationStatus = step.external_receipt_observation;
       const observation = step.external_receipt;
+      const fileStateObservation = step.local_file_state_observation;
       const allowedObservationStatuses = step.status === "outcome_unknown"
         ? ["not_recorded", "matched", "not_found", "mismatch", "ambiguous"]
         : ["not_applicable"];
@@ -518,8 +535,34 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (observationStatus === "mismatch" && isRecord(observation) && observation.match_count === 1 && isDigest(observation.receipt_digest)) ||
         (observationStatus === "ambiguous" && isRecord(observation) && typeof observation.match_count === "number" && observation.match_count >= 2 &&
           observation.receipt_digest === undefined);
+      const fileStateObservationValid = fileStateObservation === undefined || (isRecord(fileStateObservation) &&
+        Object.keys(fileStateObservation).every((key) => ["source", "status", "match_count", "target_identity_digest", "evidence_digest",
+          "gateway_execution_receipt_digest", "gateway_execution_receipt_state", "gateway_execution_epoch_digest", "gateway_task_identity_digest",
+          "file_state_digest", "observed_at_ms", "memory_status", "used_for_authority", "raw_receipt_exposed"].includes(key)) &&
+        fileStateObservation.source === "local_file_state" && step.status === "outcome_unknown" && step.operation === "file.write" &&
+        ["matched", "not_found", "mismatch"].includes(String(fileStateObservation.status)) &&
+        Number.isInteger(fileStateObservation.match_count) && (fileStateObservation.match_count as number) >= 0 &&
+        (fileStateObservation.match_count as number) <= 1 && isDigest(fileStateObservation.target_identity_digest) &&
+        isDigest(fileStateObservation.evidence_digest) &&
+        (fileStateObservation.gateway_execution_receipt_digest === undefined || isDigest(fileStateObservation.gateway_execution_receipt_digest)) &&
+        (fileStateObservation.gateway_execution_receipt_state === undefined ||
+          ["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(String(fileStateObservation.gateway_execution_receipt_state))) &&
+        (fileStateObservation.gateway_execution_epoch_digest === undefined || isDigest(fileStateObservation.gateway_execution_epoch_digest)) &&
+        (fileStateObservation.gateway_task_identity_digest === undefined || isDigest(fileStateObservation.gateway_task_identity_digest)) &&
+        ([fileStateObservation.gateway_execution_receipt_digest, fileStateObservation.gateway_execution_receipt_state,
+          fileStateObservation.gateway_execution_epoch_digest].every((value) => value === undefined) ||
+          [fileStateObservation.gateway_execution_receipt_digest, fileStateObservation.gateway_execution_receipt_state,
+            fileStateObservation.gateway_execution_epoch_digest].every((value) => value !== undefined)) &&
+        (fileStateObservation.file_state_digest === undefined || isDigest(fileStateObservation.file_state_digest)) &&
+        Number.isSafeInteger(fileStateObservation.observed_at_ms) && (fileStateObservation.observed_at_ms as number) >= 0 &&
+        ["not_recorded", "memory_commit_pending", "receipt_confirmed"].includes(String(fileStateObservation.memory_status)) &&
+        fileStateObservation.used_for_authority === false && fileStateObservation.raw_receipt_exposed === false &&
+        ((fileStateObservation.status === "matched" && fileStateObservation.match_count === 1 && isDigest(fileStateObservation.file_state_digest)) ||
+          (fileStateObservation.status === "not_found" && fileStateObservation.match_count === 0 && fileStateObservation.file_state_digest === undefined) ||
+          (fileStateObservation.status === "mismatch" && fileStateObservation.match_count === 1 && isDigest(fileStateObservation.file_state_digest))));
       if (typeof observationStatus !== "string" || !allowedObservationStatuses.includes(observationStatus) ||
-          !observationValid || !observationStateValid) {
+          !observationValid || !observationStateValid || !fileStateObservationValid ||
+          (fileStateObservation !== undefined && observationStatus !== "not_applicable")) {
         return invalidOperationPlanStatusProjection();
       }
       const matching = bindings.filter((candidate) => candidate.step_id === step.step_id);
@@ -541,6 +584,27 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           evidence_digest: observation.evidence_digest as string,
           ...(typeof observation.receipt_digest === "string" ? { receipt_digest: observation.receipt_digest } : {}),
           observed_at_ms: observation.observed_at_ms as number,
+          used_for_authority: false as const,
+          raw_receipt_exposed: false as const,
+        } } : {}),
+        ...(isRecord(fileStateObservation) ? { local_file_state_observation: {
+          source: "local_file_state" as const,
+          status: fileStateObservation.status as "matched" | "not_found" | "mismatch",
+          match_count: fileStateObservation.match_count as number,
+          target_identity_digest: fileStateObservation.target_identity_digest as string,
+          evidence_digest: fileStateObservation.evidence_digest as string,
+          ...(typeof fileStateObservation.gateway_execution_receipt_digest === "string"
+            ? { gateway_execution_receipt_digest: fileStateObservation.gateway_execution_receipt_digest } : {}),
+          ...(typeof fileStateObservation.gateway_execution_receipt_state === "string"
+            ? { gateway_execution_receipt_state: fileStateObservation.gateway_execution_receipt_state as
+              "issued" | "intent_committed" | "invocation_attempted" | "adapter_returned" | "not_attempted" | "outcome_unknown" } : {}),
+          ...(typeof fileStateObservation.gateway_execution_epoch_digest === "string"
+            ? { gateway_execution_epoch_digest: fileStateObservation.gateway_execution_epoch_digest } : {}),
+          ...(typeof fileStateObservation.gateway_task_identity_digest === "string"
+            ? { gateway_task_identity_digest: fileStateObservation.gateway_task_identity_digest } : {}),
+          ...(typeof fileStateObservation.file_state_digest === "string" ? { file_state_digest: fileStateObservation.file_state_digest } : {}),
+          observed_at_ms: fileStateObservation.observed_at_ms as number,
+          memory_status: fileStateObservation.memory_status as "not_recorded" | "memory_commit_pending" | "receipt_confirmed",
           used_for_authority: false as const,
           raw_receipt_exposed: false as const,
         } } : {}),

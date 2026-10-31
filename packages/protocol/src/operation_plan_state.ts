@@ -19,6 +19,8 @@ const OperationPlanPlanComputeSourceObservationReferenceSchema = z.object({
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
+  /** Owner explicitly selects a current local file-state observation; this does not resolve execution success. */
+  owner_selected_observation: z.literal("local_file_state").optional(),
 }).strict();
 /** Explicit selection of one digest-only shell result report. */
 const OperationPlanShellResultComputeSourceObservationReferenceSchema = z.object({
@@ -65,6 +67,41 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     match_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     visited_files: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     search_completeness: z.literal("unknown"),
+  }).strict(),
+  z.object({
+    schema_version: z.literal("operation-plan-compute-source-observation.v1"),
+    source: z.literal("owner_selected_local_file_state"),
+    operation: z.literal("file.write"),
+    plan_id_digest: Digest,
+    task_identity_digest: Digest,
+    revision_digest: Digest,
+    step_id_digest: Digest,
+    plan_binding_status: z.literal("outcome_unknown"),
+    plan_validation_status: z.literal("owner_selected_observation"),
+    command_digest: Digest,
+    execution_admission_digest: Digest,
+    gateway_execution_receipt_digest: Digest,
+    gateway_execution_receipt_state: z.enum(["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"]),
+    gateway_execution_epoch_digest: Digest,
+    gateway_task_identity_digest: Digest.optional(),
+    gateway_execution_feedback_status: z.enum(["success", "failed", "suspended"]).optional(),
+    gateway_result_delivery_digest: Digest.optional(),
+    gateway_result_delivery_acknowledged: z.boolean().optional(),
+    result_digest: Digest.optional(),
+    delivery_digest: Digest.optional(),
+    observation_digest: Digest,
+    observation_status: z.literal("matched"),
+    target_identity_digest: Digest,
+    effect_observation: z.literal("observed_target_state"),
+    record_digest: Digest,
+    memory_revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    memory_receipt_digest: Digest,
+    observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    owner_selection_digest: Digest,
+    adoption_status: z.literal("observation_only"),
+    used_as_world_truth: z.literal(false),
+    used_for_authority: z.literal(false),
+    may_execute: z.literal(false),
   }).strict(),
   z.object({ ...OperationPlanComputeSourceObservationCommon,
     source: z.literal("verified_shell_exec_result"), operation: z.literal("shell.exec"),
@@ -113,7 +150,7 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 });
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v7";
+  "blue-tanuki.plan-compute-source-observations.v8";
 export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v1";
 /** Parent identity for an explicit result-backed continuation; it grants no authority. */
@@ -301,6 +338,13 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
   request_payload_digest: Digest,
   observed_payload_digest: Digest.optional(),
   target_identity_digest: Digest.optional(),
+  gateway_execution_receipt_digest: Digest.optional(),
+  gateway_execution_receipt_state: z.enum(["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"]).optional(),
+  gateway_execution_epoch_digest: Digest.optional(),
+  gateway_task_identity_digest: Digest.optional(),
+  gateway_execution_feedback_status: z.enum(["success", "failed", "suspended"]).optional(),
+  gateway_result_delivery_digest: Digest.optional(),
+  gateway_result_delivery_acknowledged: z.boolean().optional(),
   candidate_set_digest: Digest,
   status: z.enum(["matched", "not_found", "mismatch", "ambiguous"]),
   match_count: z.number().int().min(0).max(100),
@@ -314,6 +358,11 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
     if (!observation.target_identity_digest || observation.observed_command_digest !== undefined ||
         observation.observed_command_key_digest !== undefined || observation.status === "ambiguous") {
       context.addIssue({ code: "custom", message: "local_file_state_observation_binding_invalid" });
+    }
+    const gatewayReceiptFields = [observation.gateway_execution_receipt_digest,
+      observation.gateway_execution_receipt_state, observation.gateway_execution_epoch_digest];
+    if (gatewayReceiptFields.some((field) => field !== undefined) && gatewayReceiptFields.some((field) => field === undefined)) {
+      context.addIssue({ code: "custom", message: "local_file_state_gateway_receipt_incomplete" });
     }
     if (observation.status === "matched" && (observation.match_count !== 1 || !observation.receipt_digest ||
         observation.observed_payload_digest !== observation.request_payload_digest)) {

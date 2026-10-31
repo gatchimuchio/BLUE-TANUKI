@@ -467,6 +467,8 @@ export interface OwnerMeaningUpdateProposalReview {
     readonly observed_at_ms: number;
     readonly record_digest: string;
     readonly memory_receipt_digest: string;
+    readonly gateway_execution_receipt_digest?: string;
+    readonly gateway_execution_receipt_state?: Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_local_file_state" }>["gateway_execution_receipt_state"];
   }[];
 }
 
@@ -484,7 +486,9 @@ function computeSourceObservationReference(
   return observation.source === "verified_shell_exec_result"
     ? { command_id_digest: observation.command_id_digest }
     : { plan_id_digest: observation.plan_id_digest, revision_digest: observation.revision_digest,
-        step_id_digest: observation.step_id_digest };
+      step_id_digest: observation.step_id_digest,
+      ...(observation.source === "owner_selected_local_file_state"
+        ? { owner_selected_observation: "local_file_state" as const } : {}) };
 }
 
 interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
@@ -2216,6 +2220,10 @@ ${planControl.question}`,
         source_observation_summary: Object.freeze((pending.source_observations ?? []).map((observation) => ({
           source: observation.source, operation: observation.operation, observed_at_ms: observation.observed_at_ms,
           record_digest: observation.record_digest, memory_receipt_digest: observation.memory_receipt_digest,
+          ...(observation.source === "owner_selected_local_file_state" ? {
+            gateway_execution_receipt_digest: observation.gateway_execution_receipt_digest,
+            gateway_execution_receipt_state: observation.gateway_execution_receipt_state,
+          } : {}),
         }))),
       } : {}) });
   }
@@ -4415,7 +4423,7 @@ ${planControl.question}`,
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.source_observations?.length ? {
         role: "system",
-        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
+        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。owner_selected_local_file_stateはownerが選択した観測時点の対象digestであり、元のfile.writeはoutcome_unknownのまま、作成主体・実行成功・目的達成・現在の世界状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const planComputeParentMessage: LLMCallPayload["messages"][number] | undefined = planCompute?.parent_context ? {

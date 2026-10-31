@@ -5170,6 +5170,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         hds,
         command,
         caller: authorityReq,
+        lookupExecutionReceipt: (commandKey) => executionStore.lookupCommand(commandKey),
         endpoint: nonEmptyEnv(process.env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT),
       });
       const content = localInspectionReconciliationMessage(result);

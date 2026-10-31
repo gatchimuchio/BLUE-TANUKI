@@ -297,11 +297,13 @@ export interface WebChatMeaningUpdateContentReview {
     count: number;
     observations: readonly {
       source: "verified_file_write_result" | "verified_file_delete_result" | "verified_file_edit_result" |
-        "verified_file_search_result" | "verified_shell_exec_result";
+        "verified_file_search_result" | "owner_selected_local_file_state" | "verified_shell_exec_result";
       operation: "file.write" | "file.delete" | "file.edit" | "file.search" | "shell.exec";
       observed_at_ms: number;
       record_digest: string;
       memory_receipt_digest: string;
+      gateway_execution_receipt_digest?: string;
+      gateway_execution_receipt_state?: "issued" | "intent_committed" | "invocation_attempted" | "adapter_returned" | "not_attempted" | "outcome_unknown";
     }[];
     used_as_world_truth: false;
     used_for_authority: false;

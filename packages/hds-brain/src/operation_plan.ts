@@ -16,7 +16,7 @@ import {
   type OperationPlanGoalRelationAdoptionAssessment,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
-  OperationPlanExternalReceiptObservationSchema,
+  OperationPlanExternalReceiptObservationSchema, type OperationPlanExternalReceiptObservation,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   OperationPlanComputeSourceObservationSchema,
@@ -496,6 +496,8 @@ export interface OperationPlanReceiptReconciliationAuthorization {
   readonly command_digest: string;
   readonly executor_command_digest: string;
   readonly command_key: string;
+  readonly execution_epoch: string;
+  readonly task_identity_digest?: string;
   readonly operation: string;
   readonly parameters: Record<string, unknown>;
   readonly issued_at_ms: number;
@@ -504,6 +506,21 @@ export interface OperationPlanReceiptReconciliationAuthorization {
 
 export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
+}
+
+function gatewayExecutionReceiptEvidenceDigest(observation: OperationPlanExternalReceiptObservation): string {
+  return operationPlanDigest({
+    schema_version: "gateway-execution-receipt-evidence.v1",
+    command_key_digest: observation.command_key_digest,
+    command_digest: observation.executor_command_digest,
+    execution_epoch_digest: observation.gateway_execution_epoch_digest,
+    task_identity_digest: observation.gateway_task_identity_digest ?? null,
+    state: observation.gateway_execution_receipt_state,
+    feedback_status: observation.gateway_execution_feedback_status ?? null,
+    result_delivery_digest: observation.gateway_result_delivery_digest ?? null,
+    result_delivery_acknowledged: observation.gateway_result_delivery_acknowledged ?? null,
+    used_for_authority: false,
+  });
 }
 
 function canonicalExecutorCommandDigest(command: ExecuteCommand): string {
@@ -2015,7 +2032,9 @@ export class OperationPlanLedger {
         observation.source === "verified_shell_exec_result"
           ? { command_id_digest: observation.command_id_digest }
           : { plan_id_digest: observation.plan_id_digest, revision_digest: observation.revision_digest,
-            step_id_digest: observation.step_id_digest });
+            step_id_digest: observation.step_id_digest,
+            ...(observation.source === "owner_selected_local_file_state"
+              ? { owner_selected_observation: "local_file_state" as const } : {}) });
       const current = this.inspectComputeSourceObservations(references, origin);
       if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
         throw new Error("plan_compute_source_observation_stale");
@@ -2251,7 +2270,10 @@ export class OperationPlanLedger {
       plan_id_digest: operationPlanDigest(inspected.plan_id), revision_digest: inspected.revision_digest,
       step_id_digest: operationPlanDigest(inspected.step.step_id), command_id: binding.command_id,
       command_digest: binding.command_digest, executor_command_digest: binding.execution_admission!.command_digest,
-      command_key: binding.execution_admission!.command_key, operation: inspected.step.operation,
+      command_key: binding.execution_admission!.command_key,
+      execution_epoch: binding.execution_admission!.execution_epoch,
+      task_identity_digest: binding.execution_admission!.task_identity_digest,
+      operation: inspected.step.operation,
       parameters: structuredClone(inspected.step.parameters ?? {}), issued_at_ms: now_ms, expires_at_ms: now_ms + 30_000,
     };
     for (const [id, pending] of this.receiptReconciliations) {
@@ -2290,7 +2312,9 @@ export class OperationPlanLedger {
           operationPlanDigest(current.step.step_id) !== issued.authorization.step_id_digest ||
           binding.command_id !== issued.authorization.command_id || binding.command_digest !== issued.authorization.command_digest ||
           binding.execution_admission?.command_digest !== issued.authorization.executor_command_digest ||
-          binding.execution_admission?.command_key !== issued.authorization.command_key) return null;
+          binding.execution_admission?.command_key !== issued.authorization.command_key ||
+          binding.execution_admission?.execution_epoch !== issued.authorization.execution_epoch ||
+          binding.execution_admission?.task_identity_digest !== issued.authorization.task_identity_digest) return null;
       return structuredClone(issued.authorization);
     } catch { return null; }
   }
@@ -3038,6 +3062,96 @@ export class OperationPlanLedger {
       if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
       const binding = bindings[0]!;
       const operation = step.operation;
+      if (reference.owner_selected_observation === "local_file_state") {
+        if (operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "outcome_unknown" ||
+            !binding.execution_admission || binding.step_digest !== stepDigest(step) ||
+            !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+            !this.computeSourceObservationsAreCurrent(plan, inspectedAtMs) ||
+            step.parameters?.mode !== "create" || typeof step.parameters.path !== "string" ||
+            typeof step.parameters.content !== "string") {
+          throw new Error("plan_compute_source_observation_not_owner_resolvable");
+        }
+        const admission = binding.execution_admission;
+        const expectedCommandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", binding.command_id]), "utf8").digest("hex");
+        const receiptObservations = plan.receipt_observations.filter((entry) => entry.source === "local_file_state" &&
+          entry.plan_id_digest === reference.plan_id_digest && entry.revision_digest === revision.digest &&
+          entry.step_id_digest === reference.step_id_digest && entry.command_digest === binding.command_digest);
+        const observation = receiptObservations.sort((left, right) => left.observed_at_ms - right.observed_at_ms).at(-1);
+        if (admission.command_digest !== observation?.executor_command_digest || admission.command_key !== expectedCommandKey ||
+            binding.command_digest !== observation?.command_digest ||
+            observation?.command_key_digest !== createHash("sha256").update(expectedCommandKey, "utf8").digest("hex") ||
+            !observation.gateway_execution_receipt_digest || !observation.gateway_execution_receipt_state ||
+            observation.gateway_execution_epoch_digest !== createHash("sha256").update(admission.execution_epoch, "utf8").digest("hex") ||
+            observation.gateway_task_identity_digest !== admission.task_identity_digest ||
+            observation.status !== "matched" || observation.match_count !== 1 || !observation.receipt_digest ||
+            observation.target_identity_digest !== fileWriteTargetIdentityDigest(step.parameters.path) ||
+            observation.request_payload_digest !== fileWritePayloadDigest(step.parameters.content) ||
+            observation.observed_payload_digest !== observation.request_payload_digest ||
+            observation.observed_at_ms < admission.issued_at_ms ||
+            !this.receiptObservationMemoryIsDurable(observation.evidence_digest)) {
+          throw new Error("plan_compute_source_observation_owner_resolution_stale");
+        }
+        const delivery = this.receiptMemoryDelivery(revision.plan.plan_id, observation.evidence_digest);
+        const stored = delivery?.memory_commit && this.resultMemory
+          ? this.resultMemory.readMemoryRecord(receiptMemoryIdentity(observation).record_id) : null;
+        const expectedValue = delivery?.memory_commit?.changes[0]?.operation === "upsert"
+          ? delivery.memory_commit.changes[0].value : undefined;
+        if (!delivery?.memory_commit || !delivery.memory_receipt || expectedValue === undefined || !stored?.exists ||
+            operationPlanDigest(stored.value) !== operationPlanDigest(expectedValue) ||
+            !verifyReceiptMemoryCommit(observation, delivery) ||
+            !receiptForReceiptMemoryCommit(delivery.memory_receipt, delivery.memory_commit)) {
+          throw new Error("plan_compute_source_observation_owner_resolution_memory_unavailable");
+        }
+        const ownerSelectionDigest = operationPlanDigest({
+          schema_version: "owner-selected-local-file-state.v1",
+          owner_digest: operationPlanDigest(caller.user),
+          channel_digest: operationPlanDigest(caller.channel),
+          plan_id_digest: reference.plan_id_digest,
+          revision_digest: reference.revision_digest,
+          step_id_digest: reference.step_id_digest,
+          observation_digest: observation.evidence_digest,
+          decision: "use_as_non_authority_candidate_context",
+        });
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          schema_version: "operation-plan-compute-source-observation.v1",
+          source: "owner_selected_local_file_state",
+          operation: "file.write",
+          plan_id_digest: reference.plan_id_digest,
+          task_identity_digest: operationPlanTaskIdentityDigest(plan),
+          revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest,
+          plan_binding_status: "outcome_unknown",
+          plan_validation_status: "owner_selected_observation",
+          command_digest: binding.command_digest,
+          execution_admission_digest: operationPlanDigest(admission),
+          gateway_execution_receipt_digest: observation.gateway_execution_receipt_digest!,
+          gateway_execution_receipt_state: observation.gateway_execution_receipt_state!,
+          gateway_execution_epoch_digest: observation.gateway_execution_epoch_digest!,
+          ...(observation.gateway_task_identity_digest ? { gateway_task_identity_digest: observation.gateway_task_identity_digest } : {}),
+          ...(observation.gateway_execution_feedback_status
+            ? { gateway_execution_feedback_status: observation.gateway_execution_feedback_status } : {}),
+          ...(observation.gateway_result_delivery_digest
+            ? { gateway_result_delivery_digest: observation.gateway_result_delivery_digest } : {}),
+          ...(observation.gateway_result_delivery_acknowledged !== undefined
+            ? { gateway_result_delivery_acknowledged: observation.gateway_result_delivery_acknowledged } : {}),
+          ...(binding.result_digest ? { result_digest: binding.result_digest } : {}),
+          ...(binding.delivery_digest ? { delivery_digest: binding.delivery_digest } : {}),
+          observation_digest: observation.evidence_digest,
+          observation_status: "matched",
+          target_identity_digest: observation.target_identity_digest,
+          effect_observation: "observed_target_state",
+          record_digest: operationPlanDigest(stored.value),
+          memory_revision: delivery.memory_receipt.revision,
+          memory_receipt_digest: delivery.memory_receipt.receipt_digest,
+          observed_at_ms: observation.observed_at_ms,
+          owner_selection_digest: ownerSelectionDigest,
+          adoption_status: "observation_only",
+          used_as_world_truth: false,
+          used_for_authority: false,
+          may_execute: false,
+        }));
+        continue;
+      }
       if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.edit" && operation !== "file.search") ||
           binding.operation !== operation || binding.status !== "verified" ||
           binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
@@ -3248,10 +3362,18 @@ export class OperationPlanLedger {
     }
     if (observation.source === "local_file_state") {
       const parameters = step.parameters ?? {};
+      const admission = binding.execution_admission;
+      const gatewayReceiptDigest = observation.gateway_execution_receipt_digest;
+      const gatewayReceiptState = observation.gateway_execution_receipt_state;
+      const gatewayExecutionEpochDigest = createHash("sha256").update(admission.execution_epoch, "utf8").digest("hex");
       if (step.operation !== "file.write" || parameters.mode !== "create" ||
           typeof parameters.path !== "string" || typeof parameters.content !== "string" ||
           observation.target_identity_digest !== fileWriteTargetIdentityDigest(parameters.path) ||
-          observation.request_payload_digest !== fileWritePayloadDigest(parameters.content)) {
+          observation.request_payload_digest !== fileWritePayloadDigest(parameters.content) ||
+          !gatewayReceiptDigest || !gatewayReceiptState ||
+          observation.gateway_execution_epoch_digest !== gatewayExecutionEpochDigest ||
+          observation.gateway_task_identity_digest !== admission.task_identity_digest ||
+          gatewayExecutionReceiptEvidenceDigest(observation) !== gatewayReceiptDigest) {
         throw new Error("file_write_state_observation_binding_mismatch");
       }
     } else if (step.operation !== "gmail.write" || step.parameters?.operation !== "message.send") {
@@ -3416,6 +3538,9 @@ export class OperationPlanLedger {
             ? p.receipt_observations.filter((entry) => entry.revision_digest === currentRevision.digest &&
               entry.step_id_digest === operationPlanDigest(step.step_id) && entry.command_digest === binding.command_digest).at(-1)
             : undefined;
+          const observationMemory = observation?.source === "local_file_state"
+            ? p.receipt_memory?.find((entry) => entry.evidence_digest === observation.evidence_digest)
+            : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
             external_receipt_observation: binding?.status !== "outcome_unknown" || observation?.source === "local_file_state"
@@ -3428,8 +3553,19 @@ export class OperationPlanLedger {
             ...(observation?.source === "local_file_state" ? { local_file_state_observation: {
               source: observation.source, status: observation.status, match_count: observation.match_count,
               target_identity_digest: observation.target_identity_digest, evidence_digest: observation.evidence_digest,
+              ...(observation.gateway_execution_receipt_digest
+                ? { gateway_execution_receipt_digest: observation.gateway_execution_receipt_digest } : {}),
+              ...(observation.gateway_execution_receipt_state
+                ? { gateway_execution_receipt_state: observation.gateway_execution_receipt_state } : {}),
+              ...(observation.gateway_execution_epoch_digest
+                ? { gateway_execution_epoch_digest: observation.gateway_execution_epoch_digest } : {}),
+              ...(observation.gateway_task_identity_digest
+                ? { gateway_task_identity_digest: observation.gateway_task_identity_digest } : {}),
               ...(observation.receipt_digest ? { file_state_digest: observation.receipt_digest } : {}),
-              observed_at_ms: observation.observed_at_ms, used_for_authority: false as const, raw_receipt_exposed: false as const,
+              observed_at_ms: observation.observed_at_ms,
+              memory_status: observationMemory?.memory_receipt ? "receipt_confirmed" as const
+                : observationMemory?.memory_commit ? "memory_commit_pending" as const : "not_recorded" as const,
+              used_for_authority: false as const, raw_receipt_exposed: false as const,
             } } : {}),
           };
         }),
@@ -3599,13 +3735,99 @@ export class OperationPlanLedger {
   }
 
   /** A search-derived candidate cannot be reviewed or executed after its bounded source window closes. */
-  private computeSourceObservationsAreCurrent(p: PlanState, nowMs: number): boolean {
+  private computeSourceObservationsAreCurrent(p: PlanState, nowMs: number, seen = new Set<string>()): boolean {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) return false;
-    return (p.compute_source_observations ?? []).every((observation) =>
-      observation.source !== "verified_file_search_result" ||
-      (observation.operation === "file.search" &&
-        observation.expires_at_ms === observation.observed_at_ms + 600_000 &&
-        observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms));
+    const planKey = operationPlanDigest(p.revisions[0]!.plan.plan_id);
+    if (seen.has(planKey)) return false;
+    seen.add(planKey);
+    const current = (p.compute_source_observations ?? []).every((observation) => {
+      if (observation.source === "verified_file_search_result") {
+        return observation.operation === "file.search" &&
+          observation.expires_at_ms === observation.observed_at_ms + 600_000 &&
+          observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+      }
+      if (observation.source === "owner_selected_local_file_state") {
+        return this.ownerSelectedLocalFileStateIsCurrent(p, observation, nowMs, seen);
+      }
+      return true;
+    });
+    seen.delete(planKey);
+    return current;
+  }
+
+  private ownerSelectedLocalFileStateIsCurrent(
+    candidate: PlanState,
+    source: Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_local_file_state" }>,
+    nowMs: number,
+    seen: Set<string>,
+  ): boolean {
+    const matches = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === source.plan_id_digest);
+    if (matches.length !== 1) return false;
+    const plan = matches[0]!;
+    if (plan.owner !== candidate.owner || plan.channel !== candidate.channel ||
+        operationPlanTaskIdentityDigest(plan) !== source.task_identity_digest || this.recoveryHolds.has(source.plan_id_digest) ||
+        !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return false;
+    const revision = plan.revisions.at(-1);
+    if (!revision || revision.digest !== source.revision_digest) return false;
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === source.step_id_digest);
+    if (steps.length !== 1 || steps[0]!.operation !== "file.write" || steps[0]!.parameters?.mode !== "create" ||
+        typeof steps[0]!.parameters.path !== "string" || typeof steps[0]!.parameters.content !== "string") return false;
+    const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+      binding.step_id === steps[0]!.step_id);
+    if (bindings.length !== 1) return false;
+    const binding = bindings[0]!;
+    if (binding.status !== "outcome_unknown" || binding.operation !== "file.write" || !binding.execution_admission ||
+        binding.command_digest !== source.command_digest || operationPlanDigest(binding.execution_admission) !== source.execution_admission_digest ||
+        binding.result_digest !== source.result_digest || binding.delivery_digest !== source.delivery_digest ||
+        binding.step_digest !== stepDigest(steps[0]!)) return false;
+    const observations = plan.receipt_observations.filter((entry) => entry.source === "local_file_state" &&
+      entry.revision_digest === revision.digest && entry.step_id_digest === source.step_id_digest &&
+      entry.command_digest === binding.command_digest);
+    const observation = observations.sort((left, right) => left.observed_at_ms - right.observed_at_ms).at(-1);
+    if (!observation || observation.evidence_digest !== source.observation_digest || observation.status !== "matched" ||
+        observation.target_identity_digest !== source.target_identity_digest || observation.observed_at_ms !== source.observed_at_ms ||
+        observation.command_key_digest !== createHash("sha256").update(binding.execution_admission.command_key, "utf8").digest("hex") ||
+        observation.executor_command_digest !== binding.execution_admission.command_digest ||
+        !observation.gateway_execution_receipt_digest || !observation.gateway_execution_receipt_state ||
+        observation.gateway_execution_epoch_digest !== createHash("sha256")
+          .update(binding.execution_admission.execution_epoch, "utf8").digest("hex") ||
+        observation.gateway_task_identity_digest !== binding.execution_admission.task_identity_digest ||
+        gatewayExecutionReceiptEvidenceDigest(observation) !== observation.gateway_execution_receipt_digest ||
+        source.gateway_execution_receipt_digest !== observation.gateway_execution_receipt_digest ||
+        source.gateway_execution_receipt_state !== observation.gateway_execution_receipt_state ||
+        source.gateway_execution_epoch_digest !== observation.gateway_execution_epoch_digest ||
+        source.gateway_task_identity_digest !== observation.gateway_task_identity_digest ||
+        source.gateway_execution_feedback_status !== observation.gateway_execution_feedback_status ||
+        source.gateway_result_delivery_digest !== observation.gateway_result_delivery_digest ||
+        source.gateway_result_delivery_acknowledged !== observation.gateway_result_delivery_acknowledged ||
+        observation.request_payload_digest !== fileWritePayloadDigest(steps[0]!.parameters.content) ||
+        observation.target_identity_digest !== fileWriteTargetIdentityDigest(steps[0]!.parameters.path) ||
+        observation.observed_payload_digest !== observation.request_payload_digest ||
+        !this.receiptObservationMemoryIsDurable(observation.evidence_digest)) return false;
+    const delivery = this.receiptMemoryDelivery(revision.plan.plan_id, observation.evidence_digest);
+    const stored = delivery?.memory_commit && this.resultMemory
+      ? this.resultMemory.readMemoryRecord(receiptMemoryIdentity(observation).record_id) : null;
+    const expectedValue = delivery?.memory_commit?.changes[0]?.operation === "upsert"
+      ? delivery.memory_commit.changes[0].value : undefined;
+    if (!delivery?.memory_commit || !delivery.memory_receipt || expectedValue === undefined || !stored?.exists ||
+        operationPlanDigest(stored.value) !== source.record_digest || operationPlanDigest(stored.value) !== operationPlanDigest(expectedValue) ||
+        delivery.memory_receipt.revision !== source.memory_revision ||
+        delivery.memory_receipt.receipt_digest !== source.memory_receipt_digest ||
+        !verifyReceiptMemoryCommit(observation, delivery) ||
+        !receiptForReceiptMemoryCommit(delivery.memory_receipt, delivery.memory_commit)) return false;
+    const expectedSelectionDigest = operationPlanDigest({
+      schema_version: "owner-selected-local-file-state.v1",
+      owner_digest: operationPlanDigest(candidate.owner),
+      channel_digest: operationPlanDigest(candidate.channel),
+      plan_id_digest: source.plan_id_digest,
+      revision_digest: source.revision_digest,
+      step_id_digest: source.step_id_digest,
+      observation_digest: source.observation_digest,
+      decision: "use_as_non_authority_candidate_context",
+    });
+    return source.owner_selection_digest === expectedSelectionDigest &&
+      this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
   }
 
   private goalPurposeRelationProjection(p: PlanState) {

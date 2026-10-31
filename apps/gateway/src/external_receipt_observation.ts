@@ -2,12 +2,39 @@ import { createHash } from "node:crypto";
 import type { InboundRequest, OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
 import { OperationPlanExternalReceiptObservationSchema, fileWritePayloadDigest } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 interface LocalInspectionMatch {
   idempotency_key: string; command_digest: string; payload_digest: string; receipt_id: string;
 }
 export interface LocalInspectionResponse { status: "not_found" | "accepted" | "ambiguous"; matches: LocalInspectionMatch[] }
+
+export function gatewayExecutionReceiptEvidence(receipt: ExecutionIntentReceipt, command_key_digest: string) {
+  const execution_epoch_digest = sha256(receipt.execution_epoch);
+  const projection = {
+    schema_version: "gateway-execution-receipt-evidence.v1",
+    command_key_digest,
+    command_digest: receipt.command_digest,
+    execution_epoch_digest,
+    task_identity_digest: receipt.task_identity_digest ?? null,
+    state: receipt.state,
+    feedback_status: receipt.feedback_status ?? null,
+    result_delivery_digest: receipt.result_delivery_digest ?? null,
+    result_delivery_acknowledged: receipt.result_delivery_acknowledged ?? null,
+    used_for_authority: false,
+  };
+  return {
+    gateway_execution_receipt_digest: operationPlanDigest(projection),
+    gateway_execution_receipt_state: receipt.state,
+    gateway_execution_epoch_digest: execution_epoch_digest,
+    ...(receipt.task_identity_digest ? { gateway_task_identity_digest: receipt.task_identity_digest } : {}),
+    ...(receipt.feedback_status ? { gateway_execution_feedback_status: receipt.feedback_status } : {}),
+    ...(receipt.result_delivery_digest ? { gateway_result_delivery_digest: receipt.result_delivery_digest } : {}),
+    ...(receipt.result_delivery_acknowledged !== undefined
+      ? { gateway_result_delivery_acknowledged: receipt.result_delivery_acknowledged } : {}),
+  } as const;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -117,6 +144,9 @@ export function ingestLocalFileWriteStateObservation(
   sink: ExternalReceiptObservationSink,
   input: Omit<LocalInspectionReceiptInput, "response"> & {
     parameters: Record<string, unknown>;
+    execution_epoch?: string;
+    task_identity_digest?: string;
+    execution_receipt?: ExecutionIntentReceipt;
     inspection: {
       state: "absent" | "present" | "non_regular";
       target_identity_digest: string;
@@ -154,6 +184,16 @@ export function ingestLocalFileWriteStateObservation(
     : inspection.state === "present" && inspection.observed_payload_digest === input.request_payload_digest
       ? "matched" as const : "mismatch" as const;
   const expectedCommandKey = sha256(JSON.stringify(["gateway-executor-command.v1", input.command_id]));
+  const executionReceipt = input.execution_receipt;
+  let gatewayReceipt: ReturnType<typeof gatewayExecutionReceiptEvidence> | undefined;
+  if (executionReceipt) {
+    if (!input.execution_epoch || executionReceipt.command_key !== expectedCommandKey ||
+        executionReceipt.command_digest !== input.executor_command_digest || executionReceipt.execution_epoch !== input.execution_epoch ||
+        executionReceipt.task_identity_digest !== input.task_identity_digest || executionReceipt.used_for_authority !== false) {
+      throw new Error("local_file_state_gateway_receipt_binding_invalid");
+    }
+    gatewayReceipt = gatewayExecutionReceiptEvidence(executionReceipt, sha256(expectedCommandKey));
+  }
   const evidence = {
     schema_version: "external-receipt-observation.v1" as const,
     source: "local_file_state" as const,
@@ -164,6 +204,7 @@ export function ingestLocalFileWriteStateObservation(
     executor_command_digest: input.executor_command_digest,
     command_key_digest: sha256(expectedCommandKey),
     request_payload_digest: input.request_payload_digest,
+    ...(gatewayReceipt ?? {}),
     ...(candidate && inspection.state === "present" && inspection.observed_payload_digest
       ? { observed_payload_digest: inspection.observed_payload_digest } : {}),
     target_identity_digest: inspection.target_identity_digest,

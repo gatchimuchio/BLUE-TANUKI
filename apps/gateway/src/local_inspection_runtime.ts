@@ -1,4 +1,5 @@
 import type { HDSUpperController, OperationPlanReceiptReconciliationAuthorization } from "@blue-tanuki/hds-brain";
+import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { gmailWriteRequestPayloadDigest, inspectFileWriteOutcomeState } from "@blue-tanuki/core";
 import { fileWritePayloadDigest, type ExecuteCommand, type InboundRequest, type OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
 import { ingestLocalFileWriteStateObservation, ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
@@ -39,6 +40,7 @@ export async function runLocalInspectionReconciliation(input: {
   hds: ReconciliationHDS;
   command: ExecuteCommand;
   caller: InboundRequest;
+  lookupExecutionReceipt?: (command_key: string) => ExecutionIntentReceipt | null;
   endpoint?: string;
   now_ms?: number;
 }): Promise<LocalInspectionReconciliationResult> {
@@ -50,7 +52,20 @@ export async function runLocalInspectionReconciliation(input: {
     return { status: "not_run", reason: "local_inspection_endpoint_not_configured" };
   }
   try {
-    return await queryAndRecord(input.hds, authorization, input.caller, input.endpoint);
+    let execution_receipt: ExecutionIntentReceipt | undefined;
+    if (authorization.operation === "file.write") {
+      if (input.lookupExecutionReceipt) {
+        execution_receipt = input.lookupExecutionReceipt(authorization.command_key) ?? undefined;
+        if (!execution_receipt || execution_receipt.command_key !== authorization.command_key ||
+            execution_receipt.command_digest !== authorization.executor_command_digest ||
+            execution_receipt.execution_epoch !== authorization.execution_epoch ||
+            execution_receipt.task_identity_digest !== authorization.task_identity_digest ||
+            execution_receipt.used_for_authority !== false) {
+          throw new Error("local_file_state_gateway_receipt_unavailable_or_mismatched");
+        }
+      }
+    }
+    return await queryAndRecord(input.hds, authorization, input.caller, input.endpoint, execution_receipt);
   } catch (error) {
     const candidate = error instanceof Error ? error.message : "";
     const reason = /^[a-z0-9_]{1,100}$/.test(candidate) ? candidate : "local_inspection_failed";
@@ -63,6 +78,7 @@ async function queryAndRecord(
   authorization: OperationPlanReceiptReconciliationAuthorization,
   caller: InboundRequest,
   endpoint?: string,
+  execution_receipt?: ExecutionIntentReceipt,
 ): Promise<LocalInspectionReconciliationResult> {
   const common = {
     caller, command_id: authorization.command_id, command_digest: authorization.command_digest,
@@ -72,6 +88,9 @@ async function queryAndRecord(
   const observation = authorization.operation === "file.write"
     ? ingestLocalFileWriteStateObservation(hds, {
       ...common, parameters: authorization.parameters,
+      execution_epoch: authorization.execution_epoch,
+      task_identity_digest: authorization.task_identity_digest,
+      execution_receipt: execution_receipt!,
       request_payload_digest: fileWritePayloadDigest(String(authorization.parameters.content ?? "")),
       inspection: await inspectFileWriteOutcomeState(authorization.parameters),
     })

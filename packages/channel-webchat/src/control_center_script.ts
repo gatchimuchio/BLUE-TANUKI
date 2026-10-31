@@ -724,7 +724,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
-      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding) {
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
@@ -740,11 +740,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("goal-purpose binding is invalid");
         }
         const control = {
-          task: "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
+          task: ownerSelectedFileState
+            ? "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。"
+            : "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
           goal_purpose_binding: { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
             purpose_digest: binding.purpose_digest },
           parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
-          source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest, step_id_digest: stepId }],
+          source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest, step_id_digest: stepId,
+            ...(ownerSelectedFileState ? { owner_selected_observation: "local_file_state" } : {}) }],
         };
         const content = "plan:compute " + JSON.stringify(control);
         let result;
@@ -753,7 +756,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           ownerTokenInput.value = "";
         }
-        appendChat("owner", "同一taskの検証済み結果に基づく再計画を依頼しました");
+        appendChat("owner", ownerSelectedFileState
+          ? "ownerが現在状態の観測を候補計算へ明示選択しました（元の作用結果は不明のまま）"
+          : "同一taskの検証済み結果に基づく再計画を依頼しました");
         appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました", result.request_id);
       }
 
@@ -1228,6 +1233,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function renderComputeSourceObservations(value) {
         if (!Array.isArray(value) || value.length === 0) return "";
         const summaries = value.slice(0, 8).map(function (observation) {
+          if (isObject(observation) && observation.schema_version === "operation-plan-compute-source-observation.v1" &&
+              observation.source === "owner_selected_local_file_state" && observation.operation === "file.write" &&
+              /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.step_id_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.command_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.execution_admission_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.gateway_execution_receipt_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.gateway_execution_epoch_digest || "") &&
+              ["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(observation.gateway_execution_receipt_state) &&
+              /^[a-f0-9]{64}$/.test(observation.observation_digest || "") &&
+              observation.plan_binding_status === "outcome_unknown" &&
+              observation.plan_validation_status === "owner_selected_observation" &&
+              observation.observation_status === "matched" && observation.effect_observation === "observed_target_state" &&
+              observation.used_as_world_truth === false && observation.used_for_authority === false && observation.may_execute === false &&
+              observation.adoption_status === "observation_only" &&
+              Number.isSafeInteger(observation.memory_revision) && observation.memory_revision > 0 &&
+              /^[a-f0-9]{64}$/.test(observation.memory_receipt_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.owner_selection_digest || "")) {
+            return "Gateway実行receipt=" + observation.gateway_execution_receipt_state + "（digest照合済み）とowner選択のfile.write現在状態digestのみ。元stepはoutcome_unknown、作成主体・成功・目的達成は未確認";
+          }
           const commonSafe = isObject(observation) &&
             observation.schema_version === "operation-plan-compute-source-observation.v1" &&
             observation.effect_observation === "reported_success" && /^[a-f0-9]{64}$/.test(observation.record_digest || "") &&
@@ -1512,14 +1538,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 step.status === "verified" && binding.memory_status === "receipt_confirmed" &&
                 /^[a-f0-9]{64}$/.test(binding.command_digest || "") && /^[a-f0-9]{64}$/.test(binding.result_digest || "") &&
                 /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
-              const replanButton = replanSourceReady
+              const localFileState = isObject(step.local_file_state_observation) ? step.local_file_state_observation : {};
+              const ownerSelectedFileStateReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
+                step.operation === "file.write" && step.status === "outcome_unknown" &&
+                localFileState.source === "local_file_state" && localFileState.status === "matched" &&
+                /^[a-f0-9]{64}$/.test(localFileState.gateway_execution_receipt_digest || "") &&
+                /^[a-f0-9]{64}$/.test(localFileState.gateway_execution_epoch_digest || "") &&
+                ["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(localFileState.gateway_execution_receipt_state) &&
+                localFileState.memory_status === "receipt_confirmed" && localFileState.used_for_authority === false &&
+                localFileState.raw_receipt_exposed === false && /^[a-f0-9]{64}$/.test(localFileState.evidence_digest || "") &&
+                /^[a-f0-9]{64}$/.test(localFileState.target_identity_digest || "");
+              const replanButton = replanSourceReady || ownerSelectedFileStateReady
                 ? '<button type="button" class="secondary" data-operation-plan-replan="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
                   escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
-                  '">検証済み結果から同一taskを再計画</button>' +
-                  '<p class="muted">現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。</p>'
+                  '" data-owner-selected-file-state="' + String(ownerSelectedFileStateReady) + '">' +
+                  (ownerSelectedFileStateReady ? '現在状態を明示選択して候補を再計算' : '検証済み結果から同一taskを再計画') + '</button>' +
+                  '<p class="muted">' + (ownerSelectedFileStateReady
+                    ? 'Gatewayの永続実行receiptをJのcommand／epoch／taskへ再照合し、digest-onlyの現在状態をownerがC候補の文脈として選びます。元のfile.writeは結果不明のままです。次候補は未実行で、選択後もJのstep審査と必要なowner Approval／Broker判定が必要です。'
+                    : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>'
                 : '';
               const receiptLabels = {
                 not_applicable: "対象外",
@@ -1545,6 +1585,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(String(externalReceipt.match_count)) + '</dd>' +
                   (externalReceipt.receipt_digest ? '<dt>receipt digest</dt><dd class="mono">' + escapeHtml(shortDigest(externalReceipt.receipt_digest)) + '</dd>' : '')
                 : '';
+              const localFileStateSafe = localFileState.source === "local_file_state" &&
+                ["matched", "not_found", "mismatch"].includes(String(localFileState.status)) &&
+                Number.isInteger(localFileState.match_count) && localFileState.match_count >= 0 && localFileState.match_count <= 1 &&
+                typeof localFileState.evidence_digest === "string" && /^[a-f0-9]{64}$/.test(localFileState.evidence_digest) &&
+                typeof localFileState.target_identity_digest === "string" && /^[a-f0-9]{64}$/.test(localFileState.target_identity_digest) &&
+                Number.isSafeInteger(localFileState.observed_at_ms) && localFileState.observed_at_ms >= 0 &&
+                localFileState.used_for_authority === false && localFileState.raw_receipt_exposed === false;
+              const localFileStateLabels = {
+                matched: "現在の対象payload digestが要求と一致（作成主体・実行成功は未確認）",
+                not_found: "現在の対象なし（作用が未実行だった証明ではありません）",
+                mismatch: "現在の対象payload digestは要求と不一致（結果不明を維持）",
+              };
+              const localFileStateDetails = localFileStateSafe
+                ? '<dt>file.write現在状態</dt><dd>' + escapeHtml(localFileStateLabels[localFileState.status] || "観測状態不明") +
+                  '</dd><dt>target identity digest</dt><dd class="mono">' + escapeHtml(shortDigest(localFileState.target_identity_digest)) +
+                  '</dd><dt>file state digest</dt><dd class="mono">' + escapeHtml(shortDigest(localFileState.file_state_digest)) +
+                  '</dd><dt>観測M receipt</dt><dd>' + escapeHtml(localFileState.memory_status || "not_recorded") +
+                  '</dd><dt>観測evidence digest</dt><dd class="mono">' + escapeHtml(shortDigest(localFileState.evidence_digest)) + '</dd>'
+                : '';
               const stepReviewButton = planReviewReady && step.status === "not_selected" &&
                 typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id)
                 ? '<button type="button" class="secondary" data-operation-plan-review="true" data-plan-id="' +
@@ -1568,7 +1627,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>command digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.command_digest)) + '</dd>' +
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
-                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + '</dl>' +
+                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + localFileStateDetails + '</dl>' +
                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし、作用は再送しません。</p>' : '') +
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-plan-id="' +
@@ -4653,7 +4712,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
-              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "");
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "",
+              target.dataset.ownerSelectedFileState === "true");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
