@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: 同一taskのread-only再計画実行と結果帰還、その後の復旧連続性）
+### Active batch: E2E-01 — WebChat task一気通貫（次: file.write実行中の中断・再起動後にcommand intent／execution receipt／M receipt／現在のplan dependencyを再照合する復旧経路）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -43,6 +43,14 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 開発専用backendを通常の4役割agent-delegation経路へ接続した。子候補は固定・非権威の合成markerのみで、親候補は4役割・contract digest・固定task／目的contextが一致した場合だけ生成する。Windowsの実Gateway processで、通常`/owner/task-compute`→Jのfile.write候補→owner tokenによる目的関係L3審査→同一plan/revisionのowner step審査→HDS選択済みcommandのtool process policy→既存Approval Gate／Broker→file.write receiptとM→WebSocket結果返信まで成立した。検証済みreceiptから同一taskのread-only file.search候補を生成し、ownerによる目的関係L3確認・step審査を経て既存read-only Broker workerを実行、検索結果を完全一致検証・M receipt確認後、保存結果を再検索せずWebChatへ返すところまで確認した。file.search候補に必須のpreparation／validationが欠けてHDSが`plan_step_not_ready`で拒否した欠陥を合成backendで修正した。候補は親plan digestに対応する初回の合成file.write pathだけを使い、HDS／ownerの再照合・承認境界は変えていない。試験は隔離stateと一時file rootのみを使い、実provider呼出しは0件、保存結果返却後も作成ファイルが一件のままで、test cleanupが除去した。Gateway実process testはPASS（1 selected、他3件pattern skip）。`pnpm --filter @blue-tanuki/core build`、workspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。日本語基底移行負債76件は既存注意として残る。この証拠は限定synthetic taskの`WIRED`接続であり、独立した意味推論、restart recovery、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
 
 **次のproducer／consumer:** file.write実行中の中断・process restart後に、既存writeを重複実行せず、同一taskのcommand intent・execution receipt・M receipt・現在のplan dependencyを再照合する復旧経路を接続する。provider/live外部作用は使わない。
+
+#### 2026-10-31 E2E-01 合成Gateway再起動後のread-only再計画継続
+
+対象の隔離Gateway process testは、Vitestが`apps/gateway`をcwdにする実行経路でrepo root相対のentrypointを二重連結していた。test helperのrepo rootを`import.meta.url`基準で決定するよう直し、同じprocess testを再実行した。固定synthetic taskで目的関係L3確認、owner step審査、既存Approval／Brokerを経てcreate-only `file.write`とM receiptを確認した後、Gateway childを停止・再起動した。新しいWebChat接続のruntime snapshotへ同一plan／revision／task identityとverified `receipt_confirmed` stepが復帰し、そのreceiptから同一taskのread-only `file.search`、M receipt、保存結果返信まで継続した。再起動後・結果返信後もcreate-only fileは一件で、test中のprovider callは0件。`document_organization_entry.test.ts`は1 selected PASS、他3件はpattern skip。test-owned temp rootはcleanup済み。
+
+この確認は完了済みfile.write receiptからのprocess再起動連続性を示す。file.write実行中の中断、Broker作用後かつexecution result／M receipt確定前のcrash window、そこからのcommand intent／outbox／plan dependency再照合は未確認であり、E2E-01全体の復旧成立とは扱わない。
+
+**次のproducer／consumer:** 実行中断時に現在の権限を復元せず、同じtaskのcommand intent・execution receipt／outbox・M receipt・現在のplan dependencyを安全に再照合する。結果不明なら再実行せずholdする。provider/live外部作用は使わない。
 
 #### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
 

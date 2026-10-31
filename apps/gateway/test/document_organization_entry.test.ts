@@ -4,13 +4,14 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
-const repositoryRoot = process.cwd();
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const tsxArgs = ["--import", "tsx"];
 const source = "決定事項:青\n未確認:期限";
 const firstExcerpt = "決定事項:青";
@@ -903,6 +904,40 @@ describe("delegated goal purpose owner review", () => {
       expect(createdFiles).toHaveLength(1);
       expect(readFileSync(join(fileRoot, createdFiles[0]!), "utf8"))
         .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+
+      const previousTaskWebSocket = taskWebSocket;
+      taskWebSocket = undefined;
+      previousTaskWebSocket.close();
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const resumedTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(resumedTicketResponse.status).toBe(200);
+      const { ticket: resumedTicket } = await resumedTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(resumedTicket));
+      await once(taskWebSocket, "open");
+
+      const restoredWritePlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === writePlanId);
+        const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+          candidate.step_id === writeStepId);
+        return plan?.status === "results_verified" && step?.status === "verified" &&
+          (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed" ? plan : null;
+      }, gateway, "Gateway restart did not restore the verified synthetic file.write receipt");
+      expect(restoredWritePlan).toMatchObject({ plan_id: writePlanId,
+        task_identity_digest: writePlan.task_identity_digest, revision_digest: writeRevision });
+      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+        .toEqual(createdFiles);
 
       const syntheticReplanReply = waitForWebChatSend(taskWebSocket, "synthetic same-task replan");
       const replanControl = {
