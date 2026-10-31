@@ -168,6 +168,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
             <div class="row">
               <button id="submit-owner-task" class="primary" type="button">計画作成を依頼</button>
+              <button id="owner-task-new-submission" type="button" hidden>先行依頼を確認後、新しい依頼IDへ切替</button>
               <span id="owner-task-status" class="badge warn" aria-live="polite">未送信</span>
             </div>
           </div>

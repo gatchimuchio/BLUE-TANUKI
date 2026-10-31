@@ -207,6 +207,16 @@ channel-webchat `typecheck`と`git diff --check`はPASS。テスト、Gateway実
 
 **次:** rev3.0現行工程から次の未接続producer／consumerを特定し実装を続ける。E2E-01の実行確認は、全体実装後のQE_QC段階で同じtask・承認条件・M receipt・WebChat返却をまとめて検証する。旧epoch result outboxはauthorityにせず、元`file.write`を再発行しない。provider/live外部作用は使わない。
 
+#### 2026-10-31 E2E-01 BUILD接続 — 結果不明時のowner task依頼ID保持
+
+`/owner/task-compute`は同じ`submission_id`と同じpayloadの再送を重複dispatchせず、handler開始後に結果不明となった依頼を`outcome_unknown`として再実行拒否する。一方Control CenterはHTTP 409全般でsession上のIDを消していたため、結果不明・IDと別payloadの衝突後に次の操作が新IDを作り、同じ仕事を重複dispatchできる状態だった。HTTP statusだけから未送信と推定するclient挙動を除去した。
+
+clientがIDを消すのは`owner_task_submission_not_dispatched`、事前にterminal rejectされたsubmission、およびhandler開始前に確定した委任目的不一致だけとする。結果不明・ID/payload conflict・未知の409はIDを保持し、Runtimeの状態を確認するよう案内する。sessionに未解決IDが残っている場合は回復導線を再表示する。先行依頼の状態を確認したownerが明示操作と確認dialogを通った場合だけIDを破棄し、新規依頼を作れる。HDS authority、Approval／L3、Broker、M writer、実行・再実行の判定は変えない。
+
+channel-webchat `typecheck`／build、control-center生成scriptの構文解析、`git diff --check`でこの差分を確認する。Gateway process、tests、実provider／外部作用は実施しない（NOT_RUN）。これはclientの重複再送防止接続であり、E2E-01全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOの成立ではない。
+
+**次の実装:** 同じ利用者仕事の次の未接続production consumerを現行コードから選ぶ。全体構造が揃う前に広域QCを開始せず、provider/live外部作用は使わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

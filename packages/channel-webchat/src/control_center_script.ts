@@ -614,6 +614,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function clearOwnerTaskSubmissionId() {
         ownerTaskSubmissionIdMemory = null;
         try { sessionStorage.removeItem("blue-tanuki.owner-task-submission-id.v1"); } catch { /* best effort */ }
+        byId("owner-task-new-submission").hidden = true;
       }
 
       async function postOwnerTaskCompute(token, body) {
@@ -627,17 +628,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!response.ok) {
           const statusCode = result && typeof result.status === "string" ? result.status : "";
           const requestId = result && typeof result.request_id === "string" ? result.request_id : "";
-          if (response.status === 409 || statusCode === "owner_task_submission_not_dispatched") {
+          const knownNotDispatched = statusCode === "owner_task_submission_not_dispatched" ||
+            statusCode === "owner_task_submission_already_rejected" ||
+            statusCode === "delegated_task_purpose_changed" ||
+            statusCode === "delegated_task_purpose_unavailable";
+          if (knownNotDispatched) {
             clearOwnerTaskSubmissionId();
+          }
+          if (response.status === 409 && !knownNotDispatched) {
+            byId("owner-task-new-submission").hidden = false;
           }
           if (statusCode === "owner_task_submission_not_dispatched") {
             throw new Error("GatewayからHDSへは未送信です。内容を確認して再送できます。");
           }
           if (statusCode === "owner_task_submission_outcome_unknown") {
-            throw new Error("依頼結果が不明のため再実行しません。Tasks／Runtimeで状態を確認してください。参照ID: " + requestId);
+            throw new Error("依頼結果が不明です。依頼IDを保持しました。Tasks／Runtimeで状態を確認してください。新規依頼へ切り替える場合は、先行依頼の状態を確認してから専用ボタンを使ってください。参照ID: " + requestId);
           }
           if (statusCode === "submission_id_reused_with_different_input") {
-            throw new Error("この依頼IDは別の内容で使用済みです。先行依頼をTasks／Runtimeで確認してください。参照ID: " + requestId);
+            throw new Error("この依頼IDは別の内容で使用済みです。IDを保持したままにしました。先行依頼をTasks／Runtimeで確認してください。新規依頼へ切り替える場合は、状態確認後に専用ボタンを使ってください。参照ID: " + requestId);
           }
           if (statusCode === "owner_task_submission_already_rejected") {
             throw new Error("この依頼は以前に拒否されています。現在の目的を再確認してください。参照ID: " + requestId);
@@ -4959,15 +4967,31 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("submit-owner-task").addEventListener("click", function () {
         submitOwnerTask().catch(function (error) {
           const status = byId("owner-task-status");
-          const stalePurpose = typeof error?.message === "string" &&
-            error.message.includes("/owner/task-compute failed: HTTP 409");
-          status.textContent = stalePurpose
-            ? "委任目的が更新または利用不可です。再読み込みして選び直してください。仕事は送信されていません。"
-            : error.message || "仕事を送信できませんでした";
-          status.className = stalePurpose ? "badge warn" : "badge bad";
+          status.textContent = error.message || "仕事を送信できませんでした";
+          status.className = error.message && error.message.includes("委任目的") ? "badge warn" : "badge bad";
           byId("owner-task-token").value = "";
         });
       });
+      byId("owner-task-new-submission").addEventListener("click", function () {
+        const confirmed = window.confirm(
+          "Tasks／Runtimeで先行依頼の状態を確認し、同じ仕事の重複実行にならないと判断した場合だけ、新しい依頼IDへ切り替えてください。続行しますか？");
+        if (!confirmed) return;
+        clearOwnerTaskSubmissionId();
+        const status = byId("owner-task-status");
+        status.textContent = "新しい依頼IDを用意しました。先行依頼との重複がないことを確認した場合だけ再送してください。";
+        status.className = "badge warn";
+      });
+      try {
+        const storedSubmissionId = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
+        if (typeof storedSubmissionId === "string" &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storedSubmissionId)) {
+          ownerTaskSubmissionIdMemory = storedSubmissionId;
+          byId("owner-task-new-submission").hidden = false;
+          const status = byId("owner-task-status");
+          status.textContent = "前回の依頼状態を確認してください。通信結果が不明な場合、先に新規IDへ切り替えないでください。";
+          status.className = "badge warn";
+        }
+      } catch { /* status recovery remains available when session storage works */ }
       byId("load-goal-purpose-candidates").addEventListener("click", function () {
         loadGoalPurposeCandidates().catch(function () {
           const status = byId("goal-purpose-submit-status");
