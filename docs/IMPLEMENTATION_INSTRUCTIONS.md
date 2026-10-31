@@ -317,7 +317,13 @@ owner task status照会で`request_id` digestに一致したRuntime planにつ�
 
 WebChatの対象テスト1件（同fileの他113件pattern skip）、package typecheck/build、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認した。Gateway process、実ブラウザー、全workspace suite、provider／外部作用、QE_QC／QE_QAはNOT_RUN。この接続はowner task受付からplan lineage／M receipt状態への`WIRED`表示であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOを成立させない。
 
-**次:** 全体実装を優先し、Deferred K-B5のうち、plan adoption classificationがTypeScript／Rustで異なる場合の実Rust process比較receiptを生成する残るproducer→consumer接続を最小単位で進める。HDS-BRAINを唯一のauthority／M writerに保ち、Rustは`hold`／no-effect／no-M-writeとする。全体QC／QA・single-writer cutoverは行わない。
+#### 2026-11-01 K-B5 BUILD接続 — 実Rust processのplan adoption分類差receipt
+
+Gateway observer試験に限るclassifier注入を用い、TypeScript側期待分類を`matched`、同じ固定projectionから実Rust processが返す分類を`mismatched`とするreceiptを通した。observerはRust receiptのshape、projection echo、status／matches内部整合を保って受け取り、両側の分類と`plan_step_adoption_classification_agrees=false`、総合`mismatched`を記録した。Rust向けprojection bytesは注入前の同一snapshotのまま。注入は試験だけで、実装間に自然発生する差や実運転のTypeScript分類を示さない。受理にはRust receiptの`hold`・no-effect・no-M-write条件が引き続き必要。
+
+Gateway observer process試験6件とGateway typecheck、`git diff --check`はPASS。全workspace suite、実provider／外部作用、全体BUILD、QE_QC／QE_QA、5OS、single-writer cutoverは未実施または未成立。
+
+**次のproducer／consumer:** 全体実装を優先し、E2E-01の既存command intent・execution receipt・M receipt・plan dependencyを同一task identityでつなぐ。最新HEADで実際に切れている辺と呼出し元／consumerを特定し、既存権限・receipt・M writerを使って合成仕事の実経路を進める。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
 
 ## Gitと復旧
 

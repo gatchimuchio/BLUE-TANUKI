@@ -330,6 +330,8 @@ export async function startRuntimeKernelShadowObserver(options: {
   enabled: boolean;
   production: boolean;
   onEvent?: (event: RuntimeKernelShadowObserverEvent) => void;
+  /** 実Rust process試験用。Rustへ送るprojectionを変えず、observerが分類差を受け取る経路だけを模擬する。 */
+  classifyPlanStepAdoptionForTest?: typeof classifyRuntimeKernelJPlanStepAdoption;
 }): Promise<RuntimeKernelShadowObserver | undefined> {
   const emit = (event: RuntimeKernelShadowObserverEvent): void => {
     try { options.onEvent?.(event); } catch { /* shadow telemetry must not affect the authority path */ }
@@ -461,7 +463,8 @@ export async function startRuntimeKernelShadowObserver(options: {
       return;
     }
     const commandPresent = observation.command_present;
-    const planAdoption = classifyRuntimeKernelJPlanStepAdoption(projection.plan_step_adoption);
+    const planAdoption = options.classifyPlanStepAdoptionForTest?.(projection.plan_step_adoption) ??
+      classifyRuntimeKernelJPlanStepAdoption(projection.plan_step_adoption);
     const comparisonKind = projection.memory_transition
       ? "memory_approval" : projection.resume_transition ? "resume" : "decision";
     const typescriptDecision = projection.resume_transition?.typescript_result_decision ??

@@ -8,7 +8,9 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-01、Tasksのowner task受付状態からrequest ID一致plan、同一`task_identity_digest`の計画件数、依頼一致plan stepのM receipt状態を既存の非権威Runtime projectionで表示する接続を追加した。WebChat対象テスト1件、package typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。表示上限・step省略・不正bindingは未確認とし、完了や権限へ昇格しない。E2E-01全体と製品全体BUILDは未成立。次のQE_BUILDではDeferred K-B5のplan adoption classification差を実Rust process receiptへ接続する。
+2026-11-01、K-B5 plan-step adoption比較の分類差consumerを、実Rust process receiptで確認した。試験時だけTypeScript期待分類を意図的に`matched`へずらし、Rustへは受付時に固定した同一projection bytesを送る。Rustが返す`mismatched` receiptは構造・echo・status/matches整合を維持したまま受理され、Gateway observerは双方のstatusと`plan_step_adoption_classification_agrees=false`を非権威記録した。Gateway observer process試験6件、Gateway typecheck、`git diff --check`はPASS。試験注入は実装間の自然発生差を示さず、observer consumerが差を停止で隠さず扱えることだけを示す。実provider・外部作用・5OS・全体BUILD・QE_QC／QE_QA・cutoverは未成立。次はE2E-01のcommand intent／execution receipt／M receipt／plan dependencyの既存consumer接続から、現HEADで切れている実経路を特定してQE_BUILDを続ける。
+
+2026-11-01の前batchでは、Tasksのowner task受付状態からrequest ID一致plan、同一`task_identity_digest`の計画件数、依頼一致plan stepのM receipt状態を既存の非権威Runtime projectionで表示する接続を追加した。WebChat対象テスト1件、package typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。表示上限・step省略・不正bindingは未確認とし、完了や権限へ昇格しない。E2E-01全体と製品全体BUILDは未成立。
 
 ### E2E-01 接続単位 — WebChat結果から同一taskの再計画候補まで
 

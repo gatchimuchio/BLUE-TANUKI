@@ -12,9 +12,12 @@ import {
 import {
   DEFAULT_POLICY,
   HDSUpperController,
+  classifyRuntimeKernelJPlanStepAdoption,
   operationPlanDigest,
   projectRuntimeKernelJMemoryTransition,
   runStandaloneHDSBrain,
+  type RuntimeKernelJPlanStepAdoptionProjection,
+  type RuntimeKernelJPlanStepAdoptionReceipt,
 } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, type OperationPlan } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -606,6 +609,14 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     const { selectedProjection } = fixture;
     const events: RuntimeKernelShadowObserverEvent[] = [];
     let observer: Awaited<ReturnType<typeof startRuntimeKernelShadowObserver>> | undefined;
+    const classifierWithSyntheticDrift = (
+      projection: RuntimeKernelJPlanStepAdoptionProjection,
+    ): RuntimeKernelJPlanStepAdoptionReceipt => {
+      const result = classifyRuntimeKernelJPlanStepAdoption(projection);
+      return result.status === "mismatched"
+        ? { ...result, status: "matched", matches: true }
+        : result;
+    };
     try {
       const planAdoption = selectedProjection.projection.plan_step_adoption;
       if (planAdoption.status !== "available") throw new Error("selected plan adoption assessment unavailable");
@@ -621,7 +632,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       };
 
       observer = await startRuntimeKernelShadowObserver({ enabled: true, production: false,
-        onEvent: (event) => events.push(event) });
+        onEvent: (event) => events.push(event), classifyPlanStepAdoptionForTest: classifierWithSyntheticDrift });
       expect(observer).toBeDefined();
       observer!.observe({ j_projection: selectedProjection, command_present: true });
       await waitForObservedEvents(events, 1);
@@ -638,7 +649,10 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       plan_step_adoption: { status: "matched", matches: true } });
     expect(events[2]).toMatchObject({ kind: "observation", sequence: 2, shadow_revision: 2,
       comparison_kind: "decision", comparison_status: "mismatched",
-      plan_step_adoption: { status: "mismatched", matches: false } });
+      plan_step_adoption: { status: "mismatched", matches: false },
+      typescript_plan_step_adoption_status: "matched",
+      plan_step_adoption_typescript_matches: true,
+      plan_step_adoption_classification_agrees: false });
     const serializedEvents = JSON.stringify(events);
     for (const privateValue of fixture.privateValues) {
       expect(serializedEvents).not.toContain(privateValue);
