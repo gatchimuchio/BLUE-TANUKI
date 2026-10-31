@@ -90,6 +90,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 最新のK-B5 BUILD差分では、plan-step adoptionのRust receiptについて、`not_comparable`の固定reason差をIPC不正としてobserver停止させず、Rust／TypeScript双方のstatusとreasonを非権威比較として記録する。未知reason、形状不正、projection echo不一致は引き続きreceipt拒否とする。Gateway typecheck／buildはPASS。testおよびRust／Gateway process確認はNOT_RUN。HDS authority、作用、M writer、Rust `hold`／no-effect／no-M-writeは不変で、K-B5全体・製品全体BUILD・QC／QA・cutoverは未成立。
 
+続くobserver consumer差分では、妥当なRust plan-step adoption receiptがTypeScript側と異なる比較statusを返した場合、Rust側の集約status差だけでobserverを停止させていた結合を解いた。固定enum・receipt形状・projection echo検査は維持し、plan採否分類差がある場合だけ`mismatched`として観測し、TypeScript／Rust双方のstatus・reasonと`plan_step_adoption_classification_agrees=false`を非権威Gateway logへ残す。型チェックはPASS。test、Rust／Gateway process、実provider・外部作用、5OS実機はNOT_RUN。HDS authority／command／Approval／M writerとRust `hold`／no-effect／no-M-writeに変更なし。K-B5全体意味比較、製品全体BUILD、QE_QC／QE_QA、single-writer cutoverは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

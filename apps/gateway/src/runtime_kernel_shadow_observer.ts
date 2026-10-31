@@ -92,7 +92,7 @@ export type RuntimeKernelShadowObserverEvent =
     typescript_plan_step_adoption_status: RuntimeKernelJPlanStepAdoptionReceipt["status"];
     typescript_plan_step_adoption_reason?: RuntimeKernelJPlanStepAdoptionUnavailableReason;
     plan_step_adoption_typescript_matches?: boolean;
-    plan_step_adoption_classification_agrees?: boolean;
+    plan_step_adoption_classification_agrees: boolean;
     command_presence_mismatch?: true;
   }
   | {
@@ -554,7 +554,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           ? "mismatched" : expectedRuntimeComparisonStatus;
         if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
             receipt.comparison_status !== runtimeComparisonStatus ||
-            runtimeComparisonStatus !== expectedRuntimeComparisonStatus ||
+            (runtimeComparisonStatus !== expectedRuntimeComparisonStatus &&
+              planStepAdoptionClassificationAgrees !== false) ||
             receipt.comparison_kind !== comparisonKind ||
             typeof receipt.policy_decision_matches !== "boolean" ||
             purposeBindingMatches === undefined ||
@@ -653,8 +654,7 @@ export async function startRuntimeKernelShadowObserver(options: {
             ? { typescript_plan_step_adoption_reason: planAdoption.reason } : {}),
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
             ? { plan_step_adoption_typescript_matches: planAdoption.matches } : {}),
-          ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
-            ? { plan_step_adoption_classification_agrees: planStepAdoptionClassificationAgrees } : {}),
+          plan_step_adoption_classification_agrees: planStepAdoptionClassificationAgrees,
           ...(commandPresenceMatches ? {} : { command_presence_mismatch: true as const }),
         });
       } catch {
