@@ -3502,3 +3502,17 @@ Control CenterはWebChatの`channel_send`または`error` frameをchatへ表示�
 | `pnpm typecheck`／`pnpm build` | PASS。 |
 | test／Gateway process smoke | 未実施（NOT_RUN）。 |
 | `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+
+## 2026-10-31 — E2E-01接続単位: owner-authenticated plan操作の配送
+
+Control Centerはowner tokenで作成されたplanのstep審査・保存結果読取・結果不明receipt照合にowner tokenを使っていたが、送信先の`/operators/developer/invoke`はowner tokenをwait／resumeに限定しており、これらの操作を拒否した。三操作を同一plan ID／revisionを付けたowner専用`/owner/inbound`へ接続した。HDSが所有・revision・依存・対象を再照合し、L3／Approval／Broker判定は従来経路のまま。wait／resumeのoperator経路、通常chat token経路、owner tokenの保存方針は変えていない。receipt照合は従来どおり明示要求のloopback読取のみで、作用を再送しない。
+
+| 確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS、全workspace。 |
+| `pnpm build` | PASS、全workspace。 |
+| `pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+| `git diff --check` | PASS。 |
+| test／WebChat owner-task process smoke | 未実施（NOT_RUN）。 |
+
+このowner操作配送はE2E-01全体を閉じない。目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→同一taskの再計画／復帰を通常WebChat task entryで一仕事に通す接続は未成立のまま。

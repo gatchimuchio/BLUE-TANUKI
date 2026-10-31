@@ -611,12 +611,32 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge good";
       }
 
-      async function invokeReceiptReconciliation(planId, revisionDigest, stepId) {
+      async function postOperationPlanControl(authToken, content, ownerAuthenticationRequired, planId, revisionDigest) {
+        const payload = { user: state.chatUser, content };
+        if (ownerAuthenticationRequired) {
+          return postJson("/owner/inbound", authToken, { ...payload, plan_id: planId, revision_digest: revisionDigest });
+        }
+        return postJson("/operators/developer/invoke", authToken, payload);
+      }
+
+      async function invokeReceiptReconciliation(planId, revisionDigest, stepId, ownerAuthenticationRequired) {
         state.chatToken = byId("chat-token").value.trim();
         state.chatUser = byId("chat-user").value.trim() || "owner";
-        if (!state.chatToken) throw new Error("webchat token is required");
+        const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
+        const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : state.chatToken;
+        if (!authToken) throw new Error(ownerAuthenticationRequired
+          ? "結果照合にはowner tokenを入力してください" : "webchat token is required");
+        const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+        if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
+          throw new Error("current plan and step digests are unavailable");
+        }
         const content = "plan:reconcile " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId });
-        const result = await postJson("/operators/developer/invoke", state.chatToken, { user: state.chatUser, content });
+        let result;
+        try {
+          result = await postOperationPlanControl(authToken, content, ownerAuthenticationRequired, planId, revisionDigest);
+        } finally {
+          if (ownerTokenInput) ownerTokenInput.value = "";
+        }
         appendChat("owner", content);
         appendChat("accepted", result.request_id || "read-only reconciliation accepted");
       }
@@ -656,7 +676,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const content = "plan:review " + JSON.stringify(control);
         let result;
         try {
-          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+          result = await postOperationPlanControl(authToken, content, ownerAuthenticationRequired, planId, revisionDigest);
         } finally {
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
@@ -690,7 +710,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const content = "plan:result " + JSON.stringify(control);
         let result;
         try {
-          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+          result = await postOperationPlanControl(authToken, content, ownerAuthenticationRequired, planId, revisionDigest);
         } finally {
           if (ownerTokenInput) ownerTokenInput.value = "";
         }
@@ -1496,7 +1516,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
                 '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + '</dl>' +
                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし、作用は再送しません。</p>' : '') +
-                (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-plan-id="' +
+                (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-owner-authentication-required="' +
+                  String(plan.owner_authentication_required === true) + '" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
                 savedResultButton +
@@ -4520,7 +4541,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (target.dataset.operationPlanReconcile === "true") {
           target.disabled = true;
           try {
-            await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "");
+            await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "",
+              target.dataset.ownerAuthenticationRequired === "true");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

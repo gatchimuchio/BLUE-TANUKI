@@ -8,9 +8,9 @@
 
 ## 現在のBUILD_BATCH
 
-### E2E-01 接続単位 — WebChat task結果状態の画面反映
+### E2E-01 接続単位 — WebChat task結果状態とowner plan操作の接続
 
-`/owner/task-compute`のhandler失敗時はtask本文・例外詳細・目的・credential・HDS commitを含まない固定`error` status frameを返信先へbest-effort通知し、handler未接続時は受付前に503で拒否する。またControl Centerは`channel_send`／`error`結果frame受信後、runtime tokenが入力済みなら`/runtime/snapshot`を再読込し、計画一覧を更新する。失敗statusは非権威の運転状態で、HDS判断・最終出力・Approval・実行receiptではない。通知は接続中WebSocketへのbest-effortまでで、切断後の永続配送・Approval queue自動更新・runtime token未入力時の自動更新は未接続。今回の確認はworkspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、`git diff --check`。testは未実施。これはE2E-01の二接続単位であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰の一気通貫は未成立のまま。
+`/owner/task-compute`のhandler失敗時はtask本文・例外詳細・目的・credential・HDS commitを含まない固定`error` status frameを返信先へbest-effort通知し、handler未接続時は受付前に503で拒否する。またControl Centerは`channel_send`／`error`結果frame受信後、runtime tokenが入力済みなら`/runtime/snapshot`を再読込し、計画一覧を更新する。今回、owner tokenで作成されたplanのstep審査・保存結果読取・結果不明receipt照合を、同一plan/revisionを付けたowner専用`/owner/inbound`へ接続した。owner tokenのDeveloper operator経路は既存のwait／resume限定を維持し、HDSのplan照合・L3／Approval／Broker判定は変更しない。失敗statusは非権威の運転状態で、HDS判断・最終出力・Approval・実行receiptではない。通知は接続中WebSocketへのbest-effortまでで、切断後の永続配送・Approval queue自動更新・runtime token未入力時の自動更新は未接続。今回の確認はworkspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、`git diff --check`。testとGatewayの実process smokeは未実施。これはUIからowner plan controlsへの接続単位であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰の一気通貫は未成立のまま。
 
 ### 直近の過去BUILD_BATCH記録
 
