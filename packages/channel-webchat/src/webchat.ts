@@ -497,6 +497,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       : { delivered: false, error: "no_open_socket" };
   }
 
+  private notifyOwnerTaskProcessingFailure(target: string, requestId: string): void {
+    const connections = this.conns.get(target);
+    if (!connections?.size) return;
+    const frame = JSON.stringify({
+      kind: "error",
+      content: `計画作成の応答を確認できません。重複計画を避けるため、再送前にTasks／Runtimeで参照IDを確認してください。参照ID: ${requestId}`,
+    });
+    for (const ws of connections) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      try { ws.send(frame); } catch { /* notification is best-effort and carries no authority */ }
+    }
+  }
+
   connectionCount(user?: string): number {
     if (user) return this.conns.get(user)?.size ?? 0;
     let n = 0;
@@ -816,6 +829,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           return;
         }
         const requestId = randomUUID();
+        const handler = this.handler;
+        if (!handler) {
+          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
+          return;
+        }
         const binding = {
           goal_ref: goal.goal_ref,
           purpose_version: goal.purpose_version,
@@ -844,10 +863,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
           },
         });
-        this.handler?.(inboundReq).catch(() => {
+        void Promise.resolve().then(() => handler(inboundReq)).catch(() => {
           // Avoid logging owner task content or reply identity.
           // eslint-disable-next-line no-console
           console.error("[webchat] owner task handler error");
+          this.notifyOwnerTaskProcessingFailure(replyTo, requestId);
         });
         res.writeHead(202, {
           "content-type": "application/json",

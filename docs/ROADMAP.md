@@ -8,6 +8,12 @@
 
 ## 現在のBUILD_BATCH
 
+### E2E-01 接続単位 — WebChat task計画受付の失敗通知
+
+`/owner/task-compute`が202受付を返した後、Gatewayの非同期handlerが失敗した場合に利用者が状態を確認できない隙を閉じた。WebChatはhandler rejection時に、task本文・例外詳細・目的・credential・HDS commitを含めず、参照IDと重複計画を避ける状態確認案内だけを固定`error` status frameで返信先へ送る。Control Centerは既存のerror表示で受ける。handler未接続時は受付前に503を返す。この通知は非権威の運転状態であり、HDSの判断・最終出力・Approval・実行receiptではない。接続中WebSocketへのbest-effort通知までが成立範囲で、切断後の永続配送は未接続。workspace `pnpm typecheck`／`pnpm build`と`pnpm docs:check`、`git diff --check`はPASS、testは未実施。これはE2E-01の一接続単位であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰の一気通貫は未成立のまま。
+
+### 直近の過去BUILD_BATCH記録
+
 CR-0/I-06の安全割込みとしてWindows開発用`install.ps1 -Force`に既存install rootの所有確認を加えた。markerが現在のinstall root／data rootの双方に一致する形式を優先し、marker欠落時は既定rootにあるBLUE workspace manifest・runtime／installer入口・env file存在・両rootへ結び付く生成済みlaunchersを確認できる従来導入だけを認識する。途中のreparseや識別不一致、custom rootは削除前に拒否し、既存DataRootを再帰削除しない。実Windowsでの非破壊拒否確認と従来導入からの更新確認は未実施（`NOT_RUN`）であり、動的安全性は未成立のまま記録する。これはK-B5の合成shadow BUILDを止める理由にはしない。
 
 K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main appから通常Computeへのbudget設定を照合・接続した。E2E-01とK-B2では、合成仕事のC→J→L3→M→次task再評価を限定接続し、meaning-update専用J/Mを7-store復旧経路へ接続した。これらは部分経路の証拠であり、製品全体の結合形状を示さない。

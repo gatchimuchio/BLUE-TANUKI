@@ -3479,3 +3479,16 @@ I-05では`LineMessagingTransport`にcaller Abortと内部timeoutの発生元を
 | 実LINE API／credential、他channelのlive作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 CR-3ではI-04対象consumerの現HEAD不一致は再現せず、I-05のLINE取消・timeout・配送結果分類をtransportからdurable Gateway outboxまで接続した。LINE live運転や他channelへの一般化は主張しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03 provider、OD-03 live作用、D4-Pocket／ミニドラ別repo変更、P13 owner GO、公開／出荷保留を維持する。次のBUILD_BATCHはrev2.4 E2E-01：同一WebChat taskの目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰をつなぐ。
+
+## 2026-10-31 — E2E-01接続単位: WebChat task計画受付の失敗通知
+
+WebChat `/owner/task-compute`のHTTP 202後にGateway handlerがrejectした場合、従来は固定ログだけで利用者へ状態が返らなかった。handler未接続時は503で受付を拒み、受付後のrejectは入力・例外を含まない固定error status frameとして返信先へbest-effort通知する。参照IDを示し、重複計画を避けるため再送前にTasks／Runtimeを確認するよう案内する。status frameはHDS出力・判断・承認・実行結果を称さない。通知が届くのはWebSocket接続中に限り、永続再配送は未実装。
+
+| 確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS、全workspace。 |
+| `pnpm build` | PASS、全workspace。 |
+| test／Gateway process smoke | 未実施（NOT_RUN）。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+
+この接続単位はE2E-01全体を閉じない。目的→C→J→合成Approval／Broker作用→receipt→M→結果返信→同一taskの再計画／復帰を通すconsumerは次の実装対象として残す。

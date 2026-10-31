@@ -14,7 +14,7 @@ ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc30
 
 ## CR-0割込み — I-06 Windows開発インストーラー
 
-`install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。K-B5の合成shadow実装はこの安全修復と並行して続行できる。
+`install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。全体の利用者経路を先に成立させるowner指示により、K-B5 shadow比較は一時保留し、次のBUILD_BATCHでWebChat taskの実consumer接続を進める。
 
 ## 現行接続状態と次のBUILD_BATCH
 
@@ -28,9 +28,17 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 コード上、Gatewayのno-store content reviewからL3承認、同一proposal／candidate／target／source-observation digestの再照合、M適用、最終監査markerまでの既存接続を維持した。HDS 3 files／5 tests、HDS typecheck/build、HDS standalone smoke、Gateway typecheck/buildはPASS。`pnpm docs:check`はこの記録更新後に実行する。Gateway meaning-update process smokeは前バッチで起動後15秒以内にhealthへ到達せず、統合実行の証拠は未成立のまま。今回の経路抽出は既存責任境界の整理であり、新しい利用者仕事や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。K-B3全体の抽出完了は未確定、QE_QC／QE_QAは未開始。
 
-K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。今回のactive batchはK-B5の限定J projection比較であり、K-B5全体の完了ではない。
+K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
+### Active batch: E2E-01 — WebChat task一気通貫（今回の接続単位: 失敗通知）
+
+- **目的:** `/owner/task-compute`がHTTP 202で受理した後にGateway handlerが失敗した場合、利用者に処理状態と安全な次の確認先を知らせる。K-B5 observer比較より先に、通常利用者経路の失敗consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
+- **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler`。非同期handler失敗をWebChatの固定`error` status frameへ接続し、Control Centerの既存error表示で受ける。起動・停止中などhandlerが未接続なら202ではなく503を返す。
+- **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
+- **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
+- **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、HDS判断やOutputAuditを通すassistant回答への変換は対象外。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。次は同じWebChat task identity／目的bindingを保つ安全な合成Approval／Broker作用からreceipt・M・結果返信・再計画を一仕事で通す。
+
+### Deferred batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
 
 - **目的:** 現行TypeScript HDS-BRAINのpolicy採否とM writerをauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立算出するJ projection、停止後の人間復帰、L3承認済みM更新の有限な残差状態、およびJが選択したplan stepの目的／criterion採否要約を比較する。
 - **producer／consumer:** `HDSUpperController.decide()`／`resume()`と、Gatewayの意味候補採用・引用判断再評価のL3結果（成功commit、明示的なstale再照合、commit blocked）がprojectionを作る。成功した新規M commitでは実`MemoryUpdateReceiptV1`の`previous_revision`／`revision`を保持し、Rust shadow processが1段の版遷移を独立比較する。同一commitの再送など当該操作の新receiptがない場合は版を捏造せず`not_comparable`にする。meaning adoptionでは現行M参照レビューから件数・検証数・scope／target状態を縮約し、Rustが状態と集計値の整合を再計算する。通常inbound、resume、L3 memory approvalの既存observerから同じRust processへ順に渡し、比較receiptをGatewayの非権威ログへ返す。未確定のM再評価数・明示された未評価状態・再評価済み／残存数だけを集計し、IDや個々の参照は渡さない。HDSの`OperationPlanLedger.bind()`は選択時assessmentを保存し、`canExecute()`と`executionSourceBindingDigest()`で再計算・再照合する。通常inbound observerはexact `command` identityでselected bindingを特定し、保存assessment digestをHDS内だけで検証後、同じRust shadow系列へ状態区分とrelation件数だけを渡す。
