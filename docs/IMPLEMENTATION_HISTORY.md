@@ -3598,3 +3598,26 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | provider／実LLM／外部作用 | NOT_RUN。synthetic provider calls 0。 |
 
 この限定synthetic taskのread-only consumer接続は`WIRED`。独立した意味推論、restart recovery、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+## 2026-11-01 — E2E-01 owner task受付とRuntime planのread-only相関
+
+### 差分
+
+- Gatewayの`operation_plan_status`投影に、HDS planの`request_id`を外部へ追加せずSHA-256の`request_id_digest`として付加した。識別子がない旧／不完全projectionでも全体snapshotを不正扱いしないよう任意項目とした。
+- Control Centerのowner受付照会は、受付APIの`request_id`から`operation-request:<id>`をdigest化し、owner tokenと別に入力されたruntime tokenで取得したsnapshot中のplanと相関する。一致planが一件なら既存plan cardを指す短縮plan digest・revision・step状態を表示する。
+- projection不能、復元照合中、digest不能、複数一致、表示件数制限時は未確認／不確定を維持する。受付statusや`results_verified`表示を仕事全体の完了へ読み替えない。権限・J/M writer・実行・承認経路は変更せず、追加routeも作らない。
+
+### 確認
+
+| 確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/channel-webchat typecheck` | PASS |
+| `pnpm --filter @blue-tanuki/channel-webchat build` | PASS |
+| `pnpm --filter @blue-tanuki/gateway typecheck` | PASS |
+| `pnpm --filter @blue-tanuki/gateway build` | PASS |
+| 生成Control Center script構文 | PASS |
+| `git diff --check` | PASS |
+| unit／process test、Gateway runtime | NOT_RUN |
+| 実provider／外部作用 | NOT_RUN |
+
+この変更はowner受付状態と現行Runtime planの限定read-only相関を`WIRED`にする。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは成立しない。

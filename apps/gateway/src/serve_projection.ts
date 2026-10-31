@@ -250,6 +250,7 @@ export interface OperationPlanStatusProjection {
   }>;
   plans: Array<{
     plan_id: string;
+    request_id_digest?: string;
     task_identity_digest?: string;
     revision: number;
     revision_digest: string;
@@ -619,7 +620,11 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       });
     }
     const crossChannelOwnerReview = plan.channel_identity_digest !== WEBCHAT_CHANNEL_IDENTITY_DIGEST;
-    plans.push({ plan_id: plan.plan_id, ...(typeof plan.task_identity_digest === "string"
+    const requestIdDigest = typeof plan.request_id === "string" && plan.request_id.length > 0 && plan.request_id.length <= 1024
+      ? digestString(plan.request_id) : undefined;
+    plans.push({ plan_id: plan.plan_id,
+      ...(requestIdDigest ? { request_id_digest: requestIdDigest } : {}),
+      ...(typeof plan.task_identity_digest === "string"
       ? { task_identity_digest: plan.task_identity_digest } : {}),
       revision: revision!, revision_digest: plan.revision_digest,
       owner_authentication_required: crossChannelOwnerReview || plan.owner_identity_digest === WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST,

@@ -721,13 +721,65 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             outcome_unknown: "依頼結果は不明です。再送せず、Tasks／RuntimeとGateway状態を確認してください。",
             rejected: "依頼受付は拒否済みです。現在の委任目的とTasks／Runtimeを確認してください。"
           }[result.state];
-          status.textContent = stateMessage + " 参照ID: " + result.request_id.slice(-12);
+          const stateSummary = stateMessage + " 参照ID: " + result.request_id.slice(-12);
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
-          if (byId("runtime-token").value.trim()) await loadRuntime("owner-task-status");
+          if (!byId("runtime-token").value.trim()) {
+            status.textContent = stateSummary + " Runtime token未入力のためplan照合は未実施です。";
+          } else {
+            status.textContent = stateSummary + " Runtime planを照合しています。";
+            const runtimeSnapshot = await loadRuntime("owner-task-status");
+            status.textContent = stateSummary + " " + await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
+          }
         } finally {
           ownerTokenInput.value = "";
           button.disabled = false;
         }
+      }
+
+      async function ownerTaskRuntimeCorrelation(requestId, runtimeSnapshot) {
+        const projection = isObject(runtimeSnapshot) ? runtimeSnapshot.operation_plan_status : null;
+        if (!isObject(projection) || projection.schema_version !== "operation-plan.status.v1" ||
+            projection.status !== "available" || projection.used_for_authority !== false ||
+            projection.raw_payload_exposed !== false || !Array.isArray(projection.plans)) {
+          return "Runtime plan projectionを確認できず、受付状態との対応は未確認です。";
+        }
+        if (projection.recovery_refresh_status !== "ready") {
+          return "Runtimeの復元照合が未完了のため、受付状態とのplan対応は未確認です。";
+        }
+        if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") {
+          return "この画面で依頼IDを照合できず、plan対応は未確認です。";
+        }
+        let requestDigest;
+        try {
+          const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("operation-request:" + requestId));
+          requestDigest = Array.from(new Uint8Array(digest), function (byte) {
+            return byte.toString(16).padStart(2, "0");
+          }).join("");
+        } catch {
+          return "依頼IDのdigest照合に失敗し、plan対応は未確認です。";
+        }
+        const matchingPlans = projection.plans.filter(function (plan) {
+          return isObject(plan) && typeof plan.request_id_digest === "string" &&
+            /^[a-f0-9]{64}$/.test(plan.request_id_digest) && plan.request_id_digest === requestDigest;
+        });
+        if (matchingPlans.length > 1) return "同じ依頼IDに一致するplanが複数あり、対応を確定できません。";
+        if (matchingPlans.length === 1) {
+          const plan = matchingPlans[0];
+          if (typeof plan.plan_id !== "string" || !/^[a-f0-9]{64}$/.test(plan.plan_id) ||
+              !Number.isSafeInteger(plan.revision) || plan.revision < 1 ||
+              !["awaiting_step_review", "results_verified"].includes(plan.status)) {
+            return "一致planの状態projectionが不正なため、対応を確定できません。";
+          }
+          const planState = plan.status === "results_verified" ? "全stepの結果検証済み表示" : "step審査待ち";
+          return "Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
+            planState + "）。受付状態とは別で、仕事全体の完了を意味しません。";
+        }
+        const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;
+        const total = Number.isSafeInteger(projection.plan_count) ? projection.plan_count : null;
+        const limited = displayed !== null && total !== null && displayed < total;
+        return limited
+          ? "一致planを表示範囲内で確認できません（" + String(displayed) + "/" + String(total) + "件を表示）。依頼結果は未確定です。"
+          : "このRuntime snapshot内に一致planはありません。受付記録だけでは仕事の未作成・完了・失敗を判定できません。";
       }
 
       async function submitOwnerTask() {
@@ -4150,22 +4202,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           byId("header-status").className = "badge warn";
           setText("runtime-json", "not refreshed: runtime token required");
           setRuntimeSnapshotObservation("not refreshed: runtime token required", "warn");
-          return;
+          return null;
         }
         setRuntimeSnapshotObservation("refreshing" + (source === "webchat-connected" ? " after WebChat connection" : ""), "warn");
         try {
           const body = await fetchJson("/runtime/snapshot", token, { cache: "no-store" });
-          if (requestId !== state.runtimeSnapshotRequestId) return;
+          if (requestId !== state.runtimeSnapshotRequestId) return null;
           renderRuntime(body);
           setRuntimeSnapshotObservation("received " + new Date().toISOString(), "good");
+          return body;
         } catch (error) {
-          if (requestId !== state.runtimeSnapshotRequestId) return;
+          if (requestId !== state.runtimeSnapshotRequestId) return null;
           setText("gateway-status", "unknown");
           byId("gateway-status").className = "badge warn";
           setText("runtime-json", error.message);
           setText("header-status", "runtime error");
           byId("header-status").className = "badge bad";
           setRuntimeSnapshotObservation("refresh failed; Gateway state is unknown", "bad");
+          return null;
         }
       }
 
