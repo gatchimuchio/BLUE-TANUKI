@@ -1,7 +1,7 @@
 import type { HDSUpperController, OperationPlanReceiptReconciliationAuthorization } from "@blue-tanuki/hds-brain";
-import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
-import type { ExecuteCommand, InboundRequest, OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
-import { ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
+import { gmailWriteRequestPayloadDigest, inspectFileWriteOutcomeState } from "@blue-tanuki/core";
+import { fileWritePayloadDigest, type ExecuteCommand, type InboundRequest, type OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
+import { ingestLocalFileWriteStateObservation, ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
 import { queryLocalInspectionReceipt } from "./local_inspection_adapter.js";
 
 export type LocalInspectionReconciliationResult =
@@ -17,7 +17,9 @@ export function localInspectionReconciliationMessage(result: LocalInspectionReco
     const memory = result.memory_status === "committed"
       ? "digest-onlyの非権威観測をMへ保存しました。"
       : "観測はJへ記録済みですがMへの保存は未確認で、再調停が必要です。";
-    return `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
+    const observationKind = result.observation.source === "local_file_state"
+      ? "sandbox内file.write対象の状態観測" : "合成local inspectionのreceipt照合";
+    return `${observationKind}を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
   }
   if (result.status === "not_run") {
     return `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`;
@@ -32,7 +34,7 @@ type ReconciliationHDS = Pick<HDSUpperController,
   "takeOperationPlanReceiptReconciliationAuthorization" | "recordOperationPlanExternalReceiptObservation" |
   "reconcileOperationPlanMemory" | "operationPlanReceiptObservationMemoryIsDurable">;
 
-/** Consume one fresh J permit, issue at most one loopback GET, and retain digest-only evidence. */
+/** Consume one fresh J permit, perform one bounded read-only inspection, and retain digest-only evidence. */
 export async function runLocalInspectionReconciliation(input: {
   hds: ReconciliationHDS;
   command: ExecuteCommand;
@@ -44,7 +46,9 @@ export async function runLocalInspectionReconciliation(input: {
     input.command, input.caller, input.now_ms,
   );
   if (!authorization) return { status: "rejected", reason: "plan_receipt_reconciliation_authorization_expired_or_stale" };
-  if (!input.endpoint?.trim()) return { status: "not_run", reason: "local_inspection_endpoint_not_configured" };
+  if (authorization.operation !== "file.write" && !input.endpoint?.trim()) {
+    return { status: "not_run", reason: "local_inspection_endpoint_not_configured" };
+  }
   try {
     return await queryAndRecord(input.hds, authorization, input.caller, input.endpoint);
   } catch (error) {
@@ -58,21 +62,23 @@ async function queryAndRecord(
   hds: ReconciliationHDS,
   authorization: OperationPlanReceiptReconciliationAuthorization,
   caller: InboundRequest,
-  endpoint: string,
+  endpoint?: string,
 ): Promise<LocalInspectionReconciliationResult> {
-  const requestPayloadDigest = gmailWriteRequestPayloadDigest(authorization.parameters);
-  const response = await queryLocalInspectionReceipt(endpoint, authorization.command_key);
-  const observation = ingestLocalInspectionReceipt(hds, {
-    caller,
-    command_id: authorization.command_id,
-    command_digest: authorization.command_digest,
-    executor_command_digest: authorization.executor_command_digest,
-    plan_id_digest: authorization.plan_id_digest,
-    revision_digest: authorization.revision_digest,
-    step_id_digest: authorization.step_id_digest,
-    request_payload_digest: requestPayloadDigest,
-    response,
-  });
+  const common = {
+    caller, command_id: authorization.command_id, command_digest: authorization.command_digest,
+    executor_command_digest: authorization.executor_command_digest, plan_id_digest: authorization.plan_id_digest,
+    revision_digest: authorization.revision_digest, step_id_digest: authorization.step_id_digest,
+  };
+  const observation = authorization.operation === "file.write"
+    ? ingestLocalFileWriteStateObservation(hds, {
+      ...common, parameters: authorization.parameters,
+      request_payload_digest: fileWritePayloadDigest(String(authorization.parameters.content ?? "")),
+      inspection: await inspectFileWriteOutcomeState(authorization.parameters),
+    })
+    : ingestLocalInspectionReceipt(hds, {
+      ...common, request_payload_digest: gmailWriteRequestPayloadDigest(authorization.parameters),
+      response: await queryLocalInspectionReceipt(endpoint!, authorization.command_key),
+    });
   const memory_status = hds.reconcileOperationPlanMemory() &&
       hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)
     ? "committed" : "pending";

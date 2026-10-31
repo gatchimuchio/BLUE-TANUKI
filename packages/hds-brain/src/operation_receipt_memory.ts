@@ -21,7 +21,7 @@ export function receiptMemoryIdentity(observation: OperationPlanExternalReceiptO
 export function receiptMemoryObservation(observation: OperationPlanExternalReceiptObservation) {
   return {
     schema_version: "operation-receipt-observation.v1",
-    record_type: "external_receipt_observation",
+    record_type: observation.source === "local_file_state" ? "local_file_state_observation" : "external_receipt_observation",
     source: observation.source,
     plan_id_digest: observation.plan_id_digest,
     plan_revision_digest: observation.revision_digest,
@@ -32,6 +32,7 @@ export function receiptMemoryObservation(observation: OperationPlanExternalRecei
     ...(observation.observed_command_digest ? { observed_command_digest: observation.observed_command_digest } : {}),
     ...(observation.observed_command_key_digest ? { observed_command_key_digest: observation.observed_command_key_digest } : {}),
     request_payload_digest: observation.request_payload_digest,
+    ...(observation.target_identity_digest ? { target_identity_digest: observation.target_identity_digest } : {}),
     ...(observation.observed_payload_digest ? { observed_payload_digest: observation.observed_payload_digest } : {}),
     candidate_set_digest: observation.candidate_set_digest,
     status: observation.status,

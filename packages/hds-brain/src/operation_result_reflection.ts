@@ -13,6 +13,10 @@ export type ResultObservationCitation = ResultObservationCitationBase & (
   | { evidence_type: "external_receipt"; evidence_digest: string; operation: string;
       observation: { source: "local_inspection"; reconciliation_status: "matched" | "not_found" | "mismatch" | "ambiguous";
         match_count: number; observed_receipt_digest?: string; action_outcome: "outcome_unknown" } }
+  | { evidence_type: "file_state"; evidence_digest: string; operation: "file.write";
+      observation: { source: "local_file_state"; inspection_status: "matched" | "not_found" | "mismatch";
+        match_count: number; target_identity_digest: string; observed_payload_digest?: string;
+        file_state_digest?: string; action_outcome: "outcome_unknown" } }
 );
 export interface ResultObservationProjection {
   schema_version: "operation-result-current-projection.v2";

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { InboundRequest, OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
-import { OperationPlanExternalReceiptObservationSchema } from "@blue-tanuki/protocol";
+import { OperationPlanExternalReceiptObservationSchema, fileWritePayloadDigest } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -107,6 +107,75 @@ export function ingestLocalInspectionReceipt(
     ...evidence,
     evidence_digest: operationPlanDigest(evidence),
     observed_at_ms: observedAt,
+  });
+  sink.recordOperationPlanExternalReceiptObservation(observation, input.caller);
+  return observation;
+}
+
+/** Record a digest-only observation of one create-only sandbox target; this does not prove who created it. */
+export function ingestLocalFileWriteStateObservation(
+  sink: ExternalReceiptObservationSink,
+  input: Omit<LocalInspectionReceiptInput, "response"> & {
+    parameters: Record<string, unknown>;
+    inspection: {
+      state: "absent" | "present" | "non_regular";
+      target_identity_digest: string;
+      canonical_root_digest: string;
+      parent_identity_digest: string;
+      observed_payload_digest?: string;
+      file_identity_digest?: string;
+    };
+  },
+): OperationPlanExternalReceiptObservation {
+  if (!/^[a-zA-Z0-9._:-]{1,200}$/.test(input.command_id) ||
+      ![input.command_digest, input.executor_command_digest, input.plan_id_digest, input.revision_digest,
+        input.step_id_digest].every((value) => DIGEST_PATTERN.test(value)) ||
+      input.parameters.mode !== "create" || typeof input.parameters.path !== "string" ||
+      typeof input.parameters.content !== "string" ||
+      input.request_payload_digest !== fileWritePayloadDigest(input.parameters.content) ||
+      !DIGEST_PATTERN.test(input.inspection.target_identity_digest)) {
+    throw new Error("local_file_state_observation_binding_invalid");
+  }
+  const observedAt = input.observed_at_ms ?? Date.now();
+  if (!Number.isSafeInteger(observedAt) || observedAt < 0 || observedAt > Date.now() + 30_000) {
+    throw new Error("external_receipt_observation_time_invalid");
+  }
+  const inspection = input.inspection;
+  const candidate = inspection.state === "absent" ? undefined : {
+    target_identity_digest: inspection.target_identity_digest,
+    canonical_root_digest: inspection.canonical_root_digest,
+    parent_identity_digest: inspection.parent_identity_digest,
+    state: inspection.state,
+    ...(inspection.observed_payload_digest ? { observed_payload_digest: inspection.observed_payload_digest } : {}),
+    ...(inspection.file_identity_digest ? { file_identity_digest: inspection.file_identity_digest } : {}),
+  };
+  const candidates = candidate ? [candidate] : [];
+  const status = !candidate ? "not_found" as const
+    : inspection.state === "present" && inspection.observed_payload_digest === input.request_payload_digest
+      ? "matched" as const : "mismatch" as const;
+  const expectedCommandKey = sha256(JSON.stringify(["gateway-executor-command.v1", input.command_id]));
+  const evidence = {
+    schema_version: "external-receipt-observation.v1" as const,
+    source: "local_file_state" as const,
+    plan_id_digest: input.plan_id_digest,
+    revision_digest: input.revision_digest,
+    step_id_digest: input.step_id_digest,
+    command_digest: input.command_digest,
+    executor_command_digest: input.executor_command_digest,
+    command_key_digest: sha256(expectedCommandKey),
+    request_payload_digest: input.request_payload_digest,
+    ...(candidate && inspection.state === "present" && inspection.observed_payload_digest
+      ? { observed_payload_digest: inspection.observed_payload_digest } : {}),
+    target_identity_digest: inspection.target_identity_digest,
+    candidate_set_digest: operationPlanDigest(candidates),
+    status,
+    match_count: candidates.length,
+    ...(candidate ? { receipt_digest: operationPlanDigest(candidate) } : {}),
+    used_for_authority: false as const,
+    raw_receipt_exposed: false as const,
+  };
+  const observation = OperationPlanExternalReceiptObservationSchema.parse({
+    ...evidence, evidence_digest: operationPlanDigest(evidence), observed_at_ms: observedAt,
   });
   sink.recordOperationPlanExternalReceiptObservation(observation, input.caller);
   return observation;

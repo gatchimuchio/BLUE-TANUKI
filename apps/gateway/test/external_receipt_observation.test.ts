@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createGatewayInternalInboundRequest, OperationPlanExternalReceiptObservationSchema } from "@blue-tanuki/protocol";
-import { ingestLocalInspectionReceipt, type ExternalReceiptObservationSink, type LocalInspectionReceiptInput } from "../src/external_receipt_observation.js";
+import { createGatewayInternalInboundRequest, fileWritePayloadDigest, fileWriteTargetIdentityDigest,
+  OperationPlanExternalReceiptObservationSchema } from "@blue-tanuki/protocol";
+import { ingestLocalFileWriteStateObservation, ingestLocalInspectionReceipt,
+  type ExternalReceiptObservationSink, type LocalInspectionReceiptInput } from "../src/external_receipt_observation.js";
 
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 const commandId = "command-fixture-1";
@@ -77,5 +79,38 @@ describe("local receipt observation ingestion", () => {
     expect(() => ingestLocalInspectionReceipt(store.target, { ...expected,
       response: { status: "accepted", matches: [], raw: "SECRET" } })).toThrow(/response_invalid/);
     expect(store.records).toHaveLength(0);
+  });
+
+  it("records create-only file state by digest without claiming command receipt or exposing content", () => {
+    const store = sink();
+    const content = "synthetic file result\n";
+    const parameters = { path: "notes.txt", content, mode: "create" };
+    const target_identity_digest = fileWriteTargetIdentityDigest(parameters.path);
+    const observation = ingestLocalFileWriteStateObservation(store.target, { ...expected,
+      parameters, request_payload_digest: fileWritePayloadDigest(content), inspection: {
+        state: "present", target_identity_digest, canonical_root_digest: "1".repeat(64),
+        parent_identity_digest: "2".repeat(64), observed_payload_digest: fileWritePayloadDigest(content),
+        file_identity_digest: "3".repeat(64),
+      } });
+    expect(observation).toMatchObject({ source: "local_file_state", status: "matched", match_count: 1,
+      target_identity_digest, used_for_authority: false, raw_receipt_exposed: false });
+    expect(observation).not.toHaveProperty("observed_command_digest");
+    expect(observation).not.toHaveProperty("observed_command_key_digest");
+    expect(JSON.stringify(observation)).not.toContain(content);
+    expect(JSON.stringify(observation)).not.toContain(parameters.path);
+
+    const mismatch = ingestLocalFileWriteStateObservation(store.target, { ...expected,
+      parameters, request_payload_digest: fileWritePayloadDigest(content), inspection: {
+        state: "present", target_identity_digest, canonical_root_digest: "1".repeat(64),
+        parent_identity_digest: "2".repeat(64), observed_payload_digest: fileWritePayloadDigest("other"),
+        file_identity_digest: "4".repeat(64),
+      } });
+    expect(mismatch).toMatchObject({ source: "local_file_state", status: "mismatch", match_count: 1 });
+    const absent = ingestLocalFileWriteStateObservation(store.target, { ...expected,
+      parameters, request_payload_digest: fileWritePayloadDigest(content), inspection: {
+        state: "absent", target_identity_digest, canonical_root_digest: "1".repeat(64),
+        parent_identity_digest: "2".repeat(64),
+      } });
+    expect(absent).toMatchObject({ source: "local_file_state", status: "not_found", match_count: 0 });
   });
 });

@@ -17,6 +17,8 @@ import {
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
+  fileWritePayloadDigest,
+  fileWriteTargetIdentityDigest,
   OperationPlanComputeSourceObservationSchema,
   OperationPlanComputeSourceObservationReferenceSchema,
   OperationPlanGoalPurposeBindingSchema,
@@ -614,8 +616,18 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
           binding.status !== "outcome_unknown" || !binding.execution_admission ||
           binding.command_digest !== observation.command_digest ||
           binding.execution_admission.command_digest !== observation.executor_command_digest ||
+          observation.command_key_digest !== createHash("sha256").update(binding.execution_admission.command_key, "utf8").digest("hex") ||
           observed_at_ms < binding.execution_admission.issued_at_ms) {
         throw new Error("plan_checkpoint_receipt_observation_binding_mismatch");
+      }
+      if (observation.source === "local_file_state" && (step.operation !== "file.write" || step.parameters?.mode !== "create" ||
+          typeof step.parameters.path !== "string" || typeof step.parameters.content !== "string" ||
+          observation.target_identity_digest !== fileWriteTargetIdentityDigest(step.parameters.path) ||
+          observation.request_payload_digest !== fileWritePayloadDigest(step.parameters.content))) {
+        throw new Error("plan_checkpoint_file_state_observation_binding_mismatch");
+      }
+      if (observation.source === "local_inspection" && (step.operation !== "gmail.write" || step.parameters?.operation !== "message.send")) {
+        throw new Error("plan_checkpoint_external_receipt_observation_operation_mismatch");
       }
     }
     const receiptMemoryDigests = new Set<string>();
@@ -3131,14 +3143,30 @@ export class OperationPlanLedger {
         if (!delivery?.memory_receipt || !record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(expectedValue)) {
           throw new Error("plan_reflection_record_mismatch");
         }
-        citations.push({ evidence_type: "external_receipt", record_id: identity.record_id,
-          record_digest: operationPlanDigest(record.value), memory_revision: delivery.memory_receipt.revision,
-          receipt_digest: delivery.memory_receipt.receipt_digest, source_revision_digest: current.digest,
-          step_digest: b.step_digest, observed_at_ms: observation.observed_at_ms, evidence_digest: observation.evidence_digest,
-          operation: step.operation, observation: { source: "local_inspection", reconciliation_status: observation.status,
+        if (observation.source === "local_file_state" && observation.status === "ambiguous") {
+          throw new Error("plan_reflection_file_state_observation_invalid");
+        }
+        citations.push(observation.source === "local_file_state" ? {
+          evidence_type: "file_state", record_id: identity.record_id, record_digest: operationPlanDigest(record.value),
+          memory_revision: delivery.memory_receipt.revision, receipt_digest: delivery.memory_receipt.receipt_digest,
+          source_revision_digest: current.digest, step_digest: b.step_digest, observed_at_ms: observation.observed_at_ms,
+          evidence_digest: observation.evidence_digest, operation: "file.write",
+          observation: { source: "local_file_state", inspection_status: observation.status as "matched" | "not_found" | "mismatch",
+            match_count: observation.match_count, target_identity_digest: observation.target_identity_digest!,
+            ...(observation.observed_payload_digest ? { observed_payload_digest: observation.observed_payload_digest } : {}),
+            ...(observation.receipt_digest ? { file_state_digest: observation.receipt_digest } : {}),
+            action_outcome: "outcome_unknown" }, adoption_status: "observation_only", counterevidence_status: "not_assessed",
+          used_as_world_truth: false, used_for_authority: false, may_execute: false,
+        } : {
+          evidence_type: "external_receipt", record_id: identity.record_id, record_digest: operationPlanDigest(record.value),
+          memory_revision: delivery.memory_receipt.revision, receipt_digest: delivery.memory_receipt.receipt_digest,
+          source_revision_digest: current.digest, step_digest: b.step_digest, observed_at_ms: observation.observed_at_ms,
+          evidence_digest: observation.evidence_digest, operation: step.operation,
+          observation: { source: "local_inspection", reconciliation_status: observation.status,
             match_count: observation.match_count, ...(observation.receipt_digest ? { observed_receipt_digest: observation.receipt_digest } : {}),
             action_outcome: "outcome_unknown" }, adoption_status: "observation_only", counterevidence_status: "not_assessed",
-          used_as_world_truth: false, used_for_authority: false, may_execute: false });
+          used_as_world_truth: false, used_for_authority: false, may_execute: false,
+        });
         continue;
       }
       if (b.operation !== "file.search") throw new Error("plan_reflection_operation_not_supported");
@@ -3214,8 +3242,20 @@ export class OperationPlanLedger {
     if (!binding || binding.status !== "outcome_unknown" || !binding.execution_admission ||
         binding.command_digest !== observation.command_digest ||
         binding.execution_admission.command_digest !== observation.executor_command_digest ||
+        observation.command_key_digest !== createHash("sha256").update(binding.execution_admission.command_key, "utf8").digest("hex") ||
         observed_at_ms < binding.execution_admission.issued_at_ms) {
       throw new Error("external_receipt_observation_command_mismatch");
+    }
+    if (observation.source === "local_file_state") {
+      const parameters = step.parameters ?? {};
+      if (step.operation !== "file.write" || parameters.mode !== "create" ||
+          typeof parameters.path !== "string" || typeof parameters.content !== "string" ||
+          observation.target_identity_digest !== fileWriteTargetIdentityDigest(parameters.path) ||
+          observation.request_payload_digest !== fileWritePayloadDigest(parameters.content)) {
+        throw new Error("file_write_state_observation_binding_mismatch");
+      }
+    } else if (step.operation !== "gmail.write" || step.parameters?.operation !== "message.send") {
+      throw new Error("external_receipt_observation_operation_mismatch");
     }
     if (plan.receipt_observations.some((entry) => entry.command_digest === binding.command_digest &&
         entry.evidence_digest === evidence_digest)) return null;
@@ -3378,10 +3418,17 @@ export class OperationPlanLedger {
             : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
-            external_receipt_observation: binding?.status !== "outcome_unknown" ? "not_applicable" : observation?.status ?? "not_recorded",
-            ...(observation ? { external_receipt: {
+            external_receipt_observation: binding?.status !== "outcome_unknown" || observation?.source === "local_file_state"
+              ? "not_applicable" : observation?.status ?? "not_recorded",
+            ...(observation?.source === "local_inspection" ? { external_receipt: {
               source: observation.source, match_count: observation.match_count, evidence_digest: observation.evidence_digest,
               ...(observation.receipt_digest ? { receipt_digest: observation.receipt_digest } : {}),
+              observed_at_ms: observation.observed_at_ms, used_for_authority: false as const, raw_receipt_exposed: false as const,
+            } } : {}),
+            ...(observation?.source === "local_file_state" ? { local_file_state_observation: {
+              source: observation.source, status: observation.status, match_count: observation.match_count,
+              target_identity_digest: observation.target_identity_digest, evidence_digest: observation.evidence_digest,
+              ...(observation.receipt_digest ? { file_state_digest: observation.receipt_digest } : {}),
               observed_at_ms: observation.observed_at_ms, used_for_authority: false as const, raw_receipt_exposed: false as const,
             } } : {}),
           };
@@ -3745,7 +3792,10 @@ export class OperationPlanLedger {
         binding.prepared_step.operation !== step.operation) {
       throw new Error("plan_receipt_reconciliation_binding_invalid");
     }
-    if (step.operation !== "gmail.write" || step.parameters?.operation !== "message.send") {
+    const gmailReceipt = step.operation === "gmail.write" && step.parameters?.operation === "message.send";
+    const fileWriteState = step.operation === "file.write" && step.parameters?.mode === "create" &&
+      typeof step.parameters.path === "string" && typeof step.parameters.content === "string";
+    if (!gmailReceipt && !fileWriteState) {
       throw new Error("plan_receipt_reconciliation_operation_unsupported");
     }
     const expectedKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", binding.command_id])).digest("hex");

@@ -1737,6 +1737,89 @@ export async function inspectFileWriteTargetVersion(
   return (await resolveFileWriteTargetVersion(args, opts)).observation;
 }
 
+export interface FileWriteOutcomeStateInspection {
+  readonly state: "absent" | "present" | "non_regular";
+  readonly target_identity_digest: string;
+  readonly canonical_root_digest: string;
+  readonly parent_identity_digest: string;
+  readonly observed_payload_digest?: string;
+  readonly file_identity_digest?: string;
+}
+
+/** Read the exact planned create target after an unknown result; never returns file contents. */
+export async function inspectFileWriteOutcomeState(
+  args: Record<string, unknown>,
+  opts: Pick<FileWriteOptions, "env"> = {},
+): Promise<FileWriteOutcomeStateInspection> {
+  const pathArg = stringArg(args, "path")!;
+  const content = stringArg(args, "content")!;
+  if (stringArg(args, "mode", false) !== "create" ||
+      Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key))) {
+    throw new Error("file.write outcome inspection supports only planned create commands");
+  }
+  assertPlannedFileWritePath(pathArg);
+  const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
+  if (Buffer.byteLength(content, "utf8") > maxBytes) throw new Error("file.write plan payload exceeds max_bytes");
+  const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
+  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const realParent = await fs.realpath(path.dirname(resolved.filepath));
+  if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.write outcome parent escapes BLUE_TANUKI_FILE_ROOT");
+  const filepath = path.join(realParent, path.basename(resolved.filepath));
+  const rootStat = await fs.stat(sandboxRoot, { bigint: true });
+  const parentStat = await fs.stat(realParent, { bigint: true });
+  const common = {
+    target_identity_digest: fileWriteTargetIdentityDigest(pathArg),
+    canonical_root_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-write-root-identity.v1", sandboxRoot, rootStat.dev.toString(), rootStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+    parent_identity_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-write-parent-identity.v1", realParent, parentStat.dev.toString(), parentStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+  };
+  const before = await fs.lstat(filepath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!before) return { state: "absent", ...common };
+  if (!before.isFile() || before.isSymbolicLink()) return { state: "non_regular", ...common };
+  if (before.size > BigInt(maxBytes)) throw new Error("file.write outcome target exceeds max_bytes");
+  const identity = (stat: {
+    dev: bigint; ino: bigint; size: bigint; mode: bigint; nlink: bigint; mtimeNs: bigint; ctimeNs: bigint;
+  }) => createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-write-outcome-file-identity.v1", stat.dev.toString(), stat.ino.toString(), stat.size.toString(),
+    stat.mode.toString(), stat.nlink.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString(),
+  ]), "utf8").digest("hex");
+  const beforeIdentity = identity(before);
+  const handle = await fs.open(filepath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let contents: Buffer;
+  let openedIdentity: string;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || identity(opened) !== beforeIdentity) throw new Error("file.write outcome target changed while being observed");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let position = 0;
+    while (total <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(64_000, maxBytes + 1 - total));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+      position += bytesRead;
+      if (total > maxBytes) throw new Error("file.write outcome target exceeds max_bytes");
+    }
+    contents = Buffer.concat(chunks, total);
+    openedIdentity = identity(await handle.stat({ bigint: true }));
+  } finally {
+    await handle.close();
+  }
+  const after = await fs.lstat(filepath, { bigint: true });
+  if (!after.isFile() || identity(after) !== openedIdentity) throw new Error("file.write outcome target changed while being observed");
+  return { state: "present", ...common,
+    observed_payload_digest: createHash("sha256").update(contents).digest("hex"),
+    file_identity_digest: openedIdentity };
+}
+
 interface ResolvedFileDeleteTargetVersion {
   filepath: string;
   observation: FileDeleteTargetVersionObservation;

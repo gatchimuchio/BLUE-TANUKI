@@ -289,7 +289,7 @@ export type OperationPlanGoalRelationAdoptionAssessment = z.infer<typeof Operati
 
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
-  source: z.literal("local_inspection"),
+  source: z.enum(["local_inspection", "local_file_state"]),
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
@@ -300,6 +300,7 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
   observed_command_key_digest: Digest.optional(),
   request_payload_digest: Digest,
   observed_payload_digest: Digest.optional(),
+  target_identity_digest: Digest.optional(),
   candidate_set_digest: Digest,
   status: z.enum(["matched", "not_found", "mismatch", "ambiguous"]),
   match_count: z.number().int().min(0).max(100),
@@ -309,6 +310,25 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
   used_for_authority: z.literal(false),
   raw_receipt_exposed: z.literal(false),
 }).strict().superRefine((observation, context) => {
+  if (observation.source === "local_file_state") {
+    if (!observation.target_identity_digest || observation.observed_command_digest !== undefined ||
+        observation.observed_command_key_digest !== undefined || observation.status === "ambiguous") {
+      context.addIssue({ code: "custom", message: "local_file_state_observation_binding_invalid" });
+    }
+    if (observation.status === "matched" && (observation.match_count !== 1 || !observation.receipt_digest ||
+        observation.observed_payload_digest !== observation.request_payload_digest)) {
+      context.addIssue({ code: "custom", message: "matched_file_state_requires_one_payload_match" });
+    }
+    if (observation.status === "not_found" && (observation.match_count !== 0 || observation.receipt_digest !== undefined ||
+        observation.observed_payload_digest !== undefined)) {
+      context.addIssue({ code: "custom", message: "not_found_file_state_must_have_no_target" });
+    }
+    if (observation.status === "mismatch" && (observation.match_count !== 1 || !observation.receipt_digest ||
+        observation.observed_payload_digest === observation.request_payload_digest)) {
+      context.addIssue({ code: "custom", message: "mismatched_file_state_requires_one_nonmatching_target" });
+    }
+    return;
+  }
   if (observation.status === "matched" && (observation.match_count !== 1 || !observation.receipt_digest ||
       !observation.observed_command_digest || !observation.observed_command_key_digest || !observation.observed_payload_digest)) {
     context.addIssue({ code: "custom", message: "matched_receipt_requires_one_digest_bound_record" });

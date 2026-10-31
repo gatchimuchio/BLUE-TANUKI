@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: file.write実行中の中断・再起動後にcommand intent／execution receipt／M receipt／現在のplan dependencyを再照合する復旧経路）
+### Active batch: E2E-01 — WebChat task一気通貫（次: `local_file_state`観測をowner明示結果解決へつなぎ、command intent／execution receipt／M receipt／現在のplan dependencyを再照合する復旧経路）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -59,6 +59,14 @@ Windowsの隔離Gateway process試験に、実`file.write`の後で`execution_in
 再起動後の同task file.search候補が作成されなかった根因は、開発専用`SyntheticFileWritePlanBackend`がpath対応をprocess内Mapだけへ保持していたことだった。create-only pathを親plan digestから決定的に導出し、Cが再起動後も同じsandbox対象を再生成できるよう接続した。`document_organization_entry.test.ts`の目的L3・Approval／Broker・write・再起動・read-only再計画・receipt失敗・再起動復帰を含む選択実process試験は1 selected PASS（他3件はpattern skip）。`execution_result_reconciliation.test.ts`のreceipt失敗・store reopen試験は1 selected PASS（他47件はpattern skip）。core build、Gateway typecheck、`git diff --check`もPASS。合成ファイル作用以外の外部作用・実provider呼出しは0件。この限定証拠はE2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
 
 2026-10-31再同期時の再検証では、低層store reopen試験は1 selected PASS（他47件はpattern skip）、Gateway実process試験は初回に45秒health timeoutでFAIL（初回helperはstderrのみ出力しstdoutは未確認）、同じ対象の再実行で1 selected PASS（他3件はpattern skip）だった。初回timeoutの原因は未確定であり、再現時に起動出力を確認できるようhealth timeout時の診断へstdout捕捉を加えた。`pnpm --filter @blue-tanuki/core build`、`pnpm --filter @blue-tanuki/gateway typecheck`、`pnpm docs:check`はPASS（日本語基底移行負債76件は既存注意）。この再検証も限定合成環境の証拠である。
+
+#### 2026-10-31 E2E-01追加接続 — create-only file.writeの未知結果状態観測
+
+既存の`plan:reconcile`へ、HDSが所有者・現行revision・step・`outcome_unknown` bindingを再検査して発行する30秒・単回permitを使い、`file.write mode=create`に限るsandbox内読取専用状態観測を追加した。Gatewayは対象の不存在／通常file／非regularを区別し、上限1 MiBで通常fileのSHA-256とroot・parent・file identity digestだけを作り、内容本文・絶対pathをJ、M、WebChatへ返さない。Gmailのloopback receipt照合は従来経路を保持した。新sourceは`local_file_state`とし、command keyは期待値のbindingとして保持するが、file stateをcommand receiptと偽装しない。Jの観測記録・M memory projection・reflection citationはsource別にした。
+
+この状態観測は非権威証拠で、plan bindingを`verified`へ変えず、stepを成功・目標達成とせず、再作用・依存step・後続searchを許可しない。作成fileのhash一致でも誰が書いたかの証明にはしない。実装は`packages/blue-tanuki/src/tools/builtin.ts`、`packages/protocol/src/operation_plan_state.ts`、`packages/hds-brain/src/operation_plan.ts`、`apps/gateway/src/local_inspection_runtime.ts`等。Core file-state観測とGatewayのsource分岐は隔離temp rootで試験したが、新sourceの実HDS persistent store／M receipt再起動復元、通常WebChat process経由の実接続は未実施（NOT_RUN）。所有者の明示結果解決と、それに続くcommand intent／execution receipt／M receipt／plan dependencyの一体再照合が次工程である。
+
+Windowsでprotocol／core／HDS-BRAIN／Gateway build PASS、依存channel build PASS、workspace `node node_modules/typescript/bin/tsc -b` PASS。限定試験は4 file・71 PASS・6 skip。初回`pnpm typecheck`は作業中に修正済みのreflection型エラーを検出し、後段cleanがOneDrive上のGateway `dist`削除でOS `UNKNOWN`拒否となった。そのため再度の削除系cleanを避け、修正後は直接`tsc -b`とpackage buildで確認した。実provider・外部service write・owner GOは未実施。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを成立扱いしない。
 
 #### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
 

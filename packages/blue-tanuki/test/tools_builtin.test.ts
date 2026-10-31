@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -9,6 +10,7 @@ import {
   invokeFileSearch,
   inspectFileSearchTargetVersion,
   inspectFileWriteTargetVersion,
+  inspectFileWriteOutcomeState,
   invokeFileWrite,
   inspectFileDeleteTargetVersion,
   invokeFileDelete,
@@ -303,6 +305,29 @@ describe("built-in tools", () => {
       await expect(invokeFileWrite(args, { ...evidence, expected_target_version: observation }))
         .rejects.toThrow(/must be absent|target version changed/);
       expect(await fs.readFile(path.join(dir, "notes.txt"), "utf8")).toBe("concurrent owner content\n");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("unknown結果のfile.writeをsandbox内でdigestだけ照合し、本文を返さない", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-write-outcome-"));
+    const env = { BLUE_TANUKI_FILE_ROOT: dir };
+    const content = "synthetic write result\n";
+    const args = { path: "notes.txt", content, mode: "create", max_bytes: 128 };
+    try {
+      const absent = await inspectFileWriteOutcomeState(args, { env });
+      expect(absent).toMatchObject({ state: "absent" });
+      await fs.writeFile(path.join(dir, "notes.txt"), content, "utf8");
+      const present = await inspectFileWriteOutcomeState(args, { env });
+      expect(present).toMatchObject({ state: "present",
+        observed_payload_digest: createHash("sha256").update(content, "utf8").digest("hex") });
+      expect(JSON.stringify(present)).not.toContain(content);
+      await fs.writeFile(path.join(dir, "notes.txt"), "different content\n", "utf8");
+      const mismatch = await inspectFileWriteOutcomeState(args, { env });
+      expect(mismatch.state).toBe("present");
+      expect(mismatch.observed_payload_digest).not.toBe(present.observed_payload_digest);
+      expect(JSON.stringify(mismatch)).not.toContain("different content");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
