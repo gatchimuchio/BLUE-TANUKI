@@ -736,18 +736,78 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      function ownerTaskExecutionEvidenceSummary(requestId, runtimeSnapshot) {
+        const execution = isObject(runtimeSnapshot) ? runtimeSnapshot.operation_core_execution : null;
+        const safe = isObject(execution) && execution.schema_version === "operation-core.execution.v1" &&
+          execution.used_for_authority === false && execution.adapter_result_used_for_authority === false &&
+          execution.execution_history_used_for_authority === false && execution.raw_payload_exposed === false &&
+          Array.isArray(execution.evidence_source) && execution.evidence_source.length > 0 &&
+          execution.evidence_source.every(function (source) { return source === "INTERNAL_STATE"; }) &&
+          Array.isArray(execution.latest_results) && Number.isSafeInteger(execution.displayed_count) &&
+          execution.displayed_count === execution.latest_results.length && Number.isSafeInteger(execution.entries_count) &&
+          execution.entries_count >= execution.displayed_count && Number.isSafeInteger(execution.skipped_count) &&
+          execution.skipped_count >= 0 && typeof execution.chain_valid === "boolean";
+        if (!safe) return "実行結果の安全な履歴投影は未確認です（結果本文は表示していません）。";
+        if (execution.chain_valid !== true) return "実行履歴のhash chainが有効と確認できず、同一依頼の実行結果は未確認です。";
+
+        const requestMatches = execution.latest_results.filter(function (entry) {
+          return isObject(entry) && entry.request_id === requestId;
+        });
+        const matching = requestMatches.filter(function (entry) {
+          if (!isObject(entry.command_execution_result)) return false;
+          const result = entry.command_execution_result;
+          return result.request_id === requestId && result.role === "command_execution_result" &&
+            result.version === "operation-core.v1" && result.used_for_authority === false &&
+            result.adapter_result_used_for_authority === false && result.plan_step_binding === "unbound" &&
+            Array.isArray(result.evidence_source) && result.evidence_source.length === 1 &&
+            result.evidence_source[0] === "INTERNAL_STATE" &&
+            ["succeeded", "failed", "suspended"].includes(result.state) &&
+            ["reported_success", "unknown", "not_attempted", "preview_only"].includes(result.action_outcome) &&
+            typeof result.operation === "string" && /^[a-z][a-z0-9._-]{0,159}$/.test(result.operation) &&
+            (result.output_digest === undefined || /^[a-f0-9]{64}$/.test(result.output_digest));
+        });
+        if (matching.length === 0) {
+          if (requestMatches.length > 0) {
+            return "同一依頼IDの実行履歴はありますが、command resultの照合条件が成立せず詳細未確認です。";
+          }
+          const partial = execution.displayed_count < execution.entries_count || execution.skipped_count > 0;
+          return partial
+            ? "同一依頼IDの実行結果は履歴の最新表示範囲で確認できません。再送や未送信を意味しません。"
+            : "同一依頼IDに結び付く実行結果記録はありません。再送や未送信を意味しません。";
+        }
+
+        const stateLabels = { succeeded: "下流が成功を報告", failed: "下流が失敗を報告", suspended: "実行停止を報告" };
+        const outcomeLabels = {
+          reported_success: "成功応答", unknown: "結果不明", not_attempted: "未試行", preview_only: "previewのみ",
+        };
+        const summaries = matching.slice(0, 3).map(function (entry) {
+          const result = entry.command_execution_result;
+          const digest = typeof result.output_digest === "string" ? "result digest " + shortDigest(result.output_digest) :
+            "result digest未記録";
+          return result.operation + "：" + stateLabels[result.state] + "／" + outcomeLabels[result.action_outcome] + "／" + digest;
+        });
+        if (matching.length > summaries.length) summaries.push("ほか" + String(matching.length - summaries.length) + "件");
+        if (requestMatches.length > matching.length) summaries.push("詳細未確認" + String(requestMatches.length - matching.length) + "件");
+        const partial = execution.displayed_count < execution.entries_count || execution.skipped_count > 0;
+        return "同一依頼IDの実行観測（非権威・本文非表示・step未結合）: " + summaries.join("；") +
+          (partial ? "。履歴は最新" + String(execution.displayed_count) + "/" + String(execution.entries_count) + "件の表示範囲です。" : "。") +
+          " 仕事全体の完了や画面への到達はこの記録だけでは確定しません。";
+      }
+
       async function ownerTaskRuntimeCorrelation(requestId, runtimeSnapshot) {
+        const executionEvidence = ownerTaskExecutionEvidenceSummary(requestId, runtimeSnapshot);
+        const withExecutionEvidence = function (message) { return message + " " + executionEvidence; };
         const projection = isObject(runtimeSnapshot) ? runtimeSnapshot.operation_plan_status : null;
         if (!isObject(projection) || projection.schema_version !== "operation-plan.status.v1" ||
             projection.status !== "available" || projection.used_for_authority !== false ||
             projection.raw_payload_exposed !== false || !Array.isArray(projection.plans)) {
-          return "Runtime plan projectionを確認できず、受付状態との対応は未確認です。";
+          return withExecutionEvidence("Runtime plan projectionを確認できず、受付状態との対応は未確認です。");
         }
         if (projection.recovery_refresh_status !== "ready") {
-          return "Runtimeの復元照合が未完了のため、受付状態とのplan対応は未確認です。";
+          return withExecutionEvidence("Runtimeの復元照合が未完了のため、受付状態とのplan対応は未確認です。");
         }
         if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder === "undefined") {
-          return "この画面で依頼IDを照合できず、plan対応は未確認です。";
+          return withExecutionEvidence("この画面で依頼IDを照合できず、plan対応は未確認です。");
         }
         let requestDigest;
         try {
@@ -756,30 +816,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return byte.toString(16).padStart(2, "0");
           }).join("");
         } catch {
-          return "依頼IDのdigest照合に失敗し、plan対応は未確認です。";
+          return withExecutionEvidence("依頼IDのdigest照合に失敗し、plan対応は未確認です。");
         }
         const matchingPlans = projection.plans.filter(function (plan) {
           return isObject(plan) && typeof plan.request_id_digest === "string" &&
             /^[a-f0-9]{64}$/.test(plan.request_id_digest) && plan.request_id_digest === requestDigest;
         });
-        if (matchingPlans.length > 1) return "同じ依頼IDに一致するplanが複数あり、対応を確定できません。";
+        if (matchingPlans.length > 1) return withExecutionEvidence("同じ依頼IDに一致するplanが複数あり、対応を確定できません。");
         if (matchingPlans.length === 1) {
           const plan = matchingPlans[0];
           if (typeof plan.plan_id !== "string" || !/^[a-f0-9]{64}$/.test(plan.plan_id) ||
               !Number.isSafeInteger(plan.revision) || plan.revision < 1 ||
               !["awaiting_step_review", "results_verified"].includes(plan.status)) {
-            return "一致planの状態projectionが不正なため、対応を確定できません。";
+            return withExecutionEvidence("一致planの状態projectionが不正なため、対応を確定できません。");
           }
           const planState = plan.status === "results_verified" ? "全stepの結果検証済み表示" : "step審査待ち";
-          return "Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
-            planState + "）。受付状態とは別で、仕事全体の完了を意味しません。";
+          return withExecutionEvidence("Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
+            planState + "）。受付状態とは別で、仕事全体の完了を意味しません。");
         }
         const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;
         const total = Number.isSafeInteger(projection.plan_count) ? projection.plan_count : null;
         const limited = displayed !== null && total !== null && displayed < total;
-        return limited
+        return withExecutionEvidence(limited
           ? "一致planを表示範囲内で確認できません（" + String(displayed) + "/" + String(total) + "件を表示）。依頼結果は未確定です。"
-          : "このRuntime snapshot内に一致planはありません。受付記録だけでは仕事の未作成・完了・失敗を判定できません。";
+          : "このRuntime snapshot内に一致planはありません。受付記録だけでは仕事の未作成・完了・失敗を判定できません。");
       }
 
       async function submitOwnerTask() {
