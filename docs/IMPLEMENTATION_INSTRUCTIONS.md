@@ -88,6 +88,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 今回のK-B5 Gateway observer記録では、意味上の差があった時に原因軸を追えるよう、Rust receiptの分類とTypeScript projection側の期待分類を別々に運転ログへ残す。対象はreference-review／M revision／memory transitionの真偽値と、固定区分のresidual statusだけ。本文・参照ID・集計数・秘密は追加しない。Gateway typecheck／buildはPASS。test、Gateway統合process smoke、実provider・外部作用、K-B5全体比較、cutover、製品全体BUILD、QE_QC／QE_QAは未実施または未成立。
 
+最新のK-B5 BUILD差分では、plan-step adoptionのRust receiptについて、`not_comparable`の固定reason差をIPC不正としてobserver停止させず、Rust／TypeScript双方のstatusとreasonを非権威比較として記録する。未知reason、形状不正、projection echo不一致は引き続きreceipt拒否とする。Gateway typecheck／buildはPASS。testおよびRust／Gateway process確認はNOT_RUN。HDS authority、作用、M writer、Rust `hold`／no-effect／no-M-writeは不変で、K-B5全体・製品全体BUILD・QC／QA・cutoverは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

@@ -23,6 +23,10 @@ const RESPONSE_TIMEOUT_MS = 1_000;
 const MAX_PENDING_OBSERVATIONS = 8;
 
 type JsonObject = Record<string, unknown>;
+type RuntimeKernelJPlanStepAdoptionUnavailableReason = Extract<
+  RuntimeKernelJPlanStepAdoptionProjection,
+  { status: "not_comparable" }
+>["reason"];
 
 export interface RuntimeKernelShadowObservation {
   j_projection: RuntimeKernelJProjectionResult;
@@ -85,6 +89,8 @@ export type RuntimeKernelShadowObserverEvent =
     memory_transition_classification_agrees?: boolean;
     memory_residual_status_classification_agrees?: boolean;
     plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
+    typescript_plan_step_adoption_status: RuntimeKernelJPlanStepAdoptionReceipt["status"];
+    typescript_plan_step_adoption_reason?: RuntimeKernelJPlanStepAdoptionUnavailableReason;
     plan_step_adoption_typescript_matches?: boolean;
     plan_step_adoption_classification_agrees?: boolean;
     command_presence_mismatch?: true;
@@ -256,17 +262,21 @@ function planStepAdoptionReceiptIsConsistent(
   projection: RuntimeKernelJPlanStepAdoptionProjection,
   receipt: unknown,
 ): RuntimeKernelJPlanStepAdoptionReceipt | undefined {
-  const expected = classifyRuntimeKernelJPlanStepAdoption(projection);
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return undefined;
   const actual = receipt as JsonObject;
   const keys = Object.keys(actual).sort();
-  if (expected.status === "not_applicable") {
-    return keys.join(",") === "matches,status" && actual.status === expected.status && actual.matches === null
-      ? expected : undefined;
+  if (actual.status === "not_applicable") {
+    return keys.join(",") === "matches,status" && actual.matches === null
+      ? actual as unknown as RuntimeKernelJPlanStepAdoptionReceipt : undefined;
   }
-  if (expected.status === "not_comparable") {
-    return keys.join(",") === "matches,reason,status" && actual.status === expected.status &&
-      actual.reason === expected.reason && actual.matches === null ? expected : undefined;
+  if (actual.status === "not_comparable") {
+    const unavailableReasons: readonly RuntimeKernelJPlanStepAdoptionUnavailableReason[] = [
+      "binding_identity_unavailable", "binding_unavailable", "binding_not_selected",
+      "legacy_record_unavailable", "record_invalid",
+    ];
+    return keys.join(",") === "matches,reason,status" && actual.matches === null &&
+      unavailableReasons.includes(actual.reason as RuntimeKernelJPlanStepAdoptionUnavailableReason)
+      ? actual as unknown as RuntimeKernelJPlanStepAdoptionReceipt : undefined;
   }
   if (keys.join(",") !== "criterion_relation,matches,purpose_relation,status" ||
       (actual.status !== "matched" && actual.status !== "mismatched") ||
@@ -285,6 +295,7 @@ function planStepAdoptionReceiptIsConsistent(
     "reason_code", "relation_count", "risk_status", "safety_count", "supports_count"];
   if (purposeKeys.join(",") !== expectedPurposeKeys.sort().join(",") ||
       criterionKeys.join(",") !== expectedCriterionKeys.sort().join(",")) return undefined;
+  const expected = classifyRuntimeKernelJPlanStepAdoption(projection);
   if (expected.status !== "matched" && expected.status !== "mismatched") return undefined;
   const expectedPurpose = expected.purpose_relation;
   const expectedCriteria = expected.criterion_relation;
@@ -302,6 +313,17 @@ function planStepAdoptionReceiptIsConsistent(
       criteria.supports_count !== expectedCriteria.supports_count || criteria.conflicts_count !== expectedCriteria.conflicts_count ||
       criteria.reason_code !== expectedCriteria.reason_code) return undefined;
   return actual as unknown as RuntimeKernelJPlanStepAdoptionReceipt;
+}
+
+function planStepAdoptionClassificationsAgree(
+  typescript: RuntimeKernelJPlanStepAdoptionReceipt,
+  runtimeKernel: RuntimeKernelJPlanStepAdoptionReceipt | undefined,
+): boolean {
+  if (!runtimeKernel || typescript.status !== runtimeKernel.status) return false;
+  if (typescript.status === "not_comparable") {
+    return runtimeKernel.status === "not_comparable" && typescript.reason === runtimeKernel.reason;
+  }
+  return typescript.matches === runtimeKernel.matches;
 }
 
 export async function startRuntimeKernelShadowObserver(options: {
@@ -499,13 +521,10 @@ export async function startRuntimeKernelShadowObserver(options: {
           projection.plan_step_adoption,
           receipt.plan_step_adoption,
         );
-        const planStepAdoptionClassificationAgrees =
-          planAdoption.status === "matched" || planAdoption.status === "mismatched"
-            ? planStepAdoptionReceipt !== undefined &&
-              (planStepAdoptionReceipt.status === "matched" || planStepAdoptionReceipt.status === "mismatched") &&
-              planAdoption.status === planStepAdoptionReceipt.status &&
-              planAdoption.matches === planStepAdoptionReceipt.matches
-            : undefined;
+        const planStepAdoptionClassificationAgrees = planStepAdoptionClassificationsAgree(
+          planAdoption,
+          planStepAdoptionReceipt,
+        );
         const memoryTransitionClassification = projection.memory_transition
           ? compareMemoryTransitionReceipt(projection.memory_transition, receipt)
           : undefined;
@@ -629,6 +648,9 @@ export async function startRuntimeKernelShadowObserver(options: {
             } : {}),
           } : {}),
           plan_step_adoption: planStepAdoptionReceipt,
+          typescript_plan_step_adoption_status: planAdoption.status,
+          ...(planAdoption.status === "not_comparable"
+            ? { typescript_plan_step_adoption_reason: planAdoption.reason } : {}),
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
             ? { plan_step_adoption_typescript_matches: planAdoption.matches } : {}),
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"

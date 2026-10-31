@@ -50,6 +50,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 最新のK-B5 observer差分では、Rust receiptとHDS/TypeScriptが計算したreference-review／M revision／transitionの真偽値、およびresidual statusを別の非権威ログ項目として保持する。不一致を観測した際に両側の分類を読めるようにし、本文・参照ID・集計数・秘密は追加しない。Gateway typecheckとbuildはPASS。testとGateway統合process smokeはNOT_RUN。Rustは`hold`／no-effect／no-M-writeを維持し、K-B5全体比較、single-writer cutover、製品全体BUILD、QE_QC／QE_QAは未成立。
 
+今回のplan-step adoption observer差分では、Rust receiptの`not_comparable` status／reasonをTypeScript期待分類と分けて構造検査し、双方の固定statusとreasonを記録する。reason差は`mismatched`として観測し、未知reason・receipt形状不正・projection echo不一致は従来どおり拒否する。Gateway typecheck／buildと`pnpm docs:check`はPASS。test・Rust／Gateway process確認はNOT_RUN。HDS authorityと実行経路に影響せず、K-B5全体比較、製品全体BUILD、QC／QA、cutoverは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

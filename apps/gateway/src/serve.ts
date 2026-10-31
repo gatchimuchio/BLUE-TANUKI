@@ -5296,6 +5296,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             memory_residual_status_classification_agrees: event.memory_residual_status_classification_agrees,
           } : {}),
           plan_step_adoption: event.plan_step_adoption,
+          typescript_plan_step_adoption_status: event.typescript_plan_step_adoption_status,
+          ...(event.typescript_plan_step_adoption_reason !== undefined
+            ? { typescript_plan_step_adoption_reason: event.typescript_plan_step_adoption_reason } : {}),
           ...(event.plan_step_adoption_typescript_matches !== undefined
             ? { plan_step_adoption_typescript_matches: event.plan_step_adoption_typescript_matches } : {}),
           ...(event.plan_step_adoption_classification_agrees !== undefined
