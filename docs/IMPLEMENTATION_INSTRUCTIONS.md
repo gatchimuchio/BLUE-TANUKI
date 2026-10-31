@@ -30,13 +30,19 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次の接続単位: 安全な合成Approval／Broker作用からM receipt・結果返信・再計画まで）
+### Active batch: E2E-01 — WebChat task一気通貫（次: 同一taskのread-only再計画実行と結果帰還、その後の復旧連続性）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
 - **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
 - **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
-- **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSの権限・L3／Approval・Broker規則は変更しない。次は同じWebChat task identity／目的bindingを保つ安全な合成Approval／Broker作用からreceipt・M・結果返信・再計画を一仕事で通す。
+- **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSがowner-bound plan/revision/stepを再検証して選択した単一commandに限り、既存process policyのtool区分を適用する。一般chat、C候補、Gateway／metadataによる権限昇格は認めず、L3／Approval／Broker判定を維持する。
+
+#### 2026-10-31 E2E-01 Windows合成Gateway実processの接続済み範囲
+
+開発専用backendを通常の4役割agent-delegation経路へ接続した。子候補は固定・非権威の合成markerのみで、親候補は4役割・contract digest・固定task／目的contextが一致した場合だけ生成する。Windowsの実Gateway processで、通常`/owner/task-compute`→Jのfile.write候補→owner tokenによる目的関係L3審査→同一plan/revisionのowner step審査→HDS選択済みcommandのtool process policy→既存Approval Gate／Broker→file.write receiptとM→WebSocket結果返信まで成立した。検証済みreceiptから同一taskのread-only file.search候補も生成し、未選択のまま保持されることを確認した。試験は隔離stateと一時file rootのみを使い、作成ファイルはtest cleanupが除去、実provider呼出しは0件。対象Gateway process testはPASS（他3 casesはpatternで未実施）。workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`もPASS。この証拠は限定synthetic taskの`WIRED`接続であり、独立した意味推論、recovery/resume、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
+**次のproducer／consumer:** 同一taskのfile.search候補をowner関係確認・step審査からread-only Broker結果、M receipt、表示／returnへつなぐ。その後、処理中断・再起動後に既存writeを重複実行せず同一taskの依存・receiptを再照合する復旧経路を接続する。provider/live外部作用は使わない。
 
 #### 2026-10-31 E2E-01追加接続 — WebChat応答の依頼相関
 

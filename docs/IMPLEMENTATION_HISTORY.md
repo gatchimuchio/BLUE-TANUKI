@@ -3557,3 +3557,25 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | `pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
 
 これは実consumerに合わせた合成C入力接続と二段目の読取候補までであり、実WebChat一気通貫、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOの成立ではない。
+
+## 2026-10-31 — E2E-01 合成WebChatの限定実process経路
+
+### 差分
+
+- 開発専用合成backendを既存の固定4役割agent-delegation producer/consumerへ接続した。子候補は非権威markerに限定し、親候補は役割・contract digest・固定task／目的contextが一致する場合のみ受け付ける。
+- HDSがowner-bound plan/revision/stepを再検証し選択した単一commandを形成するときに限り`process_kind=tool`を設定し、既存process policyへ接続した。一般chat、C候補、Gateway metadataがtool権限を昇格できない。既存L3、Approval Gate、Broker、sandbox境界は維持。
+- 隔離Gateway process testを拡張し、固定task受付→目的関係owner L3 fixture→step review→create-only `file.write`→検証済みM receipt→WebSocket replyを通した。receiptに基づく同一taskのread-only `file.search`候補生成と未選択も確認した。
+- temp state／file rootはtest専用でcleanupし、provider call countが変化しないことを確認した。
+
+### 検証
+
+| 確認 | 結果 |
+|---|---|
+| 対象Gateway process test | PASS（1 selected、他3件pattern skip） |
+| workspace `pnpm typecheck` | PASS |
+| workspace `pnpm build` | PASS |
+| `pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+| `git diff --check` | PASS |
+| 実provider／外部通信 | 未実施。provider呼出し0件。 |
+
+このlimited synthetic process evidenceはE2E-01全体、独立した意味推論、read-only再計画の実行・結果帰還、restart recovery、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。次は同一taskのread-only再計画候補をowner審査・実行・M・returnまで接続し、続いて復旧時の既存作用重複を防ぐ。

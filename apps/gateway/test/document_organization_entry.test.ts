@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
+import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = process.cwd();
@@ -771,13 +771,177 @@ describe("delegated goal purpose owner review", () => {
       });
       expect(rejected.status).toBe(200);
       expect(providerCalls).toBe(providerCallsBeforeRejectedReview);
+
+      const providerCallsBeforeSyntheticTask = providerCalls;
+      await stopChild(gateway.child);
+      runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+      runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
+      runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+      runtimeEnv.BLUE_TANUKI_FILE_ROOT = fileRoot;
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const syntheticTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(syntheticTicketResponse.status).toBe(200);
+      const { ticket: syntheticTicket } = await syntheticTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(syntheticTicket));
+      await once(taskWebSocket, "open");
+
+      const syntheticTaskReply = waitForWebChatSend(taskWebSocket, "synthetic create-only task");
+      const syntheticTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+          goal_ref: goalRef, purpose_version: 2 }),
+      });
+      expect(syntheticTaskSubmission.status).toBe(202);
+      const syntheticTaskOutput = await syntheticTaskReply;
+      expect(syntheticTaskOutput.length).toBeGreaterThan(0);
+
+      const writePlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return body.operation_plan_status?.plans?.find((plan) => Array.isArray(plan.steps) &&
+          (plan.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.write")) ?? null;
+      }, gateway, `synthetic task did not reach the file.write plan consumer; WebChat reply=${syntheticTaskOutput}`);
+      expect(writePlan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const writePlanId = String(writePlan.plan_id);
+      const writeRevision = String(writePlan.revision_digest);
+      const goalPurposeBinding = writePlan.goal_purpose_binding as {
+        goal_ref: string; purpose_version: number; purpose_digest: string;
+      };
+      const writeStep = (writePlan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.operation === "file.write");
+      expect(writeStep?.step_id).toMatch(/^[a-f0-9]{64}$/);
+      const writeStepId = String(writeStep?.step_id);
+
+      const syntheticRelationProposalResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: writePlanId, revision_digest: writeRevision, outcome: "supports" }),
+      });
+      expect(syntheticRelationProposalResponse.status).toBe(202);
+      const syntheticRelationProposal = await syntheticRelationProposalResponse.json() as { command_id?: string; status?: string };
+      expect(syntheticRelationProposal).toMatchObject({ status: "approval_required" });
+      const syntheticRelationQueue = await loadQueue();
+      const syntheticRelationPending = syntheticRelationQueue.pending_approvals.find((item) => item.command_id === syntheticRelationProposal.command_id);
+      expect(syntheticRelationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        goal_purpose_relation_review: { outcome: "supports", review_status: "required", may_execute: false } });
+      const syntheticRelationContentResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(syntheticRelationProposal.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(syntheticRelationContentResponse.status).toBe(200);
+      const syntheticRelationContent = await syntheticRelationContentResponse.json() as Record<string, unknown>;
+      expect(syntheticRelationContent).toMatchObject({ kind: "goal_purpose_relation", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+        purpose_text: proposedPurpose, candidate_outcome: "unknown", may_execute: false });
+      const syntheticRelationApprovalResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(syntheticRelationProposal.command_id)),
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: syntheticRelationPending?.approval_token,
+          content_review_digest: syntheticRelationContent.command_digest }) },
+      );
+      expect(syntheticRelationApprovalResponse.status).toBe(200);
+      expect(await syntheticRelationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const writeReviewReply = waitForWebChatSend(taskWebSocket, "synthetic file.write review");
+      const writeReviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: writePlanId, revision_digest: writeRevision,
+          content: "plan:review " + JSON.stringify({ plan_id: writePlanId, revision_digest: writeRevision,
+            step_id: writeStepId, goal_purpose_binding: goalPurposeBinding }) }),
+      });
+      expect(writeReviewResponse.status).toBe(202);
+      const writeReviewOutput = await writeReviewReply;
+      expect(writeReviewOutput.length).toBeGreaterThan(0);
+
+      let completedWritePlan: Record<string, unknown>;
+      try {
+        completedWritePlan = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === writePlanId);
+          return plan?.status === "results_verified" ? plan : null;
+        }, gateway, "synthetic file.write did not return a verified M receipt");
+      } catch (error) {
+        const [snapshotResponse, approvalQueue] = await Promise.all([
+          fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
+          loadQueue(),
+        ]);
+        const snapshot = snapshotResponse.ok
+          ? await snapshotResponse.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } }
+          : undefined;
+        const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === writePlanId);
+        const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; review_reply=${writeReviewOutput}; ` +
+          `plan_status=${String(current?.status ?? "missing")}; steps=${JSON.stringify(steps.map((step) => ({
+            operation: step.operation, status: step.status, binding: step.binding,
+          })))}; approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({
+            command_id: item.command_id, approval_level: item.approval_level,
+            final_review_required: item.final_review_required, content_review_required: item.content_review_required,
+          })))}`);
+      }
+      const completedWriteStep = (completedWritePlan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.step_id === writeStepId);
+      expect(completedWriteStep).toMatchObject({ operation: "file.write", status: "verified",
+        binding: { memory_status: "receipt_confirmed" } });
+      const createdFiles = readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
+      expect(createdFiles).toHaveLength(1);
+      expect(readFileSync(join(fileRoot, createdFiles[0]!), "utf8"))
+        .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+
+      const syntheticReplanReply = waitForWebChatSend(taskWebSocket, "synthetic same-task replan");
+      const replanControl = {
+        task: "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
+        goal_purpose_binding: goalPurposeBinding,
+        parent_plan: { plan_id_digest: writePlanId, revision_digest: writeRevision },
+        source_observation_refs: [{ plan_id_digest: writePlanId, revision_digest: writeRevision,
+          step_id_digest: writeStepId }],
+      };
+      const replanResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: writePlanId, revision_digest: writeRevision,
+          content: "plan:compute " + JSON.stringify(replanControl) }),
+      });
+      expect(replanResponse.status).toBe(202);
+      expect((await syntheticReplanReply).length).toBeGreaterThan(0);
+      const verificationPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return body.operation_plan_status?.plans?.find((plan) => plan.plan_id !== writePlanId &&
+          plan.task_identity_digest === writePlan.task_identity_digest && Array.isArray(plan.steps) &&
+          (plan.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.search")) ?? null;
+      }, gateway, "file.write M receipt did not reach the same-task file.search planner");
+      expect(verificationPlan).toMatchObject({ task_identity_digest: writePlan.task_identity_digest,
+        goal_purpose_binding_status: "current", goal_purpose_relation: { candidate_outcome: "unknown" } });
+      expect((verificationPlan.steps as Array<Record<string, unknown>>).find((step) => step.operation === "file.search"))
+        .toMatchObject({ status: "not_selected" });
+      expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 });
 
 async function respondWithCandidate(request: IncomingMessage, response: import("node:http").ServerResponse, cycleIndex: number, prompts: string[]): Promise<void> {
@@ -985,7 +1149,7 @@ function spawnCaptured(args: string[], env: NodeJS.ProcessEnv): CapturedProcess 
 }
 
 async function waitForHealth(port: number, gateway: CapturedProcess): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) {
       throw new Error(`gateway exited ${gateway.child.exitCode}\n${gateway.stderr.join("")}`);

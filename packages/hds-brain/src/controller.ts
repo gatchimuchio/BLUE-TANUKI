@@ -1309,6 +1309,10 @@ ${planControl.question}`,
           req = createGatewayInternalInboundRequest({ ...req,
             content: `${resourceUseNote}${resourceUseNote ? "\n" : ""}${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
+              // HDS has revalidated the owner-bound plan/revision/step. Only this
+              // exact selected operation enters the tool process policy; the
+              // original chat request and all planner output remain non-authoritative.
+              "blue_tanuki.process_kind": "tool",
               "blue_tanuki.tool_call": { tool_name: descriptor.tool_name!, arguments: selection.step.parameters! } },
           });
         }
