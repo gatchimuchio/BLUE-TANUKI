@@ -1235,7 +1235,27 @@ describe("delegated goal purpose owner review", () => {
             step_id: verificationStepId, goal_purpose_binding: verificationPlan.goal_purpose_binding }) }),
       });
       expect(verificationReview.status).toBe(202);
-      const verificationReviewOutput = await verificationReviewReply;
+      const verificationReviewOutput = await verificationReviewReply.catch(async () => {
+        const [snapshotResponse, approvalQueue] = await Promise.all([
+          fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
+          loadQueue(),
+        ]);
+        const snapshot = snapshotResponse.ok
+          ? await snapshotResponse.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } }
+          : undefined;
+        const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === verificationPlanId);
+        const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
+        const relation = current?.goal_purpose_relation as Record<string, unknown> | undefined;
+        throw new Error(`verification review reply unavailable; ` +
+          `plan_status=${String(current?.status ?? "missing")}; relation=${JSON.stringify({ status: relation?.status,
+            candidate_outcome: relation?.candidate_outcome, owner_review_outcome: relation?.owner_review_outcome })}; ` +
+          `steps=${JSON.stringify(steps.map((step) => ({ operation: step.operation, status: step.status,
+            memory_status: (step.binding as Record<string, unknown> | undefined)?.memory_status })))}; ` +
+          `approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({
+            approval_level: item.approval_level, final_review_required: item.final_review_required,
+            content_review_required: item.content_review_required })))}; ` +
+          `provider_failure_present=${providerFailure !== undefined}`);
+      });
       expect(verificationReviewOutput.length).toBeGreaterThan(0);
       let completedVerificationPlan: { plan: Record<string, unknown>; step: Record<string, unknown> };
       try {
@@ -1593,7 +1613,9 @@ describe("delegated goal purpose owner review", () => {
           content: "plan:compute " + JSON.stringify(ownerObservationReplanControl) }),
       });
       expect(ownerObservationReplanResponse.status).toBe(202);
-      const ownerObservationReplanOutput = await ownerObservationReplanReply;
+      const ownerObservationReplanOutput = await ownerObservationReplanReply.catch(() => {
+        throw new Error("owner replan WebChat response unavailable; request accepted before timeout");
+      });
       expect(ownerObservationReplanOutput.length).toBeGreaterThan(0);
       expect(providerFailure).toBeUndefined();
       const ownerObservationReplanResponseSummary = ownerObservationReplanOutput.includes("\"plan\"")
@@ -1713,6 +1735,7 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
       } });
 
+      const ownerObservationSearchReviewReply = waitForWebChatSend(taskWebSocket, "owner-selected file.search review");
       const ownerObservationSearchReview = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
@@ -1723,6 +1746,8 @@ describe("delegated goal purpose owner review", () => {
             goal_purpose_binding: ownerObservationPlan.goal_purpose_binding }) }),
       });
       expect(ownerObservationSearchReview.status).toBe(202);
+      const ownerObservationSearchReviewOutput = await ownerObservationSearchReviewReply.catch(() =>
+        "WebChat review response unavailable");
       let completedOwnerObservationSearch: { plan: Record<string, unknown>; step: Record<string, unknown> };
       try {
         completedOwnerObservationSearch = await waitFor(async () => {
@@ -1747,13 +1772,32 @@ describe("delegated goal purpose owner review", () => {
         ]);
         const snapshot = snapshotResponse.ok ? await snapshotResponse.json() as {
           operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
+          execution_receipts?: { records?: Array<Record<string, unknown>> };
         } : undefined;
         const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === ownerObservationPlanId);
         const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
+        const receipts = snapshot?.execution_receipts?.records?.slice(-8).map((receipt) => ({
+          ticket_digest: receipt.ticket_digest,
+          command_digest: receipt.command_digest,
+          state: receipt.state,
+          invocation_boundary: receipt.invocation_boundary,
+          feedback_status: receipt.feedback_status,
+          error_digest: receipt.error_digest,
+          worker_platform: receipt.worker_platform,
+          worker_exit_observed: receipt.worker_exit_observed,
+        }));
         throw new Error(`${error instanceof Error ? error.message : "search result wait failed"}; ` +
           `plan_status=${String(current?.status ?? snapshot?.operation_plan_status?.status ?? "missing")}; ` +
-          `relation=${JSON.stringify(current?.goal_purpose_relation)}; ` +
-          `steps=${JSON.stringify(steps.map((step) => ({ operation: step.operation, status: step.status, binding: step.binding })))}; ` +
+          `relation=${JSON.stringify(current?.goal_purpose_relation ? {
+            status: (current.goal_purpose_relation as Record<string, unknown>).status,
+            candidate_outcome: (current.goal_purpose_relation as Record<string, unknown>).candidate_outcome,
+            owner_review_outcome: (current.goal_purpose_relation as Record<string, unknown>).owner_review_outcome,
+          } : undefined)}; ` +
+          `steps=${JSON.stringify(steps.map((step) => ({ operation: step.operation, status: step.status,
+            memory_status: (step.binding as Record<string, unknown> | undefined)?.memory_status })))}; ` +
+          `review_reply_received=${ownerObservationSearchReviewOutput !== "WebChat review response unavailable"}; ` +
+          `execution_receipts=${JSON.stringify(receipts)}; ` +
+          `provider_failure_present=${providerFailure !== undefined}; ` +
           `approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({ approval_level: item.approval_level,
             final_review_required: item.final_review_required, content_review_required: item.content_review_required })))}; ` +
           `gateway_stderr=${JSON.stringify(gateway?.stderr.slice(-4) ?? [])}`);

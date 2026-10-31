@@ -3144,7 +3144,8 @@ export class OperationPlanLedger {
     rawObservation: unknown,
     caller: InboundRequest,
     nowMs = Date.now(),
-  ): { readonly command_id: string; readonly evidence_digest: string } | null {
+  ): { readonly request_id: string; readonly command_id: string; readonly evidence_digest: string;
+      readonly reused: boolean } | null {
     const authorization = this.ownerSelectedFileStateObservations.get(authorizationId);
     this.ownerSelectedFileStateObservations.delete(authorizationId);
     if (!authorization || authorization.caller_user !== caller.user || authorization.caller_channel !== caller.channel ||
@@ -3191,7 +3192,34 @@ export class OperationPlanLedger {
     let recorded: { request_id: string; command_id: string } | null;
     try { recorded = this.recordExternalReceiptObservation(observation, caller); }
     catch { return null; }
-    return recorded ? { command_id: recorded.command_id, evidence_digest: observation.evidence_digest } : null;
+    if (recorded) return { ...recorded, evidence_digest: observation.evidence_digest, reused: false };
+
+    // recordExternalReceiptObservationは、command/evidenceが既に保存済みの場合にnullを返す。
+    // ここまでに単回permit、最新receiptの再照合、新しいローカル読取は完了している。
+    // 同一の未解決stepに結び付く同じdigest-only証拠だけを再利用する。
+    const plans = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === authorization.plan_id_digest);
+    if (plans.length !== 1) return null;
+    const plan = plans[0]!;
+    const steps = plan.revisions.at(-1)!.plan.steps.filter((step) =>
+      operationPlanDigest(step.step_id) === authorization.step_id_digest);
+    if (steps.length !== 1) return null;
+    const existingObservations = plan.receipt_observations.filter((entry) =>
+      entry.source === "local_file_state" && entry.revision_digest === authorization.revision_digest &&
+      entry.step_id_digest === authorization.step_id_digest && entry.command_digest === authorization.command_digest &&
+      entry.evidence_digest === observation.evidence_digest);
+    if (existingObservations.length !== 1) return null;
+    const bindings = plan.bindings.filter((entry) => entry.command_id === authorization.command_id &&
+      entry.revision_digest === authorization.revision_digest && entry.step_id === steps[0]!.step_id);
+    if (bindings.length !== 1) return null;
+    const existing = existingObservations[0]!;
+    const { evidence_digest: existingDigest, observed_at_ms: existingAt, ...existingEvidence } = existing;
+    const { evidence_digest: currentDigest, observed_at_ms: currentAt, ...currentEvidence } = observation;
+    if (existingDigest !== currentDigest || existingAt > currentAt ||
+        operationPlanDigest(existingEvidence) !== existingDigest ||
+        operationPlanDigest(currentEvidence) !== currentDigest) return null;
+    return { request_id: bindings[0]!.request_id, command_id: bindings[0]!.command_id,
+      evidence_digest: existingDigest, reused: true };
   }
 
   /** Resolve explicit references to durable, J-verified file action observations without exposing targets or content. */

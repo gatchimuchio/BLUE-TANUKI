@@ -4,6 +4,16 @@
 
 ---
 
+### 履歴ログ：`QEB-E2E01-OWNER-SELECTED-OBSERVATION-REUSE`
+
+現行QE pin rev3.0、適用AGENTS、active instruction、Windows main worktreeとGitHub `main`を再照合した。開始時のlocal／remote `main`は`b0d40aeef0e72f0c921e236890f0b26daa994cde`。保護対象`.codex-remote-attachments/`を保持し、変更対象に含めていない。
+
+`plan:reconcile`でMへ保存済みのcommand／evidence digestを、ownerが選択済み状態として再計画時に再記録しようとすると、重複拒否の`null`をGatewayが認可失敗として分類していた。単回permit、最新Gateway receiptの再照合、新規sandbox状態読取の後に限り、同一plan／revision／step／commandへ結び付く一件の既存digest-only観測をdigest・時刻再照合後に再利用するよう修正した。再利用は監査上新規観測と区別し、権限・実作用を追加しない。
+
+合成Gateway process testは最終3回PASS（各1 selected、他4件pattern skip）。同一testの前段1回は既存synthetic file.search review返信待ち15秒でtimeoutしており、タイミング変動は未解消。PASSした実経路は結果不明writeの再実行なしの現状態観測、owner選択、read-only search候補、L3関係確認、owner step審査、既存Approval／Broker、execution／M receipt、WebChat結果返信まで。実provider・外部作用は未使用。HDS no-emit typecheck、workspace build、docs check、差分検査はPASS。workspace typecheckは古いOneDrive `dist/output_audit.js`の`EBUSY`でFAILし、生成物clean後にbuildし直した。
+
+これはE2E-01の限定producer→consumer接続であり、結果不明中断復旧、通知再配送、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
 ### 履歴ログ：`QEB-KB03-MEANING-UPDATE-COMMIT-RECONCILIATION`
 
 現行QE pin rev3.0、適用AGENTS、active instruction、HEAD／remote／dirty state、意味更新J/Mとsource-observation consumerを再同期した。開始`main`／`origin/main`=`4b3babce9e8f152c2cd6094fd8a0d7206ddfc6b0`。保護対象untracked `.codex-remote-attachments/` とLinux isolation `target/` は保持した。

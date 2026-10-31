@@ -3790,7 +3790,8 @@ ${planControl.question}`,
     caller: InboundRequest,
   ): boolean {
     const recorded = this.operationPlans.recordOwnerSelectedFileStateObservation(authorizationId, observation, caller);
-    if (recorded) this.planEvent("external_receipt_observed", recorded.command_id);
+    if (recorded) this.planEvent(recorded.reused ? "external_receipt_observation_reused" : "external_receipt_observed",
+      recorded.command_id);
     return recorded !== null;
   }
   setOperationPlanGatewayReceiptRechecker(rechecker: OperationPlanGatewayReceiptRechecker): void {
