@@ -1502,9 +1502,12 @@ ${planControl.question}`,
           : { ...req, content: "failure:review" };
       }
     }
+    // Plan candidates have a separate C output contract. Supply only J-validated, explicitly selected
+    // purpose/parent/M inputs; generic retrieved-memory citation envelopes are not candidate evidence.
     const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
     const isolatedContextReason = suppressTransientDocumentOrganizationContext ? "transient_document_organization" as const
       : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const
+      : planPrefix?.[1]?.toLowerCase() === "compute" ? "operation_plan_compute" as const
       : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
       : planPrefix?.[1]?.toLowerCase() === "resume_wait" ? "operation_plan_wait_resume" as const
       : planComputeWaitResume ? "operation_plan_wait_resume" as const
@@ -1718,10 +1721,11 @@ ${planControl.question}`,
         if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
             req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
           const issuedOrigin = structuredClone(req);
-          const retainedOrigin = planComputeWaitResume
-            ? createGatewayInternalInboundRequest({ ...issuedOrigin,
-              metadata: issuedOrigin.metadata as GatewayInternalAuthorityMetadata })
-            : issuedOrigin;
+          // structuredClone drops the internal-request brand. Restore it only
+          // after the request has passed the checks above so later J-side
+          // revalidation sees the same authenticated origin as initial compute.
+          const retainedOrigin = createGatewayInternalInboundRequest({ ...issuedOrigin,
+            metadata: issuedOrigin.metadata as GatewayInternalAuthorityMetadata });
           this.issuedLLM.set(command.id, { command: structuredClone(command),
             origin: retainedOrigin,
             ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}),
@@ -3062,6 +3066,7 @@ ${planControl.question}`,
       : undefined;
     let waitCandidatePlanIdDigest: string | undefined;
     let planCandidateEvent: "candidate_retained" | "candidate_rejected" | undefined;
+    let planCandidateRejectionReason: string | undefined;
     const resultAudit: { digest?: string; status: "not_present" | "recorded" | "unavailable" } = fb.result === undefined ? { status: "not_present" } : (() => {
       try { return { digest: sha256(fb.result), status: "recorded" as const }; }
       catch { return { status: "unavailable" as const }; }
@@ -3367,6 +3372,7 @@ ${planControl.question}`,
         ? result.operation_core as Record<string, unknown> : undefined;
       if (planner?.status === "valid_plan") {
         let retainedPlanIdDigest: string | undefined;
+        let rejectionReason = "plan_candidate_retention_failed";
         try {
           const citationReview = this.audit.list().map((entry) => entry.log)
             .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
@@ -3381,7 +3387,31 @@ ${planControl.question}`,
           }
           retainedPlanIdDigest = this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
             issued.compute_source_observations, memoryInterpretationDependencies, issued.compute_parent_plan);
-        } catch { /* Candidate rejection is recorded below without exposing raw C output. */ }
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "";
+          if (/^(?:plan_[a-z0-9_]{1,112}|owner_gateway_receipt_recheck_[a-z0-9_]{1,96})$/.test(code)) {
+            rejectionReason = code;
+          }
+          else if (error && typeof error === "object" && Array.isArray((error as { issues?: unknown }).issues)) {
+            const issue = (error as { issues: Array<{ code?: unknown; path?: unknown }> }).issues[0];
+            const issueCode = typeof issue?.code === "string" && /^[a-z0-9_]{1,32}$/.test(issue.code)
+              ? issue.code : "unknown";
+            const issuePath = Array.isArray(issue?.path)
+              ? issue.path.filter((part): part is string | number =>
+                typeof part === "number" || typeof part === "string" && /^[a-z0-9_]{1,48}$/i.test(part))
+                .map(String).join("_").slice(0, 72)
+              : "";
+            rejectionReason = `plan_candidate_schema_${issueCode}${issuePath ? `_${issuePath}` : ""}`;
+          } else {
+            const name = error && typeof error === "object" && "name" in error && typeof error.name === "string"
+              ? error.name.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 48) : "unknown";
+            const stack = error instanceof Error ? error.stack?.split("\n").slice(1) ?? [] : [];
+            const sourceFrame = stack.find((frame) => /operation_plan\.(?:[jt]s|mjs|cjs)/i.test(frame));
+            const frameMatch = sourceFrame && /\bat ([a-z0-9_$.<>]+)/i.exec(sourceFrame);
+            const frame = frameMatch?.[1]?.split(/[.$]/).at(-1)?.replace(/[^a-z0-9_]/gi, "").slice(0, 48);
+            rejectionReason = `plan_candidate_${name || "unknown"}${frame ? `_at_${frame}` : ""}_retention_failed`;
+          }
+        }
         if (retainedPlanIdDigest) {
           waitComputeOutcome = issued.wait_resume ? "candidate_retained" : waitComputeOutcome;
           waitCandidatePlanIdDigest = retainedPlanIdDigest;
@@ -3389,6 +3419,7 @@ ${planControl.question}`,
         } else {
           waitComputeOutcome = issued.wait_resume ? "candidate_rejected" : waitComputeOutcome;
           planCandidateEvent = "candidate_rejected";
+          planCandidateRejectionReason = rejectionReason;
         }
       }
     }
@@ -3411,7 +3442,7 @@ ${planControl.question}`,
           reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
       }
     }
-    if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id);
+    if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id, planCandidateRejectionReason);
     if (sourceLog && this.operationPlans.isBound(fb.command_id)) {
       this.operationPlans.recordResult(fb);
       this.planEvent("result_observed", fb.command_id);
@@ -3842,9 +3873,10 @@ ${planControl.question}`,
   reopenOperationPlanMemoryAfterCanonicalRestore(): boolean {
     return this.operationPlans.reopenMemoryAfterCanonicalRestore();
   }
-  private planEvent(event: string, command_id: string): void {
+  private planEvent(event: string, command_id: string, reason?: string): void {
     this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,
-      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now() });
+      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now(),
+      ...(reason ? { reason } : {}) });
   }
 
   /** Record result/output release before a user-visible or external handoff. */

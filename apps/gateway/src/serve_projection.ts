@@ -518,7 +518,9 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       const observation = step.external_receipt;
       const fileStateObservation = step.local_file_state_observation;
       const allowedObservationStatuses = step.status === "outcome_unknown"
-        ? ["not_recorded", "matched", "not_found", "mismatch", "ambiguous"]
+        ? fileStateObservation !== undefined
+          ? ["not_applicable"]
+          : ["not_recorded", "matched", "not_found", "mismatch", "ambiguous"]
         : ["not_applicable"];
       const observationValid = observationStatus === "not_recorded" || observationStatus === "not_applicable"
         ? observation === undefined

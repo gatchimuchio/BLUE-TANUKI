@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: owner選択済み観測から保持した同一task候補を、owner step review・Broker実行・結果/M保存・WebChat返却consumerへつなぐ）
+### Active batch: E2E-01 — WebChat task一気通貫（次: file.write作用後・Gateway result receipt／M確定前のcrash windowを、同一task状態の再照合で安全に閉じる）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -155,6 +155,16 @@ create-only `file.write`の結果不明状態観測とGateway永続`ExecutionInt
 C応答後の`retainCandidate`も同じHDS source-inspection consumerを通るため、候補の保持直前にGateway永続receiptをもう一度再取得する。最初のowner受付からC応答までにreceiptが変化した場合も候補を保存しない。GatewayからHDSへ渡す依存は型付き読取callback一つで、HDS standalone境界・単一J/M writer・Approval／Broker権限に変更はない。`pnpm typecheck`、全workspace `pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次は同一task候補のowner step reviewから既存Broker、結果/M保存、WebChat返却consumerまでの未接続境界をつなぐ。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 2026-10-31のE2E-01続きでは、開発限定`synthetic-file-write-plan`がowner選択済み`owner_selected_local_file_state`を正確なtask文・同一parent plan/revision/task identity・`outcome_unknown`・観測専用flagで受け、同じ対象に対する既存のread-only `file.search`候補だけを返すよう接続した。元`file.write`の再生成・成功推定・権限付与は行わない。全workspace `pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test suite、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次はowner step reviewから既存Approval/Broker、結果/M保存、WebChat返却へつなぐ。E2E-01全体と製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
+
+#### 2026-10-31 E2E-01 BUILD接続 — owner選択済み未知結果から保存済みread-only結果へ
+
+file.writeのBroker結果receipt永続化失敗後、Gateway processを再起動した同一taskについて、ownerが`plan:reconcile`でsandbox内file stateを非権威・digest-only観測としてMへ記録し、その後`owner_selected_observation=local_file_state`を明示選択して同一taskの`file.search`候補を生成・保持する経路を接続した。目的関係のowner L3審査とstep審査後、既存Brokerでread-only searchを実行し、J planとM receiptを確認した。ownerの明示的`plan:result`で保存済み検索結果をWebChatへ返した。元file.writeは終始`outcome_unknown`で、再実行せず、合成sandboxの対象数も増えていない。
+
+接続時に二つの欠陥を修正した。HDSが認証済みGateway内部要求を`structuredClone`して保持すると内部要求markerが失われ、C応答後のreceipt再照合だけが拒否されていたため、保存前検査を通過した要求を内部要求factoryで再構成する。Gateway projectionは、`outcome_unknown` stepにローカルfile-state観測があるとHDSが返す`external_receipt_observation=not_applicable`を拒否して全planを`unavailable`にしていたため、その状態組合せを限定して許容する。合成sandboxの結果件数を保つため、先行test fixtureの一時fileは検証後にtest root内だけで除去した。
+
+対象Windows Gateway実process testは1 selected PASS、同file内の他3件はpattern skip。HDS typecheck/build、Gateway typecheck/build、`git diff --check`はPASS。実provider呼出し0件、外部業務作用なし。全workspace suite、実provider、全OS、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOの証拠ではない。
+
+**次のproducer／consumer:** file.write adapter作用後、Gatewayのresult receipt／M receiptが確定する前のprocess crash windowを合成条件で再現し、command intent・Gateway receipt／outbox・M receipt・現plan dependencyを照合する。結果不明なら元commandを再発行せずholdする。provider/live外部作用は使わない。
 
 ## Gitと復旧
 

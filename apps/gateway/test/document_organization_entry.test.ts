@@ -1075,7 +1075,14 @@ describe("delegated goal purpose owner review", () => {
         .toEqual(createdFiles);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
 
-      const filesBeforeUnknownWrite = [...createdFiles];
+      // The unknown-result continuation asserts one exact search result. The
+      // earlier synthetic note has already been reviewed and returned above;
+      // remove only that fixture-owned temp file so it cannot change the
+      // continuation search result cardinality.
+      for (const name of createdFiles) rmSync(join(fileRoot, name));
+      const filesBeforeUnknownWrite: string[] = [];
+      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+        .toHaveLength(0);
       const resultFaultDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
       let resultFaultInstalled = false;
       let uncertainPlanId = "";
@@ -1221,6 +1228,245 @@ describe("delegated goal purpose owner review", () => {
       expect(filesAfterRestart).toEqual(expect.arrayContaining([...filesBeforeUnknownWrite]));
       expect(readFileSync(join(fileRoot, filesAfterRestart.find((name) => !filesBeforeUnknownWrite.includes(name))!), "utf8"))
         .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+
+      const uncertainFile = filesAfterRestart.find((name) => !filesBeforeUnknownWrite.includes(name));
+      expect(uncertainFile).toBeDefined();
+      const unknownPlan = restoredUnknownPlan.plan as Record<string, unknown>;
+      const unknownRevision = String(unknownPlan.revision_digest);
+      const unknownStepId = String((restoredUnknownPlan.step as Record<string, unknown>).step_id);
+      const unknownGoalBinding = unknownPlan.goal_purpose_binding as {
+        goal_ref: string; purpose_version: number; purpose_digest: string;
+      };
+
+      const localObservationReply = waitForWebChatSend(taskWebSocket, "unknown file.write local state observation");
+      const localObservationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: uncertainPlanId, revision_digest: unknownRevision,
+          content: "plan:reconcile " + JSON.stringify({ plan_id: uncertainPlanId, revision_digest: unknownRevision,
+            step_id: unknownStepId }) }),
+      });
+      expect(localObservationResponse.status).toBe(202);
+      const localObservationOutput = await localObservationReply;
+      expect(localObservationOutput).toContain("sandbox内file.write対象の状態観測");
+      expect(localObservationOutput).toContain("digest-onlyの非権威観測をMへ保存しました");
+      expect(localObservationOutput).toContain("outcome_unknownのままです");
+      expect(localObservationOutput).not.toContain(uncertainFile!);
+
+      const ownerObservationReplanReply = waitForWebChatSend(taskWebSocket, "owner-selected local state same-task replan");
+      const ownerObservationReplanControl = {
+        task: "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。",
+        goal_purpose_binding: unknownGoalBinding,
+        parent_plan: { plan_id_digest: uncertainPlanId, revision_digest: unknownRevision },
+        source_observation_refs: [{ plan_id_digest: uncertainPlanId, revision_digest: unknownRevision,
+          step_id_digest: unknownStepId, owner_selected_observation: "local_file_state" }],
+      };
+      const ownerObservationReplanResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: uncertainPlanId, revision_digest: unknownRevision,
+          content: "plan:compute " + JSON.stringify(ownerObservationReplanControl) }),
+      });
+      expect(ownerObservationReplanResponse.status).toBe(202);
+      const ownerObservationReplanOutput = await ownerObservationReplanReply;
+      expect(ownerObservationReplanOutput.length).toBeGreaterThan(0);
+      const ownerObservationReplanResponseSummary = ownerObservationReplanOutput.includes("\"plan\"")
+        ? "raw_plan_candidate_returned"
+        : ownerObservationReplanOutput.includes("記憶引用を検証できなかったため")
+          ? "generic_memory_citation_gate_rejected"
+          : "other_webchat_response";
+
+      let ownerObservationPlanDiagnostics: Record<string, unknown> = {};
+      let ownerObservationPlan: Record<string, unknown>;
+      try {
+        ownerObservationPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) {
+          ownerObservationPlanDiagnostics = { snapshot_http_status: response.status };
+          return null;
+        }
+        const body = await response.json() as { operation_plan_status?: {
+          status?: string; used_for_authority?: boolean; plans?: Array<Record<string, unknown>>;
+        }; hds?: Record<string, unknown> };
+        const operationPlanStatus = body.operation_plan_status;
+        const plans = operationPlanStatus?.plans ?? [];
+        const hdsOperationPlans = body.hds?.operation_plans as {
+          schema_version?: string; plans?: Array<Record<string, unknown>>;
+        } | undefined;
+        ownerObservationPlanDiagnostics = { snapshot_keys: Object.keys(body),
+          hds_keys: Object.keys(body.hds ?? {}), status: operationPlanStatus?.status,
+          hds_plan_schema_version: hdsOperationPlans?.schema_version,
+          hds_plan_count: hdsOperationPlans?.plans?.length,
+          hds_plan_statuses: hdsOperationPlans?.plans?.map((candidate) => ({ status: candidate.status,
+            step_operations: (candidate.steps as Array<Record<string, unknown>> | undefined)
+              ?.map((step) => ({ operation: step.operation, status: step.status })) })),
+          used_for_authority: operationPlanStatus?.used_for_authority, plan_count: plans.length,
+          plans: plans.map((candidate) => ({
+          plan_id: candidate.plan_id,
+          task_identity_digest: candidate.task_identity_digest,
+          status: candidate.status,
+          source_observations: (candidate.compute_source_observations as Array<Record<string, unknown>> | undefined)
+            ?.map((observation) => ({ source: observation.source, plan_id_digest: observation.plan_id_digest,
+              plan_binding_status: observation.plan_binding_status })),
+          step_operations: (candidate.steps as Array<Record<string, unknown>> | undefined)
+            ?.map((step) => ({ operation: step.operation, status: step.status })),
+          })) };
+        return plans.find((candidate) => {
+          const steps = candidate.steps as Array<Record<string, unknown>> | undefined;
+          return candidate.plan_id !== uncertainPlanId && candidate.task_identity_digest === uncertainTaskIdentity &&
+            steps?.some((step) => step.operation === "file.search");
+        }) ?? null;
+        }, gateway, `owner-selected file.write state did not reach a same-task read-only search candidate; ` +
+          `WebChat response=${ownerObservationReplanResponseSummary}; ` +
+          `operation_plan_status=${JSON.stringify(ownerObservationPlanDiagnostics)}`, 30_000);
+      } catch (error) {
+        const candidateEvents = existsSync(join(auditDir, "audit.jsonl"))
+          ? readFileSync(join(auditDir, "audit.jsonl"), "utf8").split("\n").flatMap((line) => {
+            try {
+              const entry = JSON.parse(line) as { log?: { kind?: string; event?: string; reason?: string } };
+              return entry.log?.kind === "operation_plan" &&
+                ["candidate_retained", "candidate_rejected"].includes(entry.log.event ?? "")
+                ? [{ event: entry.log.event, reason: entry.log.reason ?? null }] : [];
+            } catch { return []; }
+          })
+          : [];
+        throw new Error(`${error instanceof Error ? error.message : "candidate wait failed"}; ` +
+          `candidate_events=${JSON.stringify(candidateEvents)}; ` +
+          `operation_plan_status=${JSON.stringify(ownerObservationPlanDiagnostics)}`);
+      }
+      expect(ownerObservationPlan).toMatchObject({ task_identity_digest: uncertainTaskIdentity,
+        goal_purpose_binding_status: "current", goal_purpose_relation: { candidate_outcome: "unknown" } });
+      const ownerSelectedObservation = (ownerObservationPlan.compute_source_observations as Array<Record<string, unknown>>)
+        .find((observation) => observation.source === "owner_selected_local_file_state");
+      expect(ownerSelectedObservation).toBeDefined();
+      expect(ownerSelectedObservation).toMatchObject({ operation: "file.write", plan_id_digest: uncertainPlanId,
+        task_identity_digest: uncertainTaskIdentity, plan_binding_status: "outcome_unknown",
+        plan_validation_status: "owner_selected_observation", effect_observation: "observed_target_state",
+        adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+      const ownerObservationPlanId = String(ownerObservationPlan.plan_id);
+      const ownerObservationRevision = String(ownerObservationPlan.revision_digest);
+      const ownerObservationStep = (ownerObservationPlan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.operation === "file.search");
+      expect(ownerObservationStep).toMatchObject({ status: "not_selected" });
+      const ownerObservationStepId = String(ownerObservationStep?.step_id);
+
+      const ownerObservationRelation = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: ownerObservationPlanId, revision_digest: ownerObservationRevision,
+          outcome: "supports" }),
+      });
+      expect(ownerObservationRelation.status).toBe(202);
+      const ownerObservationRelationProposal = await ownerObservationRelation.json() as { command_id?: string; status?: string };
+      expect(ownerObservationRelationProposal.status).toBe("approval_required");
+      const ownerObservationQueue = await loadQueue();
+      const ownerObservationPending = ownerObservationQueue.pending_approvals
+        .find((item) => item.command_id === ownerObservationRelationProposal.command_id);
+      expect(ownerObservationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        content_review_required: true, goal_purpose_relation_review: { outcome: "supports", review_status: "required",
+          used_for_authority: false, may_execute: false } });
+      const ownerObservationContentResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(ownerObservationRelationProposal.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(ownerObservationContentResponse.status).toBe(200);
+      const ownerObservationContent = await ownerObservationContentResponse.json() as Record<string, unknown>;
+      expect(ownerObservationContent).toMatchObject({ kind: "goal_purpose_relation",
+        task: SYNTHETIC_FILE_WRITE_PLAN_TASK, candidate_outcome: "unknown", may_execute: false });
+      const ownerObservationApprovalResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(ownerObservationRelationProposal.command_id)),
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+          body: JSON.stringify({ verdict: "approve", approval_token: ownerObservationPending?.approval_token,
+            content_review_digest: ownerObservationContent.command_digest }) },
+      );
+      expect(ownerObservationApprovalResponse.status).toBe(200);
+      expect(await ownerObservationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const ownerObservationSearchReview = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: ownerObservationPlanId,
+          revision_digest: ownerObservationRevision,
+          content: "plan:review " + JSON.stringify({ plan_id: ownerObservationPlanId,
+            revision_digest: ownerObservationRevision, step_id: ownerObservationStepId,
+            goal_purpose_binding: ownerObservationPlan.goal_purpose_binding }) }),
+      });
+      expect(ownerObservationSearchReview.status).toBe(202);
+      let completedOwnerObservationSearch: { plan: Record<string, unknown>; step: Record<string, unknown> };
+      try {
+        completedOwnerObservationSearch = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: {
+            status?: string; plans?: Array<Record<string, unknown>>;
+          } };
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === ownerObservationPlanId);
+          const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+            candidate.step_id === ownerObservationStepId);
+          return plan?.status === "results_verified" && step?.status === "verified" &&
+            (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed"
+            ? { plan, step } : null;
+        }, gateway, "owner-selected same-task file.search did not persist its J/M receipt");
+      } catch (error) {
+        const [snapshotResponse, approvalQueue] = await Promise.all([
+          fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
+          loadQueue(),
+        ]);
+        const snapshot = snapshotResponse.ok ? await snapshotResponse.json() as {
+          operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
+        } : undefined;
+        const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === ownerObservationPlanId);
+        const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
+        throw new Error(`${error instanceof Error ? error.message : "search result wait failed"}; ` +
+          `plan_status=${String(current?.status ?? snapshot?.operation_plan_status?.status ?? "missing")}; ` +
+          `relation=${JSON.stringify(current?.goal_purpose_relation)}; ` +
+          `steps=${JSON.stringify(steps.map((step) => ({ operation: step.operation, status: step.status, binding: step.binding })))}; ` +
+          `approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({ approval_level: item.approval_level,
+            final_review_required: item.final_review_required, content_review_required: item.content_review_required })))}; ` +
+          `gateway_stderr=${JSON.stringify(gateway?.stderr.slice(-4) ?? [])}`);
+      }
+      expect(completedOwnerObservationSearch.plan).toMatchObject({ status: "results_verified",
+        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
+      expect(completedOwnerObservationSearch.step).toMatchObject({ operation: "file.search", status: "verified",
+        binding: { memory_status: "receipt_confirmed" } });
+
+      const ownerObservationSavedResultReply = waitForWebChatSend(taskWebSocket, "owner-selected saved file.search result return");
+      const ownerObservationSavedResultResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: ownerObservationPlanId,
+          revision_digest: ownerObservationRevision,
+          content: "plan:result " + JSON.stringify({ plan_id: ownerObservationPlanId,
+            revision_digest: ownerObservationRevision, step_id: ownerObservationStepId }) }),
+      });
+      expect(ownerObservationSavedResultResponse.status).toBe(202);
+      const ownerObservationSavedResult = await ownerObservationSavedResultReply;
+      expect(ownerObservationSavedResult).toContain("保存時点のfile.search結果");
+      expect(ownerObservationSavedResult).toContain(uncertainFile!);
+      expect(ownerObservationSavedResult).toContain("現在のファイル状態は再検索していません");
+      expect(ownerObservationSavedResult).toContain("検索完全性は不明です");
+
+      const finalUnknownParent = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+        headers: { authorization: "Bearer " + token },
+      });
+      expect(finalUnknownParent.status).toBe(200);
+      const finalUnknownParentSnapshot = await finalUnknownParent.json() as {
+        operation_plan_status?: { plans?: Array<Record<string, unknown>> };
+      };
+      const finalUncertainWritePlan = finalUnknownParentSnapshot.operation_plan_status?.plans
+        ?.find((candidate) => candidate.plan_id === uncertainPlanId);
+      const finalUncertainWriteStep = (finalUncertainWritePlan?.steps as Array<Record<string, unknown>> | undefined)
+        ?.find((candidate) => candidate.operation === "file.write");
+      expect(finalUncertainWriteStep).toMatchObject({ status: "outcome_unknown",
+        binding: { memory_status: "not_recorded" } });
+      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+        .toEqual(filesAfterRestart);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
     } finally {
       taskWebSocket?.close();
@@ -1228,7 +1474,7 @@ describe("delegated goal purpose owner review", () => {
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 });
 
 async function respondWithCandidate(request: IncomingMessage, response: import("node:http").ServerResponse, cycleIndex: number, prompts: string[]): Promise<void> {
@@ -1375,8 +1621,8 @@ async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess,
 }
 
 async function waitFor<T>(probe: () => Promise<T | null> | T | null, gateway: CapturedProcess,
-  failureMessage: string): Promise<T> {
-  const deadline = Date.now() + 8_000;
+  failureMessage: string, timeout_ms = 8_000): Promise<T> {
+  const deadline = Date.now() + timeout_ms;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
     const value = await probe();
