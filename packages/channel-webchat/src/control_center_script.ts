@@ -528,6 +528,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return;
           }
           appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)));
+          if ((frame.kind === "channel_send" || frame.kind === "error") &&
+              byId("runtime-token").value.trim()) {
+            void loadRuntime("webchat-message");
+          }
         });
         ws.addEventListener("close", function () {
           if (state.chatSocket === ws && generation === state.chatConnectionGeneration) {

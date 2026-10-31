@@ -30,13 +30,13 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（今回の接続単位: 失敗通知）
+### Active batch: E2E-01 — WebChat task一気通貫（今回の接続単位: 結果状態の画面反映）
 
-- **目的:** `/owner/task-compute`がHTTP 202で受理した後にGateway handlerが失敗した場合、利用者に処理状態と安全な次の確認先を知らせる。K-B5 observer比較より先に、通常利用者経路の失敗consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
-- **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler`。非同期handler失敗をWebChatの固定`error` status frameへ接続し、Control Centerの既存error表示で受ける。起動・停止中などhandlerが未接続なら202ではなく503を返す。
+- **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、非同期handler失敗時は安全な次の確認先を知らせる。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
+- **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。非同期handler失敗は固定`error` status frameへ接続する。起動・停止中などhandler未接続なら202ではなく503を返す。
 - **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
-- **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
-- **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、HDS判断やOutputAuditを通すassistant回答への変換は対象外。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。次は同じWebChat task identity／目的bindingを保つ安全な合成Approval／Broker作用からreceipt・M・結果返信・再計画を一仕事で通す。
+- **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
+- **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。次は同じWebChat task identity／目的bindingを保つ安全な合成Approval／Broker作用からreceipt・M・結果返信・再計画を一仕事で通す。
 
 ### Deferred batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
 

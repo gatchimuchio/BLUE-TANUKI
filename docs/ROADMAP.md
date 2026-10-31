@@ -8,9 +8,9 @@
 
 ## 現在のBUILD_BATCH
 
-### E2E-01 接続単位 — WebChat task計画受付の失敗通知
+### E2E-01 接続単位 — WebChat task結果状態の画面反映
 
-`/owner/task-compute`が202受付を返した後、Gatewayの非同期handlerが失敗した場合に利用者が状態を確認できない隙を閉じた。WebChatはhandler rejection時に、task本文・例外詳細・目的・credential・HDS commitを含めず、参照IDと重複計画を避ける状態確認案内だけを固定`error` status frameで返信先へ送る。Control Centerは既存のerror表示で受ける。handler未接続時は受付前に503を返す。この通知は非権威の運転状態であり、HDSの判断・最終出力・Approval・実行receiptではない。接続中WebSocketへのbest-effort通知までが成立範囲で、切断後の永続配送は未接続。workspace `pnpm typecheck`／`pnpm build`と`pnpm docs:check`、`git diff --check`はPASS、testは未実施。これはE2E-01の一接続単位であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰の一気通貫は未成立のまま。
+`/owner/task-compute`のhandler失敗時はtask本文・例外詳細・目的・credential・HDS commitを含まない固定`error` status frameを返信先へbest-effort通知し、handler未接続時は受付前に503で拒否する。またControl Centerは`channel_send`／`error`結果frame受信後、runtime tokenが入力済みなら`/runtime/snapshot`を再読込し、計画一覧を更新する。失敗statusは非権威の運転状態で、HDS判断・最終出力・Approval・実行receiptではない。通知は接続中WebSocketへのbest-effortまでで、切断後の永続配送・Approval queue自動更新・runtime token未入力時の自動更新は未接続。今回の確認はworkspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、`git diff --check`。testは未実施。これはE2E-01の二接続単位であり、目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰の一気通貫は未成立のまま。
 
 ### 直近の過去BUILD_BATCH記録
 

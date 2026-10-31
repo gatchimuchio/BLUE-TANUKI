@@ -3492,3 +3492,13 @@ WebChat `/owner/task-compute`のHTTP 202後にGateway handlerがrejectした場�
 | `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
 
 この接続単位はE2E-01全体を閉じない。目的→C→J→合成Approval／Broker作用→receipt→M→結果返信→同一taskの再計画／復帰を通すconsumerは次の実装対象として残す。
+
+## 2026-10-31 — E2E-01接続単位: WebChat結果後のruntime状態再読込
+
+Control CenterはWebChatの`channel_send`または`error` frameをchatへ表示した後、runtime tokenが入力済みの場合に`/runtime/snapshot`を再取得する。これで新しいplan resultがchatだけに届き、Tasks／Runtime plan listが接続時の古い表示に残る状態を避ける。token未入力時は再取得せず、Approval queueの自動更新もしない。先行するhandler失敗status frame、handler未接続時503と合わせて、WebChat task受付後の二つの結果consumerを接続した。
+
+| 確認 | 結果 |
+|---|---|
+| `pnpm typecheck`／`pnpm build` | PASS。 |
+| test／Gateway process smoke | 未実施（NOT_RUN）。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
