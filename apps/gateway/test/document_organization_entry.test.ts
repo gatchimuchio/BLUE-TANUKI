@@ -338,9 +338,25 @@ describe("delegated goal purpose owner review", () => {
     const submissionId = "01a119c0-5b35-4491-ae00-000000000803";
     let providerCalls = 0;
     let providerFailure: unknown;
+    let blockNextProviderCall = false;
+    let signalBlockedProviderCall!: () => void;
+    const blockedProviderCall = new Promise<void>((resolve) => { signalBlockedProviderCall = resolve; });
+    let releaseBlockedProviderCall: (() => void) | undefined;
     const provider = createServer((request, response) => {
       providerCalls += 1;
       void readPrompt(request).then((prompt) => {
+        if (blockNextProviderCall) {
+          blockNextProviderCall = false;
+          releaseBlockedProviderCall = () => {
+            if (response.destroyed || response.writableEnded) return;
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ id: "c0802-interrupted-fixture", object: "chat.completion", created: 1,
+              model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content: "{}" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          };
+          signalBlockedProviderCall();
+          return;
+        }
         const childRole = /C child role=([a-z_]+)/.exec(prompt)?.[1];
         if (childRole) {
           const content = JSON.stringify({ role: childRole, candidate: "bounded read-only planning observation",
@@ -519,9 +535,61 @@ describe("delegated goal purpose owner review", () => {
         used_for_authority: false });
       const requestIdDigest = createHash("sha256").update(`operation-request:${accepted.request_id}`).digest("hex");
       expect(snapshot.operation_plan_status?.plans?.filter((plan) => plan.request_id_digest === requestIdDigest)).toHaveLength(1);
+
+      const interruptedTaskText = "Prepare one bounded read-only search plan during a Gateway crash fixture.";
+      const interruptedSubmissionId = "01a119c0-5b35-4491-ae00-000000000804";
+      blockNextProviderCall = true;
+      const interruptedSubmissionResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: interruptedTaskText, goal_ref: goalRef,
+          submission_id: interruptedSubmissionId, actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(interruptedSubmissionResponse.status).toBe(202);
+      const interruptedAccepted = await interruptedSubmissionResponse.json() as {
+        accepted?: boolean; request_id?: string; status?: string;
+      };
+      expect(interruptedAccepted).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect(interruptedAccepted.request_id).toBeTruthy();
+      await waitForSignal(blockedProviderCall, gateway, "synthetic provider call did not remain in flight");
+
+      const interruptedStatusUrl = `http://127.0.0.1:${gatewayPort}/owner/task-submission-status`;
+      const readInterruptedStatus = () => fetch(interruptedStatusUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ submission_id: interruptedSubmissionId }),
+      });
+      const dispatchingStatus = await readInterruptedStatus();
+      expect(dispatchingStatus.status).toBe(200);
+      expect(dispatchingStatus.headers.get("cache-control")).toBe("no-store");
+      expect(await dispatchingStatus.json()).toEqual({ found: true, request_id: interruptedAccepted.request_id,
+        state: "dispatching" });
+
+      const providerCallsAtCrash = providerCalls;
+      await forceStopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const uncertainStatus = await readInterruptedStatus();
+      expect(uncertainStatus.status).toBe(200);
+      expect(uncertainStatus.headers.get("cache-control")).toBe("no-store");
+      expect(await uncertainStatus.json()).toEqual({ found: true, request_id: interruptedAccepted.request_id,
+        state: "outcome_unknown" });
+
+      const interruptedDuplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: interruptedTaskText, goal_ref: goalRef,
+          submission_id: interruptedSubmissionId, actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(interruptedDuplicateResponse.status).toBe(409);
+      expect(await interruptedDuplicateResponse.json()).toMatchObject({ accepted: false,
+        status: "owner_task_submission_outcome_unknown", request_id: interruptedAccepted.request_id });
+      expect(providerCalls).toBe(providerCallsAtCrash);
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
+      releaseBlockedProviderCall?.();
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }

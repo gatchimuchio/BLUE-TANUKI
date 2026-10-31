@@ -303,6 +303,14 @@ WebChat package typecheck／build、生成`CONTROL_CENTER_SCRIPT`構文解析、
 
 **次のproducer／consumer:** browser restart後のsubmission ID復元・再送防止とstatus／Runtime確認後の明示切替はコード接続済みだが、実ブラウザーでの連続観測は未実施。次はGatewayが`dispatching`中に失われた場合の`outcome_unknown`回復と同一ID再送拒否をproducer／consumerへつなぎ、返信再配送・task再実行を加えず、QE_BUILDを続ける。
 
+#### 2026-11-01 E2E-01 BUILD接続 — dispatching中のGateway消失からoutcome_unknownへ
+
+既存の耐久owner-task inboxと`/owner/task-submission-status`／`/owner/task-compute`を、隔離Windows Gateway processで強制終了境界まで接続した。合成providerの1要求を応答保留にしてowner taskを`dispatching`で受付け、状態APIが同じ`submission_id`／`request_id`とno-storeを返すことを確認した。その後Gatewayを強制終了し、同じprivate stateで再起動すると`outcome_unknown`へ遷移した。同一submission ID・同一payloadの再送は409 `owner_task_submission_outcome_unknown`となり、provider呼出し数は増えなかった。task内容は耐久inboxへ追加せず、task再実行・返信再配送・実provider・tool作用はない。これは既存durable state/APIのprocess crash consumerを確認したもので、Control Centerの実ブラウザー再起動操作やE2E-01全体を確認したものではない。
+
+対象の`document_organization_entry.test.ts` 1件（同fileの他4件はpattern skip）、Gateway typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`は日本語基底移行負債76件の既存注意を出した。実provider／外部作用、実ブラウザー、workspace suite、全体QC／QAは未実施。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** E2E-01の次のproducer→consumer差分を最新HEADと現行正本から選び、既存のcommand intent・execution receipt・M receipt・plan dependencyの関連付けを通る仕事を一気通貫で前進させる。実provider、live外部作用、広域QCは使わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

@@ -12,13 +12,19 @@
 
 `/owner/task-compute`のhandler失敗時はtask本文・例外詳細・目的・credential・HDS commitを含まない固定`error` status frameを返信先へbest-effort通知し、handler未接続時は受付前に503で拒否する。またControl Centerは`channel_send`／`error`結果frame受信後、runtime tokenが入力済みなら`/runtime/snapshot`を再読込し、計画一覧を更新する。owner tokenで作成されたplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを付けたowner専用`/owner/inbound`へ接続済みである。現在の目的版・結果観測・task identityを入口および候補保持時に再照合し、未実行候補を既存step審査・Approval／Broker経路へ渡す。親task contextとresult observationのprovider露出分類は別にし、alternate providerは両sourceを明示許可した場合だけ使う。owner tokenのDeveloper operator経路は既存wait／resume限定を維持し、HDSの権限・L3／Approval／Broker判定は変更しない。失敗statusは非権威の運転状態であり、HDS判断・最終出力・Approval・実行receiptではない。通知は接続中WebSocketへのbest-effortまでで、切断後の永続再配送・Approval queue自動更新・runtime token未入力時の自動更新は未接続。2026-11-01のWindows隔離Gateway process testでは、既存M digest-only file-state観測のowner選択再利用から、同一task read-only `file.search`候補の審査・L3・Approval／Broker・receipt／M・WebChat保存結果返信まで3回PASS（各1 selected、他4件pattern skip）。その前の同一test 1回は初期synthetic review返信待ち15秒でtimeoutし、タイミング変動は未解消。同じcommand／evidenceの重複登録だけを既存観測の限定再利用へ変え、単回permit、fresh receipt照合、新規状態読取、元writeの結果不明を維持した。workspace `pnpm build`、HDS-BRAIN no-emit typecheck、`pnpm docs:check`、`git diff --check`はPASS。workspace `pnpm typecheck`は古いHDS `dist/output_audit.js`へのOneDrive `EBUSY`書込失敗でFAILし、その後script clean後のworkspace buildはPASS。実provider・外部作用は未使用。全体の目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立のまま。
 
-先行するowner task再起動の実process evidenceは下記「2026-11-01 E2E-01 owner task再起動照会」に記録する。`handler_returned`済みのowner taskはGateway再起動後も同じsubmission ID・request IDで照会でき、Runtime plan digestも一致した。同じtaskの再送は受付済みとして閉じ、provider呼出しは増えなかった。10月31日の実WebChat相当file.write→同一task file.search証拠は次節に履歴保持する。実provider／実LLMは呼び出していない。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+先行するowner task再起動の実process evidenceは下記「2026-11-01 E2E-01 owner task再起動照会」に記録する。`handler_returned`済みのowner taskはGateway再起動後も同じsubmission ID・request IDで照会でき、Runtime plan digestも一致した。同じtaskの再送は受付済みとして閉じ、provider呼出しは増えなかった。追加の強制終了試験では`dispatching`中にGatewayを停止・再起動し、`outcome_unknown`への遷移と同一ID再送拒否を確認した。10月31日の実WebChat相当file.write→同一task file.search証拠は次節に履歴保持する。実provider／実LLMは呼び出していない。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
 ### 2026-11-01 E2E-01 owner task再起動照会
 
 Windows隔離合成Gateway processで、L3目的変更審査を通過した合成目的に紐付くowner taskを受け付け、完了後にGatewayを再起動した。owner status APIは同じsubmission IDに対して同じrequest IDと`handler_returned`をno-storeで返し、再送は`already_accepted`、合成provider追加呼出しなしで閉じた。Runtime snapshotは復元readyで、request ID digestに一致するplanが1件存在した。対象process test 1件とGateway typecheckはPASS。テストの所有する一時stateは終了時に回収。providerは合成端点のみ、tool作用なし。
 
 証拠範囲はhandler完了後の再起動回復に限る。`dispatching`中のprocess killと`outcome_unknown`表示・再送拒否、ブラウザー再起動からのUI操作は未確認。別の既存大型Gateway integration testでは、owner選択済みfile.write状態からの再計画が`plan_control_denied:plan_compute_source_observation_authorization_failed`で拒否され、同一task file.search候補が作られなかった。再確認／認可失敗の根因は未特定である。したがってこのsliceはE2E-01全体や`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。
+
+### 2026-11-01 E2E-01 dispatching中のGateway強制終了回復
+
+隔離Windows Gateway processで合成provider要求を保留し、owner taskが`dispatching`の間にGatewayを強制終了した。再起動後、耐久status APIは同じsubmission ID／request IDに`outcome_unknown`をno-storeで返し、同一submission ID・payloadの再送を409 `owner_task_submission_outcome_unknown`で拒否した。合成provider呼出し数は増加せず、dispatch中taskを自動再実行しないことを確認した。対象process test 1件PASS（同fileの他4件はpattern skip）。実provider／外部作用／tool作用なし。
+
+この証拠はGateway inboxのcrash recovery・同一ID再送拒否までである。実ブラウザー再起動後の照会操作、実provider、owner taskの最終結果・E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは示さない。次は同じtask identityを保ったままcommand intent、execution receipt、M receipt、plan dependencyの既存consumer接続を進める。
 
 ### 2026-11-01 E2E-01 browser再起動後の再送防止UI
 
