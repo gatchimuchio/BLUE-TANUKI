@@ -766,10 +766,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             typeof result.operation === "string" && /^[a-z][a-z0-9._-]{0,159}$/.test(result.operation) &&
             (result.output_digest === undefined || /^[a-f0-9]{64}$/.test(result.output_digest));
         });
-        if (matching.length === 0) {
-          if (requestMatches.length > 0) {
-            return "同一依頼IDの実行履歴はありますが、command resultの照合条件が成立せず詳細未確認です。";
-          }
+        const genericMatching = requestMatches.filter(function (entry) {
+          if (!isObject(entry) || matching.includes(entry) || !isObject(entry.operation_core) ||
+              entry.operation_core.role !== "execution_result_projection" ||
+              entry.operation_core.used_for_authority !== false ||
+              entry.operation_core.adapter_result_used_for_authority !== false ||
+              entry.operation_core.raw_payload_exposed !== false ||
+              !Array.isArray(entry.operation_core.evidence_source) || entry.operation_core.evidence_source.length !== 1 ||
+              entry.operation_core.evidence_source[0] !== "INTERNAL_STATE" ||
+              !["success", "failed", "suspended", "unknown"].includes(entry.status) ||
+              typeof entry.result_present !== "boolean") return false;
+          const digestValid = typeof entry.result_digest === "string" && /^[a-f0-9]{64}$/.test(entry.result_digest);
+          if ((entry.result_present && !digestValid) || (!entry.result_present && entry.result_digest !== null)) return false;
+          const command = isObject(entry.command) ? entry.command : null;
+          return !!command && typeof command.operation === "string" &&
+            /^[a-z][a-z0-9._-]{0,159}$/.test(command.operation);
+        });
+        if (matching.length === 0 && genericMatching.length === 0) {
+          if (requestMatches.length > 0) return "同一依頼IDの実行履歴はありますが、result projectionの照合条件が成立せず詳細未確認です。";
           const partial = execution.displayed_count < execution.entries_count || execution.skipped_count > 0;
           return partial
             ? "同一依頼IDの実行結果は履歴の最新表示範囲で確認できません。再送や未送信を意味しません。"
@@ -786,8 +800,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "result digest未記録";
           return result.operation + "：" + stateLabels[result.state] + "／" + outcomeLabels[result.action_outcome] + "／" + digest;
         });
-        if (matching.length > summaries.length) summaries.push("ほか" + String(matching.length - summaries.length) + "件");
-        if (requestMatches.length > matching.length) summaries.push("詳細未確認" + String(requestMatches.length - matching.length) + "件");
+        const executorStatusLabels = {
+          success: "executor成功報告", failed: "executor失敗報告", suspended: "executor停止報告", unknown: "executor状態不明",
+        };
+        const displayedCommandResultCount = Math.min(matching.length, 3);
+        const displayedGenericCount = Math.min(genericMatching.length, Math.max(0, 3 - displayedCommandResultCount));
+        genericMatching.slice(0, displayedGenericCount).forEach(function (entry) {
+          const digest = entry.result_present ? "executor result digest " + shortDigest(entry.result_digest) : "executor result未記録";
+          summaries.push(entry.command.operation + "：" + executorStatusLabels[entry.status] + "／" + digest + "（command result未確認）");
+        });
+        const otherValidatedCount = matching.length - displayedCommandResultCount + genericMatching.length - displayedGenericCount;
+        if (otherValidatedCount > 0) summaries.push("ほか" + String(otherValidatedCount) + "件");
+        const unconfirmedCount = requestMatches.length - matching.length - genericMatching.length;
+        if (unconfirmedCount > 0) summaries.push("詳細未確認" + String(unconfirmedCount) + "件");
         const partial = execution.displayed_count < execution.entries_count || execution.skipped_count > 0;
         return "同一依頼IDの実行観測（非権威・本文非表示・step未結合）: " + summaries.join("；") +
           (partial ? "。履歴は最新" + String(execution.displayed_count) + "/" + String(execution.entries_count) + "件の表示範囲です。" : "。") +
