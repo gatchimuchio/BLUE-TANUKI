@@ -611,6 +611,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return ownerTaskSubmissionIdMemory;
       }
 
+      function ownerTaskStatusSubmissionId() {
+        if (ownerTaskSubmissionIdMemory) return ownerTaskSubmissionIdMemory;
+        const valid = function (value) {
+          return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+        };
+        try {
+          const pending = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
+          if (valid(pending)) return pending;
+          const latest = sessionStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1");
+          if (valid(latest)) return latest;
+        } catch { /* status lookup remains unavailable without session storage */ }
+        return null;
+      }
+
+      function rememberOwnerTaskStatusSubmissionId(submissionId) {
+        if (typeof submissionId !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(submissionId)) return;
+        try { sessionStorage.setItem("blue-tanuki.owner-task-status-submission-id.v1", submissionId); }
+        catch { /* current page keeps the status action available */ }
+        byId("check-owner-task-status").hidden = false;
+      }
+
       function clearOwnerTaskSubmissionId() {
         ownerTaskSubmissionIdMemory = null;
         try { sessionStorage.removeItem("blue-tanuki.owner-task-submission-id.v1"); } catch { /* best effort */ }
@@ -618,6 +640,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function postOwnerTaskCompute(token, body) {
+        rememberOwnerTaskStatusSubmissionId(body && body.submission_id);
         const response = await fetch("/owner/task-compute", {
           method: "POST",
           headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
@@ -662,6 +685,49 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("/owner/task-compute returned an invalid response");
         }
         return result;
+      }
+
+      async function checkOwnerTaskSubmissionStatus() {
+        const ownerTokenInput = byId("owner-task-token");
+        const button = byId("check-owner-task-status");
+        const status = byId("owner-task-status");
+        const ownerToken = ownerTokenInput.value.trim();
+        const submissionId = ownerTaskStatusSubmissionId();
+        if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
+        if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
+        button.disabled = true;
+        status.textContent = "Gatewayの受付記録を照会しています";
+        status.className = "badge warn";
+        try {
+          const result = await postJson("/owner/task-submission-status", ownerToken, { submission_id: submissionId });
+          if (!result || typeof result !== "object" || Array.isArray(result)) {
+            throw new Error("依頼状態の応答形式が不正です");
+          }
+          if (result.found === false) {
+            status.textContent = "受付記録がありません。これは未送信の証明ではありません。Tasks／RuntimeとGateway状態を確認し、同じ依頼IDを維持してください。";
+            status.className = "badge warn";
+            if (byId("runtime-token").value.trim()) await loadRuntime("owner-task-status");
+            return;
+          }
+          const validRequestId = typeof result.request_id === "string" &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.request_id);
+          const allowedStates = ["dispatching", "handler_returned", "outcome_unknown", "rejected"];
+          if (result.found !== true || !validRequestId || allowedStates.indexOf(result.state) < 0) {
+            throw new Error("依頼状態の応答内容が不正です");
+          }
+          const stateMessage = {
+            dispatching: "受付処理中です。新しい依頼を作らず、しばらくして再照会してください。",
+            handler_returned: "Gateway handlerは戻りました。仕事の最終結果ではありません。Tasks／Runtimeの同じ依頼IDを確認してください。",
+            outcome_unknown: "依頼結果は不明です。再送せず、Tasks／RuntimeとGateway状態を確認してください。",
+            rejected: "依頼受付は拒否済みです。現在の委任目的とTasks／Runtimeを確認してください。"
+          }[result.state];
+          status.textContent = stateMessage + " 参照ID: " + result.request_id.slice(-12);
+          status.className = result.state === "rejected" ? "badge bad" : "badge warn";
+          if (byId("runtime-token").value.trim()) await loadRuntime("owner-task-status");
+        } finally {
+          ownerTokenInput.value = "";
+          button.disabled = false;
+        }
       }
 
       async function submitOwnerTask() {
@@ -4981,6 +5047,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.textContent = "新しい依頼IDを用意しました。先行依頼との重複がないことを確認した場合だけ再送してください。";
         status.className = "badge warn";
       });
+      byId("check-owner-task-status").addEventListener("click", function () {
+        checkOwnerTaskSubmissionStatus().catch(function (error) {
+          const status = byId("owner-task-status");
+          status.textContent = error.message || "依頼状態を確認できませんでした";
+          status.className = "badge bad";
+          byId("owner-task-token").value = "";
+        });
+      });
       try {
         const storedSubmissionId = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
         if (typeof storedSubmissionId === "string" &&
@@ -4991,6 +5065,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.textContent = "前回の依頼状態を確認してください。通信結果が不明な場合、先に新規IDへ切り替えないでください。";
           status.className = "badge warn";
         }
+        if (ownerTaskStatusSubmissionId()) byId("check-owner-task-status").hidden = false;
       } catch { /* status recovery remains available when session storage works */ }
       byId("load-goal-purpose-candidates").addEventListener("click", function () {
         loadGoalPurposeCandidates().catch(function () {

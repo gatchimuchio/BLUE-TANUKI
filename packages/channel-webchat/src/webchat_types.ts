@@ -868,9 +868,16 @@ export type WebChatOwnerTaskSubmissionClaim =
   | { readonly status: "duplicate"; readonly request_id: string; readonly state: WebChatOwnerTaskSubmissionState }
   | { readonly status: "identity_conflict"; readonly request_id: string };
 
+export interface WebChatOwnerTaskSubmissionStatus {
+  readonly request_id: string;
+  readonly state: WebChatOwnerTaskSubmissionState;
+}
+
 export interface WebChatOwnerTaskSubmissionStore {
   claim(input: { readonly submission_id: string; readonly payload_digest: string; readonly request_id: string }):
     WebChatOwnerTaskSubmissionClaim;
+  /** Read only the content-free delivery state for an owner-provided submission id. */
+  getStatus?(input: { readonly submission_id: string }): WebChatOwnerTaskSubmissionStatus | null;
   markHandlerReturned(request_id: string): void;
   markOutcomeUnknown(request_id: string): void;
   markRejected(request_id: string): void;

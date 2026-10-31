@@ -6,6 +6,7 @@ import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type {
   WebChatOwnerTaskSubmissionClaim,
   WebChatOwnerTaskSubmissionState,
+  WebChatOwnerTaskSubmissionStatus,
   WebChatOwnerTaskSubmissionStore,
 } from "@blue-tanuki/channel-webchat";
 
@@ -102,6 +103,18 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
         .run(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id, now, now);
       return { status: "accepted", request_id: input.request_id } as const;
     });
+  }
+
+  getStatus(input: { readonly submission_id: string }): WebChatOwnerTaskSubmissionStatus | null {
+    this.assertOpen();
+    if (!SUBMISSION_ID.test(input.submission_id)) throw new Error("webchat_owner_task_submission_id_invalid");
+    const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
+    const row = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
+      FROM webchat_owner_task_inbox WHERE scope_digest=? AND event_digest=?`)
+      .get(OWNER_TASK_SCOPE, eventDigest) as SubmissionRow | undefined;
+    if (!row) return null;
+    validateSubmissionRow(row);
+    return { request_id: row.request_id, state: row.delivery_state };
   }
 
   markHandlerReturned(request_id: string): void {

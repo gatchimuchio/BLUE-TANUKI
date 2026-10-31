@@ -763,6 +763,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ? "resume"
         : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change" ||
           url.pathname === "/owner/task-compute" ||
+          url.pathname === "/owner/task-submission-status" ||
           url.pathname === "/owner/goal-purpose-relation-review"
         ? "owner"
         : url.pathname === "/webhook"
@@ -800,6 +801,42 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     const body = await readJson(req);
+
+    if (url.pathname === "/owner/task-submission-status") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore?.getStatus) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_submission_status_unavailable" }));
+        return;
+      }
+      const submissionId = typeof body?.submission_id === "string" ? body.submission_id : "";
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_owner_task_submission_id" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+      try {
+        const status = submissionStore.getStatus({ submission_id: submissionId });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify(status
+          ? { found: true, request_id: status.request_id, state: status.state }
+          : { found: false }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_submission_status_unavailable" }));
+      }
+      return;
+    }
 
     if (url.pathname === "/owner/task-compute") {
       if (!this.opts.onOwnerTaskGoalOptions) {

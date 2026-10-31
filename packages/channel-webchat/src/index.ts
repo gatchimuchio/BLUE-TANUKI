@@ -16,6 +16,7 @@ export {
   type WebChatTaskGoalOption,
   type WebChatOwnerTaskSubmissionState,
   type WebChatOwnerTaskSubmissionClaim,
+  type WebChatOwnerTaskSubmissionStatus,
   type WebChatOwnerTaskSubmissionStore,
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
