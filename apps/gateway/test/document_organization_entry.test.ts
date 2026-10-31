@@ -1060,6 +1060,9 @@ describe("delegated goal purpose owner review", () => {
       expect(providerCalls).toBe(providerCallsBeforeRejectedReview);
 
       const providerCallsBeforeSyntheticTask = providerCalls;
+      const dynamicTaskFileName = "owner-task-note.txt";
+      const dynamicTaskBody = "WebChatのowner task入力から作成した記録。";
+      const dynamicOwnerTask = `次の内容で新しいテキストファイルを作成してください。\nファイル名: ${dynamicTaskFileName}\n本文: ${dynamicTaskBody}`;
       await stopChild(gateway.child);
       runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
       runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
@@ -1082,7 +1085,7 @@ describe("delegated goal purpose owner review", () => {
       const syntheticTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+        body: JSON.stringify({ user: "c0802-owner", task: dynamicOwnerTask,
           submission_id: "01a119c0-5b35-4491-ae00-000000000802",
           goal_ref: goalRef, purpose_version: 2 }),
       });
@@ -1129,7 +1132,7 @@ describe("delegated goal purpose owner review", () => {
       );
       expect(syntheticRelationContentResponse.status).toBe(200);
       const syntheticRelationContent = await syntheticRelationContentResponse.json() as Record<string, unknown>;
-      expect(syntheticRelationContent).toMatchObject({ kind: "goal_purpose_relation", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+      expect(syntheticRelationContent).toMatchObject({ kind: "goal_purpose_relation", task: dynamicOwnerTask,
         purpose_text: proposedPurpose, candidate_outcome: "unknown", may_execute: false });
       const syntheticRelationApprovalResponse = await fetch(
         "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(syntheticRelationProposal.command_id)),
@@ -1187,10 +1190,9 @@ describe("delegated goal purpose owner review", () => {
         .find((step) => step.step_id === writeStepId);
       expect(completedWriteStep).toMatchObject({ operation: "file.write", status: "verified",
         binding: { memory_status: "receipt_confirmed" } });
-      const createdFiles = readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
-      expect(createdFiles).toHaveLength(1);
-      expect(readFileSync(join(fileRoot, createdFiles[0]!), "utf8"))
-        .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
+      const createdFiles = readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName);
+      expect(createdFiles).toEqual([dynamicTaskFileName]);
+      expect(readFileSync(join(fileRoot, dynamicTaskFileName), "utf8")).toBe(dynamicTaskBody);
 
       const previousTaskWebSocket = taskWebSocket;
       taskWebSocket = undefined;
@@ -1223,7 +1225,7 @@ describe("delegated goal purpose owner review", () => {
       }, gateway, "Gateway restart did not restore the verified synthetic file.write receipt");
       expect(restoredWritePlan).toMatchObject({ plan_id: writePlanId,
         task_identity_digest: writePlan.task_identity_digest, revision_digest: writeRevision });
-      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+      expect(readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName))
         .toEqual(createdFiles);
 
       const syntheticReplanReply = waitForWebChatSend(taskWebSocket, "synthetic same-task replan");
@@ -1281,7 +1283,7 @@ describe("delegated goal purpose owner review", () => {
       expect(verificationRelationContentResponse.status).toBe(200);
       const verificationRelationContent = await verificationRelationContentResponse.json() as Record<string, unknown>;
       expect(verificationRelationContent).toMatchObject({ kind: "goal_purpose_relation",
-        task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+        task: dynamicOwnerTask,
         purpose_text: proposedPurpose, candidate_outcome: "unknown", may_execute: false });
       const verificationRelationApprovalResponse = await fetch(
         "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(verificationRelation.command_id)),
@@ -1362,6 +1364,39 @@ describe("delegated goal purpose owner review", () => {
       expect(completedVerificationPlan.step).toMatchObject({ operation: "file.search", status: "verified",
         binding: { memory_status: "receipt_confirmed" } });
 
+      const previousSavedResultWebSocket = taskWebSocket;
+      taskWebSocket = undefined;
+      previousSavedResultWebSocket.close();
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const savedResultTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(savedResultTicketResponse.status).toBe(200);
+      const { ticket: savedResultTicket } = await savedResultTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(savedResultTicket));
+      await once(taskWebSocket, "open");
+
+      const restoredVerificationPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === verificationPlanId);
+        const step = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+          candidate.step_id === verificationStepId);
+        return plan?.status === "results_verified" && step?.status === "verified" &&
+          (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed" ? plan : null;
+      }, gateway, "Gateway restart did not restore the saved file.search receipt");
+      expect(restoredVerificationPlan).toMatchObject({ plan_id: verificationPlanId,
+        task_identity_digest: writePlan.task_identity_digest, revision_digest: verificationRevision });
+      expect(readFileSync(join(fileRoot, dynamicTaskFileName), "utf8")).toBe(dynamicTaskBody);
+
       const savedResultReply = waitForWebChatSend(taskWebSocket, "synthetic saved file.search result return");
       const savedResultResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
         method: "POST",
@@ -1376,7 +1411,7 @@ describe("delegated goal purpose owner review", () => {
       expect(savedResultOutput).toContain(createdFiles[0]!);
       expect(savedResultOutput).toContain("現在のファイル状態は再検索していません");
       expect(savedResultOutput).toContain("検索完全性は不明です");
-      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+      expect(readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName))
         .toEqual(createdFiles);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
 
@@ -1386,7 +1421,7 @@ describe("delegated goal purpose owner review", () => {
       // continuation search result cardinality.
       for (const name of createdFiles) rmSync(join(fileRoot, name));
       const filesBeforeUnknownWrite: string[] = [];
-      expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
+      expect(readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName))
         .toHaveLength(0);
       const crashWindowExecutionDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
       const crashWindowPlanDb = new DatabaseSync(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"));

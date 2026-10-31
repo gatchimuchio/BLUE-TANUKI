@@ -337,9 +337,9 @@ HDSのticket digest生成試験1件、Gateway投影試験1件、WebChat相関試
 
 開発用synthetic Cが、従来の固定demoに加えて、owner task本文で明示された単一の相対`.txt`名と一行本文から、sandbox内のcreate-only `file.write`候補を作れるようにした。Cはsandbox内容を先読みせず、本文から書込byte数を決定する。J、Approval Gate、Broker、Executor、M、同一task再計画の契約・権限経路は変更していない。親taskの検証済みwrite receiptまたはownerが選択した不確実状態observationを照合した場合、元taskの同じ名前・本文を使って既存`file.search`候補へ進む。同一task検索は`file_path`で指定した一ファイルだけを読み、承認前のtarget-version証拠で相対pathと内容を再照合する。従来のroot全体検索は維持する。これはproviderを使わないboundedな開発fixtureの入力一般化であり、任意task向けの一般Cや実行済みE2Eの証拠ではない。
 
-Protocol／HDS-BRAIN／core（Windows isolation含む）／Gatewayのpackage buildとtypecheck、`git diff --check`はPASS。sandboxでのruntime、J採否、Approval／Broker実行、M receipt、同一task再計画、testはNOT_RUN。provider／live外部作用、workspace suite、QE_QC／QE_QAもNOT_RUN。この差分は`CODE_PRESENT`で、実物経路の`WIRED`確認と`SYSTEM_SHAPED`を成立させない。
+Windows隔離Gateway process test `BT-U-C08.01-P-E2E`は1 selected PASS（同fileの他4件はpattern skip）。Ownerから送った動的task本文の相対filename／一行本文がcreate-only `file.write`へ届き、目的関係L3審査・同plan/revisionのstep審査・既存Approval／Broker・write結果／M receiptを通った。Gateway再起動後に同一plan／task identityとwrite receiptを復元し、同一taskの単一file `file.search`候補・M receiptまで進み、二度目のGateway再起動後も同じ検索結果を既存`plan:result`で読み出せた。結果読取後もtest-owned fileは一件で、再検索・再書込みなし。対象task中の実provider呼出しなし。Gateway package typecheck／buildもPASS。初回実行は名前filterがVitestへ渡らず全fileを対象にしたため停止し、正しい`--testNamePattern`で対象一件を再実行した。この証拠はこの限定synthetic taskのruntime経路を`WIRED`とする範囲であり、独立した一般C、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立させない。workspace suite、provider／live外部作用、QE_QC／QE_QAはNOT_RUN。
 
-**次のproducer／consumer:** 隔離sandbox・synthetic Cのまま、動的taskをOwner入口から提出し、J候補採否→Approval／Broker→write結果/M receipt→同一task search再計画までのruntime接続境界を特定する。実provider・外部送信・広域QC／QA・Rust cutoverは行わない。
+**次のproducer／consumer:** 現行rev3.0の施工順と最新実物を再照合し、QE_BUILDとして次の未接続な通常Owner仕事のproducer／consumerを一件選ぶ。既存権限・Approval／Broker・Mのwriterは維持し、実provider・live外部作用・広域QC／QA・Rust cutoverは行わない。
 
 ## Gitと復旧
 
