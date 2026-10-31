@@ -3537,3 +3537,23 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | test／Gateway process／provider／実作用 | NOT_RUN |
 
 候補生成のコード接続に限る。E2E-01全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。次は隔離sandboxで通常WebChat taskからowner確認・Approval／Broker・結果receipt・M・返信・再計画／復帰を接続する。
+
+## 2026-10-31 — E2E-01 合成C入力契約と一回限りの再計画候補
+
+### 差分
+
+- HDSが`plan:compute`を処理した後、Cには`plan:compute` envelopeではなくtask本文だけが渡る。合成backendの旧入力判定はこの実producerと不一致だったため、HDSの候補専用system prompt・現在目的context・固定task本文を照合して初回候補を返すよう修正した。
+- 同一の元task／task identityに結び付く検証済みfile.write result observationとM receiptが一件だけある場合、sandbox root内を検索するread-only file.search候補を一度だけ生成する。task、親plan、source observationを一致確認し、その他の継承観測・引用・複数結果・追加再計画は拒否する。
+- create-only file.writeとread-only file.searchのいずれも非権威候補のまま。purpose relationはunknownで、owner関係確認・J・Approval Gate・Brokerを維持する。外部provider、通常stub、M writer、実ファイル作用は変更していない。
+
+### 検証
+
+| 確認 | 結果 |
+|---|---|
+| workspace `pnpm typecheck` | PASS |
+| workspace `pnpm build` | PASS |
+| test／Gateway process／通常WebChat E2E／provider／file.write／file.search実行 | 未実施（NOT_RUN） |
+| `git diff --check` | PASS |
+| `pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+
+これは実consumerに合わせた合成C入力接続と二段目の読取候補までであり、実WebChat一気通貫、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOの成立ではない。

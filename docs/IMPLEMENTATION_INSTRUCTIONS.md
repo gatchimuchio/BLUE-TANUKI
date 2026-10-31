@@ -50,6 +50,10 @@ Gatewayに`BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND=true`かつ非production限
 
 WebChat Control Centerに、現在の目的版に結び付き、検証済みstepとM receiptを持つfile operation resultから同一taskの候補再計画を依頼するowner-token限定操作を追加した。HDSは親planのowner／channel／現行revision・recovery hold・wait状態・goal-purpose bindingを照合し、指定されたresult observationのM record／receiptとtask identityを再検査する。候補保持時にも同じ条件を再照合し、元のtask goalと`task_identity_digest`を新候補へ継承する。Cへ渡すのはHDSが読み出した元taskと、digest・固定区分だけの非権威result observationである。provider露出では`selected_operation_plan_context`と`selected_operation_result_observations`を独立分類し、alternate providerには各sourceの明示許可が必要となる。新planは未実行であり、既存step review／L3／Approval／Broker経路を迂回しない。`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。test、Gateway実process smoke、実provider、実作用は未実施（NOT_RUN）。この差分は`WIRED`のコード接続であり、E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。次は全体実装の未接続consumerを引き続き埋め、実運転の検証をQE_QCとして先行させない。
 
+#### 2026-10-31 E2E-01追加接続 — 合成Cの通常task入力と一回限りの検証再計画
+
+`plan:compute`はHDS内で制御接頭辞と入力JSONを解析し、Cへはtask本文だけを渡す。合成backendが解析前の制御接頭辞を要求していたため、通常WebChat task入口と入力契約が不一致で候補を返せなかった。開発限定backendを実際のHDS候補専用prompt・目的binding・固定task本文に結び付け、初回のcreate-only `file.write`候補を返す形へ修正した。さらに、同じ元task・task identityに結び付いた検証済み`file.write`結果のM receipt一件だけを入力条件として、一回限りのsandbox内read-only `file.search`候補を返す。親plan／source observationの内容とtask identityを照合し、それ以外のtask、引用依存、他operation、複数観測、追加再計画は拒否する。両候補とも目的関係は`unknown`で、J・owner関係確認・既存Approval／Brokerを省略しない。`pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS。test、Gateway process、WebChat一気通貫、provider、file.write／file.search実行は未実施（NOT_RUN）。コード接続は`WIRED`だが、E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
 ### Deferred batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
 
 - **目的:** 現行TypeScript HDS-BRAINのpolicy採否とM writerをauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立算出するJ projection、停止後の人間復帰、L3承認済みM更新の有限な残差状態、およびJが選択したplan stepの目的／criterion採否要約を比較する。
