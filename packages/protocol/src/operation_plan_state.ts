@@ -113,13 +113,20 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 });
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v6";
+  "blue-tanuki.plan-compute-source-observations.v7";
 export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v1";
+/** Parent identity for an explicit result-backed continuation; it grants no authority. */
+export const OperationPlanComputeParentSchema = z.object({
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+}).strict();
+export type OperationPlanComputeParent = z.infer<typeof OperationPlanComputeParentSchema>;
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),
   goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+  parent_plan: OperationPlanComputeParentSchema.optional(),
   source_citation_request_id: z.string().trim().min(1).max(128).optional(),
   source_observation_refs: z.array(OperationPlanComputeSourceObservationReferenceSchema).max(8).optional(),
 }).strict().superRefine((input, context) => {
@@ -129,6 +136,16 @@ export const OperationPlanComputeInputSchema = z.object({
   const references = input.source_observation_refs ?? [];
   if (references.length > 0 && !input.goal_purpose_binding) {
     context.addIssue({ code: "custom", message: "plan_compute_source_observation_requires_purpose_binding" });
+  }
+  if (input.parent_plan) {
+    if (!input.goal_purpose_binding) {
+      context.addIssue({ code: "custom", message: "plan_compute_parent_requires_purpose_binding" });
+    }
+    if (!references.some((reference) => "plan_id_digest" in reference &&
+        reference.plan_id_digest === input.parent_plan!.plan_id_digest &&
+        reference.revision_digest === input.parent_plan!.revision_digest)) {
+      context.addIssue({ code: "custom", message: "plan_compute_parent_requires_its_result_observation" });
+    }
   }
   const identities = references.map((reference) => "command_id_digest" in reference
     ? `shell:${reference.command_id_digest}`

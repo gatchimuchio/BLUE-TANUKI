@@ -14,6 +14,7 @@ import type {
   ExecutionAdmission, ExecutionResultDelivery,
   OperationPlanComputeSourceObservation,
   OperationPlanComputeSourceObservationReference,
+  OperationPlanComputeParent,
   OperationPlanMemoryInterpretationDependency,
   OperationPlanWaitState,
   MeaningUpdateProposalV3,
@@ -927,6 +928,7 @@ export class HDSUpperController {
     origin: InboundRequest;
     failure_review_projection?: FailureReviewProjection;
     compute_source_observations?: OperationPlanComputeSourceObservation[];
+    compute_parent_plan?: OperationPlanComputeParent;
     compute_memory_interpretation_dependencies?: OperationPlanMemoryInterpretationDependency[];
     wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
       readonly reason: "reply" | "deadline" | "recovery" };
@@ -1167,6 +1169,9 @@ export class HDSUpperController {
       readonly reason: "reply" | "deadline" | "recovery" } | undefined;
     let planWaitId: string | undefined;
     let planComputePurpose: { readonly binding: OperationPlanGoalPurposeBinding; readonly purpose_text: string } | undefined;
+    let planComputeParentPlan: OperationPlanComputeParent | undefined;
+    let planComputeParentContext: { readonly task_identity_digest: string; readonly goal: string;
+      readonly plan_id_digest: string; readonly revision_digest: string } | undefined;
     let planComputeSourceObservations: OperationPlanComputeSourceObservation[] | undefined;
     let planComputeMemoryInterpretationDependencies: OperationPlanMemoryInterpretationDependency[] | undefined;
     let planComputeCitationRequestId: string | undefined;
@@ -1383,6 +1388,21 @@ ${planControl.question}`,
               planComputeSourceObservations = this.operationPlans.inspectComputeSourceObservations(
                 parsedInput.source_observation_refs, req);
             }
+            if (parsedInput.parent_plan) {
+              const parent = this.operationPlans.inspectComputeParentPlan(parsedInput.parent_plan, req);
+              if (!parsedInput.goal_purpose_binding ||
+                  operationPlanDigest(parsedInput.goal_purpose_binding) !== operationPlanDigest(parent.goal_purpose_binding) ||
+                  !planComputeSourceObservations?.some((observation) => "plan_id_digest" in observation &&
+                    observation.plan_id_digest === parsedInput.parent_plan!.plan_id_digest &&
+                    observation.revision_digest === parsedInput.parent_plan!.revision_digest &&
+                    observation.task_identity_digest === parent.task_identity_digest)) {
+                throw new Error("plan_compute_parent_source_observation_mismatch");
+              }
+              planComputeParentPlan = parsedInput.parent_plan;
+              planComputeParentContext = { task_identity_digest: parent.task_identity_digest, goal: parent.goal,
+                plan_id_digest: parsedInput.parent_plan.plan_id_digest,
+                revision_digest: parsedInput.parent_plan.revision_digest };
+            }
             if (parsedInput.source_citation_request_id) {
               planComputeCitationRequestId = parsedInput.source_citation_request_id;
               planComputeMemoryInterpretationDependencies = this.inspectCurrentMemoryCitationRequest(
@@ -1396,6 +1416,8 @@ ${planControl.question}`,
                 "blue_tanuki.authority_context": "gateway_internal_v1",
                 ...(parsedInput.goal_purpose_binding
                   ? { "blue_tanuki.operation_core.goal_purpose_binding": parsedInput.goal_purpose_binding } : {}),
+                ...(planComputeParentContext
+                  ? { "blue_tanuki.operation_core.parent_task_identity_digest": planComputeParentContext.task_identity_digest } : {}),
               },
             });
           } catch (error) {
@@ -1403,6 +1425,10 @@ ${planControl.question}`,
             planControlFailure = [
               "plan_compute_purpose_unavailable", "plan_compute_purpose_parent_review_required",
               "plan_compute_purpose_stale", "plan_compute_purpose_content_invalid", "plan_compute_purpose_too_large",
+              "plan_compute_parent_unavailable", "plan_compute_parent_identity_mismatch", "plan_compute_parent_stale",
+              "plan_compute_parent_recovery_hold", "plan_compute_parent_wait_active", "plan_compute_parent_memory_unavailable",
+              "plan_compute_parent_purpose_unavailable", "plan_compute_parent_source_observation_mismatch",
+              "plan_compute_parent_conflicts_with_wait_resume",
               "plan_compute_source_observation_memory_unavailable", "plan_compute_source_observation_reference_invalid",
               "plan_compute_source_observation_unavailable", "plan_compute_source_observation_identity_mismatch",
               "plan_compute_source_observation_recovery_hold", "plan_compute_source_observation_stale",
@@ -1588,6 +1614,7 @@ ${planControl.question}`,
           source_observations: planComputeSourceObservations,
           memory_interpretation_dependencies: planComputeMemoryInterpretationDependencies,
           source_citation_request_id: planComputeCitationRequestId,
+          ...(planComputeParentContext ? { parent_context: planComputeParentContext } : {}),
           ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined);
       const commandViolation = commandExecutionPolicyViolation(candidate, f.process);
       if (commandViolation) {
@@ -1692,6 +1719,7 @@ ${planControl.question}`,
             ...(planComputeWaitResume ? { wait_resume: structuredClone(planComputeWaitResume) } : {}),
             ...(planComputeSourceObservations?.length
               ? { compute_source_observations: structuredClone(planComputeSourceObservations) } : {}),
+            ...(planComputeParentPlan ? { compute_parent_plan: structuredClone(planComputeParentPlan) } : {}),
             ...(planComputeMemoryInterpretationDependencies?.length
               ? { compute_memory_interpretation_dependencies: structuredClone(planComputeMemoryInterpretationDependencies) } : {}) });
         }
@@ -3339,7 +3367,7 @@ ${planControl.question}`,
             throw new Error("plan_memory_interpretation_dependency_invalid");
           }
           retainedPlanIdDigest = this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
-            issued.compute_source_observations, memoryInterpretationDependencies);
+            issued.compute_source_observations, memoryInterpretationDependencies, issued.compute_parent_plan);
         } catch { /* Candidate rejection is recorded below without exposing raw C output. */ }
         if (retainedPlanIdDigest) {
           waitComputeOutcome = issued.wait_resume ? "candidate_retained" : waitComputeOutcome;
@@ -4213,6 +4241,8 @@ ${planControl.question}`,
     failureReview?: FailureReviewProjection,
     planCompute?: { readonly requested: true;
       readonly purpose?: { readonly binding: OperationPlanGoalPurposeBinding; readonly purpose_text: string };
+      readonly parent_context?: { readonly task_identity_digest: string; readonly goal: string;
+        readonly plan_id_digest: string; readonly revision_digest: string };
       readonly source_observations?: readonly OperationPlanComputeSourceObservation[];
       readonly memory_interpretation_dependencies?: readonly OperationPlanMemoryInterpretationDependency[];
       readonly source_citation_request_id?: string;
@@ -4384,6 +4414,16 @@ ${planControl.question}`,
         content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
+    const planComputeParentMessage: LLMCallPayload["messages"][number] | undefined = planCompute?.parent_context ? {
+      role: "system",
+      content: `以下は、Jが所有・現行revision・task identityを照合した親planの原目的です。同一taskの結果に基づく候補計算文脈としてのみ使ってください。task identityと目的版bindingは相関情報であり、意味適合・権限・承認・実行を証明しません。新候補は未実行であり、step採否・Approval・Broker作用はHDSとownerの別途操作を要します。\n${JSON.stringify({
+        task_identity_digest: planCompute.parent_context.task_identity_digest,
+        parent_plan_id_digest: planCompute.parent_context.plan_id_digest,
+        parent_revision_digest: planCompute.parent_context.revision_digest,
+        original_task: planCompute.parent_context.goal,
+        used_for_authority: false, may_execute: false,
+      })}`,
+    } : undefined;
     const planningMaxTokens = this.llm_route.max_tokens ?? 1024;
     const planningTimeoutMs = this.llm_route.timeout_ms ?? 30_000;
     const delegationRoles: AgentDelegationContract["roles"] = ["division", "independent_comparison", "audit", "redundancy"];
@@ -4395,7 +4435,8 @@ ${planControl.question}`,
       ? {
           schema_version: "blue-tanuki.agent-delegation.v1",
           parent_goal_digest: createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
-            .update(req.content).update("\0").update(JSON.stringify(planCompute.purpose?.binding ?? null)).digest("hex"),
+            .update(planCompute.parent_context?.goal ?? req.content).update("\0")
+            .update(JSON.stringify(planCompute.purpose?.binding ?? null)).digest("hex"),
           parent_task_identity_digest: planningBudgetScope.task_identity_digest,
           parent_budget_identity_digest: planningBudgetScope.parent_task_identity_digest,
           criteria_digest: createHash("sha256").update(planningCriteria).digest("hex"),
@@ -4421,6 +4462,7 @@ ${planControl.question}`,
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),
       ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
       ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+      ...(planComputeParentMessage ? [planComputeParentMessage] : []),
       ...(agentDelegationMessage ? [agentDelegationMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
     const llmPayload: LLMCallPayload = {
@@ -4429,6 +4471,7 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
         ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+        ...(planComputeParentMessage ? [planComputeParentMessage] : []),
         ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
@@ -4462,14 +4505,18 @@ ${planControl.question}`,
         data_exposure: {
           input_sources: [
             "accepted_inbound_request",
-            ...(computeContextMessages.length > 0 ? ["selected_memory_references" as const] : []),
+            ...(memoryMessages.length > 0 || planPurposeMessage || planComputeMemoryCitationMessage
+              ? ["selected_memory_references" as const] : []),
+            ...(planComputeParentMessage ? ["selected_operation_plan_context" as const] : []),
             ...(planComputeObservationMessage ? ["selected_operation_result_observations" as const] : []),
           ],
           requested_egress_provider: backendHint ?? "registry-default",
         },
         ...(this.llm_route.fallback_authorization &&
           (!planComputeObservationMessage || this.llm_route.fallback_authorization.allowed_input_sources
-            .includes("selected_operation_result_observations"))
+            .includes("selected_operation_result_observations")) &&
+          (!planComputeParentMessage || this.llm_route.fallback_authorization.allowed_input_sources
+            .includes("selected_operation_plan_context"))
           ? { fallback_authorization: this.llm_route.fallback_authorization }
           : {}),
       },

@@ -6,6 +6,7 @@ import {
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
   type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
+  type OperationPlanComputeParent,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   type OperationCommandExecutionResult,
@@ -1913,9 +1914,40 @@ export class OperationPlanLedger {
     this.port.compareAndSetRecoveryHoldState(currentDigest, state);
   }
 
+  inspectComputeParentPlan(reference: OperationPlanComputeParent, caller: InboundRequest): {
+    readonly task_identity_digest: string;
+    readonly goal: string;
+    readonly goal_purpose_binding: OperationPlanGoalPurposeBinding;
+  } {
+    if (this.recoveryRefreshPending || this.memoryQuiesced || !this.port || !this.memoryReady ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest || !this.reconcileMemory()) {
+      throw new Error("plan_compute_parent_memory_unavailable");
+    }
+    const matches = this.state.plans.filter((candidate) =>
+      operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === reference.plan_id_digest);
+    if (matches.length !== 1) throw new Error("plan_compute_parent_unavailable");
+    const parent = matches[0]!;
+    if (parent.owner !== caller.user || parent.channel !== caller.channel) {
+      throw new Error("plan_compute_parent_identity_mismatch");
+    }
+    if (parent.revisions.at(-1)?.digest !== reference.revision_digest) {
+      throw new Error("plan_compute_parent_stale");
+    }
+    if (this.recoveryHolds.has(reference.plan_id_digest)) {
+      throw new Error("plan_compute_parent_recovery_hold");
+    }
+    if ((this.state.waits ?? []).some((wait) => wait.plan_id_digest === reference.plan_id_digest && wait.state === "waiting")) {
+      throw new Error("plan_compute_parent_wait_active");
+    }
+    if (!parent.goal_purpose_binding) throw new Error("plan_compute_parent_purpose_unavailable");
+    return { task_identity_digest: operationPlanTaskIdentityDigest(parent), goal: parent.goal,
+      goal_purpose_binding: structuredClone(parent.goal_purpose_binding) };
+  }
+
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
     computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
-    memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[]): string {
+    memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[],
+    parentPlanReference?: OperationPlanComputeParent): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
@@ -1977,6 +2009,21 @@ export class OperationPlanLedger {
         throw new Error("plan_compute_source_observation_stale");
       }
       verifiedComputeSourceObservations = current;
+    }
+    if (parentPlanReference) {
+      if (parentWaitId !== undefined) throw new Error("plan_compute_parent_conflicts_with_wait_resume");
+      const parent = this.inspectComputeParentPlan(parentPlanReference, origin);
+      const parentObservations = verifiedComputeSourceObservations?.filter((observation) =>
+        observation.source !== "verified_shell_exec_result" &&
+        observation.plan_id_digest === parentPlanReference.plan_id_digest &&
+        observation.revision_digest === parentPlanReference.revision_digest);
+      if (!goalPurposeBinding || operationPlanDigest(goalPurposeBinding) !== operationPlanDigest(parent.goal_purpose_binding) ||
+          !parentObservations?.length || parentObservations.some((observation) =>
+            observation.task_identity_digest !== parent.task_identity_digest)) {
+        throw new Error("plan_compute_parent_source_observation_mismatch");
+      }
+      parentTaskIdentityDigest = parent.task_identity_digest;
+      retainedTaskGoal = parent.goal;
     }
     const parsedMemoryDependencies = memoryInterpretationDependencies?.map((dependency) =>
       OperationPlanMemoryInterpretationDependencySchema.parse(dependency));

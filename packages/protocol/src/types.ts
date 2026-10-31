@@ -126,6 +126,7 @@ export const LLMFallbackAuthorizationSchema = z.object({
   allowed_input_sources: z.array(z.enum([
     "accepted_inbound_request",
     "selected_memory_references",
+    "selected_operation_plan_context",
     "selected_operation_result_observations",
     "session_history",
     "user_image",
@@ -196,12 +197,13 @@ export const LLMComputeContextSchema = z.object({
     input_sources: z.array(z.enum([
       "accepted_inbound_request",
       "selected_memory_references",
+      "selected_operation_plan_context",
       "failure_memory_digest_projection",
       "selected_operation_result_observations",
       "complete_history_digest_observations",
       "user_image",
       "user_audio",
-    ])).min(1).max(3),
+    ])).min(1).max(4),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
   /** Non-authority correlation scope for aggregate C resource accounting. */

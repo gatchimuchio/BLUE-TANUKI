@@ -718,6 +718,39 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted");
       }
 
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding) {
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        const ownerTokenInput = byId("owner-task-token");
+        const ownerToken = ownerTokenInput.value.trim();
+        if (!ownerToken) throw new Error("同一taskの再計画にはowner tokenを入力してください");
+        const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+        if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
+          throw new Error("current plan and verified step digests are unavailable");
+        }
+        let binding;
+        try { binding = JSON.parse(rawGoalPurposeBinding); } catch (_) { throw new Error("goal-purpose binding is invalid"); }
+        if (!isObject(binding) || typeof binding.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(binding.goal_ref) ||
+            !Number.isSafeInteger(binding.purpose_version) || binding.purpose_version < 1 || !isDigest(binding.purpose_digest)) {
+          throw new Error("goal-purpose binding is invalid");
+        }
+        const control = {
+          task: "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
+          goal_purpose_binding: { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
+            purpose_digest: binding.purpose_digest },
+          parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
+          source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest, step_id_digest: stepId }],
+        };
+        const content = "plan:compute " + JSON.stringify(control);
+        let result;
+        try {
+          result = await postOperationPlanControl(ownerToken, content, true, planId, revisionDigest);
+        } finally {
+          ownerTokenInput.value = "";
+        }
+        appendChat("owner", "同一taskの検証済み結果に基づく再計画を依頼しました");
+        appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました");
+      }
+
       async function invokeOperationPlanWait(planId, revisionDigest, hours) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
@@ -1467,6 +1500,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '<p class="muted">J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。' +
                   (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
+              const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
+                ["file.write", "file.edit", "file.delete", "file.search"].includes(step.operation) &&
+                step.status === "verified" && binding.memory_status === "receipt_confirmed" &&
+                /^[a-f0-9]{64}$/.test(binding.command_digest || "") && /^[a-f0-9]{64}$/.test(binding.result_digest || "") &&
+                /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
+              const replanButton = replanSourceReady
+                ? '<button type="button" class="secondary" data-operation-plan-replan="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
+                  '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                  escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                    purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
+                  '">検証済み結果から同一taskを再計画</button>' +
+                  '<p class="muted">現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。</p>'
+                : '';
               const receiptLabels = {
                 not_applicable: "対象外",
                 not_recorded: "Jに外部receipt観測未記録",
@@ -1521,6 +1569,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
                 savedResultButton +
+                replanButton +
                 stepReviewButton +
                 '</div>';
             }).join("") +
@@ -4587,6 +4636,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await replyToOperationPlanWait(target.dataset.planId || "", target.dataset.revisionDigest || "",
               responseInput?.value || "");
             if (responseInput) responseInput.value = "";
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanReplan === "true") {
+          target.disabled = true;
+          try {
+            await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
