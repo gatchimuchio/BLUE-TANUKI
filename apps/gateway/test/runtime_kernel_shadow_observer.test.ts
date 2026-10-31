@@ -332,6 +332,8 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       sequence: index + 1,
       shadow_revision: index + 1,
       ...expected,
+      typescript_plan_step_adoption_status: "not_applicable",
+      plan_step_adoption_classification_agrees: true,
     })));
     const mismatchedEvent = events[6];
     expect(mismatchedEvent).toMatchObject({
@@ -340,6 +342,8 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       shadow_revision: 6,
       comparison_kind: "decision",
       comparison_status: "mismatched",
+      typescript_plan_step_adoption_status: "not_applicable",
+      plan_step_adoption_classification_agrees: true,
       policy_decision_matches: true,
       purpose_binding_matches: true,
       current_goal_purpose_binding_status: "available",
