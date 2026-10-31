@@ -54,6 +54,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 今回のplan-step adoption observer差分では、Rust receiptの`not_comparable` status／reasonをTypeScript期待分類と分けて構造検査し、双方の固定statusとreasonを記録する。reason差は`mismatched`として観測し、未知reason・receipt形状不正・projection echo不一致は従来どおり拒否する。Gateway typecheck／buildと`pnpm docs:check`はPASS。test・Rust／Gateway process確認はNOT_RUN。HDS authorityと実行経路に影響せず、K-B5全体比較、製品全体BUILD、QC／QA、cutoverは未成立。
 
+2026-10-31、Gateway observerは受付時にRust向けwire JSONを固定し、TypeScript分類とRust process入力を同じsnapshotへ結び付けた。呼出元が`observe()`直後にprojectionを変更する合成条件でも、実Rust receiptとTypeScript分類の一致を確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust 4 testsがPASS。これはK-B5の非権威比較入力を同一化する接続であり、K-B5全体比較、製品全体BUILD、QE_QC／QE_QA、実provider、cutoverの成立を示さない。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

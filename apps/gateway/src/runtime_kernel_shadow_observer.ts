@@ -448,12 +448,29 @@ export async function startRuntimeKernelShadowObserver(options: {
       emit({ kind: "comparison_unavailable", reason: observation.j_projection.reason });
       return;
     }
-    const projection = observation.j_projection.projection;
+    let inputText: string;
+    let projection: typeof observation.j_projection.projection;
+    try {
+      const serialized = JSON.stringify(observation.j_projection.projection);
+      if (typeof serialized !== "string") throw new Error("projection_not_serializable");
+      inputText = serialized;
+      projection = JSON.parse(inputText) as typeof observation.j_projection.projection;
+    } catch {
+      accepting = false;
+      queue = queue.then(fail);
+      return;
+    }
+    const commandPresent = observation.command_present;
     const planAdoption = classifyRuntimeKernelJPlanStepAdoption(projection.plan_step_adoption);
     const comparisonKind = projection.memory_transition
       ? "memory_approval" : projection.resume_transition ? "resume" : "decision";
     const typescriptDecision = projection.resume_transition?.typescript_result_decision ??
       projection.typescript_decision;
+    const purposeBinding = projection.purpose_binding;
+    const goalId = purposeBinding
+      ? `goal-${purposeBinding.goal_id_digest}`
+      : "gateway-inbound-observation";
+    const goalVersion = purposeBinding?.purpose_version ?? 1;
     if (pending >= MAX_PENDING_OBSERVATIONS) {
       emit({ kind: "dropped", reason: "queue_full" });
       return;
@@ -462,14 +479,6 @@ export async function startRuntimeKernelShadowObserver(options: {
     queue = queue.then(async () => {
       if (failed) return;
       const nextSequence = sequence + 1;
-      const purposeBinding = projection.purpose_binding;
-      const goalId = purposeBinding
-        ? `goal-${purposeBinding.goal_id_digest}`
-        : "gateway-inbound-observation";
-      const goalVersion = purposeBinding?.purpose_version ?? 1;
-      let inputText: string;
-      try { inputText = JSON.stringify(projection); }
-      catch { await fail(); return; }
       const inputBytes = Buffer.byteLength(inputText, "utf8");
       if (inputBytes > 65_536) {
         await fail();
@@ -545,10 +554,10 @@ export async function startRuntimeKernelShadowObserver(options: {
         const expectedRuntimeComparisonStatus = !comparisonMatches ? "mismatched"
           : comparisonIncomplete ? "not_comparable" : "matched";
         const commandPresenceMatches = comparisonKind === "decision"
-          ? observation.command_present === (receipt.runtime_kernel_j_decision === "ASSERT")
+          ? commandPresent === (receipt.runtime_kernel_j_decision === "ASSERT")
           : comparisonKind === "resume"
-            ? projection.resume_transition?.command_present === observation.command_present
-            : !observation.command_present;
+            ? projection.resume_transition?.command_present === commandPresent
+            : !commandPresent;
         const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false ||
           planStepAdoptionClassificationAgrees === false || !memoryTransitionClassificationAgrees
           ? "mismatched" : expectedRuntimeComparisonStatus;
@@ -611,7 +620,7 @@ export async function startRuntimeKernelShadowObserver(options: {
           runtime_kernel_j_decision: receipt.runtime_kernel_j_decision,
           rule_id: receipt.rule_id,
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
-          command_present: observation.command_present,
+          command_present: commandPresent,
           ...(projection.resume_transition ? {
             resume_owner_verdict: projection.resume_transition.owner_verdict,
             resume_allowed: projection.resume_transition.resume_allowed,

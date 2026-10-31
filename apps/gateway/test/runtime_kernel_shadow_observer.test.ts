@@ -644,6 +644,39 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       expect(serializedEvents).not.toContain(privateValue);
     }
   }, 120_000);
+
+  it("Rustへ送るprojectionを受付時点で固定し、後続の呼出元変更と混ぜない", async () => {
+    const fixture = createSelectedPlanAdoptionFixture();
+    const { selectedProjection } = fixture;
+    const events: RuntimeKernelShadowObserverEvent[] = [];
+    let observer: Awaited<ReturnType<typeof startRuntimeKernelShadowObserver>> | undefined;
+    try {
+      if (selectedProjection.projection.plan_step_adoption.status !== "available") {
+        throw new Error("selected plan adoption assessment unavailable");
+      }
+
+      observer = await startRuntimeKernelShadowObserver({ enabled: true, production: false,
+        onEvent: (event) => events.push(event) });
+      expect(observer).toBeDefined();
+      observer!.observe({ j_projection: selectedProjection, command_present: true });
+
+      selectedProjection.projection.plan_step_adoption.criterion_relation.conflicts_count = 1;
+      await waitForObservedEvents(events, 1);
+    } finally {
+      await observer?.shutdown();
+      fixture.dispose();
+    }
+
+    expect(events[0]).toEqual({ kind: "ready" });
+    expect(events[1]).toMatchObject({
+      kind: "observation",
+      sequence: 1,
+      comparison_status: "matched",
+      plan_step_adoption: { status: "matched", matches: true },
+      typescript_plan_step_adoption_status: "matched",
+      plan_step_adoption_classification_agrees: true,
+    });
+  }, 120_000);
 });
 
 async function waitForObservedEvents(events: RuntimeKernelShadowObserverEvent[], expectedCount: number): Promise<void> {

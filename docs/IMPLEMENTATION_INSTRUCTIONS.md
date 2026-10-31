@@ -92,6 +92,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 続くobserver consumer差分では、妥当なRust plan-step adoption receiptがTypeScript側と異なる比較statusを返した場合、Rust側の集約status差だけでobserverを停止させていた結合を解いた。固定enum・receipt形状・projection echo検査は維持し、plan採否分類差がある場合だけ`mismatched`として観測し、TypeScript／Rust双方のstatus・reasonと`plan_step_adoption_classification_agrees=false`を非権威Gateway logへ残す。型チェックはPASS。test、Rust／Gateway process、実provider・外部作用、5OS実機はNOT_RUN。HDS authority／command／Approval／M writerとRust `hold`／no-effect／no-M-writeに変更なし。K-B5全体意味比較、製品全体BUILD、QE_QC／QE_QA、single-writer cutoverは未成立。
 
+今回、Gateway observerがTypeScript分類を`observe()`呼出し時に行い、Rust向けJSONを非同期queue内で後から生成していたため、呼出元がprojectionを変更すると別snapshot同士を比較する隙を修正した。受付時にwire JSONを一度生成し、そのJSONをparseした専用snapshotからJ分類・purpose binding・command有無を導出し、同じbytesをRustへ送る。projection serializationに失敗した場合は先行queueを保ったままobserverを停止する。追加した実Rust process試験では、`observe()`直後に呼出元projectionを変更してもreceiptとTypeScript分類が受付時snapshotに一致することを確認した。Gateway observer 6 tests、HDS／Gateway typecheck・build、Rust `cargo test --locked` 4 tests、`git diff --check`はPASS。全workspace suite、QE_QC／QE_QA、実provider・外部作用、5OS実機、実装間plan status差を意図的に発生させるprocess確認はNOT_RUN。HDS authority／M writer、Rust `hold`／no-effect／no-M-writeは不変。K-B5全体意味比較・single-writer cutover・製品全体BUILDは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
