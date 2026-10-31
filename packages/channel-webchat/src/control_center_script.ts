@@ -621,7 +621,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (valid(pending)) return pending;
           const latest = sessionStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1");
           if (valid(latest)) return latest;
-        } catch { /* status lookup remains unavailable without session storage */ }
+        } catch { /* current-tab pending identifier may be unavailable without session storage */ }
+        try {
+          const latest = localStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1");
+          if (valid(latest)) return latest;
+        } catch { /* cross-session status recovery remains unavailable without local storage */ }
         return null;
       }
 
@@ -630,6 +634,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(submissionId)) return;
         try { sessionStorage.setItem("blue-tanuki.owner-task-status-submission-id.v1", submissionId); }
         catch { /* current page keeps the status action available */ }
+        try { localStorage.setItem("blue-tanuki.owner-task-status-submission-id.v1", submissionId); }
+        catch { /* cross-session status recovery is optional; never persist task content or tokens */ }
         byId("check-owner-task-status").hidden = false;
       }
 
@@ -5202,6 +5208,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           byId("owner-task-new-submission").hidden = false;
           const status = byId("owner-task-status");
           status.textContent = "前回の依頼状態を確認してください。通信結果が不明な場合、先に新規IDへ切り替えないでください。";
+          status.className = "badge warn";
+        } else if (ownerTaskStatusSubmissionId()) {
+          const status = byId("owner-task-status");
+          status.textContent = "前回の依頼IDをこのGatewayで照会できます。task本文・結果・tokenは保存していません。";
           status.className = "badge warn";
         }
         if (ownerTaskStatusSubmissionId()) byId("check-owner-task-status").hidden = false;

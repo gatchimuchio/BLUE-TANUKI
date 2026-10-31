@@ -255,6 +255,12 @@ Tasks状態欄の同一request ID実行記録について、`command_execution_r
 
 WebChat typecheck／build、生成Control Center script構文、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、Gateway process再接続、実provider／外部作用、全体QC／QAはNOT_RUN。D09.01／F10.01の同一request ID実行要約consumerはgeneric executor feedback fallbackを含め`WIRED`。この接続はE2E-01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
 
+#### 2026-11-01 E2E-01 BUILD接続 — owner task照会IDのセッション横断回復
+
+owner taskの状態照会IDは、送信中の重複防止IDとして`sessionStorage`に保持し、成功後は照会用の不透明`submission_id`だけを同一Gateway originの`localStorage`にも記録する。タブ終了・ブラウザー再起動後もowner tokenを再入力して同じGatewayの受付状態を照会できるようにした。task本文、request payload、owner/runtime token、結果本文は永続化しない。localStorageが無効でも現在タブ内の状態照会は維持する。照会結果は受付・Runtimeの非権威観測であり、未確認・結果不明を完了へ読み替えず、WebSocket結果の再配信もしない。
+
+WebChat typecheck/build、生成`control_center_script.js`の構文確認、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、Gateway再起動、WebSocket再接続、provider/live外部作用はNOT_RUN。これはセッション横断の状態回復導線であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
