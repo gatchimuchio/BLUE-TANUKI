@@ -30,19 +30,19 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後のcrashを合成Gatewayで確認済み。旧世代receiptは新J/Mへ自動採用せず、次はowner媒介の現世代reconciliation consumerを接続）
+### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。E2E-01全体は未成立）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
-- **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
+- **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。旧epoch結果は`/recovery/inspection`のdigest-only証拠とverified `command_key_digest`の一意一致、およびBroker correlation matchedを満たすplan bindingに関連付け、ownerが現在sandbox状態を独立に観測・選択した後にだけ同一taskの新しい候補へ進める。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
 - **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
-- **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
+- **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。旧世代receiptの関連付けはcommand-key digestとBroker recordが一致し、verified bindingが一件で、表示上限による省略がない場合に限る。表示はread-only・digest-onlyとし、旧receiptからJ/M更新・承認復元・再実行を起こさない。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
 - **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSがowner-bound plan/revision/stepを再検証して選択した単一commandに限り、既存process policyのtool区分を適用する。一般chat、C候補、Gateway／metadataによる権限昇格は認めず、L3／Approval／Broker判定を維持する。
 
 #### 2026-10-31 E2E-01 — durable result outbox後のGateway process crash
 
 Windowsの隔離Gateway process試験で、対象planだけのJ checkpoint更新をfixture triggerで停止し、Broker成功結果・execution receipt・result outboxがdurable commitした後、J/M receipt採用・outbox acknowledgement前にGatewayを強制終了した。停止時点でreceiptは`adapter_returned`、receipt／outbox digestは一致し、対象bindingにはdelivery digest・result digest・M commitがなく、合成file.writeの作用は一件、provider callは0件だった。再起動後、execution epochが変わったためstartup reconciliationは旧epoch resultをJ/Mへ直接採用せず、receiptを`stale_generation_evidence`として記録し、outboxを証拠として保持する。同一planは`outcome_unknown`、action-result M未記録のままで、元writeは再実行されない。ownerによる現在sandbox状態のdigest-only非権威観測、その明示選択後の同一task read-only `file.search`、M receipt、明示結果返信までを同じprocess testで確認した。
 
-この経路はrev3.0 E03.02の「旧receiptで新世代の採否や正本を直接更新しない」を実Gateway startupで維持する証拠である。active指示が示していた「startupで保存済み結果を採用」は成立しておらず、本差分で仕様を弱めて満たしたことにはしない。旧epoch outboxの存在をownerが把握し、現世代のplan／command依存と現在状態をowner媒介で再照合するconsumerが次のBUILD対象である。自動採用・過去承認の復活・元write再実行は禁止を維持する。
+この経路はrev3.0 E03.02の「旧receiptで新世代の採否や正本を直接更新しない」を実Gateway startupで維持する証拠である。旧epoch outboxのcommand-key digestを、Recovery Inspection上で唯一のverified plan bindingへ結び、Control Centerにplan／step digestと現在J状態を表示するconsumerを接続した。crash process testではownerが既存`plan:reconcile`で現在sandboxをdigest-only観測し、状態を独立に選択した後に同一taskのread-only `file.search`候補・M receipt・明示結果返信まで継続した。旧receiptの直接採用・過去承認の復活・元write再実行は禁止を維持する。E2E-01全体は未成立であり、次のBUILD_BATCHは現行rev3.0正本と実consumerから残る未接続経路を選ぶ。
 
 #### 2026-10-31 E2E-01 Windows合成Gateway実processの接続済み範囲
 

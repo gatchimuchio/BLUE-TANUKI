@@ -58,6 +58,8 @@ export interface OperationPlanRecoveryInspection {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
     readonly command_id_digest: string;
+    /** Broker command-key correlation digest; read-only evidence only. */
+    readonly command_key_digest: string | null;
     /** SHA-256 of the raw command ID, matching the digest stored by Cron approval handoffs. */
     readonly cron_command_id_digest: string;
     /** SHA-256 of the originating request ID; only current-cursor Cron correlation consumes it. */
@@ -336,6 +338,7 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         plan_id_digest: planIdDigest,
         step_id_digest: operationPlanDigest(binding.step_id),
         command_id_digest: operationPlanDigest(binding.command_id),
+        command_key_digest: invalid ? null : createHash("sha256").update(commandKeyFor(binding.command_id)).digest("hex"),
         cron_command_id_digest: createHash("sha256").update(binding.command_id).digest("hex"),
         request_id_digest: !planRevisionMismatch && planState.channel === "cron"
           ? createHash("sha256").update(requestId).digest("hex")

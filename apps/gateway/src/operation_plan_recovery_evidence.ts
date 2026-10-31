@@ -10,7 +10,7 @@ function brokerRestorePlanStatus(
   projection: GatewayRecoveryOperatorProjection | null | undefined,
   planIdDigest: string,
 ): OperationPlanBrokerRestoreDependencyStatus {
-  if (!projection || projection.schema_version !== 12 || projection.surface !== "recovery_inspection_operator" ||
+  if (!projection || projection.schema_version !== 13 || projection.surface !== "recovery_inspection_operator" ||
       projection.mode !== "read_only" || projection.boundary_valid !== true ||
       projection.used_for_authority !== false || projection.may_execute !== false ||
       !Array.isArray(projection.operation_plan_correlations) || !Array.isArray(projection.plan_dependency_scopes) ||

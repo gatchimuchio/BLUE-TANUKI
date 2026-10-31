@@ -1653,7 +1653,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(prefixCollision).not.toContain("Plan aaaaaaaaaaaa");
   });
 
-  it("renders old-generation result archives as digest-only recovery evidence", () => {
+  it("links old-generation result archives to an exact verified plan binding as digest-only evidence", () => {
     const functionSource = (name: string): string => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
       const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
@@ -1674,8 +1674,10 @@ describe("WebChatChannel — Control Center shell", () => {
         ticket_id: "RAW_TICKET_SENTINEL", result: "RAW_RESULT_SENTINEL",
       }],
     };
-    const evaluated = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); ({ safe, text: formatRecoveryExecutionArchiveEvidence(safe, true) })`)
-      .runInNewContext({ evidence }) as { safe: { records: Array<Record<string, unknown>> }; text: string };
+    const planCorrelations = [{ command_key_digest: "2".repeat(64), plan_id_digest: "a".repeat(64),
+      step_id_digest: "b".repeat(64), status: "outcome_unknown", binding_integrity: "verified", broker_correlation: "matched" }];
+    const evaluated = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); ({ safe, text: formatRecoveryExecutionArchiveEvidence(safe, true, planCorrelations, 0) })`)
+      .runInNewContext({ evidence, planCorrelations }) as { safe: { records: Array<Record<string, unknown>> }; text: string };
     expect(evaluated.safe.records).toMatchObject([{ ticket_digest: "1".repeat(64), disposition: "stale_generation_evidence" }]);
     expect(JSON.stringify(evaluated.safe)).not.toContain("RAW_TICKET_SENTINEL");
     expect(JSON.stringify(evaluated.safe)).not.toContain("RAW_RESULT_SENTINEL");
@@ -1683,7 +1685,20 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(evaluated.text).toContain("旧epoch 333333333333");
     expect(evaluated.text).toContain("隔離先epoch 444444444444");
     expect(evaluated.text).toContain("検査上限による省略: 2件");
-    expect(evaluated.text).toContain("作用・承認・再実行を行いません");
+    expect(evaluated.text).toContain("Operation Plan aaaaaaaaaaaa / step bbbbbbbbbbbb / J状態 outcome_unknown");
+    expect(evaluated.text).toContain("旧receiptによるJ/M更新・承認・再実行を行いません");
+    const residualBinding = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); formatRecoveryExecutionArchiveEvidence(safe, true, [{ ...planCorrelations[0], binding_integrity: "residuals_present" }], 0)`)
+      .runInNewContext({ evidence, planCorrelations }) as string;
+    expect(residualBinding).toContain("Operation Plan関連: bindingまたはBroker相関未確定");
+    expect(residualBinding).not.toContain("Operation Plan aaaaaaaaaaaa");
+    const unadmittedBinding = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); formatRecoveryExecutionArchiveEvidence(safe, true, [{ ...planCorrelations[0], broker_correlation: "not_admitted" }], 0)`)
+      .runInNewContext({ evidence, planCorrelations }) as string;
+    expect(unadmittedBinding).toContain("Operation Plan関連: bindingまたはBroker相関未確定");
+    expect(unadmittedBinding).not.toContain("Operation Plan aaaaaaaaaaaa");
+    const missingInventory = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); formatRecoveryExecutionArchiveEvidence(safe, true, null, 0)`)
+      .runInNewContext({ evidence }) as string;
+    expect(missingInventory).toContain("Operation Plan関連: 未確認");
+    expect(missingInventory).not.toContain("Operation Plan関連: 該当bindingなし");
 
     const invalid = { ...evidence, records: [{ ...evidence.records[0], archived_by_execution_epoch_digest: "3".repeat(64) }] };
     expect(new Script(`${helper}\nprojectRecoveryExecutionArchiveEvidence(evidence)`).runInNewContext({ evidence: invalid })).toBeNull();
@@ -1838,6 +1853,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("recovery-inspection-json");
       expect(html).toContain("recovery-execution-archive-evidence");
       expect(html).toContain("旧世代結果の隔離証拠");
+      expect(html).toContain("command-key関連付けはownerの調査補助");
+      expect(html).toContain("Operation Plan関連: 表示上限により完全照合未成立");
       expect(html).toContain("recovery-plan-dependency-scopes");
       expect(html).toContain("Operation Plan依存scope（現行台帳検査）");
       expect(html).toContain("復元・再開許可を行いません");
@@ -2166,7 +2183,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 12,
+            schema_version: 13,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -2232,6 +2249,7 @@ describe("WebChatChannel — Recovery surface", () => {
               plan_id_digest: "a".repeat(64),
               step_id_digest: "b".repeat(64),
               command_id_digest: "c".repeat(64),
+              command_key_digest: "2".repeat(64),
               status: "outcome_unknown",
               binding_integrity: "residuals_present",
               admission_digest: "d".repeat(64),

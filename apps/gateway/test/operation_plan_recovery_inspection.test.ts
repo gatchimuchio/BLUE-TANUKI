@@ -579,7 +579,7 @@ describe("J OperationPlan recovery inspection", () => {
     const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
     const projection = projectGatewayRecoveryInspectionForOperator(report);
     expect(projection).toMatchObject({
-      schema_version: 12,
+      schema_version: 13,
       boundary_valid: true,
       operation_plan_schema_residuals: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
       omitted_operation_plan_schema_residual_count: 0,

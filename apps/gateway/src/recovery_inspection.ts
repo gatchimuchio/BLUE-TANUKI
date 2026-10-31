@@ -98,6 +98,7 @@ export interface OperationPlanBrokerCorrelation {
   readonly plan_id_digest: string;
   readonly step_id_digest: string;
   readonly command_id_digest: string;
+  readonly command_key_digest: string | null;
   readonly status: OperationPlanBindingStatus;
   readonly binding_integrity: "verified" | "residuals_present";
   readonly admission_digest: string | null;
@@ -199,7 +200,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 12;
+  readonly schema_version: 13;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -259,6 +260,7 @@ export interface GatewayRecoveryOperatorProjection {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
     readonly command_id_digest: string;
+    readonly command_key_digest: string | null;
     readonly status: OperationPlanBindingStatus;
     readonly binding_integrity: "verified" | "residuals_present";
     readonly admission_digest: string | null;
@@ -406,6 +408,7 @@ function projectOperatorOperationPlanCorrelations(
     const planIdDigest = fixedDigest(value.plan_id_digest);
     const stepIdDigest = fixedDigest(value.step_id_digest);
     const commandIdDigest = fixedDigest(value.command_id_digest);
+    const commandKeyDigest = value.command_key_digest === null ? null : fixedDigest(value.command_key_digest);
     const status = fixedEnum(value.status, OPERATION_PLAN_STATUSES);
     const bindingIntegrity = fixedEnum(value.binding_integrity, ["verified", "residuals_present"] as const);
     const admissionDigest = value.admission_digest === null ? null : fixedDigest(value.admission_digest);
@@ -418,7 +421,8 @@ function projectOperatorOperationPlanCorrelations(
     const cronEventDeliveryState = value.cron_event_delivery_state === null
       ? null
       : fixedEnum(value.cron_event_delivery_state, CRON_EVENT_DELIVERY_STATES);
-    if (!planIdDigest || !stepIdDigest || !commandIdDigest || !status || !bindingIntegrity ||
+    if (!planIdDigest || !stepIdDigest || !commandIdDigest ||
+        (value.command_key_digest !== null && !commandKeyDigest) || !status || !bindingIntegrity ||
         (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation ||
         (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || !memoryCorrelation || !cronApprovalCorrelation ||
         !cronEventCorrelation || (value.cron_event_delivery_state !== null && !cronEventDeliveryState) ||
@@ -427,6 +431,7 @@ function projectOperatorOperationPlanCorrelations(
       plan_id_digest: planIdDigest,
       step_id_digest: stepIdDigest,
       command_id_digest: commandIdDigest,
+      command_key_digest: commandKeyDigest,
       status,
       binding_integrity: bindingIntegrity,
       admission_digest: admissionDigest,
@@ -1117,7 +1122,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     unlinked_document_checkpoint_count: null,
   };
   return {
-    schema_version: 12,
+    schema_version: 13,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -1625,6 +1630,7 @@ export function correlateOperationPlanBindings(
       plan_id_digest: binding.plan_id_digest,
       step_id_digest: binding.step_id_digest,
       command_id_digest: binding.command_id_digest,
+      command_key_digest: binding.command_key_digest,
       status: binding.status,
       binding_integrity: binding.integrity,
       admission_digest: binding.admission_digest,

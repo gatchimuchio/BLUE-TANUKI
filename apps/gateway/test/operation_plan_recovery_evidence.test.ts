@@ -46,7 +46,7 @@ function brokerProjection(input: {
   readonly correlations: readonly { plan_id_digest: string; broker_correlation: "matched" | "not_admitted" | "not_found" }[];
 }): GatewayRecoveryOperatorProjection {
   return {
-    schema_version: 12,
+    schema_version: 13,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     boundary_valid: true,

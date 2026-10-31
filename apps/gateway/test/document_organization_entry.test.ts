@@ -1182,22 +1182,41 @@ describe("delegated goal purpose owner review", () => {
           if (filesAtCrash.length === filesBeforeUnknownWrite.length) await new Promise((resolve) => setTimeout(resolve, 1));
         }
         expect(filesAtCrash).toHaveLength(filesBeforeUnknownWrite.length + 1);
-        const unsettledIntentRow = crashWindowExecutionDb.prepare(`SELECT receipt_json FROM execution_intents
-          WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
-          .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
-        expect(unsettledIntentRow).toBeDefined();
-        const unsettledIntent = JSON.parse(unsettledIntentRow!.receipt_json) as {
+        const receiptDeadline = Date.now() + 20_000;
+        let unsettledIntent: {
           ticket_id?: string; execution_epoch?: string; state?: string; task_identity_digest?: string; result_delivery_digest?: string;
           result_delivery_acknowledged?: boolean;
-        };
+        } | undefined;
+        let outboxRow: { delivery_digest: string; delivery_json: string } | undefined;
+        while (Date.now() < receiptDeadline) {
+          if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
+            throw new Error(`Gateway exited before durable result capture: ${gateway.stderr.join("")}`);
+          }
+          const receiptRow = crashWindowExecutionDb.prepare(`SELECT receipt_json FROM execution_intents
+            WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
+            .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
+          if (receiptRow) {
+            const receipt = JSON.parse(receiptRow.receipt_json) as typeof unsettledIntent;
+            if (receipt?.state === "adapter_returned" && receipt.result_delivery_digest) {
+              const delivery = crashWindowExecutionDb.prepare("SELECT delivery_digest,delivery_json FROM execution_result_outbox WHERE ticket_id=?")
+                .get(receipt.ticket_id) as typeof outboxRow;
+              if (delivery?.delivery_digest === receipt.result_delivery_digest) {
+                unsettledIntent = receipt;
+                outboxRow = delivery;
+                break;
+              }
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(unsettledIntent).toBeDefined();
+        expect(outboxRow).toBeDefined();
         expect(unsettledIntent).toMatchObject({ state: "adapter_returned", task_identity_digest: uncertainTaskIdentity,
           result_delivery_acknowledged: false });
         expect(unsettledIntent.result_delivery_digest).toMatch(/^[a-f0-9]{64}$/);
         crashedTicketId = String(unsettledIntent.ticket_id);
         crashedExecutionEpoch = String(unsettledIntent.execution_epoch);
         crashedDeliveryDigest = String(unsettledIntent.result_delivery_digest);
-        const outboxRow = crashWindowExecutionDb.prepare("SELECT delivery_digest,delivery_json FROM execution_result_outbox WHERE ticket_id=?")
-          .get(unsettledIntent.ticket_id) as { delivery_digest: string; delivery_json: string } | undefined;
         expect(outboxRow?.delivery_digest).toBe(unsettledIntent.result_delivery_digest);
         const savedDelivery = JSON.parse(outboxRow!.delivery_json) as { feedback?: { command_id?: string } };
         expect(savedDelivery.feedback?.command_id).toBeTruthy();
@@ -1284,6 +1303,32 @@ describe("delegated goal purpose owner review", () => {
       expect(restoredUnknownPlan.plans.filter((plan) => plan.task_identity_digest === uncertainTaskIdentity &&
         Array.isArray(plan.steps) && (plan.steps as Array<Record<string, unknown>>)
           .some((step) => step.operation === "file.search"))).toHaveLength(0);
+
+      const recoveryInspectionResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/recovery/inspection", {
+        headers: { authorization: "Bearer " + maintenanceToken },
+      });
+      expect(recoveryInspectionResponse.status).toBe(200);
+      const recoveryInspection = await recoveryInspectionResponse.json() as {
+        boundary_valid?: boolean;
+        execution_archive_evidence?: { records?: Array<Record<string, unknown>> };
+        operation_plan_correlations?: Array<Record<string, unknown>>;
+      };
+      expect(recoveryInspection.boundary_valid).toBe(true);
+      const archivedReceipt = recoveryInspection.execution_archive_evidence?.records?.filter((record) =>
+        record.ticket_digest === createHash("sha256").update(crashedTicketId, "utf8").digest("hex"));
+      expect(archivedReceipt).toHaveLength(1);
+      const relatedBindings = recoveryInspection.operation_plan_correlations?.filter((binding) =>
+        binding.command_key_digest === archivedReceipt![0]!.command_key_digest);
+      expect(relatedBindings).toHaveLength(1);
+      expect(relatedBindings![0]).toMatchObject({
+        plan_id_digest: uncertainPlanId,
+        status: "outcome_unknown",
+        binding_integrity: "verified",
+        broker_correlation: "matched",
+        delivery_correlation: "j_not_recorded",
+      });
+      expect(JSON.stringify(recoveryInspection)).not.toContain("BLUE-TANUKI synthetic create-only operation completed.");
+
       const filesAfterRestart = readdirSync(fileRoot)
         .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
       expect(filesAfterRestart).toHaveLength(filesBeforeUnknownWrite.length + 1);
