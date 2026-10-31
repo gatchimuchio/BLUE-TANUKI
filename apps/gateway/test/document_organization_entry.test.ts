@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
-import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
+import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -1083,17 +1083,15 @@ describe("delegated goal purpose owner review", () => {
       const filesBeforeUnknownWrite: string[] = [];
       expect(readdirSync(fileRoot).filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name)))
         .toHaveLength(0);
-      const crashWindowDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+      const crashWindowExecutionDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+      const crashWindowPlanDb = new DatabaseSync(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"));
       let crashBarrierInstalled = false;
       let uncertainPlanId = "";
       let uncertainTaskIdentity = "";
+      let crashedTicketId = "";
+      let crashedExecutionEpoch = "";
+      let crashedDeliveryDigest = "";
       try {
-        // Hold the private result-receipt transaction after file.write so this test can kill the Gateway process.
-        // The barrier is fixture-only and is removed after SQLite recovery on restart.
-        crashWindowDb.exec(`CREATE TRIGGER fixture_process_result_crash_barrier BEFORE UPDATE ON execution_intents
-          WHEN json_extract(NEW.receipt_json,'$.result_delivery_digest') IS NOT NULL
-          BEGIN SELECT length(randomblob(134217728)); END;`);
-        crashBarrierInstalled = true;
         const uncertainTaskReply = waitForWebChatSend(taskWebSocket, "synthetic unknown-result task");
         const uncertainTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
           method: "POST",
@@ -1143,6 +1141,25 @@ describe("delegated goal purpose owner review", () => {
         );
         expect(uncertainApprovalResponse.status).toBe(200);
 
+        const currentPlanCheckpointRow = crashWindowPlanDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1")
+          .get() as { checkpoint_json: string };
+        const currentPlanCheckpoint = JSON.parse(currentPlanCheckpointRow.checkpoint_json) as {
+          plans: Array<{ revisions: Array<{ plan: { plan_id: string } }> }>;
+        };
+        const targetPlanCheckpoint = currentPlanCheckpoint.plans.find((plan) =>
+          operationPlanDigest(plan.revisions[0]!.plan.plan_id) === uncertainPlanId);
+        expect(targetPlanCheckpoint).toBeDefined();
+        const internalPlanId = targetPlanCheckpoint!.revisions[0]!.plan.plan_id.replace(/'/g, "''");
+        // Restrict the delay to this task's command result; prior plans already have acknowledged receipts.
+        // The completed Broker result is durable before this J write starts.
+        crashWindowPlanDb.exec(`CREATE TRIGGER fixture_process_result_crash_barrier BEFORE UPDATE ON operation_plan_state
+          WHEN EXISTS(SELECT 1 FROM json_each(NEW.checkpoint_json,'$.plans') AS p
+            JOIN json_each(p.value,'$.bindings') AS b
+            WHERE json_extract(p.value,'$.revisions[0].plan.plan_id')='${internalPlanId}'
+              AND json_type(b.value,'$.delivery_digest')='text')
+          BEGIN SELECT length(randomblob(134217728)); END;`);
+        crashBarrierInstalled = true;
+
         const uncertainWriteStep = (uncertainWritePlan.steps as Array<Record<string, unknown>>)
           .find((step) => step.operation === "file.write");
         const uncertainWriteStepId = String(uncertainWriteStep?.step_id);
@@ -1165,17 +1182,36 @@ describe("delegated goal purpose owner review", () => {
           if (filesAtCrash.length === filesBeforeUnknownWrite.length) await new Promise((resolve) => setTimeout(resolve, 1));
         }
         expect(filesAtCrash).toHaveLength(filesBeforeUnknownWrite.length + 1);
-        const unsettledIntentRow = crashWindowDb.prepare(`SELECT receipt_json FROM execution_intents
+        const unsettledIntentRow = crashWindowExecutionDb.prepare(`SELECT receipt_json FROM execution_intents
           WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
           .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
         expect(unsettledIntentRow).toBeDefined();
         const unsettledIntent = JSON.parse(unsettledIntentRow!.receipt_json) as {
-          ticket_id?: string; state?: string; task_identity_digest?: string; result_delivery_digest?: string;
+          ticket_id?: string; execution_epoch?: string; state?: string; task_identity_digest?: string; result_delivery_digest?: string;
+          result_delivery_acknowledged?: boolean;
         };
-        expect(unsettledIntent).toMatchObject({ state: "invocation_attempted", task_identity_digest: uncertainTaskIdentity });
-        expect(unsettledIntent.result_delivery_digest).toBeUndefined();
-        expect(Number((crashWindowDb.prepare("SELECT COUNT(*) AS count FROM execution_result_outbox WHERE ticket_id=?")
-          .get(unsettledIntent.ticket_id) as { count: number }).count)).toBe(0);
+        expect(unsettledIntent).toMatchObject({ state: "adapter_returned", task_identity_digest: uncertainTaskIdentity,
+          result_delivery_acknowledged: false });
+        expect(unsettledIntent.result_delivery_digest).toMatch(/^[a-f0-9]{64}$/);
+        crashedTicketId = String(unsettledIntent.ticket_id);
+        crashedExecutionEpoch = String(unsettledIntent.execution_epoch);
+        crashedDeliveryDigest = String(unsettledIntent.result_delivery_digest);
+        const outboxRow = crashWindowExecutionDb.prepare("SELECT delivery_digest,delivery_json FROM execution_result_outbox WHERE ticket_id=?")
+          .get(unsettledIntent.ticket_id) as { delivery_digest: string; delivery_json: string } | undefined;
+        expect(outboxRow?.delivery_digest).toBe(unsettledIntent.result_delivery_digest);
+        const savedDelivery = JSON.parse(outboxRow!.delivery_json) as { feedback?: { command_id?: string } };
+        expect(savedDelivery.feedback?.command_id).toBeTruthy();
+        const planCheckpointRow = crashWindowPlanDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1")
+          .get() as { checkpoint_json: string };
+        const planCheckpoint = JSON.parse(planCheckpointRow.checkpoint_json) as {
+          plans: Array<{ bindings: Array<Record<string, unknown>> }>;
+        };
+        const unadoptedBinding = planCheckpoint.plans.flatMap((plan) => plan.bindings)
+          .find((binding) => binding.command_id === savedDelivery.feedback?.command_id);
+        expect(unadoptedBinding).toBeDefined();
+        expect(unadoptedBinding).not.toHaveProperty("delivery_digest");
+        expect(unadoptedBinding).not.toHaveProperty("result_digest");
+        expect(unadoptedBinding).not.toHaveProperty("memory_commit");
         expect(readFileSync(join(fileRoot, filesAtCrash.find((name) => !filesBeforeUnknownWrite.includes(name))!), "utf8"))
           .toBe("BLUE-TANUKI synthetic create-only operation completed.\n");
         expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
@@ -1184,8 +1220,9 @@ describe("delegated goal purpose owner review", () => {
         if (gateway && gateway.child.exitCode === null && gateway.child.signalCode === null) {
           await forceStopChild(gateway.child);
         }
-        if (crashBarrierInstalled) crashWindowDb.exec("DROP TRIGGER fixture_process_result_crash_barrier");
-        crashWindowDb.close();
+        if (crashBarrierInstalled) crashWindowPlanDb.exec("DROP TRIGGER fixture_process_result_crash_barrier");
+        crashWindowPlanDb.close();
+        crashWindowExecutionDb.close();
       }
 
       const uncertainTaskWebSocket = taskWebSocket;
@@ -1194,6 +1231,30 @@ describe("delegated goal purpose owner review", () => {
       await forceStopChild(gateway.child);
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
+
+      const recoveredExecutionDb = new DatabaseSync(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+      const recoveredOwnerDb = new DatabaseSync(join(stateRoot, "private-state", "gateway-runtime", "owner-state.sqlite"));
+      try {
+        const recoveredReceiptRow = recoveredExecutionDb.prepare("SELECT receipt_json FROM execution_intents WHERE ticket_id=?")
+          .get(crashedTicketId) as { receipt_json: string } | undefined;
+        expect(recoveredReceiptRow).toBeDefined();
+        const recoveredReceipt = JSON.parse(recoveredReceiptRow!.receipt_json) as {
+          state?: string; execution_epoch?: string; result_delivery_digest?: string; result_delivery_acknowledged?: boolean;
+          result_delivery_disposition?: string; result_archived_by_epoch_digest?: string;
+        };
+        const currentOwner = recoveredOwnerDb.prepare("SELECT execution_epoch FROM gateway_owner_state WHERE singleton=1")
+          .get() as { execution_epoch: string };
+        expect(currentOwner.execution_epoch).not.toBe(crashedExecutionEpoch);
+        expect(recoveredReceipt).toMatchObject({ state: "adapter_returned", execution_epoch: crashedExecutionEpoch,
+          result_delivery_digest: crashedDeliveryDigest,
+          result_delivery_acknowledged: true, result_delivery_disposition: "stale_generation_evidence",
+          result_archived_by_epoch_digest: createHash("sha256").update(currentOwner.execution_epoch).digest("hex") });
+        expect(Number((recoveredExecutionDb.prepare("SELECT COUNT(*) AS count FROM execution_result_outbox WHERE ticket_id=?")
+          .get(crashedTicketId) as { count: number }).count)).toBe(1);
+      } finally {
+        recoveredExecutionDb.close();
+        recoveredOwnerDb.close();
+      }
 
       const uncertainResumeTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
         method: "POST",

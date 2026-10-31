@@ -30,13 +30,19 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（次: result outbox確定後・J/M receipt／acknowledgement前のprocess crashを、実Gateway startup recoveryで安全に閉じる）
+### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後のcrashを合成Gatewayで確認済み。旧世代receiptは新J/Mへ自動採用せず、次はowner媒介の現世代reconciliation consumerを接続）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。handler失敗は固定`error` status frameへ接続する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
 - **入力・出力:** 失敗通知にtask本文、例外本文、目的本文、credential、HDS判断やcommit hashを含めない。要求ごとの参照IDだけを出し、重複計画を避けるためTasks／Runtimeを確認してから再送するよう案内する。このframeは非権威の運転状態であり、HDSの最終出力・判断・承認・実行結果として扱わない。
 - **到達条件:** 通常handlerが起動した場合は従来どおり202受付、handler拒否は接続中の返信先へ固定error statusをbest-effort表示し、未接続handlerは503で拒否する。`channel_send`／`error` frameを受けた際、runtime tokenが入力済みなら最新のruntime snapshotを再取得する。owner plan操作は認証済みowner inboundとplan/revisionに結び、HDSが現行所有・revision・依存・対象を再照合する。入力本文と例外詳細をstatus frame・ログへ漏らさず、WebChat package／workspaceのtypecheck・buildが成立する。
 - **境界:** 既に切断されたWebSocketへの永続再配送、他channel共通のjob queue、Approval queueの自動更新、HDS判断やOutputAuditを通すassistant回答への変換は対象外。runtime token未入力時は自動更新しない。通知が届かない場合でもfailureを成功扱いせず、再送前の状態確認を案内する。HDSがowner-bound plan/revision/stepを再検証して選択した単一commandに限り、既存process policyのtool区分を適用する。一般chat、C候補、Gateway／metadataによる権限昇格は認めず、L3／Approval／Broker判定を維持する。
+
+#### 2026-10-31 E2E-01 — durable result outbox後のGateway process crash
+
+Windowsの隔離Gateway process試験で、対象planだけのJ checkpoint更新をfixture triggerで停止し、Broker成功結果・execution receipt・result outboxがdurable commitした後、J/M receipt採用・outbox acknowledgement前にGatewayを強制終了した。停止時点でreceiptは`adapter_returned`、receipt／outbox digestは一致し、対象bindingにはdelivery digest・result digest・M commitがなく、合成file.writeの作用は一件、provider callは0件だった。再起動後、execution epochが変わったためstartup reconciliationは旧epoch resultをJ/Mへ直接採用せず、receiptを`stale_generation_evidence`として記録し、outboxを証拠として保持する。同一planは`outcome_unknown`、action-result M未記録のままで、元writeは再実行されない。ownerによる現在sandbox状態のdigest-only非権威観測、その明示選択後の同一task read-only `file.search`、M receipt、明示結果返信までを同じprocess testで確認した。
+
+この経路はrev3.0 E03.02の「旧receiptで新世代の採否や正本を直接更新しない」を実Gateway startupで維持する証拠である。active指示が示していた「startupで保存済み結果を採用」は成立しておらず、本差分で仕様を弱めて満たしたことにはしない。旧epoch outboxの存在をownerが把握し、現世代のplan／command依存と現在状態をowner媒介で再照合するconsumerが次のBUILD対象である。自動採用・過去承認の復活・元write再実行は禁止を維持する。
 
 #### 2026-10-31 E2E-01 Windows合成Gateway実processの接続済み範囲
 
@@ -177,9 +183,9 @@ file.writeのBroker結果receipt永続化失敗後、Gateway processを再起動
 | provider／live外部作用／別repo | provider call 0件。外部業務作用・Actions・D4-Pocket／ミニドラ変更なし。 |
 | 全workspace suite／QE_QC／QE_QA／5OS実機 | 未実施。 |
 
-この接続は`invocation_attempted`のままGatewayが落ち、result outboxがないcrash窓を閉じるものである。result outboxがcommitした後、J/M receipt／outbox acknowledgement前にprocessが停止した場合の実Gateway再起動consumerは次のBUILD接続とする。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+この接続は`invocation_attempted`のままGatewayが落ち、result outboxがないcrash窓を閉じるものである。上段の別process testではresult outbox commit後の停止も捕捉したが、旧execution epochの結果はrev3.0 E03.02に従って新J/Mへ直接採用せずarchiveする。現在の到達はowner媒介の現在状態観測からread-only再計画までであり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のproducer／consumer:** Gateway result outboxがdurable commitした直後、J/M receipt採用またはoutbox acknowledgement前のprocess crashを合成taskで捕捉する。startup recoveryが同じcommand／task identity／現在plan dependencyに照合して保存済み結果を採用し、outboxを重複適用せず、元file.writeを再実行しないことを実Gateway processで接続する。provider/live外部作用は使わない。
+**次のproducer／consumer:** 旧epoch result outboxをauthorityにせず、ownerが選択した後に限り現世代のplan／command／task identityと依存を再照合し、現在sandboxのdigest-only状態観測を取り込むreconciliation consumerを接続する。旧receipt単独でJ/Mを更新しない。元`file.write`は再発行しない。provider/live外部作用は使わない。
 
 ## Gitと復旧
 
