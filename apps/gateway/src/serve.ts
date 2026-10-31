@@ -47,7 +47,8 @@ import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
-import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
+import { localInspectionReconciliationMessage, refreshOwnerSelectedFileStateObservations,
+  runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import {
   startRuntimeKernelShadowObserver,
@@ -5022,9 +5023,18 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       commandEphemeralContext.ephemeral_images.length === 0
       ? createGatewayInternalTransientAudioRequest(authorityReq, commandEphemeralContext)
       : decisionInput;
-    const { log, command } = hds.decide(hdsDecisionInput, documentCoordinator
-      ? { transient_content: "document_organization" }
-      : undefined);
+    const selectedFileStateRefresh = await refreshOwnerSelectedFileStateObservations({
+      hds,
+      caller: authorityReq,
+      lookupExecutionReceipt: (commandKey) => executionStore.lookupCommand(commandKey),
+    });
+    const decisionOptions = {
+      ...(documentCoordinator ? { transient_content: "document_organization" as const } : {}),
+      ...(selectedFileStateRefresh.status === "failed"
+        ? { plan_compute_source_refresh_failure: selectedFileStateRefresh.reason } : {}),
+    };
+    const { log, command } = hds.decide(hdsDecisionInput,
+      Object.keys(decisionOptions).length > 0 ? decisionOptions : undefined);
     if (commandEphemeralContext && log.commit.decision === "SUSPEND") {
       suspendedRequestsWithUnavailableEphemeralMedia.add(log.request_id);
     }

@@ -62,6 +62,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
+  type OperationPlanOwnerSelectedFileStateObservationAuthorization,
   type OperationPlanBrokerRestoreDependencyEvidence, type OperationPlanBrokerRestoreDependencyVerifier,
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
   type OperationPlanGatewayReceiptRechecker,
@@ -208,6 +209,11 @@ interface LongTermMemoryPort {
 export interface HDSDecisionOptions {
   /** Prevent transient document-organization input from reading/writing memory or persisting session history. */
   readonly transient_content?: "document_organization";
+  /** Fail closed when a selected local file-state observation could not be refreshed before C. */
+  readonly plan_compute_source_refresh_failure?:
+    | "plan_compute_source_observation_authorization_failed"
+    | "plan_compute_source_observation_inspection_failed"
+    | "plan_compute_source_observation_memory_unavailable";
 }
 
 interface CapturedMemoryReference {
@@ -1083,7 +1089,13 @@ export class HDSUpperController {
     log: DecisionLog;
     command: ExecuteCommand | null;
   } {
-    if (Object.keys(options).some((key) => key !== "transient_content") || (options.transient_content !== undefined && options.transient_content !== "document_organization")) {
+    if (Object.keys(options).some((key) => key !== "transient_content" && key !== "plan_compute_source_refresh_failure") ||
+        (options.transient_content !== undefined && options.transient_content !== "document_organization") ||
+        (options.plan_compute_source_refresh_failure !== undefined && ![
+          "plan_compute_source_observation_authorization_failed",
+          "plan_compute_source_observation_inspection_failed",
+          "plan_compute_source_observation_memory_unavailable",
+        ].includes(options.plan_compute_source_refresh_failure))) {
       throw new Error("invalid HDS decision options");
     }
     const boundary = parseInboundRequestAtBoundary(raw);
@@ -1169,6 +1181,13 @@ export class HDSUpperController {
     let savedResultReturn: OperationPlanSavedResultReturnProjection | undefined;
     const controlCaller = req;
     const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
+    if (options.plan_compute_source_refresh_failure &&
+        (!planPrefix || planPrefix[1]?.toLowerCase() !== "compute" || !isGatewayInternalInboundRequest(req) ||
+          req.channel !== "webchat" || req.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+          req.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+          req.metadata?.["blue_tanuki.operator_surface"] !== "developer")) {
+      throw new Error("invalid HDS decision options");
+    }
     let planComputeRequested = false;
     let planComputeWaitResume: { readonly wait_id: string; readonly task_identity_digest: string;
       readonly reason: "reply" | "deadline" | "recovery" } | undefined;
@@ -1359,7 +1378,9 @@ ${planControl.question}`,
         }
       }
     } else if (planPrefix?.[1]?.toLowerCase() === "compute") {
-      if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
+      if (options.plan_compute_source_refresh_failure) {
+        planControlFailure = options.plan_compute_source_refresh_failure;
+      } else if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
           !["owner", "user"].includes(resolveActor(req).actor_kind)) {
         planControlFailure = "plan_compute_requires_internal_developer";
       } else {
@@ -3741,6 +3762,35 @@ ${planControl.question}`,
     const observation = OperationPlanExternalReceiptObservationSchema.parse(value);
     const recorded = this.operationPlans.recordExternalReceiptObservation(observation, caller);
     if (recorded !== null) this.planEvent("external_receipt_observed", recorded.command_id);
+    return recorded !== null;
+  }
+  issueOwnerSelectedFileStateObservationAuthorizations(raw: unknown):
+    readonly OperationPlanOwnerSelectedFileStateObservationAuthorization[] | null {
+    const boundary = parseInboundRequestAtBoundary(raw);
+    if (!boundary.ok) return null;
+    const caller = boundary.request;
+    const prefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(caller.content.trim());
+    if (prefix?.[1]?.toLowerCase() !== "compute" || !isGatewayInternalInboundRequest(caller) ||
+        caller.channel !== "webchat" || caller.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+        caller.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+        caller.metadata?.["blue_tanuki.operator_surface"] !== "developer") return null;
+    const rawInput = prefix[2]?.trim();
+    if (!rawInput?.startsWith("{")) return null;
+    let parsedInput: ReturnType<typeof OperationPlanComputeInputSchema.parse>;
+    try { parsedInput = OperationPlanComputeInputSchema.parse(JSON.parse(rawInput) as unknown); }
+    catch { return null; }
+    const references = (parsedInput.source_observation_refs ?? []).filter((reference) =>
+      "plan_id_digest" in reference && reference.owner_selected_observation === "local_file_state");
+    return references.map((reference) =>
+      this.operationPlans.issueOwnerSelectedFileStateObservationAuthorization(reference, caller));
+  }
+  recordOwnerSelectedFileStateObservationAuthorization(
+    authorizationId: string,
+    observation: unknown,
+    caller: InboundRequest,
+  ): boolean {
+    const recorded = this.operationPlans.recordOwnerSelectedFileStateObservation(authorizationId, observation, caller);
+    if (recorded) this.planEvent("external_receipt_observed", recorded.command_id);
     return recorded !== null;
   }
   setOperationPlanGatewayReceiptRechecker(rechecker: OperationPlanGatewayReceiptRechecker): void {

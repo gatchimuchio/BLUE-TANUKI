@@ -505,6 +505,25 @@ export interface OperationPlanReceiptReconciliationAuthorization {
   readonly expires_at_ms: number;
 }
 
+export interface OperationPlanOwnerSelectedFileStateObservationAuthorization {
+  readonly authorization_id: string;
+  readonly caller_user: string;
+  readonly caller_channel: string;
+  readonly plan_id_digest: string;
+  readonly revision_digest: string;
+  readonly step_id_digest: string;
+  readonly command_id: string;
+  readonly command_digest: string;
+  readonly executor_command_digest: string;
+  readonly command_key: string;
+  readonly execution_epoch: string;
+  readonly task_identity_digest?: string;
+  readonly parameters: Record<string, unknown>;
+  readonly expected_gateway_receipt_evidence: OperationPlanGatewayReceiptRecheckEvidence;
+  readonly issued_at_ms: number;
+  readonly expires_at_ms: number;
+}
+
 export type OperationPlanGatewayReceiptRechecker = (
   command_key: string,
   expected_evidence: OperationPlanGatewayReceiptRecheckEvidence,
@@ -946,6 +965,7 @@ export class OperationPlanLedger {
     control: OperationPlanReceiptReconciliationControl;
     authorization: OperationPlanReceiptReconciliationAuthorization;
   }>();
+  private readonly ownerSelectedFileStateObservations = new Map<string, OperationPlanOwnerSelectedFileStateObservationAuthorization>();
   private readonly recoveryHolds = new Map<string, {
     reason: OperationPlanRecoveryHoldReason;
     restore_scope_relation: OperationPlanRecoveryScopeRelation;
@@ -1568,6 +1588,7 @@ export class OperationPlanLedger {
     this.savedDigest = restoredCheckpointDigest;
     this.reflections.clear();
     this.receiptReconciliations.clear();
+    this.ownerSelectedFileStateObservations.clear();
     const scopedRestorePlanDigest = checkedEvidence?.provenance?.restore_scope_mode === "plan_scoped_merge_v1"
       ? checkedEvidence.provenance.restore_scope_plan_digest
       : null;
@@ -3059,6 +3080,118 @@ export class OperationPlanLedger {
       used_for_authority: false,
     });
     return { command_key: admission.command_key, expected_evidence: expectedEvidence };
+  }
+
+  /** Issue a short-lived, single-use read-only permit after an owner selects local file-state context. */
+  issueOwnerSelectedFileStateObservationAuthorization(
+    rawReference: OperationPlanComputeSourceObservationReference,
+    caller: InboundRequest,
+    nowMs = Date.now(),
+  ): OperationPlanOwnerSelectedFileStateObservationAuthorization {
+    const reference = OperationPlanComputeSourceObservationReferenceSchema.parse(rawReference);
+    if (!("plan_id_digest" in reference) || reference.owner_selected_observation !== "local_file_state" ||
+        !Number.isSafeInteger(nowMs) || nowMs <= 0) {
+      throw new Error("plan_compute_source_observation_reference_invalid");
+    }
+    const lookup = this.prepareOwnerLocalFileStateReceiptRecheckLookup(reference, caller);
+    const currentReceipt = OperationPlanGatewayReceiptRecheckEvidenceSchema.safeParse(
+      this.gatewayReceiptRechecker?.(lookup.command_key, lookup.expected_evidence),
+    );
+    if (!currentReceipt.success || operationPlanDigest(currentReceipt.data) !== operationPlanDigest(lookup.expected_evidence)) {
+      throw new Error("plan_compute_source_observation_gateway_receipt_recheck_failed");
+    }
+    const plan = this.state.plans.find((candidate) =>
+      operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === reference.plan_id_digest)!;
+    const revision = plan.revisions.at(-1)!;
+    const step = revision.plan.steps.find((candidate) => operationPlanDigest(candidate.step_id) === reference.step_id_digest)!;
+    const binding = plan.bindings.find((candidate) => candidate.revision_digest === revision.digest && candidate.step_id === step.step_id)!;
+    const admission = binding.execution_admission!;
+    const authorization: OperationPlanOwnerSelectedFileStateObservationAuthorization = {
+      authorization_id: randomUUID(),
+      caller_user: caller.user,
+      caller_channel: caller.channel,
+      plan_id_digest: reference.plan_id_digest,
+      revision_digest: revision.digest,
+      step_id_digest: reference.step_id_digest,
+      command_id: binding.command_id,
+      command_digest: binding.command_digest,
+      executor_command_digest: admission.command_digest,
+      command_key: admission.command_key,
+      execution_epoch: admission.execution_epoch,
+      ...(admission.task_identity_digest ? { task_identity_digest: admission.task_identity_digest } : {}),
+      parameters: structuredClone(step.parameters ?? {}),
+      expected_gateway_receipt_evidence: lookup.expected_evidence,
+      issued_at_ms: nowMs,
+      expires_at_ms: nowMs + 30_000,
+    };
+    for (const [id, pending] of this.ownerSelectedFileStateObservations) {
+      if (pending.expires_at_ms <= nowMs) this.ownerSelectedFileStateObservations.delete(id);
+    }
+    if (this.ownerSelectedFileStateObservations.size >= 128) {
+      throw new Error("plan_compute_source_observation_refresh_capacity_reached");
+    }
+    this.ownerSelectedFileStateObservations.set(authorization.authorization_id, authorization);
+    const expiry = setTimeout(() => {
+      this.ownerSelectedFileStateObservations.delete(authorization.authorization_id);
+    }, 30_000);
+    expiry.unref?.();
+    return structuredClone(authorization);
+  }
+
+  /** Consume the permit and persist only an exact, fresh digest-only sandbox observation. */
+  recordOwnerSelectedFileStateObservation(
+    authorizationId: string,
+    rawObservation: unknown,
+    caller: InboundRequest,
+    nowMs = Date.now(),
+  ): { readonly command_id: string; readonly evidence_digest: string } | null {
+    const authorization = this.ownerSelectedFileStateObservations.get(authorizationId);
+    this.ownerSelectedFileStateObservations.delete(authorizationId);
+    if (!authorization || authorization.caller_user !== caller.user || authorization.caller_channel !== caller.channel ||
+        !Number.isSafeInteger(nowMs) || nowMs < authorization.issued_at_ms || nowMs >= authorization.expires_at_ms) return null;
+    const reference: OperationPlanComputeSourceObservationReference = {
+      plan_id_digest: authorization.plan_id_digest,
+      revision_digest: authorization.revision_digest,
+      step_id_digest: authorization.step_id_digest,
+      owner_selected_observation: "local_file_state",
+    };
+    let lookup: OperationPlanOwnerLocalFileStateReceiptRecheckLookup;
+    try { lookup = this.prepareOwnerLocalFileStateReceiptRecheckLookup(reference, caller); }
+    catch { return null; }
+    if (lookup.command_key !== authorization.command_key ||
+        operationPlanDigest(lookup.expected_evidence) !== operationPlanDigest(authorization.expected_gateway_receipt_evidence)) {
+      return null;
+    }
+    const latestReceipt = OperationPlanGatewayReceiptRecheckEvidenceSchema.safeParse(
+      this.gatewayReceiptRechecker?.(lookup.command_key, lookup.expected_evidence),
+    );
+    if (!latestReceipt.success || operationPlanDigest(latestReceipt.data) !== operationPlanDigest(lookup.expected_evidence)) return null;
+    const parsed = OperationPlanExternalReceiptObservationSchema.safeParse(rawObservation);
+    if (!parsed.success) return null;
+    const observation = parsed.data;
+    const observationReceipt = OperationPlanGatewayReceiptRecheckEvidenceSchema.safeParse({
+      schema_version: "operation-plan-gateway-receipt-recheck.v1",
+      plan_id_digest: observation.plan_id_digest,
+      revision_digest: observation.revision_digest,
+      step_id_digest: observation.step_id_digest,
+      command_digest: observation.executor_command_digest,
+      command_key_digest: observation.command_key_digest,
+      execution_epoch_digest: observation.gateway_execution_epoch_digest,
+      task_identity_digest: observation.gateway_task_identity_digest ?? null,
+      state: observation.gateway_execution_receipt_state,
+      feedback_status: observation.gateway_execution_feedback_status ?? null,
+      result_delivery_digest: observation.gateway_result_delivery_digest ?? null,
+      result_delivery_acknowledged: observation.gateway_result_delivery_acknowledged ?? null,
+      used_for_authority: false,
+    });
+    if (observation.source !== "local_file_state" || observation.observed_at_ms < authorization.issued_at_ms ||
+        !observationReceipt.success ||
+        operationPlanDigest(observationReceipt.data) !== operationPlanDigest(authorization.expected_gateway_receipt_evidence) ||
+        gatewayExecutionReceiptEvidenceDigest(observation) !== observation.gateway_execution_receipt_digest) return null;
+    let recorded: { request_id: string; command_id: string } | null;
+    try { recorded = this.recordExternalReceiptObservation(observation, caller); }
+    catch { return null; }
+    return recorded ? { command_id: recorded.command_id, evidence_digest: observation.evidence_digest } : null;
   }
 
   /** Resolve explicit references to durable, J-verified file action observations without exposing targets or content. */

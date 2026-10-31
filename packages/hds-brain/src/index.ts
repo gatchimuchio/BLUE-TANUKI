@@ -12,6 +12,7 @@ export { OperationPlanLedger, operationPlanDigest, operationPlanTaskIdentityDige
   type OperationPlanBrokerRestoreDependencyVerifier,
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
   type OperationPlanReceiptReconciliationAuthorization,
+  type OperationPlanOwnerSelectedFileStateObservationAuthorization,
   type OperationPlanGoalPurposeRelationReviewContent, type OperationPlanSavedResultReturnProjection } from "./operation_plan.js";
 export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {

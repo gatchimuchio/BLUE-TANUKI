@@ -139,23 +139,24 @@ export function ingestLocalInspectionReceipt(
   return observation;
 }
 
-/** Record a digest-only observation of one create-only sandbox target; this does not prove who created it. */
-export function ingestLocalFileWriteStateObservation(
-  sink: ExternalReceiptObservationSink,
-  input: Omit<LocalInspectionReceiptInput, "response"> & {
-    parameters: Record<string, unknown>;
-    execution_epoch?: string;
-    task_identity_digest?: string;
-    execution_receipt?: ExecutionIntentReceipt;
-    inspection: {
-      state: "absent" | "present" | "non_regular";
-      target_identity_digest: string;
-      canonical_root_digest: string;
-      parent_identity_digest: string;
-      observed_payload_digest?: string;
-      file_identity_digest?: string;
-    };
-  },
+export interface LocalFileWriteStateObservationInput extends Omit<LocalInspectionReceiptInput, "response"> {
+  parameters: Record<string, unknown>;
+  execution_epoch?: string;
+  task_identity_digest?: string;
+  execution_receipt?: ExecutionIntentReceipt;
+  inspection: {
+    state: "absent" | "present" | "non_regular";
+    target_identity_digest: string;
+    canonical_root_digest: string;
+    parent_identity_digest: string;
+    observed_payload_digest?: string;
+    file_identity_digest?: string;
+  };
+}
+
+/** Build digest-only evidence for one create-only sandbox target; this does not prove who created it. */
+export function createLocalFileWriteStateObservation(
+  input: LocalFileWriteStateObservationInput,
 ): OperationPlanExternalReceiptObservation {
   if (!/^[a-zA-Z0-9._:-]{1,200}$/.test(input.command_id) ||
       ![input.command_digest, input.executor_command_digest, input.plan_id_digest, input.revision_digest,
@@ -218,6 +219,15 @@ export function ingestLocalFileWriteStateObservation(
   const observation = OperationPlanExternalReceiptObservationSchema.parse({
     ...evidence, evidence_digest: operationPlanDigest(evidence), observed_at_ms: observedAt,
   });
+  return observation;
+}
+
+/** Build and persist a digest-only observation through the existing J observation sink. */
+export function ingestLocalFileWriteStateObservation(
+  sink: ExternalReceiptObservationSink,
+  input: LocalFileWriteStateObservationInput,
+): OperationPlanExternalReceiptObservation {
+  const observation = createLocalFileWriteStateObservation(input);
   sink.recordOperationPlanExternalReceiptObservation(observation, input.caller);
   return observation;
 }

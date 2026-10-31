@@ -2,7 +2,8 @@ import type { HDSUpperController, OperationPlanReceiptReconciliationAuthorizatio
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { gmailWriteRequestPayloadDigest, inspectFileWriteOutcomeState } from "@blue-tanuki/core";
 import { fileWritePayloadDigest, type ExecuteCommand, type InboundRequest, type OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
-import { ingestLocalFileWriteStateObservation, ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
+import { createLocalFileWriteStateObservation, ingestLocalFileWriteStateObservation,
+  ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
 import { queryLocalInspectionReceipt } from "./local_inspection_adapter.js";
 
 export type LocalInspectionReconciliationResult =
@@ -34,6 +35,90 @@ export function localInspectionReconciliationMessage(result: LocalInspectionReco
 type ReconciliationHDS = Pick<HDSUpperController,
   "takeOperationPlanReceiptReconciliationAuthorization" | "recordOperationPlanExternalReceiptObservation" |
   "reconcileOperationPlanMemory" | "operationPlanReceiptObservationMemoryIsDurable">;
+
+type OwnerSelectedFileStateRefreshHDS = Pick<HDSUpperController,
+  "issueOwnerSelectedFileStateObservationAuthorizations" | "recordOwnerSelectedFileStateObservationAuthorization" |
+  "reconcileOperationPlanMemory" | "operationPlanReceiptObservationMemoryIsDurable">;
+
+export type OwnerSelectedFileStateRefreshFailureReason =
+  | "plan_compute_source_observation_authorization_failed"
+  | "plan_compute_source_observation_inspection_failed"
+  | "plan_compute_source_observation_memory_unavailable";
+
+export type OwnerSelectedFileStateRefreshResult =
+  | { readonly status: "none" | "refreshed" }
+  | { readonly status: "failed"; readonly reason: OwnerSelectedFileStateRefreshFailureReason };
+
+/** Refresh explicitly selected file-state context before plan computation; this path only observes and stores digests. */
+export async function refreshOwnerSelectedFileStateObservations(input: {
+  hds: OwnerSelectedFileStateRefreshHDS;
+  caller: InboundRequest;
+  lookupExecutionReceipt: (command_key: string) => ExecutionIntentReceipt | null;
+}): Promise<OwnerSelectedFileStateRefreshResult> {
+  if (!/^plan:compute(?:\s|$)/i.test(input.caller.content.trim())) return { status: "none" };
+  let authorizations: ReturnType<OwnerSelectedFileStateRefreshHDS["issueOwnerSelectedFileStateObservationAuthorizations"]>;
+  try {
+    authorizations = input.hds.issueOwnerSelectedFileStateObservationAuthorizations(input.caller);
+  } catch (error) {
+    const candidate = error instanceof Error ? error.message : "";
+    return { status: "failed", reason: candidate.includes("memory") || candidate === "owner_gateway_receipt_recheck_unavailable"
+      ? "plan_compute_source_observation_memory_unavailable"
+      : "plan_compute_source_observation_authorization_failed" };
+  }
+  if (!authorizations?.length) return { status: "none" };
+  const observations: OperationPlanExternalReceiptObservation[] = [];
+  try {
+    for (const authorization of authorizations) {
+      const receipt = input.lookupExecutionReceipt(authorization.command_key);
+      if (!receipt || receipt.command_key !== authorization.command_key ||
+          receipt.command_digest !== authorization.executor_command_digest ||
+          receipt.execution_epoch !== authorization.execution_epoch ||
+          receipt.task_identity_digest !== authorization.task_identity_digest || receipt.used_for_authority !== false ||
+          authorization.parameters.mode !== "create" || typeof authorization.parameters.path !== "string" ||
+          typeof authorization.parameters.content !== "string") {
+        throw new Error("plan_compute_source_observation_authorization_failed");
+      }
+      let inspection: Awaited<ReturnType<typeof inspectFileWriteOutcomeState>>;
+      try { inspection = await inspectFileWriteOutcomeState(authorization.parameters); }
+      catch { throw new Error("plan_compute_source_observation_inspection_failed"); }
+      let observation: OperationPlanExternalReceiptObservation;
+      try {
+        observation = createLocalFileWriteStateObservation({
+          caller: input.caller,
+          command_id: authorization.command_id,
+          command_digest: authorization.command_digest,
+          executor_command_digest: authorization.executor_command_digest,
+          plan_id_digest: authorization.plan_id_digest,
+          revision_digest: authorization.revision_digest,
+          step_id_digest: authorization.step_id_digest,
+          parameters: authorization.parameters,
+          execution_epoch: authorization.execution_epoch,
+          task_identity_digest: authorization.task_identity_digest,
+          execution_receipt: receipt,
+          request_payload_digest: fileWritePayloadDigest(authorization.parameters.content),
+          inspection,
+        });
+      } catch { throw new Error("plan_compute_source_observation_authorization_failed"); }
+      if (!input.hds.recordOwnerSelectedFileStateObservationAuthorization(
+        authorization.authorization_id, observation, input.caller,
+      )) throw new Error("plan_compute_source_observation_authorization_failed");
+      observations.push(observation);
+    }
+    if (!input.hds.reconcileOperationPlanMemory() ||
+        observations.some((observation) => !input.hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest))) {
+      throw new Error("plan_compute_source_observation_memory_unavailable");
+    }
+    return { status: "refreshed" };
+  } catch (error) {
+    const candidate = error instanceof Error ? error.message : "";
+    const reason: OwnerSelectedFileStateRefreshFailureReason = candidate === "plan_compute_source_observation_memory_unavailable"
+      ? "plan_compute_source_observation_memory_unavailable"
+      : candidate === "plan_compute_source_observation_inspection_failed"
+        ? "plan_compute_source_observation_inspection_failed"
+        : "plan_compute_source_observation_authorization_failed";
+    return { status: "failed", reason };
+  }
+}
 
 /** Consume one fresh J permit, perform one bounded read-only inspection, and retain digest-only evidence. */
 export async function runLocalInspectionReconciliation(input: {

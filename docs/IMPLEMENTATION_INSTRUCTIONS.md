@@ -191,7 +191,15 @@ file.writeのBroker結果receipt永続化失敗後、Gateway processを再起動
 
 この接続は`invocation_attempted`のままGatewayが落ち、result outboxがないcrash窓を閉じるものである。上段の別process testではresult outbox commit後の停止も捕捉したが、旧execution epochの結果はrev3.0 E03.02に従って新J/Mへ直接採用せずarchiveする。現在の到達はowner媒介の現在状態観測からread-only再計画までであり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のproducer／consumer:** 旧epoch result outboxをauthorityにせず、ownerが選択した後に限り現世代のplan／command／task identityと依存を再照合し、現在sandboxのdigest-only状態観測を取り込むreconciliation consumerを接続する。旧receipt単独でJ/Mを更新しない。元`file.write`は再発行しない。provider/live外部作用は使わない。
+**前batchの次producer／consumerは本batchで接続済み。**
+
+#### 2026-10-31 E2E-01 BUILD接続 — owner選択後の現sandbox再観測
+
+`plan:compute`にowner選択済み`local_file_state`参照がある場合、GatewayはHDS `decide`前に同じplan／revision／step／command／task／execution epochの照会許可を取得し、現行execution receiptを再照合した後、既存のsandbox内create-only `file.write`状態検査を再実行する。許可は30秒・単回で、HDSが発行・消費し、GatewayからJへ渡すのはdigest-only観測だけ。観測は既存receipt observationとしてJ/Mへ保存し、次のHDS計算はその最新観測を再照合する。対象不在・内容不一致・receipt変化・保存不成立・検査失敗は候補生成前にfail-closedとなる。元`file.write`は`outcome_unknown`を維持し、再送・成功推定・外部provider呼出しはない。
+
+全workspace `tsc -b`相は完了し、Gateway個別`tsc --noEmit`と`git diff --check`はPASSした。一方、typecheck後の生成物掃除、HDS個別typecheck、HDS-BRAIN buildが、原因主体未特定のWindows file lock（`dist/output_audit.js`等への`EBUSY`）で停止または未成立となった。ロック対象は削除・強制終了していないため、全workspace buildは未成立として扱う。テストとGateway実process確認も未実施（NOT_RUN）で、実行時接続の動的証拠はない。次はロック解消後に依存順buildを閉じ、その後、同一task候補のowner step reviewから既存Approval／Broker、結果・M保存、WebChat返却consumerまでをつなぐ。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** ownerの同一task step reviewを既存Approval／Brokerへ接続し、結果観測・M receipt・明示的WebChat返却まで一気通貫で通す。旧epoch result outboxはauthorityにせず、元`file.write`を再発行しない。provider/live外部作用は使わない。
 
 ## Gitと復旧
 
