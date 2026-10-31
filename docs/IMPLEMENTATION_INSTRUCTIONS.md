@@ -30,7 +30,7 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。2026-10-31のowner指示「製品全体の成立を品質検証より先に進める」を受け、K-B5の限定J projection比較を一時保留し、WebChat taskの計画受付から結果通知までの実consumer接続を先に進める。
 
-### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。owner task受付の耐久重複抑止・read-only状態照会・Runtime plan digest相関・同一request IDの非権威な実行証拠表示をコード接続済み。詳細command resultが欠ける場合のgeneric executor feedback fallbackもUI consumerへ接続。保存済みfile.search結果はowner-bound plan:resultで再読できる。owner task照会IDは不透明IDのみ複数件をsession横断保持・選択可能。WebSocket再接続後のprocess動作は未実施。E2E-01全体は未成立）
+### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。owner task受付の耐久重複抑止・read-only状態照会・Runtime plan digest相関・同一request IDの非権威な実行証拠表示をコード接続済み。詳細command resultが欠ける場合のgeneric executor feedback fallbackもUI consumerへ接続。保存済みfile.search結果はowner-bound plan:resultで再読できる。owner task照会IDは不透明IDのみ複数件をsession横断保持・選択可能。WebSocket予期切断後の最大5回再接続をコード接続（Gateway processでの確認は未実施）。E2E-01全体は未成立）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。Control Centerは安定したUUID `submission_id` をsession storageに保持し、通信結果が不明な再送で同じIDを使う。Gatewayのprivate SQLite inboxはIDとpayloadをそれぞれdigest化し、request ID・delivery stateのみ保持する。同じID／同じpayloadは保存済みrequest IDを返してhandlerを再呼出しせず、同じIDの別payloadは409、再起動時にdispatch中だった依頼は`outcome_unknown`として再実行しない。handler失敗は固定`error` status frameへ接続する。`/owner/task-submission-status`から得た同一request IDを、認証済み`/runtime/snapshot`の`operation_core_execution.latest_results`にある内部実行記録と照合し、条件適合時だけ要約をTasksへ表示する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。既存`plan:result`はverifiedな`file.search`と確認済みreceiptに限る保存内容の読取経路であり、同一plan/revision/stepをowner認証してHDSへ渡す。旧epoch結果は`/recovery/inspection`のdigest-only証拠とverified `command_key_digest`の一意一致、およびBroker correlation matchedを満たすplan bindingに関連付け、ownerが現在sandbox状態を独立に観測・選択した後にだけ同一taskの新しい候補へ進める。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -266,6 +266,14 @@ WebChat typecheck/build、生成`control_center_script.js`の構文確認、`pnp
 owner task状態照会の保存先を単一の最新IDから不透明`submission_id`一覧へ拡張し、Tasks画面で照会対象を選択できるようにした。IDは送信前に記録して応答消失時の回復を保ち、同一Gateway originの`localStorage`へIDだけを保存する。task本文、payload、owner/runtime token、結果本文は追加保存しない。旧単一IDキーも読み取り候補に残し、既存利用者の回復を維持する。照会は既存のowner-token必須read-only APIを使い、受付status／Runtime相関／非権威証拠の意味は変えない。
 
 この差分は複数依頼を続けて送った場合にも前の照会IDを上書きで失わないためのTasks consumer接続である。WebChat typecheck/build、生成Control Center script構文、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、Gateway process再接続、provider/live外部作用、全体QC／QAはNOT_RUN。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+#### 2026-11-01 E2E-01 BUILD接続 — WebChat予期切断後の限定再接続
+
+Control CenterのWebSocketが予期せず切れた後、現在の接続で認証したWebChat identityを維持し、1／2／5／10／30秒間隔、最大5回の再接続を行う。再接続後は既存の`hello`とRuntime snapshot読込経路へ戻り、切断中に届かなかったtaskを再送しない。利用者には保存済みの依頼IDとowner tokenで状態照会するよう示す。手動切断は待機中の再接続を取り消し、上限後は手動接続を促す。新たなtoken・task本文・返信本文を永続化せず、既存の返信再配送禁止を維持する。
+
+WebChat package typecheck／build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、実Gateway processの切断／再接続、provider/live外部作用はNOT_RUN。この差分は接続回復の`WIRED`であり、WebSocket動作確認、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
+**次のproducer／consumer:** 再接続後のowner task回復では、`/owner/task-submission-status`のread-only受付状態と`ownerTaskRuntimeCorrelation()`のRuntime snapshotを同じ選択済み`submission_id`へ結び続ける。結果本文・未配信frameの再配送やtask再実行は追加しない。Gateway再起動時の合成実process観測は別途未実施である。
 
 ## Gitと復旧
 

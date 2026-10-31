@@ -50,6 +50,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         lastMascotLabel: "休憩中",
         chatSocket: null,
         chatConnectionGeneration: 0,
+        chatReconnectToken: "",
+        chatReconnectUser: "",
+        chatReconnectEnabled: false,
+        chatReconnectAttempt: 0,
+        chatReconnectTimer: null,
         runtimeSnapshotRequestId: 0,
         approvalSnapshotRequestId: 0,
         approvalTokens: Object.create(null),
@@ -497,7 +502,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           (trimmed.startsWith("/tool") && /\\s/.test(trimmed.charAt(5)));
       }
 
-      function disconnectChat() {
+      function disconnectChat(options) {
+        if (state.chatReconnectTimer !== null) {
+          clearTimeout(state.chatReconnectTimer);
+          state.chatReconnectTimer = null;
+        }
+        if (!options || options.preserveReconnect !== true) {
+          state.chatReconnectEnabled = false;
+          state.chatReconnectAttempt = 0;
+          state.chatReconnectToken = "";
+          state.chatReconnectUser = "";
+        }
         state.chatConnectionGeneration += 1;
         const socket = state.chatSocket;
         state.chatSocket = null;
@@ -507,13 +522,45 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setChatStatus("WebChat disconnected", "warn");
       }
 
-      async function connectChat() {
-        state.chatToken = byId("chat-token").value.trim();
-        state.chatUser = byId("chat-user").value.trim() || "owner";
-        sessionStorage.setItem("bt.chatToken", state.chatToken);
-        sessionStorage.setItem("bt.chatUser", state.chatUser);
+      function scheduleChatReconnect(generation) {
+        const delays = [1000, 2000, 5000, 10000, 30000];
+        if (!state.chatReconnectEnabled || generation !== state.chatConnectionGeneration ||
+            state.chatReconnectTimer !== null || state.chatSocket) return;
+        if (state.chatReconnectAttempt >= delays.length) {
+          setChatStatus("WebChat disconnected; reconnect manually", "warn");
+          return;
+        }
+        const attempt = state.chatReconnectAttempt + 1;
+        const delay = delays[state.chatReconnectAttempt];
+        state.chatReconnectAttempt = attempt;
+        setChatStatus("WebChat reconnecting (" + attempt + "/" + delays.length + ")", "warn");
+        state.chatReconnectTimer = setTimeout(function () {
+          state.chatReconnectTimer = null;
+          if (!state.chatReconnectEnabled || generation !== state.chatConnectionGeneration || state.chatSocket) return;
+          connectChat(true).catch(function () {
+            scheduleChatReconnect(state.chatConnectionGeneration);
+          });
+        }, delay);
+      }
+
+      async function connectChat(isAutomaticReconnect) {
+        if (isAutomaticReconnect === true) {
+          state.chatToken = state.chatReconnectToken;
+          state.chatUser = state.chatReconnectUser || state.chatUser;
+        } else {
+          state.chatToken = byId("chat-token").value.trim();
+          state.chatUser = byId("chat-user").value.trim() || "owner";
+          state.chatReconnectToken = state.chatToken;
+          state.chatReconnectUser = state.chatUser;
+          sessionStorage.setItem("bt.chatToken", state.chatToken);
+          sessionStorage.setItem("bt.chatUser", state.chatUser);
+        }
         if (!state.chatToken) throw new Error("webchat token is required");
-        disconnectChat();
+        if (isAutomaticReconnect !== true) {
+          state.chatReconnectEnabled = true;
+          state.chatReconnectAttempt = 0;
+        }
+        disconnectChat({ preserveReconnect: true });
         const generation = state.chatConnectionGeneration;
         const ticket = await postJson("/ws-ticket", state.chatToken, { user: state.chatUser });
         if (generation !== state.chatConnectionGeneration) return;
@@ -532,6 +579,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           try { frame = JSON.parse(event.data); } catch (_) { frame = { kind: "message", content: String(event.data) }; }
           if (frame.kind === "hello") {
             appendChat("system", "connected as " + (frame.user || state.chatUser));
+            if (state.chatReconnectAttempt > 0) {
+              appendChat("system", "WebChatを再接続しました。切断中のtaskは自動再送していません。返信が未着なら、保存済み依頼IDとowner tokenで状態を照会してください。");
+            }
             return;
           }
           appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)), frame.request_id);
@@ -548,6 +598,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (state.chatSocket === ws && generation === state.chatConnectionGeneration) {
             state.chatSocket = null;
             setChatStatus("WebChat disconnected", "warn");
+            scheduleChatReconnect(generation);
           }
         });
         ws.addEventListener("error", function () {
