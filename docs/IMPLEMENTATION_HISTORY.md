@@ -3516,3 +3516,24 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | test／WebChat owner-task process smoke | 未実施（NOT_RUN）。 |
 
 このowner操作配送はE2E-01全体を閉じない。目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→同一taskの再計画／復帰を通常WebChat task entryで一仕事に通す接続は未成立のまま。
+
+## 2026-10-31 E2E-01 開発限定合成C候補
+
+### 差分
+
+- `synthetic-file-write-plan` backendを明示opt-in・非production限定で登録可能にした。
+- 固定taskに対し、設定済みsandbox内の一意な相対pathへcreate-onlyの`file.write`候補だけを返す。通常stub、外部provider、HDS authority、Approval Gate、Broker、M writerは変えていない。
+- runbookとcredential readiness matrixに開発限定条件を記録した。
+
+### 検証
+
+| 確認 | 結果 |
+|---|---|
+| core typecheck／build | PASS |
+| Gateway typecheck | PASS |
+| workspace `pnpm typecheck` | PASS |
+| workspace `pnpm build` | PASS |
+| `pnpm docs:check` | PASS。日本語基底監査の移行負債76件は注意として残る。 |
+| test／Gateway process／provider／実作用 | NOT_RUN |
+
+候補生成のコード接続に限る。E2E-01全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。次は隔離sandboxで通常WebChat taskからowner確認・Approval／Broker・結果receipt・M・返信・再計画／復帰を接続する。

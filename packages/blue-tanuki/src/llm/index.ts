@@ -17,6 +17,11 @@ export {
   LLM_ROUTING_TRACE,
 } from "./base.js";
 export { StubBackend } from "./stub.js";
+export {
+  SYNTHETIC_FILE_WRITE_PLAN_BACKEND,
+  SYNTHETIC_FILE_WRITE_PLAN_TASK,
+  SyntheticFileWritePlanBackend,
+} from "./synthetic_file_write_plan.js";
 export { AnthropicBackend } from "./anthropic.js";
 export { OpenAICompatibleBackend } from "./openai_compatible.js";
 export type { OpenAICompatibleBackendOptions } from "./openai_compatible.js";

@@ -64,6 +64,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-10-31のE2E-01追加接続では、HDS commandのupstream_decision.request_idをExecutorからWebChat channel_send／owner-task failure frameへ通し、Control Centerの受理表示・結果返信を同じ依頼IDで相関した。結果返信に短い依頼ID末尾を表示し、要求ごとの運転traceを追えるようにした。値は非権威メタデータであり、判断・承認・作用・M書込みへ使わない。pnpm typecheck／pnpm build、Control Center script構文解析、pnpm docs:check、git diff --checkはPASS。test、Gateway実process smoke、実provider、実作用はNOT_RUN。この接続はE2E-01全体や製品全体SYSTEM_SHAPED／BUILD_COVEREDの証拠ではなく、同一task／目的bindingを保つ安全な合成Approval／Broker作用→receipt→M→返信→再計画／復帰を次の接続として残す。
 
+2026-10-31、開発限定の`synthetic-file-write-plan`を追加した。明示opt-inかつ非productionでのみ登録し、固定taskから一意なsandbox内相対pathへの新規file.write候補だけを生成する。候補は非権威で目的関係を`unknown`とし、HDS・owner Approval／Broker境界を維持する。workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS。test、Gateway process、実provider、実作用はNOT_RUN。候補生成のコード接続であり、E2E-01全体、SYSTEM_SHAPED／BUILD_COVERED、QC／QA、owner GOは未成立。次は隔離sandboxによる通常WebChat経路で候補からreceipt／M／返信／再計画までをつなぐ。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

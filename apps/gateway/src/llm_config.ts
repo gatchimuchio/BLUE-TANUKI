@@ -2,6 +2,8 @@ import {
   AnthropicBackend,
   LLMRegistry,
   OpenAICompatibleBackend,
+  SYNTHETIC_FILE_WRITE_PLAN_BACKEND,
+  SyntheticFileWritePlanBackend,
   StubBackend,
   type LLMBackend,
   type LLMFallbackProfile,
@@ -297,6 +299,18 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
     },
   });
 
+  const syntheticPlanOptIn = resolvedEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND === "true";
+  if (syntheticPlanOptIn &&
+      (resolvedEnv.NODE_ENV === "production" || process.env.NODE_ENV === "production")) {
+    throw new Error("Synthetic plan backend is development-only and cannot be enabled in production");
+  }
+  if (syntheticPlanOptIn) {
+    registry.register(new SyntheticFileWritePlanBackend(resolvedEnv), [], {
+      capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0, currency: "USD" },
+    });
+  }
+
   const anthropicKey = envValue(resolvedEnv, "ANTHROPIC_API_KEY");
   if (
     anthropicKey ||
@@ -481,6 +495,10 @@ export function describeLLMCommandRoute(env: Env = process.env): {
 
 export function listConfiguredLLMProviders(env: Env = process.env): string[] {
   const names = new Set<string>(["stub"]);
+  if (env.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND === "true" &&
+      env.NODE_ENV !== "production" && process.env.NODE_ENV !== "production") {
+    names.add(SYNTHETIC_FILE_WRITE_PLAN_BACKEND);
+  }
   if (hasLLMSecretMaterial(env, "ANTHROPIC_API_KEY") || wantsBackend(env, "anthropic")) {
     names.add("anthropic");
   }
