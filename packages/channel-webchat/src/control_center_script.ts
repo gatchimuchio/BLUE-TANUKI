@@ -595,6 +595,43 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       let ownerTaskSubmissionIdMemory = null;
+      let ownerTaskStatusSubmissionIdsMemory = [];
+      const OWNER_TASK_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const OWNER_TASK_STATUS_SUBMISSION_IDS_KEY = "blue-tanuki.owner-task-status-submission-ids.v1";
+
+      function ownerTaskStatusSubmissionIds() {
+        const ids = [];
+        const add = function (value) {
+          if (typeof value === "string" && OWNER_TASK_SUBMISSION_ID_PATTERN.test(value) && !ids.includes(value)) {
+            ids.push(value);
+          }
+        };
+        ownerTaskStatusSubmissionIdsMemory.forEach(add);
+        try { add(sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1")); }
+        catch { /* current-tab pending identifier is optional */ }
+        try { add(sessionStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1")); }
+        catch { /* the cross-session list may still be available */ }
+        try { add(localStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1")); }
+        catch { /* preserve the identifiers available from the list or current page */ }
+        try {
+          const saved = JSON.parse(localStorage.getItem(OWNER_TASK_STATUS_SUBMISSION_IDS_KEY) || "[]");
+          if (Array.isArray(saved)) saved.forEach(add);
+        } catch { /* cross-session recovery remains unavailable when local storage is unreadable */ }
+        return ids;
+      }
+
+      function renderOwnerTaskStatusSubmissionIds(preferredId) {
+        const select = byId("owner-task-status-submission-id");
+        const ids = ownerTaskStatusSubmissionIds();
+        select.replaceChildren(new Option("依頼IDを選択", ""));
+        ids.forEach(function (id) {
+          select.add(new Option("依頼ID · " + id.slice(-12), id));
+        });
+        const selected = ids.includes(preferredId) ? preferredId : ids[0] || "";
+        select.value = selected;
+        select.hidden = ids.length < 2;
+        byId("check-owner-task-status").hidden = ids.length === 0;
+      }
 
       function pendingOwnerTaskSubmissionId() {
         const storageKey = "blue-tanuki.owner-task-submission-id.v1";
@@ -612,31 +649,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function ownerTaskStatusSubmissionId() {
-        if (ownerTaskSubmissionIdMemory) return ownerTaskSubmissionIdMemory;
-        const valid = function (value) {
-          return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-        };
-        try {
-          const pending = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
-          if (valid(pending)) return pending;
-          const latest = sessionStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1");
-          if (valid(latest)) return latest;
-        } catch { /* current-tab pending identifier may be unavailable without session storage */ }
-        try {
-          const latest = localStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1");
-          if (valid(latest)) return latest;
-        } catch { /* cross-session status recovery remains unavailable without local storage */ }
-        return null;
+        const select = byId("owner-task-status-submission-id");
+        const selected = select && select.value;
+        if (typeof selected === "string" && OWNER_TASK_SUBMISSION_ID_PATTERN.test(selected)) return selected;
+        if (ownerTaskSubmissionIdMemory && OWNER_TASK_SUBMISSION_ID_PATTERN.test(ownerTaskSubmissionIdMemory)) {
+          return ownerTaskSubmissionIdMemory;
+        }
+        return ownerTaskStatusSubmissionIds()[0] || null;
       }
 
       function rememberOwnerTaskStatusSubmissionId(submissionId) {
-        if (typeof submissionId !== "string" ||
-            !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(submissionId)) return;
+        if (typeof submissionId !== "string" || !OWNER_TASK_SUBMISSION_ID_PATTERN.test(submissionId)) return;
+        ownerTaskStatusSubmissionIdsMemory = [submissionId].concat(
+          ownerTaskStatusSubmissionIds().filter(function (id) { return id !== submissionId; }));
         try { sessionStorage.setItem("blue-tanuki.owner-task-status-submission-id.v1", submissionId); }
         catch { /* current page keeps the status action available */ }
         try { localStorage.setItem("blue-tanuki.owner-task-status-submission-id.v1", submissionId); }
         catch { /* cross-session status recovery is optional; never persist task content or tokens */ }
-        byId("check-owner-task-status").hidden = false;
+        try { localStorage.setItem(OWNER_TASK_STATUS_SUBMISSION_IDS_KEY, JSON.stringify(ownerTaskStatusSubmissionIdsMemory)); }
+        catch { /* current-tab status recovery remains available when storage is full or disabled */ }
+        renderOwnerTaskStatusSubmissionIds(submissionId);
       }
 
       function clearOwnerTaskSubmissionId() {
@@ -5200,6 +5232,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           byId("owner-task-token").value = "";
         });
       });
+      byId("owner-task-status-submission-id").addEventListener("change", function () {
+        const submissionId = ownerTaskStatusSubmissionId();
+        if (!submissionId) return;
+        const status = byId("owner-task-status");
+        status.textContent = "依頼ID · " + submissionId.slice(-12) + " を選択しました。owner tokenを入力して状態を再確認してください。";
+        status.className = "badge warn";
+      });
       try {
         const storedSubmissionId = sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1");
         if (typeof storedSubmissionId === "string" &&
@@ -5211,10 +5250,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.className = "badge warn";
         } else if (ownerTaskStatusSubmissionId()) {
           const status = byId("owner-task-status");
-          status.textContent = "前回の依頼IDをこのGatewayで照会できます。task本文・結果・tokenは保存していません。";
+          status.textContent = "保存済みの依頼IDをこのGatewayで照会できます。task本文・結果・tokenは保存していません。";
           status.className = "badge warn";
         }
-        if (ownerTaskStatusSubmissionId()) byId("check-owner-task-status").hidden = false;
+        renderOwnerTaskStatusSubmissionIds(ownerTaskStatusSubmissionId());
       } catch { /* status recovery remains available when session storage works */ }
       byId("load-goal-purpose-candidates").addEventListener("click", function () {
         loadGoalPurposeCandidates().catch(function () {
