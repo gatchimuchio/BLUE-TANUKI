@@ -255,6 +255,14 @@ Tasks状態欄の同一request ID実行記録について、`command_execution_r
 
 WebChat typecheck／build、生成Control Center script構文、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。test、Gateway process再接続、実provider／外部作用、全体QC／QAはNOT_RUN。D09.01／F10.01の同一request ID実行要約consumerはgeneric executor feedback fallbackを含め`WIRED`。この接続はE2E-01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
 
+#### 2026-11-01 E2E-01 BUILD接続 — Gateway再起動後のowner task受付相関
+
+隔離したWindows Gateway processで、L3審査を経て有効化した合成目的に対するowner taskを1件受付・計画した後、同じ`submission_id`を維持してGatewayを再起動した。owner status APIは同じ`request_id`と`handler_returned`を返し、同一入力の再送は`already_accepted`で閉じ、合成provider呼出し数も増えなかった。復元後のRuntime snapshotは`recovery_refresh_status=ready`で、受付`request_id`に一致するplan digestが1件だった。Runtime／status projectionは引き続き非権威であり、実作用は行っていない。
+
+対象の隔離process test、Gateway typecheck、`git diff --check`はPASS。実provider、外部作用、実ブラウザー再読み込み、handler実行中のprocess killはNOT_RUN。別の既存大型Gateway integration testでは、owner選択済みfile.write状態を使う再計画が`plan_control_denied:plan_compute_source_observation_authorization_failed`で拒否され、同一task file.search候補が作られなかった。所有者選択観測の再確認／認可失敗の根因は未特定で、次に修正する。この結果は受付済みtaskの再起動後照会だけを示し、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOを成立させない。
+
+**次のproducer／consumer:** owner選択済みlocal file-state observationの再計画前認可を修復し、既存のGateway receipt再照合・単回観測permit・digest-only M保存・同一task identityを保ったまま次の未実行候補へ接続する。その後、`dispatching`中のprocess killで`outcome_unknown`と再送拒否を確かめ、command intent・execution receipt・M receipt・plan dependencyの再照合を続ける。
+
 #### 2026-11-01 E2E-01 BUILD接続 — owner task照会IDのセッション横断回復
 
 owner taskの状態照会IDは、送信中の重複防止IDとして`sessionStorage`に保持し、成功後は照会用の不透明`submission_id`だけを同一Gateway originの`localStorage`にも記録する。タブ終了・ブラウザー再起動後もowner tokenを再入力して同じGatewayの受付状態を照会できるようにした。task本文、request payload、owner/runtime token、結果本文は永続化しない。localStorageが無効でも現在タブ内の状態照会は維持する。照会結果は受付・Runtimeの非権威観測であり、未確認・結果不明を完了へ読み替えず、WebSocket結果の再配信もしない。

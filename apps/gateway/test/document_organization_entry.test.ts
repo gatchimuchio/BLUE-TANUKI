@@ -312,6 +312,221 @@ describe("document organization ordinary entries", () => {
 });
 
 describe("delegated goal purpose owner review", () => {
+  it("restores owner task status and prevents duplicate dispatch after a Gateway restart", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-owner-task-restart-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    const fileRoot = join(auditDir, "file-root");
+    mkdirSync(privateState, { recursive: true });
+    mkdirSync(fileRoot, { recursive: true });
+
+    const goalRef = "goal_0000000000000043";
+    const purpose = "Initial delegated purpose";
+    const purposeDigest = createHash("sha256").update(Buffer.from(purpose, "utf8")).digest("hex");
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0000000000000043",
+        initial_purpose_digest: purposeDigest, initial_interpretation_digest: "d".repeat(64), adopted_at: Date.now() - 10_000 }],
+      authorizations: [],
+      events: [],
+    }), "utf8");
+
+    const taskText = "Prepare one bounded read-only search plan after restart.";
+    const submissionId = "01a119c0-5b35-4491-ae00-000000000803";
+    let providerCalls = 0;
+    let providerFailure: unknown;
+    const provider = createServer((request, response) => {
+      providerCalls += 1;
+      void readPrompt(request).then((prompt) => {
+        const childRole = /C child role=([a-z_]+)/.exec(prompt)?.[1];
+        if (childRole) {
+          const content = JSON.stringify({ role: childRole, candidate: "bounded read-only planning observation",
+            used_for_authority: false, may_execute: false });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: `c0802-${childRole}-fixture`, object: "chat.completion", created: 1,
+            model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        const isPlanPrompt = prompt.includes("候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan");
+        if (!isPlanPrompt && prompt.includes("blue-tanuki.memory-citation-response.v1")) {
+          const content = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1", answer: "", citations: [] });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "c0802-memory-citation-fixture", object: "chat.completion", created: 1,
+            model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        if (!prompt.includes(taskText)) throw new Error("owner task intent was not passed to the local C fixture");
+        const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
+        if (!requestId) throw new Error("J operation request id was not bound into the planner prompt");
+        const target = { kind: "directory", id: fileRoot };
+        const expected = { root: fileRoot, sandbox_root: fileRoot, query: "fixture", visited_files: 0, matches: [] };
+        const content = JSON.stringify({ plan: {
+          version: "operation-core.v1",
+          plan_id: `owner-task-plan:${requestId}`,
+          request_id: requestId,
+          state: "planned",
+          steps: [{
+            step_id: "synthetic-search",
+            operation: "file.search",
+            target,
+            state: "planned",
+            effects: ["read"],
+            permission: { risk: "low", approval_level: "L1_observe", final_review_required: false,
+              hds_brain_authority_required: true, approval_gate_required: true },
+            adapter: "internal_runtime",
+            adapter_is_authority: false,
+            command_generated_by_adapter_only: false,
+            parameters: { root: fileRoot, query: "fixture", max_results: 1 },
+            preparation: { depends_on: [], bindings: [], preconditions: [],
+              validation: [{ check_id: "synthetic-search-observed", method: "result_equals", target, expected }],
+              compensation: { available: false, reason: "read-only" } },
+          }],
+          rollback: { available: false },
+          raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+          planner_output_used_for_authority: false,
+          hds_brain_authority_required: true,
+        }, goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: taskText, purpose_quote: purpose }] } });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "c0802-owner-task-fixture", object: "chat.completion", created: 1,
+          model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+      }).catch((error: unknown) => {
+        providerFailure = error;
+        if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "synthetic_owner_task_fixture_failed" }));
+      });
+    });
+    const providerPort = await listenOnLoopback(provider);
+    const gatewayPort = await reserveLoopbackPort();
+    const runtimeEnv = isolatedRuntimeEnvironment(providerPort, gatewayPort, auditDir, historyFile, sessionDir);
+    runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
+
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const purposeChangeResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: "Purpose for the restart continuity fixture." }),
+      });
+      expect(purposeChangeResponse.status).toBe(202);
+      const purposeProposal = await purposeChangeResponse.json() as { command_id?: string };
+      const approvalQueueResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      expect(approvalQueueResponse.status).toBe(200);
+      const approvalQueue = await approvalQueueResponse.json() as { pending_approvals: Array<Record<string, unknown>> };
+      const purposeApproval = approvalQueue.pending_approvals.find((item) => item.command_id === purposeProposal.command_id);
+      expect(purposeApproval?.approval_token).toBeTruthy();
+      const purposeReviewResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(purposeProposal.command_id))}/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      expect(purposeReviewResponse.status).toBe(200);
+      const purposeReview = await purposeReviewResponse.json() as { command_digest?: string };
+      const purposeApprovalResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(purposeProposal.command_id))}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: purposeApproval?.approval_token,
+          content_review_digest: purposeReview.command_digest }),
+      });
+      expect(purposeApprovalResponse.status).toBe(200);
+      expect(await purposeApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_change_committed", goal_ref: goalRef, version: 2,
+      } });
+
+      const ticketResponse = await fetch(`http://127.0.0.1:${gatewayPort}/ws-ticket`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(taskWebSocket, "open");
+
+      const taskReply = waitForWebChatSend(taskWebSocket, "owner task restart fixture");
+      const submissionResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef, submission_id: submissionId,
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(submissionResponse.status).toBe(202);
+      const accepted = await submissionResponse.json() as { accepted?: boolean; request_id?: string; status?: string };
+      expect(accepted).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect(accepted.request_id).toBeTruthy();
+      expect((await taskReply).length).toBeGreaterThan(0);
+      expect(providerCalls).toBeGreaterThan(0);
+      expect(providerFailure).toBeUndefined();
+
+      const statusUrl = `http://127.0.0.1:${gatewayPort}/owner/task-submission-status`;
+      const readStatus = () => fetch(statusUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ submission_id: submissionId }),
+      });
+      let statusBeforeRestart: { found?: boolean; request_id?: string; state?: string } | undefined;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const response = await readStatus();
+        expect(response.status).toBe(200);
+        statusBeforeRestart = await response.json() as { found?: boolean; request_id?: string; state?: string };
+        if (statusBeforeRestart.state === "handler_returned") break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(statusBeforeRestart).toMatchObject({ found: true, request_id: accepted.request_id, state: "handler_returned" });
+
+      const providerCallsBeforeRestart = providerCalls;
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const statusAfterRestartResponse = await readStatus();
+      expect(statusAfterRestartResponse.status).toBe(200);
+      expect(statusAfterRestartResponse.headers.get("cache-control")).toBe("no-store");
+      expect(await statusAfterRestartResponse.json()).toEqual({ found: true, request_id: accepted.request_id,
+        state: "handler_returned" });
+
+      const duplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef, submission_id: submissionId,
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(duplicateResponse.status).toBe(202);
+      expect(await duplicateResponse.json()).toMatchObject({ accepted: true, status: "already_accepted",
+        request_id: accepted.request_id });
+      expect(providerCalls).toBe(providerCallsBeforeRestart);
+
+      const snapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(snapshotResponse.status).toBe(200);
+      const snapshot = await snapshotResponse.json() as {
+        operation_plan_status?: { status?: string; recovery_refresh_status?: string; used_for_authority?: boolean;
+          plans?: Array<Record<string, unknown>> };
+      };
+      expect(snapshot.operation_plan_status).toMatchObject({ status: "available", recovery_refresh_status: "ready",
+        used_for_authority: false });
+      const requestIdDigest = createHash("sha256").update(`operation-request:${accepted.request_id}`).digest("hex");
+      expect(snapshot.operation_plan_status?.plans?.filter((plan) => plan.request_id_digest === requestIdDigest)).toHaveLength(1);
+    } finally {
+      taskWebSocket?.close();
+      if (gateway) await stopChild(gateway.child);
+      await closeServer(provider);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("holds exact proposal text in memory, requires reviewed L3 approval, commits to J, and replays the new version", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-change-"));
     const auditDir = join(tempRoot, "audit");
@@ -1380,6 +1595,7 @@ describe("delegated goal purpose owner review", () => {
       expect(ownerObservationReplanResponse.status).toBe(202);
       const ownerObservationReplanOutput = await ownerObservationReplanReply;
       expect(ownerObservationReplanOutput.length).toBeGreaterThan(0);
+      expect(providerFailure).toBeUndefined();
       const ownerObservationReplanResponseSummary = ownerObservationReplanOutput.includes("\"plan\"")
         ? "raw_plan_candidate_returned"
         : ownerObservationReplanOutput.includes("記憶引用を検証できなかったため")
@@ -1444,6 +1660,7 @@ describe("delegated goal purpose owner review", () => {
           : [];
         throw new Error(`${error instanceof Error ? error.message : "candidate wait failed"}; ` +
           `candidate_events=${JSON.stringify(candidateEvents)}; ` +
+          `owner_replan_response=${JSON.stringify(ownerObservationReplanOutput)}; ` +
           `operation_plan_status=${JSON.stringify(ownerObservationPlanDiagnostics)}`);
       }
       expect(ownerObservationPlan).toMatchObject({ task_identity_digest: uncertainTaskIdentity,
