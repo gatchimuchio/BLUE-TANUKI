@@ -231,6 +231,14 @@ WebChatとGatewayのtypecheck／build、生成Control Center script構文、`git
 
 **次:** E2E-01の残るproducer→consumer断線を最新HEADと現行正本から選び直し、対象path／functionを特定して実装する。owner task状態から一致した既存plan cardへ進む表示・操作境界は接続済み。provider/live外部作用と広域QCは使わない。
 
+#### 2026-11-01 E2E-01 BUILD接続 — Tasksから一致planのRuntime状態・既存owner操作へ
+
+owner task受付状態の照会後、認証済みRuntime snapshotから同一依頼IDに対応するplanを特定できても、実際のOperation Plan cardは`skills`／`developer`画面だけにあり、受付操作のあるTasks画面から続けられなかった。既存の同一Operation Core Plan projectionを`tasks`画面にも表示し、照会したplan状態・revisionと既存のowner操作が同じ画面で利用できるよう接続した。表示は同じread-only snapshotを再利用し、HDS/J、Approval、Broker、M writer、実行経路や権限は変更しない。
+
+WebChat typecheck／build、`git diff --check`はPASS。test、Gateway runtime、実provider／外部作用はNOT_RUN。D09.01／F10.01の当該UI consumer辺は`WIRED`。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** WebSocket切断後に同じtaskの結果をownerが確認できる既存producer／監査済みconsumerを特定し、再実行を起こさずに表示へ接続できるか現物から選ぶ。raw結果の新規保存や未監査表示は追加しない。provider/live外部作用と広域QCは使わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

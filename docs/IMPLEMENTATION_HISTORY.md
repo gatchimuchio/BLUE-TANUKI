@@ -3621,3 +3621,20 @@ Control Centerはowner tokenで作成されたplanのstep審査・保存結果�
 | 実provider／外部作用 | NOT_RUN |
 
 この変更はowner受付状態と現行Runtime planの限定read-only相関を`WIRED`にする。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは成立しない。
+
+## 2026-11-01 — Tasksから一致planのRuntime状態・既存owner操作へ
+
+### 実装
+
+owner taskの受付状態を照会するTasks画面には、同じ依頼IDから相関したplan状態が表示される一方、そのOperation Plan cardは`skills`／`developer`画面にしか表示されていなかった。既存の単一cardをTasks画面にも表示し、受付状態・認証済みRuntime snapshot・plan revision・既存owner操作の導線を一画面へ接続した。新しいAPI、snapshot、操作、authority、M writerは追加していない。
+
+### 確認
+
+| 確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/channel-webchat typecheck` | PASS |
+| `pnpm --filter @blue-tanuki/channel-webchat build` | PASS |
+| `git diff --check` | PASS |
+| test／Gateway runtime／実provider／外部作用 | NOT_RUN |
+
+この変更はD09.01／F10.01の該当するTasks→Runtime plan card consumerを`WIRED`にする。切断後のWebSocket結果確認、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

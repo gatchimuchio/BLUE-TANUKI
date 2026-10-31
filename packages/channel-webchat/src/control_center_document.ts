@@ -201,7 +201,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="card" data-screen-group="skills developer">
+        <section class="card" data-screen-group="skills developer tasks">
           <div class="row">
             <h2>Operation Core Plan</h2>
             <span id="operation-core-status" class="badge warn">not loaded</span>
