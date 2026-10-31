@@ -65,6 +65,7 @@ import { teamsAgentCredentialsFromEnvironment } from "./teams_agent_config.js";
 import { GatewayTeamsEventStore } from "./teams_event_store.js";
 import { parseLineInboundGrants } from "./line_inbound_grants.js";
 import { GatewayLineEventStore } from "./line_event_store.js";
+import { GatewayWebChatOwnerTaskStore } from "./webchat_owner_task_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -3121,6 +3122,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     };
   }
 
+  const ownerTaskSubmissionStore = GatewayWebChatOwnerTaskStore.fromEnvironment(process.env);
   webchat = plugins.createChannel<WebChatChannel>({
     package_name: "@blue-tanuki/channel-webchat",
     required_permissions: webchatPermissions,
@@ -3130,6 +3132,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       token,
       resume_token: resumeToken,
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
+      owner_task_submission_store: ownerTaskSubmissionStore,
       ...(d4RuntimeToken && d4RuntimeId
         ? { d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId } }
         : {}),
@@ -5346,6 +5349,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     });
   } catch (error) {
     await runtimeKernelShadowObserver?.shutdown();
+    ownerTaskSubmissionStore.close();
     throw error;
   }
   waitDeadlineScheduler.start();
@@ -5368,6 +5372,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       telegramUpdateStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
+      ownerTaskSubmissionStore.close();
       slackEventStore?.close();
       discordEventStore?.close();
       teamsEventStore?.close();

@@ -750,6 +750,8 @@ export interface WebChatOptions {
   onGoalPurposeChangeCandidates?: (input: { actor: string }) => Promise<readonly WebChatGoalPurposeChangeCandidate[]>;
   /** Read only current, materialized owner-delegated task purposes for explicit task submission. */
   onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly WebChatTaskGoalOption[]>;
+  /** Durable idempotency boundary for owner task submissions. Required when task submission is enabled. */
+  owner_task_submission_store?: WebChatOwnerTaskSubmissionStore;
   /** Dedicated owner endpoint for an exact, one-plan task-purpose relation review. */
   onGoalPurposeRelationReviewProposal?: (input: {
     plan_id_digest: string;
@@ -857,4 +859,19 @@ export interface WebChatOptions {
   rate_limit_prune_idle_ms?: number;
   /** Clock injection for tests. */
   clock?: Clock;
+}
+
+export type WebChatOwnerTaskSubmissionState = "dispatching" | "handler_returned" | "outcome_unknown" | "rejected";
+
+export type WebChatOwnerTaskSubmissionClaim =
+  | { readonly status: "accepted"; readonly request_id: string }
+  | { readonly status: "duplicate"; readonly request_id: string; readonly state: WebChatOwnerTaskSubmissionState }
+  | { readonly status: "identity_conflict"; readonly request_id: string };
+
+export interface WebChatOwnerTaskSubmissionStore {
+  claim(input: { readonly submission_id: string; readonly payload_digest: string; readonly request_id: string }):
+    WebChatOwnerTaskSubmissionClaim;
+  markHandlerReturned(request_id: string): void;
+  markOutcomeUnknown(request_id: string): void;
+  markRejected(request_id: string): void;
 }

@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import {
@@ -71,6 +71,7 @@ import type {
   WebChatNotificationSurface,
   WebChatOperatorSurface,
   WebChatOperatorSurfaces,
+  WebChatOwnerTaskSubmissionStore,
   WebChatOptions,
   WebChatRateLimits,
   WebChatRecoverySurface,
@@ -222,6 +223,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     if (opts.resume_token !== undefined && opts.resume_token === opts.token) {
       throw new Error("WebChatChannel: opts.resume_token must differ from opts.token");
+    }
+    if (opts.onOwnerTaskGoalOptions && !opts.owner_task_submission_store) {
+      throw new Error("WebChatChannel: owner task compute requires a durable submission store");
     }
     if (opts.webhook_token !== undefined && opts.webhook_token.length < 8) {
       throw new Error(
@@ -803,12 +807,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "owner_task_compute_not_configured" }));
         return;
       }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "owner_task_submission_store_unavailable" }));
+        return;
+      }
       const replyTo = typeof body?.user === "string" ? body.user.trim() : "";
       const task = typeof body?.task === "string" ? body.task.trim() : "";
       const goalRef = typeof body?.goal_ref === "string" ? body.goal_ref : "";
+      const submissionId = typeof body?.submission_id === "string" ? body.submission_id : "";
       const hasPurposeVersion = body !== null && Object.prototype.hasOwnProperty.call(body, "purpose_version");
       const requestedPurposeVersion = body?.purpose_version;
       if (!replyTo || replyTo.length > 200 || !task || task.length > 20_000 || !isWellFormedUnicode(task) ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId) ||
           !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
           (hasPurposeVersion && (typeof requestedPurposeVersion !== "number" ||
             !Number.isSafeInteger(requestedPurposeVersion) || requestedPurposeVersion < 2))) {
@@ -817,24 +829,65 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+      const handler = this.handler;
+      if (!handler) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
+        return;
+      }
+      const requestId = randomUUID();
+      const payloadDigest = createHash("sha256").update(JSON.stringify([
+        "webchat-owner-task-payload.v1",
+        replyTo,
+        task,
+        goalRef,
+        hasPurposeVersion,
+        hasPurposeVersion ? requestedPurposeVersion : null,
+      ]), "utf8").digest("hex");
+      let claimedRequestId: string | undefined;
+      let handlerStarted = false;
       try {
+        const claim = submissionStore.claim({
+          submission_id: submissionId,
+          payload_digest: payloadDigest,
+          request_id: requestId,
+        });
+        if (claim.status === "identity_conflict") {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, status: "submission_id_reused_with_different_input",
+            request_id: claim.request_id }));
+          return;
+        }
+        if (claim.status === "duplicate") {
+          if (claim.state === "dispatching" || claim.state === "handler_returned") {
+            res.writeHead(202, { "content-type": "application/json", "cache-control": "no-store",
+              "x-content-type-options": "nosniff" });
+            res.end(JSON.stringify({ accepted: true, request_id: claim.request_id,
+              status: claim.state === "dispatching" ? "already_in_progress" : "already_accepted" }));
+          } else {
+            res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(JSON.stringify({ accepted: false,
+              status: claim.state === "outcome_unknown" ? "owner_task_submission_outcome_unknown" :
+                "owner_task_submission_already_rejected",
+              request_id: claim.request_id }));
+          }
+          return;
+        }
+        claimedRequestId = claim.request_id;
         const goals = await this.opts.onOwnerTaskGoalOptions({ actor: OWNER_TOKEN_ACTOR });
         const goal = goals.find((candidate) => candidate.goal_ref === goalRef);
         if (!goal) {
+          submissionStore.markRejected(claim.request_id);
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_unavailable" }));
+          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_unavailable",
+            request_id: claim.request_id }));
           return;
         }
         if (hasPurposeVersion && goal.purpose_version !== requestedPurposeVersion) {
+          submissionStore.markRejected(claim.request_id);
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_changed" }));
-          return;
-        }
-        const requestId = randomUUID();
-        const handler = this.handler;
-        if (!handler) {
-          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-          res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
+          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_changed",
+            request_id: claim.request_id }));
           return;
         }
         const binding = {
@@ -865,7 +918,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
           },
         });
-        void Promise.resolve().then(() => handler(inboundReq)).catch(() => {
+        handlerStarted = true;
+        void Promise.resolve().then(() => handler(inboundReq)).then(() => {
+          submissionStore.markHandlerReturned(requestId);
+        }).catch(() => {
+          try { submissionStore.markOutcomeUnknown(requestId); } catch { /* keep replay blocked if state is unavailable */ }
           // Avoid logging owner task content or reply identity.
           // eslint-disable-next-line no-console
           console.error("[webchat] owner task handler error");
@@ -878,8 +935,16 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         });
         res.end(JSON.stringify({ accepted: true, request_id: requestId, status: "queued_for_hds_decision" }));
       } catch {
+        if (claimedRequestId) {
+          try {
+            if (handlerStarted) submissionStore.markOutcomeUnknown(claimedRequestId);
+            else submissionStore.markRejected(claimedRequestId);
+          } catch { /* keep replay blocked if state is unavailable */ }
+        }
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
+        res.end(JSON.stringify({ accepted: false, status: handlerStarted
+          ? "owner_task_submission_outcome_unknown" : "owner_task_submission_not_dispatched",
+        error: "owner_task_compute_unavailable" }));
       }
       return;
     }

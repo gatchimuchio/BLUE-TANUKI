@@ -25,6 +25,7 @@ import {
   type WebChatUpdateSurface,
   type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
+  type WebChatOwnerTaskSubmissionStore,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
   AOTANU_ASSET_ROUTE_PREFIX,
@@ -60,6 +61,40 @@ interface Ctx {
   ch: WebChatChannel;
   port: number;
   received: InboundRequest[];
+}
+
+function createTestOwnerTaskSubmissionStore(): WebChatOwnerTaskSubmissionStore {
+  const submissions = new Map<string, {
+    payload_digest: string;
+    request_id: string;
+    state: "dispatching" | "handler_returned" | "outcome_unknown" | "rejected";
+  }>();
+  return {
+    claim(input) {
+      const key = input.submission_id.toLowerCase();
+      const current = submissions.get(key);
+      if (current) {
+        return current.payload_digest === input.payload_digest
+          ? { status: "duplicate", request_id: current.request_id, state: current.state }
+          : { status: "identity_conflict", request_id: current.request_id };
+      }
+      submissions.set(key, { payload_digest: input.payload_digest, request_id: input.request_id, state: "dispatching" });
+      return { status: "accepted", request_id: input.request_id };
+    },
+    markHandlerReturned(requestId) { setSubmissionState(submissions, requestId, "handler_returned"); },
+    markOutcomeUnknown(requestId) { setSubmissionState(submissions, requestId, "outcome_unknown"); },
+    markRejected(requestId) { setSubmissionState(submissions, requestId, "rejected"); },
+  };
+}
+
+function setSubmissionState(
+  submissions: Map<string, { payload_digest: string; request_id: string; state: "dispatching" | "handler_returned" | "outcome_unknown" | "rejected" }>,
+  requestId: string,
+  state: "handler_returned" | "outcome_unknown" | "rejected",
+): void {
+  const row = [...submissions.values()].find((item) => item.request_id === requestId);
+  if (!row || row.state !== "dispatching") throw new Error("test_submission_state_transition_rejected");
+  row.state = state;
 }
 
 async function setup(
@@ -110,6 +145,7 @@ async function setup(
         purpose_preview: string;
         purpose_digest: string;
       }[]>;
+      owner_task_submission_store?: WebChatOwnerTaskSubmissionStore;
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
@@ -151,6 +187,7 @@ async function setup(
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
     onOwnerTaskGoalOptions: opts.onOwnerTaskGoalOptions,
+    owner_task_submission_store: opts.owner_task_submission_store ?? createTestOwnerTaskSubmissionStore(),
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
     ws_ticket_ttl_ms: opts.ws_ticket_ttl_ms,
@@ -3275,6 +3312,7 @@ describe("WebChatChannel — HTTP inbound", () => {
         user: "untrusted-reply-destination",
         task: "Plan one bounded synthetic observation.",
         goal_ref: goal.goal_ref,
+        submission_id: "8e396c37-7a67-470f-9d90-0054215cecb2",
         actor: "owner",
         metadata: { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
       };
@@ -3307,7 +3345,6 @@ describe("WebChatChannel — HTTP inbound", () => {
           purpose_digest: goal.purpose_digest },
       });
       expect(observedActors).toEqual([
-        "webchat-owner-token-holder",
         "webchat-owner-token-holder",
       ]);
 

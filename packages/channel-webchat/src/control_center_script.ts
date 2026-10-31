@@ -589,6 +589,68 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = goals.length ? "badge good" : "badge warn";
       }
 
+      let ownerTaskSubmissionIdMemory = null;
+
+      function pendingOwnerTaskSubmissionId() {
+        const storageKey = "blue-tanuki.owner-task-submission-id.v1";
+        if (ownerTaskSubmissionIdMemory) return ownerTaskSubmissionIdMemory;
+        try {
+          const stored = sessionStorage.getItem(storageKey);
+          if (typeof stored === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stored)) {
+            ownerTaskSubmissionIdMemory = stored;
+            return stored;
+          }
+        } catch { /* keep the identifier in this page session when storage is unavailable */ }
+        ownerTaskSubmissionIdMemory = crypto.randomUUID();
+        try { sessionStorage.setItem(storageKey, ownerTaskSubmissionIdMemory); } catch { /* page memory remains available */ }
+        return ownerTaskSubmissionIdMemory;
+      }
+
+      function clearOwnerTaskSubmissionId() {
+        ownerTaskSubmissionIdMemory = null;
+        try { sessionStorage.removeItem("blue-tanuki.owner-task-submission-id.v1"); } catch { /* best effort */ }
+      }
+
+      async function postOwnerTaskCompute(token, body) {
+        const response = await fetch("/owner/task-compute", {
+          method: "POST",
+          headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+          body: JSON.stringify(body)
+        });
+        let result = null;
+        try { result = await response.json(); } catch { /* use the fixed HTTP failure below */ }
+        if (!response.ok) {
+          const statusCode = result && typeof result.status === "string" ? result.status : "";
+          const requestId = result && typeof result.request_id === "string" ? result.request_id : "";
+          if (response.status === 409 || statusCode === "owner_task_submission_not_dispatched") {
+            clearOwnerTaskSubmissionId();
+          }
+          if (statusCode === "owner_task_submission_not_dispatched") {
+            throw new Error("GatewayからHDSへは未送信です。内容を確認して再送できます。");
+          }
+          if (statusCode === "owner_task_submission_outcome_unknown") {
+            throw new Error("依頼結果が不明のため再実行しません。Tasks／Runtimeで状態を確認してください。参照ID: " + requestId);
+          }
+          if (statusCode === "submission_id_reused_with_different_input") {
+            throw new Error("この依頼IDは別の内容で使用済みです。先行依頼をTasks／Runtimeで確認してください。参照ID: " + requestId);
+          }
+          if (statusCode === "owner_task_submission_already_rejected") {
+            throw new Error("この依頼は以前に拒否されています。現在の目的を再確認してください。参照ID: " + requestId);
+          }
+          if (statusCode === "delegated_task_purpose_changed") {
+            throw new Error("依頼中に委任目的が更新されました。目的を再読込して選び直してください。参照ID: " + requestId);
+          }
+          if (statusCode === "delegated_task_purpose_unavailable") {
+            throw new Error("選択した委任目的は現在利用できません。目的を再読込してください。参照ID: " + requestId);
+          }
+          throw new Error("/owner/task-compute failed: HTTP " + response.status);
+        }
+        if (!result || typeof result !== "object" || Array.isArray(result)) {
+          throw new Error("/owner/task-compute returned an invalid response");
+        }
+        return result;
+      }
+
       async function submitOwnerTask() {
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
@@ -606,14 +668,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
           throw new Error("委任目的を再読み込みして選び直してください");
         }
-        const result = await postJson("/owner/task-compute", ownerToken, {
-          user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion
+        const result = await postOwnerTaskCompute(ownerToken, {
+          user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
+          submission_id: pendingOwnerTaskSubmissionId()
         });
+        clearOwnerTaskSubmissionId();
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
         appendChat("owner", task);
         appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);
-        status.textContent = "HDSへ依頼済み。計画候補・作用は未承認です";
+        status.textContent = result.status === "already_in_progress" || result.status === "already_accepted"
+          ? "この依頼は既に受け付け済みです。重複起動していません"
+          : "HDSへ依頼済み。計画候補・作用は未承認です";
         status.className = "badge good";
       }
 

@@ -575,6 +575,7 @@ describe("delegated goal purpose owner review", () => {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000801",
           actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
       });
       expect(taskSubmission.status).toBe(202);
@@ -799,6 +800,7 @@ describe("delegated goal purpose owner review", () => {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000802",
           goal_ref: goalRef, purpose_version: 2 }),
       });
       expect(syntheticTaskSubmission.status).toBe(202);
@@ -1097,6 +1099,7 @@ describe("delegated goal purpose owner review", () => {
           method: "POST",
           headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
           body: JSON.stringify({ user: "c0802-owner", task: SYNTHETIC_FILE_WRITE_PLAN_TASK,
+            submission_id: "01a119c0-5b35-4491-ae00-000000000803",
             goal_ref: goalRef, purpose_version: 2 }),
         });
         expect(uncertainTaskSubmission.status).toBe(202);
