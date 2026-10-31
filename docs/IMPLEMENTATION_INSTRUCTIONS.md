@@ -333,6 +333,14 @@ HDSのticket digest生成試験1件、Gateway投影試験1件、WebChat相関試
 
 **次のproducer／consumer:** E2E-01の残る仕事経路を最新HEADと現行正本から選び、固定合成file.write／file.search系列を越える通常taskの目的・C候補・J採否・結果/M・同一task再計画を既存consumerへ接続する。実provider呼出し、live外部作用、広域QC／QA、Rust cutoverは保留する。
 
+#### 2026-11-01 E2E-01 BUILD接続 — task指定本文からの限定file.write候補
+
+開発用synthetic Cが、従来の固定demoに加えて、owner task本文で明示された単一の相対`.txt`名と一行本文から、sandbox内のcreate-only `file.write`候補を作れるようにした。Cはsandbox内容を先読みせず、本文から書込byte数を決定する。J、Approval Gate、Broker、Executor、M、同一task再計画の契約・権限経路は変更していない。親taskの検証済みwrite receiptまたはownerが選択した不確実状態observationを照合した場合、元taskの同じ名前・本文を使って既存`file.search`候補へ進む。これはproviderを使わないboundedな開発fixtureの入力一般化であり、任意task向けの一般Cや実行済みE2Eの証拠ではない。
+
+coreとGatewayのpackage typecheckはPASS。sandboxでのruntime、J採否、Approval／Broker実行、M receipt、同一task再計画はNOT_RUN。provider／live外部作用、workspace suite、QE_QC／QE_QAはNOT_RUN。この差分は`CODE_PRESENT`で、実物経路の`WIRED`確認と`SYSTEM_SHAPED`を成立させない。
+
+**次のproducer／consumer:** 隔離sandbox・synthetic Cのまま、動的taskをOwner入口から提出し、J候補採否→Approval／Broker→write結果/M receipt→同一task search再計画までのruntime接続境界を特定する。実provider・外部送信・広域QC／QA・Rust cutoverは行わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
