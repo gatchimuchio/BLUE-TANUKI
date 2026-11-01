@@ -2373,7 +2373,7 @@ export async function invokeFileEdit(
 
 export const fileSearchTool: Tool = {
   name: "file.search",
-  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file.",
+  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file. After an explicitly requested workspace test, use the same relative file path to reread current state and return the saved result to the owner.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
@@ -2443,7 +2443,7 @@ export const fileDeleteTool: Tool = {
 
 export const fileEditTool: Tool = {
   name: "file.edit",
-  description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT.",
+  description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT. After an owner-reviewed edit, run only a requested test with shell.exec using same_workspace_as_file_root=true and summary_only=true, then reread the same path with file.search. A failed test never triggers automatic restoration; recovery requires a fresh owner-reviewed inverse edit against the current file version.",
   required_capabilities: requireToolOperationDescriptor("file.edit").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;

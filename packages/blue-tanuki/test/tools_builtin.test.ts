@@ -1600,7 +1600,7 @@ describe("built-in tools", () => {
     await fs.mkdir(fileRoot);
     const mismatchedEnv = { ...shellTestEnv(shellRoot), BLUE_TANUKI_FILE_ROOT: fileRoot };
     const sameRootEnv = { ...shellTestEnv(shellRoot), BLUE_TANUKI_FILE_ROOT: shellRoot };
-    const args = { cmd: "node", args: ["--version"], same_workspace_as_file_root: true };
+    const args = { cmd: "node", args: ["--version"], same_workspace_as_file_root: true, summary_only: true };
     try {
       await expect(inspectShellExecTargetVersion(args, {
         env: mismatchedEnv,
@@ -1610,6 +1610,18 @@ describe("built-in tools", () => {
         env: mismatchedEnv,
         nativeProviderPath: path.join(parent, "missing-provider.exe"),
       })).rejects.toThrow(/resolve to the same directory/);
+      await expect(inspectShellExecTargetVersion({ ...args, summary_only: false }, {
+        env: sameRootEnv,
+        command_digest: "d".repeat(64),
+      })).rejects.toThrow(/requires summary_only=true/);
+      await expect(inspectShellExecTargetVersion({
+        cmd: args.cmd,
+        args: args.args,
+        same_workspace_as_file_root: true,
+      }, {
+        env: sameRootEnv,
+        command_digest: "e".repeat(64),
+      })).rejects.toThrow(/requires summary_only=true/);
 
       const observation = await inspectShellExecTargetVersion(args, {
         env: sameRootEnv,
@@ -1624,6 +1636,50 @@ describe("built-in tools", () => {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec can verify a same-workspace file while returning only a digest summary",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-workspace-test-"));
+      const filePath = path.join(root, "reviewed.txt");
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const env = shellTestEnv(root, { BLUE_TANUKI_FILE_ROOT: root });
+      await fs.writeFile(filePath, "after\r\n", "utf8");
+      const args = {
+        cmd: "findstr.exe",
+        args: ["/x", "/c:after", "reviewed.txt"],
+        same_workspace_as_file_root: true,
+        summary_only: true,
+      };
+      try {
+        const targetVersionObservation = await inspectShellExecTargetVersion(args, {
+          env,
+          command_digest: "c".repeat(64),
+        });
+        const result = await invokeShellExec(args, {
+          env,
+          targetVersionObservation,
+          nativeProviderPath: providerPath,
+        }) as Record<string, unknown>;
+        expect(result).toMatchObject({
+          exit_code: 0,
+          signal: null,
+          timed_out: false,
+          output_included: false,
+          process_tree_empty: true,
+        });
+        expect(result.stdout_text_bytes).toBeGreaterThan(0);
+        expect(result.stdout_text_sha256).toMatch(/^[a-f0-9]{64}$/u);
+        expect(result).not.toHaveProperty("stdout");
+        expect(result).not.toHaveProperty("stderr");
+        expect(JSON.stringify(result)).not.toContain("after");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("shell.exec requires a reviewed sandbox identity and refuses a replaced cwd before process creation", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-target-version-"));

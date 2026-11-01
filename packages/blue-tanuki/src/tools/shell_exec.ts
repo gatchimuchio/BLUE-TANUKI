@@ -54,6 +54,11 @@ export async function invokeShellExec(
   opts: ShellExecOptions = {},
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
+  const sameWorkspace = booleanArg(args, "same_workspace_as_file_root", false);
+  const summaryOnly = booleanArg(args, "summary_only", false);
+  if (sameWorkspace && !summaryOnly) {
+    throw new Error("same-workspace shell.exec requires summary_only=true so captured output is not returned");
+  }
   const shellRoot = await shellRootFromEnv(env);
   await assertSameFileWorkspaceWhenRequested(args, env, shellRoot);
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
@@ -104,13 +109,21 @@ export async function invokeShellExec(
     opts.onExecutionLifecycle,
   );
 
+  const output = summaryOnly
+    ? {
+        output_included: false,
+        stdout_text_bytes: Buffer.byteLength(native.stdout, "utf8"),
+        stdout_text_sha256: createHash("sha256").update(native.stdout, "utf8").digest("hex"),
+        stderr_text_bytes: Buffer.byteLength(native.stderr, "utf8"),
+        stderr_text_sha256: createHash("sha256").update(native.stderr, "utf8").digest("hex"),
+      }
+    : { stdout: native.stdout, stderr: native.stderr };
   return {
     cwd: displayPath(path.relative(shellRoot, cwd) || "."),
     exit_code: native.exit_code,
     signal: native.signal,
     timed_out: native.timed_out,
-    stdout: native.stdout,
-    stderr: native.stderr,
+    ...output,
     truncated: native.truncated,
     process_tree_empty: native.process_tree_empty,
     descendants_terminated: native.descendants_terminated,
@@ -151,7 +164,7 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
 export const shellExecTool: Tool = {
   name: "shell.exec",
   description:
-    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built. For a test of files under BLUE_TANUKI_FILE_ROOT, set same_workspace_as_file_root=true so review and execution reject a different workspace root.",
+    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built. For an explicitly requested test after an owner-reviewed file.edit, set same_workspace_as_file_root=true and summary_only=true; this returns exit status, text byte counts and digests without captured output. Then reread the same relative file with file.search. Nonzero exit or timeout is a failed test; never restore automatically. If recovery is requested, inspect current state and propose a fresh owner-reviewed inverse file.edit.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async inspect_target_version(args, options = {}) {
     return await inspectShellExecTargetVersion(args, options);
@@ -178,6 +191,11 @@ export async function inspectShellExecTargetVersion(
     throw new Error("shell.exec target resolver received an invalid Operation Plan binding");
   }
   const env = options.env ?? process.env;
+  const sameWorkspace = booleanArg(args, "same_workspace_as_file_root", false);
+  booleanArg(args, "summary_only", false);
+  if (sameWorkspace && args.summary_only !== true) {
+    throw new Error("same-workspace shell.exec requires summary_only=true so captured output is not returned");
+  }
   const command = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
   const argv = shellArgs(args);
   validateShellCommand(command, argv);
@@ -559,6 +577,13 @@ function positiveIntArg(
     throw new Error(`${name} must be a positive integer`);
   }
   return Math.min(value, max);
+}
+
+function booleanArg(args: Record<string, unknown>, name: string, fallback: boolean): boolean {
+  const value = args[name];
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
 }
 
 async function shellRootFromEnv(env: Env): Promise<string> {

@@ -380,6 +380,14 @@ HDS／Gateway／WebChat typecheck、HDS build、Windows isolation target向け`c
 
 **次のproducer／consumer:** 既存owner審査済み`file.edit`の後続で、同一rootを要求する隔離testを実行し、その結果と同一fileの再読取をGUIへ返すconsumerを接続する。test失敗時は現行file identityを再審査した新しいowner承認済み逆編集へ戻し、競合writerを上書きせず自動復元しない。D4Pocket側は変更しない。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
 
+#### 2026-11-01 F01.03 BUILD接続 — 同一Workspace隔離testのsummary結果
+
+`file.edit`／`shell.exec`／`file.search`の既存tool consumerへ順序を明示した。明示依頼がある場合に限り、owner審査済みfile.edit後のtestを`shell.exec`の`same_workspace_as_file_root=true`で実行する。同一Workspace指定時は`summary_only=true`を強制し、省略／falseならtarget review前に拒否する。summaryはexit status・captured textのbyte数／SHA-256・process終了状態だけを返し、stdout／stderr本文を会話へ渡さない。続けて同じ相対pathの`file.search`で現在状態を読み直す。test失敗から自動復元せず、ownerが復帰を選んだ場合は現在対象版へ結び付く新しいfile.edit審査を要求する。
+
+Windows native AppContainerの限定process testで、同一file root内の`reviewed.txt`を`findstr.exe`が読めること、exit code 0／process tree empty、およびsummaryに本文が含まれないことを確認した。summary省略時のpreflight拒否も確認した。core／Gateway typecheck、core build、対象test 1件はPASS。これは隔離shell consumerの限定接続証拠で、WebChat上のfile.edit→test→file.search完全往復、失敗時の新規逆編集、F01.03全体は未確認／未成立。実provider・外部live・全suite・QC／QAはNOT_RUN。
+
+**次のproducer／consumer:** 同一request/taskから既存owner審査済み`file.edit`、summary-only `shell.exec`、同一相対pathの`file.search`をGateway／WebChat実processで連結し、test結果と現行file search結果がownerへ届くことを確認する。失敗時は既存Content Review／対象版再照合を通る逆編集候補だけを提示し、自動実行しない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
