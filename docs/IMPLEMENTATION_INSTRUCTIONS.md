@@ -509,3 +509,11 @@ Control Centerの未実行`file.edit`候補に、完全一致する置換数（1
 `packages/protocol/src/operation_plan_state.ts`、`packages/hds-brain/src/operation_plan.ts`、`packages/hds-brain/src/controller.ts`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`を変更。protocol／HDS build、core／Gateway／WebChat typecheck、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（HDS証拠照合からsynthetic C拒否までのコード接続、実consumer未確認）。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 **次のproducer／consumer:** timeoutと非0終了の各実行で、HDSの失敗根拠・保存済みfile.search・Owner選択・新規逆編集候補・現行版Content Review・L3 Approval／Broker・M receipt・Owner返信がsynthetic Gateway runtimeで連なること。testは実行せず、runtime実行に進める環境・承認済み手順を先に整える。
+
+#### 2026-11-01 F01.03 BUILD接続 — 逆編集後の結果観測
+
+失敗後のOwner-reviewed `recovery_edit`候補を、単独の逆編集で終えず、同じsandbox・相対path・復元対象文字列を使うread-only `file.search`へ接続した。検索stepは逆編集stepに依存し、別のJ step審査後に実行される。Control Centerでは依存する検索を「編集後確認候補（file.search）」と表示する。逆編集の自動実行、test再実行、自動再復元は加えていない。
+
+`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`と`packages/channel-webchat/src/control_center_script.ts`を変更。core／channel-webchat typecheckとbuildはPASS、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（候補planと表示のコード接続、runtime未確認）。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** 同一taskの非0終了／確認済みtimeout後に、保存済み検索結果のOwner選択から逆編集候補、現行版Content Review、L3 Approval／Broker、M receipt、依存する編集後確認検索とOwner返信までが隔離Gateway runtimeで連なること。既存のtest未実施条件を維持する。

@@ -2107,7 +2107,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
             (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
             purposeRelationReviewActions + waitRegistrationActions +
-            steps.map(function (step) {
+            steps.map(function (step, stepIndex) {
+              const previousStep = stepIndex > 0 ? steps[stepIndex - 1] : null;
+              const isEditVerificationCandidate = step.operation === "file.search" && previousStep?.operation === "file.edit" &&
+                Array.isArray(step.preparation?.depends_on) && step.preparation.depends_on.includes(previousStep.step_id);
+              const stepTitle = isEditVerificationCandidate ? "編集後確認候補（file.search）" : step.operation || "operation";
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
               const shellSummary = isObject(step.shell_exec_summary) ? step.shell_exec_summary : null;
@@ -2271,7 +2275,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                       : 'この計画はowner tokenで開始されています。step審査にもTasks欄へowner tokenを入力してください。Jが現在のrevision・依存・対象を再確認し、必要なL3はApproval待ちです。')
                     : 'Jが現在のrevision・依存・対象を再確認します。L1/L2はowner設定により実行へ進む場合があり、L3はApproval待ちです。') + '</p>'
                 : '';
-              return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
+              return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(stepTitle) + '</h4>' +
                 badge(unknown ? "結果不明" : step.status || "unknown", operationPlanStatusTone(step.status)) + '</div>' +
                 '<dl class="kv"><dt>step digest</dt><dd class="mono">' + escapeHtml(shortDigest(step.step_id)) + '</dd>' +
                 '<dt>command digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.command_digest)) + '</dd>' +

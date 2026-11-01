@@ -502,7 +502,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     const fileContent = fixture.file_content ?? "";
     const searchText = isSearch ? fixture.search_query ?? ""
       : isRead ? ""
-      : fixture.kind === "edit_verify" ? fixture.edit_replace ?? "" : fileContent.trim();
+      : fixture.kind === "edit_verify" || fixture.kind === "recovery_edit" ? fixture.edit_replace ?? "" : fileContent.trim();
     if (!isSearch && !relativePath) throw reject("Synthetic same-task verification requires its matching parent create candidate.");
     const target: OperationPlan["steps"][number]["target"] = isCreate || isDelete || isEdit
       ? { kind: "file", id: relativePath ?? generatedPath }
@@ -695,7 +695,8 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
       };
     }
     const steps: OperationPlan["steps"] = [step];
-    if (fixture.kind === "edit_verify" && relativePath && fixture.edit_search !== undefined &&
+    if ((fixture.kind === "edit_verify" || fixture.kind === "recovery_edit") &&
+        relativePath && fixture.edit_search !== undefined &&
         fixture.edit_replace !== undefined) {
       const searchTarget: OperationPlan["steps"][number]["target"] = {
         kind: "directory", id: sandboxRoot, display_name: "編集後の同一sandbox",
