@@ -12,6 +12,7 @@ export const SYNTHETIC_FILE_WRITE_PLAN_BACKEND = "synthetic-file-write-plan";
 export const SYNTHETIC_FILE_WRITE_PLAN_TASK = "BLUE-TANUKI synthetic create-only file-write demonstration";
 const SYNTHETIC_FILE_WRITE_REPLAN_TASK = "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。";
 const SYNTHETIC_FILE_WRITE_OWNER_OBSERVATION_REPLAN_TASK = "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。";
+const SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK = "同じtaskのsame-workspace test失敗を受け、ownerが現在状態を確認した上で、新しい逆編集候補だけを作成してください。未実行candidateとし、編集の自動復元やowner承認なしの作用は行わないでください。";
 const SYNTHETIC_FILE_CONTENT = "BLUE-TANUKI synthetic create-only operation completed.\n";
 const SYNTHETIC_CREATE_TASK_PREFIX = "次の内容で新しいテキストファイルを作成してください。\nファイル名: ";
 const SYNTHETIC_SEARCH_TASK_PREFIX = "sandbox内のテキストファイルで次の語句を検索してください。\n検索語: ";
@@ -23,7 +24,7 @@ const SYNTHETIC_AGENT_ROLES = ["division", "independent_comparison", "audit", "r
 const SYNTHETIC_AGENT_WORKER_SCHEMA_VERSION = "blue-tanuki.synthetic-plan-worker-candidate.v1";
 
 type SyntheticPlanEnv = Record<string, string | undefined>;
-type SyntheticPlanKind = "create" | "verify" | "search" | "edit" | "edit_test";
+type SyntheticPlanKind = "create" | "verify" | "search" | "edit" | "edit_test" | "recovery_edit";
 type SyntheticPlanStage = "direct" | "worker" | "parent";
 type SyntheticFileTaskDetails = {
   readonly file_path?: string;
@@ -306,6 +307,33 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
     kind = "verify";
     fileDetails = parentTaskDetails;
     parentPlanIdDigest = parent.parent_plan_id_digest;
+  } else if (task === SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK &&
+      parentContexts.length === 1 && observationContexts.length === 1) {
+    const parent = parseContextTail(parentContexts[0]!.content);
+    const observationPayload = parseContextTail(observationContexts[0]!.content);
+    const observations = observationPayload?.observations;
+    const observation = Array.isArray(observations) && observations.length === 1
+      ? OperationPlanComputeSourceObservationSchema.safeParse(observations[0])
+      : undefined;
+    const parentTaskDetails = typeof parent?.original_task === "string"
+      ? parseSyntheticFileEditTestTask(parent.original_task)
+      : undefined;
+    if (!parent || !parentTaskDetails || !isDigest(parent.task_identity_digest) ||
+        !isDigest(parent.parent_plan_id_digest) || !isDigest(parent.parent_revision_digest) || !observation?.success ||
+        observation.data.source !== "verified_file_search_result" || observation.data.operation !== "file.search" ||
+        observation.data.plan_id_digest !== parent.parent_plan_id_digest ||
+        observation.data.revision_digest !== parent.parent_revision_digest ||
+        observation.data.task_identity_digest !== parent.task_identity_digest ||
+        observation.data.plan_binding_status !== "verified" || observation.data.plan_validation_status !== "matched" ||
+        observation.data.match_count < 1 || observation.data.search_completeness !== "unknown" ||
+        observation.data.expires_at_ms <= Date.now() || observation.data.used_for_authority !== false ||
+        observation.data.may_execute !== false) {
+      return undefined;
+    }
+    kind = "recovery_edit";
+    fileDetails = { file_path: parentTaskDetails.file_path, edit_search: parentTaskDetails.edit_replace,
+      edit_replace: parentTaskDetails.edit_search };
+    parentPlanIdDigest = parent.parent_plan_id_digest;
   } else {
     return undefined;
   }
@@ -339,7 +367,8 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
 
 /**
  * Local development-only C fixture. It can propose bounded file create/search
- * tasks and an owner-reviewed edit -> isolated summary-only test -> reread flow;
+ * tasks, an owner-reviewed edit -> isolated summary-only test -> reread flow, and
+ * an explicit same-task inverse-edit candidate after a failed test observation;
  * HDS, Approval Gate, Broker, Executor, and the file sandbox keep their existing
  * authority and execution responsibilities.
  */
@@ -381,7 +410,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     const identityDigest = createHash("sha256").update(requestId, "utf8").digest("hex");
     const isCreate = fixture.kind === "create";
     const isSearch = fixture.kind === "search";
-    const isEdit = fixture.kind === "edit" || fixture.kind === "edit_test";
+    const isEdit = fixture.kind === "edit" || fixture.kind === "edit_test" || fixture.kind === "recovery_edit";
     const planId = `synthetic-plan-${identityDigest}`;
     const planIdDigest = operationPlanDigest(planId);
     const generatedPath = `blue-tanuki-synthetic-${planIdDigest.slice(0, 20)}.txt`;

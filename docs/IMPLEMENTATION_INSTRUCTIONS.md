@@ -394,6 +394,14 @@ Windows native AppContainerの限定process testで、同一file root内の`revi
 
 **次のproducer／consumer:** test失敗後に自動復元せず、同一対象の現在版をownerへ示し、既存Content Review／版再照合／L3を通る新しい逆編集だけを提示する回復経路を接続する。ownerの新規承認なしに復帰編集を実行しない。
 
+#### 2026-11-01 F01.03 BUILD接続 — failed test後のowner-reviewed逆編集候補
+
+同一Workspaceのsummary-only `shell.exec`について、Jの非権威plan projectionへexit code／signal／timeout／process-tree emptyだけを追加した。stdout／stderr・command・file内容は投影しない。WebChatは明示的な非0終了と同一planのM receipt確認済みfile.searchが揃った場合だけ、owner tokenによる逆編集候補計算を提示する。先に保存済み検索結果で状態を確認するよう案内し、C fixtureは同じparent task identity／revisionの検索観測が一件以上ある場合だけ、元の置換を逆にした単一`file.edit`候補を返す。候補は未実行であり、自動復元しない。既存Content Reviewが現行差分を再表示し、target version再照合と新しいL3 Approval／Brokerを通過しなければ編集されない。timeout・中断・終了codeなしは逆編集条件から除外する。
+
+HDS-BRAIN／Gateway／core／WebChatのTypeScript no-emit確認、生成Control Center script構文確認、`git diff --check`はPASS。Gateway process／browser／test suiteはNOT_RUN。STATUS=WIRED（HDS projection→WebChat owner選択→同一task search observation→synthetic逆編集候補のコード経路接続、実consumer未実行）。実provider・実外部作用・本番file編集は未使用。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** QE_BUILDを続け、最新実物から次の未接続producer／consumerを選ぶ。統合形状が揃う前の広域QC／QA、実provider、live外部作用、Rust cutoverは行わない。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

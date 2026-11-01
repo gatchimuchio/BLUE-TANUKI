@@ -54,6 +54,52 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
 
+function summaryOnlyShellExecResult(step: OperationStep, value: unknown): {
+  readonly exit_code: number | null;
+  readonly signal: "timeout" | "aborted" | null;
+  readonly timed_out: boolean;
+  readonly process_tree_empty: true;
+} | undefined {
+  if (step.operation !== "shell.exec" || step.parameters?.same_workspace_as_file_root !== true ||
+      step.parameters?.summary_only !== true || typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output = value as Record<string, unknown>;
+  const resultKeys = ["cwd", "exit_code", "signal", "timed_out", "output_included", "stdout_text_bytes",
+    "stdout_text_sha256", "stderr_text_bytes", "stderr_text_sha256", "truncated", "process_tree_empty",
+    "descendants_terminated", "operation_core"];
+  const maxBytes = step.parameters.max_bytes ?? 64_000;
+  const operationCore = output.operation_core;
+  if (Object.keys(output).length !== resultKeys.length || !resultKeys.every((key) => Object.hasOwn(output, key)) ||
+      output.cwd !== "." || output.output_included !== false || Object.hasOwn(output, "stdout") ||
+      Object.hasOwn(output, "stderr") ||
+      (output.exit_code !== null && (typeof output.exit_code !== "number" || !Number.isSafeInteger(output.exit_code) ||
+        output.exit_code < 0 || output.exit_code > 2_147_483_647)) ||
+      (output.signal !== null && output.signal !== "timeout" && output.signal !== "aborted") ||
+      typeof output.timed_out !== "boolean" || output.timed_out !== (output.signal === "timeout") ||
+      typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 512_000 ||
+      typeof output.stdout_text_bytes !== "number" || !Number.isSafeInteger(output.stdout_text_bytes) ||
+      output.stdout_text_bytes < 0 || output.stdout_text_bytes > maxBytes ||
+      typeof output.stderr_text_bytes !== "number" || !Number.isSafeInteger(output.stderr_text_bytes) ||
+      output.stderr_text_bytes < 0 || output.stderr_text_bytes > maxBytes ||
+      typeof output.stdout_text_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(output.stdout_text_sha256) ||
+      typeof output.stderr_text_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(output.stderr_text_sha256) ||
+      typeof output.truncated !== "boolean" || output.process_tree_empty !== true ||
+      typeof output.descendants_terminated !== "boolean" || typeof operationCore !== "object" || operationCore === null ||
+      Array.isArray(operationCore)) return undefined;
+  const core = operationCore as Record<string, unknown>;
+  const operationCoreKeys = ["role", "adapter", "operation", "state", "adapter_is_authority",
+    "command_generated_by_adapter_only", "raw_command_is_core_operation", "adapter_result_used_for_authority"];
+  const resultSucceeded = output.exit_code === 0 && output.signal === null && output.timed_out === false;
+  if (Object.keys(core).length !== operationCoreKeys.length || !operationCoreKeys.every((key) => Object.hasOwn(core, key)) ||
+      core.role !== "execution_adapter" || core.adapter !== "shell" || core.operation !== "tool.shell.exec" ||
+      core.state !== (resultSucceeded ? "succeeded" : "failed") || core.adapter_is_authority !== false ||
+      core.command_generated_by_adapter_only !== true || core.raw_command_is_core_operation !== false ||
+      core.adapter_result_used_for_authority !== false) return undefined;
+  return { exit_code: output.exit_code as number | null, signal: output.signal as "timeout" | "aborted" | null,
+    timed_out: output.timed_out, process_tree_empty: true };
+}
+
 interface OperationPlanSavedResultReturnProjectionBase {
   readonly plan_id_digest: string;
   readonly revision_digest: string;
@@ -3979,6 +4025,9 @@ export class OperationPlanLedger {
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
           const binding = p.bindings.filter((entry) => entry.step_id === step.step_id).at(-1);
+          const stepResults = p.results.filter((entry) => entry.step_id === step.step_id && entry.operation === step.operation);
+          const shellExecSummary = stepResults.length === 1
+            ? summaryOnlyShellExecResult(step, stepResults[0]!.output) : undefined;
           const observation = binding?.status === "outcome_unknown"
             ? p.receipt_observations.filter((entry) => entry.revision_digest === currentRevision.digest &&
               entry.step_id_digest === operationPlanDigest(step.step_id) && entry.command_digest === binding.command_digest).at(-1)
@@ -3988,6 +4037,7 @@ export class OperationPlanLedger {
             : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
+            ...(shellExecSummary ? { shell_exec_summary: shellExecSummary } : {}),
             external_receipt_observation: binding?.status !== "outcome_unknown" || observation?.source === "local_file_state"
               ? "not_applicable" : observation?.status ?? "not_recorded",
             ...(observation?.source === "local_inspection" ? { external_receipt: {

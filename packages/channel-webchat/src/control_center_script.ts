@@ -1273,11 +1273,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
-      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState) {
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         if (!ownerToken) throw new Error("同一taskの再計画にはowner tokenを入力してください");
+        if (ownerSelectedFileState && recoveryEdit) throw new Error("file-state observation and test recovery cannot be combined");
         const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
         if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
           throw new Error("current plan and verified step digests are unavailable");
@@ -1291,7 +1292,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const control = {
           task: ownerSelectedFileState
             ? "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。"
-            : "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
+            : recoveryEdit
+              ? "同じtaskのsame-workspace test失敗を受け、ownerが現在状態を確認した上で、新しい逆編集候補だけを作成してください。未実行candidateとし、編集の自動復元やowner承認なしの作用は行わないでください。"
+              : "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
           goal_purpose_binding: { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
             purpose_digest: binding.purpose_digest },
           parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
@@ -1307,7 +1310,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         appendChat("owner", ownerSelectedFileState
           ? "ownerが現在状態の観測を候補計算へ明示選択しました（元の作用結果は不明のまま）"
-          : "同一taskの検証済み結果に基づく再計画を依頼しました");
+          : recoveryEdit
+            ? "test失敗後の現在状態をもとに、未実行の逆編集候補を依頼しました"
+            : "同一taskの検証済み結果に基づく再計画を依頼しました");
         appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました", result.request_id);
       }
 
@@ -2051,6 +2056,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               '<span class="badge" data-purpose-relation-status="true" aria-live="polite"></span>' +
               '<p class="muted">申請後、承認キューでtask・目的本文・planを再確認します。承認結果はこのplan revisionにだけ結び付きます。</p></section>'
             : '';
+          const sameWorkspaceEditTestPlan = steps.length === 3 && steps[0]?.operation === "file.edit" &&
+            steps[1]?.operation === "shell.exec" && steps[2]?.operation === "file.search";
+          const shellTestStep = sameWorkspaceEditTestPlan ? steps[1] : null;
+          const shellTestSummary = isObject(shellTestStep?.shell_exec_summary) ? shellTestStep.shell_exec_summary : null;
+          const sameWorkspaceTestFailed = !!shellTestStep && shellTestStep.status === "verified" && !!shellTestSummary &&
+            Number.isSafeInteger(shellTestSummary.exit_code) && shellTestSummary.exit_code > 0 &&
+            shellTestSummary.signal === null && shellTestSummary.timed_out === false && shellTestSummary.process_tree_empty === true;
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
@@ -2066,6 +2078,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             steps.map(function (step) {
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
+              const shellSummary = isObject(step.shell_exec_summary) ? step.shell_exec_summary : null;
+              const shellExitCode = shellSummary && Number.isSafeInteger(shellSummary.exit_code) ? shellSummary.exit_code : null;
+              const shellCompletedSuccessfully = shellExitCode === 0 && shellSummary?.signal === null &&
+                shellSummary.timed_out === false && shellSummary.process_tree_empty === true;
+              const shellCompletedWithFailure = shellExitCode !== null && shellExitCode > 0 && shellSummary?.signal === null &&
+                shellSummary.timed_out === false && shellSummary.process_tree_empty === true;
+              const shellSummaryDetails = shellSummary
+                ? '<dt>同一Workspace test</dt><dd>' + escapeHtml(shellCompletedSuccessfully
+                  ? '終了コード0（test実行結果の構造を確認済み）'
+                  : shellCompletedWithFailure ? '失敗（終了コード' + String(shellExitCode) + '）'
+                    : '結果不明（timeout／中断／終了コードなし）') + '</dd>'
+                : '';
               const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
               const savedResultReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 ["file.search", "file.edit"].includes(step.operation) && step.status === "verified" &&
@@ -2111,6 +2135,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '<p class="muted">' + (ownerSelectedFileStateReady
                     ? 'Gatewayの永続実行receiptをJのcommand／epoch／taskへ再照合し、digest-onlyの現在状態をownerがC候補の文脈として選びます。元のfile.writeは結果不明のままです。次候補は未実行で、選択後もJのstep審査と必要なowner Approval／Broker判定が必要です。'
                     : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>'
+                : '';
+              const recoveryEditReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
+                sameWorkspaceTestFailed && step === steps[2] && step.operation === "file.search" && step.status === "verified" &&
+                binding.memory_status === "receipt_confirmed" && /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
+                /^[a-f0-9]{64}$/.test(binding.result_digest || "") && /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
+              const recoveryEditButton = recoveryEditReady
+                ? '<button type="button" class="secondary" data-operation-plan-replan="true" data-recovery-edit="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
+                  '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                  escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                    purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
+                  '">失敗後の逆編集候補を作成</button><p class="muted">先に保存済みfile.search結果で現在内容を確認してください。候補生成は編集しません。新しいfile.editのContent Reviewで実差分と現行版を再確認し、別途L3 Approvalを通るまで作用しません。</p>'
                 : '';
               const receiptLabels = {
                 not_applicable: "対象外",
@@ -2178,7 +2215,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>command digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.command_digest)) + '</dd>' +
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
-                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + localFileStateDetails + '</dl>' +
+                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + shellSummaryDetails + externalReceiptDetails + localFileStateDetails + '</dl>' +
                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし、作用は再送しません。</p>' : '') +
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-plan-id="' +
@@ -2186,6 +2223,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
                 savedResultButton +
                 replanButton +
+                recoveryEditButton +
                 stepReviewButton +
                 '</div>';
             }).join("") +
@@ -5296,7 +5334,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           try {
             await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
               target.dataset.stepId || "", target.dataset.goalPurposeBinding || "",
-              target.dataset.ownerSelectedFileState === "true");
+              target.dataset.ownerSelectedFileState === "true", target.dataset.recoveryEdit === "true");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

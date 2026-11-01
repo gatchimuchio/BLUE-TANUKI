@@ -280,6 +280,12 @@ export interface OperationPlanStatusProjection {
       step_id: string;
       operation: string;
       status: "not_selected" | "selected" | "intent_committed" | "outcome_unknown" | "not_attempted" | "verified" | "verification_failed" | "invalidated";
+      shell_exec_summary?: {
+        exit_code: number | null;
+        signal: "timeout" | "aborted" | null;
+        timed_out: boolean;
+        process_tree_empty: true;
+      };
       external_receipt_observation: "not_applicable" | "not_recorded" | "matched" | "not_found" | "mismatch" | "ambiguous";
       external_receipt?: {
         source: "local_inspection";
@@ -519,6 +525,16 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       const observationStatus = step.external_receipt_observation;
       const observation = step.external_receipt;
       const fileStateObservation = step.local_file_state_observation;
+      const shellExecSummary = step.shell_exec_summary;
+      const shellExecSummaryValid = shellExecSummary === undefined || (isRecord(shellExecSummary) &&
+        Object.keys(shellExecSummary).length === 4 &&
+        Object.keys(shellExecSummary).every((key) => ["exit_code", "signal", "timed_out", "process_tree_empty"].includes(key)) &&
+        (shellExecSummary.exit_code === null || (typeof shellExecSummary.exit_code === "number" &&
+          Number.isSafeInteger(shellExecSummary.exit_code) && shellExecSummary.exit_code >= 0 &&
+          shellExecSummary.exit_code <= 2_147_483_647)) &&
+        (shellExecSummary.signal === null || shellExecSummary.signal === "timeout" || shellExecSummary.signal === "aborted") &&
+        typeof shellExecSummary.timed_out === "boolean" && shellExecSummary.timed_out === (shellExecSummary.signal === "timeout") &&
+        shellExecSummary.process_tree_empty === true && step.operation === "shell.exec" && step.status === "verified");
       const allowedObservationStatuses = step.status === "outcome_unknown"
         ? fileStateObservation !== undefined
           ? ["not_applicable"]
@@ -565,7 +581,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           (fileStateObservation.status === "not_found" && fileStateObservation.match_count === 0 && fileStateObservation.file_state_digest === undefined) ||
           (fileStateObservation.status === "mismatch" && fileStateObservation.match_count === 1 && isDigest(fileStateObservation.file_state_digest))));
       if (typeof observationStatus !== "string" || !allowedObservationStatuses.includes(observationStatus) ||
-          !observationValid || !observationStateValid || !fileStateObservationValid ||
+          !observationValid || !observationStateValid || !fileStateObservationValid || !shellExecSummaryValid ||
           (fileStateObservation !== undefined && observationStatus !== "not_applicable")) {
         return invalidOperationPlanStatusProjection();
       }
@@ -582,6 +598,12 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         step_id: step.step_id,
         operation: step.operation,
         status: step.status as OperationPlanStatusProjection["plans"][number]["steps"][number]["status"],
+        ...(isRecord(shellExecSummary) ? { shell_exec_summary: {
+          exit_code: shellExecSummary.exit_code as number | null,
+          signal: shellExecSummary.signal as "timeout" | "aborted" | null,
+          timed_out: shellExecSummary.timed_out as boolean,
+          process_tree_empty: true as const,
+        } } : {}),
         external_receipt_observation: observationStatus as OperationPlanStatusProjection["plans"][number]["steps"][number]["external_receipt_observation"],
         ...(isRecord(observation) ? { external_receipt: {
           source: "local_inspection" as const,
