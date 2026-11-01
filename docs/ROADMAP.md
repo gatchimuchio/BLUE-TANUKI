@@ -10,6 +10,8 @@
 
 2026-11-01、Gateway再起動後の同一plan `plan:result` consumerへverified `file.write`／`file.delete`保存結果のdigest／M receipt束縛要約を追加した。writeは相対path・byte数のみ、deleteは相対path・削除時点の報告のみを返し、本文・sandbox絶対root・現在状態を返さず再実行もしない。HDS-BRAIN／Gateway typecheck・build、`pnpm docs:check`、`git diff --check`はPASS。process／browser／test suiteはNOT_RUNで、STATUS=WIRED（コード接続、runtime未確認）。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
+2026-11-01、F01.01のOwner指定`file.edit`候補に完全一致する置換数（1〜100、初期値1）を通した。Owner入力、synthetic C parser、Operation Plan parameters／validationを結び、実一致数の不一致は既存toolの実行前照合で拒否する。従来の置換数なしtaskは1として扱う。core／channel-webchat typecheck・build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／browser／Gateway runtime／実provider／外部作用はNOT_RUN。STATUS=WIRED（静的接続、runtime未確認）。
+
 2026-11-01、Control Centerの保存結果consumerをverified `file.write`／`file.delete`にも表示するよう接続した。既存のowner再認証・plan/revision/step・verified binding・receipt確認条件を維持し、writeは本文／現在状態を返さず、deleteは削除時点の報告として表示する。channel-webchat typecheck／build、生成Control Center script構文解析、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（UI接続、owner画面での実操作未確認）。
 
 2026-11-01、保存済み`file.search`結果のowner入口を、条件に応じた最大5行`file.read` previewも含む表示に合わせた。全内容・検索完全性・現在状態を示さないことを案内。channel-webchat typecheck／build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。runtime／browser／test suiteはNOT_RUN。

@@ -486,4 +486,10 @@ Control CenterのWebSocket再接続回数が接続成功後も残り、別の切
 
 `packages/blue-tanuki/src/tools/builtin.ts`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/hds-brain/src/controller.ts`、`packages/hds-brain/src/operation_plan.ts`、`apps/gateway/src/serve.ts`、`packages/channel-webchat/src/control_center_script.ts`を変更。実装初回のworkspace `pnpm typecheck`と`pnpm build`（Windows isolation release buildを含む）はPASS。controller promptの最終追記後はHDS `tsc --noEmit`とHDS package build、`pnpm docs:check`（日本語基底移行負債76件の注意あり）、`git diff --check`がPASS。最終追記後のworkspace `pnpm typecheck`再実行は、`apps/gateway/dist/active_task_execution_registry.js`を削除するclean段階で`EBUSY`となり停止したため、再掃除・実行中プロセス停止はしていない。Gateway process／browser／test suite／実provider／外部作用はNOT_RUN。STATUS=WIRED（型・build・候補→adapter→HDS検証→Owner返却のコード接続、runtime未確認）。START_HEAD=`ccbd5106784cd5ccbde31e849a110f7c93f28c5f`。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のproducer／consumer:** 同じ目的を保ったOwner taskで、verified file.read observationから限定file.edit候補を作り、既存purpose binding・L3 no-store差分確認・Approval／Broker・execution／M receipt・owner結果返却へ接続する。preview本文や過去receiptを権限根拠にせず、編集対象の現在版が変われば新しい確認を要求する。
+#### 2026-11-01 F01.01 BUILD接続 — Owner指定のfile.edit置換数
+
+Control Centerの未実行`file.edit`候補に、完全一致する置換数（1〜100、初期値1）の明示入力を追加した。指定値をOwner task JSONからsynthetic C parser、Operation Planの`file.edit` parameters／result validationまで保持し、実一致数が違う場合は既存toolの実行前照合で拒否する。置換数のない従来taskは1として扱う。既存Content Reviewの実差分・置換数表示、対象版再照合、no-store L3確認、Approval／Broker、M receipt／Owner結果経路を維持し、候補作成自体は作用しない。
+
+`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/channel-webchat/src/control_center_script.ts`を変更。core／channel-webchat typecheckとbuild、生成`CONTROL_CENTER_SCRIPT`のJavaScript構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／browser／Gateway runtime／実provider／外部作用はNOT_RUN。STATUS=WIRED（UIからplan parameters／validationまでの静的コード接続、runtime未確認）。START_HEAD=`938b626202eee12d28b2afbbcb98ed5a3042b5dc`。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** 同じ目的を保つOwner taskから、指定置換数を含む候補が既存no-store差分確認・Approval／Broker・execution／M receipt・Owner結果返却へ通る経路を実物で閉じる。preview本文や過去receiptを権限根拠にせず、編集対象の現在版が変われば新しい確認を要求する。

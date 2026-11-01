@@ -1289,15 +1289,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const filePath = typeof rawExplicitFileEdit.path === "string" ? rawExplicitFileEdit.path.trim() : "";
           const editSearch = typeof rawExplicitFileEdit.search === "string" ? rawExplicitFileEdit.search : "";
           const editReplace = typeof rawExplicitFileEdit.replace === "string" ? rawExplicitFileEdit.replace : "";
+          const expectedReplacements = rawExplicitFileEdit.expectedReplacements === undefined
+            ? 1 : rawExplicitFileEdit.expectedReplacements;
           const emptyReplacementConfirmed = rawExplicitFileEdit.emptyReplacementConfirmed === true;
           if (!filePath || filePath.length > 512 || !editSearch || editSearch.length > 2_000 ||
               editSearch === editReplace ||
               editReplace.length > 2_000 || (editReplace.length === 0 && !emptyReplacementConfirmed) ||
-              (editReplace.length > 0 && emptyReplacementConfirmed)) {
-            throw new Error("相対path・置換前・置換後を明示してください。置換後を空にする場合は専用確認を選んでください");
+              (editReplace.length > 0 && emptyReplacementConfirmed) ||
+              typeof expectedReplacements !== "number" || !Number.isSafeInteger(expectedReplacements) ||
+              expectedReplacements < 1 || expectedReplacements > 100) {
+            throw new Error("相対path・置換内容・置換数（1〜100）を明示してください。置換後を空にする場合は専用確認を選んでください");
           }
-          explicitFileEditTask = "sandbox内の指定した相対パスのテキストファイルで、指定文字列を一回だけ置換してください。\\n編集JSON: " +
-            JSON.stringify({ "相対パス": filePath, "置換前": editSearch, "置換後": editReplace });
+          explicitFileEditTask = "sandbox内の指定した相対パスのテキストファイルで、指定文字列を編集JSONで指定した置換数だけ置換してください。実際の一致数が違う場合は変更しないでください。\\n編集JSON: " +
+            JSON.stringify({ "相対パス": filePath, "置換前": editSearch, "置換後": editReplace,
+              "置換数": expectedReplacements });
           if (explicitFileEditTask.length > 20_000) throw new Error("編集候補の入力が上限を超えています");
         }
         const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
@@ -2161,6 +2166,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" maxlength="2000" rows="2" aria-label="置換前の完全一致文字列"></textarea></label>' +
                   '<label>置換後の文字列<textarea data-operation-plan-edit-replace="' + escapeHtml(step.step_id) +
                   '" maxlength="2000" rows="2" aria-label="置換後の文字列"></textarea></label>' +
+                  '<label>置換数（1〜100）<input type="number" min="1" max="100" step="1" value="1" data-operation-plan-edit-count="' +
+                  escapeHtml(step.step_id) + '" aria-label="完全一致する置換数"></label>' +
                   '<label><input type="checkbox" data-operation-plan-edit-empty-replacement="' + escapeHtml(step.step_id) +
                   '">置換後を空にする（対象文字列の削除）</label>' +
                   '<button type="button" class="secondary" data-operation-plan-explicit-file-edit="true" data-plan-id="' +
@@ -2169,7 +2176,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
                   '">明示した内容で未実行file.edit候補を作成</button>' +
-                  '<p class="muted">保存済み検索結果本文は自動添付しません。選択観測はdigest／件数の要約です。対象pathと置換内容はこの依頼に明示してください。候補は未実行で、実差分確認・L3 Approval・Broker判定が別途必要です。</p></fieldset>'
+                  '<p class="muted">保存済み検索結果本文は自動添付しません。対象path・置換内容・一致する置換数を明示してください。実際の一致数が指定と違えば候補は実行時に拒否されます。候補は未実行で、実差分確認・L3 Approval・Broker判定が別途必要です。</p></fieldset>'
                 : '';
               const replanButton = replanSourceReady || ownerSelectedFileStateReady
                 ? '<button type="button" class="secondary" data-operation-plan-replan="true" data-plan-id="' +
@@ -5435,11 +5442,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const pathInput = findStepField("data-operation-plan-edit-path");
           const searchInput = findStepField("data-operation-plan-edit-search");
           const replaceInput = findStepField("data-operation-plan-edit-replace");
+          const countInput = findStepField("data-operation-plan-edit-count");
           const emptyReplacementInput = findStepField("data-operation-plan-edit-empty-replacement");
           const editRequest = {
             path: pathInput?.value || "",
             search: searchInput?.value || "",
             replace: replaceInput?.value || "",
+            expectedReplacements: Number(countInput?.value ?? "1"),
             emptyReplacementConfirmed: emptyReplacementInput?.checked === true,
           };
           try {
@@ -5448,6 +5457,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             if (pathInput) pathInput.value = "";
             if (searchInput) searchInput.value = "";
             if (replaceInput) replaceInput.value = "";
+            if (countInput) countInput.value = "1";
             if (emptyReplacementInput) emptyReplacementInput.checked = false;
           } catch (error) {
             appendChat("error", error.message);
