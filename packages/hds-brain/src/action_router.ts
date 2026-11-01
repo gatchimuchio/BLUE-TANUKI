@@ -31,7 +31,7 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - tool:gmail.read query="newer_than:1d" max_results=5 include_attachment_metadata=true
  *   - tool:google.calendar.read calendar_id=primary days=1 max_results=5
  *   - tool:google.drive.read query="trashed=false" max_results=5
- *   - tool:gmail.write operation=draft.create to=owner@example.com subject="hello" body_text="draft"
+ *   - tool:gmail.write operation=draft.create to=owner@example.com cc=copy@example.com bcc=hidden@example.com reply_to=replies@example.com subject="hello" body_text="draft"
  *   - tool:google.calendar.write operation=event.create calendar_id=primary summary="Standup" start=2026-05-12T09:00:00Z end=2026-05-12T09:15:00Z
  *   - tool:google.drive.write operation=file.create name=notes.txt content="hello"
  *   - tool:composio.search toolkit=github query=issues

@@ -1,6 +1,6 @@
 import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { normalizeGmailAddressList, type ExecuteCommand } from "@blue-tanuki/protocol";
 import type {
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
@@ -11,6 +11,7 @@ const GMAIL_WRITE_ARGUMENTS = new Set([
   "to",
   "cc",
   "bcc",
+  "reply_to",
   "from",
   "subject",
   "body_text",
@@ -111,11 +112,14 @@ export function projectGmailWriteContentReview(
 
   if (typeof args.operation !== "string") return null;
   const operation = args.operation.trim().toLowerCase() as "draft.create" | "message.send";
-  const to = nonEmptyString(args.to);
+  const to = normalizeGmailAddressList(args.to);
   const subject = nonEmptyString(args.subject);
   if (!to || !subject) return null;
-  const cc = nonEmptyString(args.cc);
-  const bcc = nonEmptyString(args.bcc);
+  const cc = args.cc === undefined ? undefined : normalizeGmailAddressList(args.cc);
+  const bcc = args.bcc === undefined ? undefined : normalizeGmailAddressList(args.bcc);
+  const replyTo = args.reply_to === undefined ? undefined : normalizeGmailAddressList(args.reply_to);
+  if ((args.cc !== undefined && !cc) || (args.bcc !== undefined && !bcc) ||
+      (args.reply_to !== undefined && !replyTo)) return null;
   const from = nonEmptyString(args.from);
   const preferredBody = nonEmptyString(args.body_text);
   const alternateBody = nonEmptyString(args.body);
@@ -131,6 +135,7 @@ export function projectGmailWriteContentReview(
       to,
       ...(cc ? { cc } : {}),
       ...(bcc ? { bcc } : {}),
+      ...(replyTo ? { reply_to: replyTo } : {}),
       ...(from ? { from } : {}),
       subject,
       body_text: bodyText,

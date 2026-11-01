@@ -12,17 +12,22 @@ rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS 
 
 ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
 
-## 最新BUILD_BATCH — F02.01 Gmail読取・宛先・添付識別
+## 最新BUILD_BATCH — F02.02 Gmail内容・宛先の承認固定
 
-**2026-11-01:** 既存`gmail.read`から、通常の`gmail.metadata`向けbounded header readにTo／Cc／Bcc／Reply-Toの未検証header claimを追加した。`include_attachment_metadata=true`の明示時だけGmail profileで認証mailbox addressを照会し、`messages.get format=full`へ部分応答field maskを渡してmailbox／message／thread／MIME part／attachment IDを束ねる。message-part `body.data`と`raw`は要求せず、応答に現れた場合も拒否し、添付取得endpointは呼ばない。human ownerとmailboxの対応は`not_verified`として保持する。
+2026-11-01、F02.01のOwner選択message identityから同一taskのdraft.create候補までの接続を受け、Gmail候補の宛先・本文を既存L3 content review／Approval Gate／Brokerへ結ぶ。
 
-subject／sender／recipient header／snippet／attachment metadataは非信頼データとして表示し、利用者の元目的の変更、返信先の権威化、operation認可へ使わない。既存HDSの結果記録はGmail本文ではなくresult digestに限定し、既存executor／OutputAudit／owner表示経路を通す。添付識別オプションは`gmail.readonly` scopeを要し、通常のheader readの最小scopeは維持する。
+Toは必須、Cc／Bcc／Reply-Toは任意。各欄は表示名なしの最大20件のメールアドレス列に制限し、Protocolの共有正規化でHDS候補検査、Gmail MIME serializer、target identity digest、Gatewayのno-store content reviewを一致させる。serializerはReply-Toを実MIMEへ出し、Approval画面は有効な宛先・件名・本文とrequest payload digestを示す。Owner taskに明記のない値をメール本文・headerから補わない。owner選択identity digestを含む候補はdraft.create一件のみで、message.send／draft.send／複数stepは拒否する。
 
-Ownerが選択したmessage identity digestを、同一owner・task・plan・revisionの検証済み`gmail.read`結果からJが照合し、期限10分の非権威観測として同じ目的版の候補計算へ渡す。Cへはdigestとplan相関だけを渡し、message ID・thread ID・本文・header・recipient claim・添付を渡さない。digest選択を含む場合、HDSは候補を`gmail.write draft.create`一件に制限し、`message.send`／`draft.send`や複数stepを拒否する。結果に対するhuman-owner／mailbox bindingは引き続き`not_verified`であり、M receiptも作らない。作成、承認、送信は行わず、既存L3 content review／Approval Gate／Brokerを維持する。
+添付は現行候補経路で未対応。HDS Operation PlanとGateway content projectionは添付フィールドを拒否し、Approval画面は「添付なし」と表示する。既存draft.send MIME parserもmultipart／添付をfail-closedで拒否する。添付内容のowner選択・読取・表示・送信は未接続であり、F02.02全体は`BUILD_GAP`のまま。
 
-Protocol／HDS-BRAIN／Gateway／WebChat typecheck、Protocol／HDS-BRAIN build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。tests、Gateway runtime／process、browser、実Google provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（owner選択→Jの同一plan結果照合→期限付きidentity digest→同一taskのdraft.create限定候補、コード接続。runtime未確認）。mailbox所有者とattachment identityの完全な解決は未成立。次のconsumerはF02.02で、候補本文・宛先と元目的の束縛、Content Review後のL3／Approval／Brokerを接続する。
+candidate生成・provider読取／書込・実資格・実送信は行わない。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。
+
+Protocol build、HDS／core／WebChat／Gatewayのtypecheck・build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底移行負債76件の既存注意あり。test、Gateway process、browser、実provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（宛先・本文のコード接続、runtime未確認）。F02.02全体は添付の選択・読取・内容digest・Owner確認が未接続のため`BUILD_GAP`。
+
+**次のBUILD_BATCH:** F02.02の添付producer／consumerを接続する。gmail.readのOwner選択済みattachment identityから、安全に検証された内容・digestをno-store L3 reviewへ結び、同じ承認commandとBroker実作用へ固定する。内容取得時のscope・保持先・サイズ上限が現行契約で成立しない場合は添付をfail-closedのままにし、未対応を進捗へ残す。実provider・live外部作用は行わない。
 
 ## CR-0割込み — I-06 Windows開発インストーラー
+
 
 `install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。全体の利用者経路を先に成立させるowner指示により、K-B5 shadow比較は一時保留し、次のBUILD_BATCHでWebChat taskの実consumer接続を進める。
 

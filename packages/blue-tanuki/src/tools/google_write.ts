@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { GmailWriteTargetVersionObservationSchema, requireToolOperationDescriptor,
+import { GmailWriteTargetVersionObservationSchema, normalizeGmailAddressList, requireToolOperationDescriptor,
   type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type Tool } from "./registry.js";
@@ -490,6 +490,16 @@ function safeHeaderValue(value: string, label: string): string {
   return value;
 }
 
+function safeAddressList(args: Record<string, unknown>, name: string, required = false): string | undefined {
+  const raw = args[name];
+  if (raw === undefined && !required) return undefined;
+  const value = normalizeGmailAddressList(raw);
+  if (!value) {
+    throw new Error(`${name} must be a bounded comma-separated list of bare email addresses; mutation_sent=false`);
+  }
+  return safeHeaderValue(value, name);
+}
+
 function encodedSubject(value: string): string {
   const safe = safeHeaderValue(value, "subject");
   return /^[\x20-\x7e]*$/.test(safe)
@@ -498,7 +508,7 @@ function encodedSubject(value: string): string {
 }
 
 function encodedMimeMessage(args: Record<string, unknown>): string {
-  const to = safeHeaderValue(stringArg(args, "to")!, "to");
+  const to = safeAddressList(args, "to", true)!;
   const subject = encodedSubject(stringArg(args, "subject")!);
   const bodyText = stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "";
   const headers = [
@@ -508,12 +518,14 @@ function encodedMimeMessage(args: Record<string, unknown>): string {
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 8bit",
   ];
-  const cc = stringArg(args, "cc", false);
+  const cc = safeAddressList(args, "cc");
   if (cc) headers.splice(1, 0, `Cc: ${safeHeaderValue(cc, "cc")}`);
-  const bcc = stringArg(args, "bcc", false);
+  const bcc = safeAddressList(args, "bcc");
   if (bcc) headers.splice(cc ? 2 : 1, 0, `Bcc: ${safeHeaderValue(bcc, "bcc")}`);
   const from = stringArg(args, "from", false);
   if (from) headers.unshift(`From: ${safeHeaderValue(from, "from")}`);
+  const replyTo = safeAddressList(args, "reply_to");
+  if (replyTo) headers.splice(headers.indexOf(`Subject: ${subject}`), 0, `Reply-To: ${replyTo}`);
   return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${bodyText}`, "utf8").toString("base64url");
 }
 
@@ -634,12 +646,12 @@ export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): s
     return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
       service: "gmail", operation, draft_id: stringArg(args, "draft_id")! });
   }
-  const recipients: Record<string, string> = { to: stringArg(args, "to")! };
-  for (const name of ["cc", "bcc"] as const) {
-    const recipient = stringArg(args, name, false);
+  const recipients: Record<string, string> = { to: safeAddressList(args, "to", true)! };
+  for (const name of ["cc", "bcc", "reply_to"] as const) {
+    const recipient = safeAddressList(args, name);
     if (recipient) recipients[name] = recipient;
   }
-  return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v2",
+  return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
     service: "gmail", operation, recipients });
 }
 

@@ -19,6 +19,7 @@ import {
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema, type OperationPlanExternalReceiptObservation,
   FileSearchTargetVersionObservationSchema,
+  normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   OperationPlanComputeSourceObservationSchema,
@@ -1241,12 +1242,15 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       parameters.draft_id.length <= 256 && !/[\r\n]/.test(parameters.draft_id) &&
       Object.keys(parameters).every((key) => ["operation", "draft_id"].includes(key));
   }
-  if ((parameters.operation !== "message.send" && parameters.operation !== "draft.create") || typeof parameters.to !== "string" ||
-      parameters.to.length > 320 || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(parameters.to) ||
+  const recipients = ["to", "cc", "bcc", "reply_to"] as const;
+  const normalizedTo = normalizeGmailAddressList(parameters.to);
+  if ((parameters.operation !== "message.send" && parameters.operation !== "draft.create") || !normalizedTo ||
+      recipients.slice(1).some((name) => parameters[name] !== undefined && !normalizeGmailAddressList(parameters[name])) ||
       typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
       parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||
       typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000) return false;
-  return Object.keys(parameters).every((key) => ["operation", "to", "subject", "body_text"].includes(key));
+  return Object.keys(parameters).every((key) =>
+    ["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text"].includes(key));
 }
 
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */

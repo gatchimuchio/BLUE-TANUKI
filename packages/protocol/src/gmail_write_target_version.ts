@@ -1,6 +1,16 @@
 import { z } from "zod";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const EMAIL_ADDRESS_PATTERN = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,63}$/;
+
+/** GmailのTo/Cc/Bcc/Reply-Toで共有する、表示名なし・上限付き宛先列の正規形。 */
+export function normalizeGmailAddressList(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 2_048) return undefined;
+  const addresses = value.split(",").map((address) => address.trim());
+  if (addresses.length > 20 || addresses.some((address) => address.length === 0 || address.length > 320 ||
+      !EMAIL_ADDRESS_PATTERN.test(address))) return undefined;
+  return addresses.join(", ");
+}
 
 /** 実行権限を与えないGmail書込み要求のtarget・payload・provider状態観測。 */
 export const GmailWriteTargetVersionObservationSchema = z.object({

@@ -176,6 +176,7 @@ export interface WebChatGmailApprovalContentReview {
   to: string;
   cc?: string;
   bcc?: string;
+  reply_to?: string;
   from?: string;
   subject: string;
   body_text: string;
