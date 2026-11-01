@@ -532,3 +532,9 @@ Control Centerの未実行`file.edit`候補に、完全一致する置換数（1
 `packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`と`packages/channel-webchat/src/control_center_script.ts`を変更。core／channel-webchat typecheckとbuildはPASS、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（候補planと表示のコード接続、runtime未確認）。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 **次のproducer／consumer:** 同一taskの非0終了／確認済みtimeout後に、保存済み検索結果のOwner選択から逆編集候補、現行版Content Review、L3 Approval／Broker、M receipt、依存する編集後確認検索とOwner返信までが隔離Gateway runtimeで連なること。既存のtest未実施条件を維持する。
+
+#### 2026-11-01 F01.03 BUILD境界補強 — 逆編集候補の検索件数上限
+
+失敗後の逆編集候補へ渡すverified `file.search`観測について、既存の「1 file」の条件に加え、実consumerの`max_results=5`と同じ上限を候補化前にも適用する。1〜5件・1 file以外の観測からsynthetic C候補を作らない。これは入力境界の補強であり、失敗の意味・現在状態・目的達成・編集許可を増やさない。
+
+`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`を変更。core typecheckと`git diff --check`はPASS。test／Gateway runtime／browser／実provider／外部作用はNOT_RUN。STATUSは既存のF01.03接続を維持し、実processでのowner選択からOwner返信までの疎通は未確認。

@@ -400,7 +400,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
         observation.data.revision_digest !== parent.parent_revision_digest ||
         observation.data.task_identity_digest !== parent.task_identity_digest ||
         observation.data.plan_binding_status !== "verified" || observation.data.plan_validation_status !== "matched" ||
-        observation.data.match_count < 1 || observation.data.visited_files !== 1 ||
+        observation.data.match_count < 1 || observation.data.match_count > 5 || observation.data.visited_files !== 1 ||
         observation.data.search_completeness !== "unknown" || observation.data.expires_at_ms <= Date.now() ||
         !observation.data.same_workspace_test_failure || observation.data.adoption_status !== "observation_only" ||
         observation.data.used_as_world_truth !== false || observation.data.used_for_authority !== false ||
