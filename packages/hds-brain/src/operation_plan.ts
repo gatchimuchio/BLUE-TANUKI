@@ -53,6 +53,8 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+type SameWorkspaceTestFailureEvidence = NonNullable<Extract<OperationPlanComputeSourceObservation,
+  { source: "verified_file_search_result" }>["same_workspace_test_failure"]>;
 
 function summaryOnlyShellExecResult(step: OperationStep, value: unknown): {
   readonly exit_code: number | null;
@@ -98,6 +100,60 @@ function summaryOnlyShellExecResult(step: OperationStep, value: unknown): {
       core.adapter_result_used_for_authority !== false) return undefined;
   return { exit_code: output.exit_code as number | null, signal: output.signal as "timeout" | "aborted" | null,
     timed_out: output.timed_out, process_tree_empty: true };
+}
+
+function sameWorkspaceTestFailureEvidenceForSearch(
+  plan: PlanState,
+  revision: PlanState["revisions"][number],
+  searchStep: OperationStep,
+  searchResult: PlanState["results"][number],
+): SameWorkspaceTestFailureEvidence | undefined {
+  const steps = revision.plan.steps;
+  if (steps.length !== 3 || steps[0]?.operation !== "file.edit" || steps[1]?.operation !== "shell.exec" ||
+      steps[2]?.operation !== "file.search" || steps[2]!.step_id !== searchStep.step_id ||
+      searchResult.step_id !== searchStep.step_id || searchResult.status !== "succeeded") return undefined;
+  const [editStep, shellStep] = steps;
+  if (!editStep || !shellStep || editStep.target.kind !== "file" || shellStep.target.kind !== "workspace" ||
+      searchStep.target.kind !== "directory" || searchStep.target.id !== shellStep.target.id ||
+      typeof editStep.parameters?.path !== "string" || editStep.parameters.path !== editStep.target.id ||
+      typeof editStep.parameters.replace !== "string" || searchStep.parameters?.root !== shellStep.target.id ||
+      searchStep.parameters?.file_path !== editStep.parameters.path ||
+      searchStep.parameters?.query !== editStep.parameters.replace ||
+      !shellStep.preparation?.depends_on.includes(editStep.step_id) ||
+      !searchStep.preparation?.depends_on.includes(shellStep.step_id) ||
+      shellStep.parameters?.same_workspace_as_file_root !== true || shellStep.parameters?.summary_only !== true ||
+      shellStep.parameters?.cwd !== ".") return undefined;
+
+  const shellBindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+    binding.step_id === shellStep.step_id && binding.operation === "shell.exec");
+  const shellResults = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
+    result.request_id === revision.plan.request_id && result.step_id === shellStep.step_id &&
+    result.operation === "shell.exec" && result.status === "succeeded");
+  if (shellBindings.length !== 1 || shellResults.length !== 1) return undefined;
+  const shellBinding = shellBindings[0]!;
+  const shellResult = shellResults[0]!;
+  if (shellBinding.status !== "verified" || shellBinding.step_digest !== stepDigest(shellStep) ||
+      !shellBinding.delivery_digest || !shellBinding.result_digest || !shellBinding.memory_commit || !shellBinding.memory_receipt ||
+      !verifyResultMemoryCommit(plan, shellBinding) ||
+      !receiptForResultCommit(shellBinding.memory_receipt, shellBinding.memory_commit) ||
+      shellResult.observed_at_ms > searchResult.observed_at_ms ||
+      operationPlanDigest(shellResult.target) !== operationPlanDigest(shellStep.target)) return undefined;
+  const summary = summaryOnlyShellExecResult(shellStep, shellResult.output);
+  if (!summary || summary.process_tree_empty !== true) return undefined;
+  const timedOut = summary.signal === "timeout" && summary.timed_out === true;
+  const nonzeroExit = summary.signal === null && summary.timed_out === false &&
+    summary.exit_code !== null && summary.exit_code > 0;
+  if (!timedOut && !nonzeroExit) return undefined;
+  return {
+    shell_step_id_digest: operationPlanDigest(shellStep.step_id),
+    shell_result_digest: operationPlanDigest(shellResult),
+    memory_revision: shellBinding.memory_receipt.revision,
+    memory_receipt_digest: shellBinding.memory_receipt.receipt_digest,
+    exit_code: summary.exit_code,
+    signal: summary.signal,
+    timed_out: summary.timed_out,
+    process_tree_empty: true,
+  };
 }
 
 interface OperationPlanSavedResultReturnProjectionBase {
@@ -3819,10 +3875,12 @@ export class OperationPlanLedger {
             typeof output.visited_files !== "number" || !Number.isSafeInteger(output.visited_files) || output.visited_files < 0) {
           throw new Error("plan_compute_source_observation_result_unavailable");
         }
+        const sameWorkspaceTestFailure = sameWorkspaceTestFailureEvidenceForSearch(plan, revision, step, result);
         observations.push(OperationPlanComputeSourceObservationSchema.parse({
           ...common, source: "verified_file_search_result", operation,
           expires_at_ms: result.expires_at_ms, match_count: output.matches.length,
           visited_files: output.visited_files, search_completeness: "unknown",
+          ...(sameWorkspaceTestFailure ? { same_workspace_test_failure: sameWorkspaceTestFailure } : {}),
         }));
       }
     }

@@ -36,6 +36,8 @@
 
 2026-11-01、F01.03のfailed test後回復候補に、process tree emptyを確認した明示的timeoutを追加した。timeoutでは部分作用の可能性を表示し、同一planのM receipt確認済み`file.search`で現状を見た後に限ってowner選択候補を提示する。候補生成は未実行で、新しいContent Review／対象版再照合／L3 Approval／Brokerが必要。中断・不明な終了状態・process tree未確認は対象外、自動復元なし。channel-webchat typecheck／build、`git diff --check`はPASS。script構文解析／Gateway process／browser／testはNOT_RUN。STATUS=WIRED（静的接続、実consumer未確認）。次は同一taskのtimeout後回復consumerを合成Gateway runtimeで閉じる。
 
+2026-11-01、回復候補の根拠をHDS側でも照合するよう接続した。file.searchの観測へ、同じplan内の`file.edit`→summary-only同一Workspace `shell.exec`→同pathの`file.search`、shell→検索の依存、shell結果のM receipt、非0終了またはprocess tree emptyを確認したtimeoutだけをdigest付きで付与する。synthetic Cはこの証拠がない逆編集候補を拒否し、raw output／command／pathは受け取らない。protocol／HDS build、core／Gateway／WebChat typecheck、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（HDS証拠照合のコード接続、実consumer未確認）。次はtimeoutと非0終了の合成Gateway runtimeで回復候補から新規L3編集、M receipt、Owner返信まで閉じる。
+
 2026-11-01、owner task受付後の状態照会欄が未送信の次回IDを選ぶ欠陥を修正し、受付済みIDを選択するよう接続した。WebChat typecheck／buildはPASS。
 
 2026-11-01、動的taskのfilename／一行本文が実Gateway経路のfile.write planへ届くことを、file内容の一致で確認した。二度のGateway再起動を越えて同一task identity、verified write／search receiptを復元し、保存済み検索結果を`plan:result`で読んだ後もfileは一件のまま。これは限定synthetic taskの実経路証拠であり、独立した一般Cや製品全体の成立を示さない。

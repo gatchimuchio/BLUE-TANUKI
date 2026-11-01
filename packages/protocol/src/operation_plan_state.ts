@@ -84,6 +84,20 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     match_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     visited_files: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     search_completeness: z.literal("unknown"),
+    same_workspace_test_failure: z.object({
+      shell_step_id_digest: Digest,
+      shell_result_digest: Digest,
+      memory_revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      memory_receipt_digest: Digest,
+      exit_code: z.number().int().nonnegative().max(2_147_483_647).nullable(),
+      signal: z.literal("timeout").nullable(),
+      timed_out: z.boolean(),
+      process_tree_empty: z.literal(true),
+    }).strict().superRefine((evidence, context) => {
+      const timedOut = evidence.signal === "timeout" && evidence.timed_out;
+      const nonzeroExit = evidence.signal === null && !evidence.timed_out && evidence.exit_code !== null && evidence.exit_code > 0;
+      if (!timedOut && !nonzeroExit) context.addIssue({ code: "custom", message: "not_a_verified_failed_test" });
+    }).optional(),
   }).strict(),
   z.object({
     schema_version: z.literal("operation-plan-compute-source-observation.v1"),

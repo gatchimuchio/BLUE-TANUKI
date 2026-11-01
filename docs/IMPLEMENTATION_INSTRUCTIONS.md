@@ -501,3 +501,11 @@ Control Centerの未実行`file.edit`候補に、完全一致する置換数（1
 `packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／buildと`git diff --check`はPASS。生成script構文解析、Gateway process／browser／test suiteはNOT_RUN。STATUS=WIRED（timeout表示とowner選択候補の静的接続、実consumer未確認）。実provider・外部作用なし。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 **次のproducer／consumer:** 同一taskのtimeout後に、process-tree確認済みsummary・保存済み検索結果・Owner選択・新規逆編集候補・現行版Content Review・L3 Approval／Broker・M receipt／結果返信が合成Gateway runtimeで連なること。
+
+#### 2026-11-01 F01.03 BUILD接続 — 失敗試験根拠のHDS照合
+
+逆編集候補の入力時に、HDSが親planの3-step形状、編集対象path／置換文字列、同一Workspace root、shell→再読取依存、shell結果のM receiptを照合する。非0終了またはprocess tree emptyを確認したtimeoutだけをfile.search観測へ付与し、synthetic CはこのJ/M確認済み根拠がない回復候補を拒否する。stdout／stderr、raw command、pathはC観測へ追加しない。成功・中断・終了状態不明・未確認のprocess treeは対象外。候補は未実行で、現行版Content Review／対象版再照合／L3 Approval／Brokerを維持する。
+
+`packages/protocol/src/operation_plan_state.ts`、`packages/hds-brain/src/operation_plan.ts`、`packages/hds-brain/src/controller.ts`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`を変更。protocol／HDS build、core／Gateway／WebChat typecheck、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（HDS証拠照合からsynthetic C拒否までのコード接続、実consumer未確認）。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** timeoutと非0終了の各実行で、HDSの失敗根拠・保存済みfile.search・Owner選択・新規逆編集候補・現行版Content Review・L3 Approval／Broker・M receipt・Owner返信がsynthetic Gateway runtimeで連なること。testは実行せず、runtime実行に進める環境・承認済み手順を先に整える。
