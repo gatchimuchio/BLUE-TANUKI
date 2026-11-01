@@ -8,7 +8,17 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
+## 最新BUILD_BATCH — F04.02 Drive書込後の形式・内容再読照合
+
+2026-11-02、既存`google.drive.write`の`file.create`／`file.update`実作用後に、同じDrive adapterから`files.get`でmetadataを再読し、作成／更新対象のID・要求された名称・MIME・親folderを照合する。内容を送った場合は`alt=media`で最大`max_content_bytes`まで一度だけ読み、UTF-8本文の完全一致をdigestのみで結果へ返す。Shared Drive対応queryを追加し、Google Workspace native MIMEのmedia uploadは作用前に拒否する。metadataが`trashed=false`と確認できない場合もfail-closed。response truncation、metadata不一致、内容不一致、再読失敗は`mutation_sent=true`／`verification_failed`として例外化し、自動再送しない。
+
+このBUILD_BATCHが結んだのは既存adapter内の書込→再読consumerだけであり、未実行の外部作用・実資格・Driveデータは使っていない。ownerがno-store画面で書込本文と共有継承先を確認する経路、実行前の対象版再照合、Google Drive Operation Plan接続、権限共有・削除の別作用は未接続。したがってF04.02全体は`BUILD_GAP`であり、部分接続をHDS承認・内容確認・実provider成功へ読み替えない。実provider／credential／外部作用は引き続き禁止・未実施。
+
+`corepack pnpm --filter @blue-tanuki/core run typecheck`／`build`はPASS。test suite、Gateway process、実provider／credential／Drive作用はNOT_RUN。statusは書込後再読consumerの静的接続のみ`WIRED`（runtime未確認）。次のconsumerはHDSが発行したDrive書込commandを内容・対象scopeのowner L3確認へ束縛し、実作用直前に対象版を再照合する経路。
+
+参照した一次資料: [Drive files.create](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/create)、[Drive download/export](https://developers.google.com/workspace/drive/api/guides/manage-downloads)。
+
+## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
 
 2026-11-02、既存`google.drive.read`の検索経路にexact `file_id`取得を加え、選択したDrive file/folderのID、名称、MIME、作成・更新時刻、親folder、Shared Drive ID、version、取得可能なhead revision ID、共有状態、trash状態、取得可能なpermission範囲を同じreaderから返す。Drive APIの`files.get`へ静的field maskと`supportsAllDrives=true`を使い、file IDは単一path segmentとして検証・encodeし、応答IDも要求IDと一致確認する。検索ではpermission一覧を既定で取得せず、exact file readは取得可能なsharing scopeも既定で含める。Daily Briefはsharing permissionを要求しない。
 

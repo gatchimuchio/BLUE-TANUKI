@@ -120,7 +120,7 @@ const DEFAULT_MAX_BYTES = 128_000;
 const MAX_MAX_BYTES = 512_000;
 const DEFAULT_MAX_CONTENT_BYTES = 64_000;
 const MAX_CONTENT_BYTES = 512_000;
-const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,webViewLink";
+const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,webViewLink,parents,driveId,version,headRevisionId,shared,trashed";
 
 function stringArg(
   args: Record<string, unknown>,
@@ -1764,6 +1764,104 @@ function multipartBody(metadata: Record<string, unknown>, content: string, mimeT
   };
 }
 
+async function verifyGoogleDriveWriteReadback(input: {
+  args: Record<string, unknown>;
+  operation: string;
+  fileId: string;
+  content: string | undefined;
+  expectedMimeType: string | undefined;
+  token: string;
+  request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
+  maxContentBytes: number;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  const fail = (reason: string): never => {
+    throw new Error(`google.drive.write readback ${reason}; mutation_sent=true; mutation_status=verification_failed; retry=false`);
+  };
+  const metadataPath = `/drive/v3/files/${encodeURIComponent(input.fileId)}?${new URLSearchParams({
+    supportsAllDrives: "true",
+    fields: DRIVE_FIELDS,
+  })}`;
+  let metadataResponse: GoogleWriteResponse;
+  try {
+    assertToolExecutionNotCancelled(input.signal, "google.drive.write readback");
+    metadataResponse = await input.request({
+      service: "drive",
+      hostname: "www.googleapis.com",
+      path: metadataPath,
+      method: "GET",
+      maxBytes: 16_384,
+      token: input.token,
+    }, input.signal);
+  } catch {
+    return fail("metadata request failed");
+  }
+  if (!metadataResponse.ok || metadataResponse.truncated) return fail("metadata unavailable or truncated");
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(metadataResponse.body) as unknown;
+  } catch {
+    return fail("metadata was not valid JSON");
+  }
+  if (!isRecord(metadata) || metadata.id !== input.fileId || metadata.trashed !== false) {
+    return fail("metadata identity or state did not match");
+  }
+
+  const expectedName = stringArg(input.args, "name", input.operation === "file.create");
+  if (expectedName !== undefined && metadata.name !== expectedName) return fail("name did not match");
+  if (input.expectedMimeType !== undefined && metadata.mimeType !== input.expectedMimeType) {
+    return fail("MIME type did not match");
+  }
+  const expectedParentId = stringArg(input.args, "parent_id", false);
+  if (expectedParentId !== undefined &&
+      (!Array.isArray(metadata.parents) || !metadata.parents.includes(expectedParentId))) {
+    return fail("parent folder did not match");
+  }
+
+  let contentDigest: string | undefined;
+  if (input.content !== undefined) {
+    const contentPath = `/drive/v3/files/${encodeURIComponent(input.fileId)}?${new URLSearchParams({
+      alt: "media",
+      supportsAllDrives: "true",
+    })}`;
+    let contentResponse: GoogleWriteResponse;
+    try {
+      assertToolExecutionNotCancelled(input.signal, "google.drive.write content readback");
+      contentResponse = await input.request({
+        service: "drive",
+        hostname: "www.googleapis.com",
+        path: contentPath,
+        method: "GET",
+        maxBytes: input.maxContentBytes,
+        token: input.token,
+      }, input.signal);
+    } catch {
+      return fail("content request failed");
+    }
+    if (!contentResponse.ok || contentResponse.truncated || contentResponse.body !== input.content) {
+      return fail("content did not match or exceeded the readback limit");
+    }
+    contentDigest = sha256String(contentResponse.body);
+  }
+
+  const observed = {
+    file_id: input.fileId,
+    name: typeof metadata.name === "string" ? metadata.name : null,
+    mime_type: typeof metadata.mimeType === "string" ? metadata.mimeType : null,
+    parent_ids: Array.isArray(metadata.parents) && metadata.parents.every((parent) => typeof parent === "string")
+      ? metadata.parents : null,
+    drive_id: typeof metadata.driveId === "string" ? metadata.driveId : null,
+    version: typeof metadata.version === "string" ? metadata.version : null,
+    head_revision_id: typeof metadata.headRevisionId === "string" ? metadata.headRevisionId : null,
+    shared: typeof metadata.shared === "boolean" ? metadata.shared : null,
+    trashed: typeof metadata.trashed === "boolean" ? metadata.trashed : null,
+    metadata_verified: true,
+    content_verified: input.content !== undefined,
+    ...(contentDigest ? { content_digest: contentDigest } : {}),
+  };
+  return { ...observed, verification_digest: sha256Hex(observed) };
+}
+
 export async function invokeGoogleDriveWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
@@ -1780,31 +1878,52 @@ export async function invokeGoogleDriveWrite(
   let method: GoogleWriteMethod;
   let body: string;
   let contentType = "application/json";
+  let content: string | undefined;
+  let expectedMimeType: string | undefined;
   if (operation === "file.create") {
     const metadata = driveMetadata(args, true);
-    const content = boundedContent(args, maxContentBytes, true)!;
+    content = boundedContent(args, maxContentBytes, true)!;
+    expectedMimeType = mimeType;
     const multipart = multipartBody(metadata, content, mimeType);
-    path = `/upload/drive/v3/files?uploadType=multipart&fields=${encodeURIComponent(DRIVE_FIELDS)}`;
+    path = `/upload/drive/v3/files?${new URLSearchParams({
+      uploadType: "multipart",
+      supportsAllDrives: "true",
+      fields: DRIVE_FIELDS,
+    })}`;
     method = "POST";
     body = multipart.body;
     contentType = multipart.contentType;
   } else {
     const fileId = stringArg(args, "file_id")!;
     const metadata = driveMetadata(args, false);
-    const content = boundedContent(args, maxContentBytes, false);
+    content = boundedContent(args, maxContentBytes, false);
+    expectedMimeType = stringArg(args, "mime_type", false) ?? (content !== undefined ? mimeType : undefined);
     method = "PATCH";
     if (content !== undefined) {
       const multipart = multipartBody(metadata, content, mimeType);
-      path = `/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart&fields=${encodeURIComponent(DRIVE_FIELDS)}`;
+      path = `/upload/drive/v3/files/${encodeURIComponent(fileId)}?${new URLSearchParams({
+        uploadType: "multipart",
+        supportsAllDrives: "true",
+        fields: DRIVE_FIELDS,
+      })}`;
       body = multipart.body;
       contentType = multipart.contentType;
     } else {
       if (Object.keys(metadata).length === 0) {
         throw new Error("file.update requires name, mime_type, parent_id, or content; mutation_sent=false");
       }
-      path = `/drive/v3/files/${encodeURIComponent(fileId)}?fields=${encodeURIComponent(DRIVE_FIELDS)}`;
+      path = `/drive/v3/files/${encodeURIComponent(fileId)}?${new URLSearchParams({
+        supportsAllDrives: "true",
+        fields: DRIVE_FIELDS,
+      })}`;
       body = jsonBody(metadata);
     }
+  }
+
+  if (content !== undefined &&
+      (!/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mimeType) ||
+        mimeType.toLowerCase().startsWith("application/vnd.google-apps."))) {
+    throw new Error("google.drive.write content requires a non-Google-Workspace MIME type; mutation_sent=false");
   }
 
   const target = {
@@ -1820,7 +1939,38 @@ export async function invokeGoogleDriveWrite(
   assertToolExecutionNotCancelled(opts.signal, "google.drive.write");
   const response = await request(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("google.drive.write", response);
-  return mutationResult("google.drive.write", "drive", operation, target, response);
+  if (response.truncated) {
+    throw new Error("google.drive.write write response truncated; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  let responseData: unknown = {};
+  if (operation === "file.create") {
+    try {
+      responseData = JSON.parse(response.body) as unknown;
+    } catch {
+      throw new Error("google.drive.write response was not valid JSON after creation; mutation_sent=true; mutation_status=verification_failed; retry=false");
+    }
+  }
+  const fileId = operation === "file.create"
+    ? isRecord(responseData) && typeof responseData.id === "string" ? responseData.id : null
+    : stringArg(args, "file_id")!;
+  if (!fileId || fileId.length > 512) {
+    throw new Error("google.drive.write response omitted a usable file identity; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  const verification = await verifyGoogleDriveWriteReadback({
+    args,
+    operation,
+    fileId,
+    content,
+    expectedMimeType,
+    token,
+    request,
+    maxContentBytes,
+    signal: opts.signal,
+  });
+  return mutationResult("google.drive.write", "drive", operation, target, {
+    ...response,
+    body: JSON.stringify({ id: fileId }),
+  }, { verification });
 }
 
 export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempotency_key" | "command_digest"> = {}): Tool {

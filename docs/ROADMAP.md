@@ -20,6 +20,12 @@
 
 ## 現在のBUILD_BATCH
 
+2026-11-02、既存`google.drive.write`の`file.create`／`file.update`後に、Drive metadataと要求内容を同じadapterで再読照合するconsumerを接続した。exact file ID、要求されたname／MIME／parent、Shared Drive対応状態を確認し、content指定時は最大`max_content_bytes`まで`alt=media`で一度だけ再読して完全一致を確認、本文はdigestのみを結果へ返す。Workspace native MIMEのcontent uploadは作用前に拒否し、trash状態が不明／trueでも検証失敗とする。切詰め、不一致、metadata／content再読失敗はmutation後の`verification_failed`として成功扱いせず、自動再送しない。core typecheck／buildはPASS。test、Gateway process、資格、実Drive作用はNOT_RUN。
+
+これはF04.02の書込後照合consumerのみ。no-store owner内容確認、実作用前の対象版再照合、HDS Operation Plan binding、permission変更・公開共有・削除の作用分離は未接続のため、F04.02全体は`BUILD_GAP`。次はDrive書込のHDS L3内容確認と対象版照合を既存Broker経路へ接続する。C08.03、OD-03、P13は引き続き保留。
+
+## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
+
 2026-11-02、既存`google.drive.read`をexact `file_id`単件metadata取得へ拡張し、file/folder identity、MIME、親folder、Shared Drive、version／取得可能なhead revision、共有状態、trash状態、取得可能なpermission scopeを返す。`files.get`は静的field maskと`supportsAllDrives=true`を使い、応答file IDを要求値と照合する。permission主体のemail・表示名・permission IDは返さない。検索ではpermission inventoryを既定で取得せず、exact file readはsharing scopeを既定で含め、取得不能・未要求・Shared Driveで部分／未提供を区別する。Daily Briefはpermission inventoryを取得しない。
 
 返却はprovider由来の非信頼metadataとして明示し、`content_read=false`／`mutation_sent=false`を維持する。version／head revision metadataは変更履歴一覧やrevision本文を意味しない。資料本文と内包指示のconsumerは未接続のため、F04.01全体は`BUILD_GAP`、metadata subconsumerのみ`WIRED`（runtime未確認）。本文形式・byte上限・保持条件が未定義のため本文読取を追加していない。F04.02 write/share/delete、F04.03 live、実provider／credential／外部読取は未実施。一次仕様は[Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get)、[files resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)、[permissions resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions)。

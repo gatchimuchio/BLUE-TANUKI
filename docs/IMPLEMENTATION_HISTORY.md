@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-02 — QEB-F04.02-DRIVE-WRITE-READBACK
+
+開始時のlocal／remote `main`=`459e224c40f5253cd4bac4a0f3a84e1492511d59`、tracked treeはclean（保護対象untracked `.codex-remote-attachments/`を除く）、worktreeはroot `main`のみ。rev3.0三文書のSHAとZIP manifest収録296資産を再照合し全件一致。ZIP全体のraw SHAは公開pin記載値と異なるが、manifest全件と三文書個別hashは一致していた。編集前にrecovery branch/tagをCAS付きでcurrent=`459e224...`、previous=`5344dd9...`へ回転した。
+
+既存`google.drive.write`のfile.create／file.update成功後に同adapterのGETでmetadataを再読し、file ID、要求されたname／MIME／parent、`trashed=false`を確認するよう接続した。contentを送ったoperationではGoogle Workspace native MIMEを作用前に拒否し、`alt=media`を一度だけ要求する。`max_content_bytes`内で送信UTF-8内容と完全一致する場合だけdigestを含むreadback verification結果を返す。本文は結果へ返さない。write response truncation、metadata／contentの不一致・取得失敗はmutation後の`verification_failed`を明示して例外化し、retryしない。create／updateのAPI pathには`supportsAllDrives=true`を加えた。
+
+変更: `packages/blue-tanuki/src/tools/google_write.ts`、`docs/IMPLEMENTATION_INSTRUCTIONS.md`、`docs/ROADMAP.md`、本履歴。`corepack pnpm --filter @blue-tanuki/core run typecheck`と同package `build`はPASS。test suite／Gateway process／browser／実provider／credential／Drive read/writeはNOT_RUN。Google一次資料: [files.create](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/create)、[download/export](https://developers.google.com/workspace/drive/api/guides/manage-downloads)。
+
+STATUS=`WIRED`（既存Drive adapterのwrite→metadata/content readback code connection、runtime未確認）。owner no-store content/scope review、書込前のtarget-version observationと承認command再結合、HDS Operation Plan接続、permission/public-share/deleteの独立作用は未接続。F04.02全体は`BUILD_GAP`のまま。C08.03 real provider、OD-03 live external writes、他repo書込、P13 owner GOは保留。QE_QC／QE_QA・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`・owner GOは未成立。
+
 ## 2026-11-02 — QEB-F04.01-DRIVE-METADATA-REVISION-SHARING
 
 開始時のlocal／remote `main`=`5344dd97c58caed306ea579871701a58ebccc35e`、作業treeはclean（保護対象untracked `.codex-remote-attachments/`を除く）。作業開始時に最新AGENTS、rev3.0 pinと三点セット、active instruction、remote／worktree／差分／復旧refを再照合した。編集前local recovery branchとremote tagはcurrent=`5344dd9...`、previous=`c6b2eee...`へ照合・回転した。単一main worktreeを使用し、保護添付directoryは変更していない。
