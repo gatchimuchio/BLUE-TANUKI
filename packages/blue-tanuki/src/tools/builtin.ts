@@ -118,6 +118,7 @@ export {
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
+  type GmailAttachmentIdentity,
   type GmailReadMessage,
   type GoogleCalendarEvent,
   type GoogleDailyBriefOptions,

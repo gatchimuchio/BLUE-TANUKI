@@ -91,6 +91,7 @@ export {
   type GitHubWriteOptions,
   type GitHubWriteTarget,
   type GitHubWriteResponse,
+  type GmailAttachmentIdentity,
   type GmailReadMessage,
   type GoogleCalendarEvent,
   type GoogleDailyBriefOptions,

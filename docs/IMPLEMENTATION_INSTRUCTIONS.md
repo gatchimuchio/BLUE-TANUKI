@@ -12,6 +12,14 @@ rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS 
 
 ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
 
+## 最新BUILD_BATCH — F02.01 Gmail読取・宛先・添付識別
+
+**2026-11-01:** 既存`gmail.read`から、通常の`gmail.metadata`向けbounded header readにTo／Cc／Bcc／Reply-Toの未検証header claimを追加した。`include_attachment_metadata=true`の明示時だけGmail profileで認証mailbox addressを照会し、`messages.get format=full`へ部分応答field maskを渡してmailbox／message／thread／MIME part／attachment IDを束ねる。message-part `body.data`と`raw`は要求せず、応答に現れた場合も拒否し、添付取得endpointは呼ばない。human ownerとmailboxの対応は`not_verified`として保持する。
+
+subject／sender／recipient header／snippet／attachment metadataは非信頼データとして表示し、利用者の元目的の変更、返信先の権威化、operation認可へ使わない。既存HDSの結果記録はGmail本文ではなくresult digestに限定し、既存executor／OutputAudit／owner表示経路を通す。添付識別オプションは`gmail.readonly` scopeを要し、通常のheader readの最小scopeは維持する。
+
+`packages/blue-tanuki` typecheckはPASS。tests、Gateway runtime、実Google provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（adapter→Gmail result→既存executor/render/output audit→owner表示のコード接続。provider runtime未確認）。human-owner/mailbox bindingも未確認。次のconsumerはownerが明示選択したmessage identityだけを現行taskへ結び、元目的を維持した`gmail.write draft.create`候補へ渡す経路であり、既存L3 content review／Approval Gate／Brokerを迂回しない。
+
 ## CR-0割込み — I-06 Windows開発インストーラー
 
 `install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。全体の利用者経路を先に成立させるowner指示により、K-B5 shadow比較は一時保留し、次のBUILD_BATCHでWebChat taskの実consumer接続を進める。
