@@ -8,6 +8,8 @@
 
 ## 現在のBUILD_BATCH
 
+2026-11-01、E2E-01の合成Owner経路を限定実行で確認した。file.deleteではOwner内容確認前のL3承認が拒否され、確認後に対象が変わるとstale拒否され、再確認・L3承認後は隔離temp root内のfixtureだけがBroker経由で削除され、WebChat結果とverified/M receiptまで確認できた（Gateway process test 1件PASS、同fileの他5件はskip）。長いOwner統合testも再実行し、目的変更の審査、Jへの確定、保存結果再読込と安全なfile.edit→file.search fixture経路を含む選択test 1件PASS（197秒、同fileの他5件はskip）。HDS-BRAIN／core／Gateway build、Gateway typecheck、`pnpm docs:check`、`git diff --check`もPASS。実provider・live外部作用なし。確認したのは限定synthetic runtime経路であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS証拠、owner GOは未成立。次はこの証拠を含めてBUILD_BATCHを継続し、残る通常Owner仕事の未接続consumerを現行rev3.0から選定する。
+
 2026-11-01、`file.delete`の認証済みno-store Owner確認を既存L3 Approval／Broker経路へ接続した。Owner画面はsandbox相対path・対象サイズ・上限・対象版digest・Operation Plan束縛digestを確認操作後にだけ表示し、本文は表示しない。未確認承認をGateで拒否し、approval時と実行command作成直前に対象版を再照合して、Brokerも作用直前に同じ版を確認する。core／WebChat build、Gateway typecheck／build、生成Control Center script parse、`git diff --check`はPASS。Gateway process／browser／test suite／実ファイル削除はNOT_RUN。STATUS=WIRED（コード接続）だがruntime consumerは未確認。次は使い捨てrootの専用fileでOwner表示・stale停止・既存削除consumerを限定確認する。E2E-01全体、製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
 
 2026-11-01、合成Cからowner指定の単一sandbox相対pathに対する`file.delete`候補計画を生成する入口を追加した。secret-like／絶対／traversal等のpathを拒否し、候補は単一file・最大256,000 bytes・high／L3 final review・Approval／Broker必須とする。実削除は行わず、既存toolのsandbox・通常file・対象版再照合を維持する。`@blue-tanuki/core` typecheckはPASS。Gateway process／Broker実行／test suiteはNOT_RUNのため、実consumerの実行は未確認。次は使い捨てroot内のtest専用fileに限定してOwner表示から既存削除経路までの接続を確認する。

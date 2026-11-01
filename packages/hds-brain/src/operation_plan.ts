@@ -3111,7 +3111,7 @@ export class OperationPlanLedger {
       throw new Error("plan_saved_result_record_mismatch");
     }
     const committedObservation = change.value as unknown as Record<string, unknown>;
-    if (binding.result_digest !== operationPlanDigest(result)) throw new Error("plan_saved_result_observation_mismatch");
+    if (committedObservation.result_digest !== binding.result_digest) throw new Error("plan_saved_result_observation_mismatch");
     const parsedOutput = OperationJsonValueSchema.parse(result.output);
     if (!parsedOutput || typeof parsedOutput !== "object" || Array.isArray(parsedOutput)) {
       throw new Error("plan_saved_result_output_invalid");

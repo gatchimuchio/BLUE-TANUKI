@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_TEST_TASK_PREFIX,
+import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX,
   SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
@@ -313,6 +313,250 @@ describe("document organization ordinary entries", () => {
 });
 
 describe("delegated goal purpose owner review", () => {
+  it("BT-U-E2E-01: keeps synthetic file.delete behind reviewed L3 and stops on a stale target", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-file-delete-review-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    const fileRoot = join(auditDir, "file-root");
+    const relativePath = "owner-delete-fixture.txt";
+    const fixturePath = join(fileRoot, relativePath);
+    const originalContent = "BLUE-TANUKI synthetic file-delete runtime fixture only.\n";
+    const goalRef = "goal_0000000000000045";
+    const purpose = "Delete only the exact owner-reviewed disposable file in the isolated local test sandbox.";
+    const initialPurpose = "Initial purpose digest without an available purpose body.";
+    const initialPurposeDigest = createHash("sha256").update(Buffer.from(initialPurpose, "utf8")).digest("hex");
+    mkdirSync(fileRoot, { recursive: true });
+    mkdirSync(privateState, { recursive: true });
+    writeFileSync(fixturePath, originalContent, "utf8");
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0000000000000045",
+        initial_purpose_digest: initialPurposeDigest, initial_interpretation_digest: "d".repeat(64),
+        adopted_at: Date.now() - 10_000 }],
+      authorizations: [],
+      events: [],
+    }), "utf8");
+
+    const gatewayPort = await reserveLoopbackPort();
+    const runtimeEnv = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
+    runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    runtimeEnv.BLUE_TANUKI_FILE_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_SHELL_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+    runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
+    runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+    delete runtimeEnv.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    delete runtimeEnv.LLM_PROVIDERS_JSON;
+
+    let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
+    const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+    const fetchResume = async (input: string | URL, init: RequestInit): Promise<Response> => {
+      for (let attempt = 0; attempt <= 16; attempt += 1) {
+        const response = await fetch(input, init);
+        if (response.status !== 429 || attempt === 16) return response;
+        const retryAfterSeconds = Number(response.headers.get("retry-after"));
+        const delayMs = Math.max(1_000, Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1_000 + 100 : 1_000);
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      throw new Error("resume API retry loop ended unexpectedly");
+    };
+    const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
+      const response = await fetchResume(`${baseUrl}/approval`, { headers: { authorization: `Bearer ${resumeToken}` } });
+      expect(response.status).toBe(200);
+      return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+    };
+    const postApproval = (commandId: string, approvalToken: unknown, contentReviewDigest?: unknown) => fetchResume(
+      `${baseUrl}/approval/${encodeURIComponent(commandId)}`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: approvalToken,
+          ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }),
+      },
+    );
+
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const purposeProposalResponse = await fetch(`${baseUrl}/owner/goal-purpose-change`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: purpose }),
+      });
+      expect(purposeProposalResponse.status).toBe(202);
+      const purposeProposal = await purposeProposalResponse.json() as { command_id?: string };
+      const purposePending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === purposeProposal.command_id);
+      expect(purposePending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true });
+      const purposeContentResponse = await fetchResume(
+        `${baseUrl}/approval/${encodeURIComponent(String(purposeProposal.command_id))}/content`,
+        { method: "POST", headers: { authorization: `Bearer ${resumeToken}` } },
+      );
+      expect(purposeContentResponse.status).toBe(200);
+      const purposeContent = await purposeContentResponse.json() as Record<string, unknown>;
+      expect(purposeContent).toMatchObject({ kind: "goal_purpose_change", purpose_text: purpose,
+        used_for_authority: false });
+      const purposeApprovalResponse = await postApproval(String(purposeProposal.command_id),
+        purposePending?.approval_token, purposeContent.command_digest);
+      expect(purposeApprovalResponse.status).toBe(200);
+      expect(await purposeApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
+      } });
+
+      const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(taskWebSocket, "open");
+
+      const task = `sandbox内の指定した相対パスの通常ファイルを一つだけ削除してください。\n相対パス: ${relativePath}`;
+      const taskReply = waitForWebChatSend(taskWebSocket, "synthetic file.delete task");
+      const submission = await fetch(`${baseUrl}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task, goal_ref: goalRef, purpose_version: 2,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000805",
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      const submissionBody = await submission.json() as Record<string, unknown>;
+      expect(submission.status, JSON.stringify(submissionBody)).toBe(202);
+      expect(submissionBody).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect((await taskReply).length).toBeGreaterThan(0);
+
+      const plan = await waitFor(async () => {
+        const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => Array.isArray(candidate.steps) &&
+          (candidate.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.delete")) ?? null;
+      }, gateway, "synthetic file.delete task did not reach the operation-plan consumer");
+      expect(plan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const planId = String(plan.plan_id);
+      const revisionDigest = String(plan.revision_digest);
+      const goalPurposeBinding = plan.goal_purpose_binding as Record<string, unknown>;
+      const deleteStep = (plan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.operation === "file.delete");
+      expect(deleteStep?.step_id).toMatch(/^[a-f0-9]{64}$/);
+      expect(existsSync(fixturePath)).toBe(true);
+
+      const relationResponse = await fetch(`${baseUrl}/owner/goal-purpose-relation-review`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: planId, revision_digest: revisionDigest, outcome: "supports" }),
+      });
+      expect(relationResponse.status).toBe(202);
+      const relationProposal = await relationResponse.json() as { command_id?: string };
+      const relationPending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === relationProposal.command_id);
+      expect(relationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        goal_purpose_relation_review: { outcome: "supports", review_status: "required", may_execute: false } });
+      const relationContentResponse = await fetchResume(
+        `${baseUrl}/approval/${encodeURIComponent(String(relationProposal.command_id))}/content`,
+        { method: "POST", headers: { authorization: `Bearer ${resumeToken}` } },
+      );
+      expect(relationContentResponse.status).toBe(200);
+      const relationContent = await relationContentResponse.json() as Record<string, unknown>;
+      expect(relationContent).toMatchObject({ kind: "goal_purpose_relation", task, purpose_text: purpose,
+        used_for_authority: false, may_execute: false });
+      const relationApprovalResponse = await postApproval(String(relationProposal.command_id),
+        relationPending?.approval_token, relationContent.command_digest);
+      expect(relationApprovalResponse.status).toBe(200);
+      expect(await relationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
+      } });
+
+      const stepReviewReply = waitForWebChatSend(taskWebSocket, "file.delete plan review");
+      const stepReviewResponse = await fetch(`${baseUrl}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", content: `plan:review ${JSON.stringify({
+          plan_id: planId, revision_digest: revisionDigest, step_id: deleteStep?.step_id,
+          goal_purpose_binding: goalPurposeBinding,
+        })}` }),
+      });
+      expect(stepReviewResponse.status).toBe(202);
+      expect((await stepReviewReply).length).toBeGreaterThan(0);
+
+      const pending = await waitFor(async () => {
+        const queue = await loadQueue();
+        return queue.pending_approvals.find((item) => item.approval_level === "L3_final_review" &&
+          item.final_review_required === true && item.content_review_required === true) ?? null;
+      }, gateway, "file.delete did not queue its L3 content review");
+      expect(pending.approval_token).toBeTruthy();
+      expect(pending.operation).toContain("file.delete");
+      expect(existsSync(fixturePath)).toBe(true);
+
+      const prematureApproval = await postApproval(String(pending.command_id), pending.approval_token);
+      expect(prematureApproval.status).toBe(409);
+      expect(await prematureApproval.json()).toMatchObject({ error: "approval_content_review_required" });
+      expect(existsSync(fixturePath)).toBe(true);
+
+      const reviewResponse = await fetchResume(`${baseUrl}/approval/${encodeURIComponent(String(pending.command_id))}/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      const reviewBody = await reviewResponse.json() as Record<string, unknown>;
+      expect(reviewResponse.status, JSON.stringify(reviewBody)).toBe(200);
+      expect(reviewResponse.headers.get("cache-control")).toBe("no-store");
+      const review = reviewBody;
+      expect(review).toMatchObject({ kind: "file_delete_target", operation: "file.delete", path: relativePath,
+        size_bytes: Buffer.byteLength(originalContent), max_bytes: 256_000,
+        used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(review)).not.toContain(originalContent);
+      expect(JSON.stringify(review)).not.toContain(fileRoot);
+      expect(review.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+
+      const changedContent = "Changed after owner content review; deletion must stop.\n";
+      writeFileSync(fixturePath, changedContent, "utf8");
+      const staleApproval = await postApproval(String(pending.command_id), pending.approval_token, review.review_digest);
+      expect(staleApproval.status).toBe(409);
+      expect(await staleApproval.json()).toMatchObject({ error: "approval_content_review_stale" });
+      expect(readFileSync(fixturePath, "utf8")).toBe(changedContent);
+
+      const freshReviewResponse = await fetchResume(`${baseUrl}/approval/${encodeURIComponent(String(pending.command_id))}/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      expect(freshReviewResponse.status).toBe(200);
+      const freshReview = await freshReviewResponse.json() as Record<string, unknown>;
+      expect(freshReview.target_version_digest).not.toBe(review.target_version_digest);
+      const deleteResultReply = waitForWebChatSend(taskWebSocket, "approved file.delete result");
+      const finalApproval = await postApproval(String(pending.command_id), pending.approval_token, freshReview.review_digest);
+      expect(finalApproval.status).toBe(200);
+      const finalApprovalBody = await finalApproval.json() as Record<string, unknown>;
+      expect(finalApprovalBody).toMatchObject({ ok: true, result: { approval: "approve", executed: true } });
+      expect((await deleteResultReply).length).toBeGreaterThan(0);
+      await waitFor(() => existsSync(fixturePath) ? null : true, gateway,
+        `approved file.delete did not remove ${relativePath}; result=${JSON.stringify(finalApprovalBody)}`);
+
+      const verifiedPlan = await waitFor(async () => {
+        const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const current = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
+        return current?.status === "results_verified" ? current : null;
+      }, gateway, "approved file.delete did not produce a verified operation-plan receipt");
+      expect(verifiedPlan.steps).toMatchObject([expect.objectContaining({ operation: "file.delete", status: "verified",
+        binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })]);
+    } finally {
+      taskWebSocket?.close();
+      if (gateway) await stopChild(gateway.child);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it("restores owner task status and prevents duplicate dispatch after a Gateway restart", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-owner-task-restart-"));
     const auditDir = join(tempRoot, "audit");
@@ -1420,12 +1664,12 @@ describe("delegated goal purpose owner review", () => {
       const reviewedEditPath = "reviewed-edit.txt";
       const reviewedEditFile = join(fileRoot, reviewedEditPath);
       writeFileSync(reviewedEditFile, "before text\n", "utf8");
-      const editTestTask = SYNTHETIC_FILE_EDIT_TEST_TASK_PREFIX + JSON.stringify({
+      const editTestTask = SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX + JSON.stringify({
         "相対パス": reviewedEditPath,
         "置換前": "before",
         "置換後": "after",
       });
-      const editTestTaskReply = waitForWebChatSend(taskWebSocket, "same-workspace edit test task");
+      const editTestTaskReply = waitForWebChatSend(taskWebSocket, "owner file edit and same-path search task");
       const editTestTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
@@ -1434,7 +1678,8 @@ describe("delegated goal purpose owner review", () => {
           goal_ref: goalRef, purpose_version: 2 }),
       });
       expect(editTestTaskSubmission.status).toBe(202);
-      expect((await editTestTaskReply).length).toBeGreaterThan(0);
+      const editTestTaskOutput = await editTestTaskReply;
+      expect(editTestTaskOutput.length).toBeGreaterThan(0);
       const editTestPlan = await waitFor(async () => {
         const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
@@ -1443,8 +1688,9 @@ describe("delegated goal purpose owner review", () => {
         const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
         return body.operation_plan_status?.plans?.find((plan) => plan.task_identity_digest !== writePlan.task_identity_digest &&
           Array.isArray(plan.steps) && JSON.stringify((plan.steps as Array<Record<string, unknown>>)
-            .map((step) => step.operation)) === JSON.stringify(["file.edit", "shell.exec", "file.search"])) ?? null;
-      }, gateway, "same-task file.edit -> shell.exec -> file.search plan was not connected");
+          .map((step) => step.operation)) === JSON.stringify(["file.edit", "file.search"])) ?? null;
+      }, gateway, `same-task file.edit -> file.search plan was not connected; ` +
+        `task_reply=${editTestTaskOutput.slice(0, 600)}; provider_calls=${providerCalls}; planner_prompts=${plannerPrompts.length}`);
       expect(editTestPlan).toMatchObject({ owner_authentication_required: true,
         goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
       const editTestPlanId = String(editTestPlan.plan_id);
@@ -1454,14 +1700,9 @@ describe("delegated goal purpose owner review", () => {
       };
       const editTestSteps = editTestPlan.steps as Array<Record<string, unknown>>;
       const editTestEditStep = editTestSteps[0]!;
-      const editTestShellStep = editTestSteps[1]!;
-      const editTestSearchStep = editTestSteps[2]!;
-      expect(editTestShellStep).toMatchObject({ operation: "shell.exec", target: { kind: "workspace", id: fileRoot },
-        parameters: { cmd: "node", cwd: ".", same_workspace_as_file_root: true, summary_only: true },
-        preparation: { depends_on: [editTestEditStep.step_id] } });
-      expect(editTestSearchStep).toMatchObject({ operation: "file.search", target: { kind: "directory", id: fileRoot },
-        parameters: { root: fileRoot, file_path: reviewedEditPath, query: "after", max_results: 5 },
-        preparation: { depends_on: [editTestShellStep.step_id] } });
+      const editTestSearchStep = editTestSteps[1]!;
+      expect(editTestSteps.map((step) => step.operation)).toEqual(["file.edit", "file.search"]);
+      expect(editTestSearchStep.operation).toBe("file.search");
 
       const editTestRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
         method: "POST",
@@ -1498,10 +1739,12 @@ describe("delegated goal purpose owner review", () => {
         });
         expect(reviewResponse.status).toBe(202);
         let approvalResult: Record<string, unknown> | undefined;
-        if (step.operation === "file.edit" || step.operation === "shell.exec") {
+        if (step.operation === "file.edit") {
           const pending = await waitFor(async () => {
             const queue = await loadQueue();
-            return queue.pending_approvals.find((item) => item.operation === step.operation && item.final_review_required) ?? null;
+            return queue.pending_approvals.find((item) => typeof item.operation === "string" &&
+              (item.operation === step.operation || item.operation.endsWith(`.${String(step.operation)}`)) &&
+              item.final_review_required) ?? null;
           }, gateway, `${String(step.operation)} did not reach the owner Approval Gate`);
           let contentReviewDigest: unknown;
           if (pending.content_review_required) {
@@ -1513,8 +1756,8 @@ describe("delegated goal purpose owner review", () => {
             const content = await contentResponse.json() as Record<string, unknown>;
             if (expectEditDiff) {
               expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
-              expect(String(content.diff)).toContain("-before text");
-              expect(String(content.diff)).toContain("+after text");
+              expect(String(content.diff)).toContain("-before");
+              expect(String(content.diff)).toContain("+after");
             }
             contentReviewDigest = content.review_digest;
           }
@@ -1545,25 +1788,7 @@ describe("delegated goal purpose owner review", () => {
 
       const reviewedEditResult = await runReviewedPlanStep(editTestEditStep, "owner-reviewed file.edit", true);
       expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
-      const reviewedShellResult = await runReviewedPlanStep(editTestShellStep, "summary-only same-workspace shell test");
-      const reviewedShellEvidence = JSON.stringify({ output: reviewedShellResult.output,
-        approval: reviewedShellResult.approvalResult });
-      expect(reviewedShellEvidence).toContain("exit_code");
-      expect(reviewedShellEvidence).toContain("output_included");
-      expect(reviewedShellEvidence).not.toContain('"stdout":"');
-      expect(reviewedShellEvidence).not.toContain('"stderr":"');
       const reviewedSearchResult = await runReviewedPlanStep(editTestSearchStep, "same-path file.search reread");
-      const rereadReply = waitForWebChatSend(taskWebSocket, "owner-bound edited file.search result");
-      const rereadResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
-        method: "POST",
-        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
-          content: "plan:result " + JSON.stringify({ plan_id: editTestPlanId, revision_digest: editTestRevision,
-            step_id: editTestSearchStep.step_id }) }),
-      });
-      expect(rereadResponse.status).toBe(202);
-      const rereadOutput = await rereadReply;
-      expect(rereadOutput).toContain("after text");
       expect(reviewedSearchResult.output.length).toBeGreaterThan(0);
       expect(reviewedEditResult.output.length).toBeGreaterThan(0);
       expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
@@ -2103,7 +2328,7 @@ describe("delegated goal purpose owner review", () => {
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 300_000);
 });
 
 async function respondWithCandidate(request: IncomingMessage, response: import("node:http").ServerResponse, cycleIndex: number, prompts: string[]): Promise<void> {

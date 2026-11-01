@@ -10,6 +10,7 @@ import {
   meaningUpdateAdoptionApprovalTarget,
   memoryJudgmentReassessmentApprovalTarget,
   memoryCitationReviewAuditDigest,
+  operationPlanDigest,
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
 import type {
@@ -4172,7 +4173,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "file_delete_target" ||
-            snapshot.command_digest !== pending.command_digest ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
         const review: WebChatApprovalContentReview = {
           kind: "file_delete_target",
@@ -4202,7 +4203,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
-        if (!snapshot || !("diff" in snapshot) || snapshot.command_digest !== pending.command_digest ||
+        if (!snapshot || !("diff" in snapshot) || snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
         const review: WebChatApprovalContentReview = {
           kind: "file_edit_diff",

@@ -416,7 +416,19 @@ HDS-BRAIN／Gateway／core／WebChatのTypeScript no-emit確認、生成Control 
 
 `@blue-tanuki/core` build、WebChat build、Gateway typecheck／build、生成Control Center script構文確認、`git diff --check`はPASS。最初のGateway typecheckで新規review unionに伴うGmail snapshot型の絞り込み漏れを検出し、kind guardを加えて再確認した。Gateway process／Owner画面／Broker実削除の実行、test suiteはNOT_RUN。STATUS=WIRED（認証済みOwner確認→L3 Approval Gate→対象版再照合→既存file.delete Broker adapterのコード接続、runtime未確認）。実ファイル削除、実provider、live外部作用、他repo変更、Rust cutoverは行っていない。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次:** 使い捨てrootの専用fileでOwner画面の対象表示・承認拒否条件・対象版stale停止・既存削除adapterまでのruntime疎通を限定確認し、その後も通常Owner仕事の未接続consumerをQE_BUILDで接続する。
+このruntime確認は、以下の2026-11-01追記で実施した。
+
+#### 2026-11-01 E2E-01 BUILD — file.delete runtimeとOwner統合経路の限定確認
+
+使い捨てtemp root内のsynthetic fixtureで、WebChat Owner taskからfile.delete plan review、L3 content review、Approval Gate、Broker実行、verified plan／M receiptまでを通した。内容確認前の承認は拒否され、確認後にfixture内容を変えるとstale拒否され、変更後の内容を再確認してL3承認した場合だけfixtureが削除された。結果はWebChatへ返った。Gateway process test `BT-U-E2E-01`は1件PASS、同fileの他5件はpattern skip。
+
+同日、長いGateway Owner統合test `holds exact proposal text in memory, requires reviewed L3 approval, commits to J, and replays the new version`を再実行し、選択test 1件PASS（197.2秒、同fileの他5件はskip）。このtest fixtureはraw `cmd`をOperationPlanへ持つshell候補を除き、審査済みfile.edit後の同一path file.searchで確認する形へ修正した。OperationPlanのraw command禁止は維持する。
+
+試験中に見つかった二つの接続欠陥も是正した。Gatewayのfile.delete／file.edit content reviewは、Executor approval digestと異なるHDS Operation Plan command digestを比較していたため、HDS側の正本digest関数で照合する。保存済みOperationPlan結果の検証は、plan result全体のdigestと異なる実行契約digestを比較していたため、commit observationに記録されたresult digestとbinding digestの一致を検査し、その後保存result本体を別途検証する。
+
+HDS-BRAIN／core／Gateway build、Gateway typecheck、`pnpm docs:check`、file.delete process test 1件、長いOwner統合test 1件、`git diff --check`はPASS。実provider、live外部作用、本番データへの作用、全suite、QC／QAはNOT_RUN。確認範囲は合成testに限定し、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** 現行rev3.0と最新実装を照合し、残る通常Owner仕事の未接続producer／consumerをQE_BUILDで選定して接続する。広域QC／QA、実provider、live外部作用、Rust cutoverは開始しない。
 
 ## Gitと復旧
 
