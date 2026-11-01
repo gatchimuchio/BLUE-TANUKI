@@ -94,6 +94,7 @@ import type {
   ObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
 import {
+  canonicalFileDeleteTargetVersionObservation,
   canonicalFileEditTargetVersionObservation,
   OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
@@ -258,6 +259,7 @@ interface PendingApproval {
   content_review_digest?: string;
   content_review_provider_state_digest?: string;
   content_review_file_edit_target_version_digest?: string;
+  content_review_file_delete_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
   goal_purpose_proposal?: {
     goal_ref: string;
@@ -1371,6 +1373,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     command_digest?: string;
     expected_gmail_draft_provider_state_digest?: string;
     expected_file_edit_target_version_digest?: string;
+    expected_file_delete_target_version_digest?: string;
     goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
     goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
@@ -1787,6 +1790,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         : undefined;
       if (observedFileEditTargetVersionDigest !== opts.expected_file_edit_target_version_digest) {
         const reason = "file_edit_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_file_delete_target_version_digest) {
+      const observedFileDeleteTargetVersionDigest = targetVersionObservation?.schema_version ===
+        "blue-tanuki.file-delete-target-version.v1"
+        ? createHash("sha256").update(canonicalFileDeleteTargetVersionObservation(targetVersionObservation), "utf8").digest("hex")
+        : undefined;
+      if (observedFileDeleteTargetVersionDigest !== opts.expected_file_delete_target_version_digest) {
+        const reason = "file_delete_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -2569,7 +2586,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) ||
-        (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit"))) {
+        (pending.command.type === "tool_call" &&
+          (pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete")))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -2936,6 +2954,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
       ...(pending.content_review_file_edit_target_version_digest
         ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
+      ...(pending.content_review_file_delete_target_version_digest
+        ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
     });
     return { approval: "approve", executed: true, status: r.status };
   }
@@ -4145,6 +4165,37 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "file_delete_target" ||
+            snapshot.command_digest !== pending.command_digest ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review: WebChatApprovalContentReview = {
+          kind: "file_delete_target",
+          command_id,
+          command_digest: pending.command_digest,
+          review_digest: snapshot.review_digest,
+          request_payload_digest: snapshot.request_payload_digest,
+          operation: "file.delete",
+          path: snapshot.path,
+          size_bytes: snapshot.size_bytes,
+          max_bytes: snapshot.max_bytes,
+          target_version_digest: snapshot.target_version_digest,
+          operation_plan_binding_digest: snapshot.operation_plan_binding_digest,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_file_delete_target_version_digest: review.target_version_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -4181,7 +4232,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       const snapshot = await executor.inspectCommandContentReview(pending.command);
-      if (!snapshot || "diff" in snapshot) return null;
+      if (!snapshot || "diff" in snapshot || "kind" in snapshot) return null;
       const review = projectGmailDraftSendContentReview(pending.command, pending.command_digest, snapshot);
       if (!review || review.kind !== "gmail_write_content" || !review.provider_state_digest || !review.review_digest) return null;
       pendingApprovals.set(command_id, {
@@ -4214,6 +4265,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (pending.memory_judgment_reassessment_proposal) {
       return validateMemoryJudgmentReassessmentContentReview(pending, content_review_digest);
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_file_delete_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        return current && "kind" in current && current.kind === "file_delete_target" &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_file_delete_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit") {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
@@ -4285,7 +4353,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
-        (p.command.type === "tool_call" && p.command.payload.tool_name === "file.edit") ||
+        (p.command.type === "tool_call" &&
+          (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete")) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),

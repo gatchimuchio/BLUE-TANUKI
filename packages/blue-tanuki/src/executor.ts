@@ -735,6 +735,34 @@ export class Executor {
       }
       return review;
     }
+    if (command.payload.tool_name === "file.delete") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("file.delete content review requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("file.delete");
+      if (tool !== fileDeleteTool || !tool.inspect_content_review) {
+        throw new Error("file.delete content review requires the registered built-in adapter");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      const requestedMaxBytes = command.payload.arguments.max_bytes ?? 256_000;
+      if (!("kind" in review) || review.kind !== "file_delete_target" ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.path !== command.payload.arguments.path || !Number.isSafeInteger(review.size_bytes) ||
+          review.size_bytes < 0 || !Number.isSafeInteger(review.max_bytes) || review.max_bytes < 1 ||
+          review.max_bytes > 1_000_000 || review.max_bytes !== requestedMaxBytes || review.size_bytes > review.max_bytes ||
+          !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.target_version_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.review_digest) ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("file.delete content review returned evidence for another command, target, or plan source");
+      }
+      return review;
+    }
     if (command.payload.tool_name !== "gmail.write" || command.payload.arguments.operation !== "draft.send") return undefined;
     const tool = this.deps.tools.get("gmail.write");
     if (tool !== gmailWriteTool || !tool.inspect_content_review) {

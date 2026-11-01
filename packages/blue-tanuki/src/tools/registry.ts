@@ -38,7 +38,22 @@ export interface FileEditDiffContentReview {
   may_execute: false;
 }
 
-export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview;
+/** Exact sandbox-relative deletion target and version, revealed only on the authenticated owner-review endpoint. */
+export interface FileDeleteTargetContentReview {
+  kind: "file_delete_target";
+  path: string;
+  size_bytes: number;
+  max_bytes: number;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {
@@ -94,7 +109,7 @@ export interface Tool {
     operation_plan_binding_digest?: string;
     command_digest?: string;
   }): Promise<BrokerTargetVersionObservation>;
-  /** Exact plain-text-only content projection for a resume-authenticated draft review. */
+  /** No-store content/target projection revealed only through the authenticated owner-review endpoint. */
   inspect_content_review?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
     operation_plan_binding_digest?: string;

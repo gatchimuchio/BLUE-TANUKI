@@ -25,7 +25,8 @@ import {
   type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation,
 } from "@blue-tanuki/protocol";
-import { assertToolExecutionNotCancelled, echoTool, type FileEditDiffContentReview, type Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
+  type FileEditDiffContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -1926,6 +1927,8 @@ export async function inspectFileWriteOutcomeState(
 
 interface ResolvedFileDeleteTargetVersion {
   filepath: string;
+  size_bytes: number;
+  max_bytes: number;
   observation: FileDeleteTargetVersionObservation;
 }
 
@@ -2001,7 +2004,7 @@ async function resolveFileDeleteTargetVersion(
     used_for_authority: false,
     may_execute: false,
   });
-  return { filepath, observation };
+  return { filepath, size_bytes: contents.length, max_bytes: maxBytes, observation };
 }
 
 export async function inspectFileDeleteTargetVersion(
@@ -2009,6 +2012,40 @@ export async function inspectFileDeleteTargetVersion(
   opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileDeleteTargetVersionObservation> {
   return (await resolveFileDeleteTargetVersion(args, opts)).observation;
+}
+
+/** No-store owner projection for the exact sandbox-relative file selected for deletion. */
+export async function inspectFileDeleteContentReview(
+  args: Record<string, unknown>,
+  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+): Promise<FileDeleteTargetContentReview> {
+  if (!opts.command_digest || !opts.operation_plan_binding_digest) {
+    throw new Error("file.delete content review requires the selected Operation Plan binding");
+  }
+  const resolved = await resolveFileDeleteTargetVersion(args, opts);
+  const pathArg = stringArg(args, "path")!;
+  const targetVersionDigest = createHash("sha256")
+    .update(canonicalFileDeleteTargetVersionObservation(resolved.observation), "utf8").digest("hex");
+  const requestPayloadDigest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-delete-content-review-request.v1", pathArg, resolved.max_bytes,
+  ]), "utf8").digest("hex");
+  const reviewDigest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-delete-content-review.v1", opts.command_digest,
+    opts.operation_plan_binding_digest, requestPayloadDigest, targetVersionDigest,
+  ]), "utf8").digest("hex");
+  return {
+    kind: "file_delete_target",
+    path: pathArg,
+    size_bytes: resolved.size_bytes,
+    max_bytes: resolved.max_bytes,
+    target_version_digest: targetVersionDigest,
+    operation_plan_binding_digest: opts.operation_plan_binding_digest,
+    request_payload_digest: requestPayloadDigest,
+    command_digest: opts.command_digest,
+    review_digest: reviewDigest,
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 /** Delete only after a J-selected planned command and its exact pre-delete observation are rechecked. */
@@ -2424,6 +2461,9 @@ export const fileDeleteTool: Tool = {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileDeleteTargetVersionObservation> {
     return await inspectFileDeleteTargetVersion(args, options);
+  },
+  async inspect_content_review(args, options): Promise<FileDeleteTargetContentReview> {
+    return await inspectFileDeleteContentReview(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const targetVersion = context.target_version_observation;

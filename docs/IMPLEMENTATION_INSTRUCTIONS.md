@@ -410,6 +410,14 @@ HDS-BRAIN／Gateway／core／WebChatのTypeScript no-emit確認、生成Control 
 
 **次:** 使い捨てroot内のtest専用fileに限定して、Owner表示・L3審査・対象版再照合から既存file.delete consumerまでの実接続を確認する。
 
+#### 2026-11-01 E2E-01 BUILD — file.delete対象のOwner確認とL3接続
+
+既存の認証済みno-store承認内容確認endpointへ`file.delete`対象の表示を接続した。Ownerが確認操作を選んだ時だけsandbox相対path、対象サイズ、上限、対象版digest、Operation Plan束縛digestを表示し、本文・絶対root・秘密内容は返さない。対象版digestはcommand・Operation Plan binding・path・file内容とidentityの観測に束縛する。確認後のL3承認時に同じ対象を再観測し、Gatewayが実行commandを構成する直前にも確認済み対象版と一致しなければ停止する。既存Broker adapterは作用直前にも対象版を再照合する。内容確認前はApproval Gateが承認を受け付けない。
+
+`@blue-tanuki/core` build、WebChat build、Gateway typecheck／build、生成Control Center script構文確認、`git diff --check`はPASS。最初のGateway typecheckで新規review unionに伴うGmail snapshot型の絞り込み漏れを検出し、kind guardを加えて再確認した。Gateway process／Owner画面／Broker実削除の実行、test suiteはNOT_RUN。STATUS=WIRED（認証済みOwner確認→L3 Approval Gate→対象版再照合→既存file.delete Broker adapterのコード接続、runtime未確認）。実ファイル削除、実provider、live外部作用、他repo変更、Rust cutoverは行っていない。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** 使い捨てrootの専用fileでOwner画面の対象表示・承認拒否条件・対象版stale停止・既存削除adapterまでのruntime疎通を限定確認し、その後も通常Owner仕事の未接続consumerをQE_BUILDで接続する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

@@ -200,6 +200,22 @@ export interface WebChatFileEditDiffContentReview {
   may_execute: false;
 }
 
+export interface WebChatFileDeleteTargetContentReview {
+  kind: "file_delete_target";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation: "file.delete";
+  path: string;
+  size_bytes: number;
+  max_bytes: number;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -336,7 +352,7 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
-  WebChatFileEditDiffContentReview;
+  WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"
