@@ -5784,6 +5784,119 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "作成内容とアクセス範囲を再確認";
           return;
         }
+        if (review.kind === "google_drive_file_update") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validOptionalString = function (value, max) {
+            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+          };
+          const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
+            review.permissions.length <= 500 && review.permissions.every(function (permission) {
+              return permission && ["user", "group", "domain", "anyone"].includes(permission.type) &&
+                typeof permission.role === "string" && permission.role.length > 0 && permission.role.length <= 128 &&
+                validOptionalString(permission.email_address, 320) && validOptionalString(permission.domain, 320) &&
+                (permission.allow_file_discovery === null || typeof permission.allow_file_discovery === "boolean") &&
+                validOptionalString(permission.expiration_time, 128) && typeof permission.deleted === "boolean" &&
+                Array.isArray(permission.permission_details) && permission.permission_details.length <= 32 &&
+                permission.permission_details.every(function (detail) {
+                  return detail && validOptionalString(detail.permission_type, 128) &&
+                    validOptionalString(detail.role, 128) &&
+                    (detail.inherited === null || typeof detail.inherited === "boolean") &&
+                    validOptionalString(detail.inherited_from, 512);
+                });
+            });
+          const currentBytes = typeof review.current_content === "string"
+            ? new TextEncoder().encode(review.current_content).byteLength : -1;
+          const replacementBytes = typeof review.replacement_content === "string"
+            ? new TextEncoder().encode(review.replacement_content).byteLength : -1;
+          if (review.command_id !== commandId || review.operation !== "google.drive.write.file.update" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.target_access_scope_digest) ||
+              !isDigest(review.current_content_digest) || typeof review.file_id !== "string" ||
+              review.file_id.length === 0 || review.file_id.length > 512 ||
+              typeof review.file_name !== "string" || review.file_name.length === 0 || review.file_name.length > 512 ||
+              !Array.isArray(review.parent_ids) || review.parent_ids.length === 0 || review.parent_ids.length > 32 ||
+              review.parent_ids.some(function (id) { return typeof id !== "string" || id.length === 0 || id.length > 512; }) ||
+              !validOptionalString(review.drive_id, 512) || typeof review.file_version !== "string" ||
+              review.file_version.length === 0 || review.file_version.length > 128 ||
+              !validOptionalString(review.file_modified_time, 128) ||
+              (review.file_shared !== null && typeof review.file_shared !== "boolean") ||
+              (review.inherited_permissions_disabled !== null && typeof review.inherited_permissions_disabled !== "boolean") ||
+              review.file_mime_type !== "text/plain" || review.target_access_scope_complete !== true || !validPermissions ||
+              typeof review.current_content !== "string" || typeof review.replacement_content !== "string" ||
+              !Number.isSafeInteger(review.current_content_bytes) || review.current_content_bytes < 0 ||
+              review.current_content_bytes > 512_000 || currentBytes !== review.current_content_bytes ||
+              !Number.isSafeInteger(review.replacement_content_bytes) || review.replacement_content_bytes < 0 ||
+              review.replacement_content_bytes > 512_000 || replacementBytes !== review.replacement_content_bytes) {
+            throw new Error("Drive更新内容または対象版がこの承認要求へ結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Google Drive text/plain本文の全置換";
+          view.appendChild(heading);
+          [
+            ["対象ファイル", review.file_name],
+            ["ファイルID", review.file_id],
+            ["共有ドライブID", review.drive_id === null ? "なし／個人Drive" : review.drive_id],
+            ["現在版", review.file_version],
+            ["親フォルダーID", review.parent_ids.join(", ")],
+            ["共有状態", review.file_shared === null ? "不明" : review.file_shared ? "共有あり" : "共有なし"],
+            ["アクセス範囲digest", review.target_access_scope_digest],
+            ["変更前本文digest", review.current_content_digest],
+            ["対象版digest", review.target_version_digest],
+            ["Operation Plan束縛digest", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const scopeHeading = document.createElement("strong");
+          scopeHeading.textContent = "対象ファイルに取得できた全アクセス権限（" + review.permissions.length + "件）";
+          view.appendChild(scopeHeading);
+          review.permissions.forEach(function (permission) {
+            const item = document.createElement("p");
+            const principal = permission.type === "anyone" ? "全員（公開範囲）" :
+              permission.type === "domain" ? "ドメイン " + (permission.domain || "不明") :
+                permission.type === "group" ? "グループ " + (permission.email_address || "不明") :
+                  "ユーザー " + (permission.email_address || "不明");
+            const discoverability = permission.type === "domain" || permission.type === "anyone"
+              ? " / 検索可能=" + (permission.allow_file_discovery === null ? "不明" : permission.allow_file_discovery ? "はい" : "いいえ") : "";
+            const detail = permission.permission_details.map(function (entry) {
+              return (entry.inherited === null ? "継承状態不明" : entry.inherited ? "親から継承" : "直接付与") +
+                (entry.role ? "・" + entry.role : "") + (entry.inherited_from ? "・継承元 " + entry.inherited_from : "");
+            }).join("、");
+            item.textContent = principal + " / 権限=" + permission.role + discoverability +
+              (permission.expiration_time ? " / 期限=" + permission.expiration_time : "") +
+              (permission.deleted ? " / 削除済み権限" : "") + (detail ? " / " + detail : "");
+            view.appendChild(item);
+          });
+          const beforeHeading = document.createElement("strong");
+          beforeHeading.textContent = "現在の本文（全置換されます）";
+          const beforeContent = document.createElement("pre");
+          beforeContent.textContent = review.current_content;
+          view.append(beforeHeading, beforeContent);
+          const replacementHeading = document.createElement("strong");
+          replacementHeading.textContent = "置換後の本文";
+          const replacement = document.createElement("pre");
+          replacement.textContent = review.replacement_content;
+          view.append(replacementHeading, replacement);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "確認内容は保存されません。本文とアクセス範囲を承認直前・PATCH直前に再取得し、変化や不完全な読取があれば更新を停止します。再読取とPATCHはDrive側の原子的な条件付き更新ではないため、最後の照合直後に他writerが更新した場合の競合を排除できません。PATCH後に同じfile IDと本文を再読取し、不明時は自動再送しません。共有変更・削除・Google Workspace文書は対象外です。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "置換前後の本文とアクセス範囲を再確認";
+          return;
+        }
         if (review.command_id !== commandId ||
             (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create" &&
               review.operation !== "gmail.write.draft.send") ||

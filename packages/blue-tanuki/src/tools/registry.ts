@@ -1,13 +1,14 @@
 import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation, type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation, type GmailWriteTargetVersionObservation,
-  type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+  type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation,
+  type GoogleDriveUpdateTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
   GmailWriteTargetVersionObservation | GoogleCalendarWriteTargetVersionObservation |
-  GoogleDriveWriteTargetVersionObservation;
+  GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation;
 
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {
@@ -216,9 +217,39 @@ export interface GoogleDriveFileCreateContentReview {
   may_execute: false;
 }
 
+/** No-store owner projection of the exact old/new text and target file access scope for file.update. */
+export interface GoogleDriveFileUpdateContentReview {
+  kind: "google_drive_file_update";
+  operation: "google.drive.write.file.update";
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  file_id: string;
+  file_name: string;
+  parent_ids: readonly string[];
+  drive_id: string | null;
+  file_version: string;
+  file_modified_time: string | null;
+  file_shared: boolean | null;
+  inherited_permissions_disabled: boolean | null;
+  file_mime_type: "text/plain";
+  target_access_scope_complete: true;
+  target_access_scope_digest: string;
+  permissions: readonly GoogleDrivePermissionReview[];
+  current_content_digest: string;
+  current_content: string;
+  current_content_bytes: number;
+  replacement_content: string;
+  replacement_content_bytes: number;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
-  GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview;
+  GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {

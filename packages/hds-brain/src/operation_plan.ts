@@ -22,6 +22,8 @@ import {
   GoogleCalendarEventTargetObservationSchema,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
+  googleDriveUpdateRequestPayloadDigest,
+  googleDriveUpdateTargetIdentityDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -1486,11 +1488,23 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
     const hasEffects = step.effects.length === 3 &&
       ["external_send", "write", "credential_access"].every((effect) =>
         step.effects.includes(effect as OperationStep["effects"][number]));
-    const name = parameters.name;
-    const parentId = parameters.parent_id;
     const content = parameters.content;
     const maxBytes = parameters.max_bytes ?? 128_000;
     const maxContentBytes = parameters.max_content_bytes ?? 64_000;
+    if (parameters.operation === "file.update") {
+      const fileId = parameters.file_id;
+      return validPermission && hasEffects && typeof fileId === "string" && fileId.length > 0 &&
+        fileId.length <= 512 && fileId === fileId.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(fileId) &&
+        (parameters.mime_type === undefined || parameters.mime_type === "text/plain") &&
+        typeof content === "string" && typeof maxBytes === "number" && Number.isSafeInteger(maxBytes) &&
+        maxBytes >= 1 && maxBytes <= 512_000 && typeof maxContentBytes === "number" &&
+        Number.isSafeInteger(maxContentBytes) && maxContentBytes >= 1 && maxContentBytes <= 512_000 &&
+        Buffer.byteLength(content, "utf8") <= maxContentBytes &&
+        Object.keys(parameters).every((key) => ["operation", "file_id", "mime_type", "content", "max_bytes",
+          "max_content_bytes"].includes(key));
+    }
+    const name = parameters.name;
+    const parentId = parameters.parent_id;
     return validPermission && hasEffects && parameters.operation === "file.create" &&
       typeof parentId === "string" && parentId.length > 0 && parentId.length <= 512 &&
       parentId === parentId.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(parentId) &&
@@ -3002,6 +3016,34 @@ export class OperationPlanLedger {
         return sameInviteEvent && priorUnresolved || googleCalendarWriteEffectIdentityDigest(priorParameters) === effectIdentity;
       }));
       if (priorEffect) throw new Error("google_calendar_write_effect_already_selected_or_attempted");
+    }
+    if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "file.update") {
+      const targetIdentity = googleDriveUpdateTargetIdentityDigest(String(step.parameters.file_id));
+      const requestPayload = googleDriveUpdateRequestPayloadDigest({
+        file_id: String(step.parameters.file_id),
+        mime_type: String(step.parameters.mime_type ?? "text/plain"),
+        content: String(step.parameters.content),
+        max_bytes: Number(step.parameters.max_bytes ?? 128_000),
+        max_content_bytes: Number(step.parameters.max_content_bytes ?? 64_000),
+      });
+      const priorEffect = this.state.plans.some((candidate) => candidate.bindings.some((binding) => {
+        if (binding.operation !== "google.drive.write" ||
+            ["invalidated", "not_attempted"].includes(binding.status) ||
+            binding.prepared_step.parameters?.operation !== "file.update") return false;
+        const prior = binding.prepared_step.parameters ?? {};
+        const priorTargetIdentity = googleDriveUpdateTargetIdentityDigest(String(prior.file_id));
+        const priorPayload = googleDriveUpdateRequestPayloadDigest({
+          file_id: String(prior.file_id),
+          mime_type: String(prior.mime_type ?? "text/plain"),
+          content: String(prior.content),
+          max_bytes: Number(prior.max_bytes ?? 128_000),
+          max_content_bytes: Number(prior.max_content_bytes ?? 64_000),
+        });
+        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        return priorTargetIdentity === targetIdentity && (unresolved ||
+          binding.status === "verified" && priorPayload === requestPayload);
+      }));
+      if (priorEffect) throw new Error("google_drive_update_effect_already_selected_or_attempted");
     }
     if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "file.create") {
       const targetIdentity = googleDriveWriteTargetIdentityDigest(String(step.parameters.parent_id), String(step.parameters.name));

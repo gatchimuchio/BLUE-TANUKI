@@ -47,8 +47,11 @@ import {
   GmailWriteTargetVersionObservationSchema,
   GoogleCalendarWriteTargetVersionObservationSchema,
   GoogleDriveWriteTargetVersionObservationSchema,
+  GoogleDriveUpdateTargetVersionObservationSchema,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
+  googleDriveUpdateRequestPayloadDigest,
+  googleDriveUpdateTargetIdentityDigest,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
@@ -3689,27 +3692,50 @@ ${planControl.question}`,
       if (brokerTargetVersionObservation === undefined || operation_plan_binding_digest === undefined) {
         throw new Error("HDS google.drive.write requires a plan-bound target version observation");
       }
-      const observation = GoogleDriveWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
       const args = command.payload.arguments;
-      const parentId = args.parent_id;
-      const name = args.name;
-      const content = args.content;
-      const mimeType = args.mime_type ?? "text/plain";
-      const maxBytes = args.max_bytes ?? 128_000;
-      const maxContentBytes = args.max_content_bytes ?? 64_000;
-      if (args.operation !== "file.create" || typeof parentId !== "string" || typeof name !== "string" ||
-          typeof content !== "string" || mimeType !== "text/plain" || !Number.isSafeInteger(maxBytes) ||
-          !Number.isSafeInteger(maxContentBytes) || observation.command_digest !== operationPlanDigest(command) ||
-          observation.operation !== args.operation || observation.operation_plan_binding_digest !== operation_plan_binding_digest ||
-          observation.parent_folder_id !== parentId ||
-          observation.target_identity_digest !== googleDriveWriteTargetIdentityDigest(parentId, name) ||
-          observation.request_payload_digest !== googleDriveWriteRequestPayloadDigest({
-            parent_id: parentId, name, mime_type: mimeType, content,
-            max_bytes: maxBytes as number, max_content_bytes: maxContentBytes as number,
-          })) {
-        throw new Error("HDS google.drive.write target version does not match the issued command or Operation Plan source");
+      if (args.operation === "file.update") {
+        const observation = GoogleDriveUpdateTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+        const fileId = args.file_id;
+        const content = args.content;
+        const mimeType = args.mime_type ?? "text/plain";
+        const maxBytes = args.max_bytes ?? 128_000;
+        const maxContentBytes = args.max_content_bytes ?? 64_000;
+        if (typeof fileId !== "string" || typeof content !== "string" || mimeType !== "text/plain" ||
+            !Number.isSafeInteger(maxBytes) || (maxBytes as number) < 1 || (maxBytes as number) > 512_000 ||
+            !Number.isSafeInteger(maxContentBytes) || (maxContentBytes as number) < 1 ||
+            (maxContentBytes as number) > 512_000 || Buffer.byteLength(content, "utf8") > (maxContentBytes as number) ||
+            observation.command_digest !== operationPlanDigest(command) || observation.operation !== args.operation ||
+            observation.operation_plan_binding_digest !== operation_plan_binding_digest || observation.file_id !== fileId ||
+            observation.target_identity_digest !== googleDriveUpdateTargetIdentityDigest(fileId) ||
+            observation.request_payload_digest !== googleDriveUpdateRequestPayloadDigest({
+              file_id: fileId, mime_type: mimeType, content,
+              max_bytes: maxBytes as number, max_content_bytes: maxContentBytes as number,
+            })) {
+          throw new Error("HDS google.drive.write update target version does not match the issued command or Operation Plan source");
+        }
+        brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+      } else {
+        const observation = GoogleDriveWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+        const parentId = args.parent_id;
+        const name = args.name;
+        const content = args.content;
+        const mimeType = args.mime_type ?? "text/plain";
+        const maxBytes = args.max_bytes ?? 128_000;
+        const maxContentBytes = args.max_content_bytes ?? 64_000;
+        if (args.operation !== "file.create" || typeof parentId !== "string" || typeof name !== "string" ||
+            typeof content !== "string" || mimeType !== "text/plain" || !Number.isSafeInteger(maxBytes) ||
+            !Number.isSafeInteger(maxContentBytes) || observation.command_digest !== operationPlanDigest(command) ||
+            observation.operation !== args.operation || observation.operation_plan_binding_digest !== operation_plan_binding_digest ||
+            observation.parent_folder_id !== parentId ||
+            observation.target_identity_digest !== googleDriveWriteTargetIdentityDigest(parentId, name) ||
+            observation.request_payload_digest !== googleDriveWriteRequestPayloadDigest({
+              parent_id: parentId, name, mime_type: mimeType, content,
+              max_bytes: maxBytes as number, max_content_bytes: maxContentBytes as number,
+            })) {
+          throw new Error("HDS google.drive.write target version does not match the issued command or Operation Plan source");
+        }
+        brokerTargetVersionObservationDigest = operationPlanDigest(observation);
       }
-      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
       if (brokerTargetVersionObservation === undefined) {
@@ -4650,7 +4676,7 @@ ${planControl.question}`,
         ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
-          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致（query検索のほか、owner指定の単一sandbox相対file_pathとquery=""による最大5行previewを許可する。start_lineはこのpreviewだけに使い、1〜1000000の整数とする。start_lineを指定する場合はparameters.start_lineとfile_search_result_matchesのvalidation.expected.start_lineへ同じ値を指定する）、file.writeのinternal_runtime file targetによる相対path指定・mode=createのみ（未存在対象を新規作成し、overwrite／appendは選択不可）、file.editのinternal_runtime file targetによる相対path指定・bounded search／replace、replacement数とmax_bytes限定（effects=[read,write]、risk=medium、approval_level=L3_final_review、final_review_required=true、Approval Gate必須のowner差分確認を行い、変更前後の内容digest・root／parent／file identityを観測してplanに結合し実行直前に再照合）、file.deleteのinternal_runtime file targetによる相対path指定・max_bytes限定（sandbox内のregular fileを1個だけ対象とし、effects=[delete]・risk=high・approval_level=L3_final_review・final_review_required=trueを必須とし、変更前hashとroot／parent／file identityをdigestだけで観測して実行直前に再照合）、google.drive.write external_service target id=driveのoperation=file.createのみ（owner taskに明示された単一parent_id・name・text/plain contentを使い、effects=[external_send,write,credential_access]・risk=high・approval_level=L3_final_review・final_review_required=true。Drive folder metadata、親の継承を含む全permission scope、同名不存在を完全取得してOperation Planへ結合し、no-store L3 reviewで本文と全アクセス範囲を表示します。承認前と作用直前に同一snapshotを再取得し、差異・不完全・ページ上限超過はfail-closed。file.update、permission/share、deleteは候補にしない）、およびgmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを扱います。Toは必須、Cc/Bcc/Reply-Toは任意で、各欄は表示名なしの最大20件のメールアドレス列です。subjectとbody_textも候補に含められますが、すべてOwner taskに明示された内容だけを使い、メール本文/headerから宛先を推定しません。添付は未対応で候補に含めてはいけません。draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。Google Calendar参加者招待はgoogle.calendar.writeのevent.inviteだけを候補化し、targetをexternal_service calendar、effectsをexternal_send+write+credential_access、permissionをhigh/L3_final_reviewへ固定します。attendeesにはOwner taskに明示された新規宛先だけを最大20件まで入れ、event_observationのevent_id・calendar_id・target_scopeを一致させます。現在の参加者一覧はplan parametersに複写せず、完全なread snapshotを得た既存adapterが既存参加者と書込可能なRSVP等を保持して新規宛先を追加します。重複・不完全・上限超過はfail-closed。sendUpdates=allは既存参加者を含む全guestへ更新通知を依頼するため、Gatewayのno-store L3 reviewで保持一覧・新規宛先・通知対象全員を表示し、承認前と作用直前にevent版を再照合します。file.deleteはsecret-like path、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にはpathや内容を含めません。file.writeではpath・content・root・親directory状態をdigestのみで観測し、実行直前に再照合します。file.editはbinary-lookingまたはinvalid UTF-8 input、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にpathや本文を含めません。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へfrom、credential、添付を含めません。To/Cc/Bcc/Reply-ToはOwner taskの明示値だけを使います。採用・承認・実行はこの計算の責務ではありません。` }] : []),
+          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致（query検索のほか、owner指定の単一sandbox相対file_pathとquery=""による最大5行previewを許可する。start_lineはこのpreviewだけに使い、1〜1000000の整数とする。start_lineを指定する場合はparameters.start_lineとfile_search_result_matchesのvalidation.expected.start_lineへ同じ値を指定する）、file.writeのinternal_runtime file targetによる相対path指定・mode=createのみ（未存在対象を新規作成し、overwrite／appendは選択不可）、file.editのinternal_runtime file targetによる相対path指定・bounded search／replace、replacement数とmax_bytes限定（effects=[read,write]、risk=medium、approval_level=L3_final_review、final_review_required=true、Approval Gate必須のowner差分確認を行い、変更前後の内容digest・root／parent／file identityを観測してplanに結合し実行直前に再照合）、file.deleteのinternal_runtime file targetによる相対path指定・max_bytes限定（sandbox内のregular fileを1個だけ対象とし、effects=[delete]・risk=high・approval_level=L3_final_review・final_review_required=trueを必須とし、変更前hashとroot／parent／file identityをdigestだけで観測して実行直前に再照合）、google.drive.write external_service target id=driveでoperation=file.create／file.updateを扱います。file.createはOwner taskに明示された単一parent_id・name・text/plain contentを使います。file.updateはOwner taskに明示されたfile_idと置換後text/plain本文だけを使い、既存blobの現本文・file metadata・取得可能なpermission scopeを読取照合して版digestへ結合し、no-store L3確認で変更前後の本文と全scopeを表示します。両作用はeffects=[external_send,write,credential_access]・risk=high・approval_level=L3_final_review・final_review_required=trueを要求し、承認時と作用直前に同じsnapshotを再取得します。file.updateはPATCHと再読取の間に外部変更される競合を原子的に排除できるとは主張しません。Google Workspace文書、rename、permission/share、deleteは候補化しません。gmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを扱います。Toは必須、Cc/Bcc/Reply-Toは任意で、各欄は表示名なしの最大20件のメールアドレス列です。subjectとbody_textも候補に含められますが、すべてOwner taskに明示された内容だけを使い、メール本文/headerから宛先を推定しません。添付は未対応で候補に含めてはいけません。draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。Google Calendar参加者招待はgoogle.calendar.writeのevent.inviteだけを候補化し、targetをexternal_service calendar、effectsをexternal_send+write+credential_access、permissionをhigh/L3_final_reviewへ固定します。attendeesにはOwner taskに明示された新規宛先だけを最大20件まで入れ、event_observationのevent_id・calendar_id・target_scopeを一致させます。現在の参加者一覧はplan parametersに複写せず、完全なread snapshotを得た既存adapterが既存参加者と書込可能なRSVP等を保持して新規宛先を追加します。重複・不完全・上限超過はfail-closed。sendUpdates=allは既存参加者を含む全guestへ更新通知を依頼するため、Gatewayのno-store L3 reviewで保持一覧・新規宛先・通知対象全員を表示し、承認前と作用直前にevent版を再照合します。file.deleteはsecret-like path、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にはpathや内容を含めません。file.writeではpath・content・root・親directory状態をdigestのみで観測し、実行直前に再照合します。file.editはbinary-lookingまたはinvalid UTF-8 input、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にpathや本文を含めません。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へfrom、credential、添付を含めません。To/Cc/Bcc/Reply-ToはOwner taskの明示値だけを使います。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
         ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested

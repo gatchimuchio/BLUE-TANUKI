@@ -2,17 +2,20 @@ import { createHash } from "node:crypto";
 import * as https from "node:https";
 import { GmailWriteTargetVersionObservationSchema, GoogleCalendarEventTargetObservationSchema,
   GoogleCalendarWriteTargetVersionObservationSchema,
-  GoogleDriveWriteTargetVersionObservationSchema, googleDriveWriteRequestPayloadDigest,
-  googleDriveWriteTargetIdentityDigest,
+  GoogleDriveWriteTargetVersionObservationSchema, GoogleDriveUpdateTargetVersionObservationSchema,
+  googleDriveWriteRequestPayloadDigest, googleDriveWriteTargetIdentityDigest,
+  googleDriveUpdateRequestPayloadDigest, googleDriveUpdateTargetIdentityDigest,
   normalizeGmailAddressList, requireToolOperationDescriptor,
   type GmailWriteTargetVersionObservation, type GoogleCalendarEventTargetObservation,
-  type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+  type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation,
+  type GoogleDriveUpdateTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, readGoogleCalendarEventTarget,
   type GoogleCalendarEventTargetSnapshot } from "./google_read.js";
 import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type GoogleCalendarEventCreateContentReview,
   type GoogleCalendarEventUpdateContentReview, type GoogleCalendarEventDeleteContentReview,
   type GoogleCalendarEventInviteContentReview, type GoogleDriveFileCreateContentReview,
+  type GoogleDriveFileUpdateContentReview,
   type GoogleDrivePermissionReview,
   type Tool, type ToolContext } from "./registry.js";
 
@@ -41,6 +44,7 @@ export interface GoogleWriteResponse {
   ok: boolean;
   content_type: string | null;
   body: string;
+  body_utf8_valid?: boolean;
   truncated: boolean;
   request_id: string | null;
 }
@@ -54,7 +58,7 @@ export interface GoogleWriteOptions {
   calendar_availability_observation_digest?: string;
   calendar_availability_result_digest?: string;
   calendar_availability_observed_at?: string;
-  target_version_observation?: GoogleDriveWriteTargetVersionObservation;
+  target_version_observation?: GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation;
 }
 
 interface CalendarAvailabilityObservation {
@@ -413,22 +417,32 @@ async function defaultGoogleWriteRequest(
           if (seenBytes >= target.maxBytes) {
             truncated = true;
             res.destroy();
+            const bytes = Buffer.concat(chunks);
+            let bodyUtf8Valid = true;
+            try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+            catch { bodyUtf8Valid = false; }
             finish({
               status,
               ok: status >= 200 && status < 300,
               content_type: contentType,
-              body: Buffer.concat(chunks).toString("utf8"),
+              body: bytes.toString("utf8"),
+              body_utf8_valid: bodyUtf8Valid,
               truncated,
               request_id: requestId,
             });
           }
         });
         res.on("end", () => {
+          const bytes = Buffer.concat(chunks);
+          let bodyUtf8Valid = true;
+          try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+          catch { bodyUtf8Valid = false; }
           finish({
             status,
             ok: status >= 200 && status < 300,
             content_type: contentType,
-            body: Buffer.concat(chunks).toString("utf8"),
+            body: bytes.toString("utf8"),
+            body_utf8_valid: bodyUtf8Valid,
             truncated,
             request_id: requestId,
           });
@@ -1786,6 +1800,15 @@ interface GoogleDriveCreateArguments {
   max_content_bytes: number;
 }
 
+interface GoogleDriveUpdateArguments {
+  operation: "file.update";
+  file_id: string;
+  mime_type: "text/plain";
+  content: string;
+  max_bytes: number;
+  max_content_bytes: number;
+}
+
 interface GoogleDriveFolderMetadata {
   id: string;
   name: string;
@@ -1806,6 +1829,30 @@ interface GoogleDriveFolderScopeSnapshot {
   access_scope_digest: string;
   permissions: readonly GoogleDrivePermissionReview[];
   target_name_absent: true;
+}
+
+interface GoogleDriveUpdateFileMetadata {
+  id: string;
+  name: string;
+  mime_type: "text/plain";
+  modified_time: string | null;
+  parent_ids: readonly string[];
+  drive_id: string | null;
+  version: string;
+  head_revision_id: string | null;
+  shared: boolean | null;
+  trashed: false;
+  inherited_permissions_disabled: boolean | null;
+}
+
+interface GoogleDriveUpdateSnapshot {
+  file: GoogleDriveUpdateFileMetadata;
+  file_state_digest: string;
+  access_scope_digest: string;
+  permissions: readonly GoogleDrivePermissionReview[];
+  current_content: string;
+  current_content_digest: string;
+  current_content_bytes: number;
 }
 
 function normalizeGoogleDriveCreateArguments(args: Record<string, unknown>): GoogleDriveCreateArguments {
@@ -1836,6 +1883,37 @@ function normalizeGoogleDriveCreateArguments(args: Record<string, unknown>): Goo
     throw new Error("google.drive.write file.create byte bounds are invalid; mutation_sent=false");
   }
   return { operation: "file.create", parent_id: parentId, name, mime_type: "text/plain", content,
+    max_bytes: maxBytes, max_content_bytes: maxContentBytes };
+}
+
+function normalizeGoogleDriveUpdateArguments(args: Record<string, unknown>): GoogleDriveUpdateArguments {
+  if (operationArg(args, ["file.update"]) !== "file.update") {
+    throw new Error("google.drive.write only supports plan-bound file.create or file.update; mutation_sent=false");
+  }
+  const allowed = new Set(["operation", "file_id", "mime_type", "content", "max_bytes", "max_content_bytes"]);
+  if (Object.keys(args).some((key) => !allowed.has(key))) {
+    throw new Error("google.drive.write file.update contains unsupported fields; mutation_sent=false");
+  }
+  const fileId = stringArg(args, "file_id")!;
+  if (args.file_id !== fileId || fileId.length > 512 ||
+      /[\s/?#\\\u0000-\u001f\u007f]/.test(fileId)) {
+    throw new Error("google.drive.write file.update identity is invalid; mutation_sent=false");
+  }
+  const mimeType = stringArg(args, "mime_type", false) ?? "text/plain";
+  if (mimeType !== "text/plain") {
+    throw new Error("google.drive.write plan-bound file.update currently requires text/plain; mutation_sent=false");
+  }
+  const maxContentBytes = positiveIntArg(args, "max_content_bytes", DEFAULT_MAX_CONTENT_BYTES, MAX_CONTENT_BYTES);
+  const content = boundedContent(args, maxContentBytes, true)!;
+  const maxBytes = args.max_bytes ?? DEFAULT_MAX_BYTES;
+  if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_MAX_BYTES ||
+      typeof args.max_content_bytes !== "undefined" &&
+        (typeof args.max_content_bytes !== "number" || !Number.isSafeInteger(args.max_content_bytes) ||
+          args.max_content_bytes < 1 || args.max_content_bytes > MAX_CONTENT_BYTES) ||
+      Buffer.byteLength(content, "utf8") > maxContentBytes) {
+    throw new Error("google.drive.write file.update byte bounds are invalid; mutation_sent=false");
+  }
+  return { operation: "file.update", file_id: fileId, mime_type: "text/plain", content,
     max_bytes: maxBytes, max_content_bytes: maxContentBytes };
 }
 
@@ -2011,6 +2089,138 @@ async function readGoogleDrivePermissionScopePass(input: {
   return permissions.sort((a, b) => operationPlanDigest(a).localeCompare(operationPlanDigest(b)));
 }
 
+function googleDriveUpdateFileMetadataProjection(value: unknown, expectedFileId: string): GoogleDriveUpdateFileMetadata {
+  if (!isRecord(value) || value.id !== expectedFileId || value.mimeType !== "text/plain" ||
+      typeof value.name !== "string" || value.name.length === 0 || value.name.length > 512 ||
+      /[\u0000-\u001f\u007f]/.test(value.name) || value.trashed !== false ||
+      typeof value.version !== "string" || value.version.length === 0 || value.version.length > 128 ||
+      !Array.isArray(value.parents) || value.parents.length === 0 ||
+      value.parents.some((parent) => typeof parent !== "string" || parent.length === 0 || parent.length > 512) ||
+      new Set(value.parents).size !== value.parents.length) {
+    throw new Error("google.drive.write update target identity, text MIME, version, or state is unavailable; mutation_sent=false");
+  }
+  const optional = (key: string, maxLength: number): string | null => {
+    const candidate = value[key];
+    if (candidate === undefined || candidate === null) return null;
+    if (typeof candidate !== "string" || candidate.length === 0 || candidate.length > maxLength ||
+        /[\u0000-\u001f\u007f]/.test(candidate)) {
+      throw new Error("google.drive.write update target metadata is malformed; mutation_sent=false");
+    }
+    return candidate;
+  };
+  const shared = value.shared === undefined ? null : typeof value.shared === "boolean" ? value.shared : undefined;
+  const inheritedDisabled = value.inheritedPermissionsDisabled === undefined
+    ? null : typeof value.inheritedPermissionsDisabled === "boolean" ? value.inheritedPermissionsDisabled : undefined;
+  if (shared === undefined || inheritedDisabled === undefined) {
+    throw new Error("google.drive.write update target metadata is malformed; mutation_sent=false");
+  }
+  return {
+    id: expectedFileId,
+    name: value.name,
+    mime_type: "text/plain",
+    modified_time: optional("modifiedTime", 128),
+    parent_ids: (value.parents as string[]).slice().sort(),
+    drive_id: optional("driveId", 512),
+    version: value.version,
+    head_revision_id: optional("headRevisionId", 512),
+    shared,
+    trashed: false,
+    inherited_permissions_disabled: inheritedDisabled,
+  };
+}
+
+async function readGoogleDriveUpdateFileMetadata(input: {
+  fileId: string;
+  token: string;
+  request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+}): Promise<GoogleDriveUpdateFileMetadata> {
+  const path = `/drive/v3/files/${encodeURIComponent(input.fileId)}?${new URLSearchParams({
+    supportsAllDrives: "true",
+    fields: "id,name,mimeType,modifiedTime,parents,driveId,version,headRevisionId,shared,trashed,inheritedPermissionsDisabled",
+  })}`;
+  assertToolExecutionNotCancelled(input.signal, "google.drive.write update target read");
+  let response: GoogleWriteResponse;
+  try {
+    response = await input.request({ service: "drive", hostname: "www.googleapis.com", path,
+      method: "GET", maxBytes: 32_000, token: input.token }, input.signal);
+  } catch {
+    throw new Error("google.drive.write update target read failed; mutation_sent=false");
+  }
+  if (!response.ok || response.truncated) {
+    throw new Error("google.drive.write update target read was unavailable or truncated; mutation_sent=false");
+  }
+  let value: unknown;
+  try { value = JSON.parse(response.body) as unknown; }
+  catch { throw new Error("google.drive.write update target metadata was invalid; mutation_sent=false"); }
+  return googleDriveUpdateFileMetadataProjection(value, input.fileId);
+}
+
+async function readGoogleDriveUpdateContent(input: {
+  fileId: string;
+  maxContentBytes: number;
+  token: string;
+  request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+}): Promise<{ content: string; digest: string; bytes: number }> {
+  const path = `/drive/v3/files/${encodeURIComponent(input.fileId)}?${new URLSearchParams({
+    alt: "media",
+    supportsAllDrives: "true",
+  })}`;
+  assertToolExecutionNotCancelled(input.signal, "google.drive.write update content read");
+  let response: GoogleWriteResponse;
+  try {
+    response = await input.request({ service: "drive", hostname: "www.googleapis.com", path,
+      method: "GET", maxBytes: input.maxContentBytes + 1, token: input.token }, input.signal);
+  } catch {
+    throw new Error("google.drive.write update content read failed; mutation_sent=false");
+  }
+  const contentType = response.content_type?.split(";", 1)[0]?.trim().toLowerCase();
+  if (!response.ok || response.truncated || response.body_utf8_valid === false || contentType !== "text/plain") {
+    throw new Error("google.drive.write update content was unavailable, invalid UTF-8, non-text, or exceeded its limit; mutation_sent=false");
+  }
+  const bytes = Buffer.byteLength(response.body, "utf8");
+  if (bytes > input.maxContentBytes) {
+    throw new Error("google.drive.write update content exceeded its limit; mutation_sent=false");
+  }
+  return { content: response.body, digest: sha256String(response.body), bytes };
+}
+
+async function inspectGoogleDriveUpdateSnapshot(input: {
+  fileId: string;
+  maxContentBytes: number;
+  token: string;
+  request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+}): Promise<GoogleDriveUpdateSnapshot> {
+  const before = await readGoogleDriveUpdateFileMetadata({ fileId: input.fileId, token: input.token,
+    request: input.request, signal: input.signal });
+  const permissionsBefore = await readGoogleDrivePermissionScopePass({ folderId: input.fileId,
+    token: input.token, request: input.request, signal: input.signal });
+  const firstContent = await readGoogleDriveUpdateContent({ fileId: input.fileId,
+    maxContentBytes: input.maxContentBytes, token: input.token, request: input.request, signal: input.signal });
+  const secondContent = await readGoogleDriveUpdateContent({ fileId: input.fileId,
+    maxContentBytes: input.maxContentBytes, token: input.token, request: input.request, signal: input.signal });
+  const permissionsAfter = await readGoogleDrivePermissionScopePass({ folderId: input.fileId,
+    token: input.token, request: input.request, signal: input.signal });
+  const after = await readGoogleDriveUpdateFileMetadata({ fileId: input.fileId, token: input.token,
+    request: input.request, signal: input.signal });
+  if (operationPlanDigest(before) !== operationPlanDigest(after) ||
+      firstContent.digest !== secondContent.digest || firstContent.bytes !== secondContent.bytes ||
+      operationPlanDigest(permissionsBefore) !== operationPlanDigest(permissionsAfter)) {
+    throw new Error("google.drive.write update target changed or permission/content scope was inconsistent; mutation_sent=false");
+  }
+  return {
+    file: before,
+    file_state_digest: operationPlanDigest(before),
+    access_scope_digest: operationPlanDigest(permissionsBefore),
+    permissions: permissionsBefore,
+    current_content: firstContent.content,
+    current_content_digest: firstContent.digest,
+    current_content_bytes: firstContent.bytes,
+  };
+}
+
 async function googleDriveCreateTargetNameIsAbsent(input: {
   parentId: string;
   driveId: string | null;
@@ -2109,17 +2319,50 @@ function googleDriveCreateObservation(input: {
   });
 }
 
+function googleDriveUpdateObservation(input: {
+  args: GoogleDriveUpdateArguments;
+  snapshot: GoogleDriveUpdateSnapshot;
+  commandDigest: string;
+  operationPlanBindingDigest: string;
+}): GoogleDriveUpdateTargetVersionObservation {
+  return GoogleDriveUpdateTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.google-drive-update-target-version.v1",
+    operation: "file.update",
+    target_identity_digest: googleDriveUpdateTargetIdentityDigest(input.args.file_id),
+    request_payload_digest: googleDriveUpdateRequestPayloadDigest(input.args),
+    file_id: input.args.file_id,
+    file_state_digest: input.snapshot.file_state_digest,
+    current_content_digest: input.snapshot.current_content_digest,
+    current_content_bytes: input.snapshot.current_content_bytes,
+    target_mime_type: "text/plain",
+    target_access_scope_digest: input.snapshot.access_scope_digest,
+    target_access_scope_complete: true,
+    target_access_scope_entry_count: input.snapshot.permissions.length,
+    command_digest: input.commandDigest,
+    operation_plan_binding_digest: input.operationPlanBindingDigest,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
 export async function inspectGoogleDriveWriteTargetVersion(
   rawArgs: Record<string, unknown>,
   options: GoogleWriteOptions & { operation_plan_binding_digest?: string; command_digest?: string } = {},
-): Promise<GoogleDriveWriteTargetVersionObservation> {
+): Promise<GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation> {
   if (!options.operation_plan_binding_digest || !/^[a-f0-9]{64}$/.test(options.operation_plan_binding_digest) ||
       !options.command_digest || !/^[a-f0-9]{64}$/.test(options.command_digest)) {
     throw new Error("google.drive.write requires a current Operation Plan command binding; mutation_sent=false");
   }
-  const args = normalizeGoogleDriveCreateArguments(rawArgs);
   const token = googleToken(options.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
   const request = options.request ?? defaultGoogleWriteRequest;
+  if (rawArgs.operation === "file.update") {
+    const args = normalizeGoogleDriveUpdateArguments(rawArgs);
+    const snapshot = await inspectGoogleDriveUpdateSnapshot({ fileId: args.file_id,
+      maxContentBytes: args.max_content_bytes, token, request, signal: options.signal });
+    return googleDriveUpdateObservation({ args, snapshot, commandDigest: options.command_digest,
+      operationPlanBindingDigest: options.operation_plan_binding_digest });
+  }
+  const args = normalizeGoogleDriveCreateArguments(rawArgs);
   const snapshot = await inspectGoogleDriveFolderScope({ parentId: args.parent_id, name: args.name,
     token, request, signal: options.signal });
   return googleDriveCreateObservation({ args, snapshot, commandDigest: options.command_digest,
@@ -2131,7 +2374,19 @@ export function assertGoogleDriveWriteTargetVersion(
   rawObservation: unknown,
   commandDigest: string,
   operationPlanBindingDigest: string | undefined,
-): GoogleDriveWriteTargetVersionObservation {
+): GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation {
+  if (rawArgs.operation === "file.update") {
+    const observation = GoogleDriveUpdateTargetVersionObservationSchema.parse(rawObservation);
+    const args = normalizeGoogleDriveUpdateArguments(rawArgs);
+    if (!operationPlanBindingDigest || observation.command_digest !== commandDigest ||
+        observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+        observation.operation !== args.operation || observation.file_id !== args.file_id ||
+        observation.target_identity_digest !== googleDriveUpdateTargetIdentityDigest(args.file_id) ||
+        observation.request_payload_digest !== googleDriveUpdateRequestPayloadDigest(args)) {
+      throw new Error("google.drive.write update target version does not match command or Operation Plan source");
+    }
+    return observation;
+  }
   const observation = GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
   const args = normalizeGoogleDriveCreateArguments(rawArgs);
   if (!operationPlanBindingDigest || observation.command_digest !== commandDigest ||
@@ -2147,13 +2402,48 @@ export function assertGoogleDriveWriteTargetVersion(
 export async function inspectGoogleDriveWriteContentReview(
   rawArgs: Record<string, unknown>,
   options: GoogleWriteOptions & { operation_plan_binding_digest?: string; command_digest?: string } = {},
-): Promise<GoogleDriveFileCreateContentReview> {
+): Promise<GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview> {
   if (!options.operation_plan_binding_digest || !options.command_digest) {
     throw new Error("google.drive.write content review requires an Operation Plan binding");
   }
-  const args = normalizeGoogleDriveCreateArguments(rawArgs);
   const token = googleToken(options.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
   const request = options.request ?? defaultGoogleWriteRequest;
+  if (rawArgs.operation === "file.update") {
+    const args = normalizeGoogleDriveUpdateArguments(rawArgs);
+    const snapshot = await inspectGoogleDriveUpdateSnapshot({ fileId: args.file_id,
+      maxContentBytes: args.max_content_bytes, token, request, signal: options.signal });
+    const observation = googleDriveUpdateObservation({ args, snapshot, commandDigest: options.command_digest,
+      operationPlanBindingDigest: options.operation_plan_binding_digest });
+    const review = {
+      kind: "google_drive_file_update" as const,
+      operation: "google.drive.write.file.update" as const,
+      command_digest: options.command_digest,
+      request_payload_digest: observation.request_payload_digest,
+      target_version_digest: operationPlanDigest(observation),
+      operation_plan_binding_digest: observation.operation_plan_binding_digest,
+      file_id: snapshot.file.id,
+      file_name: snapshot.file.name,
+      parent_ids: snapshot.file.parent_ids,
+      drive_id: snapshot.file.drive_id,
+      file_version: snapshot.file.version,
+      file_modified_time: snapshot.file.modified_time,
+      file_shared: snapshot.file.shared,
+      inherited_permissions_disabled: snapshot.file.inherited_permissions_disabled,
+      file_mime_type: snapshot.file.mime_type,
+      target_access_scope_complete: true as const,
+      target_access_scope_digest: snapshot.access_scope_digest,
+      permissions: snapshot.permissions,
+      current_content_digest: snapshot.current_content_digest,
+      current_content: snapshot.current_content,
+      current_content_bytes: snapshot.current_content_bytes,
+      replacement_content: args.content,
+      replacement_content_bytes: Buffer.byteLength(args.content, "utf8"),
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return { ...review, review_digest: operationPlanDigest(review) };
+  }
+  const args = normalizeGoogleDriveCreateArguments(rawArgs);
   const snapshot = await inspectGoogleDriveFolderScope({ parentId: args.parent_id, name: args.name,
     token, request, signal: options.signal });
   const observation = googleDriveCreateObservation({ args, snapshot, commandDigest: options.command_digest,
@@ -2192,6 +2482,7 @@ async function verifyGoogleDriveWriteReadback(input: {
   fileId: string;
   content: string | undefined;
   expectedMimeType: string | undefined;
+  expectedUpdateMetadata?: GoogleDriveUpdateFileMetadata;
   token: string;
   request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
   maxContentBytes: number;
@@ -2234,6 +2525,16 @@ async function verifyGoogleDriveWriteReadback(input: {
   if (input.expectedMimeType !== undefined && metadata.mimeType !== input.expectedMimeType) {
     return fail("MIME type did not match");
   }
+  if (input.expectedUpdateMetadata) {
+    const expected = input.expectedUpdateMetadata;
+    const parents = Array.isArray(metadata.parents) && metadata.parents.every((parent) => typeof parent === "string")
+      ? (metadata.parents as string[]).slice().sort() : null;
+    if (metadata.name !== expected.name || metadata.mimeType !== expected.mime_type ||
+        !parents || operationPlanDigest(parents) !== operationPlanDigest(expected.parent_ids) ||
+        (metadata.driveId ?? null) !== expected.drive_id) {
+      return fail("target metadata changed during content update");
+    }
+  }
   const expectedParentId = stringArg(input.args, "parent_id", false);
   if (expectedParentId !== undefined &&
       (!Array.isArray(metadata.parents) || !metadata.parents.includes(expectedParentId))) {
@@ -2260,7 +2561,8 @@ async function verifyGoogleDriveWriteReadback(input: {
     } catch {
       return fail("content request failed");
     }
-    if (!contentResponse.ok || contentResponse.truncated || contentResponse.body !== input.content) {
+    if (!contentResponse.ok || contentResponse.truncated || contentResponse.body_utf8_valid === false ||
+        contentResponse.body !== input.content) {
       return fail("content did not match or exceeded the readback limit");
     }
     contentDigest = sha256String(contentResponse.body);
@@ -2284,10 +2586,84 @@ async function verifyGoogleDriveWriteReadback(input: {
   return { ...observed, verification_digest: sha256Hex(observed) };
 }
 
+async function invokeGoogleDriveFileUpdate(args: Record<string, unknown>, opts: GoogleWriteOptions): Promise<unknown> {
+  const updateArgs = normalizeGoogleDriveUpdateArguments(args);
+  if (!opts.target_version_observation || !opts.command_digest || !/^[a-f0-9]{64}$/.test(opts.command_digest)) {
+    throw new Error("google.drive.write file.update requires an approved Operation Plan command; mutation_sent=false");
+  }
+  const expectedObservation = assertGoogleDriveWriteTargetVersion(args, opts.target_version_observation,
+    opts.command_digest, opts.target_version_observation.operation_plan_binding_digest);
+  if (!("file_id" in expectedObservation) || expectedObservation.operation !== "file.update") {
+    throw new Error("google.drive.write file.update target observation has the wrong operation; mutation_sent=false");
+  }
+  const token = googleToken(opts.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
+  const request = opts.request ?? defaultGoogleWriteRequest;
+  const currentSnapshot = await inspectGoogleDriveUpdateSnapshot({ fileId: updateArgs.file_id,
+    maxContentBytes: updateArgs.max_content_bytes, token, request, signal: opts.signal });
+  const currentObservation = googleDriveUpdateObservation({ args: updateArgs, snapshot: currentSnapshot,
+    commandDigest: expectedObservation.command_digest,
+    operationPlanBindingDigest: expectedObservation.operation_plan_binding_digest });
+  if (operationPlanDigest(currentObservation) !== operationPlanDigest(expectedObservation)) {
+    throw new Error("google.drive.write update target or prior content changed after owner review; mutation_sent=false");
+  }
+
+  const multipart = multipartBody({}, updateArgs.content, updateArgs.mime_type);
+  const path = `/upload/drive/v3/files/${encodeURIComponent(updateArgs.file_id)}?${new URLSearchParams({
+    uploadType: "multipart",
+    supportsAllDrives: "true",
+    fields: DRIVE_FIELDS,
+  })}`;
+  const target: GoogleWriteTarget = {
+    service: "drive",
+    hostname: "www.googleapis.com",
+    path,
+    method: "PATCH",
+    maxBytes: updateArgs.max_bytes,
+    token,
+    body: multipart.body,
+    contentType: multipart.contentType,
+    idempotency_key: opts.idempotency_key,
+    command_digest: opts.command_digest,
+  };
+  assertToolExecutionNotCancelled(opts.signal, "google.drive.write file.update");
+  const response = await request(target, opts.signal);
+  if (!response.ok) throw googleWriteResponseError("google.drive.write", response);
+  if (response.truncated) {
+    throw new Error("google.drive.write update response truncated; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  let responseData: unknown;
+  try { responseData = JSON.parse(response.body) as unknown; }
+  catch {
+    throw new Error("google.drive.write update response was not valid JSON; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  if (!isRecord(responseData) || responseData.id !== updateArgs.file_id) {
+    throw new Error("google.drive.write update response identity did not match; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  const verification = await verifyGoogleDriveWriteReadback({
+    args,
+    operation: "file.update",
+    fileId: updateArgs.file_id,
+    content: updateArgs.content,
+    expectedMimeType: updateArgs.mime_type,
+    expectedUpdateMetadata: currentSnapshot.file,
+    token,
+    request,
+    maxContentBytes: updateArgs.max_content_bytes + 1,
+    signal: opts.signal,
+  });
+  return mutationResult("google.drive.write", "drive", "file.update", target, {
+    ...response,
+    body: JSON.stringify({ id: updateArgs.file_id }),
+  }, { verification });
+}
+
 export async function invokeGoogleDriveWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
 ): Promise<unknown> {
+  if (args.operation === "file.update") {
+    return await invokeGoogleDriveFileUpdate(args, opts);
+  }
   const createArgs = normalizeGoogleDriveCreateArguments(args);
   const operation = createArgs.operation;
   if (!opts.target_version_observation) {
@@ -2535,9 +2911,9 @@ export const googleCalendarWriteTool: Tool = createGoogleCalendarWriteTool();
 
 export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",
-  description: "Create one bounded text file in an explicitly reviewed Google Drive folder. Update, sharing, and delete actions remain separately gated.",
+  description: "Create one bounded text file or replace one existing text/plain blob through a separate L3 review. Sharing and delete remain unavailable.",
   required_capabilities: requireToolOperationDescriptor("google.drive.write").required_capabilities,
-  async inspect_target_version(args, resolverOptions = {}): Promise<GoogleDriveWriteTargetVersionObservation> {
+  async inspect_target_version(args, resolverOptions = {}): Promise<GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation> {
     return await inspectGoogleDriveWriteTargetVersion(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
       ...(resolverOptions.operation_plan_binding_digest
@@ -2545,7 +2921,7 @@ export const googleDriveWriteTool: Tool = {
       ...(resolverOptions.command_digest ? { command_digest: resolverOptions.command_digest } : {}),
     });
   },
-  async inspect_content_review(args, resolverOptions = {}): Promise<GoogleDriveFileCreateContentReview> {
+  async inspect_content_review(args, resolverOptions = {}): Promise<GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview> {
     return await inspectGoogleDriveWriteContentReview(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
       ...(resolverOptions.operation_plan_binding_digest
@@ -2554,7 +2930,9 @@ export const googleDriveWriteTool: Tool = {
     });
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    const observation = GoogleDriveWriteTargetVersionObservationSchema.parse(context.target_version_observation);
+    const observation = args.operation === "file.update"
+      ? GoogleDriveUpdateTargetVersionObservationSchema.parse(context.target_version_observation)
+      : GoogleDriveWriteTargetVersionObservationSchema.parse(context.target_version_observation);
     return await invokeGoogleDriveWrite(args, { signal: context.signal,
       idempotency_key: context.idempotency_key, command_digest: context.command_digest,
       target_version_observation: observation });

@@ -8,7 +8,17 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F04.02 Drive新規作成のplan束縛・owner L3確認
+## 現在のBUILD_BATCH — F04.02 Drive既存text/plain本文のL3束縛更新
+
+`google.drive.write/file.update`を既存のHDS Operation Plan／Executor Brokerへ接続する。Owner taskに明示された単一の`file_id`と置換後本文だけを対象とし、既存blob fileの`text/plain`に限定する。Google Workspace native document、folder、binary、metadata rename、sharing／permission change、delete、createは対象外。このbatchでは実provider、credential、Gateway process、Drive外部作用を使わない。
+
+変更前のmetadata、現本文、対象fileに対する取得可能なpermission scopeを上限付きで読み、読み取り間の差異、欠損、不完全pagination、上限超過、file ID不一致、trash状態、`mimeType`不一致、byte上限超過はfail-closedにする。target-versionへfile identity／state digest、変更前content digest、permission-scope digest、置換payload digest、command digest、Operation Plan bindingを結合する。既存内容と置換内容はno-storeのL3確認に表示し、本文を監査・M・history・通常結果へ保存しない。
+
+承認直前とPATCH直前に同じsnapshotを再取得してtarget-versionと一致することを要求する。Drive側が原子的な条件付き更新を受理する根拠が確認できないため、read-before-PATCH間の外部同時変更を防げるとは主張しない。その競合窓をL3確認へ明示し、未確認・変化時はPATCHしない。PATCH後は同一file ID、既存name／parent／MIME、置換本文を再読取する。結果不明・readback失敗では自動retryしない。
+
+完了境界：Protocol／HDS／core／Gateway／WebChatのworkspace typecheckと該当package build、`pnpm docs:check`、生成Control Center script構文、`git diff --check`。test suite、Gateway process、provider／credential／外部作用は実施しない。結果は`WIRED`（runtime未確認）または`BUILD_GAP`に記録し、F04.02全体・F04全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ昇格しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remoteとlocalのSHA・clean状態を閉じる。
+
+## 完了済みBUILD_BATCH — F04.02 Drive新規作成のplan束縛・owner L3確認
 
 既存`google.drive.write`から`file.create`一件をHDS Operation Plan／Executor Brokerへ接続する。対象はowner taskに明示された単一の親folder・ファイル名・`text/plain`本文だけ。`file.update`、権限変更／共有、削除はこのbatchで候補化・実行しない。実provider・資格情報・外部作用を使わない。
 

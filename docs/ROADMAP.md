@@ -20,9 +20,12 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-02、`google.drive.write/file.create`だけをHDS Operation PlanとExecutor Brokerへ接続した。入力はOwner taskに明示された単一親folder・名前・`text/plain`本文に限る。Operation Planは登録descriptorのexternal_send/write/credential_access、high/L3、Approval Gate／HDS authorityを要求し、同じfolder・nameの未解決作成と確定済み同一payload重複を遮断する。
+2026-11-02、`google.drive.write/file.update`を既存HDS Operation Plan／Executor Brokerへ接続した。対象はOwner taskに明示された既存blobの単一`file_id`と置換本文、MIMEは`text/plain`のみ。Workspace native document、folder／binary、rename、共有・permission変更、delete、実provider／資格情報／Drive実作用は対象外。
 
-folder metadata、親の継承を含む権限一覧の完全pagination、同名不存在を二重読取してdigestに結び、no-store L3確認では本文と全アクセスscopeをOwnerへ表示する。承認時と実作用直前に再照合し、変化・不完全なら停止する。Drive APIによるname一意性や外部同時変更との原子的排他は成立しない。file.update／権限変更・共有／deleteは未接続。provider／credential／Drive実作用は未実施。全workspace typecheck／build、docs gate、生成Control Center script構文、`git diff --check`はPASS。test suite／Gateway process／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`。C08.03、OD-03、P13を保留する。
+metadata、現本文、取得可能なpermission scopeを二重読取して差異・欠損・上限超過をfail-closedにし、target-versionにfile state、本文、permission scope、payload、command、Plan bindingのdigestを結合する。L3 no-store確認に変更前後の本文と取得した全permission scopeを表示し、承認時とPATCH直前に同じsnapshotを再照合する。Driveが原子的な条件付き更新を提供する根拠はなく、最終照合とPATCH間の外部競合を排除できるとは主張しない。PATCH後は既存identity／MIME／parent／nameと本文をreadbackし、不明・不一致で再送しない。
+
+全workspace `pnpm typecheck`のTypeScript phaseはPASSしたが、後段cleanは`apps/gateway/dist/host_audience_identity.d.ts.map`のunlinkで`EBUSY`（終了コード0）。その後のGateway依存package buildとcore／Gateway no-emit typecheck、HDS build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`、共有・deleteは未接続。C08.03、OD-03、P13を保留する。
+
 ## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
 
 2026-11-02、既存`google.drive.read`をexact `file_id`単件metadata取得へ拡張し、file/folder identity、MIME、親folder、Shared Drive、version／取得可能なhead revision、共有状態、trash状態、取得可能なpermission scopeを返す。`files.get`は静的field maskと`supportsAllDrives=true`を使い、応答file IDを要求値と照合する。permission主体のemail・表示名・permission IDは返さない。検索ではpermission inventoryを既定で取得せず、exact file readはsharing scopeを既定で含め、取得不能・未要求・Shared Driveで部分／未提供を区別する。Daily Briefはpermission inventoryを取得しない。

@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-02 — QEB-F04.02-DRIVE-TEXT-UPDATE-L3-PLAN-BINDING
+
+開始local／remote `main`=`f7d6e2c1635886abcd32badb88dd45a2e37339c3`。編集前のlocal recovery branch／remote tagはcurrent=`f7d6e2c...`、previous=`20d51cf...`を保持した。唯一のmain worktreeを確認し、保護対象untracked `.codex-remote-attachments/`を変更していない。rev3.0現行pin／manifestと三文書、適用AGENTS、active F04.02 instructionを再確認した。
+
+`google.drive.write/file.update`を既存Operation Plan／Executor／Gateway／WebChat経路へ接続し、既存blob `text/plain`の単一file全置換に限定した。HDS target-versionはfile ID／metadata state、現本文digest／byte数、permission-scope digest、置換payload、command、Plan bindingへ結合する。metadata／本文／permission scopeを取得上限内で二重読取し、欠損・変化・invalid UTF-8・非text・対象状態不一致は作用前に拒否する。no-store L3 reviewは変更前後の全文と取得した権限scopeをOwnerへ表示し、承認時とPATCH直前に再照合する。実行結果では本文を返さず、同じfile ID・name／parent／MIME・本文を再取得して検証する。不一致または結果不明時はretryしない。
+
+Drive公式資料で`files.update`のPATCHとmedia upload、stored blobの`alt=media`取得を確認した: [files.update](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update)、[upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads)、[download/export guide](https://developers.google.com/workspace/drive/api/guides/manage-downloads)。この実装は原子的な条件付き更新を主張しない。L3表示に最終read/PATCH間の外部writer競合を明示し、live provider作用は保留する。
+
+全workspace `pnpm typecheck`のTypeScript phaseはPASSしたが、後段cleanは`apps/gateway/dist/host_audience_identity.d.ts.map`のunlinkで`EBUSY`（終了コード0）。その後のGateway依存package build、core／Gateway no-emit typecheck、HDS-BRAIN build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite、Gateway process／browser、実provider／credential／Drive read/writeはNOT_RUN。変更範囲はProtocol、HDS-BRAIN、core、Gateway、WebChatと現行施工／進捗／履歴。保護添付は未変更。
+
+STATUS=`WIRED`（plan→L3 review→target-version再照合→PATCH/readbackの静的接続、runtime未確認）。F04.02全体・F04全体・QE_QC／QE_QA・製品`SYSTEM_SHAPED`／`BUILD_COVERED`・owner GOは未成立。共有／permission変更・delete、C08.03、OD-03、P13は保留。
+
 ## 2026-11-02 — QEB-F04.02-DRIVE-CREATE-L3-PLAN-BINDING
 
 開始local／remote `main`=`20d51cf0ca709cf1b92098711693e31219228047`。編集前のlocal `codex/backup-main`／`codex/backup-main-prev`とremote同名tagはcurrent=`20d51cf...`／previous=`459e224...`へ照合・回転済み。保護対象untracked `.codex-remote-attachments/`は変更していない。rev3.0の現行pinとmanifest hash、AGENTS、F04.02 active指示を確認した。

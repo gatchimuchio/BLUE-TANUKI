@@ -1863,8 +1863,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (opts.expected_google_drive_target_version_digest) {
-      const observedDriveTargetVersionDigest = targetVersionObservation?.schema_version ===
-        "blue-tanuki.google-drive-write-target-version.v1"
+      const expectedDriveTargetVersion = cmd.type === "tool_call" && cmd.payload.tool_name === "google.drive.write"
+        ? cmd.payload.arguments.operation === "file.update"
+          ? "blue-tanuki.google-drive-update-target-version.v1"
+          : cmd.payload.arguments.operation === "file.create"
+            ? "blue-tanuki.google-drive-write-target-version.v1" : undefined
+        : undefined;
+      const observedDriveTargetVersionDigest = expectedDriveTargetVersion !== undefined &&
+        targetVersionObservation?.schema_version === expectedDriveTargetVersion
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedDriveTargetVersionDigest !== opts.expected_google_drive_target_version_digest) {
         const reason = "google_drive_write_content_review_stale";
@@ -2655,7 +2661,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             (pending.command.payload.tool_name === "google.calendar.write" &&
               ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
             (pending.command.payload.tool_name === "google.drive.write" &&
-              pending.command.payload.arguments.operation === "file.create"))))) {
+              (pending.command.payload.arguments.operation === "file.create" ||
+                pending.command.payload.arguments.operation === "file.update")))))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -4299,17 +4306,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
-        pending.command.payload.arguments.operation === "file.create" &&
+        (pending.command.payload.arguments.operation === "file.create" ||
+          pending.command.payload.arguments.operation === "file.update") &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
-        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "google_drive_file_create" ||
+        const expectedKind = pending.command.payload.arguments.operation === "file.update"
+          ? "google_drive_file_update" : "google_drive_file_create";
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
             snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
         const review: WebChatApprovalContentReview = { ...snapshot, command_id } as WebChatApprovalContentReview;
-        if (review.kind !== "google_drive_file_create") return null;
+        if (review.kind !== expectedKind) return null;
         pendingApprovals.set(command_id, { ...pending,
           content_review_digest: review.review_digest,
           content_review_drive_target_version_digest: review.target_version_digest,
@@ -4415,7 +4425,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
-        pending.command.payload.arguments.operation === "file.create") {
+        (pending.command.payload.arguments.operation === "file.create" ||
+          pending.command.payload.arguments.operation === "file.update")) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
       if (!content_review_digest || !pending.content_review_digest ||
@@ -4424,7 +4435,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
-        return current && "kind" in current && current.kind === "google_drive_file_create" &&
+        const expectedKind = pending.command.payload.arguments.operation === "file.update"
+          ? "google_drive_file_update" : "google_drive_file_create";
+        return current && "kind" in current && current.kind === expectedKind &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
           current.review_digest === pending.content_review_digest &&
