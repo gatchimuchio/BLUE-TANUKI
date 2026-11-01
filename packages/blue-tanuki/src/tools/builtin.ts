@@ -1601,8 +1601,14 @@ export async function invokeFileSearch(
   const requestedRoot = stringArg(args, "root")!;
   const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
   const requestedFilePath = args.file_path === undefined ? undefined : stringArg(args, "file_path")!;
-  const query = stringArg(args, "query")!;
+  const query = args.query === "" && requestedFilePath !== undefined ? "" : stringArg(args, "query")!;
+  if (query.length === 0 && requestedFilePath === undefined) {
+    throw new Error("file.search requires a query unless an exact relative file path is selected");
+  }
   const maxResults = positiveIntArg(args, "max_results", 20, 100);
+  if (query.length === 0 && maxResults > 5) {
+    throw new Error("file.search exact-file preview is limited to five lines");
+  }
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) {
     throw new Error("root must be a directory");
@@ -2410,7 +2416,7 @@ export async function invokeFileEdit(
 
 export const fileSearchTool: Tool = {
   name: "file.search",
-  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file. After an explicitly requested workspace test, use the same relative file path to reread current state and return the saved result to the owner.",
+  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file. With an exact file path, an empty query returns a bounded line preview. After an explicitly requested workspace test, use the same relative file path to reread current state and return the saved result to the owner.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;

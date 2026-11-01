@@ -447,3 +447,9 @@ BT-U-E2E-01 path-bound file.search test 1件PASS、同fileの他6件skip（21.6�
 `apps/gateway/src/serve.ts`はwrite結果を「本文は非表示・現在状態を未再読込」、delete結果を「削除時点の報告・現在の不存在を保証しない」と表示する。HDS-BRAIN／Gateway typecheckとbuild、`pnpm docs:check`、`git diff --check`はPASS。process／browser／test suiteはNOT_RUN。**STATUS=WIRED（コード接続、runtime未確認）**。実provider／live外部作用なし。変更範囲は保存済み結果のOwner返却consumerで、E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`・QE_QC／QE_QA・owner GOは未成立。
 
 **次のproducer／consumer:** 次の独立BUILD作業で現行実物を再同期し、E2E-01の次の未接続な通常Owner仕事consumerを選んで実装する。保存結果から元作用を再実行しない。実provider・live外部作用・広域QC／QA・Rust cutoverは行わない。
+
+#### 2026-11-01 E2E-01 BUILD接続 — owner指定単一fileのbounded preview
+
+`file.read` Developer operationは既存catalogどおり`file.search` adapterを使う。検索語を持たない場合は、ownerが指定したsandbox相対pathが一つある場合だけ`query=""`を受理し、既存のregular-file／secret-like path／symlink／root containment／対象版hash検査を通した上で先頭最大5行のpreview候補を作る。directory-wide empty-query読取は引き続き拒否する。通常の`file.search` OperationPlan validationでも、検索語なしはexact `file_path`結合がある場合だけ許可する。verified receipt／M保存／owner-bound `plan:result`を再利用し、保存時点の行結果として返す。これはbounded previewで、全内容・検索完全性・現在状態を保証しない。
+
+実装は`packages/blue-tanuki/src/tools/builtin.ts`、`packages/hds-brain/src/operation_plan.ts`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`apps/gateway/src/serve.ts`。workspace全体の`tsc -b --pretty false`（clean副作用なし）はPASS、15 workspace projectの`pnpm build`（Windows isolation Rust release buildを含む）はPASS、`pnpm docs:check`はPASS（日本語基底の移行負債76件の注意を含む）、`git diff --check`はPASS。Gateway process／browser／test suiteはこのBUILDでは未実施（NOT_RUN）。実provider・外部作用なし。STATUSは型／buildと静的経路確認に基づく`WIRED`、runtime確認は未成立。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

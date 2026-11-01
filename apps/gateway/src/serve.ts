@@ -369,7 +369,7 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     ].join("\n");
   }
   const header = [
-    "保存時点のfile.search結果です。現在のファイル状態は再検索していません。検索完全性は不明です。",
+    "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容や検索完全性は保証しません。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
     `観測ファイル数: ${projection.visited_files}`,
     `一致行数: ${projection.matches.length}`,
@@ -377,14 +377,18 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
   const limit = 3_400;
   const lines: string[] = [];
   let length = header.join("\n").length;
+  let displayWasTruncated = false;
   for (const match of projection.matches) {
     const line = `- ${JSON.stringify(match.path)}:${match.line_number}: ${JSON.stringify(match.line)}`;
-    if (length + line.length + 1 > limit) break;
+    if (length + line.length + 1 > limit) {
+      displayWasTruncated = true;
+      break;
+    }
     lines.push(line);
     length += line.length + 1;
   }
-  const omitted = projection.matches.length - lines.length;
-  if (omitted > 0) lines.push(`表示上限により ${omitted} 件を省略しました。`);
+  const omittedCount = projection.matches.length - lines.length;
+  if (displayWasTruncated && omittedCount > 0) lines.push(`表示上限により残り ${omittedCount} 件を省略しました。`);
   if (projection.matches.length === 0) lines.push("一致行はこの検索結果にありませんでした。");
   return [...header, ...lines].join("\n");
 }

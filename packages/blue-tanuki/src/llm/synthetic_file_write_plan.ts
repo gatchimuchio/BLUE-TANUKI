@@ -16,6 +16,7 @@ const SYNTHETIC_FILE_CONTENT = "BLUE-TANUKI synthetic create-only operation comp
 const SYNTHETIC_CREATE_TASK_PREFIX = "次の内容で新しいテキストファイルを作成してください。\nファイル名: ";
 const SYNTHETIC_SEARCH_TASK_PREFIX = "sandbox内のテキストファイルで次の語句を検索してください。\n検索語: ";
 const SYNTHETIC_EXACT_FILE_SEARCH_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ";
+const SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルを先頭から最大5行だけ確認してください。\n相対パス: ";
 const SYNTHETIC_FILE_EDIT_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで、指定文字列を一回だけ置換してください。\n編集JSON: ";
 const SYNTHETIC_FILE_DELETE_TASK_PREFIX = "sandbox内の指定した相対パスの通常ファイルを一つだけ削除してください。\n相対パス: ";
 export const SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで指定文字列を一回だけ置換し、同じpathをfile.searchで再読してください。\n編集JSON: ";
@@ -24,7 +25,7 @@ const SYNTHETIC_AGENT_ROLES = ["division", "independent_comparison", "audit", "r
 const SYNTHETIC_AGENT_WORKER_SCHEMA_VERSION = "blue-tanuki.synthetic-plan-worker-candidate.v1";
 
 type SyntheticPlanEnv = Record<string, string | undefined>;
-type SyntheticPlanKind = "create" | "verify" | "search" | "delete" | "edit" | "edit_verify" | "recovery_edit";
+type SyntheticPlanKind = "create" | "verify" | "search" | "read" | "delete" | "edit" | "edit_verify" | "recovery_edit";
 type SyntheticPlanStage = "direct" | "worker" | "parent";
 type SyntheticFileTaskDetails = {
   readonly file_path?: string;
@@ -142,6 +143,12 @@ function parseSyntheticSearchTask(task: string): SyntheticFileTaskDetails | unde
   if (query.length === 0 || query.length > 200 || query !== query.trim() ||
       /[\u0000-\u001f\u007f]/u.test(query)) return undefined;
   return { search_query: query };
+}
+
+function parseSyntheticExactFileReadTask(task: string): SyntheticFileTaskDetails | undefined {
+  if (!task.startsWith(SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX)) return undefined;
+  const filePath = task.slice(SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX.length);
+  return isSafeSyntheticRelativePath(filePath) ? { file_path: filePath } : undefined;
 }
 
 function parseSyntheticFileEditTask(task: string): SyntheticFileTaskDetails | undefined {
@@ -264,6 +271,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   let parentPlanIdDigest: string | undefined;
   const createTaskDetails = parseSyntheticCreateTask(task);
   const searchTaskDetails = parseSyntheticSearchTask(task);
+  const readTaskDetails = parseSyntheticExactFileReadTask(task);
   const deleteTaskDetails = parseSyntheticFileDeleteTask(task);
   const editTaskDetails = parseSyntheticFileEditTask(task);
   const editVerifyTaskDetails = parseSyntheticFileEditVerifyTask(task);
@@ -273,6 +281,9 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   } else if (searchTaskDetails && parentContexts.length === 0 && observationContexts.length === 0) {
     kind = "search";
     fileDetails = searchTaskDetails;
+  } else if (readTaskDetails && parentContexts.length === 0 && observationContexts.length === 0) {
+    kind = "read";
+    fileDetails = readTaskDetails;
   } else if (deleteTaskDetails && parentContexts.length === 0 && observationContexts.length === 0) {
     kind = "delete";
     fileDetails = deleteTaskDetails;
@@ -420,18 +431,20 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     const identityDigest = createHash("sha256").update(requestId, "utf8").digest("hex");
     const isCreate = fixture.kind === "create";
     const isSearch = fixture.kind === "search";
+    const isRead = fixture.kind === "read";
     const isDelete = fixture.kind === "delete";
     const isEdit = fixture.kind === "edit" || fixture.kind === "edit_verify" || fixture.kind === "recovery_edit";
     const planId = `synthetic-plan-${identityDigest}`;
     const planIdDigest = operationPlanDigest(planId);
     const generatedPath = `blue-tanuki-synthetic-${planIdDigest.slice(0, 20)}.txt`;
     const relativePath = isCreate ? fixture.file_path ?? generatedPath
-      : isDelete || isEdit ? fixture.file_path
+      : isDelete || isEdit || isRead ? fixture.file_path
         : fixture.kind === "verify" && fixture.parent_plan_id_digest
           ? fixture.file_path ?? `blue-tanuki-synthetic-${fixture.parent_plan_id_digest.slice(0, 20)}.txt`
           : undefined;
     const fileContent = fixture.file_content ?? "";
     const searchText = isSearch ? fixture.search_query ?? ""
+      : isRead ? ""
       : fixture.kind === "edit_verify" ? fixture.edit_replace ?? "" : fileContent.trim();
     if (!isSearch && !relativePath) throw reject("Synthetic same-task verification requires its matching parent create candidate.");
     const target: OperationPlan["steps"][number]["target"] = isCreate || isDelete || isEdit
@@ -477,7 +490,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
           },
         },
       };
-    } else if (isSearch) {
+    } else if (isSearch || isRead) {
       const requestedFilePath = fixture.file_path;
       step = {
         step_id: `search-synthetic-workspace-${identityDigest.slice(0, 16)}`,

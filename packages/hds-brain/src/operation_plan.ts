@@ -699,7 +699,8 @@ export function operationPlanResultValidationMatches(
   if (!parameters || expected.schema_version !== "blue-tanuki.file-search-result-validation.v1" ||
       typeof expected.root !== "string" || expected.root.length === 0 ||
       typeof expected.sandbox_root !== "string" || expected.sandbox_root.length === 0 ||
-      typeof expected.query !== "string" || expected.query.length === 0 || expected.query.length > 2_000 ||
+      typeof expected.query !== "string" || (expected.query.length === 0 && !Object.hasOwn(expected, "file_path")) ||
+      expected.query.length > 2_000 ||
       /[\u0000-\u001f\u007f]/u.test(expected.query) ||
       !Number.isInteger(expected.max_results) || typeof expected.max_results !== "number" ||
       expected.max_results < 1 || expected.max_results > 100 ||
@@ -713,6 +714,7 @@ export function operationPlanResultValidationMatches(
   if (hasExpectedFilePath !== Object.hasOwn(parameters, "file_path") ||
       (hasExpectedFilePath && (typeof expectedFilePath !== "string" || parameters.file_path !== expectedFilePath ||
         !isFileSearchRelativeResultPath(expectedFilePath)))) return false;
+  if (expected.query.length === 0 && (!hasExpectedFilePath || expected.max_results > 5)) return false;
 
   if (output.root !== expected.root || output.sandbox_root !== expected.sandbox_root ||
       output.query !== expected.query || typeof output.visited_files !== "number" ||
