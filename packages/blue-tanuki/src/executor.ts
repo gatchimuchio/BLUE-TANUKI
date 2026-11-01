@@ -435,8 +435,8 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.calendar.write" &&
-      target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v1") {
-    throw new Error("Executor approval rejected: google.calendar.write requires freebusy-bound target version evidence");
+      target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v2") {
+    throw new Error("Executor approval rejected: google.calendar.write requires current target version evidence");
   }
   if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
       target_version_observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
@@ -760,7 +760,7 @@ export class Executor {
       return review;
     }
     if (command.payload.tool_name === "google.calendar.write" &&
-        ["event.create", "event.update"].includes(String(command.payload.arguments.operation))) {
+        ["event.create", "event.update", "event.delete"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("google.calendar.write");
       if (tool !== googleCalendarWriteTool || !tool.inspect_content_review) {
         throw new Error("google.calendar.write content review requires the registered built-in adapter");
@@ -774,7 +774,10 @@ export class Executor {
         /^[a-f0-9]{64}$/.test(review.availability_result_digest);
       const validUpdateReview = "kind" in review && review.kind === "google_calendar_event_update" &&
         /^[a-f0-9]{64}$/.test(review.event_state_digest);
-      if ((!validCreateReview && !validUpdateReview) ||
+      const validDeleteReview = "kind" in review && review.kind === "google_calendar_event_delete" &&
+        /^[a-f0-9]{64}$/.test(review.event_state_digest) && review.organizer_self === true &&
+        review.attendee_inventory_complete === true && review.other_attendee_count === 0;
+      if ((!validCreateReview && !validUpdateReview && !validDeleteReview) ||
           review.command_digest !== operationPlanDigest(command) ||
           !/^[a-f0-9]{64}$/.test(review.review_digest) ||
           !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||

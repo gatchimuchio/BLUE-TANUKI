@@ -87,6 +87,36 @@ export interface GoogleCalendarEventUpdateContentReview {
   event_id: string;
   current_summary: string | null;
   new_summary: string;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
+  event_state_digest: string;
+  observed_at: string;
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+/** Exact primary-calendar event and verified ownership/impact boundary before deletion. */
+export interface GoogleCalendarEventDeleteContentReview {
+  kind: "google_calendar_event_delete";
+  operation: "google.calendar.write.event.delete";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
   event_state_digest: string;
   observed_at: string;
   request_payload_digest: string;
@@ -97,7 +127,7 @@ export interface GoogleCalendarEventUpdateContentReview {
 }
 
 export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
-  GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview;
+  GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {

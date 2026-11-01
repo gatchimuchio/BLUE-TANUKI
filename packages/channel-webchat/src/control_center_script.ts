@@ -5352,11 +5352,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.event_state_digest) ||
-              typeof review.calendar_id !== "string" || review.calendar_id.length === 0 || review.calendar_id.length > 512 ||
+              typeof review.calendar_id !== "string" || review.calendar_id !== "primary" ||
               typeof review.event_id !== "string" || review.event_id.length === 0 || review.event_id.length > 1_024 ||
-              (review.current_summary !== null && typeof review.current_summary !== "string") ||
+              (review.current_summary !== null && (typeof review.current_summary !== "string" || review.current_summary.length > 8_192)) ||
               typeof review.new_summary !== "string" || review.new_summary.trim().length === 0 ||
-              review.new_summary.length > 8_192 || typeof review.observed_at !== "string" ||
+              review.new_summary.length > 8_192 || typeof review.event_start !== "string" ||
+              typeof review.event_end !== "string" || !Number.isFinite(Date.parse(review.event_start)) ||
+              !Number.isFinite(Date.parse(review.event_end)) ||
+              (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
+              (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
+              review.organizer_self !== true || review.other_attendee_count !== 0 ||
+              review.attendee_inventory_complete !== true ||
+              typeof review.observed_at !== "string" ||
               !Number.isFinite(Date.parse(review.observed_at))) {
             throw new Error("更新対象と新しい件名がこの承認要求と一致しません");
           }
@@ -5367,8 +5374,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           [
             ["カレンダー", review.calendar_id],
             ["予定ID", review.event_id],
+            ["日時", review.event_start + " – " + review.event_end +
+              (review.event_time_zone ? " (" + review.event_time_zone + ")" : review.event_time_kind === "date" ? " (終日)" : "")],
             ["現在の件名", review.current_summary === null ? "（件名なし）" : review.current_summary],
             ["更新後の件名", review.new_summary],
+            ["所有確認", "このアカウントが主催者"],
+            ["他の参加者", "0人（一覧取得完了）"],
             ["対象の再読取時刻", review.observed_at]
           ].forEach(function (field) {
             const row = document.createElement("p");
@@ -5389,6 +5400,58 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "予定の現在値と更新後を再確認";
+          return;
+        }
+        if (review.kind === "google_calendar_event_delete") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.delete" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.event_state_digest) ||
+              typeof review.calendar_id !== "string" || review.calendar_id !== "primary" ||
+              typeof review.event_id !== "string" || review.event_id.length === 0 || review.event_id.length > 1_024 ||
+              (review.current_summary !== null && (typeof review.current_summary !== "string" || review.current_summary.length > 8_192)) ||
+              typeof review.event_start !== "string" || typeof review.event_end !== "string" ||
+              !Number.isFinite(Date.parse(review.event_start)) || !Number.isFinite(Date.parse(review.event_end)) ||
+              (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
+              (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
+              review.organizer_self !== true || review.other_attendee_count !== 0 ||
+              review.attendee_inventory_complete !== true || typeof review.observed_at !== "string" ||
+              !Number.isFinite(Date.parse(review.observed_at))) {
+            throw new Error("削除対象と所有・参加者の確認結果がこの承認要求と一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Calendar予定一件の削除";
+          view.appendChild(heading);
+          [
+            ["カレンダー", review.calendar_id],
+            ["予定ID", review.event_id],
+            ["日時", review.event_start + " – " + review.event_end +
+              (review.event_time_zone ? " (" + review.event_time_zone + ")" : review.event_time_kind === "date" ? " (終日)" : "")],
+            ["現在の件名", review.current_summary === null ? "（件名なし）" : review.current_summary],
+            ["所有確認", "このアカウントが主催者"],
+            ["他の参加者", "0人（一覧取得完了）"],
+            ["対象の再読取時刻", review.observed_at]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "確定済み・非繰返しの単一予定を削除します。参加者への通知は送りません。承認後も対象の再読取とETag条件が一致しない場合は削除を停止します。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "削除対象と影響範囲を再確認";
           return;
         }
         if (review.command_id !== commandId ||

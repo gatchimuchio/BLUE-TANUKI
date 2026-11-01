@@ -3668,3 +3668,20 @@ owner taskの受付状態を照会するTasks画面には、同じ依頼IDから
 | test／Gateway runtime／実provider／外部作用 | NOT_RUN |
 
 この変更はD09.01／F10.01の該当するTasks→Runtime plan card consumerを`WIRED`にする。切断後のWebSocket結果確認、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+## 2026-11-01 QE_BUILD — F03.02 Calendar単件の所有境界・event.delete接続
+
+開始mainは`ed65540f29b6ad9ca8c915c3f417501a32852c29`。意味編集前に二世代復旧refをCASでlocal branch／remote tagへ回転し、現行backupを`ed65540`、直前backupを`515eb69`へ照合した。保護対象untracked `.codex-remote-attachments/`は維持。
+
+Google Calendar単件read snapshotとwrite target-versionをv2へ更新した。readは主催者の`self`、`attendees(self)`、省略状態、開始・終了日時とtimezoneを取得する。参加者識別子やメールアドレスは取得・返却せず、完全一覧を確認できない場合は失敗する。更新・削除ともprimary calendar上の確定済み非繰返し予定に限定し、主催者が本人で、他参加者が0人の場合だけ通す。状態digestはETag・日時・所有状態・参加者flags・予定状態を束縛する。
+
+`event.update`のOwner確認には日時・現在／変更後件名・所有／参加者確認を追加した。単一予定の`event.delete`を既存L3 Approval／HDS execution binding／Brokerへ接続し、no-store Owner確認に対象ID・日時・件名・所有／参加者根拠を表示する。target-version取得、内容確認、承認時、承認後実行で再読取し、DELETEは`sendUpdates=none`とfresh ETagの`If-Match`を使う。対象変更・所有不一致・参加者不明・系列／occurrenceは作用前に停止する。削除・更新の実provider実行は行っていない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS-BRAIN／core／WebChat／Gateway TypeScript build | PASS。 |
+| 生成Control Center script構文解析 | PASS。 |
+| `git diff --check` | PASS。 |
+| test suite／Gateway process／browser／実provider・実資格／外部作用 | NOT_RUN。 |
+
+`event.create`、対象制約付き`event.update`／`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の系列／occurrence・参加者／招待効果、F03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

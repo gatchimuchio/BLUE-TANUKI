@@ -2,9 +2,9 @@ import { z } from "zod";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
-/** Google Calendarの単一イベント、作成時点のfreebusy観測と更新時点のevent状態を束縛する非権威証拠。 */
+/** Google Calendarの作成時freebusy観測または更新・削除時単件snapshotを束縛する非権威証拠。 */
 const GoogleCalendarWriteTargetVersionBaseSchema = z.object({
-  schema_version: z.literal("blue-tanuki.google-calendar-write-target-version.v1"),
+  schema_version: z.literal("blue-tanuki.google-calendar-write-target-version.v2"),
   target_identity_digest: DigestSchema,
   request_payload_digest: DigestSchema,
   command_digest: DigestSchema,
@@ -31,11 +31,18 @@ export const GoogleCalendarWriteTargetVersionObservationSchema = z.discriminated
     event_state_digest: DigestSchema,
     event_etag_digest: DigestSchema,
   }).strict(),
+  GoogleCalendarWriteTargetVersionBaseSchema.extend({
+    operation: z.literal("event.delete"),
+    calendar_id: z.string().min(1).max(512),
+    event_id: z.string().min(1).max(1_024),
+    event_state_digest: DigestSchema,
+    event_etag_digest: DigestSchema,
+  }).strict(),
 ]);
 
-/** Owner-confirmed, targeted snapshot returned by a single-event read. */
+/** Read-only single-event snapshot with the fields required to bind a safe write target. */
 export const GoogleCalendarEventTargetObservationSchema = z.object({
-  schema_version: z.literal("blue-tanuki.google-calendar-event-target.v1"),
+  schema_version: z.literal("blue-tanuki.google-calendar-event-target.v2"),
   service: z.literal("calendar"),
   view: z.literal("event"),
   mode: z.literal("read_only"),
@@ -46,6 +53,13 @@ export const GoogleCalendarEventTargetObservationSchema = z.object({
   event_etag_digest: DigestSchema,
   status: z.string().min(1).max(64),
   summary: z.string().max(8_192).nullable(),
+  event_start: z.string().min(1).max(64),
+  event_end: z.string().min(1).max(64),
+  event_time_kind: z.enum(["date", "date_time"]),
+  event_time_zone: z.string().max(128).nullable(),
+  organizer_self: z.boolean(),
+  other_attendee_count: z.number().int().min(0).max(200),
+  attendee_inventory_complete: z.literal(true),
   recurrence_present: z.boolean(),
   observed_at: z.string().min(20).max(64),
   observed_at_source: z.literal("client_response_received"),

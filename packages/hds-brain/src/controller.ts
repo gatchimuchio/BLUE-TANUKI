@@ -3671,7 +3671,7 @@ ${planControl.question}`,
     } else if (command.type === "tool_call" && command.payload.tool_name === "google.calendar.write") {
       const commandOperation = command.payload.arguments.operation;
       if (brokerTargetVersionObservation === undefined ||
-          (commandOperation !== "event.create" && commandOperation !== "event.update")) {
+          (commandOperation !== "event.create" && commandOperation !== "event.update" && commandOperation !== "event.delete")) {
         throw new Error("HDS google.calendar.write requires a supported operation target version observation");
       }
       const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);

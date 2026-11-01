@@ -8,13 +8,15 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 単件作成・件名更新のread-before-write接続
+## 最新BUILD_BATCH — F03.02 Calendar単件の所有・参加者境界と削除接続
 
-2026-11-01、Google Calendarの単件`event.create`と単一の確定済み非繰返しeventに対する`event.update`件名変更を、既存Approval／HDS execution binding／Brokerへ接続した。作成は完全・非unknownのfreebusy観測を要求し、target-version取得、Ownerのno-store内容確認、承認受付後、POST直前に同じcalendar・観測窓・busy結果digestを再照合する。更新は`google.calendar.read view=event event_id=...`の単一event観測を要求し、event ID・ETag digest・state digestをtarget-versionへ束縛する。target-version取得・Owner確認・承認時・承認後実行の各境界でeventを再読取し、最後のPATCHにはfresh ETagを`If-Match`で付ける。Owner画面は現在の件名と更新後の件名を表示する。更新可能なのは件名だけで、時刻・本文・場所・参加者・繰返し・通知は変更しない。provider dataは非権威の証拠に限る。
+2026-11-01、既存のCalendar `event.create`と件名のみの`event.update`に続き、単一の確定済み非繰返し予定に対する`event.delete`を既存L3 Approval／HDS execution binding／Broker／no-store Owner reviewへ接続した。削除・更新とも`calendar_id=primary`、`organizer.self=true`、完全な参加者一覧、他の参加者0人を要求する。系列・occurrence・参加者変更・招待通知は対象外のまま拒否する。
 
-Protocol／HDS／core／Gateway／WebChatへtarget-versionと内容確認を接続し、command digestとOperation Plan bindingに結んだ。対象TypeScript project build、生成Control Center script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`と件名のみの`event.update`はコード接続上`WIRED`（runtime未確認）。F03.02残要求は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+単件read snapshotをv2へ更新し、主催者の本人性、`attendees(self)`の完全性と他参加者数、開始・終了日時とtimezoneを保持する。参加者識別子・メールアドレスは取得・返却しない。snapshot digestには日時・所有状態・参加者フラグ・ETagを束縛する。Owner確認画面は予定ID、現在の件名、日時、主催者確認、他参加者0人の完全な一覧照合を表示する。削除は`sendUpdates=none`、fresh ETagの`If-Match`付き単件DELETEとし、対象が更新された場合は作用前に停止する。作成も含むwrite target-version schemaをv2へ更新した。
 
-**次のBUILD_BATCH:** F03.02 `event.delete`の対象所有・参加者通知境界を現物から確認し、所有と影響範囲を確定できる単一対象だけを同じHDS承認・内容確認・ETag条件へ接続する。契約が不足する種別、繰返し系列／occurrence、参加者・招待通知は安全に拒否したまま進める。実provider／live外部作用は行わない。
+Protocol／HDS／core／Gateway／WebChatの承認reviewまで接続した。Protocol・HDS・core・WebChat・Gateway TypeScript build、生成Control Center script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`、対象制約付き`event.update`、対象制約付き`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の繰返し系列／occurrenceと招待・参加者効果は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のBUILD_BATCH:** F03.02の系列と単回occurrenceのidentity・作用差を現行consumerで接続する。単回承認から系列変更へ広げず、参加者／招待効果は別Operation Plan・別L3確認が接続するまで無効のままにする。実provider／live外部作用は行わない。
 
 ## 現在のrepo基点
 

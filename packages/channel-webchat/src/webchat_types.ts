@@ -253,6 +253,36 @@ export interface WebChatGoogleCalendarEventUpdateContentReview {
   event_id: string;
   current_summary: string | null;
   new_summary: string;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
+  event_state_digest: string;
+  observed_at: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface WebChatGoogleCalendarEventDeleteContentReview {
+  kind: "google_calendar_event_delete";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation: "google.calendar.write.event.delete";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
   event_state_digest: string;
   observed_at: string;
   used_for_authority: false;
@@ -396,7 +426,7 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
-  WebChatGoogleCalendarEventUpdateContentReview;
+  WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

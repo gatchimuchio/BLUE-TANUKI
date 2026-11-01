@@ -1165,7 +1165,7 @@ export async function readGoogleCalendarEventTarget(
   const response = await request({
     service: "calendar",
     hostname: "www.googleapis.com",
-    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId`,
+    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId,organizer(self),attendees(self),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)`,
     maxBytes,
     token,
   }, opts.signal);
@@ -1181,7 +1181,29 @@ export async function readGoogleCalendarEventTarget(
       (typeof body.summary === "string" && body.summary.length > 8_192)) {
     throw new Error("google.calendar.read returned an incomplete single-event target; mutation_sent=false");
   }
+  const rawAttendees = body.attendees === undefined ? [] : body.attendees;
+  if (!isRecord(body.organizer) || typeof body.organizer.self !== "boolean" || !Array.isArray(rawAttendees) ||
+      rawAttendees.length > MAX_CALENDAR_EVENT_ATTENDEES ||
+      (body.attendeesOmitted !== undefined && typeof body.attendeesOmitted !== "boolean") ||
+      body.attendeesOmitted === true ||
+      rawAttendees.some((attendee) => !isRecord(attendee) || typeof attendee.self !== "boolean") ||
+      rawAttendees.filter((attendee) => isRecord(attendee) && attendee.self === true).length > 1) {
+    throw new Error("google.calendar.read could not verify complete Calendar ownership and attendee inventory; mutation_sent=false");
+  }
+  const eventStart = calendarTimeIdentity(body.start);
+  const eventEnd = calendarTimeIdentity(body.end);
+  const eventRangeValid = eventStart.complete && eventEnd.complete && eventStart.kind === eventEnd.kind &&
+    (eventStart.kind === "date"
+      ? typeof eventStart.normalized.value === "string" && typeof eventEnd.normalized.value === "string" &&
+        eventEnd.normalized.value > eventStart.normalized.value
+      : eventStart.kind === "date_time" && typeof eventStart.normalized.instant_utc === "string" &&
+        typeof eventEnd.normalized.instant_utc === "string" &&
+        Date.parse(eventEnd.normalized.instant_utc) > Date.parse(eventStart.normalized.instant_utc));
+  if (!eventRangeValid || (eventStart.kind !== "date" && eventStart.kind !== "date_time")) {
+    throw new Error("google.calendar.read returned an incomplete single-event time range; mutation_sent=false");
+  }
   const summary = typeof body.summary === "string" ? body.summary : null;
+  const otherAttendeeCount = rawAttendees.filter((attendee) => attendee.self !== true).length;
   const recurrencePresent = (Array.isArray(body.recurrence) && body.recurrence.length > 0) ||
     (body.recurrence !== undefined && !Array.isArray(body.recurrence)) ||
     body.recurringEventId !== undefined;
@@ -1191,10 +1213,18 @@ export async function readGoogleCalendarEventTarget(
     etag: body.etag,
     status: body.status,
     summary,
+    event_start: eventStart.normalized.value,
+    event_end: eventEnd.normalized.value,
+    event_time_kind: eventStart.kind,
+    event_time_zone: eventStart.normalized.time_zone,
+    organizer_self: body.organizer.self,
+    attendee_self_flags: rawAttendees.map((attendee) => attendee.self),
+    other_attendee_count: otherAttendeeCount,
+    attendee_inventory_complete: true,
     recurrence_present: recurrencePresent,
   });
   const observation = GoogleCalendarEventTargetObservationSchema.parse({
-    schema_version: "blue-tanuki.google-calendar-event-target.v1",
+    schema_version: "blue-tanuki.google-calendar-event-target.v2",
     service: "calendar",
     view: "event",
     mode: "read_only",
@@ -1205,6 +1235,13 @@ export async function readGoogleCalendarEventTarget(
     event_etag_digest: sha256Hex(body.etag),
     status: body.status,
     summary,
+    event_start: eventStart.normalized.value,
+    event_end: eventEnd.normalized.value,
+    event_time_kind: eventStart.kind,
+    event_time_zone: eventStart.normalized.time_zone,
+    organizer_self: body.organizer.self,
+    other_attendee_count: otherAttendeeCount,
+    attendee_inventory_complete: true,
     recurrence_present: recurrencePresent,
     observed_at: observedAt,
     observed_at_source: "client_response_received",

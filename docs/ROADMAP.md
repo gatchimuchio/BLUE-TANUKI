@@ -152,6 +152,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-11-01、F03.02の次consumerとして、単一の確定済み非繰返しCalendar eventの件名更新だけを追加した。`google.calendar.read view=event event_id=...`が返す単件snapshotからevent ID／state digest／ETag digestを確認し、target-version、Ownerのno-store review、承認時再検査、承認後実行の各境界で同じ状態を再読取する。PATCHはfresh ETagの`If-Match`条件付きとし、summary以外を変更せず、通知なしを明示する。繰返し・本文・時刻・場所・参加者・通知の更新は拒否する。Protocol／HDS／core／WebChat／Gatewayの限定TypeScript build、Control Center script構文解析、`git diff --check`はPASS。test／Gateway process／browser／provider／外部作用はNOT_RUN。`event.update`件名変更は`WIRED`（runtime未確認）、F03.02残要求、F03全体、製品全体BUILD、QC／QA、owner GOは未成立。
 
+2026-11-01、F03.02の単件Calendar対象をv2へ拡張し、主催者本人、完全な参加者一覧、他参加者0人、日時・timezoneを read-before-write の状態digestへ結んだ。参加者識別子は取得・返却しない。作成・更新に続いて、primary calendar上の確定済み非繰返し予定一件だけを対象にした`event.delete`を既存L3／Approval／HDS binding／Brokerへ接続した。Ownerのno-store reviewで予定ID・件名・日時・所有・参加者数を提示し、承認前後に再読取、fresh ETagを`If-Match`、`sendUpdates=none`で単件DELETEする。Protocol／HDS／core／WebChat／Gateway TypeScript build、生成script構文解析、`git diff --check`はPASS。test／Gateway process／browser／実provider／実資格／外部作用はNOT_RUN。三操作は`WIRED`（runtime未確認）、繰返し系列／occurrence、参加者・招待効果は`BUILD_GAP`、F03全体と製品全体BUILD・QC／QA・owner GOは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。
