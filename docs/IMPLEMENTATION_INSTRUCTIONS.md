@@ -8,7 +8,15 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
+## 現在のBUILD_BATCH — F05.01 GitHub repository/base commit identity read
+
+`github.read resource=base owner=<owner> repo=<repo> [base_ref=<branch>]`を既存の公開読取経路へ接続する。Repository APIから数値repository ID・canonical `full_name`・owner・default branchを読み、指定branchまたはdefault branchのcommit SHAを取得する。取得結果が要求したrepository／branchと一致しない、JSONでない、切詰められた、途中でrepository ID／名前が変化した場合はidentityを返さず失敗する。branch名はGit ref規則とpath境界を検査し、各path segmentをencodeする。
+
+結果は版付き`blue-tanuki.github.base-identity.v1`の読取観測とSHA-256 digestにし、provider由来の非信頼情報・non-authority・非原子的観測・mutationなしを明記する。これは後続consumerが同じrepo/base commitを参照するための観測であり、`github.write`の承認・実行権限やbase-bound writeはこのBUILD_BATCHの対象外（F05.02以降）とする。
+
+完了境界：Protocol／HDS-BRAIN／core／Gatewayのworkspace typecheckと変更package build、`pnpm docs:check`、`git diff --check`。test suite、Gateway process、browser、GitHub API／credential、外部書込みは実施しない。成功したBUILD_BATCHは`main`へ直接commit／pushし、remote／local SHA・clean状態と二世代復旧refを照合する。F05.01全体、GitHub write、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOへ昇格しない。
+
+## 完了済みBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
 
 Ownerが選択した単一の`gmail.read view=attachment_identity`結果だけをsourceとする。message／attachment／part identity・filename・MIME・size・SHA-256を厳密に再照合し、添付bytesは5 MiB以下でprocess memory内だけに保持する。bytesをLLM、plan、command、履歴、audit、Control Center projectionへ渡さず、content reviewは本文・宛先と添付filename／MIME／size／SHA-256をno-store表示する。Owner選択・結果・期限をHDSの同一plan／task／revisionへ結び、添付1件を完全一致で束ねた未実行`gmail.write draft.create`候補だけを許す。`message.send`、`draft.send`、別添付、添付内容由来の目的・宛先・権限推定は拒否する。
 

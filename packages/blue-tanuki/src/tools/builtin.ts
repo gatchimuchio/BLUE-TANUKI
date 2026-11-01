@@ -525,10 +525,22 @@ function parseWebSearchResults(body: string, maxResults: number): WebSearchResul
 
 function githubNameArg(args: Record<string, unknown>, name: string): string {
   const value = stringArg(args, name)!;
-  if (!/^[A-Za-z0-9_.-]+$/.test(value)) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(value) || value === "." || value === "..") {
     throw new Error(`${name} must contain only letters, numbers, dot, underscore, or dash`);
   }
   return value;
+}
+
+function githubBaseRefArg(value: string): string {
+  const segments = value.split("/");
+  if (value.length > 255 || value !== value.trim() || value === "@" ||
+      value.startsWith("/") || value.endsWith("/") || value.includes("//") ||
+      value.includes("..") || value.includes("@{") || /[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) ||
+      value.endsWith(".") || segments.some((segment) => !segment || segment === "." || segment === ".." ||
+        segment.startsWith(".") || segment.endsWith(".lock") || segment.endsWith("."))) {
+    throw new Error("base_ref is not a valid GitHub branch name");
+  }
+  return segments.map((segment) => encodeURIComponent(segment)).join("/");
 }
 
 function githubResource(args: Record<string, unknown>): string {
@@ -552,6 +564,9 @@ function githubPath(args: Record<string, unknown>): { resource: string; path: st
   const repo = encodeURIComponent(githubNameArg(args, "repo"));
   const resource = githubResource(args);
   if (resource === "repo") {
+    return { resource, path: `/repos/${owner}/${repo}` };
+  }
+  if (resource === "base") {
     return { resource, path: `/repos/${owner}/${repo}` };
   }
   if (resource === "issue") {
@@ -578,7 +593,103 @@ function githubPath(args: Record<string, unknown>): { resource: string; path: st
       path: `/repos/${owner}/${repo}/pulls?state=${state}&per_page=${perPage}`,
     };
   }
-  throw new Error("resource must be repo, issue, issues, pr, or prs");
+  throw new Error("resource must be repo, base, issue, issues, pr, or prs");
+}
+
+function requireGitHubJsonRecord(response: GitHubReadResponse, label: string): Record<string, unknown> {
+  if (response.status !== 200 || !response.ok || response.truncated ||
+      !response.content_type?.toLowerCase().includes("json")) {
+    throw new Error(`github.read ${label} identity is incomplete; base_identity=unavailable`);
+  }
+  const value = parseJsonOrText(response.body);
+  if (!isRecord(value)) {
+    throw new Error(`github.read ${label} identity is invalid; base_identity=unavailable`);
+  }
+  return value;
+}
+
+async function readGitHubBaseIdentity(
+  args: Record<string, unknown>,
+  request: NonNullable<GitHubReadOptions["request"]>,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const requestedBaseRefValue = args.base_ref;
+  if (requestedBaseRefValue !== undefined &&
+      (typeof requestedBaseRefValue !== "string" || requestedBaseRefValue.length === 0)) {
+    throw new Error("base_ref must be a non-empty branch name when provided");
+  }
+  const requestedBaseRef = requestedBaseRefValue as string | undefined;
+  const encodedRequestedBaseRef = requestedBaseRef === undefined ? undefined : githubBaseRefArg(requestedBaseRef);
+  const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  assertToolExecutionNotCancelled(signal, "github.read");
+  const repositoryResponse = await request({ path: repoPath, maxBytes }, signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "repository");
+  const repositoryId = repository.id;
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerRecord = isRecord(repository.owner) ? repository.owner : null;
+  const ownerLogin = ownerRecord && typeof ownerRecord.login === "string" ? ownerRecord.login : "";
+  const defaultBranch = typeof repository.default_branch === "string" ? repository.default_branch : "";
+  const sameRequestedRepository = fullName.toLocaleLowerCase("en-US") === `${owner}/${repo}`.toLocaleLowerCase("en-US") &&
+    repositoryName.toLocaleLowerCase("en-US") === repo.toLocaleLowerCase("en-US") &&
+    ownerLogin.toLocaleLowerCase("en-US") === owner.toLocaleLowerCase("en-US");
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      !sameRequestedRepository || !defaultBranch) {
+    throw new Error("github.read repository identity did not match the requested owner/repo; base_identity=unavailable");
+  }
+
+  const baseRef = requestedBaseRef ?? defaultBranch;
+  const encodedBaseRef = encodedRequestedBaseRef ?? githubBaseRefArg(baseRef);
+  assertToolExecutionNotCancelled(signal, "github.read");
+  const branchPath = `${repoPath}/branches/${encodedBaseRef}`;
+  const branchResponse = await request({ path: branchPath, maxBytes }, signal);
+  const branch = requireGitHubJsonRecord(branchResponse, "base branch");
+  const commit = isRecord(branch.commit) ? branch.commit : null;
+  const commitSha = commit && typeof commit.sha === "string" ? commit.sha.toLowerCase() : "";
+  if (branch.name !== baseRef || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commitSha)) {
+    throw new Error("github.read base branch did not resolve to the requested ref and an exact commit; base_identity=unavailable");
+  }
+
+  assertToolExecutionNotCancelled(signal, "github.read");
+  const confirmationResponse = await request({ path: repoPath, maxBytes }, signal);
+  const confirmation = requireGitHubJsonRecord(confirmationResponse, "repository confirmation");
+  const confirmationOwner = isRecord(confirmation.owner) && typeof confirmation.owner.login === "string"
+    ? confirmation.owner.login : "";
+  if (confirmation.id !== repositoryId || confirmation.full_name !== fullName ||
+      confirmationOwner.toLocaleLowerCase("en-US") !== ownerLogin.toLocaleLowerCase("en-US") ||
+      (!requestedBaseRef && confirmation.default_branch !== defaultBranch)) {
+    throw new Error("github.read repository identity changed during base resolution; base_identity=unavailable");
+  }
+
+  const identity = {
+    schema_version: "blue-tanuki.github.base-identity.v1",
+    repository_id: repositoryId,
+    full_name: fullName,
+    requested_owner: owner,
+    requested_repo: repo,
+    default_branch: defaultBranch,
+    base_ref: baseRef,
+    base_commit_sha: commitSha,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    used_for_authority: false,
+    mutation_sent: false,
+  };
+  return {
+    resource: "base",
+    api_host: "api.github.com",
+    paths: [repoPath, branchPath, repoPath],
+    status: confirmationResponse.status,
+    content_type: confirmationResponse.content_type,
+    truncated: false,
+    rate_limit_remaining: confirmationResponse.rate_limit_remaining,
+    requests: 3,
+    data: identity,
+    identity_digest: sha256Hex(identity),
+  };
 }
 
 function githubBoolArg(
@@ -1205,6 +1316,9 @@ export async function invokeGitHubRead(
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const route = githubPath(args);
   const request = opts.request ?? defaultGitHubReadRequest;
+  if (route.resource === "base") {
+    return await readGitHubBaseIdentity(args, request, maxBytes, opts.signal);
+  }
   assertToolExecutionNotCancelled(opts.signal, "github.read");
   const response = await request({
     path: route.path,
@@ -2552,7 +2666,7 @@ export const webSearchTool: Tool = {
 
 export const githubReadTool: Tool = {
   name: "github.read",
-  description: "Read public GitHub repo, issue, and pull request metadata from api.github.com.",
+  description: "Read public GitHub repository, branch/base commit, issue, and pull request metadata from api.github.com. Base identity is an untrusted read observation, never authority.",
   required_capabilities: requireToolOperationDescriptor("github.read").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeGitHubRead(args, { signal: context.signal });

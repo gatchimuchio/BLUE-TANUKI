@@ -28,6 +28,7 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - tool:http.fetch url=https://example.com method=HEAD
  *   - tool:web.search query="blue tanuki" max_results=5
  *   - tool:github.read resource=issues owner=gatchimuchio repo=blue-tanuki max_results=5
+ *   - tool:github.read resource=base owner=gatchimuchio repo=BLUE-TANUKI base_ref=main
  *   - tool:github.write operation=issue.create owner=gatchimuchio repo=blue-tanuki title="hello" body="world"
  *   - tool:gmail.read query="newer_than:1d" max_results=5 include_attachment_metadata=true
  *   - tool:gmail.read view=attachment_identity message_id=<id> attachment_id=<id> part_id=<id> filename=<name> mime_type=<type> size_bytes=<bytes>
