@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-01 — QEB-F03.02-CALENDAR-SINGLE-EVENT-SUMMARY-UPDATE
+
+開始`main`／`origin/main`=`515eb693a6b23fbe32854012054d890a314d9a53`。現行rev3.0 pin／hash・AGENTS・F03.02 active instructionを確認。編集前復旧refをCASで回転し、local／remote current=`515eb69...`／previous=`c280135...`。保護添付ZIPは変更していない。
+
+Google Calendarの`google.calendar.read view=event event_id=...`から単件の非権威snapshotを取得するread consumerを追加し、provider ETagそのものはadapter内だけに保持する。`event.update`は確定済み非繰返しeventのsummary一項目に限定し、event ID・state digest・ETag digestをtarget-versionへ結び付ける。target resolver、no-store Owner review、approval validation、承認後実行で同じevent状態を再照合し、実PATCHにはfresh ETagの`If-Match`を付け、`sendUpdates=none`を指定する。繰返し、本文・時刻・場所・参加者・招待通知、削除は拒否する。
+
+Protocol／HDS／core／WebChat／GatewayのTypeScript project build、生成Control Center script構文、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.update`件名変更は`WIRED`（runtime未確認）。F03.02全体、F03全体、製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
+
+---
+
 ## 2026-11-01 — QEB-F03.02-CALENDAR-EVENT-CREATE-READ-BEFORE-WRITE
 
 開始`main`／`origin/main`=`c28013562ed0d55e969f15e3ec9c85b0e22168c3`。現行rev3.0 pin／hash・AGENTS・active instructionを確認。編集前復旧二世代をCASで回転し、current=`c280135...`／previous=`a9b3c19...`。保護添付ZIPと別Worktreeは変更していない。

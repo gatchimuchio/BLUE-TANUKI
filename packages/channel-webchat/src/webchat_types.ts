@@ -242,6 +242,23 @@ export interface WebChatGoogleCalendarEventCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGoogleCalendarEventUpdateContentReview {
+  kind: "google_calendar_event_update";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation: "google.calendar.write.event.update";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  new_summary: string;
+  event_state_digest: string;
+  observed_at: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -378,7 +395,8 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
-  WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview;
+  WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
+  WebChatGoogleCalendarEventUpdateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

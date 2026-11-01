@@ -5336,7 +5336,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(overlap);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。招待・繰返し・更新・削除はこの施工単位では扱いません。";
+          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。単一の非繰返し予定の件名更新は別の内容審査を行います。招待・繰返し・削除は未対応です。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | freebusy result digest: " + review.availability_result_digest;
@@ -5344,6 +5344,51 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "予定内容と空き状況を再確認";
+          return;
+        }
+        if (review.kind === "google_calendar_event_update") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.update" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.event_state_digest) ||
+              typeof review.calendar_id !== "string" || review.calendar_id.length === 0 || review.calendar_id.length > 512 ||
+              typeof review.event_id !== "string" || review.event_id.length === 0 || review.event_id.length > 1_024 ||
+              (review.current_summary !== null && typeof review.current_summary !== "string") ||
+              typeof review.new_summary !== "string" || review.new_summary.trim().length === 0 ||
+              review.new_summary.length > 8_192 || typeof review.observed_at !== "string" ||
+              !Number.isFinite(Date.parse(review.observed_at))) {
+            throw new Error("更新対象と新しい件名がこの承認要求と一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "単一Calendar予定の件名更新";
+          view.appendChild(heading);
+          [
+            ["カレンダー", review.calendar_id],
+            ["予定ID", review.event_id],
+            ["現在の件名", review.current_summary === null ? "（件名なし）" : review.current_summary],
+            ["更新後の件名", review.new_summary],
+            ["対象の再読取時刻", review.observed_at]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "非繰返し・確定済みの一件について件名だけを更新します。時刻・本文・場所・参加者・招待通知は変更しません。対象が変化した場合はETag条件付き更新で停止します。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "予定の現在値と更新後を再確認";
           return;
         }
         if (review.command_id !== commandId ||

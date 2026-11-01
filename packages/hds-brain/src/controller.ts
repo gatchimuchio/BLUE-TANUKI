@@ -3669,12 +3669,14 @@ ${planControl.question}`,
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "google.calendar.write") {
-      if (brokerTargetVersionObservation === undefined || command.payload.arguments.operation !== "event.create") {
-        throw new Error("HDS google.calendar.write event.create target version observation is required");
+      const commandOperation = command.payload.arguments.operation;
+      if (brokerTargetVersionObservation === undefined ||
+          (commandOperation !== "event.create" && commandOperation !== "event.update")) {
+        throw new Error("HDS google.calendar.write requires a supported operation target version observation");
       }
       const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
       if (observation.command_digest !== operationPlanDigest(command) ||
-          observation.operation !== "event.create" ||
+          observation.operation !== commandOperation ||
           observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
         throw new Error("HDS google.calendar.write target version does not match the issued command or Operation Plan source");
       }

@@ -79,8 +79,25 @@ export interface GoogleCalendarEventCreateContentReview {
   may_execute: false;
 }
 
+/** Exact target and single-field replacement shown before an approved event update. */
+export interface GoogleCalendarEventUpdateContentReview {
+  kind: "google_calendar_event_update";
+  operation: "google.calendar.write.event.update";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  new_summary: string;
+  event_state_digest: string;
+  observed_at: string;
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
-  GoogleCalendarEventCreateContentReview;
+  GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { GoogleCalendarEventTargetObservationSchema, requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, type Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -751,6 +751,7 @@ const MAX_CALENDAR_EVENT_ATTENDEES = 200;
 const GOOGLE_CALENDAR_READ_ARGUMENTS = new Set([
   "calendar_id",
   "days",
+  "event_id",
   "max_bytes",
   "max_results",
   "time_max",
@@ -1027,7 +1028,8 @@ interface NormalizedCalendarRequestTime {
 }
 
 interface CalendarReadParameters {
-  view: "events" | "freebusy";
+  view: "events" | "event" | "freebusy";
+  event_id: string | null;
   calendar_id: string;
   calendar_id_original: string;
   max_results: number;
@@ -1093,8 +1095,15 @@ function calendarReadParameters(
   }
   const viewArg = calendarOptionalStringArg(args, "view");
   const view = viewArg?.normalized ?? "events";
-  if (view !== "events" && view !== "freebusy") {
-    throw new Error("google.calendar.read view must be events or freebusy");
+  if (view !== "events" && view !== "event" && view !== "freebusy") {
+    throw new Error("google.calendar.read view must be events, event, or freebusy");
+  }
+  const eventIdArg = calendarOptionalStringArg(args, "event_id");
+  if ((view === "event") !== Boolean(eventIdArg)) {
+    throw new Error("google.calendar.read view=event requires event_id and other views forbid it");
+  }
+  if (eventIdArg && (eventIdArg.normalized.length > 1_024 || /[\u0000-\u001f\u007f]/.test(eventIdArg.normalized))) {
+    throw new Error("google.calendar.read event_id is invalid");
   }
   const maxResults = positiveIntArg(args, "max_results", DEFAULT_MAX_RESULTS, MAX_RESULTS);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
@@ -1117,6 +1126,7 @@ function calendarReadParameters(
   }
   return {
     view,
+    event_id: eventIdArg?.normalized ?? null,
     calendar_id: calendarId,
     calendar_id_original: calendarIdArg?.original ?? "primary",
     max_results: maxResults,
@@ -1128,6 +1138,85 @@ function calendarReadParameters(
     time_zone: timeZone,
     time_zone_original: timeZoneArg?.original ?? null,
   };
+}
+
+export interface GoogleCalendarEventTargetSnapshot {
+  observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse>;
+  /** Retained only in the adapter so the subsequent PATCH can use If-Match. */
+  etag: string;
+}
+
+export async function readGoogleCalendarEventTarget(
+  calendarId: string,
+  eventId: string,
+  opts: GoogleReadOptions & { maxBytes?: number } = {},
+): Promise<GoogleCalendarEventTargetSnapshot> {
+  const env = opts.env ?? process.env;
+  const now = opts.now ?? (() => new Date());
+  const request = opts.request ?? defaultGoogleReadRequest;
+  const maxBytes = opts.maxBytes ?? MAX_MAX_BYTES;
+  if (!calendarId.trim() || calendarId.length > 512 || !eventId.trim() || eventId.length > 1_024 ||
+      /[\u0000-\u001f\u007f]/.test(calendarId + eventId) || !Number.isInteger(maxBytes) ||
+      maxBytes < 1 || maxBytes > MAX_MAX_BYTES) {
+    throw new Error("google.calendar.read single-event identity is invalid; mutation_sent=false");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "google.calendar.read");
+  const token = googleToken(env, ["GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.calendar.read");
+  const response = await request({
+    service: "calendar",
+    hostname: "www.googleapis.com",
+    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId`,
+    maxBytes,
+    token,
+  }, opts.signal);
+  const observedAt = now().toISOString();
+  if (!response.ok || response.truncated) {
+    throw new Error("google.calendar.read could not obtain a complete single-event target; mutation_sent=false");
+  }
+  const body = parseJson(response.body, "google.calendar.read");
+  if (!isRecord(body) || body.id !== eventId || typeof body.etag !== "string" || !body.etag.trim() ||
+      body.etag.length > 1_024 || /[\u0000-\u001f\u007f]/.test(body.etag) ||
+      typeof body.status !== "string" || body.status.length === 0 ||
+      (body.summary !== undefined && body.summary !== null && typeof body.summary !== "string") ||
+      (typeof body.summary === "string" && body.summary.length > 8_192)) {
+    throw new Error("google.calendar.read returned an incomplete single-event target; mutation_sent=false");
+  }
+  const summary = typeof body.summary === "string" ? body.summary : null;
+  const recurrencePresent = (Array.isArray(body.recurrence) && body.recurrence.length > 0) ||
+    (body.recurrence !== undefined && !Array.isArray(body.recurrence)) ||
+    body.recurringEventId !== undefined;
+  const eventStateDigest = sha256Hex({
+    calendar_id: calendarId,
+    event_id: eventId,
+    etag: body.etag,
+    status: body.status,
+    summary,
+    recurrence_present: recurrencePresent,
+  });
+  const observation = GoogleCalendarEventTargetObservationSchema.parse({
+    schema_version: "blue-tanuki.google-calendar-event-target.v1",
+    service: "calendar",
+    view: "event",
+    mode: "read_only",
+    calendar_id: calendarId,
+    calendar_id_original: calendarId,
+    event_id: eventId,
+    event_state_digest: eventStateDigest,
+    event_etag_digest: sha256Hex(body.etag),
+    status: body.status,
+    summary,
+    recurrence_present: recurrencePresent,
+    observed_at: observedAt,
+    observed_at_source: "client_response_received",
+    result_complete: true,
+    mutation_sent: false,
+    trust_boundary: {
+      provider_data_is_untrusted: true,
+      calendar_data_can_authorize_operation: false,
+      used_for_authority: false,
+    },
+  });
+  return { observation, etag: body.etag };
 }
 
 function freeBusyIntervals(
@@ -1310,6 +1399,16 @@ export async function invokeGoogleCalendarRead(
   const now = opts.now ?? (() => new Date());
   const request = opts.request ?? defaultGoogleReadRequest;
   const parameters = calendarReadParameters(args, now);
+  if (parameters.view === "event" && parameters.event_id) {
+    const snapshot = await readGoogleCalendarEventTarget(parameters.calendar_id, parameters.event_id, {
+      env,
+      now,
+      maxBytes: parameters.max_bytes,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      request,
+    });
+    return snapshot.observation;
+  }
   if (parameters.view === "freebusy") {
     return await invokeGoogleCalendarFreeBusyRead(parameters, { ...opts, env, now, request });
   }
@@ -1625,7 +1724,7 @@ export const gmailReadTool: Tool = {
 
 export const googleCalendarReadTool: Tool = {
   name: "google.calendar.read",
-  description: "Read bounded Google Calendar events or free/busy windows. Set view=freebusy for a timestamped availability observation; all provider data is untrusted and non-authoritative.",
+  description: "Read bounded Google Calendar events, one exact event target (view=event with event_id), or free/busy windows. All provider data is untrusted and non-authoritative.",
   required_capabilities: requireToolOperationDescriptor("google.calendar.read").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeGoogleCalendarRead(args, { signal: context.signal });

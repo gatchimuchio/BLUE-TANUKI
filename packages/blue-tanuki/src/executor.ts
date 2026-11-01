@@ -760,7 +760,7 @@ export class Executor {
       return review;
     }
     if (command.payload.tool_name === "google.calendar.write" &&
-        command.payload.arguments.operation === "event.create") {
+        ["event.create", "event.update"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("google.calendar.write");
       if (tool !== googleCalendarWriteTool || !tool.inspect_content_review) {
         throw new Error("google.calendar.write content review requires the registered built-in adapter");
@@ -770,11 +770,14 @@ export class Executor {
         ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
         command_digest: operationPlanDigest(command),
       });
-      if (!("kind" in review) || review.kind !== "google_calendar_event_create" ||
+      const validCreateReview = "kind" in review && review.kind === "google_calendar_event_create" &&
+        /^[a-f0-9]{64}$/.test(review.availability_result_digest);
+      const validUpdateReview = "kind" in review && review.kind === "google_calendar_event_update" &&
+        /^[a-f0-9]{64}$/.test(review.event_state_digest);
+      if ((!validCreateReview && !validUpdateReview) ||
           review.command_digest !== operationPlanDigest(command) ||
           !/^[a-f0-9]{64}$/.test(review.review_digest) ||
           !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||
-          !/^[a-f0-9]{64}$/.test(review.availability_result_digest) ||
           review.used_for_authority !== false || review.may_execute !== false) {
         throw new Error("google.calendar.write content review returned evidence for another command");
       }

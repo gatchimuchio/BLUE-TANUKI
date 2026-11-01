@@ -8,13 +8,13 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 単件予定登録のread-before-write接続
+## 最新BUILD_BATCH — F03.02 単件作成・件名更新のread-before-write接続
 
-2026-11-01、既存Google Calendarの`event.create`だけを、F03.01のfreebusy観測から既存Approval／HDS execution binding／Brokerまで接続した。完全・非unknownのfreebusy観測を予定作成引数へ渡し、同一calendar・観測窓・busy結果digestを照合する。target-version取得、Ownerのno-store内容確認、承認受付後のtarget再照合、AdapterのPOST直前に同じ窓を再読取し、忙しさ結果が変われば書込みを止める。Owner画面には登録する値、busy区間、予定との重複を表示する。busy情報は非権威の確認材料であり、承認や権限を作らない。未知引数と未接続の更新・削除・繰返し・参加者は送信前に拒否する。
+2026-11-01、Google Calendarの単件`event.create`と単一の確定済み非繰返しeventに対する`event.update`件名変更を、既存Approval／HDS execution binding／Brokerへ接続した。作成は完全・非unknownのfreebusy観測を要求し、target-version取得、Ownerのno-store内容確認、承認受付後、POST直前に同じcalendar・観測窓・busy結果digestを再照合する。更新は`google.calendar.read view=event event_id=...`の単一event観測を要求し、event ID・ETag digest・state digestをtarget-versionへ束縛する。target-version取得・Owner確認・承認時・承認後実行の各境界でeventを再読取し、最後のPATCHにはfresh ETagを`If-Match`で付ける。Owner画面は現在の件名と更新後の件名を表示する。更新可能なのは件名だけで、時刻・本文・場所・参加者・繰返し・通知は変更しない。provider dataは非権威の証拠に限る。
 
-Protocol／HDS／core／Gateway／WebChatへtarget-versionと内容確認を接続し、操作時刻・対象・要求digestを同じcommandへ束縛した。今回の対象パッケージTypeScript buildとWebChat生成script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`は`WIRED`（runtime未確認）、F03.02残要求は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+Protocol／HDS／core／Gateway／WebChatへtarget-versionと内容確認を接続し、command digestとOperation Plan bindingに結んだ。対象TypeScript project build、生成Control Center script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`と件名のみの`event.update`はコード接続上`WIRED`（runtime未確認）。F03.02残要求は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のBUILD_BATCH:** F03.02に残る更新・削除・繰返し系列／単一回・参加者と招待通知の内容審査を同一のHDS承認・Broker・結果帰還経路へ接続する。実providerとlive外部作用を使わず、契約がまだ閉じていない種別は安全に拒否したまま進める。
+**次のBUILD_BATCH:** F03.02 `event.delete`の対象所有・参加者通知境界を現物から確認し、所有と影響範囲を確定できる単一対象だけを同じHDS承認・内容確認・ETag条件へ接続する。契約が不足する種別、繰返し系列／occurrence、参加者・招待通知は安全に拒否したまま進める。実provider／live外部作用は行わない。
 
 ## 現在のrepo基点
 
