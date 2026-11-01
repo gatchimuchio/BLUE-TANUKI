@@ -18,7 +18,13 @@
 
 2026-11-01、単一fileのbounded `file.read` previewに開始行指定を接続した。exact sandbox相対pathと空queryの組合せに限定し、開始行は1〜1,000,000、返却は最大5行のまま。候補の開始行をOperation Plan validationへ結び、返却行番号の連続性を照合する。保存済みOwner結果にも開始行を表示し、既存のroot／file version確認、Approval／Broker、M receipt、非権威projectionを維持する。実装初回のworkspace `pnpm typecheck`／`pnpm build`はPASS。controller promptの最終追記後はHDS no-emit typecheck／package build、`pnpm docs:check`、`git diff --check`がPASS。workspace typecheck再実行は`apps/gateway/dist/active_task_execution_registry.js`の削除時`EBUSY`でclean段階停止。test／Gateway process／browser／provider／外部作用はNOT_RUN。STATUS=WIRED（型・build・実consumer接続の静的確認）、runtime未確認。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。
 
-## 現在のBUILD_BATCH
+## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
+
+既存google.drive.readからOwner taskが明示した単一file_idの本文確認consumerを接続した。検索・Google Workspace native document・binary・trash済み・version／size／canDownload欠落対象は拒否し、text/plain blobだけを扱う。取得はalt=mediaの一回、本文上限は既定16 KiB／最大64 KiB、strict UTF-8・完全なContent-Type・size一致・取得前後のversion／file state一致を必須とする。途中切断・部分本文・revision競合時は本文を返さず、Workspace文書exportもしない。
+
+返却はprovider contentを不信データとして明示し、資料内指示は目的変更・権限・承認の根拠にならない。tool.call high/L3 final review、Approval Gate、HDS authorityを維持する。新しいM writeやhistory raw contentを追加せず、provider履歴は既存のdigest projectionを維持する。実provider／credential／Gateway process／外部Drive readはNOT_RUN。F04.01全体とF04全体はBUILD_GAPのまま。
+
+## 前回BUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 
 2026-11-02、`google.drive.write/file.trash`を既存HDS Operation Plan／Executor Broker／Gateway承認／Control Centerへ接続中。Owner taskに明示された個人My Drive内の単一`file_id`に限定し、認証中アカウント所有、未trash、`text/plain`を必須にする。実行は`PATCH trashed=true`による復元可能なゴミ箱移動で、`files.delete`による完全削除は行わない。共有ドライブ、Workspace native document、folder、binary、非所有・曖昧・未取得の対象は拒否する。
 

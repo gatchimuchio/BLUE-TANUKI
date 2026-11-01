@@ -8,7 +8,15 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
+## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
+
+既存google.drive.readへ、Owner taskが内容確認を明示した単一file_idの本文取得を接続する。検索結果・Google Workspace native document・binary・trash済みファイル・version／size／canDownload欠落対象を拒否する。対象はtext/plain blobに限り、versionとsizeを取得してからalt=mediaで取得し、最大16 KiB（明示指定時も最大64 KiB）に制限する。strict UTF-8、Content-Type、metadataのfile stateを取得前後で照合し、途中切断・size不一致・revision変更時は本文を返さない。部分本文やfiles.exportは扱わない。
+
+本文にはdocument_content_is_untrusted_data=true、document_instructions_can_change_user_goal=false、document_instructions_can_authorize_operation=falseを付け、既存tool.callのhigh/L3 final review／Approval Gate／HDS authorityを維持する。通常のprovider履歴は既存どおりdigest projectionに留め、本文を新たなM commitや監査記録へ複製しない。本文は現在のtool result consumerへ返し、ユーザーtaskに基づくCの入力としてのみ扱う。実provider／credential／Drive read／Gateway process／browserは使わない。
+
+完了境界：@blue-tanuki/core typecheck／build、pnpm docs:check、git diff --check。test suite／Gateway process／provider／credential／外部読取は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remote／local SHA・clean状態を照合する。F04.01全体、F04全体、製品全体SYSTEM_SHAPED／BUILD_COVEREDへ昇格しない。
+
+## 前回完了済みBUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 
 既存`google.drive.write`に`file.trash`を接続し、Owner taskが明示した単一`file_id`について、認証中アカウント所有・個人My Drive・`text/plain`・未trashであることを確認してから、`PATCH trashed=true`でゴミ箱へ移す。これは復元可能な移動であり、`files.delete`による完全削除は実装しない。Drive共有ドライブ、Workspace native document、folder、binary、他ユーザー所有、曖昧・不完全な対象はfail-closedとする。実provider、credential、Gateway process、外部Drive作用は使わない。
 
