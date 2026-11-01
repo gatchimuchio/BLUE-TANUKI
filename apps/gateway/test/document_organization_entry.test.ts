@@ -557,6 +557,240 @@ describe("delegated goal purpose owner review", () => {
     }
   }, 90_000);
 
+  it("BT-U-E2E-01: routes an owner path-bound file.search through the verified receipt", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-file-search-path-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    const fileRoot = join(auditDir, "file-root");
+    const relativePath = "nested/owner-search-fixture.txt";
+    const targetPath = join(fileRoot, "nested", "owner-search-fixture.txt");
+    const decoyPath = join(fileRoot, "other", "decoy.txt");
+    const query = "cobalt-fern";
+    const targetContent = "指定対象marker: " + query + "\n";
+    const decoyContent = "別fileのdecoy marker: " + query + "\n";
+    const goalRef = "goal_0000000000000046";
+    const purpose = "隔離されたローカル試験sandbox内でownerが指定した通常ファイルだけを読み取り検索する。";
+    const initialPurpose = "Initial purpose digest without an available purpose body.";
+    const initialPurposeDigest = createHash("sha256").update(Buffer.from(initialPurpose, "utf8")).digest("hex");
+    mkdirSync(dirname(targetPath), { recursive: true });
+    mkdirSync(dirname(decoyPath), { recursive: true });
+    mkdirSync(privateState, { recursive: true });
+    writeFileSync(targetPath, targetContent, "utf8");
+    writeFileSync(decoyPath, decoyContent, "utf8");
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0000000000000046",
+        initial_purpose_digest: initialPurposeDigest, initial_interpretation_digest: "e".repeat(64),
+        adopted_at: Date.now() - 10_000 }],
+      authorizations: [],
+      events: [],
+    }), "utf8");
+
+    const gatewayPort = await reserveLoopbackPort();
+    const runtimeEnv = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
+    runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    runtimeEnv.BLUE_TANUKI_FILE_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_SHELL_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+    runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
+    runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+    delete runtimeEnv.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    delete runtimeEnv.LLM_PROVIDERS_JSON;
+
+    let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
+    const baseUrl = "http://127.0.0.1:" + gatewayPort;
+    const fetchResume = async (input: string | URL, init: RequestInit): Promise<Response> => {
+      for (let attempt = 0; attempt <= 16; attempt += 1) {
+        const response = await fetch(input, init);
+        if (response.status !== 429 || attempt === 16) return response;
+        const retryAfterSeconds = Number(response.headers.get("retry-after"));
+        const delayMs = Math.max(1_000, Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1_000 + 100 : 1_000);
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      throw new Error("resume API retry loop ended unexpectedly");
+    };
+    const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
+      const response = await fetchResume(baseUrl + "/approval", {
+        headers: { authorization: "Bearer " + resumeToken },
+      });
+      expect(response.status).toBe(200);
+      return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+    };
+    const postApproval = (commandId: string, approvalToken: unknown, contentReviewDigest?: unknown) => fetchResume(
+      baseUrl + "/approval/" + encodeURIComponent(commandId),
+      {
+        method: "POST",
+        headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: approvalToken,
+          ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }),
+      },
+    );
+    const webchatContents: string[] = [];
+
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const purposeProposalResponse = await fetch(baseUrl + "/owner/goal-purpose-change", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: purpose }),
+      });
+      expect(purposeProposalResponse.status).toBe(202);
+      const purposeProposal = await purposeProposalResponse.json() as { command_id?: string };
+      const purposePending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === purposeProposal.command_id);
+      expect(purposePending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true });
+      const purposeContentResponse = await fetchResume(
+        baseUrl + "/approval/" + encodeURIComponent(String(purposeProposal.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(purposeContentResponse.status).toBe(200);
+      const purposeContent = await purposeContentResponse.json() as Record<string, unknown>;
+      expect(purposeContent).toMatchObject({ kind: "goal_purpose_change", purpose_text: purpose,
+        used_for_authority: false });
+      const purposeApprovalResponse = await postApproval(String(purposeProposal.command_id),
+        purposePending?.approval_token, purposeContent.command_digest);
+      expect(purposeApprovalResponse.status).toBe(200);
+      expect(await purposeApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
+      } });
+
+      const ticketResponse = await fetch(baseUrl + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(ticket));
+      taskWebSocket.on("message", (data) => {
+        try {
+          const message = JSON.parse(data.toString()) as { kind?: unknown; content?: unknown };
+          if (message.kind === "channel_send" && typeof message.content === "string") {
+            webchatContents.push(message.content);
+          }
+        } catch { /* malformed frames are ignored by the test observer */ }
+      });
+      await once(taskWebSocket, "open");
+
+      const task = "sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: " +
+        relativePath + "\n検索語: " + query;
+      const submission = await fetch(baseUrl + "/owner/task-compute", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task, goal_ref: goalRef, purpose_version: 2,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000806",
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      const submissionBody = await submission.json() as Record<string, unknown>;
+      expect(submission.status, JSON.stringify(submissionBody)).toBe(202);
+      expect(submissionBody).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      await waitFor(() => webchatContents.length > 0 ? webchatContents.length : null, gateway,
+        "path-bound owner task did not return a WebChat frame", 15_000);
+
+      const plan = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => Array.isArray(candidate.steps) &&
+          (candidate.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.search")) ?? null;
+      }, gateway, "path-bound synthetic file.search did not reach the operation-plan consumer");
+      expect(plan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const planId = String(plan.plan_id);
+      const revisionDigest = String(plan.revision_digest);
+      const step = (plan.steps as Array<Record<string, unknown>>)
+        .find((candidate) => candidate.operation === "file.search");
+      expect(step?.step_id).toMatch(/^[a-f0-9]{64}$/);
+      const stepId = String(step?.step_id);
+
+      const relationResponse = await fetch(baseUrl + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: planId, revision_digest: revisionDigest, outcome: "supports" }),
+      });
+      expect(relationResponse.status).toBe(202);
+      const relationProposal = await relationResponse.json() as { command_id?: string };
+      const relationPending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === relationProposal.command_id);
+      expect(relationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        goal_purpose_relation_review: { outcome: "supports", review_status: "required", may_execute: false } });
+      const relationContentResponse = await fetchResume(
+        baseUrl + "/approval/" + encodeURIComponent(String(relationProposal.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(relationContentResponse.status).toBe(200);
+      const relationContent = await relationContentResponse.json() as Record<string, unknown>;
+      expect(relationContent).toMatchObject({ kind: "goal_purpose_relation", task, purpose_text: purpose,
+        used_for_authority: false, may_execute: false });
+      const relationApprovalResponse = await postApproval(String(relationProposal.command_id),
+        relationPending?.approval_token, relationContent.command_digest);
+      expect(relationApprovalResponse.status).toBe(200);
+      expect(await relationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const goalPurposeBinding = plan.goal_purpose_binding as Record<string, unknown>;
+      const reviewResponse = await fetch(baseUrl + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: planId, revision_digest: revisionDigest,
+          content: "plan:review " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest,
+            step_id: stepId, goal_purpose_binding: goalPurposeBinding }) }),
+      });
+      expect(reviewResponse.status).toBe(202);
+
+      const verified = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const current = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
+        const currentStep = (current?.steps as Array<Record<string, unknown>> | undefined)
+          ?.find((candidate) => candidate.step_id === stepId);
+        return current?.status === "results_verified" && currentStep?.status === "verified" &&
+          (currentStep.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed"
+          ? { plan: current, step: currentStep } : null;
+      }, gateway, "path-bound file.search did not reach a verified M receipt");
+      expect(verified.plan).toMatchObject({ status: "results_verified",
+        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
+      expect(verified.step).toMatchObject({ operation: "file.search", status: "verified",
+        binding: { memory_status: "receipt_confirmed" } });
+
+      const resultReplyStart = webchatContents.length;
+      const resultResponse = await fetch(baseUrl + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: planId, revision_digest: revisionDigest,
+          content: "plan:result " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId }) }),
+      });
+      expect(resultResponse.status).toBe(202);
+      const resultReply = await waitFor(() => webchatContents.slice(resultReplyStart)
+        .find((content) => content.includes("保存時点のfile.search結果")) ?? null,
+      gateway, "owner did not receive the saved path-bound search result", 15_000);
+      expect(resultReply).toContain(relativePath);
+      expect(resultReply).toContain(query);
+      expect(resultReply).toContain("指定対象marker");
+      expect(resultReply).not.toContain("other/decoy.txt");
+      expect(resultReply).not.toContain(fileRoot);
+      expect(readFileSync(targetPath, "utf8")).toBe(targetContent);
+      expect(readFileSync(decoyPath, "utf8")).toBe(decoyContent);
+    } finally {
+      taskWebSocket?.close();
+      if (gateway) await stopChild(gateway.child);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it("restores owner task status and prevents duplicate dispatch after a Gateway restart", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-owner-task-restart-"));
     const auditDir = join(tempRoot, "audit");
