@@ -20,6 +20,7 @@ export { StubBackend } from "./stub.js";
 export {
   SYNTHETIC_FILE_WRITE_PLAN_BACKEND,
   SYNTHETIC_FILE_WRITE_PLAN_TASK,
+  SYNTHETIC_FILE_EDIT_TEST_TASK_PREFIX,
   SyntheticFileWritePlanBackend,
 } from "./synthetic_file_write_plan.js";
 export { AnthropicBackend } from "./anthropic.js";

@@ -9,7 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
+import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_TEST_TASK_PREFIX,
+  SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -1068,6 +1069,7 @@ describe("delegated goal purpose owner review", () => {
       runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
       runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
       runtimeEnv.BLUE_TANUKI_FILE_ROOT = fileRoot;
+      runtimeEnv.BLUE_TANUKI_SHELL_ROOT = fileRoot;
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
 
@@ -1414,6 +1416,159 @@ describe("delegated goal purpose owner review", () => {
       expect(readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName))
         .toEqual(createdFiles);
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+
+      const reviewedEditPath = "reviewed-edit.txt";
+      const reviewedEditFile = join(fileRoot, reviewedEditPath);
+      writeFileSync(reviewedEditFile, "before text\n", "utf8");
+      const editTestTask = SYNTHETIC_FILE_EDIT_TEST_TASK_PREFIX + JSON.stringify({
+        "相対パス": reviewedEditPath,
+        "置換前": "before",
+        "置換後": "after",
+      });
+      const editTestTaskReply = waitForWebChatSend(taskWebSocket, "same-workspace edit test task");
+      const editTestTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: editTestTask,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000804",
+          goal_ref: goalRef, purpose_version: 2 }),
+      });
+      expect(editTestTaskSubmission.status).toBe(202);
+      expect((await editTestTaskReply).length).toBeGreaterThan(0);
+      const editTestPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return body.operation_plan_status?.plans?.find((plan) => plan.task_identity_digest !== writePlan.task_identity_digest &&
+          Array.isArray(plan.steps) && JSON.stringify((plan.steps as Array<Record<string, unknown>>)
+            .map((step) => step.operation)) === JSON.stringify(["file.edit", "shell.exec", "file.search"])) ?? null;
+      }, gateway, "same-task file.edit -> shell.exec -> file.search plan was not connected");
+      expect(editTestPlan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const editTestPlanId = String(editTestPlan.plan_id);
+      const editTestRevision = String(editTestPlan.revision_digest);
+      const editTestBinding = editTestPlan.goal_purpose_binding as {
+        goal_ref: string; purpose_version: number; purpose_digest: string;
+      };
+      const editTestSteps = editTestPlan.steps as Array<Record<string, unknown>>;
+      const editTestEditStep = editTestSteps[0]!;
+      const editTestShellStep = editTestSteps[1]!;
+      const editTestSearchStep = editTestSteps[2]!;
+      expect(editTestShellStep).toMatchObject({ operation: "shell.exec", target: { kind: "workspace", id: fileRoot },
+        parameters: { cmd: "node", cwd: ".", same_workspace_as_file_root: true, summary_only: true },
+        preparation: { depends_on: [editTestEditStep.step_id] } });
+      expect(editTestSearchStep).toMatchObject({ operation: "file.search", target: { kind: "directory", id: fileRoot },
+        parameters: { root: fileRoot, file_path: reviewedEditPath, query: "after", max_results: 5 },
+        preparation: { depends_on: [editTestShellStep.step_id] } });
+
+      const editTestRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: editTestPlanId, revision_digest: editTestRevision, outcome: "supports" }),
+      });
+      expect(editTestRelationResponse.status).toBe(202);
+      const editTestRelation = await editTestRelationResponse.json() as { command_id?: string };
+      const editTestRelationQueue = await loadQueue();
+      const editTestRelationPending = editTestRelationQueue.pending_approvals
+        .find((item) => item.command_id === editTestRelation.command_id);
+      const editTestRelationContentResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(editTestRelation.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(editTestRelationContentResponse.status).toBe(200);
+      const editTestRelationContent = await editTestRelationContentResponse.json() as Record<string, unknown>;
+      const editTestRelationApprovalResponse = await fetch(
+        "http://127.0.0.1:" + gatewayPort + "/approval/" + encodeURIComponent(String(editTestRelation.command_id)),
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+          body: JSON.stringify({ verdict: "approve", approval_token: editTestRelationPending?.approval_token,
+            content_review_digest: editTestRelationContent.command_digest }) },
+      );
+      expect(editTestRelationApprovalResponse.status).toBe(200);
+
+      const runReviewedPlanStep = async (step: Record<string, unknown>, label: string, expectEditDiff = false) => {
+        const ownerReply = waitForWebChatSend(taskWebSocket, label);
+        const reviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+          method: "POST",
+          headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+          body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
+            content: "plan:review " + JSON.stringify({ plan_id: editTestPlanId, revision_digest: editTestRevision,
+              step_id: step.step_id, goal_purpose_binding: editTestBinding }) }),
+        });
+        expect(reviewResponse.status).toBe(202);
+        let approvalResult: Record<string, unknown> | undefined;
+        if (step.operation === "file.edit" || step.operation === "shell.exec") {
+          const pending = await waitFor(async () => {
+            const queue = await loadQueue();
+            return queue.pending_approvals.find((item) => item.operation === step.operation && item.final_review_required) ?? null;
+          }, gateway, `${String(step.operation)} did not reach the owner Approval Gate`);
+          let contentReviewDigest: unknown;
+          if (pending.content_review_required) {
+            const contentResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
+              encodeURIComponent(String(pending.command_id)) + "/content", {
+              method: "POST", headers: { authorization: "Bearer " + resumeToken },
+            });
+            expect(contentResponse.status).toBe(200);
+            const content = await contentResponse.json() as Record<string, unknown>;
+            if (expectEditDiff) {
+              expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
+              expect(String(content.diff)).toContain("-before text");
+              expect(String(content.diff)).toContain("+after text");
+            }
+            contentReviewDigest = content.review_digest;
+          }
+          const approvalResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
+            encodeURIComponent(String(pending.command_id)), {
+            method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+            body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
+              ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }),
+          });
+          expect(approvalResponse.status).toBe(200);
+          approvalResult = await approvalResponse.json() as Record<string, unknown>;
+        }
+        const output = await ownerReply;
+        const completedPlan = await waitFor(async () => {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (!response.ok) return null;
+          const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === editTestPlanId);
+          const current = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
+            candidate.step_id === step.step_id);
+          return current?.status === "verified" && plan ? plan : null;
+        }, gateway, `${String(step.operation)} did not reach its verified result consumer`);
+        expect(completedPlan.task_identity_digest).toBe(editTestPlan.task_identity_digest);
+        return { output, approvalResult };
+      };
+
+      const reviewedEditResult = await runReviewedPlanStep(editTestEditStep, "owner-reviewed file.edit", true);
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      const reviewedShellResult = await runReviewedPlanStep(editTestShellStep, "summary-only same-workspace shell test");
+      const reviewedShellEvidence = JSON.stringify({ output: reviewedShellResult.output,
+        approval: reviewedShellResult.approvalResult });
+      expect(reviewedShellEvidence).toContain("exit_code");
+      expect(reviewedShellEvidence).toContain("output_included");
+      expect(reviewedShellEvidence).not.toContain('"stdout":"');
+      expect(reviewedShellEvidence).not.toContain('"stderr":"');
+      const reviewedSearchResult = await runReviewedPlanStep(editTestSearchStep, "same-path file.search reread");
+      const rereadReply = waitForWebChatSend(taskWebSocket, "owner-bound edited file.search result");
+      const rereadResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
+          content: "plan:result " + JSON.stringify({ plan_id: editTestPlanId, revision_digest: editTestRevision,
+            step_id: editTestSearchStep.step_id }) }),
+      });
+      expect(rereadResponse.status).toBe(202);
+      const rereadOutput = await rereadReply;
+      expect(rereadOutput).toContain("after text");
+      expect(reviewedSearchResult.output.length).toBeGreaterThan(0);
+      expect(reviewedEditResult.output.length).toBeGreaterThan(0);
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+      rmSync(reviewedEditFile);
 
       // The unknown-result continuation asserts one exact search result. The
       // earlier synthetic note has already been reviewed and returned above;

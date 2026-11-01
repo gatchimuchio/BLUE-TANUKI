@@ -386,7 +386,13 @@ HDS／Gateway／WebChat typecheck、HDS build、Windows isolation target向け`c
 
 Windows native AppContainerの限定process testで、同一file root内の`reviewed.txt`を`findstr.exe`が読めること、exit code 0／process tree empty、およびsummaryに本文が含まれないことを確認した。summary省略時のpreflight拒否も確認した。core／Gateway typecheck、core build、対象test 1件はPASS。これは隔離shell consumerの限定接続証拠で、WebChat上のfile.edit→test→file.search完全往復、失敗時の新規逆編集、F01.03全体は未確認／未成立。実provider・外部live・全suite・QC／QAはNOT_RUN。
 
-**次のproducer／consumer:** 同一request/taskから既存owner審査済み`file.edit`、summary-only `shell.exec`、同一相対pathの`file.search`をGateway／WebChat実processで連結し、test結果と現行file search結果がownerへ届くことを確認する。失敗時は既存Content Review／対象版再照合を通る逆編集候補だけを提示し、自動実行しない。
+#### 2026-11-01 F01.03 BUILD接続 — Gatewayの同一task edit/test/reread
+
+開発専用の固定synthetic taskを通常Owner task受付からGateway／WebChat processへ通し、同一task identity・plan内でowner審査済み`file.edit`→summary-onlyの同一Workspace `shell.exec`→同じ相対pathの`file.search`を順番に実行した。file.edit差分とshellの各L3 Approvalをowner tokenで審査し、最後の`plan:result`で再読込結果をOwnerへ返した。shell結果はexit status・stdout/stderr byte数とSHA-256・process状態だけを返し、本文を含めない。試験用Node assertionは置換後の文字列を確認し、作業fileは試験専用に作成・削除した。実装は非0終了もexit statusと失敗状態を保持し、成功へ変換しない。今回実行したのはexit code 0の成功経路で、非0／timeoutのruntime経路はNOT_RUN。実provider呼出しは0件。
+
+`pnpm typecheck`、全workspace `pnpm build`、Gateway process test 1件（`BT-U-C08.01-P-E2E`、同fileの他4件をskip）、`git diff --check`はPASS。testから検証できたのは合成taskのexit code 0成功経路であり、非0／timeout実行、失敗時の新規owner-reviewed recovery edit、GUIの一般task全体、F01.03全体は未成立／NOT_RUN。実provider・外部作用・全workspace suite・QE_QC／QE_QA・5OS実機はNOT_RUN。
+
+**次のproducer／consumer:** test失敗後に自動復元せず、同一対象の現在版をownerへ示し、既存Content Review／版再照合／L3を通る新しい逆編集だけを提示する回復経路を接続する。ownerの新規承認なしに復帰編集を実行しない。
 
 ## Gitと復旧
 

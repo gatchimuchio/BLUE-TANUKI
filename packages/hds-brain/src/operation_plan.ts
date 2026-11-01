@@ -595,6 +595,43 @@ export function operationPlanResultValidationMatches(
     return ["schema_version", "path", "expected_replacements", "max_bytes"].every((key) => Object.hasOwn(expected, key)) &&
       ["edited", "replacements", "bytes_written"].every((key) => Object.hasOwn(output, key));
   }
+  if (validation.method === "shell_exec_result_matches") {
+    if (step.operation !== "shell.exec" || step.target.kind !== "workspace" || !step.parameters ||
+        !isFileSearchResultRecord(validation.expected) || !isFileSearchResultRecord(output)) return false;
+    const expected = validation.expected;
+    const parameters = step.parameters;
+    const resultKeys = ["cwd", "exit_code", "signal", "timed_out", "output_included", "stdout_text_bytes",
+      "stdout_text_sha256", "stderr_text_bytes", "stderr_text_sha256", "truncated", "process_tree_empty",
+      "descendants_terminated", "operation_core"];
+    const operationCore = output.operation_core;
+    const resultSucceeded = output.exit_code === 0 && output.signal === null && output.timed_out === false;
+    const maxBytes = parameters.max_bytes ?? 64_000;
+    if (Object.keys(expected).length !== 4 || expected.schema_version !== "blue-tanuki.shell-exec-result-validation.v1" ||
+        expected.sandbox_root !== step.target.id || expected.same_workspace_as_file_root !== true ||
+        expected.summary_only !== true || parameters.same_workspace_as_file_root !== true ||
+        parameters.summary_only !== true || parameters.cwd !== "." ||
+        typeof maxBytes !== "number" || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 512_000 ||
+        Object.keys(output).length !== resultKeys.length || !resultKeys.every((key) => Object.hasOwn(output, key)) ||
+        output.cwd !== "." || (output.exit_code !== null && (typeof output.exit_code !== "number" ||
+          !Number.isSafeInteger(output.exit_code) || output.exit_code < 0 || output.exit_code > 2_147_483_647)) ||
+        (output.signal !== null && output.signal !== "timeout" && output.signal !== "aborted") ||
+        typeof output.timed_out !== "boolean" || output.timed_out !== (output.signal === "timeout") ||
+        output.output_included !== false || Object.hasOwn(output, "stdout") || Object.hasOwn(output, "stderr") ||
+        typeof output.stdout_text_bytes !== "number" || !Number.isSafeInteger(output.stdout_text_bytes) ||
+        output.stdout_text_bytes < 0 || output.stdout_text_bytes > maxBytes ||
+        typeof output.stderr_text_bytes !== "number" || !Number.isSafeInteger(output.stderr_text_bytes) ||
+        output.stderr_text_bytes < 0 || output.stderr_text_bytes > maxBytes ||
+        typeof output.stdout_text_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(output.stdout_text_sha256) ||
+        typeof output.stderr_text_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(output.stderr_text_sha256) ||
+        typeof output.truncated !== "boolean" || output.process_tree_empty !== true ||
+        typeof output.descendants_terminated !== "boolean" || !isFileSearchResultRecord(operationCore) ||
+        Object.keys(operationCore).length !== 8 || operationCore.role !== "execution_adapter" ||
+        operationCore.adapter !== "shell" || operationCore.operation !== "tool.shell.exec" ||
+        operationCore.state !== (resultSucceeded ? "succeeded" : "failed") ||
+        operationCore.adapter_is_authority !== false || operationCore.command_generated_by_adapter_only !== true ||
+        operationCore.raw_command_is_core_operation !== false || operationCore.adapter_result_used_for_authority !== false) return false;
+    return true;
+  }
   if (validation.method !== "file_search_result_matches" || step.operation !== "file.search" ||
       step.target.kind !== "directory" || !isFileSearchResultRecord(validation.expected) ||
       !isFileSearchResultRecord(output)) return false;
