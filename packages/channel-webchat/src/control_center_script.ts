@@ -5336,7 +5336,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(overlap);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。単一の非繰返し予定の件名更新は別の内容審査を行います。招待・繰返し・削除は未対応です。";
+          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。この作成操作は単一の非繰返し予定のみです。繰返し作成、参加者変更、招待通知は未対応です。既存予定の件名更新・削除は別の内容審査と作用範囲確認を行います。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | freebusy result digest: " + review.availability_result_digest;
@@ -5348,6 +5348,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "google_calendar_event_update") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validRecurrenceRules = Array.isArray(review.recurrence_rules) && review.recurrence_rules.length <= 64 &&
+            review.recurrence_rules.every(function (rule) { return typeof rule === "string" && rule.length > 0 &&
+              rule.length <= 2_048 && !/[\\u0000-\\u001f\\u007f]/.test(rule); });
+          const recurrenceRulesEmpty = validRecurrenceRules && review.recurrence_rules.length === 0;
+          const recurrenceRulesPresent = validRecurrenceRules && review.recurrence_rules.length > 0;
+          const originalStartValid = review.original_start === null || (review.original_start &&
+            typeof review.original_start.value === "string" &&
+            (review.original_start.kind === "date"
+              ? /^\\d{4}-\\d{2}-\\d{2}$/.test(review.original_start.value) && Number.isFinite(Date.parse(review.original_start.value + "T00:00:00Z"))
+              : review.original_start.kind === "date_time" && Number.isFinite(Date.parse(review.original_start.value)) &&
+                typeof review.original_start.time_zone === "string") &&
+            (review.original_start.time_zone === null || typeof review.original_start.time_zone === "string"));
+          const scopeIdentityValid = review.target_scope === "single_event"
+            ? review.recurring_event_id === null && review.original_start === null && recurrenceRulesEmpty
+            : review.target_scope === "series"
+              ? review.recurring_event_id === null && review.original_start === null && recurrenceRulesPresent
+              : review.target_scope === "occurrence" && typeof review.recurring_event_id === "string" &&
+                review.recurring_event_id.length > 0 && review.original_start !== null;
           if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.update" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
@@ -5361,18 +5379,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !Number.isFinite(Date.parse(review.event_end)) ||
               (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
               (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
+              !validRecurrenceRules || !originalStartValid || !scopeIdentityValid ||
               review.organizer_self !== true || review.other_attendee_count !== 0 ||
               review.attendee_inventory_complete !== true ||
               typeof review.observed_at !== "string" ||
               !Number.isFinite(Date.parse(review.observed_at))) {
-            throw new Error("更新対象と新しい件名がこの承認要求と一致しません");
+            throw new Error("更新対象・作用範囲・新しい件名がこの承認要求と一致しません");
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "単一Calendar予定の件名更新";
+          heading.textContent = review.target_scope === "series" ? "Calendar繰返し系列の件名更新" :
+            review.target_scope === "occurrence" ? "Calendar繰返し予定の1回分の件名更新" : "単一Calendar予定の件名更新";
           view.appendChild(heading);
           [
             ["カレンダー", review.calendar_id],
+            ["作用範囲", review.target_scope === "series" ? "系列本体（繰返し規則に従う予定）" :
+              review.target_scope === "occurrence" ? "この1回分だけ" : "この単一予定だけ"],
             ["予定ID", review.event_id],
             ["日時", review.event_start + " – " + review.event_end +
               (review.event_time_zone ? " (" + review.event_time_zone + ")" : review.event_time_kind === "date" ? " (終日)" : "")],
@@ -5390,9 +5412,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             row.append(label, value);
             view.appendChild(row);
           });
+          if (review.target_scope === "occurrence") {
+            const identity = document.createElement("p");
+            identity.textContent = "親系列ID: " + review.recurring_event_id + " / 元の開始日時: " +
+              review.original_start.value + (review.original_start.time_zone ? " (" + review.original_start.time_zone + ")" : "");
+            view.appendChild(identity);
+          }
+          if (review.target_scope === "series") {
+            const rulesLabel = document.createElement("strong");
+            rulesLabel.textContent = "繰返し規則";
+            const rules = document.createElement("pre");
+            rules.textContent = review.recurrence_rules.join("\\n");
+            view.append(rulesLabel, rules);
+          }
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "非繰返し・確定済みの一件について件名だけを更新します。時刻・本文・場所・参加者・招待通知は変更しません。対象が変化した場合はETag条件付き更新で停止します。";
+          note.textContent = review.target_scope === "series"
+            ? "繰返し系列本体の件名欄だけを更新します。繰返し規則・参加者・他の項目は要求へ含めません。例外回を個別更新する操作ではありません。対象が変化した場合は停止します。"
+            : review.target_scope === "occurrence"
+              ? "この1回分だけの件名を更新します。親系列や他の回の内容は変更しません。親系列IDと元の開始日時が一致しない場合は停止します。"
+              : "確定済みの単一予定について件名だけを更新します。時刻・本文・場所・参加者・招待通知は変更しません。対象が変化した場合はETag条件付き更新で停止します。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;
@@ -5404,6 +5443,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "google_calendar_event_delete") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validRecurrenceRules = Array.isArray(review.recurrence_rules) && review.recurrence_rules.length <= 64 &&
+            review.recurrence_rules.every(function (rule) { return typeof rule === "string" && rule.length > 0 &&
+              rule.length <= 2_048 && !/[\\u0000-\\u001f\\u007f]/.test(rule); });
+          const originalStartValid = review.original_start === null || (review.original_start &&
+            typeof review.original_start.value === "string" &&
+            (review.original_start.kind === "date"
+              ? /^\\d{4}-\\d{2}-\\d{2}$/.test(review.original_start.value)
+              : review.original_start.kind === "date_time" && Number.isFinite(Date.parse(review.original_start.value)) &&
+                typeof review.original_start.time_zone === "string") &&
+            (review.original_start.time_zone === null || typeof review.original_start.time_zone === "string"));
+          const scopeIdentityValid = review.target_scope === "single_event"
+            ? review.recurring_event_id === null && review.original_start === null && Array.isArray(review.recurrence_rules) && review.recurrence_rules.length === 0
+            : review.target_scope === "series"
+              ? review.recurring_event_id === null && review.original_start === null && Array.isArray(review.recurrence_rules) && review.recurrence_rules.length > 0
+              : review.target_scope === "occurrence" && typeof review.recurring_event_id === "string" &&
+                review.recurring_event_id.length > 0 && review.original_start !== null;
           if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.delete" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
@@ -5415,17 +5470,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !Number.isFinite(Date.parse(review.event_start)) || !Number.isFinite(Date.parse(review.event_end)) ||
               (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
               (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
+              !validRecurrenceRules || !originalStartValid || !scopeIdentityValid ||
               review.organizer_self !== true || review.other_attendee_count !== 0 ||
               review.attendee_inventory_complete !== true || typeof review.observed_at !== "string" ||
               !Number.isFinite(Date.parse(review.observed_at))) {
-            throw new Error("削除対象と所有・参加者の確認結果がこの承認要求と一致しません");
+            throw new Error("削除対象・作用範囲・所有・参加者の確認結果がこの承認要求と一致しません");
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "Calendar予定一件の削除";
+          heading.textContent = review.target_scope === "series" ? "Calendar繰返し系列全体の削除" :
+            review.target_scope === "occurrence" ? "Calendar繰返し予定の1回分の削除" : "Calendar単一予定の削除";
           view.appendChild(heading);
           [
             ["カレンダー", review.calendar_id],
+            ["作用範囲", review.target_scope === "series" ? "この系列全体（規則を表示。各回は列挙していません）" :
+              review.target_scope === "occurrence" ? "この1回分だけ。親系列と他の回は維持" : "この単一予定だけ"],
             ["予定ID", review.event_id],
             ["日時", review.event_start + " – " + review.event_end +
               (review.event_time_zone ? " (" + review.event_time_zone + ")" : review.event_time_kind === "date" ? " (終日)" : "")],
@@ -5442,9 +5501,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             row.append(label, value);
             view.appendChild(row);
           });
+          if (review.target_scope === "occurrence") {
+            const identity = document.createElement("p");
+            identity.textContent = "親系列ID: " + review.recurring_event_id + " / 元の開始日時: " +
+              review.original_start.value + (review.original_start.time_zone ? " (" + review.original_start.time_zone + ")" : "");
+            view.appendChild(identity);
+          }
+          if (review.target_scope === "series") {
+            const rulesLabel = document.createElement("strong");
+            rulesLabel.textContent = "繰返し規則";
+            const rules = document.createElement("pre");
+            rules.textContent = review.recurrence_rules.join("\\n");
+            view.append(rulesLabel, rules);
+          }
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "確定済み・非繰返しの単一予定を削除します。参加者への通知は送りません。承認後も対象の再読取とETag条件が一致しない場合は削除を停止します。";
+          note.textContent = review.target_scope === "series"
+            ? "繰返し規則を持つ系列本体を削除する作用です。単一予定や1回分の削除とは別の作用で、規則の各回は個別列挙していません。参加者への通知は送りません。"
+            : review.target_scope === "occurrence"
+              ? "この1回分だけを削除し、親系列と他の回は維持します。親系列IDと元の開始日時が一致しない場合は削除を停止します。参加者への通知は送りません。"
+              : "確定済みの単一予定を削除します。参加者への通知は送りません。承認後も対象の再読取とETag条件が一致しない場合は削除を停止します。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;

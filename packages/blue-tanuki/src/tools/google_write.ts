@@ -78,6 +78,7 @@ interface CalendarEventCreatePlan {
 
 interface CalendarEventUpdatePlan {
   operation: "event.update";
+  target_scope: GoogleCalendarEventTargetObservation["recurrence_scope"];
   calendar_id: string;
   event_id: string;
   summary: string;
@@ -88,6 +89,7 @@ interface CalendarEventUpdatePlan {
 
 interface CalendarEventDeletePlan {
   operation: "event.delete";
+  target_scope: GoogleCalendarEventTargetObservation["recurrence_scope"];
   calendar_id: string;
   event_id: string;
   max_bytes: number;
@@ -957,24 +959,38 @@ function calendarEventCreatePlan(args: Record<string, unknown>): CalendarEventCr
 }
 
 const CALENDAR_EVENT_UPDATE_ARGUMENTS = new Set([
-  "operation", "calendar_id", "event_id", "summary", "event_observation", "max_bytes",
+  "operation", "target_scope", "calendar_id", "event_id", "summary", "event_observation", "max_bytes",
 ]);
 
 const CALENDAR_EVENT_DELETE_ARGUMENTS = new Set([
-  "operation", "calendar_id", "event_id", "event_observation", "max_bytes",
+  "operation", "target_scope", "calendar_id", "event_id", "event_observation", "max_bytes",
 ]);
+
+function calendarEventTargetScope(
+  args: Record<string, unknown>,
+  sourceEvent: GoogleCalendarEventTargetObservation,
+  operation: "event.update" | "event.delete",
+): GoogleCalendarEventTargetObservation["recurrence_scope"] {
+  const targetScope = args.target_scope;
+  if (targetScope === undefined && sourceEvent.recurrence_scope === "single_event") return "single_event";
+  if (targetScope !== sourceEvent.recurrence_scope) {
+    throw new Error(`${operation} target_scope must explicitly match the observed single event, recurring series, or occurrence; mutation_sent=false`);
+  }
+  return sourceEvent.recurrence_scope;
+}
 
 function assertSafeCalendarEventMutationTarget(
   sourceEvent: GoogleCalendarEventTargetObservation,
   operation: "event.update" | "event.delete",
+  targetScope: GoogleCalendarEventTargetObservation["recurrence_scope"],
 ): void {
   const observedAt = Date.parse(sourceEvent.observed_at);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(sourceEvent.observed_at) ||
       sourceEvent.calendar_id !== "primary" || sourceEvent.calendar_id_original !== "primary" ||
-      sourceEvent.status !== "confirmed" || sourceEvent.recurrence_present ||
+      sourceEvent.status !== "confirmed" || sourceEvent.recurrence_scope !== targetScope ||
       sourceEvent.organizer_self !== true || sourceEvent.attendee_inventory_complete !== true ||
       sourceEvent.other_attendee_count !== 0 || !Number.isFinite(observedAt) || observedAt > Date.now()) {
-    throw new Error(`${operation} requires a current, confirmed, non-recurring primary-calendar event owned by this account with no other attendees; mutation_sent=false`);
+    throw new Error(`${operation} requires a current, confirmed primary-calendar target with an exact recurrence scope, owner status, and no other attendees; mutation_sent=false`);
   }
 }
 
@@ -990,7 +1006,8 @@ function calendarEventUpdatePlan(args: Record<string, unknown>): CalendarEventUp
   }
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const sourceEvent = GoogleCalendarEventTargetObservationSchema.parse(args.event_observation);
-  assertSafeCalendarEventMutationTarget(sourceEvent, "event.update");
+  const targetScope = calendarEventTargetScope(args, sourceEvent, "event.update");
+  assertSafeCalendarEventMutationTarget(sourceEvent, "event.update", targetScope);
   if (args.calendar_id !== undefined && (typeof args.calendar_id !== "string" || !args.calendar_id.trim())) {
     throw new Error("event.update calendar_id must be a non-empty string when supplied; mutation_sent=false");
   }
@@ -1005,14 +1022,16 @@ function calendarEventUpdatePlan(args: Record<string, unknown>): CalendarEventUp
     throw new Error("event.update payload exceeds max_bytes; mutation_sent=false");
   }
   const targetIdentityDigest = sha256Hex({
-    schema_version: "blue-tanuki.google-calendar-event-update-target.v2",
+    schema_version: "blue-tanuki.google-calendar-event-update-target.v3",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     event_state_digest: sourceEvent.event_state_digest,
     event_etag_digest: sourceEvent.event_etag_digest,
   });
   const requestPayloadDigest = sha256Hex({
-    schema_version: "blue-tanuki.google-calendar-event-update-payload.v2",
+    schema_version: "blue-tanuki.google-calendar-event-update-payload.v3",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     event_state_digest: sourceEvent.event_state_digest,
@@ -1020,6 +1039,7 @@ function calendarEventUpdatePlan(args: Record<string, unknown>): CalendarEventUp
   });
   return {
     operation: "event.update",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     summary,
@@ -1040,7 +1060,8 @@ function calendarEventDeletePlan(args: Record<string, unknown>): CalendarEventDe
   }
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const sourceEvent = GoogleCalendarEventTargetObservationSchema.parse(args.event_observation);
-  assertSafeCalendarEventMutationTarget(sourceEvent, "event.delete");
+  const targetScope = calendarEventTargetScope(args, sourceEvent, "event.delete");
+  assertSafeCalendarEventMutationTarget(sourceEvent, "event.delete", targetScope);
   if (args.calendar_id !== undefined && (typeof args.calendar_id !== "string" || !args.calendar_id.trim())) {
     throw new Error("event.delete calendar_id must be a non-empty string when supplied; mutation_sent=false");
   }
@@ -1049,20 +1070,23 @@ function calendarEventDeletePlan(args: Record<string, unknown>): CalendarEventDe
     throw new Error("event.delete target does not match its observed calendar event; mutation_sent=false");
   }
   const targetIdentityDigest = sha256Hex({
-    schema_version: "blue-tanuki.google-calendar-event-delete-target.v1",
+    schema_version: "blue-tanuki.google-calendar-event-delete-target.v2",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     event_state_digest: sourceEvent.event_state_digest,
     event_etag_digest: sourceEvent.event_etag_digest,
   });
   const requestPayloadDigest = sha256Hex({
-    schema_version: "blue-tanuki.google-calendar-event-delete-payload.v1",
+    schema_version: "blue-tanuki.google-calendar-event-delete-payload.v2",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     event_state_digest: sourceEvent.event_state_digest,
   });
   return {
     operation: "event.delete",
+    target_scope: targetScope,
     calendar_id: calendarId,
     event_id: eventId,
     max_bytes: maxBytes,
@@ -1106,6 +1130,7 @@ export function assertGoogleCalendarWriteTargetVersion(
     if (observation.target_identity_digest !== plan.target_identity_digest ||
         observation.request_payload_digest !== plan.request_payload_digest ||
         observation.calendar_id !== plan.calendar_id || observation.event_id !== plan.event_id ||
+        observation.target_scope !== plan.target_scope ||
         observation.event_state_digest !== plan.source_event.event_state_digest ||
         observation.event_etag_digest !== plan.source_event.event_etag_digest) {
       throw new Error("google.calendar.write target version does not match the current event; mutation_sent=false");
@@ -1180,11 +1205,11 @@ async function recheckCalendarEventTarget(
       ...(target.body === undefined ? {} : { body: target.body }),
     }, signal) } : {}),
   });
-  assertSafeCalendarEventMutationTarget(current.observation, plan.operation);
-  if (current.observation.status !== "confirmed" || current.observation.recurrence_present ||
+  assertSafeCalendarEventMutationTarget(current.observation, plan.operation, plan.target_scope);
+  if (current.observation.status !== "confirmed" || current.observation.recurrence_scope !== plan.target_scope ||
       current.observation.event_state_digest !== plan.source_event.event_state_digest ||
       current.observation.event_etag_digest !== plan.source_event.event_etag_digest) {
-    throw new Error("google.calendar.write event changed, became recurring, or is no longer confirmed; mutation_sent=false");
+    throw new Error("google.calendar.write event or recurrence scope changed, or is no longer confirmed; mutation_sent=false");
   }
   return current;
 }
@@ -1195,8 +1220,9 @@ function calendarUpdateContentReview(
   commandDigest: string,
 ): GoogleCalendarEventUpdateContentReview {
   const reviewDigest = operationPlanDigest({
-    schema_version: "blue-tanuki.google-calendar-event-update-review.v1",
+    schema_version: "blue-tanuki.google-calendar-event-update-review.v2",
     command_digest: commandDigest,
+    target_scope: plan.target_scope,
     request_payload_digest: plan.request_payload_digest,
     event_state_digest: current.event_state_digest,
     event_etag_digest: current.event_etag_digest,
@@ -1204,6 +1230,7 @@ function calendarUpdateContentReview(
   return {
     kind: "google_calendar_event_update",
     operation: "google.calendar.write.event.update",
+    target_scope: plan.target_scope,
     calendar_id: plan.calendar_id,
     event_id: plan.event_id,
     current_summary: current.summary,
@@ -1212,6 +1239,9 @@ function calendarUpdateContentReview(
     event_end: current.event_end,
     event_time_kind: current.event_time_kind,
     event_time_zone: current.event_time_zone,
+    recurrence_rules: current.recurrence_rules,
+    recurring_event_id: current.recurring_event_id,
+    original_start: current.original_start,
     organizer_self: true,
     other_attendee_count: 0,
     attendee_inventory_complete: true,
@@ -1231,8 +1261,9 @@ function calendarDeleteContentReview(
   commandDigest: string,
 ): GoogleCalendarEventDeleteContentReview {
   const reviewDigest = operationPlanDigest({
-    schema_version: "blue-tanuki.google-calendar-event-delete-review.v1",
+    schema_version: "blue-tanuki.google-calendar-event-delete-review.v2",
     command_digest: commandDigest,
+    target_scope: plan.target_scope,
     request_payload_digest: plan.request_payload_digest,
     event_state_digest: current.event_state_digest,
     event_etag_digest: current.event_etag_digest,
@@ -1240,6 +1271,7 @@ function calendarDeleteContentReview(
   return {
     kind: "google_calendar_event_delete",
     operation: "google.calendar.write.event.delete",
+    target_scope: plan.target_scope,
     calendar_id: plan.calendar_id,
     event_id: plan.event_id,
     current_summary: current.summary,
@@ -1247,6 +1279,9 @@ function calendarDeleteContentReview(
     event_end: current.event_end,
     event_time_kind: current.event_time_kind,
     event_time_zone: current.event_time_zone,
+    recurrence_rules: current.recurrence_rules,
+    recurring_event_id: current.recurring_event_id,
+    original_start: current.original_start,
     organizer_self: true,
     other_attendee_count: 0,
     attendee_inventory_complete: true,
@@ -1291,6 +1326,7 @@ async function invokeGoogleCalendarEventUpdate(
   return mutationResult("google.calendar.write", "calendar", "event.update", target, response, {
     calendar_id: plan.calendar_id,
     event_id: plan.event_id,
+    target_scope: plan.target_scope,
     event_state_digest: snapshot.observation.event_state_digest,
     event_summary_digest: sha256String(plan.summary),
     invite_notifications_requested: false,
@@ -1326,6 +1362,7 @@ async function invokeGoogleCalendarEventDelete(
   return mutationResult("google.calendar.write", "calendar", "event.delete", target, response, {
     calendar_id: plan.calendar_id,
     event_id: plan.event_id,
+    target_scope: plan.target_scope,
     event_state_digest: snapshot.observation.event_state_digest,
     invite_notifications_requested: false,
     other_attendee_count: 0,
@@ -1570,7 +1607,7 @@ export function createGoogleCalendarWriteTool(
   });
   return {
     name: "google.calendar.write",
-    description: "Create one event after a current freebusy recheck, update the summary of one confirmed non-recurring primary-calendar event owned by this account with no other attendees, or delete one such event after exact owner review. All actions use current read-before-write state and L3 approval; Calendar data is non-authoritative. Recurrence, attendee changes, invite notifications, and other update fields remain unavailable.",
+    description: "Create one non-recurring event after a current freebusy recheck. Update the summary or delete one confirmed primary-calendar single event, recurring series, or exact occurrence owned by this account with no other attendees. A fresh event observation is required; recurring series and occurrences require an explicit matching target_scope. The exact scope is shown in Owner review and bound to read-before-write state and L3 approval. Calendar data is non-authoritative. Attendee changes, invite notifications, recurring-event creation, and other update fields remain unavailable.",
     required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
     async inspect_target_version(args, inspectOptions = {}): Promise<GoogleCalendarWriteTargetVersionObservation> {
       const commandDigest = inspectOptions.command_digest;
@@ -1581,8 +1618,9 @@ export function createGoogleCalendarWriteTool(
         const plan = args.operation === "event.update" ? calendarEventUpdatePlan(args) : calendarEventDeletePlan(args);
         const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
         return GoogleCalendarWriteTargetVersionObservationSchema.parse({
-          schema_version: "blue-tanuki.google-calendar-write-target-version.v2",
+          schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
           operation: plan.operation,
+          target_scope: plan.target_scope,
           target_identity_digest: plan.target_identity_digest,
           request_payload_digest: plan.request_payload_digest,
           calendar_id: plan.calendar_id,
@@ -1599,7 +1637,7 @@ export function createGoogleCalendarWriteTool(
       const plan = calendarEventCreatePlan(args);
       const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));
       return GoogleCalendarWriteTargetVersionObservationSchema.parse({
-        schema_version: "blue-tanuki.google-calendar-write-target-version.v2",
+        schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
         operation: "event.create",
         target_identity_digest: plan.target_identity_digest,
         request_payload_digest: plan.request_payload_digest,
@@ -1642,7 +1680,7 @@ export function createGoogleCalendarWriteTool(
         throw new Error("google.calendar.write requires an approved Executor identity; mutation_sent=false");
       }
       const rawObservation = context.target_version_observation;
-      if (!rawObservation || rawObservation.schema_version !== "blue-tanuki.google-calendar-write-target-version.v2") {
+      if (!rawObservation || rawObservation.schema_version !== "blue-tanuki.google-calendar-write-target-version.v3") {
         throw new Error("google.calendar.write requires a bound target version; mutation_sent=false");
       }
       const observation = assertGoogleCalendarWriteTargetVersion(args, rawObservation, context.command_digest,

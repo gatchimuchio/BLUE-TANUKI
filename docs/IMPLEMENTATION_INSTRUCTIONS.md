@@ -8,19 +8,19 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 Calendar単件の所有・参加者境界と削除接続
+## 最新BUILD_BATCH — F03.02 Calendar系列・単回occurrenceの作用境界
 
-2026-11-01、既存のCalendar `event.create`と件名のみの`event.update`に続き、単一の確定済み非繰返し予定に対する`event.delete`を既存L3 Approval／HDS execution binding／Broker／no-store Owner reviewへ接続した。削除・更新とも`calendar_id=primary`、`organizer.self=true`、完全な参加者一覧、他の参加者0人を要求する。系列・occurrence・参加者変更・招待通知は対象外のまま拒否する。
+2026-11-01、Calendar読取snapshotをv3へ更新し、非繰返し単一予定・繰返し系列本体・系列内単一回を別の識別形状にした。単回は`recurrence`なし、系列本体は`recurrence[]`、occurrenceは`recurringEventId`と`originalStartTime`を必須とし、曖昧・欠損・上限超過の応答は失敗させる。状態digestは系列規則または親系列ID・元の開始日時を含む。
 
-単件read snapshotをv2へ更新し、主催者の本人性、`attendees(self)`の完全性と他参加者数、開始・終了日時とtimezoneを保持する。参加者識別子・メールアドレスは取得・返却しない。snapshot digestには日時・所有状態・参加者フラグ・ETagを束縛する。Owner確認画面は予定ID、現在の件名、日時、主催者確認、他参加者0人の完全な一覧照合を表示する。削除は`sendUpdates=none`、fresh ETagの`If-Match`付き単件DELETEとし、対象が更新された場合は作用前に停止する。作成も含むwrite target-version schemaをv2へ更新した。
+`event.update`は件名一項目、`event.delete`は指定event ID一件の既存操作を維持し、recurring series／occurrenceには明示的な一致`target_scope`を要求する。系列の内容審査は規則を、occurrenceの審査は親系列ID・元の開始日時を表示する。scopeはtarget-version、payload／target identity、review digestへ束縛し、target-version取得・Owner確認・承認直前・Broker実行直前の再読取とETag `If-Match`を維持する。系列／単回の曖昧な拡張、参加者変更、招待通知、繰返し作成は未対応。
 
-Protocol／HDS／core／Gateway／WebChatの承認reviewまで接続した。Protocol・HDS・core・WebChat・Gateway TypeScript build、生成Control Center script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`、対象制約付き`event.update`、対象制約付き`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の繰返し系列／occurrenceと招待・参加者効果は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+Protocol／HDS／core／WebChat／Gatewayの型検査とproject build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債76件は既存注意として残る。test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。`event.create`、対象制約付き`event.update`／`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の参加者・招待効果、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のBUILD_BATCH:** F03.02の系列と単回occurrenceのidentity・作用差を現行consumerで接続する。単回承認から系列変更へ広げず、参加者／招待効果は別Operation Plan・別L3確認が接続するまで無効のままにする。実provider／live外部作用は行わない。
+**次のBUILD_BATCH:** F03.02の参加者変更と招待通知を既存の分離された作用・Operation Plan・L3確認へ接続できるか、現行consumerと安全境界から実装する。実provider／live外部作用は行わない。
 
-## 現在のrepo基点
+## repo基点
 
-ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
+ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。2026-11-01の本BUILD_BATCHはlocal／remote `main`=`c26c137b1b58f96075ced25320445a9a97bcee5a`から開始した。後続作業はこの記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
 
 ## 直近Gmail BUILD_BATCH — F02.02 Gmail内容・宛先の承認固定
 

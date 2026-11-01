@@ -1165,7 +1165,7 @@ export async function readGoogleCalendarEventTarget(
   const response = await request({
     service: "calendar",
     hostname: "www.googleapis.com",
-    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId,organizer(self),attendees(self),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)`,
+    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId,originalStartTime(date,dateTime,timeZone),organizer(self),attendees(self),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)`,
     maxBytes,
     token,
   }, opts.signal);
@@ -1204,9 +1204,40 @@ export async function readGoogleCalendarEventTarget(
   }
   const summary = typeof body.summary === "string" ? body.summary : null;
   const otherAttendeeCount = rawAttendees.filter((attendee) => attendee.self !== true).length;
-  const recurrencePresent = (Array.isArray(body.recurrence) && body.recurrence.length > 0) ||
-    (body.recurrence !== undefined && !Array.isArray(body.recurrence)) ||
-    body.recurringEventId !== undefined;
+  const recurrenceRules = body.recurrence === undefined ? [] : body.recurrence;
+  if (!Array.isArray(recurrenceRules) || recurrenceRules.length > 64 ||
+      recurrenceRules.some((line) => typeof line !== "string" || !line.trim() || line.trim() !== line || line.length > 2_048 ||
+        /[\u0000-\u001f\u007f]/.test(line)) ||
+      Buffer.byteLength(recurrenceRules.join("\n"), "utf8") > 16_384) {
+    throw new Error("google.calendar.read returned invalid or oversized recurrence rules; mutation_sent=false");
+  }
+  const normalizedRecurrenceRules = [...recurrenceRules];
+  const recurringEventId = body.recurringEventId;
+  const hasOriginalStart = body.originalStartTime !== undefined;
+  let recurrenceScope: "single_event" | "series" | "occurrence";
+  let originalStart: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null = null;
+  if (normalizedRecurrenceRules.length > 0 && recurringEventId === undefined && !hasOriginalStart) {
+    recurrenceScope = "series";
+  } else if (normalizedRecurrenceRules.length === 0 && typeof recurringEventId === "string" &&
+      recurringEventId.trim().length > 0 && recurringEventId.trim() === recurringEventId && recurringEventId.length <= 1_024 &&
+      !/[\u0000-\u001f\u007f]/.test(recurringEventId) && hasOriginalStart) {
+    const identity = calendarTimeIdentity(body.originalStartTime);
+    if (!identity.complete || (identity.kind !== "date" && identity.kind !== "date_time") ||
+        (identity.kind === "date_time" && identity.normalized.time_zone === null)) {
+      throw new Error("google.calendar.read returned an incomplete recurring occurrence identity; mutation_sent=false");
+    }
+    recurrenceScope = "occurrence";
+    originalStart = {
+      value: identity.normalized.value!,
+      kind: identity.kind,
+      time_zone: identity.normalized.time_zone,
+    };
+  } else if (normalizedRecurrenceRules.length === 0 && recurringEventId === undefined && !hasOriginalStart) {
+    recurrenceScope = "single_event";
+  } else {
+    throw new Error("google.calendar.read returned ambiguous recurrence identity; mutation_sent=false");
+  }
+  const normalizedRecurringEventId = recurrenceScope === "occurrence" ? recurringEventId as string : null;
   const eventStateDigest = sha256Hex({
     calendar_id: calendarId,
     event_id: eventId,
@@ -1221,10 +1252,13 @@ export async function readGoogleCalendarEventTarget(
     attendee_self_flags: rawAttendees.map((attendee) => attendee.self),
     other_attendee_count: otherAttendeeCount,
     attendee_inventory_complete: true,
-    recurrence_present: recurrencePresent,
+    recurrence_scope: recurrenceScope,
+    recurrence_rules: normalizedRecurrenceRules,
+    recurring_event_id: normalizedRecurringEventId,
+    original_start: originalStart,
   });
   const observation = GoogleCalendarEventTargetObservationSchema.parse({
-    schema_version: "blue-tanuki.google-calendar-event-target.v2",
+    schema_version: "blue-tanuki.google-calendar-event-target.v3",
     service: "calendar",
     view: "event",
     mode: "read_only",
@@ -1242,7 +1276,10 @@ export async function readGoogleCalendarEventTarget(
     organizer_self: body.organizer.self,
     other_attendee_count: otherAttendeeCount,
     attendee_inventory_complete: true,
-    recurrence_present: recurrencePresent,
+    recurrence_scope: recurrenceScope,
+    recurrence_rules: normalizedRecurrenceRules,
+    recurring_event_id: normalizedRecurringEventId,
+    original_start: originalStart,
     observed_at: observedAt,
     observed_at_source: "client_response_received",
     result_complete: true,

@@ -83,6 +83,7 @@ export interface GoogleCalendarEventCreateContentReview {
 export interface GoogleCalendarEventUpdateContentReview {
   kind: "google_calendar_event_update";
   operation: "google.calendar.write.event.update";
+  target_scope: "single_event" | "series" | "occurrence";
   calendar_id: string;
   event_id: string;
   current_summary: string | null;
@@ -91,6 +92,9 @@ export interface GoogleCalendarEventUpdateContentReview {
   event_end: string;
   event_time_kind: "date" | "date_time";
   event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
   organizer_self: true;
   other_attendee_count: 0;
   attendee_inventory_complete: true;
@@ -107,6 +111,7 @@ export interface GoogleCalendarEventUpdateContentReview {
 export interface GoogleCalendarEventDeleteContentReview {
   kind: "google_calendar_event_delete";
   operation: "google.calendar.write.event.delete";
+  target_scope: "single_event" | "series" | "occurrence";
   calendar_id: string;
   event_id: string;
   current_summary: string | null;
@@ -114,6 +119,9 @@ export interface GoogleCalendarEventDeleteContentReview {
   event_end: string;
   event_time_kind: "date" | "date_time";
   event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
   organizer_self: true;
   other_attendee_count: 0;
   attendee_inventory_complete: true;

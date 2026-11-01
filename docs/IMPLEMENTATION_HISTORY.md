@@ -3685,3 +3685,23 @@ Google Calendar単件read snapshotとwrite target-versionをv2へ更新した。
 | test suite／Gateway process／browser／実provider・実資格／外部作用 | NOT_RUN。 |
 
 `event.create`、対象制約付き`event.update`／`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の系列／occurrence・参加者／招待効果、F03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+## 2026-11-01 QE_BUILD — F03.02 Calendar系列・単回occurrenceの作用境界
+
+開始main／origin/mainは`c26c137b1b58f96075ced25320445a9a97bcee5a`。開始前の復旧refはlocal `codex/backup-main`／`codex/backup-main-prev`とremote同名tagを回転し、現行`c26c137`、直前`ed65540`に一致した。保護対象`.codex-remote-attachments/`は変更していない。
+
+ProtocolのCalendar event observation／write target-version schemaをv3へ更新した。readは`recurrence[]`を持つ系列本体、`recurringEventId`と`originalStartTime`を持つoccurrence、どちらも持たない単一予定を別形状で返す。規則は最大64行・各2,048文字・合計16 KiBに制限し、欠損・曖昧・制御文字・上限超過をfail-closedにする。event state digestにscope／規則列／親系列ID／元開始日時を含める。
+
+`event.update`は件名のみ、`event.delete`は指定event IDのみの実行形を維持する。単一予定は従来互換でscopeを`single_event`と判定し、系列・occurrenceは`target_scope`の明示と観測scopeとの一致を必須にした。scopeをpayload／target identity、command／Operation Plan-bound target-version、no-store Owner reviewへ結び、系列では規則、occurrenceでは親系列ID・元の開始日時を表示する。target-version取得・review・承認直前・Broker実行直前に再読取し、fresh ETagの`If-Match`、`sendUpdates=none`、primary calendar・本人主催・完全な参加者一覧・他参加者0人を維持する。参加者変更、招待通知、繰返し作成は未実装のまま。
+
+Google Calendar APIの`recurringEventId`／`originalStartTime`がoccurrenceを識別し、移動後も元の開始日時が一意識別に使われること、および単一instanceをinstance ID宛てに取得・変更する方式は、[Google Calendar recurring events](https://developers.google.com/workspace/calendar/api/guides/recurringevents)と[Events resource](https://developers.google.com/workspace/calendar/api/v3/reference/events)で照合した。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS-BRAIN／core／WebChat／Gateway typecheck | PASS。 |
+| Protocol／HDS-BRAIN／core／WebChat／Gateway project build | PASS。 |
+| 生成Control Center script構文解析 | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の移行負債76件は既存注意。 |
+| test／Gateway process／browser／実provider／実資格／Calendar外部作用 | NOT_RUN。 |
+
+Calendar create、対象scope付きupdate／deleteは`WIRED`（静的接続、runtime未確認）。参加者・招待効果、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。次consumerは参加者変更・招待通知を独立した作用とOperation Plan／L3へ結ぶ工程。

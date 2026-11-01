@@ -1,10 +1,16 @@
 import { z } from "zod";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const CalendarEventScopeSchema = z.enum(["single_event", "series", "occurrence"]);
+const CalendarOriginalStartSchema = z.object({
+  value: z.string().min(1).max(64),
+  kind: z.enum(["date", "date_time"]),
+  time_zone: z.string().max(128).nullable(),
+}).strict();
 
 /** Google Calendarの作成時freebusy観測または更新・削除時単件snapshotを束縛する非権威証拠。 */
 const GoogleCalendarWriteTargetVersionBaseSchema = z.object({
-  schema_version: z.literal("blue-tanuki.google-calendar-write-target-version.v2"),
+  schema_version: z.literal("blue-tanuki.google-calendar-write-target-version.v3"),
   target_identity_digest: DigestSchema,
   request_payload_digest: DigestSchema,
   command_digest: DigestSchema,
@@ -26,6 +32,7 @@ export const GoogleCalendarWriteTargetVersionObservationSchema = z.discriminated
   }).strict(),
   GoogleCalendarWriteTargetVersionBaseSchema.extend({
     operation: z.literal("event.update"),
+    target_scope: CalendarEventScopeSchema,
     calendar_id: z.string().min(1).max(512),
     event_id: z.string().min(1).max(1_024),
     event_state_digest: DigestSchema,
@@ -33,6 +40,7 @@ export const GoogleCalendarWriteTargetVersionObservationSchema = z.discriminated
   }).strict(),
   GoogleCalendarWriteTargetVersionBaseSchema.extend({
     operation: z.literal("event.delete"),
+    target_scope: CalendarEventScopeSchema,
     calendar_id: z.string().min(1).max(512),
     event_id: z.string().min(1).max(1_024),
     event_state_digest: DigestSchema,
@@ -40,9 +48,9 @@ export const GoogleCalendarWriteTargetVersionObservationSchema = z.discriminated
   }).strict(),
 ]);
 
-/** Read-only single-event snapshot with the fields required to bind a safe write target. */
+/** Read-only Calendar event snapshot with recurrence identity for exact-scope writes. */
 export const GoogleCalendarEventTargetObservationSchema = z.object({
-  schema_version: z.literal("blue-tanuki.google-calendar-event-target.v2"),
+  schema_version: z.literal("blue-tanuki.google-calendar-event-target.v3"),
   service: z.literal("calendar"),
   view: z.literal("event"),
   mode: z.literal("read_only"),
@@ -60,7 +68,10 @@ export const GoogleCalendarEventTargetObservationSchema = z.object({
   organizer_self: z.boolean(),
   other_attendee_count: z.number().int().min(0).max(200),
   attendee_inventory_complete: z.literal(true),
-  recurrence_present: z.boolean(),
+  recurrence_scope: CalendarEventScopeSchema,
+  recurrence_rules: z.array(z.string().min(1).max(2_048)).max(64),
+  recurring_event_id: z.string().min(1).max(1_024).nullable(),
+  original_start: CalendarOriginalStartSchema.nullable(),
   observed_at: z.string().min(20).max(64),
   observed_at_source: z.literal("client_response_received"),
   result_complete: z.literal(true),
@@ -70,7 +81,17 @@ export const GoogleCalendarEventTargetObservationSchema = z.object({
     calendar_data_can_authorize_operation: z.literal(false),
     used_for_authority: z.literal(false),
   }).strict(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  const single = value.recurrence_scope === "single_event" && value.recurrence_rules.length === 0 &&
+    value.recurring_event_id === null && value.original_start === null;
+  const series = value.recurrence_scope === "series" && value.recurrence_rules.length > 0 &&
+    value.recurring_event_id === null && value.original_start === null;
+  const occurrence = value.recurrence_scope === "occurrence" && value.recurrence_rules.length === 0 &&
+    value.recurring_event_id !== null && value.original_start !== null;
+  if (!single && !series && !occurrence) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Calendar recurrence identity is incomplete or inconsistent" });
+  }
+});
 
 export type GoogleCalendarEventTargetObservation = z.infer<typeof GoogleCalendarEventTargetObservationSchema>;
 

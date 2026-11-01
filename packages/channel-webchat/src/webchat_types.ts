@@ -249,6 +249,7 @@ export interface WebChatGoogleCalendarEventUpdateContentReview {
   review_digest: string;
   request_payload_digest: string;
   operation: "google.calendar.write.event.update";
+  target_scope: "single_event" | "series" | "occurrence";
   calendar_id: string;
   event_id: string;
   current_summary: string | null;
@@ -257,6 +258,9 @@ export interface WebChatGoogleCalendarEventUpdateContentReview {
   event_end: string;
   event_time_kind: "date" | "date_time";
   event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
   organizer_self: true;
   other_attendee_count: 0;
   attendee_inventory_complete: true;
@@ -273,6 +277,7 @@ export interface WebChatGoogleCalendarEventDeleteContentReview {
   review_digest: string;
   request_payload_digest: string;
   operation: "google.calendar.write.event.delete";
+  target_scope: "single_event" | "series" | "occurrence";
   calendar_id: string;
   event_id: string;
   current_summary: string | null;
@@ -280,6 +285,9 @@ export interface WebChatGoogleCalendarEventDeleteContentReview {
   event_end: string;
   event_time_kind: "date" | "date_time";
   event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
   organizer_self: true;
   other_attendee_count: 0;
   attendee_inventory_complete: true;

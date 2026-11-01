@@ -435,7 +435,7 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.calendar.write" &&
-      target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v2") {
+      target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v3") {
     throw new Error("Executor approval rejected: google.calendar.write requires current target version evidence");
   }
   if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
