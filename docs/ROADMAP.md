@@ -148,6 +148,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-11-01、別の安全consumerとしてF03.01 Calendar読取を接続した。google.calendar.readはevent identity／organizer／attendee／date-time・timezoneの正規化値と原表現を保持し、view=freebusyは31日以内の単一calendar照会と応答受領時刻・observed digestを返す。部分取得・provider error・不整合はavailability=unknownへ閉じる。core／hds-brain typecheckはPASS。test／Gateway runtime／実provider／browser／外部作用はNOT_RUN。これはadapter経路のコード接続で、F03.01 runtime、F03.02 read-before-write、F03全体、E2E-01、製品全体BUILD、QC／QAやowner GOの証拠ではない。
 
+2026-11-01、F03.02の最初のwrite consumerとしてGoogle Calendar `event.create`を既存Approval／HDS execution binding／Brokerへ接続した。作成には同一calendar・対象時間を含む完全freebusy観測が必要で、target-version取得・Owner内容確認・承認後・POST直前に同じ範囲を再読取する。busy結果変更、unknown／部分観測、非対応引数では外部write前に停止する。Owner確認画面は予定内容、busy区間、重複を示し、busy結果を権限へ昇格しない。更新・削除・繰返し・参加者／招待通知は未接続で拒否する。限定TypeScript buildはPASS、test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。`event.create`は`WIRED`（runtime未確認）、F03.02とF03全体は`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、owner GOは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

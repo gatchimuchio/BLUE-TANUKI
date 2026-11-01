@@ -1786,7 +1786,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
       targetVersionObservation = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
     } catch {
-      const reason = cmd.type === "tool_call" && cmd.payload.tool_name === "gmail.write"
+      const reason = cmd.type === "tool_call" && cmd.payload.tool_name === "google.calendar.write"
+        ? "google_calendar_write_target_version_unavailable"
+        : cmd.type === "tool_call" && cmd.payload.tool_name === "gmail.write"
         ? "gmail_write_target_version_unavailable"
         : cmd.type === "tool_call" && cmd.payload.tool_name === "file.search"
           ? "file_search_target_version_unavailable"
@@ -2634,7 +2636,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) ||
         (pending.command.type === "tool_call" &&
-          (pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete")))) {
+          (pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
+            (pending.command.payload.tool_name === "google.calendar.write" &&
+              pending.command.payload.arguments.operation === "event.create"))))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -4275,6 +4279,25 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
+        pending.command.payload.arguments.operation === "event.create" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "google_calendar_event_create" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command)) return null;
+        const review: WebChatApprovalContentReview = {
+          ...snapshot,
+          command_id,
+        };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending && isGmailDraftSendReviewCommand(pending.command) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -4346,6 +4369,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         return "unavailable";
       }
     }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
+        pending.command.payload.arguments.operation === "event.create") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        return current && "kind" in current && current.kind === "google_calendar_event_create" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.review_digest === pending.content_review_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
     }
@@ -4401,7 +4441,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       reason: p.evaluation.reason,
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
-          (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete")) ||
+          (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
+            (p.command.payload.tool_name === "google.calendar.write" &&
+              p.command.payload.arguments.operation === "event.create"))) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),

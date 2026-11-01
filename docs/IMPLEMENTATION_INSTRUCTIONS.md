@@ -8,11 +8,19 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
+## 最新BUILD_BATCH — F03.02 単件予定登録のread-before-write接続
+
+2026-11-01、既存Google Calendarの`event.create`だけを、F03.01のfreebusy観測から既存Approval／HDS execution binding／Brokerまで接続した。完全・非unknownのfreebusy観測を予定作成引数へ渡し、同一calendar・観測窓・busy結果digestを照合する。target-version取得、Ownerのno-store内容確認、承認受付後のtarget再照合、AdapterのPOST直前に同じ窓を再読取し、忙しさ結果が変われば書込みを止める。Owner画面には登録する値、busy区間、予定との重複を表示する。busy情報は非権威の確認材料であり、承認や権限を作らない。未知引数と未接続の更新・削除・繰返し・参加者は送信前に拒否する。
+
+Protocol／HDS／core／Gateway／WebChatへtarget-versionと内容確認を接続し、操作時刻・対象・要求digestを同じcommandへ束縛した。今回の対象パッケージTypeScript buildとWebChat生成script構文解析、`git diff --check`はPASS。test、Gateway process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`は`WIRED`（runtime未確認）、F03.02残要求は`BUILD_GAP`。F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のBUILD_BATCH:** F03.02に残る更新・削除・繰返し系列／単一回・参加者と招待通知の内容審査を同一のHDS承認・Broker・結果帰還経路へ接続する。実providerとlive外部作用を使わず、契約がまだ閉じていない種別は安全に拒否したまま進める。
+
 ## 現在のrepo基点
 
 ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
 
-## 最新BUILD_BATCH — F02.02 Gmail内容・宛先の承認固定
+## 直近Gmail BUILD_BATCH — F02.02 Gmail内容・宛先の承認固定
 
 2026-11-01、F02.01のOwner選択message identityから同一taskのdraft.create候補までの接続を受け、Gmail候補の宛先・本文を既存L3 content review／Approval Gate／Brokerへ結ぶ。
 
@@ -24,9 +32,9 @@ candidate生成・provider読取／書込・実資格・実送信は行わない
 
 宛先・本文の接続を含む従前の確認結果は、Protocol build、HDS／core／WebChat／Gatewayのtypecheck・build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`がPASS。今回の安全guard施工では`@blue-tanuki/core typecheck`、`pnpm docs:check`、`git diff --check`がPASSし、`packages/blue-tanuki/src/tools/google_write.ts`がoperation別許可引数だけを受け付け、未知・添付引数をcredential取得・request前に拒否する。今回のtest、Gateway process、browser、実provider／実資格、外部作用はNOT_RUN。宛先・本文は`WIRED`（runtime未確認）、添付の選択・読取・内容digest・Owner確認は未接続のためF02.02全体は`BUILD_GAP`。
 
-**次のBUILD_BATCH:** F02.02の添付producer／consumer接続は、対応形式・内容scope・保持期間・byte上限が現行契約で定まるまで`BUILD_GAP`として保持する。Owner選択済み`gmail.read` attachment identityの本文取得、no-store L3 review、同一承認command／Broker作用は未接続のままにする。実provider・live外部作用は行わず、並行して別の安全なQE_BUILD consumerを進める。
+F02.02の当時の未接続事項: 添付producer／consumerは、対応形式・内容scope・保持期間・byte上限が現行契約で定まるまで`BUILD_GAP`として保持する。Owner選択済み`gmail.read` attachment identityの本文取得、no-store L3 review、同一承認command／Broker作用は未接続のままにする。
 
-### 並行する安全consumer — F03.01 Calendar読取・時刻・空き状況
+### 直近の先行consumer — F03.01 Calendar読取・時刻・空き状況
 
 2026-11-01、既存のgoogle.calendar.readを拡張し、既定のview=eventsではcalendar ID／event ID、organizer／attendee identity、start/endのdate・dateTime・timezoneを、正規化値と原表現の両方で返す。イベント本文・説明・参加者コメントは取得しない。200人超またはAPI側省略、欠落identity、次ページ、response byte上限をresult_complete=false／attendees_omittedへ反映する。
 
@@ -34,7 +42,7 @@ view=freebusyは同じHDS tool経路からGoogle Calendarのread-only freeBusy q
 
 packages/blue-tanuki/src/tools/google_read.ts、packages/blue-tanuki/src/tools/builtin.ts、packages/blue-tanuki/src/tools/index.ts、packages/hds-brain/src/action_router.tsを変更。core／hds-brain typecheckはPASS。test、Gateway runtime、実provider、browser、外部作用はNOT_RUN。STATUS=WIRED（既存Calendar toolから限定read adapter分岐へのコード接続、runtime未確認）。F03.01のruntime確認、F03.02の登録前再照合、F03親全体、E2E-01、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
 
-次のCalendar consumer: 登録候補が使ったfreebusy観測のobserved_at・時間窓・calendar identityを保持し、承認／作用直前に新しい照会との差を識別するF03.02 read-before-write経路。古い観測だけで登録を許可しない。
+F03.02との接続前状態の記録。現在は上記の最新BUILD_BATCHで`event.create`単件のread-before-write経路を接続したが、F03.02の他操作とF03全体は未成立。
 
 ## CR-0割込み — I-06 Windows開発インストーラー
 

@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { GmailWriteTargetVersionObservationSchema, normalizeGmailAddressList, requireToolOperationDescriptor,
-  type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import { GmailWriteTargetVersionObservationSchema, GoogleCalendarWriteTargetVersionObservationSchema,
+  normalizeGmailAddressList, requireToolOperationDescriptor,
+  type GmailWriteTargetVersionObservation, type GoogleCalendarWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type Tool } from "./registry.js";
+import { invokeGoogleCalendarRead } from "./google_read.js";
+import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type GoogleCalendarEventCreateContentReview,
+  type Tool, type ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -39,6 +42,34 @@ export interface GoogleWriteOptions {
   request?: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
   idempotency_key?: string;
   command_digest?: string;
+  calendar_availability_observation_digest?: string;
+  calendar_availability_result_digest?: string;
+  calendar_availability_observed_at?: string;
+}
+
+interface CalendarAvailabilityObservation {
+  calendar_id: string;
+  calendar_id_original: string;
+  time_min: string;
+  time_max: string;
+  time_zone: string;
+  observed_at: string;
+  availability_status: "observed";
+  busy: readonly { start: string; end: string }[];
+  result_digest: string;
+  observation_digest: string;
+}
+
+interface CalendarEventCreatePlan {
+  calendar_id: string;
+  event_body: Record<string, unknown>;
+  event_start: string;
+  event_end: string;
+  event_start_ms: number;
+  event_end_ms: number;
+  source_observation: CalendarAvailabilityObservation;
+  request_payload_digest: string;
+  target_identity_digest: string;
 }
 
 const GOOGLE_WRITE_TIMEOUT_MS = 15_000;
@@ -733,6 +764,83 @@ function gmailWriteRequest(args: Record<string, unknown>, draftRaw?: string): { 
   }) };
 }
 
+const CALENDAR_EVENT_CREATE_ARGUMENTS = new Set([
+  "operation", "calendar_id", "summary", "description", "location", "start", "end", "time_zone",
+  "availability_observation", "max_bytes",
+]);
+
+function parseCalendarAvailabilityObservation(value: unknown): CalendarAvailabilityObservation {
+  if (!isRecord(value) || value.service !== "calendar" || value.view !== "freebusy" || value.mode !== "read_only" ||
+      typeof value.calendar_id !== "string" || !value.calendar_id.trim() || value.calendar_id.length > 512 ||
+      typeof value.calendar_id_original !== "string" || !value.calendar_id_original.trim() ||
+      typeof value.time_min !== "string" || typeof value.time_max !== "string" ||
+      typeof value.time_zone !== "string" || !value.time_zone ||
+      typeof value.observed_at !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value.observed_at) ||
+      !Number.isFinite(Date.parse(value.observed_at)) ||
+      Date.parse(value.observed_at) > Date.now() || value.observed_at_source !== "client_response_received" ||
+      value.availability_status !== "observed" || value.result_complete !== true || value.has_more_results !== false ||
+      value.provider_error_count !== 0 || value.truncated !== false || value.mutation_sent !== false ||
+      !Array.isArray(value.busy) || value.busy.length > 1_000 ||
+      typeof value.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.result_digest) ||
+      typeof value.observation_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.observation_digest) ||
+      !isRecord(value.trust_boundary) || value.trust_boundary.provider_data_is_untrusted !== true ||
+      value.trust_boundary.availability_can_authorize_operation !== false ||
+      value.trust_boundary.used_for_authority !== false) {
+    throw new Error("google.calendar.write requires a complete, observed freebusy result; mutation_sent=false");
+  }
+  const windowStart = Date.parse(value.time_min);
+  const windowEnd = Date.parse(value.time_max);
+  if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd) || windowEnd <= windowStart) {
+    throw new Error("google.calendar.write freebusy window is invalid; mutation_sent=false");
+  }
+  const busy: { start: string; end: string }[] = [];
+  for (const interval of value.busy) {
+    if (!isRecord(interval) || !isRecord(interval.start) || !isRecord(interval.end) ||
+        !isRecord(interval.start.normalized) || !isRecord(interval.end.normalized) ||
+        interval.start.complete !== true || interval.end.complete !== true ||
+        typeof interval.start.normalized.instant_utc !== "string" ||
+        typeof interval.end.normalized.instant_utc !== "string") {
+      throw new Error("google.calendar.write freebusy intervals are incomplete; mutation_sent=false");
+    }
+    const startMs = Date.parse(interval.start.normalized.instant_utc);
+    const endMs = Date.parse(interval.end.normalized.instant_utc);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs ||
+        startMs < windowStart || endMs > windowEnd) {
+      throw new Error("google.calendar.write freebusy interval is outside the observed window; mutation_sent=false");
+    }
+    busy.push({ start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() });
+  }
+  const expectedResultDigest = sha256Hex({
+    calendar_id: value.calendar_id,
+    calendar_id_original: value.calendar_id_original,
+    time_min: value.time_min,
+    time_max: value.time_max,
+    time_zone: value.time_zone || "UTC",
+    availability_status: value.availability_status,
+    busy: value.busy,
+    provider_error_count: value.provider_error_count,
+    result_complete: value.result_complete,
+    has_more_results: value.has_more_results,
+  });
+  const expectedObservationDigest = sha256Hex({ result_digest: value.result_digest, observed_at: value.observed_at });
+  if (expectedResultDigest !== value.result_digest || expectedObservationDigest !== value.observation_digest) {
+    throw new Error("google.calendar.write freebusy digest is inconsistent; mutation_sent=false");
+  }
+  return {
+    calendar_id: value.calendar_id.trim(),
+    calendar_id_original: value.calendar_id_original,
+    time_min: value.time_min,
+    time_max: value.time_max,
+    time_zone: value.time_zone,
+    observed_at: value.observed_at,
+    availability_status: "observed",
+    busy,
+    result_digest: value.result_digest,
+    observation_digest: value.observation_digest,
+  };
+}
+
 function calendarEventBody(args: Record<string, unknown>, requireTime: boolean): Record<string, unknown> {
   if (args.attendees !== undefined) {
     throw new Error("calendar attendees are deferred to avoid implicit external invites; mutation_sent=false");
@@ -752,45 +860,216 @@ function calendarEventBody(args: Record<string, unknown>, requireTime: boolean):
   return body;
 }
 
+function calendarEventCreatePlan(args: Record<string, unknown>): CalendarEventCreatePlan {
+  if (args.attendees !== undefined) {
+    throw new Error("calendar attendees are deferred to avoid implicit external invites; mutation_sent=false");
+  }
+  if (Object.keys(args).some((key) => !CALENDAR_EVENT_CREATE_ARGUMENTS.has(key))) {
+    throw new Error("google.calendar.write received an unsupported event.create argument; mutation_sent=false");
+  }
+  for (const name of ["calendar_id", "summary", "description", "location", "time_zone"] as const) {
+    const value = args[name];
+    if (value !== undefined && (typeof value !== "string" || value.trim().length === 0)) {
+      throw new Error(`google.calendar.write ${name} must be a non-empty string when supplied; mutation_sent=false`);
+    }
+  }
+  operationArg(args, ["event.create"]);
+  const calendarId = stringArg(args, "calendar_id", false) ?? "primary";
+  if (calendarId.length > 512 || /[\r\n]/.test(calendarId)) {
+    throw new Error("calendar_id is invalid; mutation_sent=false");
+  }
+  const start = stringArg(args, "start")!;
+  const end = stringArg(args, "end")!;
+  const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
+  if (!rfc3339.test(start) || !rfc3339.test(end)) {
+    throw new Error("event.create start/end must be RFC3339 date-times with an explicit offset; mutation_sent=false");
+  }
+  const eventStartMs = Date.parse(start);
+  const eventEndMs = Date.parse(end);
+  if (!Number.isFinite(eventStartMs) || !Number.isFinite(eventEndMs) || eventEndMs <= eventStartMs) {
+    throw new Error("event.create time window is invalid; mutation_sent=false");
+  }
+  const timeZone = stringArg(args, "time_zone", false);
+  if (timeZone) {
+    try { new Intl.DateTimeFormat("en", { timeZone }); }
+    catch { throw new Error("event.create time_zone must be a valid IANA time zone; mutation_sent=false"); }
+  }
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const body = calendarEventBody(args, true);
+  if (Buffer.byteLength(jsonBody(body), "utf8") > maxBytes) {
+    throw new Error("event.create payload exceeds max_bytes; mutation_sent=false");
+  }
+  const sourceObservation = parseCalendarAvailabilityObservation(args.availability_observation);
+  const windowStart = Date.parse(sourceObservation.time_min);
+  const windowEnd = Date.parse(sourceObservation.time_max);
+  if (sourceObservation.calendar_id !== calendarId || eventStartMs < windowStart || eventEndMs > windowEnd) {
+    throw new Error("event.create does not match the supplied freebusy calendar or time window; mutation_sent=false");
+  }
+  const requestPayloadDigest = sha256Hex({
+    schema_version: "blue-tanuki.google-calendar-event-create-payload.v1",
+    calendar_id: calendarId,
+    event: body,
+  });
+  const targetIdentityDigest = sha256Hex({
+    schema_version: "blue-tanuki.google-calendar-event-create-target.v1",
+    calendar_id: calendarId,
+    start,
+    end,
+  });
+  return {
+    calendar_id: calendarId,
+    event_body: body,
+    event_start: start,
+    event_end: end,
+    event_start_ms: eventStartMs,
+    event_end_ms: eventEndMs,
+    source_observation: sourceObservation,
+    request_payload_digest: requestPayloadDigest,
+    target_identity_digest: targetIdentityDigest,
+  };
+}
+
+export function googleCalendarWriteRequestPayloadDigest(args: Record<string, unknown>): string {
+  return calendarEventCreatePlan(args).request_payload_digest;
+}
+
+export function googleCalendarWriteTargetIdentityDigest(args: Record<string, unknown>): string {
+  return calendarEventCreatePlan(args).target_identity_digest;
+}
+
+export function assertGoogleCalendarWriteTargetVersion(
+  args: Record<string, unknown>,
+  raw: unknown,
+  commandDigest: string,
+  operationPlanBindingDigest?: string,
+): GoogleCalendarWriteTargetVersionObservation {
+  const plan = calendarEventCreatePlan(args);
+  const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(raw);
+  if (!/^[a-f0-9]{64}$/.test(commandDigest) || observation.command_digest !== commandDigest ||
+      observation.operation !== "event.create" || observation.target_identity_digest !== plan.target_identity_digest ||
+      observation.request_payload_digest !== plan.request_payload_digest ||
+      observation.availability_observation_digest !== plan.source_observation.observation_digest ||
+      observation.availability_result_digest !== plan.source_observation.result_digest ||
+      observation.availability_window_start !== plan.source_observation.time_min ||
+      observation.availability_window_end !== plan.source_observation.time_max ||
+      observation.event_start !== plan.event_start || observation.event_end !== plan.event_end ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.used_for_authority !== false || observation.may_execute !== false) {
+    throw new Error("google.calendar.write target version does not match the command or current source; mutation_sent=false");
+  }
+  return observation;
+}
+
+async function recheckCalendarAvailability(
+  args: Record<string, unknown>,
+  plan: CalendarEventCreatePlan,
+  options: GoogleWriteOptions,
+): Promise<CalendarAvailabilityObservation> {
+  const source = plan.source_observation;
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const read = await invokeGoogleCalendarRead({
+    view: "freebusy",
+    calendar_id: source.calendar_id_original,
+    time_min: source.time_min,
+    time_max: source.time_max,
+    time_zone: source.time_zone,
+    max_bytes: maxBytes,
+  }, {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.request ? { request: (target, signal) => options.request!({
+      service: target.service,
+      hostname: target.hostname,
+      path: target.path,
+      method: target.method ?? "GET",
+      maxBytes: target.maxBytes,
+      token: target.token,
+      ...(target.body === undefined ? {} : { body: target.body }),
+    }, signal) } : {}),
+  });
+  const current = parseCalendarAvailabilityObservation(read);
+  if (current.calendar_id !== source.calendar_id || current.time_min !== source.time_min ||
+      current.time_max !== source.time_max || current.result_digest !== source.result_digest) {
+    throw new Error("google.calendar.write freebusy observation changed; refresh availability and review again; mutation_sent=false");
+  }
+  return current;
+}
+
+function overlappingBusyIntervals(
+  plan: CalendarEventCreatePlan,
+  observation: CalendarAvailabilityObservation,
+): { start: string; end: string }[] {
+  return observation.busy.filter((interval) => Date.parse(interval.start) < plan.event_end_ms &&
+    Date.parse(interval.end) > plan.event_start_ms);
+}
+
+function calendarCreateContentReview(
+  args: Record<string, unknown>,
+  plan: CalendarEventCreatePlan,
+  current: CalendarAvailabilityObservation,
+  commandDigest: string,
+): GoogleCalendarEventCreateContentReview {
+  const requestPayloadDigest = plan.request_payload_digest;
+  const reviewDigest = operationPlanDigest({
+    schema_version: "blue-tanuki.google-calendar-event-create-review.v1",
+    command_digest: commandDigest,
+    request_payload_digest: requestPayloadDigest,
+    source_observation_digest: plan.source_observation.observation_digest,
+    availability_result_digest: current.result_digest,
+  });
+  const summary = stringArg(args, "summary", false);
+  const description = stringArg(args, "description", false);
+  const location = stringArg(args, "location", false);
+  const timeZone = stringArg(args, "time_zone", false);
+  return {
+    kind: "google_calendar_event_create",
+    operation: "google.calendar.write.event.create",
+    calendar_id: plan.calendar_id,
+    ...(summary ? { summary } : {}),
+    ...(description ? { description } : {}),
+    ...(location ? { location } : {}),
+    start: plan.event_start,
+    end: plan.event_end,
+    ...(timeZone ? { time_zone: timeZone } : {}),
+    source_observation_digest: plan.source_observation.observation_digest,
+    availability_result_digest: current.result_digest,
+    availability_observed_at: current.observed_at,
+    availability_window_start: current.time_min,
+    availability_window_end: current.time_max,
+    busy_intervals: current.busy,
+    overlapping_busy_intervals: overlappingBusyIntervals(plan, current),
+    request_payload_digest: requestPayloadDigest,
+    command_digest: commandDigest,
+    review_digest: reviewDigest,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 export async function invokeGoogleCalendarWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
 ): Promise<unknown> {
-  const operation = operationArg(args, ["event.create", "event.update", "event.delete"]);
+  operationArg(args, ["event.create"]);
+  const plan = calendarEventCreatePlan(args);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.calendar.write");
   const request = opts.request ?? defaultGoogleWriteRequest;
-  const calendarId = stringArg(args, "calendar_id", false) ?? "primary";
+  const calendarId = plan.calendar_id;
   const params = new URLSearchParams({ sendUpdates: "none" });
-
-  let path: string;
-  let method: GoogleWriteMethod;
-  let body: string | undefined;
-  const fallback: Record<string, unknown> = { calendar_id: calendarId };
-  if (operation === "event.create") {
-    const eventBody = calendarEventBody(args, true);
-    if (Object.keys(eventBody).length === 0) {
-      throw new Error("event.create requires event fields; mutation_sent=false");
-    }
-    path = `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
-    method = "POST";
-    body = jsonBody(eventBody);
-  } else {
-    const eventId = stringArg(args, "event_id")!;
-    fallback.id = eventId;
-    path = `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?${params}`;
-    if (operation === "event.update") {
-      const eventBody = calendarEventBody(args, false);
-      if (Object.keys(eventBody).length === 0) {
-        throw new Error("event.update requires at least one mutable event field; mutation_sent=false");
-      }
-      method = "PATCH";
-      body = jsonBody(eventBody);
-    } else {
-      method = "DELETE";
-    }
-  }
+  const path = `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
+  const method: GoogleWriteMethod = "POST";
+  const body = jsonBody(plan.event_body);
+  const fallback: Record<string, unknown> = {
+    calendar_id: calendarId,
+    ...(opts.calendar_availability_observation_digest
+      ? { availability_observation_digest: opts.calendar_availability_observation_digest } : {}),
+    ...(opts.calendar_availability_result_digest
+      ? { availability_result_digest: opts.calendar_availability_result_digest } : {}),
+    ...(opts.calendar_availability_observed_at
+      ? { availability_observed_at: opts.calendar_availability_observed_at } : {}),
+  };
 
   const target = {
     service: "calendar" as const,
@@ -804,7 +1083,7 @@ export async function invokeGoogleCalendarWrite(
   assertToolExecutionNotCancelled(opts.signal, "google.calendar.write");
   const response = await request(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("google.calendar.write", response);
-  return mutationResult("google.calendar.write", "calendar", operation, target, response, fallback);
+  return mutationResult("google.calendar.write", "calendar", "event.create", target, response, fallback);
 }
 
 function boundedContent(args: Record<string, unknown>, maxContentBytes: number, required: boolean): string | undefined {
@@ -941,14 +1220,85 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
 
 export const gmailWriteTool: Tool = createGmailWriteTool();
 
-export const googleCalendarWriteTool: Tool = {
-  name: "google.calendar.write",
-  description: "Create, update, or delete Google Calendar events with an operator-provided OAuth token.",
-  required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
-  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    return await invokeGoogleCalendarWrite(args, { signal: context.signal });
-  },
-};
+export function createGoogleCalendarWriteTool(
+  options: Omit<GoogleWriteOptions, "signal" | "idempotency_key" | "command_digest"> = {},
+): Tool {
+  const resolverOptions = (env?: Readonly<Record<string, string | undefined>>): GoogleWriteOptions => ({
+    ...options,
+    ...(env ? { env: { ...env } } : {}),
+  });
+  return {
+    name: "google.calendar.write",
+    description: "Create one Google Calendar event after a current freebusy recheck and explicit owner content review. Pass the complete google.calendar.read view=freebusy result as availability_observation. Busy data is review context, not authority. Event updates, deletion, recurrence, and attendees remain unavailable.",
+    required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
+    async inspect_target_version(args, inspectOptions = {}): Promise<GoogleCalendarWriteTargetVersionObservation> {
+      const commandDigest = inspectOptions.command_digest;
+      if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+        throw new Error("google.calendar.write target resolver requires an exact HDS command digest");
+      }
+      const plan = calendarEventCreatePlan(args);
+      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));
+      return GoogleCalendarWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.google-calendar-write-target-version.v1",
+        operation: "event.create",
+        target_identity_digest: plan.target_identity_digest,
+        request_payload_digest: plan.request_payload_digest,
+        availability_observation_digest: plan.source_observation.observation_digest,
+        availability_result_digest: current.result_digest,
+        availability_observed_at: current.observed_at,
+        availability_window_start: current.time_min,
+        availability_window_end: current.time_max,
+        event_start: plan.event_start,
+        event_end: plan.event_end,
+        command_digest: commandDigest,
+        ...(inspectOptions.operation_plan_binding_digest
+          ? { operation_plan_binding_digest: inspectOptions.operation_plan_binding_digest } : {}),
+        used_for_authority: false,
+        may_execute: false,
+      });
+    },
+    async inspect_content_review(args, inspectOptions = {}): Promise<GoogleCalendarEventCreateContentReview> {
+      const commandDigest = inspectOptions.command_digest;
+      if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+        throw new Error("google.calendar.write content review requires an exact HDS command digest");
+      }
+      const plan = calendarEventCreatePlan(args);
+      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));
+      return calendarCreateContentReview(args, plan, current, commandDigest);
+    },
+    async invoke(args: Record<string, unknown>, context: ToolContext): Promise<unknown> {
+      if (typeof context.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(context.idempotency_key) ||
+          typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
+        throw new Error("google.calendar.write requires an approved Executor identity; mutation_sent=false");
+      }
+      const rawObservation = context.target_version_observation;
+      if (!rawObservation || rawObservation.schema_version !== "blue-tanuki.google-calendar-write-target-version.v1") {
+        throw new Error("google.calendar.write requires a bound freebusy target version; mutation_sent=false");
+      }
+      const observation = assertGoogleCalendarWriteTargetVersion(args, rawObservation, context.command_digest,
+        rawObservation.operation_plan_binding_digest);
+      const plan = calendarEventCreatePlan(args);
+      const current = await recheckCalendarAvailability(args, plan, {
+        ...options,
+        signal: context.signal,
+      });
+      if (current.result_digest !== observation.availability_result_digest) {
+        throw new Error("google.calendar.write freebusy result changed before write; mutation_sent=false");
+      }
+      return await invokeGoogleCalendarWrite(args, {
+        ...options,
+        idempotency_key: context.idempotency_key,
+        command_digest: context.command_digest,
+        signal: context.signal,
+        calendar_availability_observation_digest: observation.availability_observation_digest,
+        calendar_availability_result_digest: current.result_digest,
+        calendar_availability_observed_at: current.observed_at,
+      });
+    },
+  };
+}
+
+export const googleCalendarWriteTool: Tool = createGoogleCalendarWriteTool();
 
 export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",

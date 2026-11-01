@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-01 — QEB-F03.02-CALENDAR-EVENT-CREATE-READ-BEFORE-WRITE
+
+開始`main`／`origin/main`=`c28013562ed0d55e969f15e3ec9c85b0e22168c3`。現行rev3.0 pin／hash・AGENTS・active instructionを確認。編集前復旧二世代をCASで回転し、current=`c280135...`／previous=`a9b3c19...`。保護添付ZIPと別Worktreeは変更していない。
+
+Google Calendar書込みを`event.create`専用の安全なproducer／consumer sliceへ拡張した。入力freebusy観測のdigest整合を検査し、target observationにcommand／Operation Plan／calendar／イベント／availability resultを結び付ける。HDS execution bindingとExecutorで再検査し、Ownerのno-store content reviewで予定値・busy区間・重複を表示する。承認直前に再照合し、承認後target resolverとwrite adapter直前にも同一calendar・窓・availability resultを再確認してからPOSTする。busy情報は権限ではなく、空き競合の有無だけをreview表示する。未知／不完全／変化済みの観測、非対応引数とevent.update／delete／recurrence／attendeesは書込み前に拒否する。
+
+Protocol／HDS／core／Gateway／WebChatへ接続。対象TS project build、生成Control Center script構文解析、`git diff --check`はPASS。test、process、browser、実provider／実資格、Calendar変更はNOT_RUN。`event.create`は`WIRED`（runtime未確認）、F03.02全体とF03全体、製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
+
+---
+
 ### 履歴ログ：`QEB-E2E01-OWNER-SELECTED-OBSERVATION-REUSE`
 
 現行QE pin rev3.0、適用AGENTS、active instruction、Windows main worktreeとGitHub `main`を再照合した。開始時のlocal／remote `main`は`b0d40aeef0e72f0c921e236890f0b26daa994cde`。保護対象`.codex-remote-attachments/`を保持し、変更対象に含めていない。

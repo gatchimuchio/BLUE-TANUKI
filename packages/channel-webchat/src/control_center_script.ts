@@ -5257,6 +5257,95 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "候補本文を再確認";
           return;
         }
+        if (review.kind === "google_calendar_event_create") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validIntervals = function (value) {
+            return Array.isArray(value) && value.length <= 500 && value.every(function (interval) {
+              return isObject(interval) && typeof interval.start === "string" &&
+                Number.isFinite(Date.parse(interval.start)) && typeof interval.end === "string" &&
+                Number.isFinite(Date.parse(interval.end)) && Date.parse(interval.end) > Date.parse(interval.start);
+            });
+          };
+          if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.create" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.source_observation_digest) ||
+              !isDigest(review.availability_result_digest) || typeof review.calendar_id !== "string" ||
+              review.calendar_id.length === 0 || review.calendar_id.length > 512 ||
+              typeof review.start !== "string" || !Number.isFinite(Date.parse(review.start)) ||
+              typeof review.end !== "string" || !Number.isFinite(Date.parse(review.end)) ||
+              Date.parse(review.end) <= Date.parse(review.start) ||
+              typeof review.availability_observed_at !== "string" ||
+              !Number.isFinite(Date.parse(review.availability_observed_at)) ||
+              typeof review.availability_window_start !== "string" ||
+              !Number.isFinite(Date.parse(review.availability_window_start)) ||
+              typeof review.availability_window_end !== "string" ||
+              !Number.isFinite(Date.parse(review.availability_window_end)) ||
+              !validIntervals(review.busy_intervals) || !validIntervals(review.overlapping_busy_intervals) ||
+              (review.summary !== undefined && typeof review.summary !== "string") ||
+              (review.description !== undefined && typeof review.description !== "string") ||
+              (review.location !== undefined && typeof review.location !== "string") ||
+              (review.time_zone !== undefined && typeof review.time_zone !== "string")) {
+            throw new Error("予定の内容・空き状況がこの承認要求と一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "登録するGoogle Calendar予定と直近の空き状況";
+          view.appendChild(heading);
+          [
+            ["カレンダー", review.calendar_id],
+            ["件名", review.summary || "（件名なし）"],
+            ["開始", review.start],
+            ["終了", review.end],
+            ["タイムゾーン", review.time_zone || "RFC3339のoffset"],
+            ["場所", review.location || "（なし）"],
+            ["空き状況の再確認時刻", review.availability_observed_at],
+            ["観測窓", review.availability_window_start + " – " + review.availability_window_end]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          if (review.description) {
+            const descriptionLabel = document.createElement("strong");
+            descriptionLabel.textContent = "説明";
+            view.appendChild(descriptionLabel);
+            const description = document.createElement("pre");
+            description.textContent = review.description;
+            view.appendChild(description);
+          }
+          const busyLabel = document.createElement("strong");
+          busyLabel.textContent = "観測された予定";
+          view.appendChild(busyLabel);
+          const busy = document.createElement("pre");
+          busy.textContent = review.busy_intervals.length
+            ? review.busy_intervals.map(function (interval) { return interval.start + " – " + interval.end; }).join("\\n")
+            : "空き状況APIはこの範囲にbusy区間を返していません";
+          view.appendChild(busy);
+          const overlapLabel = document.createElement("strong");
+          overlapLabel.textContent = "この予定と重なるbusy区間";
+          view.appendChild(overlapLabel);
+          const overlap = document.createElement("pre");
+          overlap.textContent = review.overlapping_busy_intervals.length
+            ? review.overlapping_busy_intervals.map(function (interval) { return interval.start + " – " + interval.end; }).join("\\n")
+            : "重なりなし";
+          view.appendChild(overlap);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。招待・繰返し・更新・削除はこの施工単位では扱いません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | freebusy result digest: " + review.availability_result_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "予定内容と空き状況を再確認";
+          return;
+        }
         if (review.command_id !== commandId ||
             (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create" &&
               review.operation !== "gmail.write.draft.send") ||

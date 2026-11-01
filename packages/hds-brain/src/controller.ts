@@ -45,6 +45,7 @@ import {
   fileEditPayloadDigest,
   fileEditTargetIdentityDigest,
   GmailWriteTargetVersionObservationSchema,
+  GoogleCalendarWriteTargetVersionObservationSchema,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
@@ -3665,6 +3666,17 @@ ${planControl.question}`,
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== (operation_plan_binding_digest ?? null)) {
         throw new Error("HDS shell.exec target version does not match the issued command or Operation Plan source");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (command.type === "tool_call" && command.payload.tool_name === "google.calendar.write") {
+      if (brokerTargetVersionObservation === undefined || command.payload.arguments.operation !== "event.create") {
+        throw new Error("HDS google.calendar.write event.create target version observation is required");
+      }
+      const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation !== "event.create" ||
+          observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+        throw new Error("HDS google.calendar.write target version does not match the issued command or Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&

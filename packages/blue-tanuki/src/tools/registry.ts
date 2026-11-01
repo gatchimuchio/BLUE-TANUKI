@@ -1,11 +1,12 @@
 import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation, type FileDeleteTargetVersionObservation,
-  type FileEditTargetVersionObservation, type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+  type FileEditTargetVersionObservation, type GmailWriteTargetVersionObservation,
+  type GoogleCalendarWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
-  GmailWriteTargetVersionObservation;
+  GmailWriteTargetVersionObservation | GoogleCalendarWriteTargetVersionObservation;
 
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {
@@ -53,7 +54,33 @@ export interface FileDeleteTargetContentReview {
   may_execute: false;
 }
 
-export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview;
+/** Exact planned Calendar event and the unchanged freebusy result shown before owner approval. */
+export interface GoogleCalendarEventCreateContentReview {
+  kind: "google_calendar_event_create";
+  operation: "google.calendar.write.event.create";
+  calendar_id: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  start: string;
+  end: string;
+  time_zone?: string;
+  source_observation_digest: string;
+  availability_result_digest: string;
+  availability_observed_at: string;
+  availability_window_start: string;
+  availability_window_end: string;
+  busy_intervals: readonly { start: string; end: string }[];
+  overlapping_busy_intervals: readonly { start: string; end: string }[];
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
+  GoogleCalendarEventCreateContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {

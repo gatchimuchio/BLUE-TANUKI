@@ -15,6 +15,7 @@ import {
   FileSearchTargetVersionObservationSchema,
   ShellExecTargetVersionObservationSchema,
   GmailWriteTargetVersionObservationSchema,
+  GoogleCalendarWriteTargetVersionObservationSchema,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
@@ -62,9 +63,9 @@ import {
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { brokerFileResourceLockDigest, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool,
-  shellExecTool } from "./tools/builtin.js";
+  googleCalendarWriteTool, shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
-  gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
+  gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -400,6 +401,10 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: shell.exec target version does not match command or HDS source");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "google.calendar.write") {
+      const observation = assertGoogleCalendarWriteTargetVersion(snapshot.payload.arguments, rawTargetVersionObservation,
+        operationPlanDigest(snapshot), hds_binding?.operation_plan_binding_digest);
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
@@ -428,6 +433,10 @@ function approveCommandForExecution(
       ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation)) &&
       target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.calendar.write" &&
+      target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v1") {
+    throw new Error("Executor approval rejected: google.calendar.write requires freebusy-bound target version evidence");
   }
   if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
       target_version_observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
@@ -599,6 +608,21 @@ export class Executor {
       }
       return Object.freeze(observation);
     }
+    if (command.payload.tool_name === "google.calendar.write") {
+      const tool = this.deps.tools.get("google.calendar.write");
+      if (tool !== googleCalendarWriteTool || !tool.inspect_target_version) {
+        throw new Error("google.calendar.write target version resolver requires the registered built-in adapter");
+      }
+      const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      return Object.freeze(assertGoogleCalendarWriteTargetVersion(command.payload.arguments, observation,
+        operationPlanDigest(command), operationPlanBindingDigest));
+    }
     if (command.payload.tool_name === "file.write" && operationPlanBindingDigest !== undefined) {
       const tool = this.deps.tools.get("file.write");
       if (tool !== fileWriteTool || !tool.inspect_target_version) {
@@ -732,6 +756,27 @@ export class Executor {
           !/^[a-f0-9]{64}$/.test(review.review_digest) || !/^[a-f0-9]{64}$/.test(review.target_version_digest) ||
           review.used_for_authority !== false || review.may_execute !== false) {
         throw new Error("file.edit content review returned evidence for another command or plan source");
+      }
+      return review;
+    }
+    if (command.payload.tool_name === "google.calendar.write" &&
+        command.payload.arguments.operation === "event.create") {
+      const tool = this.deps.tools.get("google.calendar.write");
+      if (tool !== googleCalendarWriteTool || !tool.inspect_content_review) {
+        throw new Error("google.calendar.write content review requires the registered built-in adapter");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
+        command_digest: operationPlanDigest(command),
+      });
+      if (!("kind" in review) || review.kind !== "google_calendar_event_create" ||
+          review.command_digest !== operationPlanDigest(command) ||
+          !/^[a-f0-9]{64}$/.test(review.review_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.availability_result_digest) ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("google.calendar.write content review returned evidence for another command");
       }
       return review;
     }
