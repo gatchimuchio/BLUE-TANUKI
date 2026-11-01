@@ -5364,7 +5364,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(overlap);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。この作成操作は単一の非繰返し予定のみです。招待先を指定した場合は、上記の宛先へ招待メールを送る外部作用も同じL3確認に含みます。既存予定への招待は別操作で、参加者がいない単一予定・系列・個別発生だけを対象にします。";
+          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。この作成操作は単一の非繰返し予定のみです。招待先を指定した場合は、宛先への招待通知も同じL3確認に含みます。既存予定への招待は別操作で、現在の参加者を保って追加し、sendUpdates=allで既存参加者を含む全員へ更新通知を依頼します。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | freebusy result digest: " + review.availability_result_digest;
@@ -5397,9 +5397,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               ? review.recurring_event_id === null && review.original_start === null && recurrenceRulesPresent
               : review.target_scope === "occurrence" && typeof review.recurring_event_id === "string" &&
                 review.recurring_event_id.length > 0 && review.original_start !== null;
-          const validInvitees = Array.isArray(review.invitees) && review.invitees.length > 0 && review.invitees.length <= 20 &&
-            review.invitees.every(function (email) { return isEmail(email); }) &&
-            new Set(review.invitees.map(function (email) { return email.toLowerCase(); })).size === review.invitees.length;
+          const validEmailList = function (values, minimum, maximum) {
+            return Array.isArray(values) && values.length >= minimum && values.length <= maximum &&
+              values.every(function (email) { return isEmail(email); }) &&
+              new Set(values.map(function (email) { return email.toLowerCase(); })).size === values.length;
+          };
+          const validRetainedAttendees = validEmailList(review.retained_attendees, 0, 200);
+          const validInvitees = validEmailList(review.invitees, 1, 20);
+          const validNotificationRecipients = validEmailList(review.notification_recipients, 1, 200) &&
+            review.invitees.every(function (email) {
+              return review.notification_recipients.some(function (recipient) {
+                return recipient.toLowerCase() === email.toLowerCase();
+              });
+            });
           if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.invite" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
@@ -5411,16 +5421,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !Number.isFinite(Date.parse(review.event_start)) || !Number.isFinite(Date.parse(review.event_end)) ||
               (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
               (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
-              !validRecurrenceRules || !originalStartValid || !scopeIdentityValid || !validInvitees ||
-              review.notification_effect !== "send_invitation_emails_to_listed_attendees" ||
-              review.organizer_self !== true || review.other_attendee_count !== 0 ||
+              !validRecurrenceRules || !originalStartValid || !scopeIdentityValid || !validRetainedAttendees ||
+              !validInvitees || !validNotificationRecipients ||
+              review.notification_effect !== "send_calendar_update_notifications_to_all_attendees" ||
+              review.organizer_self !== true || !Number.isInteger(review.other_attendee_count) ||
+              review.other_attendee_count < 0 || review.other_attendee_count > 200 ||
+              review.retained_attendee_count !== review.retained_attendees.length ||
+              review.retained_attendee_count + review.invitees.length > 200 ||
+              review.notification_recipient_count !== review.notification_recipients.length ||
               review.attendee_inventory_complete !== true || typeof review.observed_at !== "string" ||
               !Number.isFinite(Date.parse(review.observed_at))) {
             throw new Error("参加者と通知の確認内容がこの承認要求と一致しません");
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "Google Calendar参加者追加と招待メール";
+          heading.textContent = "Google Calendar参加者追加と全員への更新通知";
           view.appendChild(heading);
           [
             ["カレンダー", review.calendar_id],
@@ -5429,7 +5444,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["終了", review.event_end],
             ["対象範囲", review.target_scope === "series" ? "繰返し予定全体" :
               review.target_scope === "occurrence" ? "繰返し予定の指定回" : "単一予定"],
-            ["招待メール", "一覧の全員へ送信"],
+            ["既存参加者", review.retained_attendee_count + "人を保持"],
+            ["新規追加", review.invitees.length + "人"],
+            ["更新通知の範囲", "現在の参加者と追加する参加者"],
+            ["Calendar API", "sendUpdates=all"],
             ["再確認時刻", review.observed_at]
           ].forEach(function (field) {
             const row = document.createElement("p");
@@ -5441,14 +5459,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             view.appendChild(row);
           });
           const inviteesLabel = document.createElement("strong");
-          inviteesLabel.textContent = "招待先（この一覧へメール送信）";
+          inviteesLabel.textContent = "保持する既存参加者";
           view.appendChild(inviteesLabel);
-          const invitees = document.createElement("pre");
-          invitees.textContent = review.invitees.join("\\n");
-          view.appendChild(invitees);
+          const retainedAttendees = document.createElement("pre");
+          retainedAttendees.textContent = review.retained_attendees.length ? review.retained_attendees.join("\\n") : "（既存参加者なし）";
+          view.appendChild(retainedAttendees);
+          const newInviteesLabel = document.createElement("strong");
+          newInviteesLabel.textContent = "新しく追加する参加者";
+          view.appendChild(newInviteesLabel);
+          const newInvitees = document.createElement("pre");
+          newInvitees.textContent = review.invitees.join("\\n");
+          view.appendChild(newInvitees);
+          const notificationRecipientsLabel = document.createElement("strong");
+          notificationRecipientsLabel.textContent = "通知対象（既存参加者を含む全員）";
+          view.appendChild(notificationRecipientsLabel);
+          const notificationRecipients = document.createElement("pre");
+          notificationRecipients.textContent = review.notification_recipients.join("\\n");
+          view.appendChild(notificationRecipients);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "この操作は予定参加者の置換APIを使います。対象予定に既存参加者（owner本人を含む）がいる場合は実行を拒否します。系列は系列全体、occurrenceは表示した指定回だけを対象にし、承認後に予定の版が変わると停止します。";
+          note.textContent = "Google Calendar APIのattendees配列は置換されるため、確認済みの既存参加者とRSVP等の状態を保持して新規参加者を追加します。sendUpdates=allにより既存参加者を含む一覧全員へ更新通知を依頼します。通知メールの到達自体は確認できません。系列は系列全体、occurrenceは表示した指定回だけを対象にし、承認後に予定の版が変わると停止します。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;
@@ -5832,7 +5862,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "新しい別taskです。前のGoogle Calendar " + operation + " は結果不明のまま停止しています。",
             "前のevent.createまたはevent.inviteを再実行・再送しないでください。保存された読取観測は非権威の参考情報で、成功・失敗や招待メール到達を証明しません。",
             "Calendar書込みや外部送信を含めず、安全な読取確認または終了方法だけを計画候補にしてください。"
-          ].join("\n");
+          ].join("\\n");
           setActiveScreen("conversation");
           input.focus();
           appendChat("status", "別task用の文面を入力欄へ準備しました。確認・編集し、owner taskとして明示送信してください。まだ送信も作用もしていません。");

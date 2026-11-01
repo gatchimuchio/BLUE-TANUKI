@@ -2638,7 +2638,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (pending.command.type === "tool_call" &&
           (pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
             (pending.command.payload.tool_name === "google.calendar.write" &&
-              ["event.create", "event.update", "event.delete"].includes(String(pending.command.payload.arguments.operation))))))) {
+              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))))))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -4280,7 +4280,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
-        ["event.create", "event.update", "event.delete"].includes(String(pending.command.payload.arguments.operation)) &&
+        ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation)) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       try {
@@ -4288,13 +4288,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         const expectedKind = pending.command.payload.arguments.operation === "event.update"
           ? "google_calendar_event_update" : pending.command.payload.arguments.operation === "event.delete"
-            ? "google_calendar_event_delete" : "google_calendar_event_create";
+            ? "google_calendar_event_delete" : pending.command.payload.arguments.operation === "event.invite"
+              ? "google_calendar_event_invite" : "google_calendar_event_create";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
             snapshot.command_digest !== operationPlanDigest(pending.command)) return null;
         const review: WebChatApprovalContentReview = {
           ...snapshot,
           command_id,
-        };
+        } as WebChatApprovalContentReview;
+        if (!("review_digest" in review)) return null;
         pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
         return review;
       } catch {
@@ -4373,7 +4375,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
-        ["event.create", "event.update", "event.delete"].includes(String(pending.command.payload.arguments.operation))) {
+        ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
       if (!content_review_digest || !pending.content_review_digest) return "required";
@@ -4383,7 +4385,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         const expectedKind = pending.command.payload.arguments.operation === "event.update"
           ? "google_calendar_event_update" : pending.command.payload.arguments.operation === "event.delete"
-            ? "google_calendar_event_delete" : "google_calendar_event_create";
+            ? "google_calendar_event_delete" : pending.command.payload.arguments.operation === "event.invite"
+              ? "google_calendar_event_invite" : "google_calendar_event_create";
         return current && "kind" in current && current.kind === expectedKind &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.review_digest === pending.content_review_digest
@@ -4449,7 +4452,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
             (p.command.payload.tool_name === "google.calendar.write" &&
-              ["event.create", "event.update", "event.delete"].includes(String(p.command.payload.arguments.operation))))) ||
+              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))))) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),

@@ -6,7 +6,8 @@ import { GmailWriteTargetVersionObservationSchema, GoogleCalendarEventTargetObse
   type GmailWriteTargetVersionObservation, type GoogleCalendarEventTargetObservation,
   type GoogleCalendarWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { invokeGoogleCalendarRead, readGoogleCalendarEventTarget } from "./google_read.js";
+import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, readGoogleCalendarEventTarget,
+  type GoogleCalendarEventTargetSnapshot } from "./google_read.js";
 import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type GoogleCalendarEventCreateContentReview,
   type GoogleCalendarEventUpdateContentReview, type GoogleCalendarEventDeleteContentReview,
   type GoogleCalendarEventInviteContentReview,
@@ -1028,8 +1029,9 @@ function assertSafeCalendarEventMutationTarget(
       sourceEvent.calendar_id !== "primary" || sourceEvent.calendar_id_original !== "primary" ||
       sourceEvent.status !== "confirmed" || sourceEvent.recurrence_scope !== targetScope ||
       sourceEvent.organizer_self !== true || sourceEvent.attendee_inventory_complete !== true ||
-      sourceEvent.other_attendee_count !== 0 || !Number.isFinite(observedAt) || observedAt > Date.now()) {
-    throw new Error(`${operation} requires a current, confirmed primary-calendar target with an exact recurrence scope, owner status, and no other attendees; mutation_sent=false`);
+      (operation !== "event.invite" && sourceEvent.other_attendee_count !== 0) ||
+      !Number.isFinite(observedAt) || observedAt > Date.now()) {
+    throw new Error(`${operation} requires a current, confirmed primary-calendar target with an exact recurrence scope and owner status; mutation_sent=false`);
   }
 }
 
@@ -1177,7 +1179,7 @@ function calendarEventInvitePlan(args: Record<string, unknown>): CalendarEventIn
     event_id: eventId,
     event_state_digest: sourceEvent.event_state_digest,
     invitees: attendeeEmails,
-    notification_effect: "send_invitation_emails_to_listed_attendees",
+    notification_effect: "send_calendar_update_notifications_to_all_attendees",
   });
   return {
     operation: "event.invite",
@@ -1316,9 +1318,6 @@ async function recheckCalendarEventTarget(
     }, signal) } : {}),
   });
   assertSafeCalendarEventMutationTarget(current.observation, plan.operation, plan.target_scope);
-  if (plan.operation === "event.invite" && current.self_attendee_present) {
-    throw new Error("event.invite cannot replace an existing owner attendee; mutation_sent=false");
-  }
   if (current.observation.status !== "confirmed" || current.observation.recurrence_scope !== plan.target_scope ||
       current.observation.event_state_digest !== plan.source_event.event_state_digest ||
       current.observation.event_etag_digest !== plan.source_event.event_etag_digest) {
@@ -1410,16 +1409,33 @@ function calendarDeleteContentReview(
 
 function calendarInviteContentReview(
   plan: CalendarEventInvitePlan,
-  current: GoogleCalendarEventTargetObservation,
+  current: GoogleCalendarEventTargetSnapshot,
   commandDigest: string,
 ): GoogleCalendarEventInviteContentReview {
+  const mergedAttendeePayload = calendarMergedAttendeePayload(plan, current);
+  if (Buffer.byteLength(jsonBody({ attendees: mergedAttendeePayload }), "utf8") > plan.max_bytes) {
+    throw new Error("event.invite attendee inventory exceeds max_bytes; mutation_sent=false");
+  }
+  const retainedAttendees = current.attendees.map((attendee) => attendee.email);
+  const notificationRecipients = [
+    ...current.attendees.filter((attendee) => !attendee.organizer && !attendee.self).map((attendee) => attendee.email),
+    ...plan.attendee_emails,
+  ];
+  if (new Set(notificationRecipients.map((email) => email.toLowerCase())).size !== notificationRecipients.length) {
+    throw new Error("event.invite notification recipient inventory is ambiguous; mutation_sent=false");
+  }
+  const observed = current.observation;
   const reviewDigest = operationPlanDigest({
     schema_version: "blue-tanuki.google-calendar-event-invite-review.v1",
     command_digest: commandDigest,
     target_scope: plan.target_scope,
     request_payload_digest: plan.request_payload_digest,
-    event_state_digest: current.event_state_digest,
-    event_etag_digest: current.event_etag_digest,
+    event_state_digest: observed.event_state_digest,
+    event_etag_digest: observed.event_etag_digest,
+    retained_attendees: retainedAttendees,
+    invitees: plan.attendee_emails,
+    notification_recipients: notificationRecipients,
+    notification_effect: "send_calendar_update_notifications_to_all_attendees",
   });
   return {
     kind: "google_calendar_event_invite",
@@ -1427,27 +1443,56 @@ function calendarInviteContentReview(
     target_scope: plan.target_scope,
     calendar_id: plan.calendar_id,
     event_id: plan.event_id,
-    current_summary: current.summary,
-    event_start: current.event_start,
-    event_end: current.event_end,
-    event_time_kind: current.event_time_kind,
-    event_time_zone: current.event_time_zone,
-    recurrence_rules: current.recurrence_rules,
-    recurring_event_id: current.recurring_event_id,
-    original_start: current.original_start,
+    current_summary: observed.summary,
+    event_start: observed.event_start,
+    event_end: observed.event_end,
+    event_time_kind: observed.event_time_kind,
+    event_time_zone: observed.event_time_zone,
+    recurrence_rules: observed.recurrence_rules,
+    recurring_event_id: observed.recurring_event_id,
+    original_start: observed.original_start,
     organizer_self: true,
-    other_attendee_count: 0,
+    other_attendee_count: observed.other_attendee_count,
     attendee_inventory_complete: true,
+    retained_attendees: retainedAttendees,
+    retained_attendee_count: retainedAttendees.length,
     invitees: plan.attendee_emails,
-    notification_effect: "send_invitation_emails_to_listed_attendees",
-    event_state_digest: current.event_state_digest,
-    observed_at: current.observed_at,
+    notification_recipients: notificationRecipients,
+    notification_recipient_count: notificationRecipients.length,
+    notification_effect: "send_calendar_update_notifications_to_all_attendees",
+    event_state_digest: observed.event_state_digest,
+    observed_at: observed.observed_at,
     request_payload_digest: plan.request_payload_digest,
     command_digest: commandDigest,
     review_digest: reviewDigest,
     used_for_authority: false,
     may_execute: false,
   };
+}
+
+function calendarMergedAttendeePayload(
+  plan: CalendarEventInvitePlan,
+  current: GoogleCalendarEventTargetSnapshot,
+): Array<Record<string, unknown>> {
+  const existingIdentities = new Set(current.attendees.map((attendee) => attendee.email.toLowerCase()));
+  if (plan.attendee_emails.some((email) => existingIdentities.has(email.toLowerCase()))) {
+    throw new Error("event.invite includes an address that is already an attendee; mutation_sent=false");
+  }
+  if (current.attendees.length + plan.attendee_emails.length > MAX_CALENDAR_EVENT_ATTENDEES) {
+    throw new Error("event.invite would exceed the complete attendee inventory limit; mutation_sent=false");
+  }
+  return [
+    ...current.attendees.map((attendee) => ({
+      email: attendee.email,
+      ...(attendee.optional === undefined ? {} : { optional: attendee.optional }),
+      ...(attendee.resource === undefined ? {} : { resource: attendee.resource }),
+      ...(attendee.response_status === undefined ? {} : { responseStatus: attendee.response_status }),
+      ...(attendee.comment === undefined ? {} : { comment: attendee.comment }),
+      ...(attendee.display_name === undefined ? {} : { displayName: attendee.display_name }),
+      ...(attendee.additional_guests === undefined ? {} : { additionalGuests: attendee.additional_guests }),
+    })),
+    ...plan.attendee_emails.map((email) => ({ email })),
+  ];
 }
 
 async function invokeGoogleCalendarEventUpdate(
@@ -1531,8 +1576,13 @@ async function invokeGoogleCalendarEventInvite(
 ): Promise<unknown> {
   const snapshot = current ?? await recheckCalendarEventTarget(plan, opts);
   if (snapshot.observation.event_state_digest !== plan.source_event.event_state_digest ||
-      snapshot.observation.event_etag_digest !== plan.source_event.event_etag_digest || snapshot.self_attendee_present) {
+      snapshot.observation.event_etag_digest !== plan.source_event.event_etag_digest) {
     throw new Error("google.calendar.write event or attendee state changed after invitation review; mutation_sent=false");
+  }
+  const attendees = calendarMergedAttendeePayload(plan, snapshot);
+  const body = jsonBody({ attendees });
+  if (Buffer.byteLength(body, "utf8") > plan.max_bytes) {
+    throw new Error("event.invite attendee inventory exceeds max_bytes; mutation_sent=false");
   }
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.calendar.write");
@@ -1545,7 +1595,7 @@ async function invokeGoogleCalendarEventInvite(
     method: "PATCH",
     maxBytes: plan.max_bytes,
     token,
-    body: jsonBody({ attendees: plan.attendee_emails.map((email) => ({ email })) }),
+    body,
     if_match: snapshot.etag,
   };
   assertToolExecutionNotCancelled(opts.signal, "google.calendar.write");
@@ -1558,8 +1608,15 @@ async function invokeGoogleCalendarEventInvite(
     event_state_digest: snapshot.observation.event_state_digest,
     invitee_count: plan.attendee_emails.length,
     invitees_digest: sha256String(plan.attendee_emails.join("\n")),
+    retained_attendee_count: snapshot.attendees.length,
+    notification_recipient_count: snapshot.attendees.filter((attendee) => !attendee.organizer && !attendee.self).length +
+      plan.attendee_emails.length,
+    notification_recipients_digest: sha256String([
+      ...snapshot.attendees.filter((attendee) => !attendee.organizer && !attendee.self).map((attendee) => attendee.email),
+      ...plan.attendee_emails,
+    ].join("\n")),
     invite_notifications_requested: true,
-    notification_effect: "send_invitation_emails_to_listed_attendees",
+    notification_effect: "send_calendar_update_notifications_to_all_attendees",
   });
 }
 
@@ -1809,7 +1866,7 @@ export function createGoogleCalendarWriteTool(
   });
   return {
     name: "google.calendar.write",
-    description: "Create one non-recurring event after a current freebusy recheck. Explicit attendees on event.create produce invitation emails. event.invite adds up to 20 explicit attendees to a confirmed primary-calendar event, series, or exact occurrence owned by this account; the event must have no current attendee (including the owner), preventing replacement of an attendee list. The exact recipient list, invitation effect, and recurrence scope are shown in no-store Owner review and bound to L3 approval and read-before-write state. Update the summary or delete a confirmed event as a separate operation. Calendar data is non-authoritative.",
+    description: "Create one non-recurring event after a current freebusy recheck. Explicit attendees on event.create produce invitation emails. event.invite adds up to 20 explicit attendees to a confirmed primary-calendar event, series, or exact occurrence owned by this account while preserving the complete current attendee array and writable RSVP fields. Because Calendar PATCH replaces attendee arrays and sendUpdates=all notifies all guests, no-store Owner review shows retained attendees, new invitees, and every notification recipient before L3 approval. The exact recurrence scope and event version are rechecked before the write. Update the summary or delete a confirmed event as separate operations. Calendar data is non-authoritative.",
     required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
     async inspect_target_version(args, inspectOptions = {}): Promise<GoogleCalendarWriteTargetVersionObservation> {
       const commandDigest = inspectOptions.command_digest;
@@ -1876,7 +1933,7 @@ export function createGoogleCalendarWriteTool(
       if (args.operation === "event.invite") {
         const plan = calendarEventInvitePlan(args);
         const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
-        return calendarInviteContentReview(plan, current.observation, commandDigest);
+        return calendarInviteContentReview(plan, current, commandDigest);
       }
       const plan = calendarEventCreatePlan(args);
       const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));

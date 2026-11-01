@@ -26,7 +26,10 @@ export function localInspectionReconciliationMessage(result: LocalInspectionReco
       : result.observation.source === "google_calendar_read"
         ? "Google Calendarの対象event読取" : "合成local inspectionのreceipt照合";
     const inviteNotice = result.observation.provider_operation === "event.invite"
-      ? " 招待メールの配信・到達は確認できません。event.inviteは再送していません。" : "";
+      ? result.observation.status === "matched"
+        ? " Calendarの参加者一覧に要求宛先が含まれることを確認しました。招待通知の配信・到達は確認できず、event.inviteは再送していません。"
+        : " Calendarの参加者一覧に要求宛先全員が含まれることを確認できませんでした。招待通知の配信・到達も確認できず、event.inviteは再送していません。"
+      : "";
     return `${observationKind}を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。${inviteNotice}`;
   }
   if (result.status === "not_run") {
@@ -217,7 +220,15 @@ async function reconcileGoogleCalendarWriteReceipt(
   if ((operation !== "event.create" && operation !== "event.invite") || !eventId || !calendarId) {
     throw new Error("google_calendar_receipt_parameters_invalid");
   }
-  const lookup = await readGoogleCalendarEventReceipt(calendarId, eventId, { maxBytes: 32_768 });
+  const expectedInvitees = operation === "event.invite"
+    ? Array.isArray(parameters.attendees) && parameters.attendees.every((entry) => typeof entry === "string")
+      ? parameters.attendees as string[]
+      : (() => { throw new Error("google_calendar_receipt_parameters_invalid"); })()
+    : undefined;
+  const lookup = await readGoogleCalendarEventReceipt(calendarId, eventId, {
+    maxBytes: 32_768,
+    ...(expectedInvitees ? { expectedInvitees } : {}),
+  });
   return ingestGoogleCalendarReceiptObservation(hds, {
     ...common,
     caller,

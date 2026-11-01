@@ -967,7 +967,7 @@ function googleCalendarWriteReceiptDigests(parameters: Record<string, unknown>):
         event_state_digest: eventStateDigest, event_etag_digest: eventEtagDigest }),
       request_payload_digest: operationPlanDigest({ schema_version: "blue-tanuki.google-calendar-event-invite-payload.v1",
         target_scope: targetScope, calendar_id: calendarId, event_id: eventId, event_state_digest: eventStateDigest,
-        invitees, notification_effect: "send_invitation_emails_to_listed_attendees" }),
+        invitees, notification_effect: "send_calendar_update_notifications_to_all_attendees" }),
     };
   }
   throw new Error("google_calendar_receipt_operation_unsupported");
@@ -990,7 +990,19 @@ function googleCalendarWriteEffectIdentityDigest(parameters: Record<string, unkn
     throw new Error("google_calendar_receipt_parameters_invalid");
   }
   return operationPlanDigest({ schema_version: "blue-tanuki.google-calendar-invite-effect.v1",
-    calendar_id: calendarId, event_id: parameters.event_id.trim(), invitees });
+    calendar_id: calendarId, event_id: parameters.event_id.trim(), invitees: invitees.map((entry) => entry.toLowerCase()).sort() });
+}
+function googleCalendarInviteEventIdentityDigest(parameters: Record<string, unknown>): string {
+  if (parameters.operation !== "event.invite" || typeof parameters.event_id !== "string") {
+    throw new Error("google_calendar_receipt_operation_unsupported");
+  }
+  const event = parameters.event_observation;
+  const source = event && typeof event === "object" && !Array.isArray(event) ? event as Record<string, unknown> : undefined;
+  const calendarId = typeof parameters.calendar_id === "string" ? parameters.calendar_id.trim() :
+    typeof source?.calendar_id === "string" ? source.calendar_id : "";
+  if (!calendarId || !parameters.event_id.trim()) throw new Error("google_calendar_receipt_parameters_invalid");
+  return operationPlanDigest({ schema_version: "blue-tanuki.google-calendar-invite-event.v1",
+    calendar_id: calendarId, event_id: parameters.event_id.trim() });
 }
 function stepDigest(step: OperationStep): string {
   const { state: _state, result_digest: _result, ...definition } = step;
@@ -2858,7 +2870,10 @@ export class OperationPlanLedger {
           return unresolved || binding.status === "verified" &&
             priorDigests.request_payload_digest === currentDigests?.request_payload_digest;
         }
-        return googleCalendarWriteEffectIdentityDigest(priorParameters) === effectIdentity;
+        const priorUnresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const sameInviteEvent = googleCalendarInviteEventIdentityDigest(priorParameters) ===
+          googleCalendarInviteEventIdentityDigest(step.parameters ?? {});
+        return sameInviteEvent && priorUnresolved || googleCalendarWriteEffectIdentityDigest(priorParameters) === effectIdentity;
       }));
       if (priorEffect) throw new Error("google_calendar_write_effect_already_selected_or_attempted");
     }

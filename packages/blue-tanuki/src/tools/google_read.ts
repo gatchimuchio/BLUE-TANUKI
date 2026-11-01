@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { GoogleCalendarEventTargetObservationSchema, requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { GoogleCalendarEventTargetObservationSchema, normalizeGmailAddressList,
+  requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, type Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -747,7 +748,7 @@ function calendarTime(value: unknown): string | null {
   return optionalString(value.dateTime) ?? optionalString(value.date);
 }
 
-const MAX_CALENDAR_EVENT_ATTENDEES = 200;
+export const MAX_CALENDAR_EVENT_ATTENDEES = 200;
 const GOOGLE_CALENDAR_READ_ARGUMENTS = new Set([
   "calendar_id",
   "days",
@@ -1144,13 +1145,26 @@ export interface GoogleCalendarEventTargetSnapshot {
   observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse>;
   /** Retained only in the adapter so the subsequent PATCH can use If-Match. */
   etag: string;
-  /** Kept inside the adapter so attendee replacement cannot remove the owner's own participation. */
-  self_attendee_present: boolean;
+  /** Private, transient provider data used only to preserve the exact attendee array on an approved invite. */
+  attendees: readonly GoogleCalendarEventAttendeeSnapshot[];
+}
+
+export interface GoogleCalendarEventAttendeeSnapshot {
+  email: string;
+  self: boolean;
+  organizer: boolean;
+  optional?: boolean;
+  resource?: boolean;
+  response_status?: "needsAction" | "declined" | "tentative" | "accepted";
+  comment?: string;
+  display_name?: string;
+  additional_guests?: number;
 }
 
 export type GoogleCalendarEventReceiptLookup =
   | { readonly status: "found"; readonly provider_http_status: 200;
-      readonly observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse> }
+      readonly observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse>;
+      readonly planned_invitees_present?: boolean }
   | { readonly status: "not_found"; readonly provider_http_status: 404 };
 
 class GoogleCalendarEventNotFoundError extends Error {
@@ -1179,7 +1193,7 @@ export async function readGoogleCalendarEventTarget(
   const response = await request({
     service: "calendar",
     hostname: "www.googleapis.com",
-    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId,originalStartTime(date,dateTime,timeZone),organizer(self),attendees(self),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)`,
+    path: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?fields=id,etag,status,summary,recurrence,recurringEventId,originalStartTime(date,dateTime,timeZone),organizer(self),attendees(email,self,organizer,optional,resource,responseStatus,comment,displayName,additionalGuests),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)`,
     maxBytes,
     token,
   }, opts.signal);
@@ -1201,9 +1215,36 @@ export async function readGoogleCalendarEventTarget(
       rawAttendees.length > MAX_CALENDAR_EVENT_ATTENDEES ||
       (body.attendeesOmitted !== undefined && typeof body.attendeesOmitted !== "boolean") ||
       body.attendeesOmitted === true ||
-      rawAttendees.some((attendee) => !isRecord(attendee) || typeof attendee.self !== "boolean") ||
+      rawAttendees.some((attendee) => !isRecord(attendee) || typeof attendee.self !== "boolean" ||
+        typeof attendee.email !== "string" || typeof normalizeGmailAddressList(attendee.email) !== "string" ||
+        normalizeGmailAddressList(attendee.email) !== attendee.email ||
+        (attendee.organizer !== undefined && typeof attendee.organizer !== "boolean") ||
+        (attendee.optional !== undefined && typeof attendee.optional !== "boolean") ||
+        (attendee.resource !== undefined && typeof attendee.resource !== "boolean") ||
+        (attendee.responseStatus !== undefined && !["needsAction", "declined", "tentative", "accepted"].includes(String(attendee.responseStatus))) ||
+        (attendee.comment !== undefined && (typeof attendee.comment !== "string" || attendee.comment.length > 8_192)) ||
+        (attendee.displayName !== undefined && (typeof attendee.displayName !== "string" || attendee.displayName.length > 1_024)) ||
+        (attendee.additionalGuests !== undefined && (!Number.isInteger(attendee.additionalGuests) ||
+          (attendee.additionalGuests as number) < 0 || (attendee.additionalGuests as number) > MAX_CALENDAR_EVENT_ATTENDEES))) ||
       rawAttendees.filter((attendee) => isRecord(attendee) && attendee.self === true).length > 1) {
     throw new Error("google.calendar.read could not verify complete Calendar ownership and attendee inventory; mutation_sent=false");
+  }
+  const attendees: GoogleCalendarEventAttendeeSnapshot[] = rawAttendees.map((attendee) => {
+    const value = attendee as Record<string, unknown>;
+    return {
+      email: value.email as string,
+      self: value.self as boolean,
+      organizer: value.organizer === true,
+      ...(value.optional === undefined ? {} : { optional: value.optional as boolean }),
+      ...(value.resource === undefined ? {} : { resource: value.resource as boolean }),
+      ...(value.responseStatus === undefined ? {} : { response_status: value.responseStatus as GoogleCalendarEventAttendeeSnapshot["response_status"] }),
+      ...(value.comment === undefined ? {} : { comment: value.comment as string }),
+      ...(value.displayName === undefined ? {} : { display_name: value.displayName as string }),
+      ...(value.additionalGuests === undefined ? {} : { additional_guests: value.additionalGuests as number }),
+    };
+  });
+  if (new Set(attendees.map((attendee) => attendee.email.toLowerCase())).size !== attendees.length) {
+    throw new Error("google.calendar.read returned duplicate attendee identities; mutation_sent=false");
   }
   const eventStart = calendarTimeIdentity(body.start);
   const eventEnd = calendarTimeIdentity(body.end);
@@ -1264,7 +1305,17 @@ export async function readGoogleCalendarEventTarget(
     event_time_kind: eventStart.kind,
     event_time_zone: eventStart.normalized.time_zone,
     organizer_self: body.organizer.self,
-    attendee_self_flags: rawAttendees.map((attendee) => attendee.self),
+    attendee_state_digest: sha256Hex(attendees.map((attendee) => ({
+      email: attendee.email.toLowerCase(),
+      self: attendee.self,
+      organizer: attendee.organizer,
+      optional: attendee.optional ?? false,
+      resource: attendee.resource ?? false,
+      response_status: attendee.response_status ?? null,
+      comment: attendee.comment ?? null,
+      display_name: attendee.display_name ?? null,
+      additional_guests: attendee.additional_guests ?? 0,
+    }))),
     other_attendee_count: otherAttendeeCount,
     attendee_inventory_complete: true,
     recurrence_scope: recurrenceScope,
@@ -1305,19 +1356,33 @@ export async function readGoogleCalendarEventTarget(
       used_for_authority: false,
     },
   });
-  return { observation, etag: body.etag,
-    self_attendee_present: rawAttendees.some((attendee) => isRecord(attendee) && attendee.self === true) };
+  return { observation, etag: body.etag, attendees };
 }
 
 /** Exact single-event read for unknown write reconciliation; provider 404 remains non-authoritative. */
 export async function readGoogleCalendarEventReceipt(
   calendarId: string,
   eventId: string,
-  opts: GoogleReadOptions & { maxBytes?: number } = {},
+  opts: GoogleReadOptions & { maxBytes?: number; expectedInvitees?: readonly string[] } = {},
 ): Promise<GoogleCalendarEventReceiptLookup> {
   try {
     const target = await readGoogleCalendarEventTarget(calendarId, eventId, opts);
-    return { status: "found", provider_http_status: 200, observation: target.observation };
+    if (opts.expectedInvitees === undefined) {
+      return { status: "found", provider_http_status: 200, observation: target.observation };
+    }
+    if (opts.expectedInvitees.length < 1 || opts.expectedInvitees.length > 20 ||
+        opts.expectedInvitees.some((email) => typeof email !== "string" ||
+          normalizeGmailAddressList(email) !== email) ||
+        new Set(opts.expectedInvitees.map((email) => email.toLowerCase())).size !== opts.expectedInvitees.length) {
+      throw new Error("google.calendar.read receipt invitees are invalid; mutation_sent=false");
+    }
+    const current = new Set(target.attendees.map((attendee) => attendee.email.toLowerCase()));
+    return {
+      status: "found",
+      provider_http_status: 200,
+      observation: target.observation,
+      planned_invitees_present: opts.expectedInvitees.every((email) => current.has(email.toLowerCase())),
+    };
   } catch (error) {
     if (error instanceof GoogleCalendarEventNotFoundError) {
       return { status: "not_found", provider_http_status: 404 };

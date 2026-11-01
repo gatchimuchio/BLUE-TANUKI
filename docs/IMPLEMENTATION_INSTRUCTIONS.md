@@ -8,15 +8,23 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 Calendar結果不明の照合・再送抑止
+## 最新BUILD_BATCH — F03.02既存参加者を保持する招待追加consumer
+
+2026-11-02、既存参加者がいるGoogle Calendar予定へ宛先を追加するconsumerを接続した。現行APIはPATCHで指定した配列を置換し、`attendeesOmitted`は参加者応答だけの更新用途であるため、完全なattendee一覧を読んで保持項目と新規宛先を結合してPATCHする。既存者のemail、RSVP、任意参加、resource、comment、display name、additional guestsを読み取り、未知・不完全・重複・200人超・要求宛先重複・byte上限超過は作用前に拒否する。request前に確認したevent ETagを`If-Match`へ結ぶ。
+
+承認画面はno-storeで既存参加者、新規追加先、通知対象全員を分けて表示する。`sendUpdates=all`は既存参加者も含む全guestへの更新通知を依頼するため、その全宛先をL3 review digestへ束縛した。`event.invite`をGatewayの内容確認・承認必須経路へ追加し、承認時の再読取でも同じreview digestを照合する。providerから読んだ既存参加者の生住所は一時スナップショットとno-store reviewに限り、HDS／M／監査へは渡さない。Ownerが依頼した新規宛先は既存契約どおりtask parametersに残り、これをreview digestと作用要求へ束縛する。系列全体・occurrence・単一予定のscopeは従前どおり分離する。
+
+結果不明後の一回読取は、event存在だけで`event.invite`を一致扱いせず、要求された宛先が全員attendee一覧にいることとrecurrence scope一致を確認する。これは予定上の参加者登録を示すread-only観測であり、通知メールの配信・到達やwrite成功を証明しない。HDS stepは`outcome_unknown`を保ち再送しない。同一eventの未解決招待は別宛先でも遮断し、確定済み同一宛先の重複は順序・大文字小文字を正規化して拒否する。
+
+確認した現行API仕様: [Events: patch](https://developers.google.com/workspace/calendar/api/v3/reference/events/patch)、[Events resource](https://developers.google.com/workspace/calendar/api/v3/reference/events)、[Calendar notifications](https://developers.google.com/workspace/calendar/api/concepts/reminders)。
+
+HDS／core／WebChat／Gateway typecheck、HDS／core／WebChat／Gateway build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の移行負債76件は既存注意）。test suite、Gateway process／browser、実provider／実資格、Calendar変更はNOT_RUN。STATUS=`WIRED`（承認・既存参加者保持・再読取のコード接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
+
+## 前回BUILD_BATCH履歴 — F03.02 Calendar結果不明の照合・再送抑止
 
 2026-11-02、Calendar書込み後に結果が不明となった場合、HDSの一回限り・短期限・対象束縛の照合許可から、対象eventのread-only GET一回を行うconsumerを接続した。`event.create`は要求内容から決定するprovider event IDを使い、同一要求の再登録を防ぐ。Operation Plan経由では、同じ時間枠の結果が未解決の間は内容を変えた再作成も止め、確定済みの場合も同一要求の重複を拒否する。`event.invite`は同じevent・宛先への再送を拒否する。
 
-照合はeventの現在状態とprovider HTTP statusだけをdigest中心で記録し、HDS stepは`outcome_unknown`のまま保つ。Google Calendarの404は不存在と閲覧不能を区別できないため、成功・失敗の判定や再実行許可にしない。eventが見つかっても、招待メールの配信・到達は未確認のまま表示する。別owner taskボタンは新しい入力文を準備するだけで、自動送信・Calendar作用を行わない。
-
-Protocol／HDS-BRAIN／core／WebChat project build、core／WebChat／Gateway typecheckはPASS。`pnpm docs:check`と`git diff --check`もPASS（日本語基底の移行負債76件は既存注意）。test、Gateway process、browser、実provider／実資格、Calendar外部作用はNOT_RUN。状態は`WIRED`（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
-
-**次のBUILD_BATCH:** 既存参加者のいるeventへ追加するときにattendees全体を失わず処理するGoogle Calendar consumerが未接続。APIの安全な更新契約を現行正本・現行API仕様と照合し、満たせない条件はfail-closedのまま保持して、同じL3／Approval／Broker経路に接続する。実provider／live外部作用は行わない。
+照合はeventの現在状態とprovider HTTP statusだけをdigest中心で記録し、HDS stepは`outcome_unknown`のまま保つ。Google Calendarの404は不存在と閲覧不能を区別できないため、成功・失敗の判定や再実行許可にしない。eventが見つかっても、招待メールの配信・到達は未確認のまま表示する。別owner taskボタンは新しい入力文を準備するだけで、自動送信・Calendar作用を行わない。次batchで参加者一覧照合を加えたが、この履歴範囲の証拠はevent状態読取までに限る。
 
 ## 前回BUILD_BATCH履歴 — F03.02 Calendar参加者追加・招待通知
 

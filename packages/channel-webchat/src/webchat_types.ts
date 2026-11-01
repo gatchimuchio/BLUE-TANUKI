@@ -318,10 +318,14 @@ export interface WebChatGoogleCalendarEventInviteContentReview {
   recurring_event_id: string | null;
   original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
   organizer_self: true;
-  other_attendee_count: 0;
+  other_attendee_count: number;
   attendee_inventory_complete: true;
+  retained_attendees: readonly string[];
+  retained_attendee_count: number;
   invitees: readonly string[];
-  notification_effect: "send_invitation_emails_to_listed_attendees";
+  notification_recipients: readonly string[];
+  notification_recipient_count: number;
+  notification_effect: "send_calendar_update_notifications_to_all_attendees";
   event_state_digest: string;
   observed_at: string;
   used_for_authority: false;

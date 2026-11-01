@@ -20,11 +20,13 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-02、F03.02 Calendar書込み後の結果不明を、HDSから許可された一回限りの読取照合へ接続した。`event.create`は完全な要求内容から決定するprovider event IDを用い、同一要求の再登録を防ぐ。Operation Plan経由では同じ時間枠の結果が未解決の間は別内容への変更も止め、結果確定後は同一要求だけを重複拒否する。`event.invite`は同じevent・宛先への再送を拒否する。照合結果はdigest中心で保存し、HDS stepは`outcome_unknown`を維持する。404は不存在と閲覧不能を区別できず、eventの存在から招待メール到達も確認できないことをUIに表示する。owner継続ボタンは別task入力欄を準備するだけで自動送信・作用しない。
+2026-11-02、F03.02の`event.invite`を既存attendee保持consumer、no-store L3確認、Gateway必須承認経路へ接続した。Google Calendar PATCHはattendees配列を置換するため、完全一覧を読み、既存のRSVP等の書込可能項目と新規宛先を合わせて送る。重複宛先、完全性不明、200人超、max_bytes超は作用前にfail-closed。reviewは既存参加者・新規追加先・`sendUpdates=all`の全通知対象を表示し、digestとfresh ETagへ束縛する。既存参加者への更新通知を含むことも明示した。結果不明後のread-only照合はevent存在だけで一致扱いせず、要求宛先全員のattendee登録とscopeを確認する。通知メール到達は未確認、HDSは`outcome_unknown`、自動再送なし。同じeventの未解決招待は異なる宛先でも遮断し、確定済み同一宛先は順序・大文字小文字を正規化して重複拒否する。
 
-Protocol／HDS／core／WebChat project build、core／WebChat／Gateway typecheckはPASS。`pnpm docs:check`と`git diff --check`もPASS（日本語基底の移行負債76件は既存注意）。test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。STATUS=WIRED（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。次は既存参加者を保った招待追加consumerを、Google Calendar APIの現行仕様と照合して安全に接続する。
+HDS／core／WebChat／Gateway typecheck、HDS／core／WebChat／Gateway build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の移行負債76件は既存注意）。test suite／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。STATUS=`WIRED`（既存attendee保持・review承認・結果照合のコード接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
 
 ## 直近のBUILD_BATCH履歴
+
+2026-11-02、Calendar書込み後の結果不明を、HDSから許可された一回限りの読取照合へ接続した。`event.create`は要求内容から決定するprovider event IDを使い、同じ時間枠の未解決再作成と同一要求の重複を抑止する。`event.invite`は同じevent・宛先への再送を拒否する。404は不存在と閲覧不能を区別できず、eventの存在は招待メール到達を証明しない。HDS stepは`outcome_unknown`を保ち、owner継続ボタンは別task入力欄を準備するだけで自動送信・Calendar作用を行わない。参加者一覧の照合は次のBUILD_BATCHで接続した。
 
 2026-11-01、F03.02 Calendarの単一予定・繰返し系列・単一occurrenceを別scopeにし、系列規則とoccurrenceの親系列ID／`originalStartTime`をsnapshot／write target-version／Operation Plan／Owner確認へ結んだ。更新は件名のみ、削除は指定event IDのみとし、primary calendar・本人主催・完全参加者観測・他参加者0人・通知なし・fresh ETag `If-Match`を維持する。typecheck／build、script構文、docs gate、diff checkはPASS。test／runtime／browser／実provider／Calendar変更はNOT_RUN。STATUS=WIRED（runtime未確認）。
 

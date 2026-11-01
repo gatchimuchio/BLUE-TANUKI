@@ -3735,3 +3735,21 @@ Google Calendar `event.create`／`event.invite`のHDS `outcome_unknown`に、対
 | test／Gateway process／browser／実provider・資格／Calendar外部作用 | NOT_RUN。 |
 
 STATUS=`WIRED`（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。
+
+## 2026-11-02 QE_BUILD — F03.02既存参加者保持・招待consumer
+
+開始main／origin/main=`21732e1b3cd4158cd3e9640663ccc0396816f898`。意味編集前の二世代復旧点はlocal branch／remote tagで現行`21732e1`、直前`4f5ccc0`を照合した。保護対象untracked `.codex-remote-attachments/`は維持した。
+
+`event.invite`を、既存参加者一覧を失わずに追加するGoogle Calendar consumerへ接続した。現在のattendee全件と書込可能なRSVP等を短命snapshotへ読み、未知・不完全・重複・上限超過を作用前に拒否する。既存 attendee と新規宛先を統合したPATCHをfresh ETagの`If-Match`付きで送り、`sendUpdates=all`を指定する。no-store L3確認には保持対象、新規追加先、既存者を含む全通知対象を表示し、その全一覧をreview digestへ束縛する。Gatewayの承認要求・承認時再照合にも`event.invite`を追加した。既存参加者の生住所は一時snapshotとno-store reviewに限り、保存観測はdigest・件数中心とする。新規宛先は依頼されたtask parametersに残る。
+
+結果不明時の一回read-only照合は、event ID、recurrence scope、要求宛先全員の参加者登録を照合する。照合はHDSの`outcome_unknown`を解消せず、通知メールの配信・到達を示さず、再送しない。同一eventの未解決招待は別宛先でも遮断する。確定済み同じ宛先の重複は順序・大文字小文字に依存せず拒否する。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| HDS／core／WebChat／Gateway typecheck | PASS |
+| HDS／core／WebChat／Gateway project build | PASS |
+| 生成Control Center script構文解析 | PASS |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の移行負債76件は既存注意。 |
+| test suite／Gateway process／browser／実provider・資格／Calendar変更 | NOT_RUN |
+
+STATUS=`WIRED`（既存参加者保持・L3 review／承認・read-only照合の静的接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。

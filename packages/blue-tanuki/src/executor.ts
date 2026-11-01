@@ -779,8 +779,18 @@ export class Executor {
         review.attendee_inventory_complete === true && review.other_attendee_count === 0;
       const validInviteReview = "kind" in review && review.kind === "google_calendar_event_invite" &&
         /^[a-f0-9]{64}$/.test(review.event_state_digest) && review.organizer_self === true &&
-        review.attendee_inventory_complete === true && review.other_attendee_count === 0 &&
-        review.invitees.length > 0 && review.notification_effect === "send_invitation_emails_to_listed_attendees";
+        review.attendee_inventory_complete === true && Number.isInteger(review.other_attendee_count) &&
+        review.other_attendee_count >= 0 && review.other_attendee_count <= 200 &&
+        Array.isArray(review.retained_attendees) && review.retained_attendee_count === review.retained_attendees.length &&
+        review.retained_attendee_count <= 200 && review.retained_attendees.every((email) => typeof email === "string") &&
+        Array.isArray(review.invitees) && review.invitees.length > 0 && review.invitees.length <= 20 &&
+        Array.isArray(review.notification_recipients) && review.notification_recipient_count === review.notification_recipients.length &&
+        review.notification_recipient_count > 0 && review.notification_recipient_count <= 200 &&
+        review.retained_attendee_count + review.invitees.length <= 200 &&
+        review.invitees.every((email) => typeof email === "string" && review.notification_recipients.some((recipient) =>
+          typeof recipient === "string" && recipient.toLowerCase() === email.toLowerCase())) &&
+        review.notification_recipients.every((email) => typeof email === "string") &&
+        review.notification_effect === "send_calendar_update_notifications_to_all_attendees";
       if ((!validCreateReview && !validUpdateReview && !validDeleteReview && !validInviteReview) ||
           review.command_digest !== operationPlanDigest(command) ||
           !/^[a-f0-9]{64}$/.test(review.review_digest) ||

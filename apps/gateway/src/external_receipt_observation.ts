@@ -181,6 +181,8 @@ export function ingestGoogleCalendarReceiptObservation(
       event_etag_digest: providerEvent.event_etag_digest,
       recurrence_scope: providerEvent.recurrence_scope,
       other_attendee_count: providerEvent.other_attendee_count,
+      ...(operation === "event.invite"
+        ? { planned_invitees_present: input.lookup.planned_invitees_present === true } : {}),
     };
     receipt_digest = operationPlanDigest(candidate);
     candidate_set_digest = operationPlanDigest([candidate]);
@@ -193,6 +195,9 @@ export function ingestGoogleCalendarReceiptObservation(
       visibleTargetMatches = visibleTargetMatches && providerEvent.recurrence_scope === "single_event" &&
         providerEvent.summary === expectedSummary && Number.isFinite(expectedStart) && Number.isFinite(expectedEnd) &&
         Date.parse(providerEvent.event_start) === expectedStart && Date.parse(providerEvent.event_end) === expectedEnd;
+    } else {
+      visibleTargetMatches = visibleTargetMatches && providerEvent.recurrence_scope === input.parameters.target_scope &&
+        input.lookup.planned_invitees_present === true;
     }
     status = visibleTargetMatches ? "matched" : "mismatch";
   }
