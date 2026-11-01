@@ -34,6 +34,8 @@ export function receiptMemoryObservation(observation: OperationPlanExternalRecei
     request_payload_digest: observation.request_payload_digest,
     ...(observation.target_identity_digest ? { target_identity_digest: observation.target_identity_digest } : {}),
     ...(observation.observed_payload_digest ? { observed_payload_digest: observation.observed_payload_digest } : {}),
+    ...(observation.provider_http_status !== undefined ? { provider_http_status: observation.provider_http_status } : {}),
+    ...(observation.provider_operation !== undefined ? { provider_operation: observation.provider_operation } : {}),
     candidate_set_digest: observation.candidate_set_digest,
     status: observation.status,
     match_count: observation.match_count,

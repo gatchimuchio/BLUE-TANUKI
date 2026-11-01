@@ -8,15 +8,19 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 Calendar参加者追加・招待通知
+## 最新BUILD_BATCH — F03.02 Calendar結果不明の照合・再送抑止
 
-2026-11-01、Calendarの作成にOwner taskへ明示された最大20件の参加者を任意で指定できるようにし、同じL3内容確認へ宛先一覧と招待メール作用を表示する。宛先がある場合のみ`sendUpdates=all`を使い、宛先なしでは`sendUpdates=none`を維持する。既存予定への追加は独立した`event.invite` operationとし、主催者本人・primary calendar・完全snapshot・event ID・明示的なrecurrence scopeを要求する。
+2026-11-02、Calendar書込み後に結果が不明となった場合、HDSの一回限り・短期限・対象束縛の照合許可から、対象eventのread-only GET一回を行うconsumerを接続した。`event.create`は要求内容から決定するprovider event IDを使い、同一要求の再登録を防ぐ。Operation Plan経由では、同じ時間枠の結果が未解決の間は内容を変えた再作成も止め、確定済みの場合も同一要求の重複を拒否する。`event.invite`は同じevent・宛先への再送を拒否する。
 
-Google Calendar APIのPATCHはattendees配列を置換するため、既存予定への追加は現在の参加者が0人（owner本人を含む）と確認できる場合だけに限定した。event readのETag／状態digestと、request payload・target version・no-store L3 reviewを結び、取得・確認・Broker実行前に再読取する。シリーズ本体／指定occurrenceはscopeとidentityを一致させて表示し、異なる対象へ広がらない。Operation Planはevent.createの宛先有無とevent.inviteに応じて`write`／`external_send`／`credential_access`を厳密に分け、招待はhigh risk・L3・Approval Gate・HDS authorityを必須にする。
+照合はeventの現在状態とprovider HTTP statusだけをdigest中心で記録し、HDS stepは`outcome_unknown`のまま保つ。Google Calendarの404は不存在と閲覧不能を区別できないため、成功・失敗の判定や再実行許可にしない。eventが見つかっても、招待メールの配信・到達は未確認のまま表示する。別owner taskボタンは新しい入力文を準備するだけで、自動送信・Calendar作用を行わない。
 
-Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債76件は既存注意。test、Gateway process、browser、実provider／実資格、Calendar外部作用はNOT_RUN。`event.create`と限定された`event.invite`は`WIRED`（コード接続、runtime未確認）。既存参加者を保持しながら追加する経路、通知結果が不明な場合の照合・復旧、F03.02全体、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+Protocol／HDS-BRAIN／core／WebChat project build、core／WebChat／Gateway typecheckはPASS。`pnpm docs:check`と`git diff --check`もPASS（日本語基底の移行負債76件は既存注意）。test、Gateway process、browser、実provider／実資格、Calendar外部作用はNOT_RUN。状態は`WIRED`（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
 
-**次のBUILD_BATCH:** F03.02のCalendar書込結果が不明になった場合のread-only照合・停止・owner再開経路を接続し、`event.create`の重複登録と`event.invite`の招待メール再送を防ぐ。実provider／live外部作用は行わない。
+**次のBUILD_BATCH:** 既存参加者のいるeventへ追加するときにattendees全体を失わず処理するGoogle Calendar consumerが未接続。APIの安全な更新契約を現行正本・現行API仕様と照合し、満たせない条件はfail-closedのまま保持して、同じL3／Approval／Broker経路に接続する。実provider／live外部作用は行わない。
+
+## 前回BUILD_BATCH履歴 — F03.02 Calendar参加者追加・招待通知
+
+2026-11-01、Calendar作成にOwner taskが明示した最大20件の参加者を任意で束ね、宛先表示と招待メール作用を同じL3内容確認に結んだ。既存予定への追加は独立した`event.invite`とし、primary calendar・本人主催・完全snapshot・event ID・recurrence scopeを要求する。PATCHによるattendees置換で既存者を落とさないよう、参加者が0人の場合だけ許可する制限を維持する。詳細は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に記録する。
 
 ## repo基点
 

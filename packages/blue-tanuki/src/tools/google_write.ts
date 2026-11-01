@@ -955,25 +955,29 @@ function calendarEventCreatePlan(args: Record<string, unknown>): CalendarEventCr
   }
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const body = calendarEventBody(args, true, attendeeEmails);
-  if (Buffer.byteLength(jsonBody(body), "utf8") > maxBytes) {
-    throw new Error("event.create payload exceeds max_bytes; mutation_sent=false");
-  }
   const sourceObservation = parseCalendarAvailabilityObservation(args.availability_observation);
   const windowStart = Date.parse(sourceObservation.time_min);
   const windowEnd = Date.parse(sourceObservation.time_max);
   if (sourceObservation.calendar_id !== calendarId || eventStartMs < windowStart || eventEndMs > windowEnd) {
     throw new Error("event.create does not match the supplied freebusy calendar or time window; mutation_sent=false");
   }
-  const requestPayloadDigest = sha256Hex({
-    schema_version: "blue-tanuki.google-calendar-event-create-payload.v1",
-    calendar_id: calendarId,
-    event: body,
-  });
   const targetIdentityDigest = sha256Hex({
     schema_version: "blue-tanuki.google-calendar-event-create-target.v1",
     calendar_id: calendarId,
     start,
     end,
+  });
+  // Reusing this payload-bound provider ID prevents retry duplicates without conflating
+  // distinct events that happen to share a calendar and time window.
+  body.id = sha256Hex({ schema_version: "blue-tanuki.google-calendar-event-create-id.v1",
+    calendar_id: calendarId, event: body });
+  if (Buffer.byteLength(jsonBody(body), "utf8") > maxBytes) {
+    throw new Error("event.create payload exceeds max_bytes; mutation_sent=false");
+  }
+  const requestPayloadDigest = sha256Hex({
+    schema_version: "blue-tanuki.google-calendar-event-create-payload.v1",
+    calendar_id: calendarId,
+    event: body,
   });
   return {
     calendar_id: calendarId,
@@ -1196,6 +1200,14 @@ export function googleCalendarWriteRequestPayloadDigest(args: Record<string, unk
       : args.operation === "event.invite"
         ? calendarEventInvitePlan(args).request_payload_digest
     : calendarEventCreatePlan(args).request_payload_digest;
+}
+
+/** Stable client-generated Google event ID for the exact calendar/time target. */
+export function googleCalendarCreateEventId(args: Record<string, unknown>): string {
+  if (args.operation !== "event.create") throw new Error("google_calendar_event_create_id_operation_unsupported");
+  const id = calendarEventCreatePlan(args).event_body.id;
+  if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)) throw new Error("google_calendar_event_create_id_invalid");
+  return id;
 }
 
 export function googleCalendarWriteTargetIdentityDigest(args: Record<string, unknown>): string {

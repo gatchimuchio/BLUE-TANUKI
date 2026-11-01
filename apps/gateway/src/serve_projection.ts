@@ -288,10 +288,12 @@ export interface OperationPlanStatusProjection {
       };
       external_receipt_observation: "not_applicable" | "not_recorded" | "matched" | "not_found" | "mismatch" | "ambiguous";
       external_receipt?: {
-        source: "local_inspection";
+        source: "local_inspection" | "google_calendar_read";
         match_count: number;
         evidence_digest: string;
         receipt_digest?: string;
+        provider_http_status?: number;
+        provider_operation?: "event.create" | "event.invite";
         observed_at_ms: number;
         used_for_authority: false;
         raw_receipt_exposed: false;
@@ -543,8 +545,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       const observationValid = observationStatus === "not_recorded" || observationStatus === "not_applicable"
         ? observation === undefined
         : isRecord(observation) && Object.keys(observation).every((key) =>
-          ["source", "match_count", "evidence_digest", "receipt_digest", "observed_at_ms", "used_for_authority", "raw_receipt_exposed"].includes(key)) &&
-          observation.source === "local_inspection" && observation.used_for_authority === false && observation.raw_receipt_exposed === false &&
+          ["source", "match_count", "evidence_digest", "receipt_digest", "provider_http_status", "provider_operation", "observed_at_ms", "used_for_authority", "raw_receipt_exposed"].includes(key)) &&
+          ["local_inspection", "google_calendar_read"].includes(String(observation.source)) &&
+          (observation.source !== "google_calendar_read" || step.operation === "google.calendar.write" &&
+            ((observationStatus === "not_found" && observation.provider_http_status === 404) ||
+              (["matched", "mismatch"].includes(String(observationStatus)) && observation.provider_http_status === 200)) &&
+            ["event.create", "event.invite"].includes(String(observation.provider_operation))) &&
+          observation.used_for_authority === false && observation.raw_receipt_exposed === false &&
           Number.isInteger(observation.match_count) && (observation.match_count as number) >= 0 &&
           (observation.match_count as number) <= 100 && isDigest(observation.evidence_digest) &&
           (observation.receipt_digest === undefined || isDigest(observation.receipt_digest)) &&
@@ -606,10 +613,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         } } : {}),
         external_receipt_observation: observationStatus as OperationPlanStatusProjection["plans"][number]["steps"][number]["external_receipt_observation"],
         ...(isRecord(observation) ? { external_receipt: {
-          source: "local_inspection" as const,
+          source: observation.source as "local_inspection" | "google_calendar_read",
           match_count: observation.match_count as number,
           evidence_digest: observation.evidence_digest as string,
           ...(typeof observation.receipt_digest === "string" ? { receipt_digest: observation.receipt_digest } : {}),
+          ...(typeof observation.provider_http_status === "number" ? { provider_http_status: observation.provider_http_status } : {}),
+          ...(observation.provider_operation === "event.create" || observation.provider_operation === "event.invite"
+            ? { provider_operation: observation.provider_operation } : {}),
           observed_at_ms: observation.observed_at_ms as number,
           used_for_authority: false as const,
           raw_receipt_exposed: false as const,

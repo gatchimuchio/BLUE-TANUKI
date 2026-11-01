@@ -1148,6 +1148,18 @@ export interface GoogleCalendarEventTargetSnapshot {
   self_attendee_present: boolean;
 }
 
+export type GoogleCalendarEventReceiptLookup =
+  | { readonly status: "found"; readonly provider_http_status: 200;
+      readonly observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse> }
+  | { readonly status: "not_found"; readonly provider_http_status: 404 };
+
+class GoogleCalendarEventNotFoundError extends Error {
+  constructor() {
+    super("google.calendar.read could not obtain a complete single-event target; mutation_sent=false");
+    this.name = "GoogleCalendarEventNotFoundError";
+  }
+}
+
 export async function readGoogleCalendarEventTarget(
   calendarId: string,
   eventId: string,
@@ -1172,6 +1184,7 @@ export async function readGoogleCalendarEventTarget(
     token,
   }, opts.signal);
   const observedAt = now().toISOString();
+  if (response.status === 404) throw new GoogleCalendarEventNotFoundError();
   if (!response.ok || response.truncated) {
     throw new Error("google.calendar.read could not obtain a complete single-event target; mutation_sent=false");
   }
@@ -1294,6 +1307,23 @@ export async function readGoogleCalendarEventTarget(
   });
   return { observation, etag: body.etag,
     self_attendee_present: rawAttendees.some((attendee) => isRecord(attendee) && attendee.self === true) };
+}
+
+/** Exact single-event read for unknown write reconciliation; provider 404 remains non-authoritative. */
+export async function readGoogleCalendarEventReceipt(
+  calendarId: string,
+  eventId: string,
+  opts: GoogleReadOptions & { maxBytes?: number } = {},
+): Promise<GoogleCalendarEventReceiptLookup> {
+  try {
+    const target = await readGoogleCalendarEventTarget(calendarId, eventId, opts);
+    return { status: "found", provider_http_status: 200, observation: target.observation };
+  } catch (error) {
+    if (error instanceof GoogleCalendarEventNotFoundError) {
+      return { status: "not_found", provider_http_status: 404 };
+    }
+    throw error;
+  }
 }
 
 function freeBusyIntervals(

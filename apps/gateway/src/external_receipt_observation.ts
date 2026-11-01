@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import type { GoogleCalendarEventReceiptLookup } from "@blue-tanuki/core";
 import type { InboundRequest, OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
-import { OperationPlanExternalReceiptObservationSchema, fileWritePayloadDigest } from "@blue-tanuki/protocol";
+import { GoogleCalendarEventTargetObservationSchema, OperationPlanExternalReceiptObservationSchema,
+  fileWritePayloadDigest } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 
@@ -127,6 +129,90 @@ export function ingestLocalInspectionReceipt(
     candidate_set_digest: operationPlanDigest(candidates),
     status,
     match_count: candidates.length,
+    used_for_authority: false as const,
+    raw_receipt_exposed: false as const,
+  };
+  const observation = OperationPlanExternalReceiptObservationSchema.parse({
+    ...evidence,
+    evidence_digest: operationPlanDigest(evidence),
+    observed_at_ms: observedAt,
+  });
+  sink.recordOperationPlanExternalReceiptObservation(observation, input.caller);
+  return observation;
+}
+
+export interface GoogleCalendarReceiptObservationInput extends Omit<LocalInspectionReceiptInput, "response"> {
+  parameters: Record<string, unknown>;
+  target_identity_digest: string;
+  lookup: GoogleCalendarEventReceiptLookup;
+}
+
+/** Store only the exact Calendar target's digest-only read; this never resolves the original write outcome. */
+export function ingestGoogleCalendarReceiptObservation(
+  sink: ExternalReceiptObservationSink,
+  input: GoogleCalendarReceiptObservationInput,
+): OperationPlanExternalReceiptObservation {
+  const operation = input.parameters.operation;
+  if (!/^[a-zA-Z0-9._:-]{1,200}$/.test(input.command_id) ||
+      ![input.command_digest, input.executor_command_digest, input.plan_id_digest, input.revision_digest,
+        input.step_id_digest, input.request_payload_digest, input.target_identity_digest].every((value) => DIGEST_PATTERN.test(value)) ||
+      (operation !== "event.create" && operation !== "event.invite")) {
+    throw new Error("google_calendar_receipt_observation_binding_invalid");
+  }
+  const observedAt = input.observed_at_ms ?? Date.now();
+  if (!Number.isSafeInteger(observedAt) || observedAt < 0 || observedAt > Date.now() + 30_000) {
+    throw new Error("external_receipt_observation_time_invalid");
+  }
+  const expectedCommandKey = sha256(JSON.stringify(["gateway-executor-command.v1", input.command_id]));
+  let status: "matched" | "not_found" | "mismatch";
+  let receipt_digest: string | undefined;
+  let candidate_set_digest: string;
+  let match_count: number;
+  if (input.lookup.status === "not_found") {
+    status = "not_found";
+    candidate_set_digest = operationPlanDigest([]);
+    match_count = 0;
+  } else {
+    const providerEvent = GoogleCalendarEventTargetObservationSchema.parse(input.lookup.observation);
+    const candidate = {
+      target_identity_digest: input.target_identity_digest,
+      provider_status: providerEvent.status,
+      event_state_digest: providerEvent.event_state_digest,
+      event_etag_digest: providerEvent.event_etag_digest,
+      recurrence_scope: providerEvent.recurrence_scope,
+      other_attendee_count: providerEvent.other_attendee_count,
+    };
+    receipt_digest = operationPlanDigest(candidate);
+    candidate_set_digest = operationPlanDigest([candidate]);
+    match_count = 1;
+    let visibleTargetMatches = providerEvent.status === "confirmed";
+    if (operation === "event.create") {
+      const expectedSummary = typeof input.parameters.summary === "string" ? input.parameters.summary.trim() : null;
+      const expectedStart = typeof input.parameters.start === "string" ? Date.parse(input.parameters.start.trim()) : NaN;
+      const expectedEnd = typeof input.parameters.end === "string" ? Date.parse(input.parameters.end.trim()) : NaN;
+      visibleTargetMatches = visibleTargetMatches && providerEvent.recurrence_scope === "single_event" &&
+        providerEvent.summary === expectedSummary && Number.isFinite(expectedStart) && Number.isFinite(expectedEnd) &&
+        Date.parse(providerEvent.event_start) === expectedStart && Date.parse(providerEvent.event_end) === expectedEnd;
+    }
+    status = visibleTargetMatches ? "matched" : "mismatch";
+  }
+  const evidence = {
+    schema_version: "external-receipt-observation.v1" as const,
+    source: "google_calendar_read" as const,
+    plan_id_digest: input.plan_id_digest,
+    revision_digest: input.revision_digest,
+    step_id_digest: input.step_id_digest,
+    command_digest: input.command_digest,
+    executor_command_digest: input.executor_command_digest,
+    command_key_digest: sha256(expectedCommandKey),
+    request_payload_digest: input.request_payload_digest,
+    target_identity_digest: input.target_identity_digest,
+    provider_http_status: input.lookup.provider_http_status,
+    provider_operation: operation,
+    candidate_set_digest,
+    status,
+    match_count,
+    ...(receipt_digest ? { receipt_digest } : {}),
     used_for_authority: false as const,
     raw_receipt_exposed: false as const,
   };

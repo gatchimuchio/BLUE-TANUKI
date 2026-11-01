@@ -3719,3 +3719,19 @@ Calendar create、対象scope付きupdate／deleteは`WIRED`（静的接続、ru
 | test suite／Gateway process／browser／実provider・資格／Calendar外部作用／QE_QC／QE_QA | NOT_RUN。 |
 
 `event.create`参加者追加および既存参加者0人に限る`event.invite`を`WIRED`（コード接続、runtime未確認）とする。既存attendeeを保持して追加する経路、外部作用結果不明時の照合・復旧、F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOは未成立。
+
+## 2026-11-02 QE_BUILD — F03.02 Calendar結果不明の読取照合・再送抑止
+
+開始local／remote `main`=`4f5ccc0ee525f159fbea3030a8d76d344518fb9b`。作業前の復旧点はlocal `codex/backup-main=4f5ccc0...`、`codex/backup-main-prev=bc8b2ec...`およびremote同名tagで照合した。保護対象`.codex-remote-attachments/`は変更していない。現行rev3.0 pinと適用AGENTS／active instructionを再確認した。
+
+Google Calendar `event.create`／`event.invite`のHDS `outcome_unknown`に、対象・plan revision・step・execution binding・期限へ束縛した一回限りのread-only照合を追加した。Calendarはevent IDを指定したGET一回だけ行い、書込みを再送しない。`event.create`のprovider event IDは要求本文のdigestから決定するため、同一内容の再試行は同じIDとなる。Operation Planは同じカレンダー・時間枠に未解決writeがある間は別内容への再作成も拒否し、verified後は同一payloadのみを拒否する。`event.invite`は対象eventと正規化宛先の組が過去に選択／実行された場合の再送を拒否する。
+
+読取結果はtarget／request digest、provider status、event state／ETag digest等のdigest中心観測としてHDS/Mへ保存する。観測はworld truth、成功、失敗、権限、再実行許可ではなく、stepの`outcome_unknown`を解消しない。404は不存在またはアクセス不能のいずれもあり、invite eventが確認できても招待メールの配信・到達は示さない。UIはこの境界を表示し、owner継続ボタンは新task入力欄の準備だけを行う。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS／core／WebChat project build、core／WebChat／Gateway typecheck | PASS |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債76件の既存注意あり。 |
+| test／Gateway process／browser／実provider・資格／Calendar外部作用 | NOT_RUN。 |
+
+STATUS=`WIRED`（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。

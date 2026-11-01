@@ -20,11 +20,13 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-01、F03.02 Calendarの繰返し系列と単一occurrenceを別の読み取り・作用scopeとして接続した。単件snapshot／write target-versionをv3へ上げ、単一予定・系列本体・系列内1回分を識別する。seriesは規則列、occurrenceは親系列IDと`originalStartTime`を取得し、曖昧・不完全・上限超過の識別は失敗する。更新・削除は`target_scope`を要求してstate／ETag／command／Operation Planに束縛し、Ownerのno-store確認にも作用scopeと識別情報を表示する。更新は件名だけ、削除は指定event IDだけ、primary calendar・本人主催・参加者一覧完全・他参加者0人の既存条件を維持し、通知なし・fresh ETag `If-Match`で実行する。
+2026-11-02、F03.02 Calendar書込み後の結果不明を、HDSから許可された一回限りの読取照合へ接続した。`event.create`は完全な要求内容から決定するprovider event IDを用い、同一要求の再登録を防ぐ。Operation Plan経由では同じ時間枠の結果が未解決の間は別内容への変更も止め、結果確定後は同一要求だけを重複拒否する。`event.invite`は同じevent・宛先への再送を拒否する。照合結果はdigest中心で保存し、HDS stepは`outcome_unknown`を維持する。404は不存在と閲覧不能を区別できず、eventの存在から招待メール到達も確認できないことをUIに表示する。owner継続ボタンは別task入力欄を準備するだけで自動送信・作用しない。
 
-Protocol／HDS／core／WebChat／Gatewayのtypecheck／build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の移行負債76件は既存注意）。test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。STATUS=WIRED（コード接続、runtime未確認）。F03.02の参加者・招待効果、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。次は参加者変更と招待通知を、別Operation Plan・別L3確認へ接続するconsumerを施工する。
+Protocol／HDS／core／WebChat project build、core／WebChat／Gateway typecheckはPASS。`pnpm docs:check`と`git diff --check`もPASS（日本語基底の移行負債76件は既存注意）。test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。STATUS=WIRED（コード・型・build接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。次は既存参加者を保った招待追加consumerを、Google Calendar APIの現行仕様と照合して安全に接続する。
 
 ## 直近のBUILD_BATCH履歴
+
+2026-11-01、F03.02 Calendarの単一予定・繰返し系列・単一occurrenceを別scopeにし、系列規則とoccurrenceの親系列ID／`originalStartTime`をsnapshot／write target-version／Operation Plan／Owner確認へ結んだ。更新は件名のみ、削除は指定event IDのみとし、primary calendar・本人主催・完全参加者観測・他参加者0人・通知なし・fresh ETag `If-Match`を維持する。typecheck／build、script構文、docs gate、diff checkはPASS。test／runtime／browser／実provider／Calendar変更はNOT_RUN。STATUS=WIRED（runtime未確認）。
 
 2026-11-01、F02.02のGmail候補をTo/Cc/Bcc/Reply-To・件名・本文から実MIME要求、target identity、no-store Owner content review、既存L3／Approval Gate／Brokerへ結んだ。宛先列は共有Protocol正規化で表示名なし・最大20件に限定し、Owner taskにない宛先をメールheaderから補わない。Control CenterはReply-Toとrequest digestを表示し、添付は未対応としてなしと明示、添付フィールドは候補検査で拒否する。Protocol build、HDS／core／WebChat／Gatewayのtypecheck・build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／Gateway process／browser／実provider／外部作用はNOT_RUN。STATUS=WIRED（宛先・本文のコード接続、runtime未確認）。添付の選択・読取・内容digest・Owner確認が未接続のためF02.02全体=`BUILD_GAP`。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。次は添付identityから内容を正確に確認・結合するproducer／consumerを実装する。
 

@@ -385,7 +385,7 @@ export type OperationPlanGoalRelationAdoptionAssessment = z.infer<typeof Operati
 
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
-  source: z.enum(["local_inspection", "local_file_state"]),
+  source: z.enum(["local_inspection", "local_file_state", "google_calendar_read"]),
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
@@ -397,6 +397,8 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
   request_payload_digest: Digest,
   observed_payload_digest: Digest.optional(),
   target_identity_digest: Digest.optional(),
+  provider_http_status: z.number().int().min(100).max(599).optional(),
+  provider_operation: z.enum(["event.create", "event.invite"]).optional(),
   gateway_execution_receipt_digest: Digest.optional(),
   gateway_execution_receipt_state: z.enum(["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"]).optional(),
   gateway_execution_epoch_digest: Digest.optional(),
@@ -434,6 +436,27 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
     if (observation.status === "mismatch" && (observation.match_count !== 1 || !observation.receipt_digest ||
         observation.observed_payload_digest === observation.request_payload_digest)) {
       context.addIssue({ code: "custom", message: "mismatched_file_state_requires_one_nonmatching_target" });
+    }
+    return;
+  }
+  if (observation.source === "google_calendar_read") {
+    if (!observation.target_identity_digest || observation.observed_command_digest !== undefined ||
+        observation.observed_command_key_digest !== undefined || observation.observed_payload_digest !== undefined ||
+        observation.gateway_execution_receipt_digest !== undefined || observation.gateway_execution_receipt_state !== undefined ||
+        observation.gateway_execution_epoch_digest !== undefined || observation.gateway_task_identity_digest !== undefined ||
+        ![200, 404].includes(observation.provider_http_status ?? 0) || !observation.provider_operation) {
+      context.addIssue({ code: "custom", message: "google_calendar_read_observation_binding_invalid" });
+    }
+    if ((observation.status === "matched" || observation.status === "mismatch") &&
+        (observation.provider_http_status !== 200 || observation.match_count !== 1 || !observation.receipt_digest)) {
+      context.addIssue({ code: "custom", message: "google_calendar_read_observed_target_requires_one_provider_record" });
+    }
+    if (observation.status === "not_found" &&
+        (observation.provider_http_status !== 404 || observation.match_count !== 0 || observation.receipt_digest !== undefined)) {
+      context.addIssue({ code: "custom", message: "google_calendar_read_not_found_must_be_provider_404" });
+    }
+    if (observation.status === "ambiguous") {
+      context.addIssue({ code: "custom", message: "google_calendar_read_cannot_claim_ambiguous_provider_lookup" });
     }
     return;
   }

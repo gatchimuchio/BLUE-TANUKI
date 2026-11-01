@@ -499,6 +499,7 @@ function cronExternalReceiptCorrelation(
 
   const statuses: string[] = [];
   let hasRecordedObservation = false;
+  const sources = new Set<"local_inspection" | "google_calendar_read">();
   for (const step of unresolved) {
     const status = step.external_receipt_observation;
     if (!status || !["not_recorded", "matched", "not_found", "mismatch", "ambiguous"].includes(status)) {
@@ -510,12 +511,19 @@ function cronExternalReceiptCorrelation(
       continue;
     }
     const observation = step.external_receipt;
-    if (!observation || observation.source !== "local_inspection" || observation.used_for_authority !== false ||
+    if (!observation || !["local_inspection", "google_calendar_read"].includes(String(observation.source)) ||
+        observation.used_for_authority !== false ||
         observation.raw_receipt_exposed !== false || !Number.isSafeInteger(observation.match_count) ||
         observation.match_count < 0 || observation.match_count > 100 ||
         !/^[a-f0-9]{64}$/.test(observation.evidence_digest) ||
         (observation.receipt_digest !== undefined && !/^[a-f0-9]{64}$/.test(observation.receipt_digest)) ||
         !Number.isSafeInteger(observation.observed_at_ms) || observation.observed_at_ms < 0) {
+      return { external_receipt_observation_status: "mixed_or_unknown" };
+    }
+    if (observation.source === "google_calendar_read" &&
+        (step.operation !== "google.calendar.write" ||
+          (status === "not_found" ? observation.provider_http_status !== 404
+            : observation.provider_http_status !== 200))) {
       return { external_receipt_observation_status: "mixed_or_unknown" };
     }
     const consistent = status === "matched"
@@ -526,6 +534,7 @@ function cronExternalReceiptCorrelation(
           ? observation.match_count === 1 && observation.receipt_digest !== undefined
           : observation.match_count >= 2 && observation.receipt_digest === undefined;
     if (!consistent) return { external_receipt_observation_status: "mixed_or_unknown" };
+    sources.add(observation.source as "local_inspection" | "google_calendar_read");
     hasRecordedObservation = true;
   }
 
@@ -534,7 +543,8 @@ function cronExternalReceiptCorrelation(
     external_receipt_observation_status: uniqueStatuses.size === 1
       ? statuses[0] as WebChatNotificationItem["external_receipt_observation_status"]
       : "mixed_or_unknown",
-    ...(hasRecordedObservation ? { external_receipt_observation_source: "local_inspection" as const } : {}),
+    ...(hasRecordedObservation ? { external_receipt_observation_source: sources.size === 1
+      ? [...sources][0]! : "mixed" as const } : {}),
   };
 }
 

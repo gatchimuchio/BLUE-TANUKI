@@ -741,7 +741,7 @@ export interface WebChatNotificationItem {
   result_correlation_status?: WebChatCronResultCorrelationStatus;
   result_memory_status?: WebChatCronResultMemoryStatus;
   external_receipt_observation_status?: WebChatCronExternalReceiptObservationStatus;
-  external_receipt_observation_source?: "local_inspection";
+  external_receipt_observation_source?: "local_inspection" | "google_calendar_read" | "mixed";
   cron_resolution_state?: WebChatCronResolutionState;
   expires_at_ms?: number;
   next_action?: string;

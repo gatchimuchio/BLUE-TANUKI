@@ -1,9 +1,11 @@
 import type { HDSUpperController, OperationPlanReceiptReconciliationAuthorization } from "@blue-tanuki/hds-brain";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
-import { gmailWriteRequestPayloadDigest, inspectFileWriteOutcomeState } from "@blue-tanuki/core";
+import { gmailWriteRequestPayloadDigest, googleCalendarCreateEventId, googleCalendarWriteRequestPayloadDigest,
+  googleCalendarWriteTargetIdentityDigest, inspectFileWriteOutcomeState, readGoogleCalendarEventReceipt } from "@blue-tanuki/core";
 import { fileWritePayloadDigest, type ExecuteCommand, type InboundRequest, type OperationPlanExternalReceiptObservation } from "@blue-tanuki/protocol";
 import { createLocalFileWriteStateObservation, ingestLocalFileWriteStateObservation,
-  ingestLocalInspectionReceipt } from "./external_receipt_observation.js";
+  ingestGoogleCalendarReceiptObservation, ingestLocalInspectionReceipt,
+  type LocalInspectionReceiptInput } from "./external_receipt_observation.js";
 import { queryLocalInspectionReceipt } from "./local_inspection_adapter.js";
 
 export type LocalInspectionReconciliationResult =
@@ -20,8 +22,12 @@ export function localInspectionReconciliationMessage(result: LocalInspectionReco
       ? "digest-onlyの非権威観測をMへ保存しました。"
       : "観測はJへ記録済みですがMへの保存は未確認で、再調停が必要です。";
     const observationKind = result.observation.source === "local_file_state"
-      ? "sandbox内file.write対象の状態観測" : "合成local inspectionのreceipt照合";
-    return `${observationKind}を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
+      ? "sandbox内file.write対象の状態観測"
+      : result.observation.source === "google_calendar_read"
+        ? "Google Calendarの対象event読取" : "合成local inspectionのreceipt照合";
+    const inviteNotice = result.observation.provider_operation === "event.invite"
+      ? " 招待メールの配信・到達は確認できません。event.inviteは再送していません。" : "";
+    return `${observationKind}を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。${inviteNotice}`;
   }
   if (result.status === "not_run") {
     return `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`;
@@ -133,7 +139,7 @@ export async function runLocalInspectionReconciliation(input: {
     input.command, input.caller, input.now_ms,
   );
   if (!authorization) return { status: "rejected", reason: "plan_receipt_reconciliation_authorization_expired_or_stale" };
-  if (authorization.operation !== "file.write" && !input.endpoint?.trim()) {
+  if (authorization.operation !== "file.write" && authorization.operation !== "google.calendar.write" && !input.endpoint?.trim()) {
     return { status: "not_run", reason: "local_inspection_endpoint_not_configured" };
   }
   try {
@@ -179,12 +185,45 @@ async function queryAndRecord(
       request_payload_digest: fileWritePayloadDigest(String(authorization.parameters.content ?? "")),
       inspection: await inspectFileWriteOutcomeState(authorization.parameters),
     })
-    : ingestLocalInspectionReceipt(hds, {
-      ...common, request_payload_digest: gmailWriteRequestPayloadDigest(authorization.parameters),
-      response: await queryLocalInspectionReceipt(endpoint!, authorization.command_key),
-    });
+    : authorization.operation === "google.calendar.write"
+      ? await reconcileGoogleCalendarWriteReceipt(hds, authorization, caller, common)
+      : ingestLocalInspectionReceipt(hds, {
+        ...common, request_payload_digest: gmailWriteRequestPayloadDigest(authorization.parameters),
+        response: await queryLocalInspectionReceipt(endpoint!, authorization.command_key),
+      });
   const memory_status = hds.reconcileOperationPlanMemory() &&
       hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)
     ? "committed" : "pending";
   return { status: "observed", observation, memory_status };
+}
+
+async function reconcileGoogleCalendarWriteReceipt(
+  hds: ReconciliationHDS,
+  authorization: OperationPlanReceiptReconciliationAuthorization,
+  caller: InboundRequest,
+  common: Pick<LocalInspectionReceiptInput, "command_id" | "command_digest" | "executor_command_digest" |
+    "plan_id_digest" | "revision_digest" | "step_id_digest">,
+): Promise<OperationPlanExternalReceiptObservation> {
+  const parameters = authorization.parameters;
+  const operation = parameters.operation;
+  const calendarId = typeof parameters.calendar_id === "string" && parameters.calendar_id.trim()
+    ? parameters.calendar_id.trim()
+    : operation === "event.invite" && parameters.event_observation && typeof parameters.event_observation === "object" &&
+        !Array.isArray(parameters.event_observation) && typeof (parameters.event_observation as Record<string, unknown>).calendar_id === "string"
+      ? String((parameters.event_observation as Record<string, unknown>).calendar_id) : "primary";
+  const eventId = operation === "event.create"
+    ? googleCalendarCreateEventId(parameters)
+    : typeof parameters.event_id === "string" ? parameters.event_id.trim() : "";
+  if ((operation !== "event.create" && operation !== "event.invite") || !eventId || !calendarId) {
+    throw new Error("google_calendar_receipt_parameters_invalid");
+  }
+  const lookup = await readGoogleCalendarEventReceipt(calendarId, eventId, { maxBytes: 32_768 });
+  return ingestGoogleCalendarReceiptObservation(hds, {
+    ...common,
+    caller,
+    parameters,
+    target_identity_digest: googleCalendarWriteTargetIdentityDigest(parameters),
+    request_payload_digest: googleCalendarWriteRequestPayloadDigest(parameters),
+    lookup,
+  });
 }

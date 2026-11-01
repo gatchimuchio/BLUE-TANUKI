@@ -2272,21 +2272,40 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 mismatch: "local inspectionのreceipt digest不一致（結果不明を維持）",
                 ambiguous: "local inspectionに複数候補（結果不明を維持）",
               };
-              const receipt = Object.prototype.hasOwnProperty.call(receiptLabels, step.external_receipt_observation)
+              const receiptValue = Object.prototype.hasOwnProperty.call(receiptLabels, step.external_receipt_observation)
                 ? receiptLabels[step.external_receipt_observation] : "観測状態を確認できません";
               const externalReceipt = isObject(step.external_receipt) ? step.external_receipt : {};
-              const externalReceiptSafe = externalReceipt.source === "local_inspection" &&
+              const externalReceiptSafe = ["local_inspection", "google_calendar_read"].includes(externalReceipt.source) &&
                 externalReceipt.used_for_authority === false && externalReceipt.raw_receipt_exposed === false &&
                 typeof externalReceipt.evidence_digest === "string" && /^[a-f0-9]{64}$/.test(externalReceipt.evidence_digest) &&
                 Number.isInteger(externalReceipt.match_count) && externalReceipt.match_count >= 0 && externalReceipt.match_count <= 100 &&
                 Number.isSafeInteger(externalReceipt.observed_at_ms) && externalReceipt.observed_at_ms >= 0 &&
                 (externalReceipt.receipt_digest === undefined || (typeof externalReceipt.receipt_digest === "string" && /^[a-f0-9]{64}$/.test(externalReceipt.receipt_digest))) &&
                 step.external_receipt_observation !== "not_recorded";
+              const googleCalendarReceiptSafe = externalReceiptSafe && externalReceipt.source === "google_calendar_read" &&
+                step.operation === "google.calendar.write" && ["event.create", "event.invite"].includes(externalReceipt.provider_operation) &&
+                ((step.external_receipt_observation === "not_found" && externalReceipt.provider_http_status === 404) ||
+                  (["matched", "mismatch"].includes(step.external_receipt_observation) && externalReceipt.provider_http_status === 200));
+              const receipt = googleCalendarReceiptSafe
+                ? step.external_receipt_observation === "matched"
+                  ? "Google Calendarで対象イベントの現在状態を読取確認（書込み成功・招待メール到達は未確認）"
+                  : step.external_receipt_observation === "not_found"
+                    ? "Google Calendarが404を返しました（不存在と閲覧不能は区別できず、結果不明を維持）"
+                    : "Google Calendarの現在状態が要求と一致しません（結果不明を維持）"
+                : receiptValue;
               const externalReceiptDetails = externalReceiptSafe
-                ? '<dt>観測source</dt><dd>local inspection（合成）</dd><dt>観測evidence digest</dt><dd class="mono">' +
+                ? '<dt>観測source</dt><dd>' + (googleCalendarReceiptSafe ? 'Google Calendar特定event読取' : 'local inspection（合成）') + '</dd>' +
+                  (googleCalendarReceiptSafe ? '<dt>読取対象操作</dt><dd>' + escapeHtml(externalReceipt.provider_operation) +
+                    '</dd><dt>provider HTTP</dt><dd>' + escapeHtml(String(externalReceipt.provider_http_status)) + '</dd>' : '') +
+                  '<dt>観測evidence digest</dt><dd class="mono">' +
                   escapeHtml(shortDigest(externalReceipt.evidence_digest)) + '</dd><dt>候補件数</dt><dd>' +
                   escapeHtml(String(externalReceipt.match_count)) + '</dd>' +
                   (externalReceipt.receipt_digest ? '<dt>receipt digest</dt><dd class="mono">' + escapeHtml(shortDigest(externalReceipt.receipt_digest)) + '</dd>' : '')
+                : '';
+              const calendarNewTaskButton = unknown && googleCalendarReceiptSafe
+                ? '<button type="button" class="secondary" data-operation-plan-calendar-new-task="true" data-calendar-operation="' +
+                  escapeHtml(externalReceipt.provider_operation) + '">別のowner taskとして続ける</button>' +
+                  '<p class="muted">このplanは結果不明のままです。下のボタンは別taskの入力欄を準備するだけで、送信もCalendar作用も行いません。</p>'
                 : '';
               const localFileStateSafe = localFileState.source === "local_file_state" &&
                 ["matched", "not_found", "mismatch"].includes(String(localFileState.status)) &&
@@ -2331,11 +2350,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
                 '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + shellSummaryDetails + externalReceiptDetails + localFileStateDetails + '</dl>' +
-                (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし、作用は再送しません。</p>' : '') +
+                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけ対象の読取を1回行います。event.create／event.inviteは再実行・再送しません。招待メールの配信結果はCalendar読取では確認できません。</p>' : '') +
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
-                  escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
+                   escapeHtml(step.step_id) + '">' + (step.operation === "google.calendar.write" ? 'Google Calendarを読取照合' : 'loopbackで読取照合') + '</button>' : '') +
+                 calendarNewTaskButton +
                 savedResultButton +
                 replanButton +
                 gmailDraftCandidateActions +
@@ -5803,6 +5823,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const mascotAction = target.dataset.mascotAction;
         if (mascotAction) {
           runMascotAction(mascotAction);
+          return;
+        }
+        if (target.dataset.operationPlanCalendarNewTask === "true") {
+          const operation = target.dataset.calendarOperation === "event.invite" ? "event.invite" : "event.create";
+          const input = byId("owner-task-intent");
+          input.value = [
+            "新しい別taskです。前のGoogle Calendar " + operation + " は結果不明のまま停止しています。",
+            "前のevent.createまたはevent.inviteを再実行・再送しないでください。保存された読取観測は非権威の参考情報で、成功・失敗や招待メール到達を証明しません。",
+            "Calendar書込みや外部送信を含めず、安全な読取確認または終了方法だけを計画候補にしてください。"
+          ].join("\n");
+          setActiveScreen("conversation");
+          input.focus();
+          appendChat("status", "別task用の文面を入力欄へ準備しました。確認・編集し、owner taskとして明示送信してください。まだ送信も作用もしていません。");
           return;
         }
         if (target.dataset.operationPlanReconcile === "true") {
