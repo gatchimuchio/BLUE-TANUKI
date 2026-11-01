@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-11-02 — QEB-F04.01-DRIVE-TRANSIENT-ORGANIZER
+
+開始local／remote `main`=`2fb98b8d73107c26a8a785e74f144dbe6e102f89`。編集前の二世代復旧refはcurrent=`2fb98b8...`／previous=`4ecaace...`（local branch／remote tag）。単一`main` worktreeを確認し、保護対象untracked `.codex-remote-attachments/`と別repo作業は変更していない。現行rev3.0 pin・三文書・manifest、適用AGENTS、active F04.01指示を再確認した。
+
+CLI／WebChatの明示route `/organize-drive file_id=<exact-id>`だけを既存`google.drive.read`のbounded本文取得へ接続した。12,000 bytes以下の厳密な`text/plain`本文について、完全な取得応答、UTF-8、content type、file identity／size／version／sharing、取得前後stateを検証する。generic `include_content=true`とOperation Plan経由は実行前に拒否し、無効・不完全・過大な結果は本文を出さない。検証済み本文は既存の一時文書整理consumerだけへ渡し、tool候補の実行は認めない。HDS memory retrieval/capture/session history、CompleteHistory、OutputAudit、通常結果表示へのraw body保存を抑止し、監査・履歴はdigest／projectionに留める。resumeでも同じ抑止分類とtransient consumerを継承する。high/L3 final review、Approval Gate、HDS authorityを維持する。
+
+Protocol／HDS-BRAIN／core／Gateway typecheckとbuild、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。test suite、Gateway process／browser、Google provider／credential／外部Drive readはNOT_RUN。STATUS=`WIRED`（verified exact-file resultから既存一時C consumerへの静的接続、runtime未確認）。F04.01／F04全体、製品`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03、OD-03、P13の保留を維持する。
+
 ## 2026-11-02 — QEB-F04.02-DRIVE-TEXT-UPDATE-L3-PLAN-BINDING
 
 開始local／remote `main`=`f7d6e2c1635886abcd32badb88dd45a2e37339c3`。編集前のlocal recovery branch／remote tagはcurrent=`f7d6e2c...`、previous=`20d51cf...`を保持した。唯一のmain worktreeを確認し、保護対象untracked `.codex-remote-attachments/`を変更していない。rev3.0現行pin／manifestと三文書、適用AGENTS、active F04.02 instructionを再確認した。

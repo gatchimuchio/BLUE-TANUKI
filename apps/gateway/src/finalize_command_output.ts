@@ -23,10 +23,12 @@ export function finalizeCommandOutput(input: {
   feedback: ExecuteFeedback;
   target_surface: OutputTargetSurface;
   request_id: string | null;
+  /** Safe fixed projection for commands whose raw result is consumed internally. */
+  rendered_output_override?: string;
   development_handoff_store?: DevelopmentHandoffStore;
 }): FinalizedCommandOutput {
   const reviewed_feedback = input.hds.reviewMemoryCitations(input.command, input.feedback);
-  const rendered_output = renderCommandOutput(input.command, reviewed_feedback);
+  const rendered_output = input.rendered_output_override ?? renderCommandOutput(input.command, reviewed_feedback);
   deliverDevelopmentHandoff(input.hds.onFeedback(input.feedback), input.development_handoff_store);
   const output_audit = input.hds.onOutputAudit({
     command: input.command,

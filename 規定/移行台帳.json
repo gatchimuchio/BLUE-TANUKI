@@ -64,7 +64,7 @@
     { "path": "docs/repository-health-phase4-final-commissioning.md", "sha256": "dbcea89474397a28e299071d3cc92db424c44ad60618f6ed265a0e4987a5cd48" },
     { "path": "docs/RESIDENT_APP_GUIDE.md", "sha256": "7da24d0daff4250e71f558b7ebfb8b2607cd1229caf56b78ec96dafa4fd95a44" },
     { "path": "docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md", "sha256": "591194cb6b995898857dead9a188ba2804591a9bb01e323a9a4dd40cd853bd0e" },
-    { "path": "docs/runbook.md", "sha256": "086e0249d85046b976e70600a52cd592cc864fb6c417984b6432f5a95b4e8533" },
+    { "path": "docs/runbook.md", "sha256": "bc1d83b9d8aee5d7a9d62edaf411feef1aff31d18dae1aa5ee3a0825f17e3eda" },
     { "path": "docs/SECURITY_REVIEW_CHECKLIST.md", "sha256": "0923d84b7a9eeb650c0bf2fe07bd817da4f4550ab5523d202bdc7e3bc64b09e0" },
     { "path": "docs/SKILL_LOADER_CONTRACT.md", "sha256": "3f4fb30d74b4ddc1306640f0b70c6c37d994590f010afaa4c49dfa14ef0f264a" },
     { "path": "docs/STRATEGY_FRAME.md", "sha256": "a52efdf8d713f975c36f9f5c08e293fbcbf6051480637dc04ca2b50f598197a3" },

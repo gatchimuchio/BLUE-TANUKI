@@ -20,13 +20,15 @@
 
 ## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
 
-既存google.drive.readからOwner taskが明示した単一file_idの本文確認consumerを接続した。検索・Google Workspace native document・binary・trash済み・version／size／canDownload欠落対象は拒否し、text/plain blobだけを扱う。取得はalt=mediaの一回、本文上限は既定16 KiB／最大64 KiB、strict UTF-8・完全なContent-Type・size一致・取得前後のversion／file state一致を必須とする。途中切断・部分本文・revision競合時は本文を返さず、Workspace文書exportもしない。
+明示CLI/WebChat `/organize-drive file_id=<exact-id>`から既存`google.drive.read`へ接続し、単一file本文を12,000 bytes以下で検証した後、既存の一時文書整理consumerからCへ渡す経路をコード接続した。検索・Google Workspace native document・binary・trash済み・version／size／canDownload／sharing欠落対象、generic include_content、Operation Plan経由は拒否する。本文は直接表示せず、HDS memory retrieval/capture/session履歴、complete history、output auditへの本文保存を抑止し、失敗時は固定安全応答にする。既存high/L3 final review・Approval Gate・HDS authorityを維持する。
+
+Protocol／HDS-BRAIN／core／Gatewayのtypecheck・build、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。test suite、Gateway process、provider／credential／外部Drive読取はNOT_RUN。F04.01の完全成立、実consumer runtime、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 返却はprovider contentを不信データとして明示し、資料内指示は目的変更・権限・承認の根拠にならない。tool.call high/L3 final review、Approval Gate、HDS authorityを維持する。新しいM writeやhistory raw contentを追加せず、provider履歴は既存のdigest projectionを維持する。実provider／credential／Gateway process／外部Drive readはNOT_RUN。F04.01全体とF04全体はBUILD_GAPのまま。
 
 ## 前回BUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 
-2026-11-02、`google.drive.write/file.trash`を既存HDS Operation Plan／Executor Broker／Gateway承認／Control Centerへ接続中。Owner taskに明示された個人My Drive内の単一`file_id`に限定し、認証中アカウント所有、未trash、`text/plain`を必須にする。実行は`PATCH trashed=true`による復元可能なゴミ箱移動で、`files.delete`による完全削除は行わない。共有ドライブ、Workspace native document、folder、binary、非所有・曖昧・未取得の対象は拒否する。
+2026-11-02、`google.drive.write/file.trash`を既存HDS Operation Plan／Executor Broker／Gateway承認／Control Centerへ接続した。Owner taskに明示された個人My Drive内の単一`file_id`に限定し、認証中アカウント所有、未trash、`text/plain`を必須にする。実行は`PATCH trashed=true`による復元可能なゴミ箱移動で、`files.delete`による完全削除は行わない。共有ドライブ、Workspace native document、folder、binary、非所有・曖昧・未取得の対象は拒否する。全workspace typecheck/build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite／Gateway process／browser／provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。
 
 対象metadataと取得可能なpermission scopeを複数回読み、file state／scope／payload／command／Plan bindingのdigestをtarget-versionへ結合する。Operation PlanとApproval Gateでhigh/L3を要求し、no-store画面に対象、所有者、保存先、全取得permission scope、復元可能／完全削除なしを表示する。承認直前・PATCH直前に同じsnapshotを再照合し、PATCH responseと同じfile IDのreadbackで`trashed=true`、所有者、MIME、name、parentを確認する。結果不明・readback失敗では再送しない。Drive側他writerとの原子的排他は保証しない。実provider／資格情報／外部Drive作用は未実施。
 

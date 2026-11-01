@@ -335,9 +335,9 @@ export interface DecisionLog {
   timestamp: number;
   /** Digest-only link to the governed purpose version associated with this decision. */
   readonly goal_purpose_binding?: GoalPurposeBindingReference;
-  memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
-  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
-  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
+  memory_capture_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
+  session_history_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
 }
 
 

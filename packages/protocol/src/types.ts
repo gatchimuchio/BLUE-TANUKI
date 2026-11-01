@@ -125,6 +125,7 @@ export const LLMFallbackAuthorizationSchema = z.object({
   allowed_providers: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
   allowed_input_sources: z.array(z.enum([
     "accepted_inbound_request",
+    "selected_google_drive_document_content",
     "selected_memory_references",
     "selected_operation_plan_context",
     "selected_operation_result_observations",
@@ -196,6 +197,7 @@ export const LLMComputeContextSchema = z.object({
   data_exposure: z.object({
     input_sources: z.array(z.enum([
       "accepted_inbound_request",
+      "selected_google_drive_document_content",
       "selected_memory_references",
       "selected_operation_plan_context",
       "failure_memory_digest_projection",

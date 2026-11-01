@@ -353,6 +353,7 @@ tool:github.write operation=issue.create owner=gatchimuchio repo=blue-tanuki tit
 tool:gmail.read query="newer_than:1d" max_results=5
 tool:google.calendar.read calendar_id=primary days=1 max_results=5
 tool:google.drive.read query="trashed=false" max_results=5
+/organize-drive file_id=<exact-id>
 tool:gmail.write operation=draft.create to=owner@example.com subject="Draft" body_text="hello"
 tool:google.calendar.write operation=event.create calendar_id=primary summary="Standup" start=2026-05-12T09:00:00Z end=2026-05-12T09:15:00Z
 tool:google.drive.write operation=file.create name=notes.txt content="hello"
@@ -361,6 +362,8 @@ tool:shell.exec {"cmd":"git","args":["status","-sb"],"cwd":"."}
 /tool echo text="hello"
 tool:http.fetch {"url":"https://example.com","method":"GET"}
 ```
+
+`/organize-drive` is the only route that may read Drive text content. It accepts one exact file ID from CLI or WebChat, sends a verified bounded `text/plain` body only to the transient untrusted document-organization consumer, and returns that consumer's projection. It does not render or persist the raw body. Generic `google.drive.read include_content=true` and Operation Plan content reads are rejected.
 
 Structured channels may also send metadata:
 

@@ -22,6 +22,7 @@ export interface ComputeProfile {
 
 export type ComputeInputSource =
   | "accepted_inbound_request"
+  | "selected_google_drive_document_content"
   | "selected_memory_references"
   | "selected_operation_plan_context"
   | "selected_operation_result_observations"

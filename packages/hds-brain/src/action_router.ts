@@ -1,6 +1,7 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import { getToolOperationDescriptor, isGatewayInternalInboundRequest,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema } from "@blue-tanuki/protocol";
+import { DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS } from "./document_organization.js";
 
 export interface ToolActionRoute {
   type: "tool_call";
@@ -32,6 +33,7 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - tool:google.calendar.read calendar_id=primary days=1 max_results=5 view=events
  *   - tool:google.calendar.read calendar_id=primary days=1 view=freebusy time_zone=Asia/Tokyo
  *   - tool:google.drive.read query="trashed=false" max_results=5
+ *   - /organize-drive file_id=<exact-id>
  *   - tool:gmail.write operation=draft.create to=owner@example.com cc=copy@example.com bcc=hidden@example.com reply_to=replies@example.com subject="hello" body_text="draft"
  *   - tool:google.calendar.write operation=event.create calendar_id=primary summary="Standup" start=2026-05-12T09:00:00Z end=2026-05-12T09:15:00Z
  *   - tool:google.drive.write operation=file.create name=notes.txt content="hello"
@@ -54,9 +56,47 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - metadata.tool_call = { tool_name, arguments }
  */
 export function routeAction(req: InboundRequest): ActionRoute {
+  const driveOrganization = routeDriveOrganization(req);
+  if (driveOrganization) return driveOrganization;
   const fromMetadata = routeMetadata(req);
-  if (fromMetadata) return fromMetadata;
-  return routeContent(req.content);
+  if (fromMetadata) return rejectUnconsumedDriveContent(fromMetadata);
+  return rejectUnconsumedDriveContent(routeContent(req.content));
+}
+
+function routeDriveOrganization(req: InboundRequest): ActionRoute {
+  const trimmed = req.content.trim();
+  if (!/^\/organize-drive(?:$|[\t ])/u.test(trimmed)) return null;
+  if (req.channel !== "cli" && req.channel !== "webchat") {
+    return { type: "noop", reason: "Drive document organization is available only through CLI or WebChat" };
+  }
+  const match = /^\/organize-drive(?:[\t ]+([\s\S]*))?$/u.exec(trimmed);
+  if (!match) return { type: "noop", reason: "use /organize-drive file_id=<exact-id>" };
+  let args: Record<string, unknown>;
+  try {
+    args = parseArgs(match[1] ?? "");
+  } catch (error) {
+    return { type: "noop", reason: error instanceof Error ? error.message : String(error) };
+  }
+  const fileId = args.file_id;
+  if (Object.keys(args).length !== 1 || typeof fileId !== "string" || fileId.length === 0 ||
+      fileId !== fileId.trim() || /[\s/?#\\\u0000-\u001f\u007f]/u.test(fileId)) {
+    return { type: "noop", reason: "Drive document organization requires one exact safe file_id" };
+  }
+  return buildToolRoute("google.drive.read", {
+    file_id: fileId,
+    include_content: true,
+    include_sharing: true,
+    max_content_bytes: DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
+  });
+}
+
+function rejectUnconsumedDriveContent(route: ActionRoute): ActionRoute {
+  if (!route || route.type !== "tool_call" || route.tool_name !== "google.drive.read") return route;
+  const value = route.arguments.include_content;
+  const requested = value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
+  return requested
+    ? { type: "noop", reason: "use /organize-drive file_id=<exact-id> so Drive text reaches only the untrusted document-organization consumer" }
+    : route;
 }
 
 function routeMetadata(req: InboundRequest): ActionRoute {

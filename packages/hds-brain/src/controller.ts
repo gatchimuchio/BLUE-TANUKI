@@ -222,7 +222,7 @@ interface LongTermMemoryPort {
 
 export interface HDSDecisionOptions {
   /** Prevent transient document-organization input from reading/writing memory or persisting session history. */
-  readonly transient_content?: "document_organization";
+  readonly transient_content?: "document_organization" | "google_drive_document_organization";
   /** Fail closed when a selected local file-state observation could not be refreshed before C. */
   readonly plan_compute_source_refresh_failure?:
     | "plan_compute_source_observation_authorization_failed"
@@ -1106,7 +1106,9 @@ export class HDSUpperController {
     command: ExecuteCommand | null;
   } {
     if (Object.keys(options).some((key) => key !== "transient_content" && key !== "plan_compute_source_refresh_failure") ||
-        (options.transient_content !== undefined && options.transient_content !== "document_organization") ||
+        (options.transient_content !== undefined &&
+          options.transient_content !== "document_organization" &&
+          options.transient_content !== "google_drive_document_organization") ||
         (options.plan_compute_source_refresh_failure !== undefined && ![
           "plan_compute_source_observation_authorization_failed",
           "plan_compute_source_observation_inspection_failed",
@@ -1544,8 +1546,12 @@ ${planControl.question}`,
     }
     // Plan candidates have a separate C output contract. Supply only J-validated, explicitly selected
     // purpose/parent/M inputs; generic retrieved-memory citation envelopes are not candidate evidence.
-    const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
-    const isolatedContextReason = suppressTransientDocumentOrganizationContext ? "transient_document_organization" as const
+    const suppressTransientDocumentOrganizationContext = options.transient_content !== undefined &&
+      req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
+    const isolatedContextReason = suppressTransientDocumentOrganizationContext
+      ? options.transient_content === "google_drive_document_organization"
+        ? "transient_google_drive_document_organization" as const
+        : "transient_document_organization" as const
       : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const
       : planPrefix?.[1]?.toLowerCase() === "compute" ? "operation_plan_compute" as const
       : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
@@ -1831,6 +1837,14 @@ ${planControl.question}`,
     }
 
     const purposeBinding = susp.log.goal_purpose_binding ?? null;
+    const inheritedContextSuppression = {
+      ...(susp.log.memory_retrieval_suppressed_for
+        ? { memory_retrieval_suppressed_for: susp.log.memory_retrieval_suppressed_for } : {}),
+      ...(susp.log.memory_capture_suppressed_for
+        ? { memory_capture_suppressed_for: susp.log.memory_capture_suppressed_for } : {}),
+      ...(susp.log.session_history_suppressed_for
+        ? { session_history_suppressed_for: susp.log.session_history_suppressed_for } : {}),
+    };
     const projectResume = (log: DecisionLog, resumeAllowed: boolean, commandPresent: boolean) =>
       projectRuntimeKernelJResumeTransition(susp.log, this.policy, purposeBinding, {
         owner_verdict: verdict,
@@ -1870,6 +1884,7 @@ ${planControl.question}`,
         model: selfHealthModel(susp.log.frame, selfHealth),
         ...(susp.log.goal_purpose_binding
           ? { goal_purpose_binding: Object.freeze({ ...susp.log.goal_purpose_binding }) } : {}),
+        ...inheritedContextSuppression,
         commit: {
           decision: "SUSPEND",
           reason,
@@ -1927,6 +1942,7 @@ ${planControl.question}`,
       model: susp.log.model,
       ...(susp.log.goal_purpose_binding
         ? { goal_purpose_binding: Object.freeze({ ...susp.log.goal_purpose_binding }) } : {}),
+      ...inheritedContextSuppression,
       commit: {
         decision: lifted,
         reason: `human_resume:${verdict} (was SUSPEND: ${susp.reason})`,
@@ -1936,7 +1952,7 @@ ${planControl.question}`,
       timestamp: now,
     };
     this.audit.append(resumeLog);
-    if (verdict === "approve") {
+    if (verdict === "approve" && resumeLog.memory_capture_suppressed_for === undefined) {
       this.captureMemoryReference(resumeLog);
     }
 
@@ -4714,7 +4730,8 @@ ${planControl.question}`,
           content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致（query検索のほか、owner指定の単一sandbox相対file_pathとquery=""による最大5行previewを許可する。start_lineはこのpreviewだけに使い、1〜1000000の整数とする。start_lineを指定する場合はparameters.start_lineとfile_search_result_matchesのvalidation.expected.start_lineへ同じ値を指定する）、file.writeのinternal_runtime file targetによる相対path指定・mode=createのみ（未存在対象を新規作成し、overwrite／appendは選択不可）、file.editのinternal_runtime file targetによる相対path指定・bounded search／replace、replacement数とmax_bytes限定（effects=[read,write]、risk=medium、approval_level=L3_final_review、final_review_required=true、Approval Gate必須のowner差分確認を行い、変更前後の内容digest・root／parent／file identityを観測してplanに結合し実行直前に再照合）、file.deleteのinternal_runtime file targetによる相対path指定・max_bytes限定（sandbox内のregular fileを1個だけ対象とし、effects=[delete]・risk=high・approval_level=L3_final_review・final_review_required=trueを必須とし、変更前hashとroot／parent／file identityをdigestだけで観測して実行直前に再照合）、google.drive.write external_service target id=driveでoperation=file.create／file.updateを扱います。file.createはOwner taskに明示された単一parent_id・name・text/plain contentを使います。file.updateはOwner taskに明示されたfile_idと置換後text/plain本文だけを使い、既存blobの現本文・file metadata・取得可能なpermission scopeを読取照合して版digestへ結合し、no-store L3確認で変更前後の本文と全scopeを表示します。両作用はeffects=[external_send,write,credential_access]・risk=high・approval_level=L3_final_review・final_review_required=trueを要求し、承認時と作用直前に同じsnapshotを再取得します。file.updateはPATCHと再読取の間に外部変更される競合を原子的に排除できるとは主張しません。file.trashはOwner taskに対象file_idとゴミ箱移動が明示された、認証中アカウント所有の個人My Drive内text/plainファイル1件だけを扱い、trash=trueのPATCHと同じIDの再読取で状態を確認します。これは復元可能なゴミ箱移動であり、完全削除ではありません。Drive権限操作は個人ユーザー1名へのreader/writer付与だけを扱い、権限の更新・撤回・公開・group/domain付与と恒久削除は候補化しません。file.trashもeffects=[external_send,write,credential_access]・risk=high・approval_level=L3_final_review・final_review_required=trueを要求し、承認直前・作用直前に所有者・対象版・アクセス範囲を再取得します。gmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを扱います。Toは必須、Cc/Bcc/Reply-Toは任意で、各欄は表示名なしの最大20件のメールアドレス列です。subjectとbody_textも候補に含められますが、すべてOwner taskに明示された内容だけを使い、メール本文/headerから宛先を推定しません。添付は未対応で候補に含めてはいけません。draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。Google Calendar参加者招待はgoogle.calendar.writeのevent.inviteだけを候補化し、targetをexternal_service calendar、effectsをexternal_send+write+credential_access、permissionをhigh/L3_final_reviewへ固定します。attendeesにはOwner taskに明示された新規宛先だけを最大20件まで入れ、event_observationのevent_id・calendar_id・target_scopeを一致させます。現在の参加者一覧はplan parametersに複写せず、完全なread snapshotを得た既存adapterが既存参加者と書込可能なRSVP等を保持して新規宛先を追加します。重複・不完全・上限超過はfail-closed。sendUpdates=allは既存参加者を含む全guestへ更新通知を依頼するため、Gatewayのno-store L3 reviewで保持一覧・新規宛先・通知対象全員を表示し、承認前と作用直前にevent版を再照合します。file.deleteはsecret-like path、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にはpathや内容を含めません。file.writeではpath・content・root・親directory状態をdigestのみで観測し、実行直前に再照合します。file.editはbinary-lookingまたはinvalid UTF-8 input、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にpathや本文を含めません。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へfrom、credential、添付を含めません。To/Cc/Bcc/Reply-ToはOwner taskの明示値だけを使います。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
-        ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested
+        ...(log.memory_retrieval_suppressed_for === "transient_document_organization" ||
+          log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" || planCompute?.requested
         ? {}
         : {
             session_id: isGatewayInternalInboundRequest(req) && req.session_id
@@ -4740,7 +4757,9 @@ ${planControl.question}`,
         budget_scope: computeBudgetScope(req),
         data_exposure: {
           input_sources: [
-            "accepted_inbound_request",
+            ...(log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization"
+              ? ["selected_google_drive_document_content" as const]
+              : ["accepted_inbound_request" as const]),
             ...(memoryMessages.length > 0 || planPurposeMessage || planComputeMemoryCitationMessage
               ? ["selected_memory_references" as const] : []),
             ...(planComputeParentMessage ? ["selected_operation_plan_context" as const] : []),
@@ -4749,6 +4768,8 @@ ${planControl.question}`,
           requested_egress_provider: backendHint ?? "registry-default",
         },
         ...(this.llm_route.fallback_authorization &&
+          (log.memory_retrieval_suppressed_for !== "transient_google_drive_document_organization" ||
+            this.llm_route.fallback_authorization.allowed_input_sources.includes("selected_google_drive_document_content")) &&
           (!planComputeObservationMessage || this.llm_route.fallback_authorization.allowed_input_sources
             .includes("selected_operation_result_observations")) &&
           (!planComputeParentMessage || this.llm_route.fallback_authorization.allowed_input_sources

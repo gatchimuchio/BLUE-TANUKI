@@ -3,6 +3,7 @@ import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
   CompleteHistoryStore,
   HDSUpperController,
+  DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
   goalPurposeChangeApprovalTarget,
@@ -105,6 +106,7 @@ import {
   MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   meaningUpdateProposalAuditProjection,
   parseInboundRequestAtBoundary,
+  normalizeInboundRequestForAuthority,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
@@ -554,6 +556,93 @@ export function planGatewayInboundBoundary(raw: unknown): GatewayInboundBoundary
     ...boundary,
     hdsBoundaryInput: boundary.boundary_ok ? boundary.request : raw,
   };
+}
+
+interface ValidatedGoogleDriveOrganizationContent {
+  readonly file_id: string;
+  readonly text: string;
+  readonly sha256: string;
+  readonly bytes: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function googleDriveContentReadRequested(command: ExecuteCommand): boolean {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "google.drive.read") return false;
+  const value = command.payload.arguments.include_content;
+  return value === true || typeof value === "string" && value.trim().toLowerCase() === "true";
+}
+
+function driveOrganizationFileId(request: InboundRequest): string | null {
+  if (request.channel !== "cli" && request.channel !== "webchat") return null;
+  const match = /^\/organize-drive[\t ]+file_id=(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s]+))$/u.exec(request.content.trim());
+  const fileId = match?.[1] ?? match?.[2] ?? match?.[3];
+  return fileId && fileId.length <= 512 && fileId === fileId.trim() &&
+    !/[\s/?#\\\u0000-\u001f\u007f]/u.test(fileId) ? fileId : null;
+}
+
+function isExplicitDriveOrganizationCommand(
+  command: ExecuteCommand,
+  log: DecisionLog,
+  request: InboundRequest,
+  operationPlanBound: boolean,
+): boolean {
+  if (operationPlanBound || command.type !== "tool_call" || command.payload.tool_name !== "google.drive.read" ||
+      log.request_id !== request.id || command.upstream_decision.request_id !== request.id) return false;
+  const fileId = driveOrganizationFileId(request);
+  if (!fileId) return false;
+  const args = command.payload.arguments;
+  const expectedKeys = ["file_id", "include_content", "include_sharing", "max_content_bytes"];
+  return Object.keys(args).length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(args, key)) &&
+    args.file_id === fileId && args.include_content === true && args.include_sharing === true &&
+    args.max_content_bytes === DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS;
+}
+
+function validateGoogleDriveOrganizationFeedback(
+  command: ExecuteCommand,
+  request: InboundRequest,
+  feedback: ExecuteFeedback,
+): ValidatedGoogleDriveOrganizationContent | null {
+  const fileId = driveOrganizationFileId(request);
+  if (!fileId || !googleDriveContentReadRequested(command) || feedback.status !== "success" ||
+      !isRecord(feedback.result)) return null;
+  const result = feedback.result;
+  const text = result.document_content_text;
+  const digest = result.document_content_sha256;
+  const revision = result.document_content_revision;
+  const bytes = result.document_content_bytes;
+  const contentType = result.document_content_type;
+  const files = result.files;
+  const trust = result.trust_boundary;
+  if (result.service !== "drive" || result.mode !== "read_only" || result.target_mode !== "file_content" ||
+      result.file_id !== fileId || result.status !== 200 || result.document_content_status !== 200 ||
+      result.request_status !== "ok" || result.truncated !== false || result.result_complete !== true ||
+      result.mutation_sent !== false || result.result_count !== 1 || result.content_read !== true ||
+      result.max_content_bytes !== DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS ||
+      typeof text !== "string" || text.trim().length === 0 || text.length > DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS ||
+      typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest) ||
+      typeof revision !== "string" || revision.length === 0 ||
+      typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 1 ||
+      Buffer.byteLength(text, "utf8") !== bytes || bytes > DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS ||
+      typeof contentType !== "string" || contentType.split(";", 1)[0]?.trim().toLowerCase() !== "text/plain" ||
+      createHash("sha256").update(text, "utf8").digest("hex") !== digest ||
+      !Array.isArray(files) || files.length !== 1 || !isRecord(files[0]) ||
+      files[0].id !== fileId || files[0].mime_type !== "text/plain" || files[0].trashed !== false ||
+      files[0].can_download !== true || files[0].version !== revision || files[0].size_bytes !== bytes ||
+      !isRecord(files[0].permission_inventory) || files[0].permission_inventory.state === "not_requested" ||
+      !["available", "not_returned", "shared_drive_partial", "shared_drive_not_returned"].includes(
+        String(files[0].permission_inventory.state),
+      ) || typeof files[0].permission_inventory.complete !== "boolean" ||
+      !Array.isArray(files[0].permission_inventory.entries) ||
+      !isRecord(trust) || trust.provider_data_is_untrusted !== true ||
+      trust.drive_metadata_can_authorize_operation !== false || trust.document_content_is_untrusted_data !== true ||
+      trust.document_instructions_can_change_user_goal !== false ||
+      trust.document_instructions_can_authorize_operation !== false || trust.used_for_authority !== false) return null;
+  const stateDigest = result.document_content_state_digest;
+  if (typeof stateDigest !== "string" || !/^[a-f0-9]{64}$/u.test(stateDigest)) return null;
+  return { file_id: fileId, text, sha256: digest, bytes };
 }
 
 export function selectGatewayInboundEphemeralContext(
@@ -1457,6 +1546,34 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     ephemeralContext?: InboundEphemeralContext,
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    const driveContentRead = googleDriveContentReadRequested(cmd);
+    if (driveContentRead && !isExplicitDriveOrganizationCommand(
+      cmd, log, origin, hds.isOperationPlanCommand(cmd.id),
+    )) {
+      const reason = "drive_content_requires_explicit_organize_route";
+      const feedback: ExecuteFeedback = {
+        command_id: cmd.id,
+        status: "failed",
+        error: reason,
+        metrics: { duration_ms: 0 },
+      };
+      const finalized = finalizeCommandOutput({
+        hds,
+        command: cmd,
+        feedback,
+        rendered_output_override: "Drive本文の直接表示・計画経由の読取りは許可されていません。/organize-drive file_id=<exact-id> の経路だけを利用できます。",
+        target_surface: "channel",
+        request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore,
+      });
+      recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
+      hds.onCommandLifecycle(cmd.id, "approval_rejected", { actor, reason });
+      if (finalized.rendered_output) await dispatcher.dispatch(
+        replyPayload(origin, finalized.rendered_output),
+        { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
+      );
+      return { status: reason };
+    }
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
@@ -2101,7 +2218,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         },
       });
     }
-    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb, executorApproval.receipt(approvedCommand));
+    const historyFeedback = googleDriveContentReadRequested(cmd)
+      ? {
+          command_id: fb.command_id,
+          status: fb.status,
+          ...(fb.result !== undefined ? { result: fb.result } : {}),
+          ...(fb.status === "failed" ? { error: "google_drive_content_read_failed" } : {}),
+          metrics: fb.metrics,
+        } satisfies ExecuteFeedback
+      : fb;
+    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, historyFeedback, executorApproval.receipt(approvedCommand));
     const meaningUpdateProposalHistory = buildMeaningUpdateProposalHistoryInput(
       cmd,
       log.request_id,
@@ -2122,6 +2248,67 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       runFailureMemoryVerification("post_failure");
     }
     coreLog.info("command", { command: cmd.id.slice(0, 8), status: fb.status, duration_ms: fb.metrics.duration_ms });
+    if (googleDriveContentReadRequested(cmd)) {
+      const selected = validateGoogleDriveOrganizationFeedback(cmd, origin, fb);
+      const safeMessage = selected
+        ? "Drive本文を一時C入力へ渡します。本文は直接表示せず、整理結果だけを返します。"
+        : "Drive本文を安全に取得・検証できなかったため、整理処理は実行しませんでした。";
+      const finalized = finalizeCommandOutput({
+        hds,
+        command: cmd,
+        feedback: fb,
+        rendered_output_override: safeMessage,
+        target_surface: "channel",
+        request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore,
+      });
+      recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
+      if (!selected) {
+        if (finalized.rendered_output) await dispatcher.dispatch(
+          replyPayload(origin, finalized.rendered_output),
+          { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
+        );
+        return { status: "drive_content_validation_failed" };
+      }
+
+      const authorityReq = normalizeInboundRequestForAuthority({
+        id: randomUUID(),
+        channel: origin.channel,
+        user: origin.user,
+        content: "Owner requested bounded organization of one selected Google Drive text file.",
+        timestamp: Date.now(),
+        ...(origin.goal_criteria ? { goal_criteria: origin.goal_criteria } : {}),
+      });
+      const documentSession = prepareDocumentOrganizationSession({
+        request: authorityReq,
+        source_text: selected.text,
+        hds,
+        store: checkpointStoreForOrganizer(),
+      });
+      const decisionInput = documentSession.restored_terminal_state
+        ? {
+            ...authorityReq,
+            content: `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`,
+          }
+        : { ...authorityReq, content: documentSession.coordinator.buildComputePrompt() };
+      const firstDecision = hds.decide(decisionInput, {
+        transient_content: "google_drive_document_organization",
+      });
+      const organizationStatus = await dispatchDriveOrganizationDecision({
+        original_request: origin,
+        authority_request: authorityReq,
+        coordinator: documentSession.coordinator,
+        restored_terminal_state: documentSession.restored_terminal_state,
+        persist_checkpoint: documentSession.persist_checkpoint,
+        first_decision: firstDecision,
+        source_sha256: selected.sha256,
+        source_bytes: selected.bytes,
+        source_chars: selected.text.length,
+        file_id: selected.file_id,
+        decision_source: "hds-brain",
+      });
+      return { status: organizationStatus };
+    }
     if (planBound && !hds.operationPlanResultReadyForReturn(cmd.id)) {
       const pending = finalizeCommandStatusOutput({
         hds,
@@ -3521,11 +3708,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         if (log.commit.decision !== "SUSPEND") {
           suspendedRequestsWithUnavailableEphemeralMedia.delete(request_id);
         }
+        const driveOrganizationResume = pendingDriveOrganizationResumes.get(request_id);
         runtimeKernelShadowObserver?.observe({
           j_projection: runtime_kernel_j_projection,
           command_present: command !== null,
         });
-        recordCompleteHistory({
+        if (!driveOrganizationResume) recordCompleteHistory({
           kind: "hds_decision",
           request_id: log.request_id,
           command_id: command?.id,
@@ -3539,6 +3727,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             token_kind: ctx.token_kind,
           },
         });
+        if (driveOrganizationResume) {
+          if (!command) {
+            if (log.commit.decision !== "SUSPEND") pendingDriveOrganizationResumes.delete(request_id);
+            return { decision: log.commit.decision, executed: false };
+          }
+          const status = await dispatchDriveOrganizationDecision({
+            ...driveOrganizationResume,
+            first_decision: { log, command },
+            decision_source: "hds-brain.resume",
+            resumed_request_id: request_id,
+          });
+          if (status !== "suspend") pendingDriveOrganizationResumes.delete(request_id);
+          return { decision: log.commit.decision, executed: true, status };
+        }
         if (command) {
           if (resumedWithUnavailableMedia) {
             hds.onCommandLifecycle(command.id, "approval_cancelled", {
@@ -5217,9 +5419,221 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   // Attachment bytes are deliberately volatile. Remember only that a suspended
   // Telegram request depended on them so resume cannot silently run text alone.
   const suspendedRequestsWithUnavailableEphemeralMedia = new Set<string>();
+  const pendingDriveOrganizationResumes = new Map<string, {
+    readonly original_request: InboundRequest;
+    readonly authority_request: InboundRequest;
+    readonly coordinator: ReturnType<typeof prepareDocumentOrganizationSession>["coordinator"];
+    readonly restored_terminal_state: boolean;
+    readonly persist_checkpoint: () => void;
+    readonly source_sha256: string;
+    readonly source_bytes: number;
+    readonly source_chars: number;
+    readonly file_id: string;
+  }>();
   const checkpointStoreForOrganizer = (): DocumentOrganizationCheckpointStore => {
     documentOrganizationCheckpointStore ??= DocumentOrganizationCheckpointStore.fromEnvironment(process.env);
     return documentOrganizationCheckpointStore;
+  };
+
+  const dispatchDriveOrganizationDecision = async (input: {
+    readonly original_request: InboundRequest;
+    readonly authority_request: InboundRequest;
+    readonly coordinator: ReturnType<typeof prepareDocumentOrganizationSession>["coordinator"];
+    readonly restored_terminal_state: boolean;
+    readonly persist_checkpoint: () => void;
+    readonly first_decision: ReturnType<HDSUpperController["decide"]>;
+    readonly source_sha256: string;
+    readonly source_bytes: number;
+    readonly source_chars: number;
+    readonly file_id: string;
+    readonly decision_source: "hds-brain" | "hds-brain.resume";
+    readonly resumed_request_id?: string;
+  }): Promise<string> => {
+    const { log, command } = input.first_decision;
+    if (log.request_id !== input.authority_request.id ||
+        input.coordinator.checkpoint().source_sha256 !== input.source_sha256) {
+      if (command) hds.onCommandLifecycle(command.id, "approval_rejected", {
+        actor: input.original_request.user,
+        reason: "drive_document_organization_binding_invalid",
+      });
+      return "drive_document_organization_binding_invalid";
+    }
+    runtimeKernelShadowObserver?.observe({
+      j_projection: hds.runtimeKernelJProjection(log, command),
+      command_present: command !== null,
+    });
+    recordCompleteHistory({
+      kind: "hds_decision",
+      request_id: log.request_id,
+      command_id: command?.id,
+      actor: input.authority_request.user,
+      source: input.decision_source,
+      timestamp: log.timestamp,
+      payload: {
+        ...hdsDecisionHistoryPayload(log, command),
+        ...(input.resumed_request_id ? { resumed_request_id: input.resumed_request_id } : {}),
+      },
+    });
+    recordCompleteHistory({
+      kind: "audit_history",
+      request_id: input.original_request.id,
+      ...(command ? { command_id: command.id } : {}),
+      actor: input.original_request.user,
+      source: "google_drive_document_organization_handoff",
+      timestamp: Date.now(),
+      payload: {
+        downstream_request_id: input.authority_request.id,
+        file_id_digest: digestString(input.file_id),
+        source_sha256: input.source_sha256,
+        source_bytes: input.source_bytes,
+        source_chars: input.source_chars,
+        content_body_retained: false,
+        used_for_authority: false,
+        may_execute: false,
+        may_commit_to_memory: false,
+      },
+    });
+
+    if (input.restored_terminal_state && log.commit.decision === "ASSERT") {
+      if (command) hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: input.original_request.user,
+        reason: "document_organization_checkpoint_terminal_no_compute_required",
+      });
+      const result = presentRestoredDocumentOrganizationProjection({
+        coordinator: input.coordinator,
+        request_id: input.authority_request.id,
+        upstream_commit_hash: log.commit.hash,
+        hds,
+        target_surface: "channel",
+      });
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: input.original_request.id,
+        actor: input.original_request.user,
+        source: "google_drive_document_organization_projection",
+        timestamp: Date.now(),
+        payload: {
+          downstream_request_id: input.authority_request.id,
+          task_id: result.projection.task_id,
+          projection_revision: result.projection.revision,
+          status: result.projection.status,
+          source_sha256: result.projection.source_ref.content_sha256,
+          accepted_excerpt_count: result.projection.accepted_excerpts.length,
+          output_digest: result.output_audit.rendered_output_digest,
+          restored_from_checkpoint: true,
+          content_body_retained: false,
+          used_for_authority: false,
+          may_execute: false,
+          may_commit_to_memory: false,
+        },
+      });
+      if (result.rendered_output) await dispatcher.dispatch(
+        replyPayload(input.original_request, result.rendered_output),
+        { command_id: `notify-${input.authority_request.id}`, upstream_commit_hash: log.commit.hash },
+      );
+      return "drive_document_organization_restored";
+    }
+
+    if (command) {
+      const result = await runDocumentOrganizationTask({
+        coordinator: input.coordinator,
+        origin: input.authority_request,
+        hds,
+        executor,
+        executorApproval,
+        approval,
+        failureMemory,
+        target_surface: "channel",
+        first_decision: { log, command },
+        persist_checkpoint: input.persist_checkpoint,
+        current_memory_version: () => hds.documentOrganizationMemoryVersion(),
+        emergency_stop_active: emergencyStop.active,
+        transient_content: "google_drive_document_organization",
+      });
+      if (!result) return "drive_document_organization_no_result";
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: input.original_request.id,
+        ...(result.command_id !== null ? { command_id: result.command_id } : {}),
+        actor: input.original_request.user,
+        source: "google_drive_document_organization_projection",
+        timestamp: Date.now(),
+        payload: {
+          downstream_request_id: input.authority_request.id,
+          schema_version: result.projection.schema_version,
+          task_id: result.projection.task_id,
+          projection_revision: result.projection.revision,
+          status: result.projection.status,
+          completed_cycles: result.projection.completed_cycles,
+          source_sha256: result.projection.source_ref.content_sha256,
+          accepted_excerpt_count: result.projection.accepted_excerpts.length,
+          uncovered_range_count: result.projection.uncovered_ranges.length,
+          issue_codes: result.projection.issue_codes,
+          content_body_retained: false,
+          used_for_authority: false,
+          may_execute: false,
+          may_commit_to_memory: false,
+        },
+      });
+      if (result.output_audit.kind === "output_audit") {
+        recordFinalOutputHistory(log, input.authority_request, input.authority_request.user, result.output_audit);
+      } else {
+        recordCompleteHistory({
+          kind: "audit_history",
+          request_id: input.original_request.id,
+          actor: input.original_request.user,
+          source: "google_drive_document_organization_projection_output_audit",
+          timestamp: Date.now(),
+          payload: {
+            downstream_request_id: input.authority_request.id,
+            task_id: result.output_audit.task_id,
+            projection_revision: result.output_audit.projection_revision,
+            projection_status: result.output_audit.projection_status,
+            rendered_output_digest: result.output_audit.rendered_output_digest,
+            rendered_output_chars: result.output_audit.rendered_output_chars,
+            content_body_retained: false,
+            used_for_authority: false,
+            may_execute: false,
+            may_commit_to_memory: false,
+          },
+        });
+      }
+      if (result.rendered_output) await dispatcher.dispatch(
+        replyPayload(input.original_request, result.rendered_output),
+        {
+          command_id: result.command_id ?? `notify-${input.authority_request.id}`,
+          upstream_commit_hash: result.upstream_commit_hash,
+        },
+      );
+      return result.status === "completed"
+        ? "drive_document_organization_completed"
+        : "drive_document_organization_held";
+    }
+
+    if (log.commit.decision === "SUSPEND") {
+      pendingDriveOrganizationResumes.set(input.authority_request.id, {
+        original_request: input.original_request,
+        authority_request: input.authority_request,
+        coordinator: input.coordinator,
+        restored_terminal_state: input.restored_terminal_state,
+        persist_checkpoint: input.persist_checkpoint,
+        source_sha256: input.source_sha256,
+        source_bytes: input.source_bytes,
+        source_chars: input.source_chars,
+        file_id: input.file_id,
+      });
+    }
+    const issued = log.commit.decision === "SUSPEND"
+      ? await webchat.issueResumeApprovalToken(input.authority_request.id)
+      : null;
+    const content = log.commit.decision === "SUSPEND"
+      ? humanizeDecision(log.commit.decision, log.commit.reason, input.authority_request.id, issued?.token)
+      : "Drive本文の整理はHDS判断により継続されませんでした。本文は表示・保存していません。";
+    await dispatcher.dispatch(replyPayload(input.original_request, content), {
+      command_id: `notify-${input.authority_request.id}`,
+      upstream_commit_hash: log.commit.hash,
+    });
+    return log.commit.decision.toLowerCase();
   };
 
   const handleInbound = async (

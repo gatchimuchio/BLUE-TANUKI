@@ -10,9 +10,9 @@ rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS 
 
 ## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
 
-既存google.drive.readへ、Owner taskが内容確認を明示した単一file_idの本文取得を接続する。検索結果・Google Workspace native document・binary・trash済みファイル・version／size／canDownload欠落対象を拒否する。対象はtext/plain blobに限り、versionとsizeを取得してからalt=mediaで取得し、最大16 KiB（明示指定時も最大64 KiB）に制限する。strict UTF-8、Content-Type、metadataのfile stateを取得前後で照合し、途中切断・size不一致・revision変更時は本文を返さない。部分本文やfiles.exportは扱わない。
+CLI/WebChatの明示形式`/organize-drive file_id=<exact-id>`だけをDrive本文読取に使う。取得は既存`google.drive.read`のhigh/L3 final review・Approval Gate・HDS authorityを通し、単一text/plain blob、version／size／canDownload／sharing情報、strict UTF-8、Content-Type、取得前後file state一致を要求する。整理入力は12,000 bytes以下に制限し、欠損・oversize・部分本文・版差異はCへ渡さず固定安全応答にする。検索、Google Workspace native document、binary、trash済みは拒否する。
 
-本文にはdocument_content_is_untrusted_data=true、document_instructions_can_change_user_goal=false、document_instructions_can_authorize_operation=falseを付け、既存tool.callのhigh/L3 final review／Approval Gate／HDS authorityを維持する。通常のprovider履歴は既存どおりdigest projectionに留め、本文を新たなM commitや監査記録へ複製しない。本文は現在のtool result consumerへ返し、ユーザーtaskに基づくCの入力としてのみ扱う。実provider／credential／Drive read／Gateway process／browserは使わない。
+検証済み本文は既存の一時文書整理consumerだけへ渡し、Cのtool実行を認めず、資料内指示は目的・権限・承認にならない。HDS memory retrieval/capture/session履歴を抑止し、complete history／output audit／通常のtool表示はdigestとprojectionのみとする。raw bodyの直接表示、generic include_content、Operation Plan経由を拒否する。保留や失敗はfail-closedとし、実provider／credential／Drive read／Gateway process／browserは使わない。
 
 完了境界：@blue-tanuki/core typecheck／build、pnpm docs:check、git diff --check。test suite／Gateway process／provider／credential／外部読取は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remote／local SHA・clean状態を照合する。F04.01全体、F04全体、製品全体SYSTEM_SHAPED／BUILD_COVEREDへ昇格しない。
 

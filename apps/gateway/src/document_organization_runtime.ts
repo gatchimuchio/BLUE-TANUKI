@@ -39,6 +39,7 @@ export interface DocumentOrganizationTaskInput {
   readonly persist_checkpoint: () => void;
   readonly current_memory_version: () => DocumentOrganizationMemoryVersion;
   readonly emergency_stop_active?: boolean;
+  readonly transient_content?: "document_organization" | "google_drive_document_organization";
 }
 
 export interface DocumentOrganizationTaskResult {
@@ -327,7 +328,7 @@ export async function runDocumentOrganizationTask(
       ...(input.origin.goal_criteria ? { goal_criteria: input.origin.goal_criteria } : {}),
     });
     decision = input.hds.decide(nextRequest, {
-      transient_content: "document_organization",
+      transient_content: input.transient_content ?? "document_organization",
     });
   }
 
