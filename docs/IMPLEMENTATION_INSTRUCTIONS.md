@@ -8,7 +8,19 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 Calendar更新・削除のplan接続と読取照合
+## 最新BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
+
+2026-11-02、既存`google.drive.read`の検索経路にexact `file_id`取得を加え、選択したDrive file/folderのID、名称、MIME、作成・更新時刻、親folder、Shared Drive ID、version、取得可能なhead revision ID、共有状態、trash状態、取得可能なpermission範囲を同じreaderから返す。Drive APIの`files.get`へ静的field maskと`supportsAllDrives=true`を使い、file IDは単一path segmentとして検証・encodeし、応答IDも要求IDと一致確認する。検索ではpermission一覧を既定で取得せず、exact file readは取得可能なsharing scopeも既定で含める。Daily Briefはsharing permissionを要求しない。
+
+permission主体のemail・表示名・permission IDは取得・出力しない。permission inventoryは`available`／`not_returned`／`shared_drive_partial`／`shared_drive_not_returned`／`not_requested`と`complete`で区別する。権限情報や`shared`値が返らない状態を「共有なし」と解釈しない。revisionはDriveの`version`と取得可能な`headRevisionId`だけを観測し、履歴一覧・revision本文は読まない。version／head ID欠落は「revisionなし」の証拠にしない。
+
+返却は`content_read=false`、`mutation_sent=false`、provider data untrusted、authority用途不可を明示する。資料本文・指示文は未取得であり、その非信頼本文consumer、形式・byte上限・保持条件は未接続のためF04.01全体は`BUILD_GAP`。今回のmetadata subconsumerだけを`WIRED`（runtime未確認）とする。Google Driveの実provider／credential／データ読取、F04.02 write/share/delete、F04.03 liveは未実施・対象外。
+
+参照した一次資料: [Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get)、[Drive files resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)、[Drive permissions resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions)。
+
+`corepack pnpm --filter @blue-tanuki/core run typecheck`と同package `build`、`corepack pnpm docs:check`、`git diff --check`はPASS。日本語基底の既存移行負債76件は注意として維持する。test suite、Gateway process、provider、資格、外部読取はNOT_RUN。QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOは未成立。C08.03、OD-03、P13の保留を維持する。
+
+## 前回BUILD_BATCH — F03.02 Calendar更新・削除のplan接続と読取照合
 
 2026-11-02、既存`google.calendar.write`の`event.update`／`event.delete`をHDS Operation Planの通常bind経路へ接続した。primary calendar・本人主催・confirmed snapshot・参加者一覧完全・他参加者0人・event ID／recurrence scope完全一致を必須とし、updateは件名のみ、deleteは対象eventだけを許可する。L3／Approval Gate／HDS authorityとoperation別effectを維持し、同一eventの未解決作用中と同一payloadの重複bindを拒否する。
 

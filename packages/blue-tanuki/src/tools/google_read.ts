@@ -147,8 +147,34 @@ export interface GoogleDriveFile {
   id: string;
   name: string | null;
   mime_type: string | null;
+  created_time: string | null;
   modified_time: string | null;
   web_view_link: string | null;
+  parents: string[] | null;
+  drive_id: string | null;
+  version: string | null;
+  head_revision_id: string | null;
+  revision_metadata_state: "version_and_head_revision" | "version_only" | "head_revision_only" | "not_returned";
+  shared: boolean | null;
+  trashed: boolean | null;
+  permission_inventory: {
+    state: "available" | "not_requested" | "not_returned" | "shared_drive_partial" | "shared_drive_not_returned";
+    complete: boolean;
+    entries: GoogleDrivePermissionSummary[];
+  };
+}
+
+export interface GoogleDrivePermissionSummary {
+  type: string | null;
+  role: string | null;
+  domain: string | null;
+  allow_file_discovery: boolean | null;
+  expiration_time: string | null;
+  permission_details: Array<{
+    permission_type: string | null;
+    role: string | null;
+    inherited: boolean | null;
+  }>;
 }
 
 const GOOGLE_READ_TIMEOUT_MS = 15_000;
@@ -160,6 +186,10 @@ const DEFAULT_CALENDAR_DAYS = 1;
 const MAX_CALENDAR_DAYS = 31;
 const DEFAULT_GMAIL_QUERY = "newer_than:1d";
 const DEFAULT_DRIVE_QUERY = "trashed=false";
+const DRIVE_FILE_BASE_FIELDS =
+  "id,name,mimeType,createdTime,modifiedTime,webViewLink,parents,driveId,version,headRevisionId,shared,trashed";
+const DRIVE_PERMISSION_FIELDS =
+  "permissions(type,role,domain,allowFileDiscovery,expirationTime,permissionDetails(permissionType,role,inherited))";
 const GOOGLE_BRIEF_SERVICES: GoogleReadService[] = ["gmail", "calendar", "drive"];
 const GMAIL_ATTACHMENT_METADATA_MAX_DEPTH = 12;
 const MAX_GMAIL_HEADER_VALUES = 16;
@@ -396,6 +426,12 @@ function googleResponseError(toolName: string, response: GoogleReadResponse): Er
 }
 
 function safeGmailOpaqueId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 &&
+    value === value.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(value)
+    ? value : null;
+}
+
+function safeDriveOpaqueId(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= 512 &&
     value === value.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(value)
     ? value : null;
@@ -1722,22 +1758,109 @@ export async function invokeGoogleCalendarRead(
   };
 }
 
-function driveFileFromJson(value: unknown): GoogleDriveFile | null {
+function booleanOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function drivePermissionFromJson(
+  value: unknown,
+): { summary: GoogleDrivePermissionSummary; complete: boolean } | null {
+  if (!isRecord(value)) return null;
+  const rawDetails = value.permissionDetails;
+  const permissionDetails: GoogleDrivePermissionSummary["permission_details"] = [];
+  let complete = typeof value.type === "string" && typeof value.role === "string";
+  if (rawDetails !== undefined) {
+    if (!Array.isArray(rawDetails)) {
+      complete = false;
+    } else {
+      for (const detail of rawDetails) {
+        if (!isRecord(detail)) {
+          complete = false;
+          continue;
+        }
+        permissionDetails.push({
+          permission_type: optionalString(detail.permissionType),
+          role: optionalString(detail.role),
+          inherited: booleanOrNull(detail.inherited),
+        });
+      }
+    }
+  }
+  return {
+    summary: {
+      type: optionalString(value.type),
+      role: optionalString(value.role),
+      domain: optionalString(value.domain),
+      allow_file_discovery: booleanOrNull(value.allowFileDiscovery),
+      expiration_time: optionalString(value.expirationTime),
+      permission_details: permissionDetails,
+    },
+    complete,
+  };
+}
+
+function driveFileFromJson(
+  value: unknown,
+  responseTruncated = false,
+  permissionsRequested = true,
+): GoogleDriveFile | null {
   if (!isRecord(value) || typeof value.id !== "string") return null;
+  const driveId = optionalString(value.driveId);
+  const rawPermissions = permissionsRequested && Array.isArray(value.permissions) ? value.permissions : null;
+  const parsedPermissions = rawPermissions?.map(drivePermissionFromJson) ?? [];
+  const permissionEntries = parsedPermissions
+    .filter((permission): permission is NonNullable<typeof permission> => permission !== null);
+  const permissionEntriesComplete = rawPermissions !== null &&
+    permissionEntries.length === rawPermissions.length &&
+    permissionEntries.every((permission) => permission.complete) &&
+    !responseTruncated;
+  const permissionInventoryState = !permissionsRequested
+    ? "not_requested"
+    : driveId !== null
+      ? permissionEntries.length > 0 ? "shared_drive_partial" : "shared_drive_not_returned"
+      : rawPermissions !== null ? "available" : "not_returned";
+  const version = optionalString(value.version);
+  const headRevisionId = optionalString(value.headRevisionId);
   return {
     id: value.id,
     name: optionalString(value.name),
     mime_type: optionalString(value.mimeType),
+    created_time: optionalString(value.createdTime),
     modified_time: optionalString(value.modifiedTime),
     web_view_link: optionalString(value.webViewLink),
+    parents: Array.isArray(value.parents) && value.parents.every((parent) => typeof parent === "string")
+      ? value.parents
+      : null,
+    drive_id: driveId,
+    version,
+    head_revision_id: headRevisionId,
+    revision_metadata_state: version !== null && headRevisionId !== null
+      ? "version_and_head_revision"
+      : version !== null
+        ? "version_only"
+        : headRevisionId !== null
+          ? "head_revision_only"
+          : "not_returned",
+    shared: booleanOrNull(value.shared),
+    trashed: booleanOrNull(value.trashed),
+    permission_inventory: {
+      state: permissionInventoryState,
+      complete: permissionInventoryState === "available" && permissionEntriesComplete,
+      entries: permissionEntries.map((permission) => permission.summary),
+    },
   };
 }
 
-function driveFiles(value: unknown, maxResults: number): { files: GoogleDriveFile[]; next_page_token: string | null } {
+function driveFiles(
+  value: unknown,
+  maxResults: number,
+  responseTruncated = false,
+  permissionsRequested = true,
+): { files: GoogleDriveFile[]; next_page_token: string | null } {
   if (!isRecord(value)) return { files: [], next_page_token: null };
   const files = Array.isArray(value.files)
     ? value.files
-        .map(driveFileFromJson)
+        .map((file) => driveFileFromJson(file, responseTruncated, permissionsRequested))
         .filter((file): file is GoogleDriveFile => file !== null)
         .slice(0, maxResults)
     : [];
@@ -1753,14 +1876,76 @@ export async function invokeGoogleDriveRead(
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   const request = opts.request ?? defaultGoogleReadRequest;
-  const query = stringArg(args, "query", false) ?? DEFAULT_DRIVE_QUERY;
   const maxResults = positiveIntArg(args, "max_results", DEFAULT_MAX_RESULTS, MAX_RESULTS);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const token = googleToken(env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.read");
+  const fileIdProvided = Object.prototype.hasOwnProperty.call(args, "file_id");
+  const validatedFileId = fileIdProvided ? safeDriveOpaqueId(args.file_id) : null;
+  if (fileIdProvided && !validatedFileId) {
+    throw new Error("file_id must be a safe Google Drive file identifier");
+  }
+  const fileId = validatedFileId ?? undefined;
+  const includeSharing = booleanArg(args, "include_sharing", fileId !== undefined);
+
+  if (fileId) {
+    if (Object.prototype.hasOwnProperty.call(args, "query") ||
+        Object.prototype.hasOwnProperty.call(args, "page_token")) {
+      throw new Error("file_id cannot be combined with query or page_token");
+    }
+    const params = new URLSearchParams({
+      supportsAllDrives: "true",
+      fields: includeSharing ? `${DRIVE_FILE_BASE_FIELDS},${DRIVE_PERMISSION_FIELDS}` : DRIVE_FILE_BASE_FIELDS,
+    });
+    const path = `/drive/v3/files/${encodeURIComponent(fileId)}?${params}`;
+    assertToolExecutionNotCancelled(opts.signal, "google.drive.read");
+    const response = await request({
+      service: "drive",
+      hostname: "www.googleapis.com",
+      path,
+      maxBytes,
+      token,
+    }, opts.signal);
+    if (!response.ok) throw googleResponseError("google.drive.read", response);
+    const file = driveFileFromJson(
+      parseJson(response.body, "google.drive.read"),
+      response.truncated,
+      includeSharing,
+    );
+    if (!file || file.id !== fileId) {
+      throw new Error("google.drive.read returned metadata for a different or invalid file identifier");
+    }
+    return {
+      service: "drive",
+      mode: "read_only",
+      target_mode: "file_metadata",
+      api_host: "www.googleapis.com",
+      file_id: fileId,
+      max_results: maxResults,
+      max_bytes: maxBytes,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      request_status: "ok",
+      mutation_sent: false,
+      result_count: 1,
+      result_complete: !response.truncated,
+      next_page_token: null,
+      result_digest: sha256Hex([file]),
+      files: [file],
+      content_read: false,
+      trust_boundary: {
+        provider_data_is_untrusted: true,
+        drive_metadata_can_authorize_operation: false,
+        used_for_authority: false,
+      },
+    };
+  }
+
+  const query = stringArg(args, "query", false) ?? DEFAULT_DRIVE_QUERY;
   const params = new URLSearchParams({
     pageSize: String(maxResults),
     q: query,
-    fields: "files(id,name,mimeType,modifiedTime,webViewLink),nextPageToken",
+    fields: `files(${includeSharing ? `${DRIVE_FILE_BASE_FIELDS},${DRIVE_PERMISSION_FIELDS}` : DRIVE_FILE_BASE_FIELDS}),nextPageToken`,
   });
   const pageToken = stringArg(args, "page_token", false);
   if (pageToken) params.set("pageToken", pageToken);
@@ -1774,10 +1959,16 @@ export async function invokeGoogleDriveRead(
     token,
   }, opts.signal);
   if (!response.ok) throw googleResponseError("google.drive.read", response);
-  const result = driveFiles(parseJson(response.body, "google.drive.read"), maxResults);
+  const result = driveFiles(
+    parseJson(response.body, "google.drive.read"),
+    maxResults,
+    response.truncated,
+    includeSharing,
+  );
   return {
     service: "drive",
     mode: "read_only",
+    target_mode: "search",
     api_host: "www.googleapis.com",
     query,
     max_results: maxResults,
@@ -1788,8 +1979,15 @@ export async function invokeGoogleDriveRead(
     mutation_sent: false,
     result_count: result.files.length,
     next_page_token: result.next_page_token,
+    result_complete: !response.truncated && result.next_page_token === null,
     result_digest: sha256Hex(result.files),
     files: result.files,
+    content_read: false,
+    trust_boundary: {
+      provider_data_is_untrusted: true,
+      drive_metadata_can_authorize_operation: false,
+      used_for_authority: false,
+    },
   };
 }
 
@@ -1867,6 +2065,7 @@ export async function buildGoogleDailyBriefContent(
           {
             query: opts.driveQuery ?? DEFAULT_DRIVE_QUERY,
             max_results: maxResults,
+            include_sharing: false,
           },
           opts,
         ));
@@ -1905,7 +2104,7 @@ export const googleCalendarReadTool: Tool = {
 
 export const googleDriveReadTool: Tool = {
   name: "google.drive.read",
-  description: "Read a bounded Google Drive metadata summary with an operator-provided OAuth token.",
+  description: "Search bounded Google Drive metadata or inspect one exact file_id. Exact-file reads include available version and sharing metadata by default. File contents are not read; provider metadata is untrusted and non-authoritative.",
   required_capabilities: requireToolOperationDescriptor("google.drive.read").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeGoogleDriveRead(args, { signal: context.signal });

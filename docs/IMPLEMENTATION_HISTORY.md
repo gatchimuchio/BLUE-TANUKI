@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-11-02 — QEB-F04.01-DRIVE-METADATA-REVISION-SHARING
+
+開始時のlocal／remote `main`=`5344dd97c58caed306ea579871701a58ebccc35e`、作業treeはclean（保護対象untracked `.codex-remote-attachments/`を除く）。作業開始時に最新AGENTS、rev3.0 pinと三点セット、active instruction、remote／worktree／差分／復旧refを再照合した。編集前local recovery branchとremote tagはcurrent=`5344dd9...`、previous=`c6b2eee...`へ照合・回転した。単一main worktreeを使用し、保護添付directoryは変更していない。
+
+既存`google.drive.read`は`files.list`の限定検索だけだった。これを同じtoolのexact `file_id`分岐から`files.get`へ接続し、ID、名称、MIME、作成・更新時刻、親folder、Shared Drive ID、version、取得可能なhead revision ID、共有状態、trash状態、取得可能なpermission scopeを返すよう拡張した。file IDはURL/path delimiterを含まないopaque IDとして検査し、単一path segmentへencode、応答IDも要求IDと一致照合する。default field maskは固定し、`supportsAllDrives=true`を使う。既存検索はpermission fieldsを既定で要求せず、exact file readはsharing fieldsを既定で含む。`include_sharing=false`ではpermission fieldsを要求しない。Daily Briefもpermission inventoryを取得しない。
+
+返却permissionからemail、display name、permission IDは除外する。inventoryは利用可能・未返却・Shared Drive partial／未返却・未要求を区別し、一覧が欠けた状態を共有なしと解釈しない。revision observationは`version`と取得可能な`headRevisionId`のみに限る。`headRevisionId`の欠落は履歴不存在を示さず、履歴一覧・revision本文・Drive file本文は取得しない。全結果に`mutation_sent=false`、`content_read=false`、provider metadataの非信頼・非権威flagを追加した。
+
+確認した一次資料: [Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get)、[Drive files resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)（`version`はサーバー版、`headRevisionId`はbinary contentでのみ利用可能、shared-drive itemでは`shared`／`permissions`が返らない場合がある）、[Drive permissions resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions)。
+
+`corepack pnpm --filter @blue-tanuki/core run typecheck`／`build`はPASS（Windows package TypeScript compileおよび既存Windows/Linux isolation build）。`corepack pnpm docs:check`と`git diff --check`もPASS（日本語基底の既存移行負債76件）。test suite、Gateway process、実provider／credential／実Drive読取はNOT_RUN。metadata subconsumerは`WIRED`（runtime未確認）。F04.01は文書本文・内包指示の非信頼consumer、形式・byte上限・保持条件が未接続のため全体`BUILD_GAP`。F04.02／F04.03、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03、OD-03、P13の保留を維持する。
+
+---
+
 ## 2026-11-02 — QEB-F03.02-CALENDAR-PLAN-UPDATE-DELETE-RECONCILIATION
 
 開始local `main`／`origin/main` tracking ref=`c6b2eeec8371890bc1c555fdc7b7079fc9930a65`。現行rev3.0 pin／hash・AGENTS・F03.02 active instructionを確認。編集前のlocal二世代復旧branchはcurrent=`c6b2eee...`、previous=`21732e1...`。local tag refsは旧SHA (`c26c137...`／`ed65540...`)を指し、GitHub上のtag／mainを今回再照合しようとしたがDNS／connector transport errorで取得できなかった。保護対象`.codex-remote-attachments/`は変更していない。

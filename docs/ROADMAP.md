@@ -20,13 +20,11 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-02、既存`google.calendar.write`の`event.update`／`event.delete`をHDS Operation Planの通常bind経路へ接続した。primary calendar・本人主催・confirmed snapshot・参加者一覧完全・他参加者0人・event ID／recurrence scope完全一致を必須とし、updateは件名のみ、deleteは対象eventだけを許可する。L3／Approval Gate／HDS authorityとoperation別effectを維持し、同一eventの未解決作用中と同一payloadの重複bindを拒否する。
+2026-11-02、既存`google.drive.read`をexact `file_id`単件metadata取得へ拡張し、file/folder identity、MIME、親folder、Shared Drive、version／取得可能なhead revision、共有状態、trash状態、取得可能なpermission scopeを返す。`files.get`は静的field maskと`supportsAllDrives=true`を使い、応答file IDを要求値と照合する。permission主体のemail・表示名・permission IDは返さない。検索ではpermission inventoryを既定で取得せず、exact file readはsharing scopeを既定で含め、取得不能・未要求・Shared Driveで部分／未提供を区別する。Daily Briefはpermission inventoryを取得しない。
 
-結果不明時は既存の期限・単回・対象束縛付きpermitからread-only GETを一度だけ行う。updateは正確な対象の現在件名、deleteは同対象の`cancelled`状態だけを「現在状態一致」と記録する。404・不一致・曖昧は結果不明のままとし、自動再送しない。Control Centerは観測と作用結果を区別して表示し、update／deleteから別作成taskへ誤誘導しない。実Calendar読取・書込・実資格・外部作用は行っていない。
+返却はprovider由来の非信頼metadataとして明示し、`content_read=false`／`mutation_sent=false`を維持する。version／head revision metadataは変更履歴一覧やrevision本文を意味しない。資料本文と内包指示のconsumerは未接続のため、F04.01全体は`BUILD_GAP`、metadata subconsumerのみ`WIRED`（runtime未確認）。本文形式・byte上限・保持条件が未定義のため本文読取を追加していない。F04.02 write/share/delete、F04.03 live、実provider／credential／外部読取は未実施。一次仕様は[Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get)、[files resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)、[permissions resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions)。
 
-Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`はPASS。test suite、Gateway process／browser、実provider／実資格／Calendar作用はNOT_RUN。STATUS=`WIRED`（HDS planから既存adapter／L3経路と読取照合のコード接続、runtime未確認）。F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
-
-実装commit `eaeee0e9861ea535d7198f8e4b762c9607fff729`を`main`へpushし、remote `main`と二世代復旧tagを照合済み。保護対象`.codex-remote-attachments/`は未追跡のまま保持した。
+`@blue-tanuki/core` typecheck／build、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の既存移行負債76件）。test suite、Gateway process、実provider／実資格／Drive読取はNOT_RUN。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03、OD-03、P13の保留を維持する。保護対象`.codex-remote-attachments/`は変更していない。
 
 ## 前回BUILD_BATCH — F03.02既存参加者を保持する招待追加consumer
 
