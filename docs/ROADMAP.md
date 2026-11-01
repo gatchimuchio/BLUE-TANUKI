@@ -8,6 +8,8 @@
 
 ## 現在のBUILD_BATCH
 
+2026-11-01、合成Cからowner指定の単一sandbox相対pathに対する`file.delete`候補計画を生成する入口を追加した。secret-like／絶対／traversal等のpathを拒否し、候補は単一file・最大256,000 bytes・high／L3 final review・Approval／Broker必須とする。実削除は行わず、既存toolのsandbox・通常file・対象版再照合を維持する。`@blue-tanuki/core` typecheckはPASS。Gateway process／Broker実行／test suiteはNOT_RUNのため、実consumerの実行は未確認。次は使い捨てroot内のtest専用fileに限定してOwner表示から既存削除経路までの接続を確認する。
+
 2026-11-01、E2E-01の限定synthetic owner taskを動的なfilename／本文でWebChat入口から実行した。create-only `file.write`、J審査・Approval／Broker、M receipt、Gateway再起動、同一taskの`file.search`、二度目の再起動後の保存結果読取まで、Gateway process test 1件を選択してPASS（同fileの他4件はpattern skip）。Gateway package typecheck／build、`pnpm docs:check`、`git diff --check`もPASS。対象taskの実provider呼出しはなく、このtask経路を`WIRED`とする範囲に限る。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、Rust cutoverは未成立。次のBUILD_BATCHは現行rev3.0の施工順と最新実物から、次の未接続な通常Owner仕事のproducer／consumerを選ぶ。
 
 2026-11-01、F01.03の同一Workspace境界を接続した。Settings UIから任意の`BLUE_TANUKI_SHELL_ROOT`を設定でき、File sandbox rootと同じパスを選べる。通常のshell実行条件は変えず、`same_workspace_as_file_root=true`を要求するshell operationだけ、Broker審査時と起動直前に実resolveしたFile／Shell rootが一致することを必須にした。設定保存・解除、root不一致拒否の限定test 3件とGateway／core typecheckはPASS。実process、編集後test、再読取、失敗時復帰は未接続／未実行でF01.03全体は未成立。次は同じrootで既存審査済みdiff後のtest・再読取をGUIへ戻すconsumerと、失敗時の新規owner-reviewed recovery editを接続する。

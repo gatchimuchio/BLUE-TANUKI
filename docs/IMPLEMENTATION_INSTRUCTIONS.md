@@ -402,6 +402,14 @@ HDS-BRAIN／Gateway／core／WebChatのTypeScript no-emit確認、生成Control 
 
 **次:** QE_BUILDを続け、最新実物から次の未接続producer／consumerを選ぶ。統合形状が揃う前の広域QC／QA、実provider、live外部作用、Rust cutoverは行わない。
 
+#### 2026-11-01 E2E-01 BUILD — owner指定単一file.delete候補
+
+開発専用synthetic Cに、明示された単一sandbox相対pathから`file.delete`の未実行候補を作る入力形を追加した。pathは相対・非secret・traversalなしに限定する。OperationPlanは対象fileとpathを一致させ、`max_bytes=256000`、effect=`delete`、high／`L3_final_review`、HDS authority／Approval Gate必須を固定する。削除後の自動補償は行わず、復元には別の明示依頼を要する。製品の既存file.deleteはsandbox内通常file・サイズ・対象版を再確認し、Broker evidenceと承認済みcommand identityなしに作用しない。
+
+`pnpm --filter @blue-tanuki/core typecheck`はPASS。STATUS=WIRED（synthetic C→file.delete OperationPlanのコード接続。Gateway process、Owner表示、Broker／Executor実行は未確認）。実ファイル削除、test suite、process実行はNOT_RUN。実provider・live外部作用・他repo変更・Rust cutoverは対象外。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次:** 使い捨てroot内のtest専用fileに限定して、Owner表示・L3審査・対象版再照合から既存file.delete consumerまでの実接続を確認する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。
