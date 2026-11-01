@@ -468,6 +468,24 @@ function operationArg(args: Record<string, unknown>, allowed: readonly string[])
   return operation;
 }
 
+function assertSupportedGmailWriteArguments(args: Record<string, unknown>): string {
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const supported = operation === "draft.send"
+    ? new Set(["operation", "draft_id", "max_bytes"])
+    : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "max_bytes"]);
+  const unsupported = Object.keys(args).filter((key) => !supported.has(key));
+  if (unsupported.length > 0) {
+    const attachmentArgument = unsupported.some((key) => /attachment|file/i.test(key));
+    throw new Error(attachmentArgument
+      ? "gmail.write attachment arguments are unsupported; request_sent=false; mutation_sent=false"
+      : "gmail.write arguments are unsupported; request_sent=false; mutation_sent=false");
+  }
+  if (operation !== "draft.send" && args.body !== undefined && args.body_text !== undefined) {
+    throw new Error("gmail.write body and body_text are ambiguous; request_sent=false; mutation_sent=false");
+  }
+  return operation;
+}
+
 function executionRequestIdentity(options: GoogleWriteOptions): Pick<GoogleWriteTarget, "idempotency_key" | "command_digest"> {
   const key = options.idempotency_key;
   const commandDigest = options.command_digest;
@@ -577,7 +595,7 @@ export async function invokeGmailWrite(
   opts: GoogleWriteOptions = {},
   expectedDraftObservation?: GmailWriteTargetVersionObservation,
 ): Promise<unknown> {
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const operation = assertSupportedGmailWriteArguments(args);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write");
@@ -618,7 +636,8 @@ export async function invokeGmailWrite(
 
 /** Gmailのdraft.create / message.sendで送る正確なrequest body digest。資格情報の読取り・送信は行わない。 */
 export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): string {
-  const operation = operationArg(args, ["draft.create", "message.send"]);
+  const operation = assertSupportedGmailWriteArguments(args);
+  if (operation === "draft.send") throw new Error("gmail_target_version_operation_unsupported");
   const request = gmailWriteRequest(args);
   if ((operation === "draft.create" && request.path !== "/gmail/v1/users/me/drafts") ||
       (operation === "message.send" && request.path !== "/gmail/v1/users/me/messages/send")) {
@@ -629,7 +648,7 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
 
 /** draft.sendの正確なrequest intentをdraft IDとprovider MIME digestで束ねる。MIME本文は保持しない。 */
 export function gmailDraftSendRequestPayloadDigest(args: Record<string, unknown>, rawDigest: string): string {
-  if (operationArg(args, ["draft.send"]) !== "draft.send" || !/^[a-f0-9]{64}$/.test(rawDigest)) {
+  if (assertSupportedGmailWriteArguments(args) !== "draft.send" || !/^[a-f0-9]{64}$/.test(rawDigest)) {
     throw new Error("gmail_target_version_operation_unsupported");
   }
   return operationPlanDigest({
@@ -641,7 +660,7 @@ export function gmailDraftSendRequestPayloadDigest(args: Record<string, unknown>
 
 /** 送信先文字列を観測へ保持せず、operationと宛先一式の同一性digestを作る。 */
 export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): string {
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const operation = assertSupportedGmailWriteArguments(args);
   if (operation === "draft.send") {
     return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
       service: "gmail", operation, draft_id: stringArg(args, "draft_id")! });
@@ -705,7 +724,7 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
 }
 
 function gmailWriteRequest(args: Record<string, unknown>, draftRaw?: string): { path: string; body: string } {
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const operation = assertSupportedGmailWriteArguments(args);
   if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args) } }) };
   if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args) }) };
   if (!draftRaw) throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");

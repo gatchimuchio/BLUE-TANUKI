@@ -18,13 +18,13 @@ ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc30
 
 Toは必須、Cc／Bcc／Reply-Toは任意。各欄は表示名なしの最大20件のメールアドレス列に制限し、Protocolの共有正規化でHDS候補検査、Gmail MIME serializer、target identity digest、Gatewayのno-store content reviewを一致させる。serializerはReply-Toを実MIMEへ出し、Approval画面は有効な宛先・件名・本文とrequest payload digestを示す。Owner taskに明記のない値をメール本文・headerから補わない。owner選択identity digestを含む候補はdraft.create一件のみで、message.send／draft.send／複数stepは拒否する。
 
-添付は現行候補経路で未対応。HDS Operation PlanとGateway content projectionは添付フィールドを拒否し、Approval画面は「添付なし」と表示する。既存draft.send MIME parserもmultipart／添付をfail-closedで拒否する。添付内容のowner選択・読取・表示・送信は未接続であり、F02.02全体は`BUILD_GAP`のまま。
+添付は現行候補経路で未対応。HDS Operation PlanとGateway content projectionは添付フィールドを拒否し、Approval画面は「添付なし」と表示する。既存`gmail.read`は添付metadataのみを返し、現行三点セット・F02.02契約に添付本文の対応形式、明示byte上限、保持期間の規定はない。`gmail.read.max_bytes`はAPI応答上限であり、添付本文の上限として流用しない。このため本文取得を追加せず、`gmail.write` adapterも未知・添付引数を送信前に拒否する。既存draft.send MIME parserもmultipart／添付をfail-closedで拒否する。添付内容のowner選択・読取・表示・送信は未接続であり、F02.02全体は`BUILD_GAP`のまま。
 
 candidate生成・provider読取／書込・実資格・実送信は行わない。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。
 
-Protocol build、HDS／core／WebChat／Gatewayのtypecheck・build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底移行負債76件の既存注意あり。test、Gateway process、browser、実provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（宛先・本文のコード接続、runtime未確認）。F02.02全体は添付の選択・読取・内容digest・Owner確認が未接続のため`BUILD_GAP`。
+宛先・本文の接続を含む従前の確認結果は、Protocol build、HDS／core／WebChat／Gatewayのtypecheck・build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`がPASS。今回の安全guard施工では`@blue-tanuki/core typecheck`、`pnpm docs:check`、`git diff --check`がPASSし、`packages/blue-tanuki/src/tools/google_write.ts`がoperation別許可引数だけを受け付け、未知・添付引数をcredential取得・request前に拒否する。今回のtest、Gateway process、browser、実provider／実資格、外部作用はNOT_RUN。宛先・本文は`WIRED`（runtime未確認）、添付の選択・読取・内容digest・Owner確認は未接続のためF02.02全体は`BUILD_GAP`。
 
-**次のBUILD_BATCH:** F02.02の添付producer／consumerを接続する。gmail.readのOwner選択済みattachment identityから、安全に検証された内容・digestをno-store L3 reviewへ結び、同じ承認commandとBroker実作用へ固定する。内容取得時のscope・保持先・サイズ上限が現行契約で成立しない場合は添付をfail-closedのままにし、未対応を進捗へ残す。実provider・live外部作用は行わない。
+**次のBUILD_BATCH:** F02.02の添付producer／consumer接続は、対応形式・内容scope・保持期間・byte上限が現行契約で定まるまで`BUILD_GAP`として保持する。Owner選択済み`gmail.read` attachment identityの本文取得、no-store L3 review、同一承認command／Broker作用は未接続のままにする。実provider・live外部作用は行わず、並行して別の安全なQE_BUILD consumerを進める。
 
 ## CR-0割込み — I-06 Windows開発インストーラー
 
