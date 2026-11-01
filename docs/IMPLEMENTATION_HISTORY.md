@@ -3705,3 +3705,17 @@ Google Calendar APIの`recurringEventId`／`originalStartTime`がoccurrenceを�
 | test／Gateway process／browser／実provider／実資格／Calendar外部作用 | NOT_RUN。 |
 
 Calendar create、対象scope付きupdate／deleteは`WIRED`（静的接続、runtime未確認）。参加者・招待効果、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。次consumerは参加者変更・招待通知を独立した作用とOperation Plan／L3へ結ぶ工程。
+
+## 2026-11-01 QE_BUILD — F03.02 Calendar参加者追加・招待通知
+
+`event.create`はOwner taskに明示された最大20件のattendeeを作成payloadへ含められるようにした。宛先をno-store L3 reviewに表示し、参加者がある場合のみ`sendUpdates=all`を指定する。既存予定へ参加者を追加する`event.invite`はevent updateとは別operationにし、primary calendar、owner主催、confirmed、完全な参加者観測、event IDとrecurrence scope一致を要求する。Google Calendar PATCHは配列項目を全置換するため、既存attendeeがある対象（owner本人を含む）は拒否する。target-versionとreviewへ宛先・作用範囲・状態digestを結び、実行直前に再読取してfresh ETagを`If-Match`へ設定する。Operation Planはevent.inviteおよび参加者付きevent.createに`external_send`を要求し、high risk／L3／Approval Gate／HDS authorityなしでは対象をbindしない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS-BRAIN／core／WebChat／Gateway project build | PASS。 |
+| 生成Control Center script構文解析 | PASS。 |
+| `pnpm docs:check` | PASS。日本語基底移行負債76件の既存注意あり。 |
+| `git diff --check` | PASS。 |
+| test suite／Gateway process／browser／実provider・資格／Calendar外部作用／QE_QC／QE_QA | NOT_RUN。 |
+
+`event.create`参加者追加および既存参加者0人に限る`event.invite`を`WIRED`（コード接続、runtime未確認）とする。既存attendeeを保持して追加する経路、外部作用結果不明時の照合・復旧、F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOは未成立。

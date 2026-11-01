@@ -72,6 +72,8 @@ export interface GoogleCalendarEventCreateContentReview {
   availability_window_end: string;
   busy_intervals: readonly { start: string; end: string }[];
   overlapping_busy_intervals: readonly { start: string; end: string }[];
+  attendees: readonly string[];
+  invite_notifications_requested: boolean;
   request_payload_digest: string;
   command_digest: string;
   review_digest: string;
@@ -134,8 +136,38 @@ export interface GoogleCalendarEventDeleteContentReview {
   may_execute: false;
 }
 
+/** Exact recipient list and invitation effect shown before an approved attendee update. */
+export interface GoogleCalendarEventInviteContentReview {
+  kind: "google_calendar_event_invite";
+  operation: "google.calendar.write.event.invite";
+  target_scope: "single_event" | "series" | "occurrence";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
+  invitees: readonly string[];
+  notification_effect: "send_invitation_emails_to_listed_attendees";
+  event_state_digest: string;
+  observed_at: string;
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
-  GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview;
+  GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
+  GoogleCalendarEventInviteContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
 export interface ToolExecutionLifecycleObservation {

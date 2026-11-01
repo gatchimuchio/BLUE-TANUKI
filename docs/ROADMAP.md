@@ -160,6 +160,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-11-01、F03.02の単件Calendar対象をv2へ拡張し、主催者本人、完全な参加者一覧、他参加者0人、日時・timezoneを read-before-write の状態digestへ結んだ。参加者識別子は取得・返却しない。作成・更新に続いて、primary calendar上の確定済み非繰返し予定一件だけを対象にした`event.delete`を既存L3／Approval／HDS binding／Brokerへ接続した。Ownerのno-store reviewで予定ID・件名・日時・所有・参加者数を提示し、承認前後に再読取、fresh ETagを`If-Match`、`sendUpdates=none`で単件DELETEする。Protocol／HDS／core／WebChat／Gateway TypeScript build、生成script構文解析、`git diff --check`はPASS。test／Gateway process／browser／実provider／実資格／外部作用はNOT_RUN。三操作は`WIRED`（runtime未確認）、繰返し系列／occurrence、参加者・招待効果は`BUILD_GAP`、F03全体と製品全体BUILD・QC／QA・owner GOは未成立。
 
+2026-11-01、F03.02の参加者・通知consumerを接続した。`event.create`はOwner taskに明示された最大20件の参加者を要求本文へ束ね、no-store L3確認に宛先と招待メール作用を出す。宛先がある場合だけ`sendUpdates=all`を指定し、ない場合は`none`。既存予定の`event.invite`は別operationとして、primary calendar・本人主催・完全なread snapshot・event ID・明示recurrence scopeを確認し、対象に既存attendeeが一人もいない場合に限りPATCHする。Calendar APIのattendees配列置換で既存者を落とさないため、owner本人のattendeeも含め既存参加者がある対象は拒否する。request payload／target version／状態digest／ETag `If-Match`を結び、取得・L3確認・実行直前に同じ対象を再読取する。Operation Planは招待時だけ`external_send`を必須化し、high／L3／Approval Gate／HDS authorityを固定する。Protocol／HDS-BRAIN／core／WebChat／Gateway build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底移行負債76件は既存注意。test／Gateway process／browser／実provider／実資格／外部作用はNOT_RUN。これは`WIRED`（コード接続）であり、既存参加者を保った招待、結果不明時の照合・復旧、F03.02／F03全体、製品全体BUILD、QC／QA、owner GOの成立ではない。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

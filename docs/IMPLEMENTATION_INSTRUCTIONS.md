@@ -8,19 +8,19 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02 Calendar系列・単回occurrenceの作用境界
+## 最新BUILD_BATCH — F03.02 Calendar参加者追加・招待通知
 
-2026-11-01、Calendar読取snapshotをv3へ更新し、非繰返し単一予定・繰返し系列本体・系列内単一回を別の識別形状にした。単回は`recurrence`なし、系列本体は`recurrence[]`、occurrenceは`recurringEventId`と`originalStartTime`を必須とし、曖昧・欠損・上限超過の応答は失敗させる。状態digestは系列規則または親系列ID・元の開始日時を含む。
+2026-11-01、Calendarの作成にOwner taskへ明示された最大20件の参加者を任意で指定できるようにし、同じL3内容確認へ宛先一覧と招待メール作用を表示する。宛先がある場合のみ`sendUpdates=all`を使い、宛先なしでは`sendUpdates=none`を維持する。既存予定への追加は独立した`event.invite` operationとし、主催者本人・primary calendar・完全snapshot・event ID・明示的なrecurrence scopeを要求する。
 
-`event.update`は件名一項目、`event.delete`は指定event ID一件の既存操作を維持し、recurring series／occurrenceには明示的な一致`target_scope`を要求する。系列の内容審査は規則を、occurrenceの審査は親系列ID・元の開始日時を表示する。scopeはtarget-version、payload／target identity、review digestへ束縛し、target-version取得・Owner確認・承認直前・Broker実行直前の再読取とETag `If-Match`を維持する。系列／単回の曖昧な拡張、参加者変更、招待通知、繰返し作成は未対応。
+Google Calendar APIのPATCHはattendees配列を置換するため、既存予定への追加は現在の参加者が0人（owner本人を含む）と確認できる場合だけに限定した。event readのETag／状態digestと、request payload・target version・no-store L3 reviewを結び、取得・確認・Broker実行前に再読取する。シリーズ本体／指定occurrenceはscopeとidentityを一致させて表示し、異なる対象へ広がらない。Operation Planはevent.createの宛先有無とevent.inviteに応じて`write`／`external_send`／`credential_access`を厳密に分け、招待はhigh risk・L3・Approval Gate・HDS authorityを必須にする。
 
-Protocol／HDS／core／WebChat／Gatewayの型検査とproject build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債76件は既存注意として残る。test／Gateway process／browser／実provider／実資格／Calendar変更はNOT_RUN。`event.create`、対象制約付き`event.update`／`event.delete`はコード上`WIRED`（runtime未確認）。F03.02の参加者・招待効果、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債76件は既存注意。test、Gateway process、browser、実provider／実資格、Calendar外部作用はNOT_RUN。`event.create`と限定された`event.invite`は`WIRED`（コード接続、runtime未確認）。既存参加者を保持しながら追加する経路、通知結果が不明な場合の照合・復旧、F03.02全体、F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次のBUILD_BATCH:** F03.02の参加者変更と招待通知を既存の分離された作用・Operation Plan・L3確認へ接続できるか、現行consumerと安全境界から実装する。実provider／live外部作用は行わない。
+**次のBUILD_BATCH:** F03.02のCalendar書込結果が不明になった場合のread-only照合・停止・owner再開経路を接続し、`event.create`の重複登録と`event.invite`の招待メール再送を防ぐ。実provider／live外部作用は行わない。
 
 ## repo基点
 
-ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。2026-11-01の本BUILD_BATCHはlocal／remote `main`=`c26c137b1b58f96075ced25320445a9a97bcee5a`から開始した。後続作業はこの記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
+ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。直前のCalendar scope BUILD_BATCHは`c26c137b1b58f96075ced25320445a9a97bcee5a`から`bc8b2ecb6801c93dd06d41eebd81019685ad5373`まで確定した。今回の参加者・通知BUILD_BATCHはlocal／remote `main`=`bc8b2ecb6801c93dd06d41eebd81019685ad5373`から開始。後続作業はこの記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
 
 ## F02.02 Gmail先行BUILD履歴 — 内容・宛先の承認固定
 

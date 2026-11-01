@@ -760,7 +760,7 @@ export class Executor {
       return review;
     }
     if (command.payload.tool_name === "google.calendar.write" &&
-        ["event.create", "event.update", "event.delete"].includes(String(command.payload.arguments.operation))) {
+        ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("google.calendar.write");
       if (tool !== googleCalendarWriteTool || !tool.inspect_content_review) {
         throw new Error("google.calendar.write content review requires the registered built-in adapter");
@@ -777,7 +777,11 @@ export class Executor {
       const validDeleteReview = "kind" in review && review.kind === "google_calendar_event_delete" &&
         /^[a-f0-9]{64}$/.test(review.event_state_digest) && review.organizer_self === true &&
         review.attendee_inventory_complete === true && review.other_attendee_count === 0;
-      if ((!validCreateReview && !validUpdateReview && !validDeleteReview) ||
+      const validInviteReview = "kind" in review && review.kind === "google_calendar_event_invite" &&
+        /^[a-f0-9]{64}$/.test(review.event_state_digest) && review.organizer_self === true &&
+        review.attendee_inventory_complete === true && review.other_attendee_count === 0 &&
+        review.invitees.length > 0 && review.notification_effect === "send_invitation_emails_to_listed_attendees";
+      if ((!validCreateReview && !validUpdateReview && !validDeleteReview && !validInviteReview) ||
           review.command_digest !== operationPlanDigest(command) ||
           !/^[a-f0-9]{64}$/.test(review.review_digest) ||
           !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||

@@ -46,6 +46,14 @@ export const GoogleCalendarWriteTargetVersionObservationSchema = z.discriminated
     event_state_digest: DigestSchema,
     event_etag_digest: DigestSchema,
   }).strict(),
+  GoogleCalendarWriteTargetVersionBaseSchema.extend({
+    operation: z.literal("event.invite"),
+    target_scope: CalendarEventScopeSchema,
+    calendar_id: z.string().min(1).max(512),
+    event_id: z.string().min(1).max(1_024),
+    event_state_digest: DigestSchema,
+    event_etag_digest: DigestSchema,
+  }).strict(),
 ]);
 
 /** Read-only Calendar event snapshot with recurrence identity for exact-scope writes. */

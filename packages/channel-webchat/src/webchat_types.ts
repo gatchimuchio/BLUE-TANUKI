@@ -238,6 +238,8 @@ export interface WebChatGoogleCalendarEventCreateContentReview {
   availability_window_end: string;
   busy_intervals: readonly { start: string; end: string }[];
   overlapping_busy_intervals: readonly { start: string; end: string }[];
+  attendees: readonly string[];
+  invite_notifications_requested: boolean;
   used_for_authority: false;
   may_execute: false;
 }
@@ -291,6 +293,35 @@ export interface WebChatGoogleCalendarEventDeleteContentReview {
   organizer_self: true;
   other_attendee_count: 0;
   attendee_inventory_complete: true;
+  event_state_digest: string;
+  observed_at: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface WebChatGoogleCalendarEventInviteContentReview {
+  kind: "google_calendar_event_invite";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation: "google.calendar.write.event.invite";
+  target_scope: "single_event" | "series" | "occurrence";
+  calendar_id: string;
+  event_id: string;
+  current_summary: string | null;
+  event_start: string;
+  event_end: string;
+  event_time_kind: "date" | "date_time";
+  event_time_zone: string | null;
+  recurrence_rules: readonly string[];
+  recurring_event_id: string | null;
+  original_start: { value: string; kind: "date" | "date_time"; time_zone: string | null } | null;
+  organizer_self: true;
+  other_attendee_count: 0;
+  attendee_inventory_complete: true;
+  invitees: readonly string[];
+  notification_effect: "send_invitation_emails_to_listed_attendees";
   event_state_digest: string;
   observed_at: string;
   used_for_authority: false;
@@ -434,7 +465,8 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
-  WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview;
+  WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
+  WebChatGoogleCalendarEventInviteContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

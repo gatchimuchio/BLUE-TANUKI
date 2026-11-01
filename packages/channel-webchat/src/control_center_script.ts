@@ -5259,6 +5259,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "google_calendar_event_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isEmail = function (value) { return typeof value === "string" && value.trim() === value && value.length <= 320 &&
+            value.indexOf("@") > 0 && value.indexOf("@") === value.lastIndexOf("@") &&
+            value.lastIndexOf(".") > value.indexOf("@") + 1; };
           const validIntervals = function (value) {
             return Array.isArray(value) && value.length <= 500 && value.every(function (interval) {
               return isObject(interval) && typeof interval.start === "string" &&
@@ -5282,6 +5285,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               typeof review.availability_window_end !== "string" ||
               !Number.isFinite(Date.parse(review.availability_window_end)) ||
               !validIntervals(review.busy_intervals) || !validIntervals(review.overlapping_busy_intervals) ||
+              !Array.isArray(review.attendees) || review.attendees.length > 20 ||
+              review.attendees.some(function (email) { return !isEmail(email); }) ||
+              review.invite_notifications_requested !== (review.attendees.length > 0) ||
               (review.summary !== undefined && typeof review.summary !== "string") ||
               (review.description !== undefined && typeof review.description !== "string") ||
               (review.location !== undefined && typeof review.location !== "string") ||
@@ -5299,6 +5305,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["終了", review.end],
             ["タイムゾーン", review.time_zone || "RFC3339のoffset"],
             ["場所", review.location || "（なし）"],
+            ["招待先", review.attendees.length > 0 ? review.attendees.join(", ") : "（なし）"],
+            ["招待メール", review.invite_notifications_requested ? "上記の宛先へ送信" : "送信なし"],
             ["空き状況の再確認時刻", review.availability_observed_at],
             ["観測窓", review.availability_window_start + " – " + review.availability_window_end]
           ].forEach(function (field) {
@@ -5336,7 +5344,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(overlap);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。この作成操作は単一の非繰返し予定のみです。繰返し作成、参加者変更、招待通知は未対応です。既存予定の件名更新・削除は別の内容審査と作用範囲確認を行います。";
+          note.textContent = "空き状況は参考情報で、権限や承認の根拠にはなりません。承認直前と登録直前に同じ観測結果を再照合し、変化があれば登録を止めます。この作成操作は単一の非繰返し予定のみです。招待先を指定した場合は、上記の宛先へ招待メールを送る外部作用も同じL3確認に含みます。既存予定への招待は別操作で、参加者がいない単一予定・系列・個別発生だけを対象にします。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | freebusy result digest: " + review.availability_result_digest;
@@ -5344,6 +5352,90 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "予定内容と空き状況を再確認";
+          return;
+        }
+        if (review.kind === "google_calendar_event_invite") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isEmail = function (value) { return typeof value === "string" && value.trim() === value && value.length <= 320 &&
+            value.indexOf("@") > 0 && value.indexOf("@") === value.lastIndexOf("@") &&
+            value.lastIndexOf(".") > value.indexOf("@") + 1; };
+          const validRecurrenceRules = Array.isArray(review.recurrence_rules) && review.recurrence_rules.length <= 64 &&
+            review.recurrence_rules.every(function (rule) { return typeof rule === "string" && rule.length > 0 &&
+              rule.length <= 2_048 && !/[\\u0000-\\u001f\\u007f]/.test(rule); });
+          const recurrenceRulesEmpty = validRecurrenceRules && review.recurrence_rules.length === 0;
+          const recurrenceRulesPresent = validRecurrenceRules && review.recurrence_rules.length > 0;
+          const originalStartValid = review.original_start === null || (review.original_start &&
+            typeof review.original_start.value === "string" &&
+            (review.original_start.kind === "date"
+              ? /^\\d{4}-\\d{2}-\\d{2}$/.test(review.original_start.value) && Number.isFinite(Date.parse(review.original_start.value + "T00:00:00Z"))
+              : review.original_start.kind === "date_time" && Number.isFinite(Date.parse(review.original_start.value)) &&
+                typeof review.original_start.time_zone === "string") &&
+            (review.original_start.time_zone === null || typeof review.original_start.time_zone === "string"));
+          const scopeIdentityValid = review.target_scope === "single_event"
+            ? review.recurring_event_id === null && review.original_start === null && recurrenceRulesEmpty
+            : review.target_scope === "series"
+              ? review.recurring_event_id === null && review.original_start === null && recurrenceRulesPresent
+              : review.target_scope === "occurrence" && typeof review.recurring_event_id === "string" &&
+                review.recurring_event_id.length > 0 && review.original_start !== null;
+          const validInvitees = Array.isArray(review.invitees) && review.invitees.length > 0 && review.invitees.length <= 20 &&
+            review.invitees.every(function (email) { return isEmail(email); }) &&
+            new Set(review.invitees.map(function (email) { return email.toLowerCase(); })).size === review.invitees.length;
+          if (review.command_id !== commandId || review.operation !== "google.calendar.write.event.invite" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.event_state_digest) ||
+              typeof review.calendar_id !== "string" || review.calendar_id !== "primary" ||
+              typeof review.event_id !== "string" || review.event_id.length === 0 || review.event_id.length > 1_024 ||
+              (review.current_summary !== null && (typeof review.current_summary !== "string" || review.current_summary.length > 8_192)) ||
+              typeof review.event_start !== "string" || typeof review.event_end !== "string" ||
+              !Number.isFinite(Date.parse(review.event_start)) || !Number.isFinite(Date.parse(review.event_end)) ||
+              (review.event_time_kind !== "date" && review.event_time_kind !== "date_time") ||
+              (review.event_time_zone !== null && typeof review.event_time_zone !== "string") ||
+              !validRecurrenceRules || !originalStartValid || !scopeIdentityValid || !validInvitees ||
+              review.notification_effect !== "send_invitation_emails_to_listed_attendees" ||
+              review.organizer_self !== true || review.other_attendee_count !== 0 ||
+              review.attendee_inventory_complete !== true || typeof review.observed_at !== "string" ||
+              !Number.isFinite(Date.parse(review.observed_at))) {
+            throw new Error("参加者と通知の確認内容がこの承認要求と一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Google Calendar参加者追加と招待メール";
+          view.appendChild(heading);
+          [
+            ["カレンダー", review.calendar_id],
+            ["予定", review.current_summary || "（件名なし）"],
+            ["開始", review.event_start],
+            ["終了", review.event_end],
+            ["対象範囲", review.target_scope === "series" ? "繰返し予定全体" :
+              review.target_scope === "occurrence" ? "繰返し予定の指定回" : "単一予定"],
+            ["招待メール", "一覧の全員へ送信"],
+            ["再確認時刻", review.observed_at]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const inviteesLabel = document.createElement("strong");
+          inviteesLabel.textContent = "招待先（この一覧へメール送信）";
+          view.appendChild(inviteesLabel);
+          const invitees = document.createElement("pre");
+          invitees.textContent = review.invitees.join("\\n");
+          view.appendChild(invitees);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は予定参加者の置換APIを使います。対象予定に既存参加者（owner本人を含む）がいる場合は実行を拒否します。系列は系列全体、occurrenceは表示した指定回だけを対象にし、承認後に予定の版が変わると停止します。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | event state digest: " + review.event_state_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "参加者と招待範囲を再確認";
           return;
         }
         if (review.kind === "google_calendar_event_update") {

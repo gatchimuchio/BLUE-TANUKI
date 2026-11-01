@@ -1144,6 +1144,8 @@ export interface GoogleCalendarEventTargetSnapshot {
   observation: ReturnType<typeof GoogleCalendarEventTargetObservationSchema.parse>;
   /** Retained only in the adapter so the subsequent PATCH can use If-Match. */
   etag: string;
+  /** Kept inside the adapter so attendee replacement cannot remove the owner's own participation. */
+  self_attendee_present: boolean;
 }
 
 export async function readGoogleCalendarEventTarget(
@@ -1290,7 +1292,8 @@ export async function readGoogleCalendarEventTarget(
       used_for_authority: false,
     },
   });
-  return { observation, etag: body.etag };
+  return { observation, etag: body.etag,
+    self_attendee_present: rawAttendees.some((attendee) => isRecord(attendee) && attendee.self === true) };
 }
 
 function freeBusyIntervals(

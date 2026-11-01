@@ -19,6 +19,7 @@ import {
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema, type OperationPlanExternalReceiptObservation,
   FileSearchTargetVersionObservationSchema,
+  GoogleCalendarEventTargetObservationSchema,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -1233,6 +1234,52 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_000_000) return false;
     return Object.keys(parameters).every((key) =>
       ["path", "search", "replace", "expected_replacements", "max_bytes"].includes(key));
+  }
+  if (step.operation === "google.calendar.write" && step.adapter === "external_api" &&
+      step.target.kind === "external_service" && step.target.id === "calendar" && parameters) {
+    const validPermission = step.permission.risk === "high" &&
+      step.permission.approval_level === "L3_final_review" && step.permission.final_review_required &&
+      step.permission.approval_gate_required && step.permission.hds_brain_authority_required;
+    const hasEffects = (expected: readonly string[]): boolean => step.effects.length === expected.length &&
+      expected.every((effect) => step.effects.includes(effect as OperationStep["effects"][number]));
+    if (!validPermission || typeof parameters.operation !== "string") return false;
+    if (parameters.operation === "event.create") {
+      const attendees = parameters.attendees;
+      if (attendees !== undefined && !Array.isArray(attendees)) return false;
+      const attendeeList: unknown[] = attendees === undefined ? [] : attendees;
+      if (attendees !== undefined && attendeeList.length === 0) return false;
+      if (attendeeList.length > 0 && (attendeeList.length > 20 ||
+          attendeeList.some((entry) => typeof entry !== "string" || entry.trim() !== entry))) return false;
+      const normalizedAttendees = attendeeList.length === 0 ? "" : normalizeGmailAddressList(attendeeList.join(", "));
+      if (attendeeList.length > 0 && (!normalizedAttendees || normalizedAttendees !== attendeeList.join(", ") ||
+          new Set(attendeeList.map((email) => typeof email === "string" ? email.toLowerCase() : "")).size !== attendeeList.length)) return false;
+      const inviteEffect = attendeeList.length > 0;
+      return hasEffects(inviteEffect ? ["external_send", "write", "credential_access"] : ["write", "credential_access"]) &&
+        typeof parameters.start === "string" && typeof parameters.end === "string" &&
+        Object.keys(parameters).every((key) => ["operation", "calendar_id", "summary", "description", "location",
+          "start", "end", "time_zone", "attendees", "availability_observation", "max_bytes"].includes(key));
+    }
+    if (parameters.operation === "event.invite") {
+      const attendees = parameters.attendees;
+      if (!Array.isArray(attendees) || attendees.length < 1 || attendees.length > 20 ||
+          attendees.some((entry) => typeof entry !== "string" || entry.trim() !== entry)) return false;
+      const attendeeEmails = attendees as string[];
+      const normalizedAttendees = normalizeGmailAddressList(attendeeEmails.join(", "));
+      const eventObservation = GoogleCalendarEventTargetObservationSchema.safeParse(parameters.event_observation);
+      return hasEffects(["external_send", "write", "credential_access"]) &&
+        normalizedAttendees !== undefined && normalizedAttendees === attendeeEmails.join(", ") &&
+        new Set(attendeeEmails.map((email) => email.toLowerCase())).size === attendeeEmails.length &&
+        eventObservation.success && eventObservation.data.calendar_id === "primary" &&
+        eventObservation.data.calendar_id_original === "primary" &&
+        parameters.target_scope === eventObservation.data.recurrence_scope &&
+        (parameters.calendar_id === undefined || parameters.calendar_id === eventObservation.data.calendar_id) &&
+        typeof parameters.event_id === "string" && parameters.event_id.trim().length > 0 &&
+        parameters.event_id === eventObservation.data.event_id &&
+        parameters.event_id.length <= 1_024 &&
+        Object.keys(parameters).every((key) => ["operation", "target_scope", "calendar_id", "event_id", "attendees",
+          "event_observation", "max_bytes"].includes(key));
+    }
+    return false;
   }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters) return false;
