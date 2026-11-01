@@ -1605,6 +1605,12 @@ export async function invokeFileSearch(
   if (query.length === 0 && requestedFilePath === undefined) {
     throw new Error("file.search requires a query unless an exact relative file path is selected");
   }
+  const startLineValue = args.start_line;
+  if (startLineValue !== undefined && (typeof startLineValue !== "number" || !Number.isSafeInteger(startLineValue) ||
+      startLineValue < 1 || startLineValue > 1_000_000 || query.length !== 0 || requestedFilePath === undefined)) {
+    throw new Error("file.search start_line requires an exact-file preview and must be between 1 and 1000000");
+  }
+  const startLine = startLineValue === undefined ? 1 : startLineValue;
   const maxResults = positiveIntArg(args, "max_results", 20, 100);
   if (query.length === 0 && maxResults > 5) {
     throw new Error("file.search exact-file preview is limited to five lines");
@@ -1617,11 +1623,11 @@ export async function invokeFileSearch(
   const targetVersionHasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
   const matches: Array<{ path: string; line_number: number; line: string }> = [];
   let visited = 0;
-  const appendMatches = (relativeFilePath: string, data: Buffer) => {
+  const appendMatches = (relativeFilePath: string, data: Buffer, firstLine = 1) => {
     if (matches.length >= maxResults || data.includes(0)) return;
     const text = data.toString("utf8");
     const lines = text.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = firstLine - 1; i < lines.length; i++) {
       const line = lines[i] ?? "";
       if (line.includes(query)) {
         matches.push({
@@ -1637,7 +1643,7 @@ export async function invokeFileSearch(
     const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot);
     visited = 1;
     appendFileSearchVersionEntry(targetVersionHasher, root, target.filepath, target.data);
-    appendMatches(target.relative_path, target.data);
+    appendMatches(target.relative_path, target.data, query.length === 0 ? startLine : 1);
   } else {
     for await (const file of walkFiles(root, sandboxRoot)) {
       if (visited >= 1_000) break;
@@ -2416,7 +2422,7 @@ export async function invokeFileEdit(
 
 export const fileSearchTool: Tool = {
   name: "file.search",
-  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file. With an exact file path, an empty query returns a bounded line preview. After an explicitly requested workspace test, use the same relative file path to reread current state and return the saved result to the owner.",
+  description: "Read-only text search under a requested root directory, optionally limited to one exact relative file. With an exact file path, an empty query returns at most five lines from start_line (default 1); start_line is accepted only for this exact-file preview. After an explicitly requested workspace test, use the same relative file path to reread current state and return the saved result to the owner.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;

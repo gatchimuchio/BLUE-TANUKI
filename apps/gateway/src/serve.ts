@@ -372,6 +372,7 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     const header = [
       "保存時点のfile.read previewです。全内容・完全性・現在のファイル状態は保証しません。",
       `対象: ${JSON.stringify(projection.path)}`,
+      `開始行: ${projection.start_line}`,
       `表示行数: ${projection.lines.length}（上限 ${projection.preview_limit} 行）`,
       `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
     ];

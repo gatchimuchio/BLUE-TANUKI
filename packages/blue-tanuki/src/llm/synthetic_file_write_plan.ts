@@ -17,6 +17,7 @@ const SYNTHETIC_CREATE_TASK_PREFIX = "次の内容で新しいテキストファ
 const SYNTHETIC_SEARCH_TASK_PREFIX = "sandbox内のテキストファイルで次の語句を検索してください。\n検索語: ";
 const SYNTHETIC_EXACT_FILE_SEARCH_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ";
 const SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルを先頭から最大5行だけ確認してください。\n相対パス: ";
+const SYNTHETIC_EXACT_FILE_READ_RANGE_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルを指定行から最大5行だけ確認してください。\n相対パス: ";
 const SYNTHETIC_FILE_EDIT_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで、指定文字列を一回だけ置換してください。\n編集JSON: ";
 const SYNTHETIC_FILE_DELETE_TASK_PREFIX = "sandbox内の指定した相対パスの通常ファイルを一つだけ削除してください。\n相対パス: ";
 export const SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルで指定文字列を一回だけ置換し、同じpathをfile.searchで再読してください。\n編集JSON: ";
@@ -31,6 +32,7 @@ type SyntheticFileTaskDetails = {
   readonly file_path?: string;
   readonly file_content?: string;
   readonly search_query?: string;
+  readonly start_line?: number;
   readonly edit_search?: string;
   readonly edit_replace?: string;
 };
@@ -41,6 +43,7 @@ type SyntheticPlanFixture = {
   readonly file_path?: string;
   readonly file_content?: string;
   readonly search_query?: string;
+  readonly start_line?: number;
   readonly edit_search?: string;
   readonly edit_replace?: string;
   readonly parent_plan_id_digest?: string;
@@ -146,6 +149,16 @@ function parseSyntheticSearchTask(task: string): SyntheticFileTaskDetails | unde
 }
 
 function parseSyntheticExactFileReadTask(task: string): SyntheticFileTaskDetails | undefined {
+  if (task.startsWith(SYNTHETIC_EXACT_FILE_READ_RANGE_TASK_PREFIX)) {
+    const lineSeparator = task.indexOf("\n開始行: ", SYNTHETIC_EXACT_FILE_READ_RANGE_TASK_PREFIX.length);
+    if (lineSeparator < 0) return undefined;
+    const filePath = task.slice(SYNTHETIC_EXACT_FILE_READ_RANGE_TASK_PREFIX.length, lineSeparator);
+    const startLineText = task.slice(lineSeparator + "\n開始行: ".length);
+    if (!isSafeSyntheticRelativePath(filePath) || !/^[1-9]\d{0,6}$/u.test(startLineText)) return undefined;
+    const startLine = Number(startLineText);
+    if (!Number.isSafeInteger(startLine) || startLine > 1_000_000) return undefined;
+    return { file_path: filePath, start_line: startLine };
+  }
   if (!task.startsWith(SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX)) return undefined;
   const filePath = task.slice(SYNTHETIC_EXACT_FILE_READ_TASK_PREFIX.length);
   return isSafeSyntheticRelativePath(filePath) ? { file_path: filePath } : undefined;
@@ -509,7 +522,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
         adapter_is_authority: false as const,
         command_generated_by_adapter_only: false,
         parameters: { root: sandboxRoot, ...(requestedFilePath ? { file_path: requestedFilePath } : {}),
-          query: searchText, max_results: 5 },
+          query: searchText, max_results: 5, ...(isRead ? { start_line: fixture.start_line ?? 1 } : {}) },
         preparation: {
           depends_on: [],
           bindings: [],
@@ -524,6 +537,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
               sandbox_root: sandboxRoot,
               query: searchText,
               ...(requestedFilePath ? { file_path: requestedFilePath } : {}),
+              ...(isRead ? { start_line: fixture.start_line ?? 1 } : {}),
               max_results: 5,
             },
           }],

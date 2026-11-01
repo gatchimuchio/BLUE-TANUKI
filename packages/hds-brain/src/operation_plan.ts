@@ -145,6 +145,7 @@ export type OperationPlanSavedResultReturnProjection =
     readonly schema_version: "operation-plan-saved-result-return.v5";
     readonly operation: "file.read";
     readonly path: string;
+    readonly start_line: number;
     readonly preview_limit: number;
     readonly preview_completeness: "unknown";
     readonly lines: readonly { readonly line_number: number; readonly line: string }[];
@@ -704,6 +705,10 @@ export function operationPlanResultValidationMatches(
 
   const expected = validation.expected;
   const parameters = step.parameters;
+  const hasExpectedStartLine = Object.hasOwn(expected, "start_line");
+  const hasParameterStartLine = Object.hasOwn(parameters ?? {}, "start_line");
+  const expectedStartLine = hasExpectedStartLine ? expected.start_line : 1;
+  const parameterStartLine = hasParameterStartLine ? parameters?.start_line : 1;
   if (!parameters || expected.schema_version !== "blue-tanuki.file-search-result-validation.v1" ||
       typeof expected.root !== "string" || expected.root.length === 0 ||
       typeof expected.sandbox_root !== "string" || expected.sandbox_root.length === 0 ||
@@ -712,10 +717,13 @@ export function operationPlanResultValidationMatches(
       /[\u0000-\u001f\u007f]/u.test(expected.query) ||
       !Number.isInteger(expected.max_results) || typeof expected.max_results !== "number" ||
       expected.max_results < 1 || expected.max_results > 100 ||
+      hasExpectedStartLine !== hasParameterStartLine || typeof expectedStartLine !== "number" ||
+      !Number.isSafeInteger(expectedStartLine) || expectedStartLine < 1 || expectedStartLine > 1_000_000 ||
+      parameterStartLine !== expectedStartLine ||
       step.target.id !== expected.root || parameters.root !== expected.root || parameters.query !== expected.query ||
       parameters.max_results !== expected.max_results) return false;
 
-  const expectedKeys = new Set(["schema_version", "root", "sandbox_root", "query", "max_results", "file_path"]);
+  const expectedKeys = new Set(["schema_version", "root", "sandbox_root", "query", "max_results", "file_path", "start_line"]);
   if (Object.keys(expected).some((key) => !expectedKeys.has(key))) return false;
   const hasExpectedFilePath = Object.hasOwn(expected, "file_path");
   const expectedFilePath = expected.file_path;
@@ -723,6 +731,7 @@ export function operationPlanResultValidationMatches(
       (hasExpectedFilePath && (typeof expectedFilePath !== "string" || parameters.file_path !== expectedFilePath ||
         !isFileSearchRelativeResultPath(expectedFilePath)))) return false;
   if (expected.query.length === 0 && (!hasExpectedFilePath || expected.max_results > 5)) return false;
+  if (expected.query.length !== 0 && hasExpectedStartLine) return false;
 
   if (output.root !== expected.root || output.sandbox_root !== expected.sandbox_root ||
       output.query !== expected.query || typeof output.visited_files !== "number" ||
@@ -740,11 +749,13 @@ export function operationPlanResultValidationMatches(
         (!hasExpectedFilePath && targetVersion.data.requested_path_digest !== undefined)) return false;
   }
 
-  return output.matches.every((match) => isFileSearchResultRecord(match) &&
+  const validMatches = output.matches.every((match) => isFileSearchResultRecord(match) &&
     Object.keys(match).length === 3 && isFileSearchRelativeResultPath(match.path) &&
     (!hasExpectedFilePath || match.path === expectedFilePath) &&
     typeof match.line_number === "number" && Number.isInteger(match.line_number) && match.line_number > 0 &&
     typeof match.line === "string" && match.line.length <= 240);
+  if (!validMatches) return false;
+  return expected.query !== "" || output.matches.every((match, index) => match.line_number === expectedStartLine + index);
 }
 
 function gatewayExecutionReceiptEvidenceDigest(observation: OperationPlanExternalReceiptObservation): string {
@@ -3261,10 +3272,12 @@ export class OperationPlanLedger {
     if (parameters.query === "") {
       const path = parameters.file_path;
       const previewLimit = parameters.max_results;
+      const startLine = parameters.start_line ?? 1;
       if (typeof path !== "string" || !isFileSearchRelativeResultPath(path) ||
           !Number.isInteger(previewLimit) || typeof previewLimit !== "number" || previewLimit < 1 || previewLimit > 5 ||
+          typeof startLine !== "number" || !Number.isSafeInteger(startLine) || startLine < 1 || startLine > 1_000_000 ||
           output.query !== "" || output.visited_files !== 1 || matches.length > previewLimit ||
-          matches.some((match, index) => match.path !== path || match.line_number !== index + 1)) {
+          matches.some((match, index) => match.path !== path || match.line_number !== startLine + index)) {
         throw new Error("plan_saved_result_preview_invalid");
       }
       return {
@@ -3273,7 +3286,7 @@ export class OperationPlanLedger {
         step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
         result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
         memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
-        observed_at_ms: result.observed_at_ms, operation: "file.read", path, preview_limit: previewLimit,
+        observed_at_ms: result.observed_at_ms, operation: "file.read", path, start_line: startLine, preview_limit: previewLimit,
         preview_completeness: "unknown", lines: matches.map(({ line_number, line }) => ({ line_number, line })),
         used_as_world_truth: false, used_for_authority: false, may_execute: false,
       };

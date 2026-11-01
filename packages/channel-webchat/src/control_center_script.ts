@@ -2112,7 +2112,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                       ? "J/M receipt確認済みの作成結果要約を表示します。本文は返さず、現在のファイル状態も再読込しません。"
                       : step.operation === "file.delete"
                         ? "J/M receipt確認済みの削除時点の報告を表示します。現在の対象不存在は再確認しません。"
-                        : "J/M receipt確認済みの保存結果を表示します。指定条件によっては上限5行のfile.read previewを返します。保存時点の観測であり、全内容・検索完全性・現在状態を示しません。") +
+                        : "J/M receipt確認済みの保存結果を表示します。指定条件によっては指定開始行から最大5行のfile.read previewを返します。保存時点の観測であり、全内容・検索完全性・現在状態を示しません。") +
                   (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
               const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&

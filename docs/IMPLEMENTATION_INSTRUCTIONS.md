@@ -477,3 +477,11 @@ BT-U-E2E-01 path-bound file.search test 1件PASS、同fileの他6件skip（21.6�
 Control CenterのWebSocket再接続回数が接続成功後も残り、別の切断系列で上限を早く使い切る状態を修正した。現在の接続世代を確認した後、WebSocket `open`で再接続失敗数を0へ戻す。自動再接続だったかは接続試行のローカル値で判定し、counter reset後も再接続案内を表示できる。taskを再送せず、切断中のframeを再配送せず、既存のtoken付きruntime snapshot読取も維持する。
 
 `packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／browser／Gateway processはNOT_RUN。STATUS=WIRED（静的接続、実接続未確認）。実provider・外部作用なし。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+#### 2026-11-01 F01.01 BUILD接続 — exact-path file.read previewの開始行指定
+
+既存の`file.search` adapterによる`file.read` previewを拡張し、同じsandbox相対file pathについて開始行を指定できるようにした。空queryとexact pathのpreviewだけで受理し、開始行は1〜1,000,000、1要求あたり最大5行・各行240文字・既存1 MiB上限を維持する。通常検索へ`start_line`を混在させた候補はTool境界で拒否し、Operation Plan側は開始行が候補・検証期待値・連続した結果行で一致することを照合する。既存のtarget version観測はpathとファイル全体の版へ結び付き、Owner向け保存結果へ要求開始行を示す。既存のL1 observe／Approval Gate／Broker、secret-like path拒否、symlink／root containment、M receipt、非権威saved-result経路は維持し、作用は再実行しない。
+
+`packages/blue-tanuki/src/tools/builtin.ts`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/hds-brain/src/controller.ts`、`packages/hds-brain/src/operation_plan.ts`、`apps/gateway/src/serve.ts`、`packages/channel-webchat/src/control_center_script.ts`を変更。実装初回のworkspace `pnpm typecheck`と`pnpm build`（Windows isolation release buildを含む）はPASS。controller promptの最終追記後はHDS `tsc --noEmit`とHDS package build、`pnpm docs:check`（日本語基底移行負債76件の注意あり）、`git diff --check`がPASS。最終追記後のworkspace `pnpm typecheck`再実行は、`apps/gateway/dist/active_task_execution_registry.js`を削除するclean段階で`EBUSY`となり停止したため、再掃除・実行中プロセス停止はしていない。Gateway process／browser／test suite／実provider／外部作用はNOT_RUN。STATUS=WIRED（型・build・候補→adapter→HDS検証→Owner返却のコード接続、runtime未確認）。START_HEAD=`ccbd5106784cd5ccbde31e849a110f7c93f28c5f`。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** 同じ目的を保ったOwner taskで、verified file.read observationから限定file.edit候補を作り、既存purpose binding・L3 no-store差分確認・Approval／Broker・execution／M receipt・owner結果返却へ接続する。preview本文や過去receiptを権限根拠にせず、編集対象の現在版が変われば新しい確認を要求する。
