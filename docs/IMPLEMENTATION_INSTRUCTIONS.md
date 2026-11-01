@@ -40,7 +40,7 @@ HDS／core／WebChat／Gateway typecheck、HDS／core／WebChat／Gateway build�
 
 ## repo基点
 
-ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。前回のCalendar参加者・通知BUILD_BATCHはlocal／remote `main`=`bc8b2ecb6801c93dd06d41eebd81019685ad5373`から開始した。今回のCalendar update/delete batchはlocal `main`と`origin/main` tracking ref=`c6b2eeec8371890bc1c555fdc7b7079fc9930a65`から開始した。GitHub上の最新main／backup tag再照合はDNS／connector transport errorで未完了。local復旧branchはcurrent=`c6b2eee...`／previous=`21732e1...`、local tag refsは旧SHA=`c26c137...`／`ed65540...`を指す。remote tag状態は未確認のため推測で更新しない。後続作業は記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
+ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。前回のCalendar参加者・通知BUILD_BATCHはlocal／remote `main`=`bc8b2ecb6801c93dd06d41eebd81019685ad5373`から開始した。今回のCalendar update/delete実装commit `eaeee0e9861ea535d7198f8e4b762c9607fff729`は`main`へpush済み。push後のGitHub照合は`main=eaeee0e...`、復旧tag current=`c6b2eee...`／previous=`21732e1...`で、local復旧branchも同じ二世代を保持する。後続作業は記録やpackage作成時SHAを現行HEADとみなさず、開始時にlocal／remoteの実値を再照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
 
 ## F02.02 Gmail先行BUILD履歴 — 内容・宛先の承認固定
 

@@ -26,6 +26,8 @@
 
 Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`はPASS。test suite、Gateway process／browser、実provider／実資格／Calendar作用はNOT_RUN。STATUS=`WIRED`（HDS planから既存adapter／L3経路と読取照合のコード接続、runtime未確認）。F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
 
+実装commit `eaeee0e9861ea535d7198f8e4b762c9607fff729`を`main`へpushし、remote `main`と二世代復旧tagを照合済み。保護対象`.codex-remote-attachments/`は未追跡のまま保持した。
+
 ## 前回BUILD_BATCH — F03.02既存参加者を保持する招待追加consumer
 
 2026-11-02、F03.02の`event.invite`を既存attendee保持consumer、no-store L3確認、Gateway必須承認経路へ接続した。Google Calendar PATCHはattendees配列を置換するため、完全一覧を読み、既存のRSVP等の書込可能項目と新規宛先を合わせて送る。重複宛先、完全性不明、200人超、max_bytes超は作用前にfail-closed。reviewは既存参加者・新規追加先・`sendUpdates=all`の全通知対象を表示し、digestとfresh ETagへ束縛する。既存参加者への更新通知を含むことも明示した。結果不明後のread-only照合はevent存在だけで一致扱いせず、要求宛先全員のattendee登録とscopeを確認する。通知メール到達は未確認、HDSは`outcome_unknown`、自動再送なし。同じeventの未解決招待は異なる宛先でも遮断し、確定済み同一宛先は順序・大文字小文字を正規化して重複拒否する。

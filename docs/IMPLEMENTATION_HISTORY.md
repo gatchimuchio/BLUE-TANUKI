@@ -8,6 +8,8 @@
 
 開始local `main`／`origin/main` tracking ref=`c6b2eeec8371890bc1c555fdc7b7079fc9930a65`。現行rev3.0 pin／hash・AGENTS・F03.02 active instructionを確認。編集前のlocal二世代復旧branchはcurrent=`c6b2eee...`、previous=`21732e1...`。local tag refsは旧SHA (`c26c137...`／`ed65540...`)を指し、GitHub上のtag／mainを今回再照合しようとしたがDNS／connector transport errorで取得できなかった。保護対象`.codex-remote-attachments/`は変更していない。
 
+実装commit `eaeee0e9861ea535d7198f8e4b762c9607fff729`を`main`へfast-forward pushした。push後のremote照合は`main=eaeee0e...`、復旧tag current=`c6b2eee...`／previous=`21732e1...`。local復旧branchも同じ二世代で、開始時SHAからの回復点を保持している。
+
 既存Calendar adapterは`event.update`（件名のみ）と`event.delete`（指定eventのみ）を実装済みだったが、HDS Operation Planの`hasConnectedPlanTarget`が`event.create`／`event.invite`しかbindせず、標準Owner経路から既存mutation consumerへ到達できなかった。更新・削除をexact primary-calendar snapshot、本人主催、完全attendee inventory、他参加者0人、event ID／target scope一致、high risk／L3／Approval Gate／HDS authority、およびoperation固有effectへ接続した。未解決の同一event mutationと確定済み同一payloadは再bindを拒否する。
 
 結果不明のread-only reconciliationで、`event.update`は一致したeventの現在summary、`event.delete`は一致したeventの`cancelled`状態を照合する。target identity・payload digestとoperationをHDS、Gateway、Protocol、結果projection、Control Centerへ通した。404は削除成功の証明にせず、statusは`outcome_unknown`を維持する。一回限り・短期限・対象束縛された許可に基づくGETだけを接続し、writeの再送や別Calendar作用は行わない。
