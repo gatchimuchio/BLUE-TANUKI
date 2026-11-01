@@ -293,7 +293,7 @@ export interface OperationPlanStatusProjection {
         evidence_digest: string;
         receipt_digest?: string;
         provider_http_status?: number;
-        provider_operation?: "event.create" | "event.invite";
+        provider_operation?: "event.create" | "event.update" | "event.delete" | "event.invite";
         observed_at_ms: number;
         used_for_authority: false;
         raw_receipt_exposed: false;
@@ -550,7 +550,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           (observation.source !== "google_calendar_read" || step.operation === "google.calendar.write" &&
             ((observationStatus === "not_found" && observation.provider_http_status === 404) ||
               (["matched", "mismatch"].includes(String(observationStatus)) && observation.provider_http_status === 200)) &&
-            ["event.create", "event.invite"].includes(String(observation.provider_operation))) &&
+            ["event.create", "event.update", "event.delete", "event.invite"].includes(String(observation.provider_operation))) &&
           observation.used_for_authority === false && observation.raw_receipt_exposed === false &&
           Number.isInteger(observation.match_count) && (observation.match_count as number) >= 0 &&
           (observation.match_count as number) <= 100 && isDigest(observation.evidence_digest) &&
@@ -618,7 +618,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           evidence_digest: observation.evidence_digest as string,
           ...(typeof observation.receipt_digest === "string" ? { receipt_digest: observation.receipt_digest } : {}),
           ...(typeof observation.provider_http_status === "number" ? { provider_http_status: observation.provider_http_status } : {}),
-          ...(observation.provider_operation === "event.create" || observation.provider_operation === "event.invite"
+          ...(observation.provider_operation === "event.create" || observation.provider_operation === "event.update" ||
+              observation.provider_operation === "event.delete" || observation.provider_operation === "event.invite"
             ? { provider_operation: observation.provider_operation } : {}),
           observed_at_ms: observation.observed_at_ms as number,
           used_for_authority: false as const,

@@ -209,15 +209,17 @@ async function reconcileGoogleCalendarWriteReceipt(
 ): Promise<OperationPlanExternalReceiptObservation> {
   const parameters = authorization.parameters;
   const operation = parameters.operation;
+  const eventObservation = parameters.event_observation && typeof parameters.event_observation === "object" &&
+    !Array.isArray(parameters.event_observation) ? parameters.event_observation as Record<string, unknown> : undefined;
   const calendarId = typeof parameters.calendar_id === "string" && parameters.calendar_id.trim()
     ? parameters.calendar_id.trim()
-    : operation === "event.invite" && parameters.event_observation && typeof parameters.event_observation === "object" &&
-        !Array.isArray(parameters.event_observation) && typeof (parameters.event_observation as Record<string, unknown>).calendar_id === "string"
-      ? String((parameters.event_observation as Record<string, unknown>).calendar_id) : "primary";
+    : operation !== "event.create" && typeof eventObservation?.calendar_id === "string"
+      ? eventObservation.calendar_id : "primary";
   const eventId = operation === "event.create"
     ? googleCalendarCreateEventId(parameters)
     : typeof parameters.event_id === "string" ? parameters.event_id.trim() : "";
-  if ((operation !== "event.create" && operation !== "event.invite") || !eventId || !calendarId) {
+  if ((operation !== "event.create" && operation !== "event.update" && operation !== "event.delete" && operation !== "event.invite") ||
+      !eventId || !calendarId) {
     throw new Error("google_calendar_receipt_parameters_invalid");
   }
   const expectedInvitees = operation === "event.invite"

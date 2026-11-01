@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-02 — QEB-F03.02-CALENDAR-PLAN-UPDATE-DELETE-RECONCILIATION
+
+開始local `main`／`origin/main` tracking ref=`c6b2eeec8371890bc1c555fdc7b7079fc9930a65`。現行rev3.0 pin／hash・AGENTS・F03.02 active instructionを確認。編集前のlocal二世代復旧branchはcurrent=`c6b2eee...`、previous=`21732e1...`。local tag refsは旧SHA (`c26c137...`／`ed65540...`)を指し、GitHub上のtag／mainを今回再照合しようとしたがDNS／connector transport errorで取得できなかった。保護対象`.codex-remote-attachments/`は変更していない。
+
+既存Calendar adapterは`event.update`（件名のみ）と`event.delete`（指定eventのみ）を実装済みだったが、HDS Operation Planの`hasConnectedPlanTarget`が`event.create`／`event.invite`しかbindせず、標準Owner経路から既存mutation consumerへ到達できなかった。更新・削除をexact primary-calendar snapshot、本人主催、完全attendee inventory、他参加者0人、event ID／target scope一致、high risk／L3／Approval Gate／HDS authority、およびoperation固有effectへ接続した。未解決の同一event mutationと確定済み同一payloadは再bindを拒否する。
+
+結果不明のread-only reconciliationで、`event.update`は一致したeventの現在summary、`event.delete`は一致したeventの`cancelled`状態を照合する。target identity・payload digestとoperationをHDS、Gateway、Protocol、結果projection、Control Centerへ通した。404は削除成功の証明にせず、statusは`outcome_unknown`を維持する。一回限り・短期限・対象束縛された許可に基づくGETだけを接続し、writeの再送や別Calendar作用は行わない。
+
+Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の既存移行負債76件）。test suite、Gateway process／browser、実provider／実資格／Calendar読取・書込・外部作用はNOT_RUN。`event.update`／`event.delete`のOperation Plan接続と結果不明読取照合を`WIRED`（コード接続、runtime未確認）とする。F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
+
+---
+
 ## 2026-11-01 — QEB-F03.02-CALENDAR-SINGLE-EVENT-SUMMARY-UPDATE
 
 開始`main`／`origin/main`=`515eb693a6b23fbe32854012054d890a314d9a53`。現行rev3.0 pin／hash・AGENTS・F03.02 active instructionを確認。編集前復旧refをCASで回転し、local／remote current=`515eb69...`／previous=`c280135...`。保護添付ZIPは変更していない。

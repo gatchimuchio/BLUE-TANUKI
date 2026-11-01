@@ -2283,12 +2283,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 (externalReceipt.receipt_digest === undefined || (typeof externalReceipt.receipt_digest === "string" && /^[a-f0-9]{64}$/.test(externalReceipt.receipt_digest))) &&
                 step.external_receipt_observation !== "not_recorded";
               const googleCalendarReceiptSafe = externalReceiptSafe && externalReceipt.source === "google_calendar_read" &&
-                step.operation === "google.calendar.write" && ["event.create", "event.invite"].includes(externalReceipt.provider_operation) &&
+                step.operation === "google.calendar.write" &&
+                ["event.create", "event.update", "event.delete", "event.invite"].includes(externalReceipt.provider_operation) &&
                 ((step.external_receipt_observation === "not_found" && externalReceipt.provider_http_status === 404) ||
                   (["matched", "mismatch"].includes(step.external_receipt_observation) && externalReceipt.provider_http_status === 200));
               const receipt = googleCalendarReceiptSafe
                 ? step.external_receipt_observation === "matched"
-                  ? "Google Calendarで対象イベントの現在状態を読取確認（書込み成功・招待メール到達は未確認）"
+                  ? externalReceipt.provider_operation === "event.update"
+                    ? "Google Calendarの現在件名が要求値と一致（この操作が変更したことは未確認）"
+                    : externalReceipt.provider_operation === "event.delete"
+                      ? "Google Calendarの対象イベントは現在cancelled（この操作が削除したことは未確認）"
+                      : externalReceipt.provider_operation === "event.invite"
+                        ? "Google Calendarの現在参加者一覧に要求宛先を確認（招待メール到達は未確認）"
+                        : "Google Calendarの対象イベントが要求状態と一致（この操作が作成したことは未確認）"
                   : step.external_receipt_observation === "not_found"
                     ? "Google Calendarが404を返しました（不存在と閲覧不能は区別できず、結果不明を維持）"
                     : "Google Calendarの現在状態が要求と一致しません（結果不明を維持）"
@@ -2302,7 +2309,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(String(externalReceipt.match_count)) + '</dd>' +
                   (externalReceipt.receipt_digest ? '<dt>receipt digest</dt><dd class="mono">' + escapeHtml(shortDigest(externalReceipt.receipt_digest)) + '</dd>' : '')
                 : '';
-              const calendarNewTaskButton = unknown && googleCalendarReceiptSafe
+              const calendarNewTaskButton = unknown && googleCalendarReceiptSafe &&
+                ["event.create", "event.invite"].includes(externalReceipt.provider_operation)
                 ? '<button type="button" class="secondary" data-operation-plan-calendar-new-task="true" data-calendar-operation="' +
                   escapeHtml(externalReceipt.provider_operation) + '">別のowner taskとして続ける</button>' +
                   '<p class="muted">このplanは結果不明のままです。下のボタンは別taskの入力欄を準備するだけで、送信もCalendar作用も行いません。</p>'
@@ -2350,7 +2358,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
                 '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + shellSummaryDetails + externalReceiptDetails + localFileStateDetails + '</dl>' +
-                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけ対象の読取を1回行います。event.create／event.inviteは再実行・再送しません。招待メールの配信結果はCalendar読取では確認できません。</p>' : '') +
+                 (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけ対象の読取を1回行います。event.create／event.update／event.delete／event.inviteは再実行しません。招待メールの配信結果はCalendar読取では確認できません。</p>' : '') +
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +

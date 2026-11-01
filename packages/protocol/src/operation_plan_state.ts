@@ -398,7 +398,7 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
   observed_payload_digest: Digest.optional(),
   target_identity_digest: Digest.optional(),
   provider_http_status: z.number().int().min(100).max(599).optional(),
-  provider_operation: z.enum(["event.create", "event.invite"]).optional(),
+  provider_operation: z.enum(["event.create", "event.update", "event.delete", "event.invite"]).optional(),
   gateway_execution_receipt_digest: Digest.optional(),
   gateway_execution_receipt_state: z.enum(["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"]).optional(),
   gateway_execution_epoch_digest: Digest.optional(),

@@ -12,7 +12,8 @@ export type ResultObservationCitation = ResultObservationCitationBase & (
       observation: { reported_status: "succeeded"; match_count: number; visited_files: number; completeness: "unknown" } }
   | { evidence_type: "external_receipt"; evidence_digest: string; operation: string;
       observation: { source: "local_inspection" | "google_calendar_read"; reconciliation_status: "matched" | "not_found" | "mismatch" | "ambiguous";
-        match_count: number; observed_receipt_digest?: string; provider_http_status?: number; provider_operation?: "event.create" | "event.invite";
+        match_count: number; observed_receipt_digest?: string; provider_http_status?: number;
+        provider_operation?: "event.create" | "event.update" | "event.delete" | "event.invite";
         action_outcome: "outcome_unknown" } }
   | { evidence_type: "file_state"; evidence_digest: string; operation: "file.write";
       observation: { source: "local_file_state"; inspection_status: "matched" | "not_found" | "mismatch";

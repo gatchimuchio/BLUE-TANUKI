@@ -156,7 +156,7 @@ export function ingestGoogleCalendarReceiptObservation(
   if (!/^[a-zA-Z0-9._:-]{1,200}$/.test(input.command_id) ||
       ![input.command_digest, input.executor_command_digest, input.plan_id_digest, input.revision_digest,
         input.step_id_digest, input.request_payload_digest, input.target_identity_digest].every((value) => DIGEST_PATTERN.test(value)) ||
-      (operation !== "event.create" && operation !== "event.invite")) {
+      (operation !== "event.create" && operation !== "event.update" && operation !== "event.delete" && operation !== "event.invite")) {
     throw new Error("google_calendar_receipt_observation_binding_invalid");
   }
   const observedAt = input.observed_at_ms ?? Date.now();
@@ -192,12 +192,29 @@ export function ingestGoogleCalendarReceiptObservation(
       const expectedSummary = typeof input.parameters.summary === "string" ? input.parameters.summary.trim() : null;
       const expectedStart = typeof input.parameters.start === "string" ? Date.parse(input.parameters.start.trim()) : NaN;
       const expectedEnd = typeof input.parameters.end === "string" ? Date.parse(input.parameters.end.trim()) : NaN;
-      visibleTargetMatches = visibleTargetMatches && providerEvent.recurrence_scope === "single_event" &&
+      const expectedCalendar = typeof input.parameters.calendar_id === "string" ? input.parameters.calendar_id.trim() : "primary";
+      visibleTargetMatches = visibleTargetMatches && providerEvent.calendar_id === expectedCalendar &&
+        providerEvent.recurrence_scope === "single_event" &&
         providerEvent.summary === expectedSummary && Number.isFinite(expectedStart) && Number.isFinite(expectedEnd) &&
         Date.parse(providerEvent.event_start) === expectedStart && Date.parse(providerEvent.event_end) === expectedEnd;
-    } else {
+    } else if (operation === "event.invite") {
       visibleTargetMatches = visibleTargetMatches && providerEvent.recurrence_scope === input.parameters.target_scope &&
+        providerEvent.event_id === input.parameters.event_id &&
+        providerEvent.calendar_id === (typeof input.parameters.calendar_id === "string" ? input.parameters.calendar_id.trim() : "primary") &&
         input.lookup.planned_invitees_present === true;
+    } else {
+      const sourceEvent = isRecord(input.parameters.event_observation) ? input.parameters.event_observation : undefined;
+      const expectedScope = input.parameters.target_scope ??
+        (sourceEvent?.recurrence_scope === "single_event" ? "single_event" : undefined);
+      const expectedEventId = typeof input.parameters.event_id === "string" ? input.parameters.event_id : "";
+      const expectedCalendar = typeof input.parameters.calendar_id === "string" ? input.parameters.calendar_id.trim()
+        : typeof sourceEvent?.calendar_id === "string" ? sourceEvent.calendar_id : "";
+      const exactTarget = providerEvent.recurrence_scope === expectedScope && providerEvent.event_id === expectedEventId &&
+        providerEvent.calendar_id === expectedCalendar;
+      visibleTargetMatches = operation === "event.update"
+        ? visibleTargetMatches && exactTarget && typeof input.parameters.summary === "string" &&
+          providerEvent.summary === input.parameters.summary.trim()
+        : exactTarget && providerEvent.status === "cancelled";
     }
     status = visibleTargetMatches ? "matched" : "mismatch";
   }

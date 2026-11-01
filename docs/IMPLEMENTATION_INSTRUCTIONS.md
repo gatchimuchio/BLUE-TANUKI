@@ -8,7 +8,15 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 最新BUILD_BATCH — F03.02既存参加者を保持する招待追加consumer
+## 最新BUILD_BATCH — F03.02 Calendar更新・削除のplan接続と読取照合
+
+2026-11-02、既存`google.calendar.write`の`event.update`／`event.delete`をHDS Operation Planの通常bind経路へ接続した。primary calendar・本人主催・confirmed snapshot・参加者一覧完全・他参加者0人・event ID／recurrence scope完全一致を必須とし、updateは件名のみ、deleteは対象eventだけを許可する。L3／Approval Gate／HDS authorityとoperation別effectを維持し、同一eventの未解決作用中と同一payloadの重複bindを拒否する。
+
+結果不明時は既存の期限・単回・対象束縛付きpermitからread-only GETを一度だけ行う。updateは正確な対象の現在件名、deleteは同対象の`cancelled`状態だけを「現在状態一致」と記録する。404・不一致・曖昧は結果不明のままとし、自動再送しない。Control Centerは観測と作用結果を区別して表示し、update／deleteから別作成taskへ誤誘導しない。実Calendar読取・書込・実資格・外部作用は行っていない。
+
+Protocol／HDS-BRAIN／core／WebChat／Gateway project build、生成Control Center script構文解析、`pnpm docs:check`はPASS。test suite、Gateway process／browser、実provider／実資格／Calendar作用はNOT_RUN。STATUS=`WIRED`（HDS planから既存adapter／L3経路と読取照合のコード接続、runtime未確認）。F03.02／F03全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOは保留する。
+
+## 前回BUILD_BATCH — F03.02既存参加者を保持する招待追加consumer
 
 2026-11-02、既存参加者がいるGoogle Calendar予定へ宛先を追加するconsumerを接続した。現行APIはPATCHで指定した配列を置換し、`attendeesOmitted`は参加者応答だけの更新用途であるため、完全なattendee一覧を読んで保持項目と新規宛先を結合してPATCHする。既存者のemail、RSVP、任意参加、resource、comment、display name、additional guestsを読み取り、未知・不完全・重複・200人超・要求宛先重複・byte上限超過は作用前に拒否する。request前に確認したevent ETagを`If-Match`へ結ぶ。
 
@@ -32,7 +40,7 @@ HDS／core／WebChat／Gateway typecheck、HDS／core／WebChat／Gateway build�
 
 ## repo基点
 
-ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。直前のCalendar scope BUILD_BATCHは`c26c137b1b58f96075ced25320445a9a97bcee5a`から`bc8b2ecb6801c93dd06d41eebd81019685ad5373`まで確定した。今回の参加者・通知BUILD_BATCHはlocal／remote `main`=`bc8b2ecb6801c93dd06d41eebd81019685ad5373`から開始。後続作業はこの記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
+ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。前回のCalendar参加者・通知BUILD_BATCHはlocal／remote `main`=`bc8b2ecb6801c93dd06d41eebd81019685ad5373`から開始した。今回のCalendar update/delete batchはlocal `main`と`origin/main` tracking ref=`c6b2eeec8371890bc1c555fdc7b7079fc9930a65`から開始した。GitHub上の最新main／backup tag再照合はDNS／connector transport errorで未完了。local復旧branchはcurrent=`c6b2eee...`／previous=`21732e1...`、local tag refsは旧SHA=`c26c137...`／`ed65540...`を指す。remote tag状態は未確認のため推測で更新しない。後続作業は記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
 
 ## F02.02 Gmail先行BUILD履歴 — 内容・宛先の承認固定
 
