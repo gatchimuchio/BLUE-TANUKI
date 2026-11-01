@@ -20,10 +20,9 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-02、既存`google.drive.write`の`file.create`／`file.update`後に、Drive metadataと要求内容を同じadapterで再読照合するconsumerを接続した。exact file ID、要求されたname／MIME／parent、Shared Drive対応状態を確認し、content指定時は最大`max_content_bytes`まで`alt=media`で一度だけ再読して完全一致を確認、本文はdigestのみを結果へ返す。Workspace native MIMEのcontent uploadは作用前に拒否し、trash状態が不明／trueでも検証失敗とする。切詰め、不一致、metadata／content再読失敗はmutation後の`verification_failed`として成功扱いせず、自動再送しない。core typecheck／buildはPASS。test、Gateway process、資格、実Drive作用はNOT_RUN。
+2026-11-02、`google.drive.write/file.create`だけをHDS Operation PlanとExecutor Brokerへ接続した。入力はOwner taskに明示された単一親folder・名前・`text/plain`本文に限る。Operation Planは登録descriptorのexternal_send/write/credential_access、high/L3、Approval Gate／HDS authorityを要求し、同じfolder・nameの未解決作成と確定済み同一payload重複を遮断する。
 
-これはF04.02の書込後照合consumerのみ。no-store owner内容確認、実作用前の対象版再照合、HDS Operation Plan binding、permission変更・公開共有・削除の作用分離は未接続のため、F04.02全体は`BUILD_GAP`。次はDrive書込のHDS L3内容確認と対象版照合を既存Broker経路へ接続する。C08.03、OD-03、P13は引き続き保留。
-
+folder metadata、親の継承を含む権限一覧の完全pagination、同名不存在を二重読取してdigestに結び、no-store L3確認では本文と全アクセスscopeをOwnerへ表示する。承認時と実作用直前に再照合し、変化・不完全なら停止する。Drive APIによるname一意性や外部同時変更との原子的排他は成立しない。file.update／権限変更・共有／deleteは未接続。provider／credential／Drive実作用は未実施。全workspace typecheck／build、docs gate、生成Control Center script構文、`git diff --check`はPASS。test suite／Gateway process／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`。C08.03、OD-03、P13を保留する。
 ## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
 
 2026-11-02、既存`google.drive.read`をexact `file_id`単件metadata取得へ拡張し、file/folder identity、MIME、親folder、Shared Drive、version／取得可能なhead revision、共有状態、trash状態、取得可能なpermission scopeを返す。`files.get`は静的field maskと`supportsAllDrives=true`を使い、応答file IDを要求値と照合する。permission主体のemail・表示名・permission IDは返さない。検索ではpermission inventoryを既定で取得せず、exact file readはsharing scopeを既定で含め、取得不能・未要求・Shared Driveで部分／未提供を区別する。Daily Briefはpermission inventoryを取得しない。

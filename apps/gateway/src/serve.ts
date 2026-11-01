@@ -261,6 +261,7 @@ interface PendingApproval {
   content_review_provider_state_digest?: string;
   content_review_file_edit_target_version_digest?: string;
   content_review_file_delete_target_version_digest?: string;
+  content_review_drive_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
   goal_purpose_proposal?: {
     goal_ref: string;
@@ -1421,6 +1422,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     expected_gmail_draft_provider_state_digest?: string;
     expected_file_edit_target_version_digest?: string;
     expected_file_delete_target_version_digest?: string;
+    expected_google_drive_target_version_digest?: string;
     goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
     goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
@@ -1853,6 +1855,19 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         : undefined;
       if (observedFileDeleteTargetVersionDigest !== opts.expected_file_delete_target_version_digest) {
         const reason = "file_delete_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_google_drive_target_version_digest) {
+      const observedDriveTargetVersionDigest = targetVersionObservation?.schema_version ===
+        "blue-tanuki.google-drive-write-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation) : undefined;
+      if (observedDriveTargetVersionDigest !== opts.expected_google_drive_target_version_digest) {
+        const reason = "google_drive_write_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -2638,7 +2653,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (pending.command.type === "tool_call" &&
           (pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
             (pending.command.payload.tool_name === "google.calendar.write" &&
-              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))))))) {
+              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
+            (pending.command.payload.tool_name === "google.drive.write" &&
+              pending.command.payload.arguments.operation === "file.create"))))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -3007,6 +3024,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
       ...(pending.content_review_file_delete_target_version_digest
         ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
+      ...(pending.content_review_drive_target_version_digest
+        ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
     });
     return { approval: "approve", executed: true, status: r.status };
   }
@@ -4279,6 +4298,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
+        pending.command.payload.arguments.operation === "file.create" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "google_drive_file_create" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review: WebChatApprovalContentReview = { ...snapshot, command_id } as WebChatApprovalContentReview;
+        if (review.kind !== "google_drive_file_create") return null;
+        pendingApprovals.set(command_id, { ...pending,
+          content_review_digest: review.review_digest,
+          content_review_drive_target_version_digest: review.target_version_digest,
+        });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation)) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
@@ -4369,6 +4409,26 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         return current && "diff" in current && current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_file_edit_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
+        pending.command.payload.arguments.operation === "file.create") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_drive_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        return current && "kind" in current && current.kind === "google_drive_file_create" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_drive_target_version_digest
           ? "valid" : "stale";
       } catch {
         return "unavailable";

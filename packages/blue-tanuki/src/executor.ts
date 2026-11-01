@@ -16,6 +16,7 @@ import {
   ShellExecTargetVersionObservationSchema,
   GmailWriteTargetVersionObservationSchema,
   GoogleCalendarWriteTargetVersionObservationSchema,
+  GoogleDriveWriteTargetVersionObservationSchema,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
@@ -63,9 +64,10 @@ import {
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { brokerFileResourceLockDigest, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool,
-  googleCalendarWriteTool, shellExecTool } from "./tools/builtin.js";
+  googleCalendarWriteTool, googleDriveWriteTool, shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
-  gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion } from "./tools/google_write.js";
+  gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
+  assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -405,6 +407,10 @@ function approveCommandForExecution(
       const observation = assertGoogleCalendarWriteTargetVersion(snapshot.payload.arguments, rawTargetVersionObservation,
         operationPlanDigest(snapshot), hds_binding?.operation_plan_binding_digest);
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "google.drive.write") {
+      const observation = assertGoogleDriveWriteTargetVersion(snapshot.payload.arguments, rawTargetVersionObservation,
+        operationPlanDigest(snapshot), hds_binding?.operation_plan_binding_digest);
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
@@ -455,6 +461,11 @@ function approveCommandForExecution(
       (!hds_binding?.operation_plan_binding_digest ||
         target_version_observation?.schema_version !== "blue-tanuki.file-edit-target-version.v1")) {
     throw new Error("Executor approval rejected: file.edit requires an Operation Plan-bound target version observation");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.drive.write" &&
+      (!hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.google-drive-write-target-version.v1")) {
+    throw new Error("Executor approval rejected: google.drive.write requires an Operation Plan-bound target version observation");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "shell.exec" &&
       target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
@@ -621,6 +632,24 @@ export class Executor {
         }),
       );
       return Object.freeze(assertGoogleCalendarWriteTargetVersion(command.payload.arguments, observation,
+        operationPlanDigest(command), operationPlanBindingDigest));
+    }
+    if (command.payload.tool_name === "google.drive.write") {
+      if (!operationPlanBindingDigest) {
+        throw new Error("google.drive.write target version resolver requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("google.drive.write");
+      if (tool !== googleDriveWriteTool || !tool.inspect_target_version) {
+        throw new Error("google.drive.write target version resolver requires the registered built-in adapter");
+      }
+      const observation = GoogleDriveWriteTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      return Object.freeze(assertGoogleDriveWriteTargetVersion(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest));
     }
     if (command.payload.tool_name === "file.write" && operationPlanBindingDigest !== undefined) {
@@ -797,6 +826,37 @@ export class Executor {
           !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||
           review.used_for_authority !== false || review.may_execute !== false) {
         throw new Error("google.calendar.write content review returned evidence for another command");
+      }
+      return review;
+    }
+    if (command.payload.tool_name === "google.drive.write") {
+      if (!operationPlanBindingDigest || command.payload.arguments.operation !== "file.create") {
+        throw new Error("google.drive.write content review requires a plan-bound file.create command");
+      }
+      const tool = this.deps.tools.get("google.drive.write");
+      if (tool !== googleDriveWriteTool || !tool.inspect_content_review) {
+        throw new Error("google.drive.write content review requires the registered built-in adapter");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      const args = command.payload.arguments;
+      const contentBytes = typeof args.content === "string" ? Buffer.byteLength(args.content, "utf8") : -1;
+      if (!("kind" in review) || review.kind !== "google_drive_file_create" ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.parent_folder_id !== args.parent_id || review.name !== args.name ||
+          review.mime_type !== (args.mime_type ?? "text/plain") || review.content !== args.content ||
+          review.content_bytes !== contentBytes || review.parent_access_scope_complete !== true ||
+          review.parent_access_scope_digest.length !== 64 || review.target_name_absent !== true ||
+          !Array.isArray(review.permissions) || review.permissions.length < 1 || review.permissions.length > 500 ||
+          !/^[a-f0-9]{64}$/.test(review.request_payload_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.target_version_digest) ||
+          !/^[a-f0-9]{64}$/.test(review.review_digest) ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("google.drive.write content review returned evidence for another command, target, or plan source");
       }
       return review;
     }

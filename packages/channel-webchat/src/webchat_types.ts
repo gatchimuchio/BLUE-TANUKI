@@ -332,6 +332,48 @@ export interface WebChatGoogleCalendarEventInviteContentReview {
   may_execute: false;
 }
 
+export interface WebChatGoogleDriveFileCreateContentReview {
+  kind: "google_drive_file_create";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  target_version_digest: string;
+  operation: "google.drive.write.file.create";
+  parent_folder_id: string;
+  parent_folder_name: string;
+  parent_folder_drive_id: string | null;
+  parent_folder_version: string | null;
+  parent_folder_modified_time: string | null;
+  parent_folder_shared: boolean | null;
+  parent_inherited_permissions_disabled: boolean | null;
+  parent_access_scope_complete: true;
+  parent_access_scope_digest: string;
+  target_name_absent: true;
+  permissions: readonly {
+    type: "user" | "group" | "domain" | "anyone";
+    role: string;
+    email_address: string | null;
+    domain: string | null;
+    allow_file_discovery: boolean | null;
+    expiration_time: string | null;
+    deleted: boolean;
+    permission_details: readonly {
+      permission_type: string | null;
+      role: string | null;
+      inherited: boolean | null;
+      inherited_from: string | null;
+    }[];
+  }[];
+  name: string;
+  mime_type: "text/plain";
+  content: string;
+  content_bytes: number;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -470,7 +512,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
-  WebChatGoogleCalendarEventInviteContentReview;
+  WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

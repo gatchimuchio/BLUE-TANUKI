@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-11-02 — QEB-F04.02-DRIVE-CREATE-L3-PLAN-BINDING
+
+開始local／remote `main`=`20d51cf0ca709cf1b92098711693e31219228047`。編集前のlocal `codex/backup-main`／`codex/backup-main-prev`とremote同名tagはcurrent=`20d51cf...`／previous=`459e224...`へ照合・回転済み。保護対象untracked `.codex-remote-attachments/`は変更していない。rev3.0の現行pinとmanifest hash、AGENTS、F04.02 active指示を確認した。
+
+Drive `file.create`一件を既存plan-bound external toolへ接続した。`file.update`等の追加作用は拒否する。L3 no-store projectionには本文とpermission principal／role／inherited／domain or anyone discoverabilityを含むscopeを示し、command・request・plan・target-version digestで結合する。承認時に同じreviewを再取得し、実行直前にもfolder metadata・permission pages・target name absenceを読み直して完全一致を要求する。paginationは最大5ページ／500 entries、permission response malformed・不完全・取得中のscope変化・同名あり・同名不存在を確定できない場合は作用前fail-closed。同名unique制約やsnapshot/POST間の外部競合は原子的に防止できないため、L3画面とactive instructionに限界を明記した。既存のPOST後metadata/content readbackを残す。確認した一次資料: [Drive permissions resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions)、[permissions.list pagination](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions/list)、[共有権限の継承](https://developers.google.com/workspace/drive/api/guides/manage-sharing)。
+
+`corepack pnpm typecheck`、`corepack pnpm build`、`corepack pnpm docs:check`、Control Center generated-script syntax parse、`git diff --check`はPASS（日本語基底migration debts 76件は既存注意）。test suites、Gateway process/browser、実provider／credential／Drive read/writeはNOT_RUN。変更は`packages/protocol/src/google_drive_write_target_version.ts`ほかProtocol、HDS-BRAIN、core、Gateway、WebChatとactive docsに限る。
+
+STATUS=`WIRED`（静的consumer接続、runtime未確認）。F04.02全体・F04全体・QE_QC／QE_QA・product `SYSTEM_SHAPED`／`BUILD_COVERED`・owner GOは未成立。C08.03、OD-03、P13は保留。
+
+---
+
+
 ## 2026-11-02 — QEB-F04.02-DRIVE-WRITE-READBACK
 
 開始時のlocal／remote `main`=`459e224c40f5253cd4bac4a0f3a84e1492511d59`、tracked treeはclean（保護対象untracked `.codex-remote-attachments/`を除く）、worktreeはroot `main`のみ。rev3.0三文書のSHAとZIP manifest収録296資産を再照合し全件一致。ZIP全体のraw SHAは公開pin記載値と異なるが、manifest全件と三文書個別hashは一致していた。編集前にrecovery branch/tagをCAS付きでcurrent=`459e224...`、previous=`5344dd9...`へ回転した。
