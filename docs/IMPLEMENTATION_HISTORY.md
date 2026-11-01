@@ -12,7 +12,7 @@
 
 Drive公式資料で`files.update`のPATCHとmedia upload、stored blobの`alt=media`取得を確認した: [files.update](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update)、[upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads)、[download/export guide](https://developers.google.com/workspace/drive/api/guides/manage-downloads)。この実装は原子的な条件付き更新を主張しない。L3表示に最終read/PATCH間の外部writer競合を明示し、live provider作用は保留する。
 
-全workspace `pnpm typecheck`のTypeScript phaseはPASSしたが、後段cleanは`apps/gateway/dist/host_audience_identity.d.ts.map`のunlinkで`EBUSY`（終了コード0）。その後のGateway依存package build、core／Gateway no-emit typecheck、HDS-BRAIN build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite、Gateway process／browser、実provider／credential／Drive read/writeはNOT_RUN。変更範囲はProtocol、HDS-BRAIN、core、Gateway、WebChatと現行施工／進捗／履歴。保護添付は未変更。
+全workspace `pnpm typecheck`はPASS（初回cleanの`EBUSY`後、再実行で全生成物cleanまで完了）。その後のGateway依存package build、core／Gateway no-emit typecheck、HDS-BRAIN build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`もPASS。test suite、Gateway process／browser、実provider／credential／Drive read/writeはNOT_RUN。変更範囲はProtocol、HDS-BRAIN、core、Gateway、WebChatと現行施工／進捗／履歴。保護添付は未変更。
 
 STATUS=`WIRED`（plan→L3 review→target-version再照合→PATCH/readbackの静的接続、runtime未確認）。F04.02全体・F04全体・QE_QC／QE_QA・製品`SYSTEM_SHAPED`／`BUILD_COVERED`・owner GOは未成立。共有／permission変更・delete、C08.03、OD-03、P13は保留。
 

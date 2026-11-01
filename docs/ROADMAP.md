@@ -24,7 +24,7 @@
 
 metadata、現本文、取得可能なpermission scopeを二重読取して差異・欠損・上限超過をfail-closedにし、target-versionにfile state、本文、permission scope、payload、command、Plan bindingのdigestを結合する。L3 no-store確認に変更前後の本文と取得した全permission scopeを表示し、承認時とPATCH直前に同じsnapshotを再照合する。Driveが原子的な条件付き更新を提供する根拠はなく、最終照合とPATCH間の外部競合を排除できるとは主張しない。PATCH後は既存identity／MIME／parent／nameと本文をreadbackし、不明・不一致で再送しない。
 
-全workspace `pnpm typecheck`のTypeScript phaseはPASSしたが、後段cleanは`apps/gateway/dist/host_audience_identity.d.ts.map`のunlinkで`EBUSY`（終了コード0）。その後のGateway依存package buildとcore／Gateway no-emit typecheck、HDS build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`、共有・deleteは未接続。C08.03、OD-03、P13を保留する。
+全workspace `pnpm typecheck`はPASS（初回cleanの`EBUSY`後、再実行で全生成物cleanまで完了）。その後のGateway依存package buildとcore／Gateway no-emit typecheck、HDS build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`もPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`、共有・deleteは未接続。C08.03、OD-03、P13を保留する。
 
 ## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
 
