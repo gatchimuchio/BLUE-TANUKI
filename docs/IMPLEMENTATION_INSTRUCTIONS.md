@@ -22,7 +22,7 @@ Protocol／HDS／core／WebChat／Gatewayの型検査とproject build、生成Co
 
 ownerがrev3.0を指定した時点のmainは`2964db41dc11ddc3057f47447a85f8a49395c377`。2026-11-01の本BUILD_BATCHはlocal／remote `main`=`c26c137b1b58f96075ced25320445a9a97bcee5a`から開始した。後続作業はこの記録やpackage作成時SHAを現行HEADとみなさず、作業開始時にlocal／remoteの実値を照合する。CR-0～CR-3は既存履歴の完了記録を引き継ぎ、現HEADとの差分だけを扱う。
 
-## 直近Gmail BUILD_BATCH — F02.02 Gmail内容・宛先の承認固定
+## F02.02 Gmail先行BUILD履歴 — 内容・宛先の承認固定
 
 2026-11-01、F02.01のOwner選択message identityから同一taskのdraft.create候補までの接続を受け、Gmail候補の宛先・本文を既存L3 content review／Approval Gate／Brokerへ結ぶ。
 
@@ -36,7 +36,7 @@ candidate生成・provider読取／書込・実資格・実送信は行わない
 
 F02.02の当時の未接続事項: 添付producer／consumerは、対応形式・内容scope・保持期間・byte上限が現行契約で定まるまで`BUILD_GAP`として保持する。Owner選択済み`gmail.read` attachment identityの本文取得、no-store L3 review、同一承認command／Broker作用は未接続のままにする。
 
-### 直近の先行consumer — F03.01 Calendar読取・時刻・空き状況
+### F03.01先行consumer履歴 — Calendar読取・時刻・空き状況
 
 2026-11-01、既存のgoogle.calendar.readを拡張し、既定のview=eventsではcalendar ID／event ID、organizer／attendee identity、start/endのdate・dateTime・timezoneを、正規化値と原表現の両方で返す。イベント本文・説明・参加者コメントは取得しない。200人超またはAPI側省略、欠落identity、次ページ、response byte上限をresult_complete=false／attendees_omittedへ反映する。
 
@@ -44,14 +44,14 @@ view=freebusyは同じHDS tool経路からGoogle Calendarのread-only freeBusy q
 
 packages/blue-tanuki/src/tools/google_read.ts、packages/blue-tanuki/src/tools/builtin.ts、packages/blue-tanuki/src/tools/index.ts、packages/hds-brain/src/action_router.tsを変更。core／hds-brain typecheckはPASS。test、Gateway runtime、実provider、browser、外部作用はNOT_RUN。STATUS=WIRED（既存Calendar toolから限定read adapter分岐へのコード接続、runtime未確認）。F03.01のruntime確認、F03.02の登録前再照合、F03親全体、E2E-01、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
 
-F03.02との接続前状態の記録。現在は上記の最新BUILD_BATCHで`event.create`単件のread-before-write経路を接続したが、F03.02の他操作とF03全体は未成立。
+F03.02接続の先行状態記録。過去のBUILD_BATCHで`event.create`のread-before-write経路を接続済み。更新・削除のscope境界は上記の最新BUILD_BATCHで追加した。F03.02全体とF03全体は未成立。
 
-## CR-0割込み — I-06 Windows開発インストーラー
+## CR-0割込み履歴 — I-06 Windows開発インストーラー
 
 
 `install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。全体の利用者経路を先に成立させるowner指示により、K-B5 shadow比較は一時保留し、次のBUILD_BATCHでWebChat taskの実consumer接続を進める。
 
-## 現行接続状態と次のBUILD_BATCH
+## 先行工程ログ — E2E-01／K-B5（F03.02現行BUILD_BATCHより前）
 
 K-B0／K-B1で現行入口と一仕事のproducer／consumer、J/Mの通常・復旧writerをコードで再照合した。公開可能な責任対応は[`OPERATION_CORE_ARCHITECTURE.md`](OPERATION_CORE_ARCHITECTURE.md)に置く。これは`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の静的確認範囲であり、全OSの実行証拠や全体実装の完成ではない。
 
@@ -67,7 +67,7 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 **最新接続（2026-11-01）:** verified `file.search`結果に対し、Control Centerからownerがsandbox相対path・置換前後を明示して同一taskの未実行`file.edit`候補を要求できる。保存済み検索本文を自動でCへ添付せず、選択observationはdigest／件数のみとする。synthetic Cは親taskのexact `file.read`またはpath-bound `file.search` path、現行plan／revision／task identity、期限内のverified search observationとpath一致を確認する。HDSの目的binding、J step審査、実差分のowner確認、L3 Approval／Broker、M receiptは既存経路を維持する。core／WebChat／HDS no-emit typecheckと生成Control Center script構文解析はPASS。build、test、Gateway process、browser、実providerはNOT_RUN。状態はコード接続済み・runtime未確認。次consumerは既存file.editの差分確認からApproval／Broker実行・receipt・結果返信まで。
 
-### Active batch: E2E-01 — WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。owner task受付の耐久重複抑止・read-only状態照会・Runtime plan digest相関・同一request IDの非権威な実行証拠表示をコード接続済み。詳細command resultが欠ける場合のgeneric executor feedback fallbackもUI consumerへ接続。保存済みfile.search結果はowner-bound plan:resultで再読でき、verified file.edit/file.write/file.deleteは内容を返さない限定結果要約を同じ経路へ接続した。owner task照会IDは不透明IDのみ複数件をsession横断保持・選択可能で、status照会からRuntime相関まで選択IDの変化時に古い応答を捨てる。WebSocket予期切断後は最大5回再接続し、接続成功時にその切断系列の失敗回数を戻すよう修正（Gateway process／browserでの確認は未実施）。ownerが選択したdigest-only file-state観測から同一taskのread-only `file.search`を審査・L3承認・M receipt・WebChat返信まで合成Gateway processで確認済み。owner指定相対pathのread-only `file.search`も合成Gateway processで実行し、同語を含むdecoyを除外してverified/M receiptとOwner結果返却を確認済み。E2E-01全体は未成立）
+### E2E-01 BUILD接続履歴（2026-10-31〜2026-11-01）— WebChat task一気通貫（durable result outbox後crashの隔離・現行planへのread-only相関・owner媒介の現状態観測を合成Gatewayで確認済み。owner task受付の耐久重複抑止・read-only状態照会・Runtime plan digest相関・同一request IDの非権威な実行証拠表示をコード接続済み。詳細command resultが欠ける場合のgeneric executor feedback fallbackもUI consumerへ接続。保存済みfile.search結果はowner-bound plan:resultで再読でき、verified file.edit/file.write/file.deleteは内容を返さない限定結果要約を同じ経路へ接続した。owner task照会IDは不透明IDのみ複数件をsession横断保持・選択可能で、status照会からRuntime相関まで選択IDの変化時に古い応答を捨てる。WebSocket予期切断後は最大5回再接続し、接続成功時にその切断系列の失敗回数を戻すよう修正（Gateway process／browserでの確認は未実施）。ownerが選択したdigest-only file-state観測から同一taskのread-only `file.search`を審査・L3承認・M receipt・WebChat返信まで合成Gateway processで確認済み。owner指定相対pathのread-only `file.search`も合成Gateway processで実行し、同語を含むdecoyを除外してverified/M receiptとOwner結果返却を確認済み。E2E-01全体は未成立）
 
 - **目的:** `/owner/task-compute`で受理した仕事の応答後、計画状態をControl CenterのTasks／Runtimeへ反映し、plan操作をその所有経路からHDSへ届ける。K-B5 observer比較より先に、通常利用者経路の状態consumerを閉じる。この接続単位の完了は、目的→C→J→Approval／Broker作用→receipt→M→結果返信→再計画／復帰から成るE2E-01全体の成立を意味しない。
 - **producer／consumer:** WebChat `/owner/task-compute` → Gateway `InboundHandler` → WebSocket結果frame → Control Center chat表示と、認証済みruntime-tokenが入力済みの場合の`/runtime/snapshot`再読込。Control Centerは安定したUUID `submission_id` をsession storageに保持し、通信結果が不明な再送で同じIDを使う。Gatewayのprivate SQLite inboxはIDとpayloadをそれぞれdigest化し、request ID・delivery stateのみ保持する。同じID／同じpayloadは保存済みrequest IDを返してhandlerを再呼出しせず、同じIDの別payloadは409、再起動時にdispatch中だった依頼は`outcome_unknown`として再実行しない。handler失敗は固定`error` status frameへ接続する。`/owner/task-submission-status`から得た同一request IDを、認証済み`/runtime/snapshot`の`operation_core_execution.latest_results`にある内部実行記録と照合し、条件適合時だけ要約をTasksへ表示する。owner tokenで作成したplanのstep審査・保存結果読取・結果不明receipt照合は、同一plan/revisionを含むowner専用`/owner/inbound`を使う。`plan:result`はverifiedな`file.search`の確認済み保存結果とverifiedな`file.edit`の限定成功要約に加え、verifiedな`file.write`／`file.delete`の非権威要約を、同じplan/revision/stepへowner認証してHDSへ渡す。file.editは相対path・置換数・byte数、file.writeは相対path・書込byte数、file.deleteは相対path・削除時点の報告だけを返す。write本文・file内容・差分・sandbox絶対rootは返さず、保存結果の返却で作用を再実行しない。旧epoch結果は`/recovery/inspection`のdigest-only証拠とverified `command_key_digest`の一意一致、およびBroker correlation matchedを満たすplan bindingに関連付け、ownerが現在sandbox状態を独立に観測・選択した後にだけ同一taskの新しい候補へ進める。owner tokenのDeveloper operator経路はwait／resumeに限定し続ける。起動・停止中などhandler未接続なら202ではなく503を返す。
@@ -146,7 +146,7 @@ Windows隔離Gateway processで、結果不明のcreate-only `file.write`を再�
 owner task受付後、次回用submission IDを発行した時に状態照会欄まで未送信IDを選択していた。送信IDをPOST前に保持し、受付成功後は新IDを次回送信用に維持しながら、照会欄だけ受付済みIDを選ぶようWebChatへ接続した。依頼本文・token・結果の保存、再送、HDS判断・権限変更はない。
 
 WebChat typecheck／buildはPASS。git diff --checkはPASS。テストsuiteとブラウザー実操作は未実施。E2E-01全体、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
-### Deferred batch: K-B5 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
+### K-B5保留記録 — 同一合成系列のJ採否・L3記憶遷移・plan採否比較
 
 - **目的:** 現行TypeScript HDS-BRAINのpolicy採否とM writerをauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立算出するJ projection、停止後の人間復帰、L3承認済みM更新の有限な残差状態、およびJが選択したplan stepの目的／criterion採否要約を比較する。
 - **producer／consumer:** `HDSUpperController.decide()`／`resume()`と、Gatewayの意味候補採用・引用判断再評価のL3結果（成功commit、明示的なstale再照合、commit blocked）がprojectionを作る。成功した新規M commitでは実`MemoryUpdateReceiptV1`の`previous_revision`／`revision`を保持し、Rust shadow processが1段の版遷移を独立比較する。同一commitの再送など当該操作の新receiptがない場合は版を捏造せず`not_comparable`にする。meaning adoptionでは現行M参照レビューから件数・検証数・scope／target状態を縮約し、Rustが状態と集計値の整合を再計算する。通常inbound、resume、L3 memory approvalの既存observerから同じRust processへ順に渡し、比較receiptをGatewayの非権威ログへ返す。未確定のM再評価数・明示された未評価状態・再評価済み／残存数だけを集計し、IDや個々の参照は渡さない。HDSの`OperationPlanLedger.bind()`は選択時assessmentを保存し、`canExecute()`と`executionSourceBindingDigest()`で再計算・再照合する。通常inbound observerはexact `command` identityでselected bindingを特定し、保存assessment digestをHDS内だけで検証後、同じRust shadow系列へ状態区分とrelation件数だけを渡す。
@@ -465,7 +465,7 @@ HDS-BRAIN／Gateway／core／WebChatのTypeScript no-emit確認、生成Control 
 
 HDS-BRAIN／core／Gateway build、Gateway typecheck、`pnpm docs:check`、file.delete process test 1件、長いOwner統合test 1件、`git diff --check`はPASS。実provider、live外部作用、本番データへの作用、全suite、QC／QAはNOT_RUN。確認範囲は合成testに限定し、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
-**次:** 現行rev3.0と最新実装を照合し、残る通常Owner仕事の未接続producer／consumerをQE_BUILDで選定して接続する。広域QC／QA、実provider、live外部作用、Rust cutoverは開始しない。
+**当時の次工程:** 現行rev3.0と当時の最新実装を照合し、残る通常Owner仕事の未接続producer／consumerをQE_BUILDで選定して接続する。広域QC／QA、実provider、live外部作用、Rust cutoverは開始しない。現行次工程は本書冒頭の`最新BUILD_BATCH`に従う。
 
 ## Gitと復旧
 
