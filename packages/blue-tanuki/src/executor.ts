@@ -18,6 +18,7 @@ import {
   GoogleCalendarWriteTargetVersionObservationSchema,
   GoogleDriveWriteTargetVersionObservationSchema,
   GoogleDriveUpdateTargetVersionObservationSchema,
+  GoogleDrivePermissionCreateTargetVersionObservationSchema,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
@@ -467,7 +468,9 @@ function approveCommandForExecution(
     const expectedDriveTargetVersion = snapshot.payload.arguments.operation === "file.update"
       ? "blue-tanuki.google-drive-update-target-version.v1"
       : snapshot.payload.arguments.operation === "file.create"
-        ? "blue-tanuki.google-drive-write-target-version.v1" : undefined;
+        ? "blue-tanuki.google-drive-write-target-version.v1"
+        : snapshot.payload.arguments.operation === "permissions.create"
+          ? "blue-tanuki.google-drive-permission-create-target-version.v1" : undefined;
     if (!hds_binding?.operation_plan_binding_digest || !expectedDriveTargetVersion ||
         target_version_observation?.schema_version !== expectedDriveTargetVersion) {
     throw new Error("Executor approval rejected: google.drive.write requires an Operation Plan-bound target version observation");
@@ -655,7 +658,9 @@ export class Executor {
         });
       const observation = command.payload.arguments.operation === "file.update"
         ? GoogleDriveUpdateTargetVersionObservationSchema.parse(rawObservation)
-        : GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
+        : command.payload.arguments.operation === "permissions.create"
+          ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(rawObservation)
+          : GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
       return Object.freeze(assertGoogleDriveWriteTargetVersion(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest));
     }
@@ -838,7 +843,8 @@ export class Executor {
     }
     if (command.payload.tool_name === "google.drive.write") {
       if (!operationPlanBindingDigest ||
-          (command.payload.arguments.operation !== "file.create" && command.payload.arguments.operation !== "file.update")) {
+          (command.payload.arguments.operation !== "file.create" && command.payload.arguments.operation !== "file.update" &&
+            command.payload.arguments.operation !== "permissions.create")) {
         throw new Error("google.drive.write content review requires a plan-bound supported operation");
       }
       const tool = this.deps.tools.get("google.drive.write");
@@ -851,6 +857,32 @@ export class Executor {
         command_digest: operationPlanDigest(command),
       });
       const args = command.payload.arguments;
+      if (args.operation === "permissions.create") {
+        const validPermissionReview = "kind" in review && review.kind === "google_drive_permission_create" &&
+          review.command_digest === operationPlanDigest(command) &&
+          review.operation_plan_binding_digest === operationPlanBindingDigest &&
+          review.operation === "google.drive.write.permissions.create" && review.file_id === args.file_id &&
+          review.file_mime_type === "text/plain" && review.recipient_email === args.email_address &&
+          review.recipient_role === args.role && review.notification_email_sent === false &&
+          review.ownership_transfer === false && review.target_access_scope_complete === true &&
+          /^[a-f0-9]{64}$/.test(review.target_access_scope_digest) &&
+          Array.isArray(review.permissions) && review.permissions.length >= 1 && review.permissions.length <= 500 &&
+          typeof review.file_name === "string" && review.file_name.length > 0 && review.file_name.length <= 512 &&
+          Array.isArray(review.parent_ids) && review.parent_ids.length >= 1 && review.parent_ids.length <= 128 &&
+          typeof review.file_version === "string" && review.file_version.length > 0 && review.file_version.length <= 128 &&
+          /^[a-f0-9]{64}$/.test(review.request_payload_digest) &&
+          /^[a-f0-9]{64}$/.test(review.target_version_digest) &&
+          /^[a-f0-9]{64}$/.test(review.review_digest) &&
+          review.used_for_authority === false && review.may_execute === false;
+        if (!validPermissionReview) {
+          throw new Error("google.drive.write permissions.create content review returned evidence for another command, target, or plan source");
+        }
+        const { review_digest: reviewDigest, ...reviewBody } = review;
+        if (operationPlanDigest(reviewBody) !== reviewDigest) {
+          throw new Error("google.drive.write permissions.create content review digest was invalid");
+        }
+        return review;
+      }
       const contentBytes = typeof args.content === "string" ? Buffer.byteLength(args.content, "utf8") : -1;
       if (args.operation === "file.update") {
         if (!("kind" in review) || review.kind !== "google_drive_file_update" ||

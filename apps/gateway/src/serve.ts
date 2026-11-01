@@ -1867,7 +1867,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         ? cmd.payload.arguments.operation === "file.update"
           ? "blue-tanuki.google-drive-update-target-version.v1"
           : cmd.payload.arguments.operation === "file.create"
-            ? "blue-tanuki.google-drive-write-target-version.v1" : undefined
+            ? "blue-tanuki.google-drive-write-target-version.v1"
+            : cmd.payload.arguments.operation === "permissions.create"
+              ? "blue-tanuki.google-drive-permission-create-target-version.v1" : undefined
         : undefined;
       const observedDriveTargetVersionDigest = expectedDriveTargetVersion !== undefined &&
         targetVersionObservation?.schema_version === expectedDriveTargetVersion
@@ -2662,7 +2664,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
               ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
             (pending.command.payload.tool_name === "google.drive.write" &&
               (pending.command.payload.arguments.operation === "file.create" ||
-                pending.command.payload.arguments.operation === "file.update")))))) {
+                pending.command.payload.arguments.operation === "file.update" ||
+                pending.command.payload.arguments.operation === "permissions.create")))))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -4307,14 +4310,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
         (pending.command.payload.arguments.operation === "file.create" ||
-          pending.command.payload.arguments.operation === "file.update") &&
+          pending.command.payload.arguments.operation === "file.update" ||
+          pending.command.payload.arguments.operation === "permissions.create") &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         const expectedKind = pending.command.payload.arguments.operation === "file.update"
-          ? "google_drive_file_update" : "google_drive_file_create";
+          ? "google_drive_file_update" : pending.command.payload.arguments.operation === "permissions.create"
+            ? "google_drive_permission_create" : "google_drive_file_create";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
             snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
@@ -4426,7 +4431,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
         (pending.command.payload.arguments.operation === "file.create" ||
-          pending.command.payload.arguments.operation === "file.update")) {
+          pending.command.payload.arguments.operation === "file.update" ||
+          pending.command.payload.arguments.operation === "permissions.create")) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
       if (!content_review_digest || !pending.content_review_digest ||
@@ -4436,7 +4442,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
         const expectedKind = pending.command.payload.arguments.operation === "file.update"
-          ? "google_drive_file_update" : "google_drive_file_create";
+          ? "google_drive_file_update" : pending.command.payload.arguments.operation === "permissions.create"
+            ? "google_drive_permission_create" : "google_drive_file_create";
         return current && "kind" in current && current.kind === expectedKind &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.operation_plan_binding_digest === operationPlanBindingDigest &&

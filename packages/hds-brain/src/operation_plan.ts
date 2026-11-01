@@ -24,6 +24,8 @@ import {
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
   googleDriveUpdateTargetIdentityDigest,
+  googleDrivePermissionCreateRequestPayloadDigest,
+  googleDrivePermissionCreateTargetIdentityDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -1491,6 +1493,17 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
     const content = parameters.content;
     const maxBytes = parameters.max_bytes ?? 128_000;
     const maxContentBytes = parameters.max_content_bytes ?? 64_000;
+    if (parameters.operation === "permissions.create") {
+      const fileId = parameters.file_id;
+      const email = parameters.email_address;
+      const role = parameters.role;
+      return validPermission && hasEffects && typeof fileId === "string" && fileId.length > 0 &&
+        fileId.length <= 512 && fileId === fileId.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(fileId) &&
+        typeof email === "string" && email.length <= 320 && email === email.trim() &&
+        normalizeGmailAddressList(email) === email && !email.includes(",") &&
+        (role === "reader" || role === "writer") &&
+        Object.keys(parameters).every((key) => ["operation", "file_id", "email_address", "role"].includes(key));
+    }
     if (parameters.operation === "file.update") {
       const fileId = parameters.file_id;
       return validPermission && hasEffects && typeof fileId === "string" && fileId.length > 0 &&
@@ -3044,6 +3057,32 @@ export class OperationPlanLedger {
           binding.status === "verified" && priorPayload === requestPayload);
       }));
       if (priorEffect) throw new Error("google_drive_update_effect_already_selected_or_attempted");
+    }
+    if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "permissions.create") {
+      const targetIdentity = googleDrivePermissionCreateTargetIdentityDigest(String(step.parameters.file_id),
+        String(step.parameters.email_address));
+      const requestPayload = googleDrivePermissionCreateRequestPayloadDigest({
+        file_id: String(step.parameters.file_id),
+        email_address: String(step.parameters.email_address),
+        role: step.parameters.role === "writer" ? "writer" : "reader",
+      });
+      const priorEffect = this.state.plans.some((candidate) => candidate.bindings.some((binding) => {
+        if (binding.operation !== "google.drive.write" ||
+            ["invalidated", "not_attempted"].includes(binding.status) ||
+            binding.prepared_step.parameters?.operation !== "permissions.create") return false;
+        const prior = binding.prepared_step.parameters ?? {};
+        const priorTargetIdentity = googleDrivePermissionCreateTargetIdentityDigest(String(prior.file_id),
+          String(prior.email_address));
+        const priorPayload = googleDrivePermissionCreateRequestPayloadDigest({
+          file_id: String(prior.file_id),
+          email_address: String(prior.email_address),
+          role: prior.role === "writer" ? "writer" : "reader",
+        });
+        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        return priorTargetIdentity === targetIdentity && (unresolved ||
+          binding.status === "verified" && priorPayload === requestPayload);
+      }));
+      if (priorEffect) throw new Error("google_drive_permission_grant_already_selected_or_attempted");
     }
     if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "file.create") {
       const targetIdentity = googleDriveWriteTargetIdentityDigest(String(step.parameters.parent_id), String(step.parameters.name));

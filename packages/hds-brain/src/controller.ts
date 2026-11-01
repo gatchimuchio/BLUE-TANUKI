@@ -48,10 +48,13 @@ import {
   GoogleCalendarWriteTargetVersionObservationSchema,
   GoogleDriveWriteTargetVersionObservationSchema,
   GoogleDriveUpdateTargetVersionObservationSchema,
+  GoogleDrivePermissionCreateTargetVersionObservationSchema,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
   googleDriveUpdateTargetIdentityDigest,
+  googleDrivePermissionCreateRequestPayloadDigest,
+  googleDrivePermissionCreateTargetIdentityDigest,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
@@ -3693,7 +3696,24 @@ ${planControl.question}`,
         throw new Error("HDS google.drive.write requires a plan-bound target version observation");
       }
       const args = command.payload.arguments;
-      if (args.operation === "file.update") {
+      if (args.operation === "permissions.create") {
+        const observation = GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+        const fileId = args.file_id;
+        const email = args.email_address;
+        const role = args.role;
+        const normalizedEmail = normalizeGmailAddressList(email);
+        if (typeof fileId !== "string" || typeof email !== "string" || normalizedEmail !== email || email.includes(",") ||
+            (role !== "reader" && role !== "writer") ||
+            observation.command_digest !== operationPlanDigest(command) || observation.operation !== args.operation ||
+            observation.operation_plan_binding_digest !== operation_plan_binding_digest || observation.file_id !== fileId ||
+            observation.target_identity_digest !== googleDrivePermissionCreateTargetIdentityDigest(fileId, email) ||
+            observation.request_payload_digest !== googleDrivePermissionCreateRequestPayloadDigest({
+              file_id: fileId, email_address: email, role,
+            })) {
+          throw new Error("HDS google.drive.write permission grant target version does not match the issued command or Operation Plan source");
+        }
+        brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+      } else if (args.operation === "file.update") {
         const observation = GoogleDriveUpdateTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
         const fileId = args.file_id;
         const content = args.content;

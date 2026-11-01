@@ -8,7 +8,15 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F04.02 Drive既存text/plain本文のL3束縛更新
+## 現在のBUILD_BATCH — F04.02 Drive個別ユーザー権限付与
+
+既存`google.drive.write`へ`permissions.create`を接続し、Owner taskが明示した単一のtext/plain file ID、単一ユーザーemail、`reader`または`writer`だけを許可する。新規の直接付与だけを扱い、既に有効な直接権限がある対象、権限更新／削除、group／domain／anyone共有、Workspace native document、folder、binary、所有権移転は対象外とする。Drive通知メールは送らない。実provider、credential、Gateway process、外部Drive作用は使わない。
+
+対象metadataと取得可能なpermission scopeを上限付きで複数回読み、欠損・不完全pagination・上限超過・file ID／状態／MIME不一致・観測間差異・同じ宛先への既存直接権限をfail-closedにする。Operation Planに外部作用とhigh/L3、Approval Gate／HDS authorityを要求し、no-store Control Center確認へ対象file、宛先、付与role、全permission範囲、通知なし／所有権移転なしを表示する。承認時とPOST直前にtarget versionを再照合し、Drive responseのpermission ID・type・email・roleを確認し、返却IDを使ったpermissions.getとpermission範囲・file identityのreadbackで付与を照合する。結果不明またはreadback失敗は自動再送しない。
+
+Google Drive APIは同一fileへの並行permission操作をatomicに保証しないため、最後の照合後に他writerが変更する競合窓は残り、UIへ明記する。L3と事前事後readbackはその競合を消さない。完了境界：Protocol／HDS／core／Gateway／WebChatのworkspace typecheckと変更package build、`pnpm docs:check`、生成Control Center script構文、`git diff --check`。test suite、Gateway process、provider／credential／外部作用は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remoteとlocalのSHA・clean状態を閉じる。共有実行・F04.02全体・F04全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ昇格しない。
+
+## 完了済みBUILD_BATCH — F04.02 Drive既存text/plain本文のL3束縛更新
 
 `google.drive.write/file.update`を既存のHDS Operation Plan／Executor Brokerへ接続する。Owner taskに明示された単一の`file_id`と置換後本文だけを対象とし、既存blob fileの`text/plain`に限定する。Google Workspace native document、folder、binary、metadata rename、sharing／permission change、delete、createは対象外。このbatchでは実provider、credential、Gateway process、Drive外部作用を使わない。
 

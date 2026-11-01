@@ -418,6 +418,49 @@ export interface WebChatGoogleDriveFileUpdateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGoogleDrivePermissionCreateContentReview {
+  kind: "google_drive_permission_create";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  target_version_digest: string;
+  operation: "google.drive.write.permissions.create";
+  file_id: string;
+  file_name: string;
+  parent_ids: readonly string[];
+  drive_id: string | null;
+  file_version: string;
+  file_modified_time: string | null;
+  file_mime_type: "text/plain";
+  file_shared: boolean | null;
+  inherited_permissions_disabled: boolean | null;
+  target_access_scope_complete: true;
+  target_access_scope_digest: string;
+  permissions: readonly {
+    type: "user" | "group" | "domain" | "anyone";
+    role: string;
+    email_address: string | null;
+    domain: string | null;
+    allow_file_discovery: boolean | null;
+    expiration_time: string | null;
+    deleted: boolean;
+    permission_details: readonly {
+      permission_type: string | null;
+      role: string | null;
+      inherited: boolean | null;
+      inherited_from: string | null;
+    }[];
+  }[];
+  recipient_email: string;
+  recipient_role: "reader" | "writer";
+  notification_email_sent: false;
+  ownership_transfer: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -557,7 +600,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |
-  WebChatGoogleDriveFileUpdateContentReview;
+  WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"
