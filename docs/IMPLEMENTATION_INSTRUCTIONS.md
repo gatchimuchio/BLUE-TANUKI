@@ -493,3 +493,11 @@ Control Centerの未実行`file.edit`候補に、完全一致する置換数（1
 `packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/channel-webchat/src/control_center_script.ts`を変更。core／channel-webchat typecheckとbuild、生成`CONTROL_CENTER_SCRIPT`のJavaScript構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／browser／Gateway runtime／実provider／外部作用はNOT_RUN。STATUS=WIRED（UIからplan parameters／validationまでの静的コード接続、runtime未確認）。START_HEAD=`938b626202eee12d28b2afbbcb98ed5a3042b5dc`。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 **次のproducer／consumer:** 同じ目的を保つOwner taskから、指定置換数を含む候補が既存no-store差分確認・Approval／Broker・execution／M receipt・Owner結果返却へ通る経路を実物で閉じる。preview本文や過去receiptを権限根拠にせず、編集対象の現在版が変われば新しい確認を要求する。
+
+#### 2026-11-01 F01.03 BUILD接続 — test timeout後のowner-reviewed回復候補
+
+同一Workspace `shell.exec`が検証済みtimeoutを返し、process tree emptyを確認できた場合も、失敗後の回復候補を提示できるようにした。timeoutは部分的な作用を残す可能性があるため、既存条件どおり同一planのM receipt確認済み`file.search`で現在状態を確認した後に限る。候補生成は未実行で、新しいContent Review／対象版再照合／L3 Approval／Brokerを要し、自動復元はしない。中断、終了状態不明、process tree未確認には拡張しない。
+
+`packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／buildと`git diff --check`はPASS。生成script構文解析、Gateway process／browser／test suiteはNOT_RUN。STATUS=WIRED（timeout表示とowner選択候補の静的接続、実consumer未確認）。実provider・外部作用なし。F01.03全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+**次のproducer／consumer:** 同一taskのtimeout後に、process-tree確認済みsummary・保存済み検索結果・Owner選択・新規逆編集候補・現行版Content Review・L3 Approval／Broker・M receipt／結果返信が合成Gateway runtimeで連なること。

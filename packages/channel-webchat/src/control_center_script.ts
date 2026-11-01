@@ -2088,9 +2088,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             steps[1]?.operation === "shell.exec" && steps[2]?.operation === "file.search";
           const shellTestStep = sameWorkspaceEditTestPlan ? steps[1] : null;
           const shellTestSummary = isObject(shellTestStep?.shell_exec_summary) ? shellTestStep.shell_exec_summary : null;
-          const sameWorkspaceTestFailed = !!shellTestStep && shellTestStep.status === "verified" && !!shellTestSummary &&
+          const shellTestTimedOut = !!shellTestStep && shellTestStep.status === "verified" && !!shellTestSummary &&
+            shellTestSummary.signal === "timeout" && shellTestSummary.timed_out === true &&
+            shellTestSummary.process_tree_empty === true;
+          const shellTestNonzeroExit = !!shellTestStep && shellTestStep.status === "verified" && !!shellTestSummary &&
             Number.isSafeInteger(shellTestSummary.exit_code) && shellTestSummary.exit_code > 0 &&
             shellTestSummary.signal === null && shellTestSummary.timed_out === false && shellTestSummary.process_tree_empty === true;
+          const sameWorkspaceTestRequiresRecovery = shellTestTimedOut || shellTestNonzeroExit;
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
@@ -2110,12 +2114,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const shellExitCode = shellSummary && Number.isSafeInteger(shellSummary.exit_code) ? shellSummary.exit_code : null;
               const shellCompletedSuccessfully = shellExitCode === 0 && shellSummary?.signal === null &&
                 shellSummary.timed_out === false && shellSummary.process_tree_empty === true;
-              const shellCompletedWithFailure = shellExitCode !== null && shellExitCode > 0 && shellSummary?.signal === null &&
+              const shellCompletedWithNonzeroExit = shellExitCode !== null && shellExitCode > 0 && shellSummary?.signal === null &&
                 shellSummary.timed_out === false && shellSummary.process_tree_empty === true;
+              const shellCompletedWithTimeout = shellSummary?.signal === "timeout" && shellSummary.timed_out === true &&
+                shellSummary.process_tree_empty === true;
               const shellSummaryDetails = shellSummary
                 ? '<dt>同一Workspace test</dt><dd>' + escapeHtml(shellCompletedSuccessfully
                   ? '終了コード0（test実行結果の構造を確認済み）'
-                  : shellCompletedWithFailure ? '失敗（終了コード' + String(shellExitCode) + '）'
+                  : shellCompletedWithNonzeroExit ? '失敗（終了コード' + String(shellExitCode) + '）'
+                    : shellCompletedWithTimeout ? 'timeout（process tree終了確認済み。作用結果は要確認）'
                     : '結果不明（timeout／中断／終了コードなし）') + '</dd>'
                 : '';
               const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
@@ -2193,7 +2200,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 : '';
               const recoveryEditReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
-                sameWorkspaceTestFailed && step === steps[2] && step.operation === "file.search" && step.status === "verified" &&
+                sameWorkspaceTestRequiresRecovery && step === steps[2] && step.operation === "file.search" && step.status === "verified" &&
                 binding.memory_status === "receipt_confirmed" && /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
                 /^[a-f0-9]{64}$/.test(binding.result_digest || "") && /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
               const recoveryEditButton = recoveryEditReady
@@ -2202,7 +2209,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
                   escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
-                  '">失敗後の逆編集候補を作成</button><p class="muted">先に保存済みfile.search結果で現在内容を確認してください。候補生成は編集しません。新しいfile.editのContent Reviewで実差分と現行版を再確認し、別途L3 Approvalを通るまで作用しません。</p>'
+                  '">失敗／timeout後の逆編集候補を作成</button><p class="muted">timeout後は作用が一部反映済みの可能性があります。保存済みfile.search結果で現在内容を確認してください。候補生成は編集しません。新しいfile.editのContent Reviewで実差分と現行版を再確認し、別途L3 Approvalを通るまで作用しません。</p>'
                 : '';
               const receiptLabels = {
                 not_applicable: "対象外",
