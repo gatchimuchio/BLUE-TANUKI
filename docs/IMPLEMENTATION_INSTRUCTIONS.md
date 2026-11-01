@@ -465,3 +465,9 @@ BT-U-E2E-01 path-bound file.search test 1件PASS、同fileの他6件skip（21.6�
 既存`plan:result` backendが返すverified `file.write`／`file.delete`の限定要約に対し、Control Centerで読取操作を選べるようにした。表示条件は`file.search`／`file.edit`と同じく、対象plan/revision/stepの準備、verified状態、M receipt確認、command／result／delivery digestの成立を要求する。writeは「作成結果要約」と明示し本文・現在状態を返さないこと、deleteは削除時点の報告で現在不存在を保証しないことを案内する。作用の再実行はなく、owner再認証とHDS側のreceipt再照合を既存経路で維持する。
 
 `packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／build、build済み`CONTROL_CENTER_SCRIPT`のJavaScript構文解析、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（owner向けUI入口のコード接続、実操作未確認）。実provider・外部作用なし。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+#### 2026-11-01 E2E-01 BUILD接続 — 保存済み検索結果の限定preview案内
+
+既存のowner-bound `plan:result`入口が、要求条件に応じて保存済み`file.search`結果または単一file向けの最大5行`file.read` previewを返すことを現行実装で確認した。Control Centerの入口表示と説明を「検索結果／限定preview」に合わせ、previewが全内容・検索完全性・現在状態を示さない境界を明記した。再認証、plan revision、step、verified状態、J/M receipt、digest照合は既存条件のまま。
+
+`packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／build、生成`CONTROL_CENTER_SCRIPT`のJavaScript構文解析、`pnpm docs:check`、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（owner向け説明の実物出力条件との整合、runtime未確認）。実provider・外部作用なし。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

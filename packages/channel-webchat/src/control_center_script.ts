@@ -2103,14 +2103,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
                   '">' + (step.operation === "file.edit" ? "保存済み編集結果を読む"
                     : step.operation === "file.write" ? "保存済み作成結果を読む"
-                      : step.operation === "file.delete" ? "保存済み削除結果を読む" : "保存済み検索結果を読む") + '</button>' +
+                      : step.operation === "file.delete" ? "保存済み削除結果を読む" : "保存済み検索結果／限定previewを読む") + '</button>' +
                   '<p class="muted">' + (step.operation === "file.edit"
                     ? "J/M receipt確認済みの編集結果を表示します。変更後の内容や差分は再読込しません。"
                     : step.operation === "file.write"
                       ? "J/M receipt確認済みの作成結果要約を表示します。本文は返さず、現在のファイル状態も再読込しません。"
                       : step.operation === "file.delete"
                         ? "J/M receipt確認済みの削除時点の報告を表示します。現在の対象不存在は再確認しません。"
-                        : "J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。") +
+                        : "J/M receipt確認済みの保存結果を表示します。指定条件によっては上限5行のfile.read previewを返します。保存時点の観測であり、全内容・検索完全性・現在状態を示しません。") +
                   (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
               const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
