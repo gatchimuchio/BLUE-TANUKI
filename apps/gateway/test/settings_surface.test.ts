@@ -111,6 +111,7 @@ describe("settings surface", () => {
         BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
         BLUE_TANUKI_APPROVAL_MODE: "remember_this_decision",
         BLUE_TANUKI_FILE_ROOT: "sandbox",
+        BLUE_TANUKI_SHELL_ROOT: "sandbox",
         BLUE_TANUKI_SESSION_DIR: "sessions",
         BLUE_TANUKI_AUDIT_DIR: "audit",
       },
@@ -137,6 +138,7 @@ describe("settings surface", () => {
     expect(snapshot.integrations.composio.live_execution_available).toBe(true);
     expect(snapshot.integrations.composio.user_id_set).toBe(true);
     expect(snapshot.integrations.composio.connection_revoke_available).toBe(true);
+    expect(snapshot.paths.shell_root).toBe("sandbox");
     expect(snapshot.integrations.composio.allowed_actions).toEqual(["github:github_create_an_issue"]);
     expect(snapshot.integrations.composio.revoked_actions).toEqual(["github:github_delete_repo"]);
     expect(snapshot.integrations.composio.used_for_authority).toBe(false);
@@ -218,6 +220,8 @@ describe("settings surface", () => {
 
   it("shows Slack setup guidance as read-only in Control Center Connections", () => {
     const html = renderSettingsHtml();
+    expect(html).toContain('id="path-shell-root"');
+    expect(html).toContain('id="path-use-file-root"');
     expect(html).toContain('id="slack-status"');
     expect(html).toContain('id="slack-next-action"');
     expect(html).toContain("This is configuration status only. It does not test Slack connectivity");
@@ -251,7 +255,7 @@ describe("settings surface", () => {
           },
           webchat: { host: "127.0.0.1", port: "8877" },
           approval: { mode: "ask_every_time" },
-          paths: { file_root: path.join(dir, "files") },
+          paths: { file_root: path.join(dir, "files"), shell_root: path.join(dir, "files") },
         },
         { BLUE_TANUKI_ENV_FILE: envFile },
         { platform: "linux" },
@@ -280,8 +284,16 @@ describe("settings surface", () => {
       expect(raw).toContain("COMPOSIO_LIVE_EXECUTION=true");
       expect(raw).toContain("WEBCHAT_PORT=8877");
       expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
+      expect(raw).toContain(`BLUE_TANUKI_SHELL_ROOT=${JSON.stringify(path.resolve(dir, "files"))}`);
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");
+
+      await updateSettingsEnvFile(
+        { paths: { shell_root: "" } },
+        { BLUE_TANUKI_ENV_FILE: envFile },
+        { platform: "linux" },
+      );
+      expect(await fs.readFile(envFile, "utf8")).not.toContain("BLUE_TANUKI_SHELL_ROOT=");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

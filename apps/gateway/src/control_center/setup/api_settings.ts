@@ -220,6 +220,16 @@ export function applySettingsPatch(
     const paths = body.paths;
     const fileRoot = optionalStringField(paths, "file_root");
     if (fileRoot !== undefined) config.paths.file_root = fileRoot;
+    if (Object.hasOwn(paths, "shell_root")) {
+      const rawShellRoot = paths.shell_root;
+      if (rawShellRoot === null || (typeof rawShellRoot === "string" && rawShellRoot.trim().length === 0)) {
+        delete config.paths.shell_root;
+      } else {
+        const shellRoot = optionalStringField(paths, "shell_root");
+        if (shellRoot === undefined) throw new Error("shell_root must be a non-empty path or empty");
+        config.paths.shell_root = shellRoot;
+      }
+    }
     const sessionDir = optionalStringField(paths, "session_dir");
     if (sessionDir !== undefined) config.paths.session_dir = sessionDir;
     const auditDir = optionalStringField(paths, "audit_dir");

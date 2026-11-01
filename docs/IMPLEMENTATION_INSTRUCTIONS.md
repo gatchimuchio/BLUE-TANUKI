@@ -376,7 +376,9 @@ HDS／Gateway／WebChat typecheck、HDS build、Windows isolation target向け`c
 
 **STATUS=WIRED（コード接続・Windows target cargo check PASS）**。実process起動、root ACL付与／撤去、profile削除、並行隔離、異常終了はNOT_RUN。helperを起動せず、OS ACL変更もしていないため、Windows実環境での隔離成立は未証明。これらはF01.02後段の隔離QC候補として保持する。実provider、外部業務作用、D4Pocket変更、Rust authority/cutoverは行わない。
 
-**次のproducer／consumer:** F01.03の現行pinを再同期し、GUI／Control Centerのowner審査済みdiffを隔離Workspaceへ適用し、同じWorkspaceで必要なtest・再読取・失敗時復帰へ運ぶ既存consumerを特定する。D4Pocket側は変更しない。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
+**2026-11-01 F01.03 BUILD接続 — 同一Workspaceの設定・実行境界:** Settings UIへ任意の隔離process rootを追加し、File sandbox rootと同一パスを設定する操作を接続した。shell.execが`same_workspace_as_file_root=true`を要求した場合、Broker target審査時と実行直前の両方で両rootを実resolveし、同一directoryでなければ拒否する。shell root未設定時のfail-closedと既存L3／Approval／Brokerは維持する。setup／Settings／root mismatch拒否の限定test 3件、Gateway／core typecheckはPASS。実process起動、審査済みdiff後のtest、再読取、失敗時復帰はNOT_RUNで、F01.03全体は未成立。
+
+**次のproducer／consumer:** 既存owner審査済み`file.edit`の後続で、同一rootを要求する隔離testを実行し、その結果と同一fileの再読取をGUIへ返すconsumerを接続する。test失敗時は現行file identityを再審査した新しいowner承認済み逆編集へ戻し、競合writerを上書きせず自動復元しない。D4Pocket側は変更しない。実provider、live外部作用、広域QC／QA、Rust cutoverは行わない。
 
 ## Gitと復旧
 

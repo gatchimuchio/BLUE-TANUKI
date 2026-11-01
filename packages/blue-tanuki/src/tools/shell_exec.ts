@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { requireToolOperationDescriptor, ShellExecTargetVersionObservationSchema,
   type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { Tool, ToolContext, ToolExecutionLifecycleObservation } from "./registry.js";
-import { isSecretLikeRelativePath } from "./file_safety.js";
+import { isSecretLikeRelativePath, sandboxRootFromEnv } from "./file_safety.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -55,6 +55,7 @@ export async function invokeShellExec(
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   const shellRoot = await shellRootFromEnv(env);
+  await assertSameFileWorkspaceWhenRequested(args, env, shellRoot);
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
   const cmd = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
   const argv = shellArgs(args);
@@ -150,7 +151,7 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
 export const shellExecTool: Tool = {
   name: "shell.exec",
   description:
-    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built.",
+    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built. For a test of files under BLUE_TANUKI_FILE_ROOT, set same_workspace_as_file_root=true so review and execution reject a different workspace root.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async inspect_target_version(args, options = {}) {
     return await inspectShellExecTargetVersion(args, options);
@@ -183,6 +184,7 @@ export async function inspectShellExecTargetVersion(
   positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   positiveIntArg(args, "max_bytes", 64_000, 512_000);
   const shellRoot = await shellRootFromEnv(env);
+  await assertSameFileWorkspaceWhenRequested(args, env, shellRoot);
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
   const [rootIdentityDigest, cwdIdentityDigest] = await Promise.all([
     directoryIdentityDigest(shellRoot), directoryIdentityDigest(cwd),
@@ -571,6 +573,27 @@ async function shellRootFromEnv(env: Env): Promise<string> {
     throw new Error("BLUE_TANUKI_SHELL_ROOT must be a dedicated, non-secret directory");
   }
   return real;
+}
+
+async function assertSameFileWorkspaceWhenRequested(
+  args: Record<string, unknown>,
+  env: Readonly<Env>,
+  shellRoot: string,
+): Promise<void> {
+  const required = args.same_workspace_as_file_root;
+  if (required !== undefined && typeof required !== "boolean") {
+    throw new Error("shell.exec same_workspace_as_file_root must be a boolean");
+  }
+  if (required !== true) return;
+  let fileRoot: string;
+  try {
+    fileRoot = await sandboxRootFromEnv(env);
+  } catch {
+    throw new Error("shell.exec same-workspace review requires a valid BLUE_TANUKI_FILE_ROOT");
+  }
+  if (fileRoot !== shellRoot) {
+    throw new Error("shell.exec same-workspace review requires BLUE_TANUKI_FILE_ROOT and BLUE_TANUKI_SHELL_ROOT to resolve to the same directory");
+  }
 }
 
 async function resolveShellCwd(cwdArg: string | undefined, shellRoot: string): Promise<string> {

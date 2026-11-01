@@ -28,10 +28,21 @@ describe("setup_config", () => {
     expect(env.LLM_BACKEND).toBe("stub");
     expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
     expect(env.BLUE_TANUKI_FILE_ROOT).toBe(path.resolve("local-data", "files"));
+    expect(env.BLUE_TANUKI_SHELL_ROOT).toBeUndefined();
     expect(env.WEBCHAT_TOKEN).toBe(config.webchat.token);
     expect(env.BLUE_TANUKI_OWNER_TOKEN).toBe(config.webchat.owner_token);
     expect(env.BLUE_TANUKI_MAINTENANCE_TOKEN).toBe(config.webchat.maintenance_token);
     expect(env.BLUE_TANUKI_SETTINGS_TOKEN).toBe(config.settings.token);
+  });
+
+  it("keeps the isolated process root optional and round-trips it when configured", () => {
+    const config = createDefaultSetupConfig({ base_dir: "local-data" });
+    config.paths.shell_root = path.join("local-data", "files");
+
+    const env = setupConfigToEnv(config);
+    expect(env.BLUE_TANUKI_SHELL_ROOT).toBe(path.resolve("local-data", "files"));
+    expect(renderSetupEnvFile(config)).toContain(`BLUE_TANUKI_SHELL_ROOT=${JSON.stringify(path.resolve("local-data", "files"))}`);
+    expect(setupConfigFromEnv(env).paths.shell_root).toBe(path.resolve("local-data", "files"));
   });
 
   it("renders an OpenAI-compatible provider into runtime env", () => {

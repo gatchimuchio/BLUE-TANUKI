@@ -42,6 +42,7 @@ export interface SetupWebChatConfig {
 
 export interface SetupPathConfig {
   file_root: string;
+  shell_root?: string;
   session_dir: string;
   audit_dir: string;
 }
@@ -328,6 +329,9 @@ export function validateSetupConfig(
   }
 
   validatePath(config.paths.file_root, "paths.file_root");
+  if (config.paths.shell_root !== undefined && config.paths.shell_root.trim().length > 0) {
+    validatePath(config.paths.shell_root, "paths.shell_root");
+  }
   validatePath(config.paths.session_dir, "paths.session_dir");
   validatePath(config.paths.audit_dir, "paths.audit_dir");
   validateToken(config.settings.token, "settings.token");
@@ -406,6 +410,7 @@ export function setupConfigFromEnv(
     env.BLUE_TANUKI_MAINTENANCE_TOKEN ?? config.webchat.maintenance_token;
   config.paths.file_root =
     env.BLUE_TANUKI_FILE_ROOT ?? config.paths.file_root;
+  config.paths.shell_root = env.BLUE_TANUKI_SHELL_ROOT;
   config.paths.session_dir =
     env.BLUE_TANUKI_SESSION_DIR ?? config.paths.session_dir;
   config.paths.audit_dir =
@@ -450,6 +455,9 @@ export function setupConfigToEnv(
     LLM_BACKEND: config.llm.provider,
     BLUE_TANUKI_APPROVAL_MODE: config.approval.mode,
   };
+  if (config.paths.shell_root?.trim()) {
+    env.BLUE_TANUKI_SHELL_ROOT = path.resolve(config.paths.shell_root);
+  }
 
   if (config.llm.provider === "stub") {
     env.LLM_BACKEND = "stub";
@@ -585,6 +593,7 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_MAINTENANCE_TOKEN",
     "BLUE_TANUKI_SETTINGS_TOKEN",
     "BLUE_TANUKI_FILE_ROOT",
+    "BLUE_TANUKI_SHELL_ROOT",
     "BLUE_TANUKI_SESSION_DIR",
     "BLUE_TANUKI_AUDIT_DIR",
     "COMPOSIO_API_KEY",

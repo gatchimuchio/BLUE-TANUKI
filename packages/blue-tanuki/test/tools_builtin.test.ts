@@ -42,6 +42,7 @@ import {
   type HttpFetchOptions,
 } from "../src/tools/builtin.js";
 import { ToolRegistry } from "../src/tools/registry.js";
+import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
 
 const ctx = {
   command_id: "cmd-1",
@@ -1589,6 +1590,39 @@ describe("built-in tools", () => {
     await expect(
       invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }, { env: {} }),
     ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
+  });
+
+  it("shell.exec binds an explicitly requested same-workspace command to the file sandbox", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-same-workspace-"));
+    const shellRoot = path.join(parent, "shell");
+    const fileRoot = path.join(parent, "files");
+    await fs.mkdir(shellRoot);
+    await fs.mkdir(fileRoot);
+    const mismatchedEnv = { ...shellTestEnv(shellRoot), BLUE_TANUKI_FILE_ROOT: fileRoot };
+    const sameRootEnv = { ...shellTestEnv(shellRoot), BLUE_TANUKI_FILE_ROOT: shellRoot };
+    const args = { cmd: "node", args: ["--version"], same_workspace_as_file_root: true };
+    try {
+      await expect(inspectShellExecTargetVersion(args, {
+        env: mismatchedEnv,
+        command_digest: "a".repeat(64),
+      })).rejects.toThrow(/resolve to the same directory/);
+      await expect(invokeShellExec(args, {
+        env: mismatchedEnv,
+        nativeProviderPath: path.join(parent, "missing-provider.exe"),
+      })).rejects.toThrow(/resolve to the same directory/);
+
+      const observation = await inspectShellExecTargetVersion(args, {
+        env: sameRootEnv,
+        command_digest: "b".repeat(64),
+      });
+      expect(observation).toMatchObject({
+        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
   });
 
   it("shell.exec requires a reviewed sandbox identity and refuses a replaced cwd before process creation", async () => {

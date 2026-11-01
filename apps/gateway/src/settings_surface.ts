@@ -103,6 +103,7 @@ export interface SettingsSnapshot {
   };
   paths: {
     file_root: string;
+    shell_root: string | null;
     session_dir: string;
     audit_dir: string;
   };
@@ -300,6 +301,7 @@ export function buildSettingsSnapshot(
     },
     paths: {
       file_root: config.paths.file_root,
+      shell_root: config.paths.shell_root ?? null,
       session_dir: config.paths.session_dir,
       audit_dir: config.paths.audit_dir,
     },
@@ -750,6 +752,11 @@ export function renderSettingsHtml(): string {
             <label>File sandbox root
               <input id="path-file-root" autocomplete="off">
             </label>
+            <label>Isolated process workspace (optional)
+              <input id="path-shell-root" autocomplete="off">
+            </label>
+            <button id="path-use-file-root" type="button">Use file sandbox root</button>
+            <p class="muted">Set this to the File sandbox root to run an owner-reviewed edit and its isolated test in the same workspace. Leave empty to keep shell.exec disabled.</p>
             <label>Session directory
               <input id="path-session-dir" autocomplete="off">
             </label>
@@ -811,12 +818,16 @@ export function renderSettingsHtml(): string {
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
+      shellRoot: document.querySelector("#path-shell-root"),
       sessionDir: document.querySelector("#path-session-dir"),
       auditDir: document.querySelector("#path-audit-dir")
     };
     tokenInput.value = sessionStorage.getItem("blueTanukiSettingsToken") || "";
     tokenInput.addEventListener("change", () => {
       sessionStorage.setItem("blueTanukiSettingsToken", tokenInput.value);
+    });
+    document.querySelector("#path-use-file-root").addEventListener("click", () => {
+      fields.shellRoot.value = fields.fileRoot.value;
     });
     document.querySelectorAll("nav button").forEach((button) => {
       button.addEventListener("click", () => {
@@ -891,6 +902,7 @@ export function renderSettingsHtml(): string {
       fields.host.value = snapshot.webchat.host;
       fields.port.value = snapshot.webchat.port;
       fields.fileRoot.value = snapshot.paths.file_root;
+      fields.shellRoot.value = snapshot.paths.shell_root || "";
       fields.sessionDir.value = snapshot.paths.session_dir;
       fields.auditDir.value = snapshot.paths.audit_dir;
       const rows = document.querySelector("#plugin-rows");
@@ -957,6 +969,7 @@ export function renderSettingsHtml(): string {
         webchat: { host: fields.host.value, port: fields.port.value },
         paths: {
           file_root: fields.fileRoot.value,
+          shell_root: fields.shellRoot.value,
           session_dir: fields.sessionDir.value,
           audit_dir: fields.auditDir.value
         }
