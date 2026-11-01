@@ -6,6 +6,8 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+2026-11-01、Control CenterのWebSocket再接続枠を成功接続ごとに回復するよう修正した。再接続成功後に失敗回数を0へ戻し、自動再接続であることは接続試行のローカル値で保つ。taskの再送・切断中frameの再配送は行わない。channel-webchat typecheck／build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。browser／Gateway process確認はNOT_RUN、STATUS=WIRED（静的接続、実接続未確認）。
+
 2026-11-01、Gateway再起動後の同一plan `plan:result` consumerへverified `file.write`／`file.delete`保存結果のdigest／M receipt束縛要約を追加した。writeは相対path・byte数のみ、deleteは相対path・削除時点の報告のみを返し、本文・sandbox絶対root・現在状態を返さず再実行もしない。HDS-BRAIN／Gateway typecheck・build、`pnpm docs:check`、`git diff --check`はPASS。process／browser／test suiteはNOT_RUNで、STATUS=WIRED（コード接続、runtime未確認）。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
 2026-11-01、Control Centerの保存結果consumerをverified `file.write`／`file.delete`にも表示するよう接続した。既存のowner再認証・plan/revision/step・verified binding・receipt確認条件を維持し、writeは本文／現在状態を返さず、deleteは削除時点の報告として表示する。channel-webchat typecheck／build、生成Control Center script構文解析、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（UI接続、owner画面での実操作未確認）。

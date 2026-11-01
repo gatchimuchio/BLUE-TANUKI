@@ -544,7 +544,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function connectChat(isAutomaticReconnect) {
-        if (isAutomaticReconnect === true) {
+        const reconnecting = isAutomaticReconnect === true;
+        if (reconnecting) {
           state.chatToken = state.chatReconnectToken;
           state.chatUser = state.chatReconnectUser || state.chatUser;
         } else {
@@ -570,6 +571,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setChatStatus("WebChat connecting", "warn");
         ws.addEventListener("open", function () {
           if (state.chatSocket !== ws || generation !== state.chatConnectionGeneration) return;
+          if (reconnecting) state.chatReconnectAttempt = 0;
           setChatStatus("WebChat connected", "good");
           loadRuntime("webchat-connected");
         });
@@ -579,7 +581,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           try { frame = JSON.parse(event.data); } catch (_) { frame = { kind: "message", content: String(event.data) }; }
           if (frame.kind === "hello") {
             appendChat("system", "connected as " + (frame.user || state.chatUser));
-            if (state.chatReconnectAttempt > 0) {
+            if (reconnecting) {
               appendChat("system", "WebChatを再接続しました。切断中のtaskは自動再送していません。返信が未着なら、保存済み依頼IDとowner tokenで状態を照会してください。");
             }
             return;
