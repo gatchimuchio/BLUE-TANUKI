@@ -26,6 +26,7 @@ import {
   googleDriveUpdateTargetIdentityDigest,
   googleDrivePermissionCreateRequestPayloadDigest,
   googleDrivePermissionCreateTargetIdentityDigest,
+  googleDriveTrashTargetIdentityDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -1493,6 +1494,12 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
     const content = parameters.content;
     const maxBytes = parameters.max_bytes ?? 128_000;
     const maxContentBytes = parameters.max_content_bytes ?? 64_000;
+    if (parameters.operation === "file.trash") {
+      const fileId = parameters.file_id;
+      return validPermission && hasEffects && typeof fileId === "string" && fileId.length > 0 &&
+        fileId.length <= 512 && fileId === fileId.trim() && !/[\s/?#\\\u0000-\u001f\u007f]/.test(fileId) &&
+        Object.keys(parameters).every((key) => ["operation", "file_id"].includes(key));
+    }
     if (parameters.operation === "permissions.create") {
       const fileId = parameters.file_id;
       const email = parameters.email_address;
@@ -3083,6 +3090,19 @@ export class OperationPlanLedger {
           binding.status === "verified" && priorPayload === requestPayload);
       }));
       if (priorEffect) throw new Error("google_drive_permission_grant_already_selected_or_attempted");
+    }
+    if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "file.trash") {
+      const targetIdentity = googleDriveTrashTargetIdentityDigest(String(step.parameters.file_id));
+      const priorEffect = this.state.plans.some((candidate) => candidate.bindings.some((binding) => {
+        if (binding.operation !== "google.drive.write" ||
+            ["invalidated", "not_attempted"].includes(binding.status) ||
+            binding.prepared_step.parameters?.operation !== "file.trash") return false;
+        const prior = binding.prepared_step.parameters ?? {};
+        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        return googleDriveTrashTargetIdentityDigest(String(prior.file_id)) === targetIdentity &&
+          unresolved;
+      }));
+      if (priorEffect) throw new Error("google_drive_file_trash_already_selected_or_attempted");
     }
     if (descriptor.operation_id === "google.drive.write" && step.parameters?.operation === "file.create") {
       const targetIdentity = googleDriveWriteTargetIdentityDigest(String(step.parameters.parent_id), String(step.parameters.name));

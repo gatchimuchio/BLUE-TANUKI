@@ -8,13 +8,17 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F04.02 Drive個別ユーザー権限付与
+## 現在のBUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 
-既存`google.drive.write`へ`permissions.create`を接続し、Owner taskが明示した単一のtext/plain file ID、単一ユーザーemail、`reader`または`writer`だけを許可する。新規の直接付与だけを扱い、既に有効な直接権限がある対象、権限更新／削除、group／domain／anyone共有、Workspace native document、folder、binary、所有権移転は対象外とする。Drive通知メールは送らない。実provider、credential、Gateway process、外部Drive作用は使わない。
+既存`google.drive.write`に`file.trash`を接続し、Owner taskが明示した単一`file_id`について、認証中アカウント所有・個人My Drive・`text/plain`・未trashであることを確認してから、`PATCH trashed=true`でゴミ箱へ移す。これは復元可能な移動であり、`files.delete`による完全削除は実装しない。Drive共有ドライブ、Workspace native document、folder、binary、他ユーザー所有、曖昧・不完全な対象はfail-closedとする。実provider、credential、Gateway process、外部Drive作用は使わない。
 
-対象metadataと取得可能なpermission scopeを上限付きで複数回読み、欠損・不完全pagination・上限超過・file ID／状態／MIME不一致・観測間差異・同じ宛先への既存直接権限をfail-closedにする。Operation Planに外部作用とhigh/L3、Approval Gate／HDS authorityを要求し、no-store Control Center確認へ対象file、宛先、付与role、全permission範囲、通知なし／所有権移転なしを表示する。承認時とPOST直前にtarget versionを再照合し、Drive responseのpermission ID・type・email・roleを確認し、返却IDを使ったpermissions.getとpermission範囲・file identityのreadbackで付与を照合する。結果不明またはreadback失敗は自動再送しない。
+metadata（file ID／name／MIME／parent／version／drive ID／`ownedByMe`／trash状態）と取得可能なpermission scopeを複数回読取り、読取間差異、欠損、不完全pagination、上限超過、所有者不一致、My Drive以外、対象版・scope変化はPATCH前に停止する。target-versionへfile state、scope、payload、command、Operation Plan bindingを結ぶ。Operation Planはhigh/L3、Approval Gate／HDS authorityを要求し、no-store Control Center確認は対象file、所有者、My Drive、現在の全取得permission scope、「復元可能なtrash移動／完全削除なし」を明示する。承認直前とPATCH直前に同一snapshotを再照合し、PATCH responseと同じfile IDのreadbackで`trashed=true`、所有者、MIME、name、parentを確認する。結果不明・readback失敗時は自動再送しない。Drive側の他writerとの原子的排他は保証しない。
 
-Google Drive APIは同一fileへの並行permission操作をatomicに保証しないため、最後の照合後に他writerが変更する競合窓は残り、UIへ明記する。L3と事前事後readbackはその競合を消さない。完了境界：Protocol／HDS／core／Gateway／WebChatのworkspace typecheckと変更package build、`pnpm docs:check`、生成Control Center script構文、`git diff --check`。test suite、Gateway process、provider／credential／外部作用は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remoteとlocalのSHA・clean状態を閉じる。共有実行・F04.02全体・F04全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ昇格しない。
+完了境界：Protocol／HDS／core／Gateway／WebChatのworkspace typecheckと変更package build、`pnpm docs:check`、生成Control Center script構文、`git diff --check`。test suite、Gateway process、provider／credential／外部作用は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remoteとlocalのSHA・clean状態を閉じる。F04.02全体・F04全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ昇格しない。
+
+## 完了済みBUILD_BATCH — F04.02 Drive個別ユーザー権限付与
+
+既存`google.drive.write`へ`permissions.create`を接続し、Owner taskが明示した単一のtext/plain file ID、単一ユーザーemail、`reader`または`writer`だけを許可した。新規の直接付与だけを扱い、既に有効な直接権限がある対象、権限更新／削除、group／domain／anyone共有、Workspace native document、folder、binary、所有権移転は対象外とし、Drive通知メールは送らない。対象metadataとpermission scopeを再取得し、no-store L3確認、承認前／POST直前の対象版再照合、返却permission ID／type／email／role確認、permissions.getとpost-write scope readbackを接続した。結果不明・readback失敗では自動再送しない。Google APIの並行permission変更を原子的には排除できない旨をUIに示す。実provider／credential／外部共有は未実施。検証とcommit状態は直近の [`開発進捗.md`](開発進捗.md) に記録する。
 
 ## 完了済みBUILD_BATCH — F04.02 Drive既存text/plain本文のL3束縛更新
 

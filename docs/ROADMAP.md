@@ -20,11 +20,23 @@
 
 ## 現在のBUILD_BATCH
 
-2026-11-02、`google.drive.write/file.update`を既存HDS Operation Plan／Executor Brokerへ接続した。対象はOwner taskに明示された既存blobの単一`file_id`と置換本文、MIMEは`text/plain`のみ。Workspace native document、folder／binary、rename、共有・permission変更、delete、実provider／資格情報／Drive実作用は対象外。
+2026-11-02、`google.drive.write/file.trash`を既存HDS Operation Plan／Executor Broker／Gateway承認／Control Centerへ接続中。Owner taskに明示された個人My Drive内の単一`file_id`に限定し、認証中アカウント所有、未trash、`text/plain`を必須にする。実行は`PATCH trashed=true`による復元可能なゴミ箱移動で、`files.delete`による完全削除は行わない。共有ドライブ、Workspace native document、folder、binary、非所有・曖昧・未取得の対象は拒否する。
 
-metadata、現本文、取得可能なpermission scopeを二重読取して差異・欠損・上限超過をfail-closedにし、target-versionにfile state、本文、permission scope、payload、command、Plan bindingのdigestを結合する。L3 no-store確認に変更前後の本文と取得した全permission scopeを表示し、承認時とPATCH直前に同じsnapshotを再照合する。Driveが原子的な条件付き更新を提供する根拠はなく、最終照合とPATCH間の外部競合を排除できるとは主張しない。PATCH後は既存identity／MIME／parent／nameと本文をreadbackし、不明・不一致で再送しない。
+対象metadataと取得可能なpermission scopeを複数回読み、file state／scope／payload／command／Plan bindingのdigestをtarget-versionへ結合する。Operation PlanとApproval Gateでhigh/L3を要求し、no-store画面に対象、所有者、保存先、全取得permission scope、復元可能／完全削除なしを表示する。承認直前・PATCH直前に同じsnapshotを再照合し、PATCH responseと同じfile IDのreadbackで`trashed=true`、所有者、MIME、name、parentを確認する。結果不明・readback失敗では再送しない。Drive側他writerとの原子的排他は保証しない。実provider／資格情報／外部Drive作用は未実施。
 
-全workspace `pnpm typecheck`はPASS（初回cleanの`EBUSY`後、再実行で全生成物cleanまで完了）。その後のGateway依存package buildとcore／Gateway no-emit typecheck、HDS build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`もPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`、共有・deleteは未接続。C08.03、OD-03、P13を保留する。
+全workspace `pnpm typecheck`／`pnpm build`、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体、F04、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03、OD-03、P13を保留する。
+
+## 前回BUILD_BATCH — F04.02 Drive個別ユーザー権限付与
+
+`google.drive.write/permissions.create`を既存HDS Operation Plan／Executor Brokerへ接続し、Owner taskに明示された単一のtext/plain file ID、単一ユーザーemail、`reader`または`writer`だけを許可した。既存直接付与、権限更新／削除、group／domain／anyone共有、Workspace native document、folder／binary、所有権移転を対象外とし、Drive通知emailは送らない。metadataと取得可能なpermission scopeを複数回照合し、no-store L3確認、承認前／POST直前の再照合、返却permission ID確認、permissions.getとpost-write scope readbackを接続した。結果不明では自動再送しない。Google APIの他writerとの原子的排他は保証しない。実provider／資格情報／外部共有は未実施。
+
+全workspace `pnpm typecheck`、変更package build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。F04.02全体は`BUILD_GAP`のまま。
+
+## 前回BUILD_BATCH — F04.02 Drive既存text/plain本文のL3束縛更新
+
+`google.drive.write/file.update`をHDS Operation Plan／Executor Brokerへ接続し、Owner taskに明示された既存blobの単一`file_id`と置換本文、MIME=`text/plain`だけを扱った。metadata、現本文、取得可能なpermission scopeを二重読取し、file state／本文／scope／payload／command／Plan bindingをtarget-versionに結合した。no-store L3確認に変更前後本文とscopeを表示し、承認時・PATCH直前にsnapshotを再照合する。PATCH後は既存identity／MIME／parent／nameと本文をreadbackし、結果不明で自動再送しない。Drive APIの原子的条件付き更新を確認できていないため、最終照合後の外部競合を排除できるとは主張しない。実provider／資格情報／外部Drive作用は未実施。
+
+全workspace typecheck、変更package build、`pnpm docs:check`、build済みControl Center script構文、`git diff --check`はPASS。test suite／Gateway process／browser／実provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（runtime未確認）。
 
 ## 前回BUILD_BATCH — F04.01 Driveの単一file metadata・revision・sharing読取
 

@@ -67,6 +67,28 @@ export const GoogleDrivePermissionCreateTargetVersionObservationSchema = z.objec
 export type GoogleDrivePermissionCreateTargetVersionObservation =
   z.infer<typeof GoogleDrivePermissionCreateTargetVersionObservationSchema>;
 
+/** Operation Plan-bound, non-authority preflight evidence for moving one owned text/plain file to Drive trash. */
+export const GoogleDriveTrashTargetVersionObservationSchema = z.object({
+  schema_version: z.literal("blue-tanuki.google-drive-trash-target-version.v1"),
+  operation: z.literal("file.trash"),
+  target_identity_digest: DigestSchema,
+  request_payload_digest: DigestSchema,
+  file_id: z.string().min(1).max(512),
+  file_state_digest: DigestSchema,
+  target_access_scope_digest: DigestSchema,
+  target_access_scope_complete: z.literal(true),
+  target_access_scope_entry_count: z.number().int().min(1).max(500),
+  owner_confirmed: z.literal(true),
+  reversible_trash_only: z.literal(true),
+  command_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema,
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+
+export type GoogleDriveTrashTargetVersionObservation =
+  z.infer<typeof GoogleDriveTrashTargetVersionObservationSchema>;
+
 export function googleDriveWriteTargetIdentityDigest(parentFolderId: string, name: string): string {
   return createHash("sha256").update(JSON.stringify([
     "blue-tanuki.google-drive-file-create-target.v1",
@@ -137,5 +159,20 @@ export function googleDrivePermissionCreateRequestPayloadDigest(input: {
     input.email_address,
     input.role,
     false,
+  ]), "utf8").digest("hex");
+}
+
+export function googleDriveTrashTargetIdentityDigest(fileId: string): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.google-drive-file-trash-target.v1",
+    fileId,
+  ]), "utf8").digest("hex");
+}
+
+export function googleDriveTrashRequestPayloadDigest(fileId: string): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.google-drive-file-trash-payload.v1",
+    fileId,
+    "trashed=true",
   ]), "utf8").digest("hex");
 }

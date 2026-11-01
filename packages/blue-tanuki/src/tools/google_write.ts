@@ -3,14 +3,16 @@ import * as https from "node:https";
 import { GmailWriteTargetVersionObservationSchema, GoogleCalendarEventTargetObservationSchema,
   GoogleCalendarWriteTargetVersionObservationSchema,
   GoogleDriveWriteTargetVersionObservationSchema, GoogleDriveUpdateTargetVersionObservationSchema,
-  GoogleDrivePermissionCreateTargetVersionObservationSchema,
+  GoogleDrivePermissionCreateTargetVersionObservationSchema, GoogleDriveTrashTargetVersionObservationSchema,
   googleDriveWriteRequestPayloadDigest, googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest, googleDriveUpdateTargetIdentityDigest,
   googleDrivePermissionCreateRequestPayloadDigest, googleDrivePermissionCreateTargetIdentityDigest,
+  googleDriveTrashRequestPayloadDigest, googleDriveTrashTargetIdentityDigest,
   normalizeGmailAddressList, requireToolOperationDescriptor,
   type GmailWriteTargetVersionObservation, type GoogleCalendarEventTargetObservation,
   type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation,
-  type GoogleDriveUpdateTargetVersionObservation, type GoogleDrivePermissionCreateTargetVersionObservation } from "@blue-tanuki/protocol";
+  type GoogleDriveUpdateTargetVersionObservation, type GoogleDrivePermissionCreateTargetVersionObservation,
+  type GoogleDriveTrashTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, readGoogleCalendarEventTarget,
   type GoogleCalendarEventTargetSnapshot } from "./google_read.js";
@@ -18,7 +20,7 @@ import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type Goo
   type GoogleCalendarEventUpdateContentReview, type GoogleCalendarEventDeleteContentReview,
   type GoogleCalendarEventInviteContentReview, type GoogleDriveFileCreateContentReview,
   type GoogleDriveFileUpdateContentReview, type GoogleDrivePermissionCreateContentReview,
-  type GoogleDrivePermissionReview,
+  type GoogleDriveFileTrashContentReview, type GoogleDrivePermissionReview,
   type Tool, type ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -61,7 +63,7 @@ export interface GoogleWriteOptions {
   calendar_availability_result_digest?: string;
   calendar_availability_observed_at?: string;
   target_version_observation?: GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
-    GoogleDrivePermissionCreateTargetVersionObservation;
+    GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation;
 }
 
 interface CalendarAvailabilityObservation {
@@ -1819,6 +1821,11 @@ interface GoogleDrivePermissionCreateArguments {
   role: "reader" | "writer";
 }
 
+interface GoogleDriveTrashArguments {
+  operation: "file.trash";
+  file_id: string;
+}
+
 interface GoogleDriveFolderMetadata {
   id: string;
   name: string;
@@ -1853,6 +1860,7 @@ interface GoogleDriveUpdateFileMetadata {
   shared: boolean | null;
   trashed: false;
   inherited_permissions_disabled: boolean | null;
+  owned_by_me: boolean | null;
 }
 
 interface GoogleDriveUpdateSnapshot {
@@ -1866,6 +1874,13 @@ interface GoogleDriveUpdateSnapshot {
 }
 
 interface GoogleDrivePermissionCreateSnapshot {
+  file: GoogleDriveUpdateFileMetadata;
+  file_state_digest: string;
+  access_scope_digest: string;
+  permissions: readonly GoogleDrivePermissionReview[];
+}
+
+interface GoogleDriveTrashSnapshot {
   file: GoogleDriveUpdateFileMetadata;
   file_state_digest: string;
   access_scope_digest: string;
@@ -1957,6 +1972,20 @@ function normalizeGoogleDrivePermissionCreateArguments(args: Record<string, unkn
     throw new Error("google.drive.write permissions.create only supports reader or writer; mutation_sent=false");
   }
   return { operation: "permissions.create", file_id: fileId, email_address: emailAddress, role };
+}
+
+function normalizeGoogleDriveTrashArguments(args: Record<string, unknown>): GoogleDriveTrashArguments {
+  if (operationArg(args, ["file.trash"]) !== "file.trash") {
+    throw new Error("google.drive.write only supports plan-bound file.trash; mutation_sent=false");
+  }
+  if (Object.keys(args).some((key) => key !== "operation" && key !== "file_id")) {
+    throw new Error("google.drive.write file.trash contains unsupported fields; mutation_sent=false");
+  }
+  const fileId = stringArg(args, "file_id")!;
+  if (args.file_id !== fileId || fileId.length > 512 || /[\s/?#\\\u0000-\u001f\u007f]/.test(fileId)) {
+    throw new Error("google.drive.write file.trash identity is invalid; mutation_sent=false");
+  }
+  return { operation: "file.trash", file_id: fileId };
 }
 
 function googleDriveFolderMetadataProjection(value: unknown, expectedFolderId: string): GoogleDriveFolderMetadata {
@@ -2153,7 +2182,8 @@ function googleDriveUpdateFileMetadataProjection(value: unknown, expectedFileId:
   const shared = value.shared === undefined ? null : typeof value.shared === "boolean" ? value.shared : undefined;
   const inheritedDisabled = value.inheritedPermissionsDisabled === undefined
     ? null : typeof value.inheritedPermissionsDisabled === "boolean" ? value.inheritedPermissionsDisabled : undefined;
-  if (shared === undefined || inheritedDisabled === undefined) {
+  const ownedByMe = value.ownedByMe === undefined ? null : typeof value.ownedByMe === "boolean" ? value.ownedByMe : undefined;
+  if (shared === undefined || inheritedDisabled === undefined || ownedByMe === undefined) {
     throw new Error("google.drive.write update target metadata is malformed; mutation_sent=false");
   }
   return {
@@ -2168,6 +2198,7 @@ function googleDriveUpdateFileMetadataProjection(value: unknown, expectedFileId:
     shared,
     trashed: false,
     inherited_permissions_disabled: inheritedDisabled,
+    owned_by_me: ownedByMe,
   };
 }
 
@@ -2179,7 +2210,7 @@ async function readGoogleDriveUpdateFileMetadata(input: {
 }): Promise<GoogleDriveUpdateFileMetadata> {
   const path = `/drive/v3/files/${encodeURIComponent(input.fileId)}?${new URLSearchParams({
     supportsAllDrives: "true",
-    fields: "id,name,mimeType,modifiedTime,parents,driveId,version,headRevisionId,shared,trashed,inheritedPermissionsDisabled",
+    fields: "id,name,mimeType,modifiedTime,parents,driveId,version,headRevisionId,shared,trashed,inheritedPermissionsDisabled,ownedByMe",
   })}`;
   assertToolExecutionNotCancelled(input.signal, "google.drive.write update target read");
   let response: GoogleWriteResponse;
@@ -2285,6 +2316,32 @@ async function inspectGoogleDrivePermissionCreateSnapshot(input: {
     permission.email_address?.toLowerCase() === input.args.email_address.toLowerCase() && !permission.deleted);
   if (alreadyGranted) {
     throw new Error("google.drive.write direct user permission already exists; permissions.update is unavailable; mutation_sent=false");
+  }
+  return { file: before, file_state_digest: operationPlanDigest(before),
+    access_scope_digest: operationPlanDigest(permissionsBefore), permissions: permissionsBefore };
+}
+
+async function inspectGoogleDriveTrashSnapshot(input: {
+  fileId: string;
+  token: string;
+  request: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+}): Promise<GoogleDriveTrashSnapshot> {
+  const before = await readGoogleDriveUpdateFileMetadata({ fileId: input.fileId, token: input.token,
+    request: input.request, signal: input.signal });
+  if (before.drive_id !== null || before.owned_by_me !== true) {
+    throw new Error("google.drive.write file.trash requires an untrashed My Drive text file owned by this account; mutation_sent=false");
+  }
+  const permissionsBefore = await readGoogleDrivePermissionScopePass({ folderId: input.fileId,
+    token: input.token, request: input.request, signal: input.signal });
+  const permissionsAfter = await readGoogleDrivePermissionScopePass({ folderId: input.fileId,
+    token: input.token, request: input.request, signal: input.signal });
+  const after = await readGoogleDriveUpdateFileMetadata({ fileId: input.fileId, token: input.token,
+    request: input.request, signal: input.signal });
+  if (operationPlanDigest(before) !== operationPlanDigest(after) ||
+      operationPlanDigest(permissionsBefore) !== operationPlanDigest(permissionsAfter) ||
+      after.drive_id !== null || after.owned_by_me !== true) {
+    throw new Error("google.drive.write file.trash target or access scope changed during observation; mutation_sent=false");
   }
   return { file: before, file_state_digest: operationPlanDigest(before),
     access_scope_digest: operationPlanDigest(permissionsBefore), permissions: permissionsBefore };
@@ -2437,17 +2494,48 @@ function googleDrivePermissionCreateObservation(input: {
   });
 }
 
+function googleDriveTrashObservation(input: {
+  args: GoogleDriveTrashArguments;
+  snapshot: GoogleDriveTrashSnapshot;
+  commandDigest: string;
+  operationPlanBindingDigest: string;
+}): GoogleDriveTrashTargetVersionObservation {
+  return GoogleDriveTrashTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.google-drive-trash-target-version.v1",
+    operation: "file.trash",
+    target_identity_digest: googleDriveTrashTargetIdentityDigest(input.args.file_id),
+    request_payload_digest: googleDriveTrashRequestPayloadDigest(input.args.file_id),
+    file_id: input.args.file_id,
+    file_state_digest: input.snapshot.file_state_digest,
+    target_access_scope_digest: input.snapshot.access_scope_digest,
+    target_access_scope_complete: true,
+    target_access_scope_entry_count: input.snapshot.permissions.length,
+    owner_confirmed: true,
+    reversible_trash_only: true,
+    command_digest: input.commandDigest,
+    operation_plan_binding_digest: input.operationPlanBindingDigest,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
 export async function inspectGoogleDriveWriteTargetVersion(
   rawArgs: Record<string, unknown>,
   options: GoogleWriteOptions & { operation_plan_binding_digest?: string; command_digest?: string } = {},
 ): Promise<GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
-    GoogleDrivePermissionCreateTargetVersionObservation> {
+    GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation> {
   if (!options.operation_plan_binding_digest || !/^[a-f0-9]{64}$/.test(options.operation_plan_binding_digest) ||
       !options.command_digest || !/^[a-f0-9]{64}$/.test(options.command_digest)) {
     throw new Error("google.drive.write requires a current Operation Plan command binding; mutation_sent=false");
   }
   const token = googleToken(options.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
   const request = options.request ?? defaultGoogleWriteRequest;
+  if (rawArgs.operation === "file.trash") {
+    const args = normalizeGoogleDriveTrashArguments(rawArgs);
+    const snapshot = await inspectGoogleDriveTrashSnapshot({ fileId: args.file_id, token, request, signal: options.signal });
+    return googleDriveTrashObservation({ args, snapshot, commandDigest: options.command_digest,
+      operationPlanBindingDigest: options.operation_plan_binding_digest });
+  }
   if (rawArgs.operation === "permissions.create") {
     const args = normalizeGoogleDrivePermissionCreateArguments(rawArgs);
     const snapshot = await inspectGoogleDrivePermissionCreateSnapshot({ args, token, request, signal: options.signal });
@@ -2474,7 +2562,19 @@ export function assertGoogleDriveWriteTargetVersion(
   commandDigest: string,
   operationPlanBindingDigest: string | undefined,
 ): GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
-    GoogleDrivePermissionCreateTargetVersionObservation {
+    GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation {
+  if (rawArgs.operation === "file.trash") {
+    const observation = GoogleDriveTrashTargetVersionObservationSchema.parse(rawObservation);
+    const args = normalizeGoogleDriveTrashArguments(rawArgs);
+    if (!operationPlanBindingDigest || observation.command_digest !== commandDigest ||
+        observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+        observation.operation !== args.operation || observation.file_id !== args.file_id ||
+        observation.target_identity_digest !== googleDriveTrashTargetIdentityDigest(args.file_id) ||
+        observation.request_payload_digest !== googleDriveTrashRequestPayloadDigest(args.file_id)) {
+      throw new Error("google.drive.write trash target version does not match command or Operation Plan source");
+    }
+    return observation;
+  }
   if (rawArgs.operation === "permissions.create") {
     const observation = GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(rawObservation);
     const args = normalizeGoogleDrivePermissionCreateArguments(rawArgs);
@@ -2514,12 +2614,45 @@ export function assertGoogleDriveWriteTargetVersion(
 export async function inspectGoogleDriveWriteContentReview(
   rawArgs: Record<string, unknown>,
   options: GoogleWriteOptions & { operation_plan_binding_digest?: string; command_digest?: string } = {},
-): Promise<GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview | GoogleDrivePermissionCreateContentReview> {
+): Promise<GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview | GoogleDrivePermissionCreateContentReview |
+    GoogleDriveFileTrashContentReview> {
   if (!options.operation_plan_binding_digest || !options.command_digest) {
     throw new Error("google.drive.write content review requires an Operation Plan binding");
   }
   const token = googleToken(options.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
   const request = options.request ?? defaultGoogleWriteRequest;
+  if (rawArgs.operation === "file.trash") {
+    const args = normalizeGoogleDriveTrashArguments(rawArgs);
+    const snapshot = await inspectGoogleDriveTrashSnapshot({ fileId: args.file_id, token, request, signal: options.signal });
+    const observation = googleDriveTrashObservation({ args, snapshot, commandDigest: options.command_digest,
+      operationPlanBindingDigest: options.operation_plan_binding_digest });
+    const review = {
+      kind: "google_drive_file_trash" as const,
+      operation: "google.drive.write.file.trash" as const,
+      command_digest: options.command_digest,
+      request_payload_digest: observation.request_payload_digest,
+      target_version_digest: operationPlanDigest(observation),
+      operation_plan_binding_digest: observation.operation_plan_binding_digest,
+      file_id: snapshot.file.id,
+      file_name: snapshot.file.name,
+      parent_ids: snapshot.file.parent_ids,
+      drive_id: null,
+      file_version: snapshot.file.version,
+      file_modified_time: snapshot.file.modified_time,
+      file_mime_type: snapshot.file.mime_type,
+      owner_confirmed: true as const,
+      file_shared: snapshot.file.shared,
+      inherited_permissions_disabled: snapshot.file.inherited_permissions_disabled,
+      target_access_scope_complete: true as const,
+      target_access_scope_digest: snapshot.access_scope_digest,
+      permissions: snapshot.permissions,
+      reversible_trash_only: true as const,
+      permanently_deletes: false as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return { ...review, review_digest: operationPlanDigest(review) };
+  }
   if (rawArgs.operation === "permissions.create") {
     const args = normalizeGoogleDrivePermissionCreateArguments(rawArgs);
     const snapshot = await inspectGoogleDrivePermissionCreateSnapshot({ args, token, request, signal: options.signal });
@@ -2802,6 +2935,102 @@ async function invokeGoogleDriveFileUpdate(args: Record<string, unknown>, opts: 
   }, { verification });
 }
 
+async function invokeGoogleDriveFileTrash(rawArgs: Record<string, unknown>, opts: GoogleWriteOptions): Promise<unknown> {
+  const args = normalizeGoogleDriveTrashArguments(rawArgs);
+  if (!opts.target_version_observation ||
+      opts.target_version_observation.schema_version !== "blue-tanuki.google-drive-trash-target-version.v1" ||
+      typeof opts.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(opts.idempotency_key) ||
+      typeof opts.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(opts.command_digest)) {
+    throw new Error("google.drive.write file.trash requires approved command and target bindings; mutation_sent=false");
+  }
+  const expectedObservation = assertGoogleDriveWriteTargetVersion(rawArgs, opts.target_version_observation,
+    opts.command_digest, opts.target_version_observation.operation_plan_binding_digest);
+  if (expectedObservation.schema_version !== "blue-tanuki.google-drive-trash-target-version.v1" ||
+      expectedObservation.owner_confirmed !== true || expectedObservation.reversible_trash_only !== true) {
+    throw new Error("google.drive.write file.trash target is not an owner-confirmed reversible trash operation; mutation_sent=false");
+  }
+  const token = googleToken(opts.env ?? process.env, ["GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.drive.write");
+  const request = opts.request ?? defaultGoogleWriteRequest;
+  const currentSnapshot = await inspectGoogleDriveTrashSnapshot({ fileId: args.file_id, token, request, signal: opts.signal });
+  const currentObservation = googleDriveTrashObservation({ args, snapshot: currentSnapshot,
+    commandDigest: expectedObservation.command_digest,
+    operationPlanBindingDigest: expectedObservation.operation_plan_binding_digest });
+  if (operationPlanDigest(currentObservation) !== operationPlanDigest(expectedObservation)) {
+    throw new Error("google.drive.write file.trash target or access scope changed after owner review; mutation_sent=false");
+  }
+
+  const path = `/drive/v3/files/${encodeURIComponent(args.file_id)}?${new URLSearchParams({
+    supportsAllDrives: "true",
+    fields: "id,trashed",
+  })}`;
+  const target: GoogleWriteTarget = {
+    service: "drive",
+    hostname: "www.googleapis.com",
+    path,
+    method: "PATCH",
+    maxBytes: 16_384,
+    token,
+    body: JSON.stringify({ trashed: true }),
+    contentType: "application/json; charset=UTF-8",
+    idempotency_key: opts.idempotency_key,
+    command_digest: opts.command_digest,
+  };
+  assertToolExecutionNotCancelled(opts.signal, "google.drive.write file.trash");
+  let response: GoogleWriteResponse;
+  try {
+    response = await request(target, opts.signal);
+  } catch {
+    throw new Error("google.drive.write file.trash result is uncertain; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  if (!response.ok || response.truncated) {
+    throw new Error("google.drive.write file.trash response was unavailable or truncated; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  let responseData: unknown;
+  try { responseData = JSON.parse(response.body) as unknown; }
+  catch {
+    throw new Error("google.drive.write file.trash response was invalid; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  if (!isRecord(responseData) || responseData.id !== args.file_id || responseData.trashed !== true) {
+    throw new Error("google.drive.write file.trash response did not confirm the target; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+
+  let readback: GoogleWriteResponse;
+  try {
+    const readbackPath = `/drive/v3/files/${encodeURIComponent(args.file_id)}?${new URLSearchParams({
+      supportsAllDrives: "true",
+      fields: "id,name,mimeType,parents,driveId,ownedByMe,trashed",
+    })}`;
+    readback = await request({ service: "drive", hostname: "www.googleapis.com", path: readbackPath,
+      method: "GET", maxBytes: 16_384, token }, opts.signal);
+  } catch {
+    throw new Error("google.drive.write file.trash readback is unavailable; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  let readbackData: unknown;
+  try { readbackData = JSON.parse(readback.body) as unknown; }
+  catch {
+    throw new Error("google.drive.write file.trash readback is invalid; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  const readbackParents = isRecord(readbackData) && Array.isArray(readbackData.parents) &&
+    readbackData.parents.every((parent) => typeof parent === "string")
+    ? [...readbackData.parents].sort() : null;
+  if (!readback.ok || readback.truncated || !isRecord(readbackData) || readbackData.id !== args.file_id ||
+      readbackData.name !== currentSnapshot.file.name || readbackData.mimeType !== "text/plain" ||
+      readbackData.trashed !== true || readbackData.ownedByMe !== true || readbackData.driveId != null ||
+      !readbackParents || operationPlanDigest(readbackParents) !== operationPlanDigest(currentSnapshot.file.parent_ids)) {
+    throw new Error("google.drive.write file.trash readback did not confirm the exact owned My Drive file; mutation_sent=true; mutation_status=verification_failed; retry=false");
+  }
+  return mutationResult("google.drive.write", "drive", "file.trash", target, {
+    ...response,
+    body: JSON.stringify({ id: args.file_id }),
+  }, { verification: {
+    status: "confirmed",
+    target_identity_digest: googleDriveTrashTargetIdentityDigest(args.file_id),
+    file_trashed: true,
+    reversible_trash_only: true,
+    permanently_deletes: false,
+  } });
+}
+
 async function invokeGoogleDrivePermissionCreate(
   rawArgs: Record<string, unknown>,
   opts: GoogleWriteOptions,
@@ -2920,6 +3149,9 @@ export async function invokeGoogleDriveWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
 ): Promise<unknown> {
+  if (args.operation === "file.trash") {
+    return await invokeGoogleDriveFileTrash(args, opts);
+  }
   if (args.operation === "permissions.create") {
     return await invokeGoogleDrivePermissionCreate(args, opts);
   }
@@ -3173,10 +3405,10 @@ export const googleCalendarWriteTool: Tool = createGoogleCalendarWriteTool();
 
 export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",
-  description: "Create one bounded text file, replace one existing text/plain blob, or grant one direct Drive user reader/writer access after separate L3 review. Permission changes and delete remain unavailable.",
+  description: "Create one bounded text file, replace one existing text/plain blob, grant one direct Drive user reader/writer access, or move one owner-owned My Drive text/plain file to reversible trash. Update, permission, and trash operations require separate current L3 review; trash never permanently deletes.",
   required_capabilities: requireToolOperationDescriptor("google.drive.write").required_capabilities,
   async inspect_target_version(args, resolverOptions = {}): Promise<GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
-      GoogleDrivePermissionCreateTargetVersionObservation> {
+      GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation> {
     return await inspectGoogleDriveWriteTargetVersion(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
       ...(resolverOptions.operation_plan_binding_digest
@@ -3185,7 +3417,7 @@ export const googleDriveWriteTool: Tool = {
     });
   },
   async inspect_content_review(args, resolverOptions = {}): Promise<GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
-      GoogleDrivePermissionCreateContentReview> {
+      GoogleDrivePermissionCreateContentReview | GoogleDriveFileTrashContentReview> {
     return await inspectGoogleDriveWriteContentReview(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
       ...(resolverOptions.operation_plan_binding_digest
@@ -3194,11 +3426,13 @@ export const googleDriveWriteTool: Tool = {
     });
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    const observation = args.operation === "file.update"
-      ? GoogleDriveUpdateTargetVersionObservationSchema.parse(context.target_version_observation)
-      : args.operation === "permissions.create"
-        ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(context.target_version_observation)
-        : GoogleDriveWriteTargetVersionObservationSchema.parse(context.target_version_observation);
+    const observation = args.operation === "file.trash"
+      ? GoogleDriveTrashTargetVersionObservationSchema.parse(context.target_version_observation)
+      : args.operation === "file.update"
+        ? GoogleDriveUpdateTargetVersionObservationSchema.parse(context.target_version_observation)
+        : args.operation === "permissions.create"
+          ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(context.target_version_observation)
+          : GoogleDriveWriteTargetVersionObservationSchema.parse(context.target_version_observation);
     return await invokeGoogleDriveWrite(args, { signal: context.signal,
       idempotency_key: context.idempotency_key, command_digest: context.command_digest,
       target_version_observation: observation });

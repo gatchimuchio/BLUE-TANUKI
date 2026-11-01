@@ -5994,6 +5994,96 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "対象・宛先・アクセス範囲を再確認";
           return;
         }
+        if (review.kind === "google_drive_file_trash") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validOptionalString = function (value, max) {
+            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+          };
+          const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
+            review.permissions.length <= 500 && review.permissions.every(function (permission) {
+              return permission && ["user", "group", "domain", "anyone"].includes(permission.type) &&
+                typeof permission.role === "string" && permission.role.length > 0 && permission.role.length <= 128 &&
+                validOptionalString(permission.email_address, 320) && validOptionalString(permission.domain, 320) &&
+                (permission.allow_file_discovery === null || typeof permission.allow_file_discovery === "boolean") &&
+                validOptionalString(permission.expiration_time, 128) && typeof permission.deleted === "boolean" &&
+                Array.isArray(permission.permission_details) && permission.permission_details.length <= 32 &&
+                permission.permission_details.every(function (detail) {
+                  return detail && validOptionalString(detail.permission_type, 128) &&
+                    validOptionalString(detail.role, 128) &&
+                    (detail.inherited === null || typeof detail.inherited === "boolean") &&
+                    validOptionalString(detail.inherited_from, 512);
+                });
+            });
+          if (review.command_id !== commandId || review.operation !== "google.drive.write.file.trash" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.owner_confirmed !== true || review.reversible_trash_only !== true ||
+              review.permanently_deletes !== false || review.drive_id !== null || review.file_mime_type !== "text/plain" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.target_access_scope_digest) ||
+              typeof review.file_id !== "string" || review.file_id.length === 0 || review.file_id.length > 512 ||
+              typeof review.file_name !== "string" || review.file_name.length === 0 || review.file_name.length > 512 ||
+              !Array.isArray(review.parent_ids) || review.parent_ids.length === 0 || review.parent_ids.length > 128 ||
+              review.parent_ids.some(function (id) { return typeof id !== "string" || id.length === 0 || id.length > 512; }) ||
+              typeof review.file_version !== "string" || review.file_version.length === 0 || review.file_version.length > 128 ||
+              !validOptionalString(review.file_modified_time, 128) ||
+              (review.file_shared !== null && typeof review.file_shared !== "boolean") ||
+              (review.inherited_permissions_disabled !== null && typeof review.inherited_permissions_disabled !== "boolean") ||
+              review.target_access_scope_complete !== true || !validPermissions) {
+            throw new Error("Driveのゴミ箱移動対象・所有者・アクセス範囲がこの承認要求へ結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Google Driveファイルをゴミ箱へ移動（復元可能）";
+          view.appendChild(heading);
+          [
+            ["対象ファイル", review.file_name],
+            ["ファイルID", review.file_id],
+            ["保存先", "個人のMy Drive"],
+            ["所有者確認", "認証中アカウントが所有"],
+            ["MIME type", review.file_mime_type],
+            ["現在版", review.file_version],
+            ["親フォルダーID", review.parent_ids.join(", ")],
+            ["現在の共有状態", review.file_shared === null ? "不明" : review.file_shared ? "共有あり" : "共有なし"],
+            ["実行内容", "ゴミ箱へ移動。復元可能。完全削除はしない"],
+            ["アクセス範囲digest", review.target_access_scope_digest],
+            ["対象版digest", review.target_version_digest],
+            ["Operation Plan束縛digest", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const scopeHeading = document.createElement("strong");
+          scopeHeading.textContent = "対象ファイルに取得できた全アクセス権限（" + review.permissions.length + "件）";
+          view.appendChild(scopeHeading);
+          review.permissions.forEach(function (permission) {
+            const item = document.createElement("p");
+            const principal = permission.type === "anyone" ? "全員（公開範囲）" :
+              permission.type === "domain" ? "ドメイン " + (permission.domain || "不明") :
+                permission.type === "group" ? "グループ " + (permission.email_address || "不明") :
+                  "ユーザー " + (permission.email_address || "不明");
+            item.textContent = principal + " / 権限=" + permission.role +
+              (permission.expiration_time ? " / 期限=" + permission.expiration_time : "") +
+              (permission.deleted ? " / 削除済み権限" : "");
+            view.appendChild(item);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は選択した個人Drive所有のtext/plainファイル1件をゴミ箱へ移します。完全削除は行いません。確認内容は保存されません。承認直前とPATCH直前に対象版・所有者・アクセス範囲を再取得し、変化または読取不完全なら停止します。要求後は同じIDのゴミ箱状態を再読取し、結果不明時に自動再送しません。Drive側の他writerとの原子的排他は保証しません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "対象・所有者・ゴミ箱移動を再確認";
+          return;
+        }
         if (review.command_id !== commandId ||
             (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create" &&
               review.operation !== "gmail.write.draft.send") ||

@@ -19,6 +19,7 @@ import {
   GoogleDriveWriteTargetVersionObservationSchema,
   GoogleDriveUpdateTargetVersionObservationSchema,
   GoogleDrivePermissionCreateTargetVersionObservationSchema,
+  GoogleDriveTrashTargetVersionObservationSchema,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
@@ -257,6 +258,10 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
   if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
     return `file:${await brokerFileResourceLockDigest(tool_name, args)}`;
   }
+  if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
+      ["file.update", "permissions.create", "file.trash"].includes(String(args.operation))) {
+    return `google-drive:${createHash("sha256").update(args.file_id, "utf8").digest("hex")}`;
+  }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
       ["draft.create", "message.send", "draft.send"].includes(String(args.operation))) {
     return `gmail:${observation.target_identity_digest}`;
@@ -467,6 +472,8 @@ function approveCommandForExecution(
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.drive.write") {
     const expectedDriveTargetVersion = snapshot.payload.arguments.operation === "file.update"
       ? "blue-tanuki.google-drive-update-target-version.v1"
+      : snapshot.payload.arguments.operation === "file.trash"
+        ? "blue-tanuki.google-drive-trash-target-version.v1"
       : snapshot.payload.arguments.operation === "file.create"
         ? "blue-tanuki.google-drive-write-target-version.v1"
         : snapshot.payload.arguments.operation === "permissions.create"
@@ -656,11 +663,13 @@ export class Executor {
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
         });
-      const observation = command.payload.arguments.operation === "file.update"
-        ? GoogleDriveUpdateTargetVersionObservationSchema.parse(rawObservation)
-        : command.payload.arguments.operation === "permissions.create"
-          ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(rawObservation)
-          : GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
+      const observation = command.payload.arguments.operation === "file.trash"
+        ? GoogleDriveTrashTargetVersionObservationSchema.parse(rawObservation)
+        : command.payload.arguments.operation === "file.update"
+          ? GoogleDriveUpdateTargetVersionObservationSchema.parse(rawObservation)
+          : command.payload.arguments.operation === "permissions.create"
+            ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(rawObservation)
+            : GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
       return Object.freeze(assertGoogleDriveWriteTargetVersion(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest));
     }
@@ -844,7 +853,8 @@ export class Executor {
     if (command.payload.tool_name === "google.drive.write") {
       if (!operationPlanBindingDigest ||
           (command.payload.arguments.operation !== "file.create" && command.payload.arguments.operation !== "file.update" &&
-            command.payload.arguments.operation !== "permissions.create")) {
+            command.payload.arguments.operation !== "permissions.create" &&
+            command.payload.arguments.operation !== "file.trash")) {
         throw new Error("google.drive.write content review requires a plan-bound supported operation");
       }
       const tool = this.deps.tools.get("google.drive.write");
@@ -857,6 +867,31 @@ export class Executor {
         command_digest: operationPlanDigest(command),
       });
       const args = command.payload.arguments;
+      if (args.operation === "file.trash") {
+        const validTrashReview = "kind" in review && review.kind === "google_drive_file_trash" &&
+          review.command_digest === operationPlanDigest(command) &&
+          review.operation_plan_binding_digest === operationPlanBindingDigest &&
+          review.operation === "google.drive.write.file.trash" && review.file_id === args.file_id &&
+          review.file_mime_type === "text/plain" && review.drive_id === null && review.owner_confirmed === true &&
+          review.reversible_trash_only === true && review.permanently_deletes === false &&
+          review.target_access_scope_complete === true && /^[a-f0-9]{64}$/.test(review.target_access_scope_digest) &&
+          Array.isArray(review.permissions) && review.permissions.length >= 1 && review.permissions.length <= 500 &&
+          typeof review.file_name === "string" && review.file_name.length > 0 && review.file_name.length <= 512 &&
+          Array.isArray(review.parent_ids) && review.parent_ids.length >= 1 && review.parent_ids.length <= 128 &&
+          typeof review.file_version === "string" && review.file_version.length > 0 && review.file_version.length <= 128 &&
+          /^[a-f0-9]{64}$/.test(review.request_payload_digest) &&
+          /^[a-f0-9]{64}$/.test(review.target_version_digest) &&
+          /^[a-f0-9]{64}$/.test(review.review_digest) &&
+          review.used_for_authority === false && review.may_execute === false;
+        if (!validTrashReview) {
+          throw new Error("google.drive.write file.trash content review returned evidence for another command, target, or plan source");
+        }
+        const { review_digest: reviewDigest, ...reviewBody } = review;
+        if (operationPlanDigest(reviewBody) !== reviewDigest) {
+          throw new Error("google.drive.write file.trash content review digest was invalid");
+        }
+        return review;
+      }
       if (args.operation === "permissions.create") {
         const validPermissionReview = "kind" in review && review.kind === "google_drive_permission_create" &&
           review.command_digest === operationPlanDigest(command) &&
