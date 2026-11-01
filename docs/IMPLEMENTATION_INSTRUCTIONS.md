@@ -459,3 +459,9 @@ BT-U-E2E-01 path-bound file.search test 1件PASS、同fileの他6件skip（21.6�
 既存`file.search`のverified/M receipt済み保存結果返却を拡張し、空query・exact relative path・最大5行が成立した場合だけ、Owner向けprojectionを`file.read` bounded previewとして識別する。projectionは相対path、上限行数、行結果、観測時刻を返し、`used_for_authority=false`／`may_execute=false`を保持する。Gateway返信は「保存時点のpreview」「全内容・完全性・現在状態を保証しない」と示し、空結果を空fileの証明にしない。既存のOwner再認証・plan/revision/step・verified binding・M receipt照合を維持し、作用は再実行しない。
 
 実装は`packages/hds-brain/src/operation_plan.ts`と`apps/gateway/src/serve.ts`。workspace全体の`tsc -b --pretty false`（clean副作用なし）はPASS、15 workspace projectの`pnpm build`（Windows／Linux isolation release buildを含む）はPASS、`pnpm docs:check`はPASS（日本語基底の移行負債76件の注意を含む）、`git diff --check`はPASS。Gateway process／browser／test suiteはこのBUILDでは未実施（NOT_RUN）。実provider・外部作用なし。STATUSは型／buildとprojection条件の静的確認に基づく`WIRED`、runtime確認は未成立。F01.01全体、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+#### 2026-11-01 E2E-01 BUILD接続 — file.write／file.delete保存結果のControl Center入口
+
+既存`plan:result` backendが返すverified `file.write`／`file.delete`の限定要約に対し、Control Centerで読取操作を選べるようにした。表示条件は`file.search`／`file.edit`と同じく、対象plan/revision/stepの準備、verified状態、M receipt確認、command／result／delivery digestの成立を要求する。writeは「作成結果要約」と明示し本文・現在状態を返さないこと、deleteは削除時点の報告で現在不存在を保証しないことを案内する。作用の再実行はなく、owner再認証とHDS側のreceipt再照合を既存経路で維持する。
+
+`packages/channel-webchat/src/control_center_script.ts`を変更。channel-webchat typecheck／build、build済み`CONTROL_CENTER_SCRIPT`のJavaScript構文解析、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（owner向けUI入口のコード接続、実操作未確認）。実provider・外部作用なし。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。

@@ -8,6 +8,8 @@
 
 2026-11-01、Gateway再起動後の同一plan `plan:result` consumerへverified `file.write`／`file.delete`保存結果のdigest／M receipt束縛要約を追加した。writeは相対path・byte数のみ、deleteは相対path・削除時点の報告のみを返し、本文・sandbox絶対root・現在状態を返さず再実行もしない。HDS-BRAIN／Gateway typecheck・build、`pnpm docs:check`、`git diff --check`はPASS。process／browser／test suiteはNOT_RUNで、STATUS=WIRED（コード接続、runtime未確認）。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
+2026-11-01、Control Centerの保存結果consumerをverified `file.write`／`file.delete`にも表示するよう接続した。既存のowner再認証・plan/revision/step・verified binding・receipt確認条件を維持し、writeは本文／現在状態を返さず、deleteは削除時点の報告として表示する。channel-webchat typecheck／build、生成Control Center script構文解析、`git diff --check`はPASS。test／browser runtimeはNOT_RUN。STATUS=WIRED（UI接続、owner画面での実操作未確認）。
+
 ## 現在のBUILD_BATCH
 
 2026-11-01、E2E-01の合成Owner経路を限定実行で確認した。file.deleteではOwner内容確認前のL3承認が拒否され、確認後に対象が変わるとstale拒否され、再確認・L3承認後は隔離temp root内のfixtureだけがBroker経由で削除され、WebChat結果とverified/M receiptまで確認できた（Gateway process test 1件PASS、同fileの他5件はskip）。owner指定相対pathのread-only file.searchも隔離Gateway process test 1件PASS（同fileの他6件はskip、21.6秒）し、同語decoyの除外・verified/M receipt・Owner結果返却・両file不変を確認した。長いOwner統合testも再実行し、目的変更の審査、Jへの確定、保存結果再読込と安全なfile.edit→file.search fixture経路を含む選択test 1件PASS（197秒、同fileの他5件はskip）。HDS-BRAIN／core／Gateway build、Gateway typecheck、`pnpm docs:check`、`git diff --check`もPASS。実provider・live外部作用なし。確認したのは限定synthetic runtime経路であり、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS証拠、owner GOは未成立。次はこの証拠を含めてBUILD_BATCHを継続し、残る通常Owner仕事の未接続consumerを現行rev3.0から選定する。

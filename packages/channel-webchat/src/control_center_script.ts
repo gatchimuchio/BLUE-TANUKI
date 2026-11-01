@@ -2092,7 +2092,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 : '';
               const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
               const savedResultReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
-                ["file.search", "file.edit"].includes(step.operation) && step.status === "verified" &&
+                ["file.search", "file.edit", "file.write", "file.delete"].includes(step.operation) && step.status === "verified" &&
                 binding.memory_status === "receipt_confirmed" && /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
                 /^[a-f0-9]{64}$/.test(binding.result_digest || "") && /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
               const savedResultButton = savedResultReady
@@ -2101,10 +2101,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-owner-authentication-required="' +
                   String(plan.owner_authentication_required === true) + '" data-owner-reauthentication-binding="' +
                   escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
-                  '">' + (step.operation === "file.edit" ? "保存済み編集結果を読む" : "保存済み検索結果を読む") + '</button>' +
+                  '">' + (step.operation === "file.edit" ? "保存済み編集結果を読む"
+                    : step.operation === "file.write" ? "保存済み作成結果を読む"
+                      : step.operation === "file.delete" ? "保存済み削除結果を読む" : "保存済み検索結果を読む") + '</button>' +
                   '<p class="muted">' + (step.operation === "file.edit"
                     ? "J/M receipt確認済みの編集結果を表示します。変更後の内容や差分は再読込しません。"
-                    : "J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。") +
+                    : step.operation === "file.write"
+                      ? "J/M receipt確認済みの作成結果要約を表示します。本文は返さず、現在のファイル状態も再読込しません。"
+                      : step.operation === "file.delete"
+                        ? "J/M receipt確認済みの削除時点の報告を表示します。現在の対象不存在は再確認しません。"
+                        : "J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。") +
                   (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
               const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
