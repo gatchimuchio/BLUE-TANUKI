@@ -140,6 +140,14 @@ export type OperationPlanSavedResultReturnProjection =
     readonly operation: "file.delete";
     readonly path: string;
     readonly deleted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v5";
+    readonly operation: "file.read";
+    readonly path: string;
+    readonly preview_limit: number;
+    readonly preview_completeness: "unknown";
+    readonly lines: readonly { readonly line_number: number; readonly line: string }[];
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -3244,6 +3252,31 @@ export class OperationPlanLedger {
     });
     if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
       throw new Error("plan_saved_result_state_changed");
+    }
+    const parametersValue = OperationJsonValueSchema.parse(step.parameters);
+    if (!parametersValue || typeof parametersValue !== "object" || Array.isArray(parametersValue)) {
+      throw new Error("plan_saved_result_parameters_invalid");
+    }
+    const parameters = parametersValue as Record<string, unknown>;
+    if (parameters.query === "") {
+      const path = parameters.file_path;
+      const previewLimit = parameters.max_results;
+      if (typeof path !== "string" || !isFileSearchRelativeResultPath(path) ||
+          !Number.isInteger(previewLimit) || typeof previewLimit !== "number" || previewLimit < 1 || previewLimit > 5 ||
+          output.query !== "" || output.visited_files !== 1 || matches.length > previewLimit ||
+          matches.some((match, index) => match.path !== path || match.line_number !== index + 1)) {
+        throw new Error("plan_saved_result_preview_invalid");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v5",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
+        observed_at_ms: result.observed_at_ms, operation: "file.read", path, preview_limit: previewLimit,
+        preview_completeness: "unknown", lines: matches.map(({ line_number, line }) => ({ line_number, line })),
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
     }
     return {
       schema_version: "operation-plan-saved-result-return.v1",

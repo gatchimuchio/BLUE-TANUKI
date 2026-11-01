@@ -368,6 +368,31 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
     ].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v5") {
+    const header = [
+      "保存時点のfile.read previewです。全内容・完全性・現在のファイル状態は保証しません。",
+      `対象: ${JSON.stringify(projection.path)}`,
+      `表示行数: ${projection.lines.length}（上限 ${projection.preview_limit} 行）`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    ];
+    const limit = 3_400;
+    const lines: string[] = [];
+    let length = header.join("\n").length;
+    let displayWasTruncated = false;
+    for (const line of projection.lines) {
+      const rendered = `- ${JSON.stringify(projection.path)}:${line.line_number}: ${JSON.stringify(line.line)}`;
+      if (length + rendered.length + 1 > limit) {
+        displayWasTruncated = true;
+        break;
+      }
+      lines.push(rendered);
+      length += rendered.length + 1;
+    }
+    const omittedCount = projection.lines.length - lines.length;
+    if (displayWasTruncated && omittedCount > 0) lines.push(`表示上限により残り ${omittedCount} 行を省略しました。`);
+    if (projection.lines.length === 0) lines.push("previewから返された行はありません。空ファイルとは確認していません。");
+    return [...header, ...lines].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容や検索完全性は保証しません。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
