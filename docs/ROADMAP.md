@@ -146,6 +146,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 2026-10-31の続きでは、owner選択済みdigest-only file-state observationを開発限定synthetic Cが同一taskの候補文脈として受け付ける条件を追加した。親plan ID／revision／task identityと`outcome_unknown`・観測専用flagを照合し、元`file.write`を再生成せず同じ対象に対するread-only `file.search`候補のみを返す。全workspace `pnpm typecheck`／`pnpm build`／`pnpm docs:check`／`git diff --check`はPASS。test suite、Gateway実processでのowner選択、実provider、外部作用、全体QC／QAはNOT_RUN。次は同一task候補のowner step reviewから既存Approval／Broker、結果/M保存、WebChat返却へ接続する。E2E-01全体、製品全体BUILD、QE_QC／QE_QA、owner GOは未成立。
 
+2026-11-01、別の安全consumerとしてF03.01 Calendar読取を接続した。google.calendar.readはevent identity／organizer／attendee／date-time・timezoneの正規化値と原表現を保持し、view=freebusyは31日以内の単一calendar照会と応答受領時刻・observed digestを返す。部分取得・provider error・不整合はavailability=unknownへ閉じる。core／hds-brain typecheckはPASS。test／Gateway runtime／実provider／browser／外部作用はNOT_RUN。これはadapter経路のコード接続で、F03.01 runtime、F03.02 read-before-write、F03全体、E2E-01、製品全体BUILD、QC／QAやowner GOの証拠ではない。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

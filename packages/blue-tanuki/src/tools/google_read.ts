@@ -13,6 +13,8 @@ export interface GoogleReadTarget {
   path: string;
   maxBytes: number;
   token: string;
+  method?: "GET" | "POST";
+  body?: string;
 }
 
 export interface GoogleReadResponse {
@@ -87,11 +89,57 @@ export interface GmailAttachmentIdentity {
 
 export interface GoogleCalendarEvent {
   id: string;
+  calendar_id: string;
+  calendar_id_original: string;
+  event_id: { normalized: string; original: string };
   status: string | null;
   summary: string | null;
   start: string | null;
   end: string | null;
+  start_identity: GoogleCalendarTimeIdentity;
+  end_identity: GoogleCalendarTimeIdentity;
+  organizer: GoogleCalendarParticipantIdentity | null;
+  attendees: GoogleCalendarParticipantIdentity[];
+  attendees_omitted: boolean;
+  identity_complete: boolean;
   html_link: string | null;
+}
+
+export interface GoogleCalendarIdentityValue {
+  normalized: string | null;
+  original: string | null;
+}
+
+export interface GoogleCalendarTimeIdentity {
+  kind: "date" | "date_time" | "unknown";
+  normalized: {
+    value: string | null;
+    instant_utc: string | null;
+    time_zone: string | null;
+  };
+  original: {
+    date: string | null;
+    date_time: string | null;
+    time_zone: string | null;
+  };
+  complete: boolean;
+}
+
+export interface GoogleCalendarParticipantIdentity {
+  id: GoogleCalendarIdentityValue;
+  email: GoogleCalendarIdentityValue;
+  display_name: GoogleCalendarIdentityValue;
+  self: boolean | null;
+  organizer: boolean | null;
+  resource: boolean | null;
+  optional: boolean | null;
+  response_status: string | null;
+  complete: boolean;
+}
+
+export interface GoogleCalendarFreeBusyInterval {
+  start: GoogleCalendarTimeIdentity;
+  end: GoogleCalendarTimeIdentity;
 }
 
 export interface GoogleDriveFile {
@@ -238,6 +286,15 @@ async function defaultGoogleReadRequest(
   target: GoogleReadTarget,
   signal?: AbortSignal,
 ): Promise<GoogleReadResponse> {
+  if (target.method === "POST" || target.body !== undefined) {
+    if (target.service !== "calendar" ||
+        target.path !== "/calendar/v3/freeBusy" ||
+        target.method !== "POST" ||
+        typeof target.body !== "string" ||
+        Buffer.byteLength(target.body) > 16_384) {
+      throw new Error("google read request method/body is outside the bounded Calendar freeBusy path; request_sent=false; mutation_sent=false");
+    }
+  }
   return await new Promise((resolve, reject) => {
     let finished = false;
     const finish = (result: GoogleReadResponse): void => {
@@ -255,8 +312,14 @@ async function defaultGoogleReadRequest(
         protocol: "https:",
         hostname: target.hostname,
         path: target.path,
-        method: "GET",
+        method: target.method ?? "GET",
         headers: {
+          ...(target.body !== undefined
+            ? {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(target.body),
+              }
+            : {}),
           Accept: "application/json",
           Authorization: `Bearer ${target.token}`,
           "User-Agent": `BLUE-TANUKI/0.1 ${target.service}.read`,
@@ -321,7 +384,7 @@ async function defaultGoogleReadRequest(
     req.on("error", (error) => {
       if (!finished) fail(error);
     });
-    req.end();
+    req.end(target.body);
   });
 }
 
@@ -684,24 +747,559 @@ function calendarTime(value: unknown): string | null {
   return optionalString(value.dateTime) ?? optionalString(value.date);
 }
 
-function calendarEventFromJson(value: unknown): GoogleCalendarEvent | null {
-  if (!isRecord(value) || typeof value.id !== "string") return null;
+const MAX_CALENDAR_EVENT_ATTENDEES = 200;
+const GOOGLE_CALENDAR_READ_ARGUMENTS = new Set([
+  "calendar_id",
+  "days",
+  "max_bytes",
+  "max_results",
+  "time_max",
+  "time_min",
+  "time_zone",
+  "view",
+]);
+
+function calendarOptionalStringArg(
+  args: Record<string, unknown>,
+  name: string,
+): { normalized: string; original: string } | undefined {
+  if (!Object.hasOwn(args, name)) return undefined;
+  const raw = args[name];
+  if (typeof raw !== "string" || raw.trim().length === 0 || /[\u0000-\u001f\u007f]/.test(raw)) {
+    throw new Error("google.calendar.read argument is invalid; request_sent=false; mutation_sent=false");
+  }
+  return { normalized: raw.trim(), original: raw };
+}
+
+function rejectUnknownCalendarReadArguments(args: Record<string, unknown>): void {
+  if (Object.keys(args).some((key) => !GOOGLE_CALENDAR_READ_ARGUMENTS.has(key))) {
+    throw new Error("google.calendar.read received an unsupported argument; request_sent=false; mutation_sent=false");
+  }
+}
+
+function normalizedCalendarTimeZone(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: value.trim() }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function normalizedCalendarOpaqueId(raw: string): string | null {
+  const value = raw.trim();
+  return value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : null;
+}
+
+function calendarIdentityValue(
+  value: unknown,
+  normalize: (raw: string) => string | null = (raw) => raw.trim() || null,
+): GoogleCalendarIdentityValue {
+  const original = typeof value === "string" ? value : null;
   return {
-    id: value.id,
+    normalized: original === null ? null : normalize(original),
+    original,
+  };
+}
+
+function normalizeCalendarEmail(raw: string): string | null {
+  const value = raw.trim();
+  if (!value || value.length > 320 || /\s|[\u0000-\u001f\u007f]/.test(value)) return null;
+  const at = value.lastIndexOf("@");
+  if (at <= 0 || at === value.length - 1 || value.indexOf("@") !== at) return null;
+  return value.slice(0, at) + "@" + value.slice(at + 1).toLowerCase();
+}
+
+interface ParsedCalendarDateTime {
+  valid: boolean;
+  instant_utc: string | null;
+}
+
+function parseCalendarDateTime(value: string): ParsedCalendarDateTime {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/i.exec(value);
+  if (!match) return { valid: false, instant_utc: null };
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? "0");
+  const calendarDate = new Date(0);
+  calendarDate.setUTCFullYear(year, month - 1, day);
+  calendarDate.setUTCHours(hour, minute, second, 0);
+  if (calendarDate.getUTCFullYear() !== year ||
+      calendarDate.getUTCMonth() !== month - 1 ||
+      calendarDate.getUTCDate() !== day ||
+      hour > 23 || minute > 59 || second > 59) {
+    return { valid: false, instant_utc: null };
+  }
+  const offset = match[7];
+  if (offset === undefined) {
+    return { valid: true, instant_utc: null };
+  }
+  if (offset.toUpperCase() !== "Z") {
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) {
+      return { valid: false, instant_utc: null };
+    }
+    if (offset === "-00:00") {
+      return { valid: true, instant_utc: null };
+    }
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed)
+    ? { valid: true, instant_utc: new Date(parsed).toISOString() }
+    : { valid: false, instant_utc: null };
+}
+
+function calendarTimeIdentity(value: unknown): GoogleCalendarTimeIdentity {
+  const date = isRecord(value) && typeof value.date === "string" ? value.date : null;
+  const dateTime = isRecord(value) && typeof value.dateTime === "string" ? value.dateTime : null;
+  const timeZone = isRecord(value) && typeof value.timeZone === "string" ? value.timeZone : null;
+  const normalizedZone = normalizedCalendarTimeZone(timeZone);
+  const trimmedDate = date?.trim() ?? "";
+  const trimmedDateTime = dateTime?.trim() ?? "";
+  const hasDate = trimmedDate.length > 0;
+  const hasDateTime = trimmedDateTime.length > 0;
+  if (hasDate && !hasDateTime) {
+    const dateEpoch = Date.parse(trimmedDate + "T00:00:00.000Z");
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(trimmedDate) &&
+      Number.isFinite(dateEpoch) && new Date(dateEpoch).toISOString().slice(0, 10) === trimmedDate;
+    return {
+      kind: validDate ? "date" : "unknown",
+      normalized: { value: validDate ? trimmedDate : null, instant_utc: null, time_zone: null },
+      original: { date, date_time: dateTime, time_zone: timeZone },
+      complete: validDate && (timeZone === null || normalizedZone !== null),
+    };
+  }
+  if (hasDateTime && !hasDate) {
+    const parsedDateTime = parseCalendarDateTime(trimmedDateTime);
+    const complete = parsedDateTime.valid && parsedDateTime.instant_utc !== null &&
+      (timeZone === null || normalizedZone !== null);
+    return {
+      kind: "date_time",
+      normalized: {
+        value: trimmedDateTime,
+        instant_utc: parsedDateTime.instant_utc,
+        time_zone: normalizedZone,
+      },
+      original: { date, date_time: dateTime, time_zone: timeZone },
+      complete,
+    };
+  }
+  return {
+    kind: "unknown",
+    normalized: { value: null, instant_utc: null, time_zone: normalizedZone },
+    original: { date, date_time: dateTime, time_zone: timeZone },
+    complete: false,
+  };
+}
+
+function calendarParticipantIdentity(value: unknown): GoogleCalendarParticipantIdentity | null {
+  if (!isRecord(value)) return null;
+  const id = calendarIdentityValue(value.id, normalizedCalendarOpaqueId);
+  const email = calendarIdentityValue(value.email, normalizeCalendarEmail);
+  const displayName = calendarIdentityValue(value.displayName, (raw) => compactExternalText(raw, 256) || null);
+  const optionalBoolean = (key: string): boolean | null =>
+    typeof value[key] === "boolean" ? value[key] as boolean : null;
+  const responseStatus = optionalString(value.responseStatus);
+  return {
+    id,
+    email,
+    display_name: displayName,
+    self: optionalBoolean("self"),
+    organizer: optionalBoolean("organizer"),
+    resource: optionalBoolean("resource"),
+    optional: optionalBoolean("optional"),
+    response_status: responseStatus,
+    complete: Boolean(id.normalized || email.normalized),
+  };
+}
+
+function calendarEventFromJson(
+  value: unknown,
+  calendarId: string,
+  calendarIdOriginal: string,
+): GoogleCalendarEvent | null {
+  if (!isRecord(value) || typeof value.id !== "string") return null;
+  const eventId = calendarIdentityValue(value.id, normalizedCalendarOpaqueId);
+  if (!eventId.normalized || eventId.normalized.length > 1_024 || /[\u0000-\u001f\u007f]/.test(value.id)) {
+    return null;
+  }
+  const startIdentity = calendarTimeIdentity(value.start);
+  const endIdentity = calendarTimeIdentity(value.end);
+  const organizer = calendarParticipantIdentity(value.organizer);
+  const rawAttendees = Array.isArray(value.attendees) ? value.attendees : [];
+  const attendeesMalformed = value.attendees !== undefined &&
+    (!Array.isArray(value.attendees) || rawAttendees.some((entry) => !isRecord(entry)));
+  const attendees = rawAttendees
+    .slice(0, MAX_CALENDAR_EVENT_ATTENDEES)
+    .map(calendarParticipantIdentity)
+    .filter((entry): entry is GoogleCalendarParticipantIdentity => entry !== null);
+  const attendeesOmitted = value.attendeesOmitted === true ||
+    (value.attendeesOmitted !== undefined && typeof value.attendeesOmitted !== "boolean") ||
+    rawAttendees.length > MAX_CALENDAR_EVENT_ATTENDEES ||
+    attendeesMalformed;
+  const eventRangeOrdered = (() => {
+    if (!startIdentity.complete || !endIdentity.complete ||
+        startIdentity.kind !== endIdentity.kind) return false;
+    if (startIdentity.kind === "date") {
+      const startDate = startIdentity.normalized.value;
+      const endDate = endIdentity.normalized.value;
+      return startDate !== null && endDate !== null && endDate > startDate;
+    }
+    const startInstant = startIdentity.normalized.instant_utc;
+    const endInstant = endIdentity.normalized.instant_utc;
+    if (startInstant !== null && endInstant !== null) return endInstant > startInstant;
+    return false;
+  })();
+  return {
+    id: eventId.normalized,
+    calendar_id: calendarId,
+    calendar_id_original: calendarIdOriginal,
+    event_id: { normalized: eventId.normalized, original: eventId.original ?? eventId.normalized },
     status: optionalString(value.status),
     summary: optionalString(value.summary),
     start: calendarTime(value.start),
     end: calendarTime(value.end),
+    start_identity: startIdentity,
+    end_identity: endIdentity,
+    organizer,
+    attendees,
+    attendees_omitted: attendeesOmitted,
+    identity_complete: eventId.original === eventId.normalized &&
+      eventRangeOrdered &&
+      organizer?.complete === true && !attendeesOmitted && attendees.every((entry) => entry.complete),
     html_link: optionalString(value.htmlLink),
   };
 }
 
-function calendarEvents(value: unknown, maxResults: number): GoogleCalendarEvent[] {
-  if (!isRecord(value) || !Array.isArray(value.items)) return [];
-  return value.items
-    .map(calendarEventFromJson)
-    .filter((event): event is GoogleCalendarEvent => event !== null)
-    .slice(0, maxResults);
+interface CalendarEventsProjection {
+  events: GoogleCalendarEvent[];
+  complete: boolean;
+  has_more_results: boolean;
+  calendar_time_zone: GoogleCalendarIdentityValue;
+}
+
+function calendarEvents(
+  value: unknown,
+  maxResults: number,
+  calendarId: string,
+  calendarIdOriginal: string,
+): CalendarEventsProjection {
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    return {
+      events: [],
+      complete: false,
+      has_more_results: false,
+      calendar_time_zone: { normalized: null, original: null },
+    };
+  }
+  const sourceItems = value.items;
+  const hasMoreResults = (typeof value.nextPageToken === "string" && value.nextPageToken.length > 0) ||
+    sourceItems.length > maxResults;
+  const pageTokenMalformed = value.nextPageToken !== undefined && typeof value.nextPageToken !== "string";
+  const projections = sourceItems.slice(0, maxResults)
+    .map((event) => calendarEventFromJson(event, calendarId, calendarIdOriginal));
+  const events = projections.filter((event): event is GoogleCalendarEvent => event !== null);
+  const rawTimeZone = typeof value.timeZone === "string" ? value.timeZone : null;
+  const normalizedTimeZone = normalizedCalendarTimeZone(rawTimeZone);
+  return {
+    events,
+    complete: !hasMoreResults && !pageTokenMalformed &&
+      projections.every((event) => event?.identity_complete === true) &&
+      normalizedTimeZone !== null,
+    has_more_results: hasMoreResults,
+    calendar_time_zone: {
+      normalized: normalizedTimeZone,
+      original: rawTimeZone,
+    },
+  };
+}
+
+interface NormalizedCalendarRequestTime {
+  value: string;
+  utc: string;
+  epochMs: number;
+}
+
+interface CalendarReadParameters {
+  view: "events" | "freebusy";
+  calendar_id: string;
+  calendar_id_original: string;
+  max_results: number;
+  max_bytes: number;
+  time_min: NormalizedCalendarRequestTime;
+  time_min_original: string;
+  time_max: NormalizedCalendarRequestTime;
+  time_max_original: string;
+  time_zone: string | null;
+  time_zone_original: string | null;
+}
+
+function normalizeCalendarRequestTime(value: string, name: string): NormalizedCalendarRequestTime {
+  const normalized = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/i.exec(normalized);
+  if (!match) {
+    throw new Error("google.calendar.read " + name + " must be RFC3339 with an explicit time zone");
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const calendarDate = new Date(0);
+  calendarDate.setUTCFullYear(year, month - 1, day);
+  calendarDate.setUTCHours(hour, minute, second, 0);
+  if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 ||
+      calendarDate.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) {
+    throw new Error("google.calendar.read " + name + " is not a valid date-time");
+  }
+  const offset = match[7];
+  if (typeof offset !== "string") {
+    throw new Error("google.calendar.read " + name + " has no time-zone offset");
+  }
+  if (offset.toUpperCase() !== "Z") {
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) {
+      throw new Error("google.calendar.read " + name + " has an invalid time-zone offset");
+    }
+  }
+  const epochMs = Date.parse(normalized);
+  if (!Number.isFinite(epochMs)) {
+    throw new Error("google.calendar.read " + name + " is not a valid date-time");
+  }
+  return {
+    value: normalized,
+    utc: new Date(epochMs).toISOString(),
+    epochMs,
+  };
+}
+
+function calendarReadParameters(
+  args: Record<string, unknown>,
+  now: () => Date,
+): CalendarReadParameters {
+  rejectUnknownCalendarReadArguments(args);
+  const calendarIdArg = calendarOptionalStringArg(args, "calendar_id");
+  const calendarId = calendarIdArg?.normalized ?? "primary";
+  if (calendarId.length > 512) {
+    throw new Error("google.calendar.read calendar_id is too long");
+  }
+  const viewArg = calendarOptionalStringArg(args, "view");
+  const view = viewArg?.normalized ?? "events";
+  if (view !== "events" && view !== "freebusy") {
+    throw new Error("google.calendar.read view must be events or freebusy");
+  }
+  const maxResults = positiveIntArg(args, "max_results", DEFAULT_MAX_RESULTS, MAX_RESULTS);
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const days = positiveIntArg(args, "days", DEFAULT_CALENDAR_DAYS, MAX_CALENDAR_DAYS);
+  const timeMinArg = calendarOptionalStringArg(args, "time_min");
+  const timeMinOriginal = timeMinArg?.original ?? now().toISOString();
+  const timeMin = normalizeCalendarRequestTime(timeMinArg?.normalized ?? timeMinOriginal, "time_min");
+  const timeMaxArg = calendarOptionalStringArg(args, "time_max");
+  const timeMaxOriginal = timeMaxArg?.original ??
+    new Date(timeMin.epochMs + days * 24 * 60 * 60 * 1000).toISOString();
+  const timeMax = normalizeCalendarRequestTime(timeMaxArg?.normalized ?? timeMaxOriginal, "time_max");
+  if (timeMax.epochMs <= timeMin.epochMs ||
+      timeMax.epochMs - timeMin.epochMs > MAX_CALENDAR_DAYS * 24 * 60 * 60 * 1000) {
+    throw new Error("google.calendar.read time window is invalid or exceeds the 31-day limit");
+  }
+  const timeZoneArg = calendarOptionalStringArg(args, "time_zone");
+  const timeZone = timeZoneArg ? normalizedCalendarTimeZone(timeZoneArg.normalized) : null;
+  if (timeZoneArg && !timeZone) {
+    throw new Error("google.calendar.read time_zone must be a valid IANA time zone");
+  }
+  return {
+    view,
+    calendar_id: calendarId,
+    calendar_id_original: calendarIdArg?.original ?? "primary",
+    max_results: maxResults,
+    max_bytes: maxBytes,
+    time_min: timeMin,
+    time_min_original: timeMinOriginal,
+    time_max: timeMax,
+    time_max_original: timeMaxOriginal,
+    time_zone: timeZone,
+    time_zone_original: timeZoneArg?.original ?? null,
+  };
+}
+
+function freeBusyIntervals(
+  value: unknown,
+  maxResults: number,
+  windowStartMs: number,
+  windowEndMs: number,
+): { intervals: GoogleCalendarFreeBusyInterval[]; complete: boolean; hasMore: boolean } | null {
+  if (!Array.isArray(value)) return null;
+  const hasMore = value.length > maxResults;
+  const selected = value.slice(0, maxResults);
+  const intervals: GoogleCalendarFreeBusyInterval[] = [];
+  let valid = true;
+  for (const entry of selected) {
+    if (!isRecord(entry)) {
+      valid = false;
+      continue;
+    }
+    const start = calendarTimeIdentity({ dateTime: entry.start });
+    const end = calendarTimeIdentity({ dateTime: entry.end });
+    const startMs = typeof entry.start === "string" ? Date.parse(entry.start) : Number.NaN;
+    const endMs = typeof entry.end === "string" ? Date.parse(entry.end) : Number.NaN;
+    if (!start.complete || !end.complete || !Number.isFinite(startMs) || !Number.isFinite(endMs) ||
+        endMs <= startMs || startMs < windowStartMs || endMs > windowEndMs) {
+      valid = false;
+      continue;
+    }
+    intervals.push({ start, end });
+  }
+  return {
+    intervals,
+    complete: valid && !hasMore,
+    hasMore,
+  };
+}
+
+async function invokeGoogleCalendarFreeBusyRead(
+  parameters: CalendarReadParameters,
+  opts: GoogleReadOptions,
+): Promise<unknown> {
+  const env = opts.env ?? process.env;
+  const now = opts.now ?? (() => new Date());
+  const request = opts.request ?? defaultGoogleReadRequest;
+  assertToolExecutionNotCancelled(opts.signal, "google.calendar.read");
+  const token = googleToken(env, ["GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.calendar.read");
+  const response = await request({
+    service: "calendar",
+    hostname: "www.googleapis.com",
+    path: "/calendar/v3/freeBusy",
+    maxBytes: parameters.max_bytes,
+    token,
+    method: "POST",
+    body: JSON.stringify({
+      timeMin: parameters.time_min.value,
+      timeMax: parameters.time_max.value,
+      timeZone: parameters.time_zone ?? "UTC",
+      items: [{ id: parameters.calendar_id }],
+    }),
+  }, opts.signal);
+  const observedAt = now().toISOString();
+  if (!response.ok) throw googleResponseError("google.calendar.read", response);
+  if (response.truncated) {
+    const resultDigest = sha256Hex({
+      calendar_id: parameters.calendar_id,
+      calendar_id_original: parameters.calendar_id_original,
+      time_min: parameters.time_min.utc,
+      time_max: parameters.time_max.utc,
+      time_zone: parameters.time_zone ?? "UTC",
+      status: "response_truncated",
+    });
+    return {
+      service: "calendar",
+      view: "freebusy",
+      mode: "read_only",
+      calendar_id: parameters.calendar_id,
+      calendar_id_original: parameters.calendar_id_original,
+      time_min: parameters.time_min.utc,
+      time_min_original: parameters.time_min_original,
+      time_max: parameters.time_max.utc,
+      time_max_original: parameters.time_max_original,
+      time_zone: parameters.time_zone ?? "UTC",
+      time_zone_original: parameters.time_zone_original,
+      observed_at: observedAt,
+      observed_at_source: "client_response_received",
+      availability_status: "unknown",
+      busy: null,
+      has_more_results: false,
+      result_complete: false,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: true,
+      request_status: "incomplete",
+      mutation_sent: false,
+      result_count: null,
+      result_digest: resultDigest,
+      observation_digest: sha256Hex({ result_digest: resultDigest, observed_at: observedAt }),
+      trust_boundary: {
+        provider_data_is_untrusted: true,
+        availability_can_authorize_operation: false,
+        used_for_authority: false,
+      },
+    };
+  }
+  const body = parseJson(response.body, "google.calendar.read");
+  const calendars = isRecord(body) && isRecord(body.calendars) ? body.calendars : null;
+  const calendar = calendars && Object.hasOwn(calendars, parameters.calendar_id)
+    ? calendars[parameters.calendar_id]
+    : null;
+  const responseMin = isRecord(body) && typeof body.timeMin === "string"
+    ? normalizeCalendarRequestTime(body.timeMin, "response timeMin")
+    : null;
+  const responseMax = isRecord(body) && typeof body.timeMax === "string"
+    ? normalizeCalendarRequestTime(body.timeMax, "response timeMax")
+    : null;
+  const responseWindowMatches = responseMin?.epochMs === parameters.time_min.epochMs &&
+    responseMax?.epochMs === parameters.time_max.epochMs;
+  const malformedProviderErrors = isRecord(calendar) && calendar.errors !== undefined &&
+    !Array.isArray(calendar.errors);
+  const providerErrors = isRecord(calendar) && Array.isArray(calendar.errors)
+    ? calendar.errors.length
+    : malformedProviderErrors ? 1 : 0;
+  const parsedIntervals = isRecord(calendar)
+    ? freeBusyIntervals(calendar.busy, parameters.max_results, parameters.time_min.epochMs, parameters.time_max.epochMs)
+    : null;
+  const complete = responseWindowMatches && providerErrors === 0 && parsedIntervals?.complete === true;
+  const availabilityStatus = complete ? "observed" : "unknown";
+  const busy = complete ? parsedIntervals?.intervals ?? null : null;
+  const resultDigest = sha256Hex({
+    calendar_id: parameters.calendar_id,
+      calendar_id_original: parameters.calendar_id_original,
+    time_min: parameters.time_min.utc,
+    time_max: parameters.time_max.utc,
+      time_zone: parameters.time_zone ?? "UTC",
+    availability_status: availabilityStatus,
+    busy,
+    provider_error_count: providerErrors,
+    result_complete: complete,
+    has_more_results: parsedIntervals?.hasMore ?? false,
+  });
+  return {
+    service: "calendar",
+    view: "freebusy",
+    mode: "read_only",
+    calendar_id: parameters.calendar_id,
+    calendar_id_original: parameters.calendar_id_original,
+    time_min: parameters.time_min.utc,
+    time_min_original: parameters.time_min_original,
+    time_max: parameters.time_max.utc,
+    time_max_original: parameters.time_max_original,
+    time_zone: parameters.time_zone ?? "UTC",
+    time_zone_original: parameters.time_zone_original,
+    observed_at: observedAt,
+    observed_at_source: "client_response_received",
+    availability_status: availabilityStatus,
+    busy,
+    has_more_results: parsedIntervals?.hasMore ?? false,
+    provider_error_count: providerErrors,
+    result_complete: complete,
+    status: response.status,
+    content_type: response.content_type,
+    truncated: false,
+    request_status: complete ? "ok" : "incomplete",
+    mutation_sent: false,
+    result_count: busy?.length ?? null,
+    result_digest: resultDigest,
+    observation_digest: sha256Hex({ result_digest: resultDigest, observed_at: observedAt }),
+    trust_boundary: {
+      provider_data_is_untrusted: true,
+      availability_can_authorize_operation: false,
+      used_for_authority: false,
+    },
+  };
 }
 
 export async function invokeGoogleCalendarRead(
@@ -711,14 +1309,16 @@ export async function invokeGoogleCalendarRead(
   const env = opts.env ?? process.env;
   const now = opts.now ?? (() => new Date());
   const request = opts.request ?? defaultGoogleReadRequest;
-  const calendarId = stringArg(args, "calendar_id", false) ?? "primary";
-  const maxResults = positiveIntArg(args, "max_results", DEFAULT_MAX_RESULTS, MAX_RESULTS);
-  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
-  const days = positiveIntArg(args, "days", DEFAULT_CALENDAR_DAYS, MAX_CALENDAR_DAYS);
-  const timeMin = stringArg(args, "time_min", false) ?? now().toISOString();
-  const timeMax =
-    stringArg(args, "time_max", false) ??
-    new Date(new Date(timeMin).getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  const parameters = calendarReadParameters(args, now);
+  if (parameters.view === "freebusy") {
+    return await invokeGoogleCalendarFreeBusyRead(parameters, { ...opts, env, now, request });
+  }
+  const calendarId = parameters.calendar_id;
+  const maxResults = parameters.max_results;
+  const maxBytes = parameters.max_bytes;
+  const timeMin = parameters.time_min.value;
+  const timeMax = parameters.time_max.value;
+  assertToolExecutionNotCancelled(opts.signal, "google.calendar.read");
   const token = googleToken(env, ["GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "google.calendar.read");
   const params = new URLSearchParams({
     maxResults: String(maxResults),
@@ -726,9 +1326,10 @@ export async function invokeGoogleCalendarRead(
     orderBy: "startTime",
     timeMin,
     timeMax,
+    fields: "items(id,status,summary,htmlLink,organizer(id,email,displayName,self),attendees(id,email,displayName,organizer,self,resource,optional,responseStatus),attendeesOmitted,start(date,dateTime,timeZone),end(date,dateTime,timeZone)),timeZone,nextPageToken",
   });
+  if (parameters.time_zone) params.set("timeZone", parameters.time_zone);
   const path = `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
-  assertToolExecutionNotCancelled(opts.signal, "google.calendar.read");
   const response = await request({
     service: "calendar",
     hostname: "www.googleapis.com",
@@ -736,24 +1337,117 @@ export async function invokeGoogleCalendarRead(
     maxBytes,
     token,
   }, opts.signal);
+  const observedAt = now().toISOString();
   if (!response.ok) throw googleResponseError("google.calendar.read", response);
-  const events = calendarEvents(parseJson(response.body, "google.calendar.read"), maxResults);
+  if (response.truncated) {
+    const resultDigest = sha256Hex({
+      calendar_id: calendarId,
+      calendar_id_original: parameters.calendar_id_original,
+      time_min: parameters.time_min.utc,
+      time_max: parameters.time_max.utc,
+      time_zone: parameters.time_zone,
+      status: "response_truncated",
+    });
+    return {
+      service: "calendar",
+      view: "events",
+      mode: "read_only",
+      api_host: "www.googleapis.com",
+      calendar_id: calendarId,
+      calendar_id_original: parameters.calendar_id_original,
+      time_min: parameters.time_min.utc,
+      time_min_original: parameters.time_min_original,
+      time_max: parameters.time_max.utc,
+      time_max_original: parameters.time_max_original,
+      time_zone: parameters.time_zone,
+      time_zone_original: parameters.time_zone_original,
+      observed_at: observedAt,
+      observed_at_source: "client_response_received",
+      calendar_time_zone: { normalized: null, original: null },
+      max_results: maxResults,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: true,
+      request_status: "incomplete",
+      mutation_sent: false,
+      result_count: null,
+      has_more_results: false,
+      result_complete: false,
+      result_digest: resultDigest,
+      observation_digest: sha256Hex({
+        result_digest: resultDigest,
+        observed_at: observedAt,
+        time_min: parameters.time_min.utc,
+        time_max: parameters.time_max.utc,
+        calendar_id: calendarId,
+        calendar_id_original: parameters.calendar_id_original,
+        time_zone: parameters.time_zone,
+        result_complete: false,
+      }),
+      events: [],
+      trust_boundary: {
+        provider_data_is_untrusted: true,
+        calendar_data_can_authorize_operation: false,
+        used_for_authority: false,
+      },
+    };
+  }
+  const projection = calendarEvents(
+    parseJson(response.body, "google.calendar.read"),
+    maxResults,
+    calendarId,
+    parameters.calendar_id_original,
+  );
+  const events = projection.events;
+  const resultDigest = sha256Hex({
+    calendar_id: calendarId,
+    calendar_id_original: parameters.calendar_id_original,
+    calendar_time_zone: projection.calendar_time_zone,
+    events,
+  });
   return {
     service: "calendar",
+    view: "events",
     mode: "read_only",
     api_host: "www.googleapis.com",
     calendar_id: calendarId,
-    time_min: timeMin,
-    time_max: timeMax,
+    calendar_id_original: parameters.calendar_id_original,
+    time_min: parameters.time_min.utc,
+    time_min_original: parameters.time_min_original,
+    time_max: parameters.time_max.utc,
+    time_max_original: parameters.time_max_original,
+    time_zone: parameters.time_zone ?? projection.calendar_time_zone.normalized,
+    time_zone_original: parameters.time_zone_original ?? projection.calendar_time_zone.original,
+    observed_at: observedAt,
+    observed_at_source: "client_response_received",
+    calendar_time_zone: projection.calendar_time_zone,
     max_results: maxResults,
     status: response.status,
     content_type: response.content_type,
-    truncated: response.truncated,
+    truncated: false,
     request_status: "ok",
     mutation_sent: false,
     result_count: events.length,
-    result_digest: sha256Hex(events),
+    has_more_results: projection.has_more_results,
+    result_complete: projection.complete,
+    result_digest: resultDigest,
+    observation_digest: sha256Hex({
+      result_digest: resultDigest,
+      observed_at: observedAt,
+      calendar_id: calendarId,
+      calendar_id_original: parameters.calendar_id_original,
+      calendar_time_zone: projection.calendar_time_zone,
+      time_min: parameters.time_min.utc,
+      time_max: parameters.time_max.utc,
+      result_complete: projection.complete,
+      has_more_results: projection.has_more_results,
+    }),
     events,
+    trust_boundary: {
+      provider_data_is_untrusted: true,
+      calendar_data_can_authorize_operation: false,
+      used_for_authority: false,
+    },
   };
 }
 
@@ -931,7 +1625,7 @@ export const gmailReadTool: Tool = {
 
 export const googleCalendarReadTool: Tool = {
   name: "google.calendar.read",
-  description: "Read a bounded Google Calendar event summary with an operator-provided OAuth token.",
+  description: "Read bounded Google Calendar events or free/busy windows. Set view=freebusy for a timestamped availability observation; all provider data is untrusted and non-authoritative.",
   required_capabilities: requireToolOperationDescriptor("google.calendar.read").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeGoogleCalendarRead(args, { signal: context.signal });

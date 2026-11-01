@@ -26,6 +26,16 @@ candidate生成・provider読取／書込・実資格・実送信は行わない
 
 **次のBUILD_BATCH:** F02.02の添付producer／consumer接続は、対応形式・内容scope・保持期間・byte上限が現行契約で定まるまで`BUILD_GAP`として保持する。Owner選択済み`gmail.read` attachment identityの本文取得、no-store L3 review、同一承認command／Broker作用は未接続のままにする。実provider・live外部作用は行わず、並行して別の安全なQE_BUILD consumerを進める。
 
+### 並行する安全consumer — F03.01 Calendar読取・時刻・空き状況
+
+2026-11-01、既存のgoogle.calendar.readを拡張し、既定のview=eventsではcalendar ID／event ID、organizer／attendee identity、start/endのdate・dateTime・timezoneを、正規化値と原表現の両方で返す。イベント本文・説明・参加者コメントは取得しない。200人超またはAPI側省略、欠落identity、次ページ、response byte上限をresult_complete=false／attendees_omittedへ反映する。
+
+view=freebusyは同じHDS tool経路からGoogle Calendarのread-only freeBusy queryを呼び、単一calendar・31日以内のRFC3339時間窓を要求する。応答受領時のobserved_atとobservation_digestを保持し、API範囲不一致、calendar error、部分応答、忙しさ区間上限超過はavailability=unknownとしてbusyを使えない形にする。provider内容は非権威・未信頼として明示し、C／Jの権限やL3承認を置換しない。実資格のprovider呼出し・外部業務作用は行わない。
+
+packages/blue-tanuki/src/tools/google_read.ts、packages/blue-tanuki/src/tools/builtin.ts、packages/blue-tanuki/src/tools/index.ts、packages/hds-brain/src/action_router.tsを変更。core／hds-brain typecheckはPASS。test、Gateway runtime、実provider、browser、外部作用はNOT_RUN。STATUS=WIRED（既存Calendar toolから限定read adapter分岐へのコード接続、runtime未確認）。F03.01のruntime確認、F03.02の登録前再照合、F03親全体、E2E-01、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、owner GOは未成立。
+
+次のCalendar consumer: 登録候補が使ったfreebusy観測のobserved_at・時間窓・calendar identityを保持し、承認／作用直前に新しい照会との差を識別するF03.02 read-before-write経路。古い観測だけで登録を許可しない。
+
 ## CR-0割込み — I-06 Windows開発インストーラー
 
 
