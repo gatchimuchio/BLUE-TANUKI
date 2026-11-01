@@ -352,6 +352,22 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
     ].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v3") {
+    return [
+      "保存済みfile.write作成結果です。J/M receiptを照合済みです。本文は返していません。現在のファイル状態は再読込していません。",
+      `対象: ${JSON.stringify(projection.path)}`,
+      `書込byte数: ${projection.bytes_written}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    ].join("\n");
+  }
+  if (projection.schema_version === "operation-plan-saved-result-return.v4") {
+    return [
+      "保存済みfile.delete実行報告です。J/M receiptを照合済みです。これは削除時点の報告で、現在の対象不存在は保証しません。",
+      `対象: ${JSON.stringify(projection.path)}`,
+      `削除報告: ${projection.deleted ? "あり" : "なし"}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,

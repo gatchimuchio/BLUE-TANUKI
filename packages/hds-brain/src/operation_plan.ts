@@ -128,6 +128,18 @@ export type OperationPlanSavedResultReturnProjection =
     readonly path: string;
     readonly replacements: number;
     readonly bytes_written: number;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v3";
+    readonly operation: "file.write";
+    readonly path: string;
+    readonly bytes_written: number;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v4";
+    readonly operation: "file.delete";
+    readonly path: string;
+    readonly deleted: true;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -3074,7 +3086,7 @@ export class OperationPlanLedger {
       return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
     } catch { return false; }
   }
-  /** Read only the owner's current, M-receipted file.search result; this never reruns the action or grants authority. */
+  /** Read only the owner's current, M-receipted result summary; this never reruns the action or grants authority. */
   inspectSavedResultForReturn(control: OperationPlanResultReturnControl, caller: InboundRequest): OperationPlanSavedResultReturnProjection {
     if (this.recoveryRefreshPending) {
       throw new Error("plan_recovery_refresh_hold");
@@ -3095,7 +3107,8 @@ export class OperationPlanLedger {
     const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
     const binding = bindings.at(-1);
     if (bindings.length !== 1 || !binding || binding.status !== "verified" || binding.operation !== step.operation ||
-        (step.operation !== "file.search" && step.operation !== "file.edit") ||
+        (step.operation !== "file.search" && step.operation !== "file.edit" &&
+          step.operation !== "file.write" && step.operation !== "file.delete") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
     const results = plan.results.filter((result) => result.plan_id === current.plan.plan_id &&
@@ -3117,6 +3130,63 @@ export class OperationPlanLedger {
       throw new Error("plan_saved_result_output_invalid");
     }
     const output = parsedOutput as Record<string, unknown>;
+    if (step.operation === "file.write" || step.operation === "file.delete") {
+      const parameterValue = OperationJsonValueSchema.parse(step.parameters);
+      if (!parameterValue || typeof parameterValue !== "object" || Array.isArray(parameterValue) ||
+          !hasConnectedPlanTarget(step) || committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          committedObservation.operation !== step.operation || committedObservation.result_digest !== binding.result_digest ||
+          committedObservation.plan_binding_status !== "verified" || committedObservation.plan_validation_status !== "matched" ||
+          committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.adoption_status !== "observation_only" || committedObservation.used_as_world_truth !== false ||
+          committedObservation.used_for_authority !== false || committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_observation_mismatch");
+      }
+      const parameters = parameterValue as Record<string, unknown>;
+      const path = parameters.path;
+      if (typeof path !== "string") throw new Error("plan_saved_result_output_invalid");
+      if (step.operation === "file.write") {
+        const content = parameters.content;
+        const maxBytes = parameters.max_bytes ?? 256_000;
+        if (typeof content !== "string" || !Number.isSafeInteger(maxBytes) || (maxBytes as number) < 1 ||
+            (maxBytes as number) > 1_000_000 || Buffer.byteLength(content, "utf8") > (maxBytes as number) ||
+            Object.keys(output).sort().join(",") !== "bytes_written,mode,path,sandbox_root" ||
+            output.mode !== "create" || output.path !== path || typeof output.sandbox_root !== "string" ||
+            output.sandbox_root.length === 0 || !Number.isSafeInteger(output.bytes_written) ||
+            output.bytes_written !== Buffer.byteLength(content, "utf8")) {
+          throw new Error("plan_saved_result_output_invalid");
+        }
+        if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+          throw new Error("plan_saved_result_state_changed");
+        }
+        return {
+          schema_version: "operation-plan-saved-result-return.v3",
+          plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+          step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+          result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+          memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
+          observed_at_ms: result.observed_at_ms, operation: "file.write", path,
+          bytes_written: output.bytes_written as number,
+          used_as_world_truth: false, used_for_authority: false, may_execute: false,
+        };
+      }
+      if (Object.keys(output).sort().join(",") !== "deleted" || output.deleted !== true) {
+        throw new Error("plan_saved_result_output_invalid");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v4",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
+        observed_at_ms: result.observed_at_ms, operation: "file.delete", path, deleted: true,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
     if (step.operation === "file.edit") {
       const parameterValue = OperationJsonValueSchema.parse(step.parameters);
       if (!parameterValue || typeof parameterValue !== "object" || Array.isArray(parameterValue) ||
