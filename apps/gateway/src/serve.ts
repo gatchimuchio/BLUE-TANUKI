@@ -4582,11 +4582,24 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!pending || !isGmailWriteContentReviewCommand(pending.command) ||
         executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command)) return null;
-    const review = projectGmailWriteContentReview(pending.command, pending.command_digest);
+    const hasAttachments = pending.command.type === "tool_call" && pending.command.payload.tool_name === "gmail.write" &&
+      Array.isArray(pending.command.payload.arguments.attachments) &&
+      pending.command.payload.arguments.attachments.length > 0;
+    let verifiedSnapshot: Parameters<typeof projectGmailWriteContentReview>[2];
+    if (hasAttachments) {
+      try {
+        const snapshot = await executor.inspectCommandContentReview(pending.command);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_write_content") return null;
+        verifiedSnapshot = snapshot;
+      } catch {
+        return null;
+      }
+    }
+    const review = projectGmailWriteContentReview(pending.command, pending.command_digest, verifiedSnapshot);
     if (!review) return null;
     pendingApprovals.set(command_id, {
       ...pending,
-      content_review_digest: review.command_digest,
+      content_review_digest: review.review_digest ?? review.command_digest,
     });
     return review;
   }
@@ -4712,14 +4725,26 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         return "unavailable";
       }
     }
-    return validateGmailWriteContentReview(
-      pending.command,
-      pending.command_digest,
-      executorCommandDigest(pending.command) === pending.command_digest &&
-        hds.operationPlanCommandIsCurrent(pending.command),
-      pending.content_review_digest,
-      content_review_digest,
-    );
+    if (isGmailWriteContentReviewCommand(pending.command)) {
+      const current = executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command);
+      const hasAttachments = pending.command.type === "tool_call" && pending.command.payload.tool_name === "gmail.write" &&
+        Array.isArray(pending.command.payload.arguments.attachments) &&
+        pending.command.payload.arguments.attachments.length > 0;
+      if (hasAttachments) {
+        try {
+          const snapshot = await executor.inspectCommandContentReview(pending.command);
+          if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_write_content") return "unavailable";
+          return validateGmailWriteContentReview(pending.command, pending.command_digest, current,
+            pending.content_review_digest, content_review_digest, snapshot);
+        } catch {
+          return "unavailable";
+        }
+      }
+      return validateGmailWriteContentReview(pending.command, pending.command_digest, current,
+        pending.content_review_digest, content_review_digest);
+    }
+    return "not_required";
   }
 
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {

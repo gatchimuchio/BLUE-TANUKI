@@ -8,13 +8,13 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
+## 現在のBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
 
-CLI/WebChatの明示形式`/organize-drive file_id=<exact-id>`だけをDrive本文読取に使う。取得は既存`google.drive.read`のhigh/L3 final review・Approval Gate・HDS authorityを通し、単一text/plain blob、version／size／canDownload／sharing情報、strict UTF-8、Content-Type、取得前後file state一致を要求する。整理入力は12,000 bytes以下に制限し、欠損・oversize・部分本文・版差異はCへ渡さず固定安全応答にする。検索、Google Workspace native document、binary、trash済みは拒否する。
+Ownerが選択した単一の`gmail.read view=attachment_identity`結果だけをsourceとする。message／attachment／part identity・filename・MIME・size・SHA-256を厳密に再照合し、添付bytesは5 MiB以下でprocess memory内だけに保持する。bytesをLLM、plan、command、履歴、audit、Control Center projectionへ渡さず、content reviewは本文・宛先と添付filename／MIME／size／SHA-256をno-store表示する。Owner選択・結果・期限をHDSの同一plan／task／revisionへ結び、添付1件を完全一致で束ねた未実行`gmail.write draft.create`候補だけを許す。`message.send`、`draft.send`、別添付、添付内容由来の目的・宛先・権限推定は拒否する。
 
-検証済み本文は既存の一時文書整理consumerだけへ渡し、Cのtool実行を認めず、資料内指示は目的・権限・承認にならない。HDS memory retrieval/capture/session履歴を抑止し、complete history／output audit／通常のtool表示はdigestとprojectionのみとする。raw bodyの直接表示、generic include_content、Operation Plan経由を拒否する。保留や失敗はfail-closedとし、実provider／credential／Drive read／Gateway process／browserは使わない。
+添付sourceはreview取得時と作用直前に再取得し、metadata・size・SHA-256の変化、欠損、重複、上限超過、期限切れ、plan／command不一致はfail-closedにする。添付付き`message.send`／`draft.send`、plan選択なしの添付候補を拒否する。既存high／L3 final review・Approval Gate・HDS authority・Brokerを維持し、今回のbatchでは実provider／credential／Gmail読取／draft作成／送信／Gateway process／browserを実行しない。内容bytesの保存、raw内容の表示、二つ目のauthority pathを追加しない。
 
-完了境界：@blue-tanuki/core typecheck／build、pnpm docs:check、git diff --check。test suite／Gateway process／provider／credential／外部読取は実施しない。成功したBUILD_BATCHはmainへ直接commit／pushし、remote／local SHA・clean状態を照合する。F04.01全体、F04全体、製品全体SYSTEM_SHAPED／BUILD_COVEREDへ昇格しない。
+完了境界：Protocol／HDS-BRAIN／core／WebChat／Gatewayのworkspace typecheckと変更package build、生成Control Center script構文、`pnpm docs:check`、`git diff --check`。test suite／Gateway process／provider／credential／外部作用は実施しない。成功したBUILD_BATCHは`main`へ直接commit／pushし、remote／local SHA・clean状態と二世代復旧refを照合する。F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOへ昇格しない。
 
 ## 前回完了済みBUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 

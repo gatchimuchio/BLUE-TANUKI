@@ -28,6 +28,33 @@ export interface GmailDraftContentReview {
   request_payload_digest: string;
 }
 
+export interface GmailAttachmentContentReview {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  content_sha256: string;
+  used_for_authority: false;
+}
+
+/** No-store projection of an exact outgoing Gmail message and its source attachment bytes. */
+export interface GmailWriteContentReview {
+  kind: "gmail_write_content";
+  operation: "gmail.write.draft.create" | "gmail.write.message.send";
+  from?: string;
+  to: string;
+  cc?: string;
+  bcc?: string;
+  reply_to?: string;
+  subject: string;
+  body_text: string;
+  attachments?: readonly GmailAttachmentContentReview[];
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** Exact plan-bound replacement diff revealed only through the authenticated owner-review endpoint. */
 export interface FileEditDiffContentReview {
   path: string;
@@ -307,7 +334,7 @@ export interface GoogleDriveFileTrashContentReview {
   may_execute: false;
 }
 
-export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
+export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
   GoogleDrivePermissionCreateContentReview | GoogleDriveFileTrashContentReview;

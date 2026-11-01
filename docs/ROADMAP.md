@@ -18,13 +18,11 @@
 
 2026-11-01、単一fileのbounded `file.read` previewに開始行指定を接続した。exact sandbox相対pathと空queryの組合せに限定し、開始行は1〜1,000,000、返却は最大5行のまま。候補の開始行をOperation Plan validationへ結び、返却行番号の連続性を照合する。保存済みOwner結果にも開始行を表示し、既存のroot／file version確認、Approval／Broker、M receipt、非権威projectionを維持する。実装初回のworkspace `pnpm typecheck`／`pnpm build`はPASS。controller promptの最終追記後はHDS no-emit typecheck／package build、`pnpm docs:check`、`git diff --check`がPASS。workspace typecheck再実行は`apps/gateway/dist/active_task_execution_registry.js`の削除時`EBUSY`でclean段階停止。test／Gateway process／browser／provider／外部作用はNOT_RUN。STATUS=WIRED（型・build・実consumer接続の静的確認）、runtime未確認。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。
 
-## 現在のBUILD_BATCH — F04.01 Drive本文の限定取得と非信頼consumer
+## 現在のBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
 
-明示CLI/WebChat `/organize-drive file_id=<exact-id>`から既存`google.drive.read`へ接続し、単一file本文を12,000 bytes以下で検証した後、既存の一時文書整理consumerからCへ渡す経路をコード接続した。検索・Google Workspace native document・binary・trash済み・version／size／canDownload／sharing欠落対象、generic include_content、Operation Plan経由は拒否する。本文は直接表示せず、HDS memory retrieval/capture/session履歴、complete history、output auditへの本文保存を抑止し、失敗時は固定安全応答にする。既存high/L3 final review・Approval Gate・HDS authorityを維持する。
+OwnerがUIで明示選択した、期限内の`gmail.read view=attachment_identity`結果だけをsourceにする。message／attachment／part identity・filename・MIME・size・SHA-256を厳密再照合し、最大5 MiBの添付bytesはprocess memoryだけで取得する。C、plan、command、履歴、audit、Control Center projectionにはbytesを渡さず、no-store L3 reviewへ宛先・件名・本文とfilename／MIME／size／SHA-256を表示する。HDSは選択結果を同一task／plan／revisionへ再照合し、添付一件のidentity・content hashが完全一致する未実行`gmail.write draft.create`候補だけを受理する。添付付き`message.send`／`draft.send`、Owner選択なし、別添付、内容からの目的・宛先・権限推定は拒否する。
 
-Protocol／HDS-BRAIN／core／Gatewayのtypecheck・build、`pnpm docs:check`、`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。test suite、Gateway process、provider／credential／外部Drive読取はNOT_RUN。F04.01の完全成立、実consumer runtime、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
-
-返却はprovider contentを不信データとして明示し、資料内指示は目的変更・権限・承認の根拠にならない。tool.call high/L3 final review、Approval Gate、HDS authorityを維持する。新しいM writeやhistory raw contentを追加せず、provider履歴は既存のdigest projectionを維持する。実provider／credential／Gateway process／外部Drive readはNOT_RUN。F04.01全体とF04全体はBUILD_GAPのまま。
+Review時と作用直前にsource bytesを再取得し、metadata・size・SHA-256の変化、欠損、期限切れ、重複、上限超過、plan／command不一致はfail-closedにする。Protocol／HDS-BRAIN／core／WebChat／Gatewayのworkspace typecheckと全workspace buildはPASS。最終Control Center修正後のWebChat依存buildと生成script構文、`pnpm docs:check`、`git diff --check`もPASS。test suite／Gateway process／browser／provider／資格情報／外部作用はNOT_RUN。STATUS=`WIRED`（コード接続、runtime未確認）。F02.02全体、実provider、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
 
 ## 前回BUILD_BATCH — F04.02 Drive所有ファイルの可逆ゴミ箱移動
 

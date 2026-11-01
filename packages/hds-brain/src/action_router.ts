@@ -30,6 +30,7 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - tool:github.read resource=issues owner=gatchimuchio repo=blue-tanuki max_results=5
  *   - tool:github.write operation=issue.create owner=gatchimuchio repo=blue-tanuki title="hello" body="world"
  *   - tool:gmail.read query="newer_than:1d" max_results=5 include_attachment_metadata=true
+ *   - tool:gmail.read view=attachment_identity message_id=<id> attachment_id=<id> part_id=<id> filename=<name> mime_type=<type> size_bytes=<bytes>
  *   - tool:google.calendar.read calendar_id=primary days=1 max_results=5 view=events
  *   - tool:google.calendar.read calendar_id=primary days=1 view=freebusy time_zone=Asia/Tokyo
  *   - tool:google.drive.read query="trashed=false" max_results=5

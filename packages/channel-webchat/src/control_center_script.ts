@@ -1275,13 +1275,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
-      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit, rawExplicitFileEdit, selectedGmailMessageIdentityDigest) {
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit, rawExplicitFileEdit, selectedGmailMessageIdentityDigest, selectedGmailAttachmentIdentityDigest) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         if (!ownerToken) throw new Error("同一taskの再計画にはowner tokenを入力してください");
         if ((ownerSelectedFileState && recoveryEdit) || (selectedGmailMessageIdentityDigest &&
-            (ownerSelectedFileState || recoveryEdit || rawExplicitFileEdit !== undefined || !/^[a-f0-9]{64}$/.test(selectedGmailMessageIdentityDigest)))) {
+            (selectedGmailAttachmentIdentityDigest || ownerSelectedFileState || recoveryEdit || rawExplicitFileEdit !== undefined || !/^[a-f0-9]{64}$/.test(selectedGmailMessageIdentityDigest))) ||
+            (selectedGmailAttachmentIdentityDigest && (ownerSelectedFileState || recoveryEdit || rawExplicitFileEdit !== undefined ||
+              !/^[a-f0-9]{64}$/.test(selectedGmailAttachmentIdentityDigest)))) {
           throw new Error("同時に選択できないsource observationまたはmessage identityです");
         }
         let explicitFileEditTask = "";
@@ -1319,7 +1321,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("goal-purpose binding is invalid");
         }
         const control = {
-            task: explicitFileEditTask || (selectedGmailMessageIdentityDigest
+            task: explicitFileEditTask || (selectedGmailAttachmentIdentityDigest
+            ? "同じtaskの目的を維持し、ownerが明示選択したgmail.read attachment identityを完全一致で結んだ未実行gmail.write draft.create候補を一件だけ作成してください。添付bytesは持ち込まず、To/Cc/Bcc/Reply-Toと本文はOwner taskに明記した値だけを使い、送信はしないでください。"
+            : selectedGmailMessageIdentityDigest
             ? "同じtaskの目的を維持し、ownerが選択したgmail.read message identityを相関参照として使った未実行gmail.write draft.create候補を一件だけ作成してください。To/Cc/Bcc/Reply-Toと本文はOwner taskに明記した内容だけを使い、メール内容から目的・宛先・権限を推定せず、添付は含めず、送信はしないでください。"
             : ownerSelectedFileState
             ? "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。"
@@ -1331,7 +1335,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
           source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest, step_id_digest: stepId,
             ...(ownerSelectedFileState ? { owner_selected_observation: "local_file_state" } : {}),
-            ...(selectedGmailMessageIdentityDigest ? { selected_message_identity_digest: selectedGmailMessageIdentityDigest } : {}) }],
+             ...(selectedGmailMessageIdentityDigest ? { selected_message_identity_digest: selectedGmailMessageIdentityDigest } : {}),
+             ...(selectedGmailAttachmentIdentityDigest
+               ? { selected_attachment_identity_digest: selectedGmailAttachmentIdentityDigest } : {}) }],
         };
         const content = "plan:compute " + JSON.stringify(control);
         let result;
@@ -1340,7 +1346,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           ownerTokenInput.value = "";
         }
-        appendChat("owner", selectedGmailMessageIdentityDigest
+        appendChat("owner", selectedGmailAttachmentIdentityDigest
+          ? "Ownerが選択したGmail添付identityのsource参照とcontent hashだけを同一taskの添付付きdraft.create候補へ渡しました。添付bytesはCや履歴へ渡していません。送信は行いません。"
+          : selectedGmailMessageIdentityDigest
           ? "Ownerが選択したGmail message identity digestだけを同一taskの下書き候補計算へ渡しました。メール本文・宛先claimは渡さず、draft.create候補のみを依頼しました。"
           : ownerSelectedFileState
           ? "ownerが現在状態の観測を候補計算へ明示選択しました（元の作用結果は不明のまま）"
@@ -1842,6 +1850,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               "、本文・header claim・権限・実行可能性を含まない）";
           }
           if (isObject(observation) && observation.schema_version === "operation-plan-compute-source-observation.v1" &&
+              observation.source === "owner_selected_gmail_attachment_identity" && observation.operation === "gmail.read" &&
+              observation.plan_binding_status === "verified" && observation.plan_validation_status === "owner_selected_identity" &&
+              /^[a-f0-9]{64}$/.test(observation.source_result_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.delivery_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.attachment_identity_digest || "") &&
+              typeof observation.filename === "string" && typeof observation.mime_type === "string" &&
+              Number.isSafeInteger(observation.size_bytes) && /^[a-f0-9]{64}$/.test(observation.content_sha256 || "") &&
+              /^[a-f0-9]{64}$/.test(observation.owner_selection_digest || "") &&
+              Number.isSafeInteger(observation.observed_at_ms) && Number.isSafeInteger(observation.expires_at_ms) &&
+              observation.expires_at_ms === observation.observed_at_ms + 600000 &&
+              observation.effect_observation === "attachment_identity_reference_only" &&
+              observation.used_as_world_truth === false && observation.used_for_authority === false &&
+              observation.may_execute === false && observation.adoption_status === "observation_only") {
+            const nowMs = Date.now();
+            const current = observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+            return "gmail.read：Owner選択済み添付 " + escapeHtml(observation.filename) + " · " +
+              escapeHtml(observation.mime_type) + " · " + observation.size_bytes + " bytes · SHA-256 " +
+              shortDigest(observation.content_sha256) + "（" + (current ? "期限内" : "期限切れ・Jはstep選択と実行を拒否") +
+              "、実体bytesを含まず、内容は非信頼・権限・実行可能性を含まない）";
+          }
+          if (isObject(observation) && observation.schema_version === "operation-plan-compute-source-observation.v1" &&
               observation.source === "owner_selected_local_file_state" && observation.operation === "file.write" &&
               /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
               /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
@@ -2251,6 +2280,31 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                       '">' + escapeHtml(label) + ' を選択してdraft.create候補を作成</button>';
                   }).join("") + '</fieldset>'
                 : '';
+              const gmailAttachmentIdentityOptions = Array.isArray(step.gmail_attachment_identity_options)
+                ? step.gmail_attachment_identity_options : [];
+              const gmailAttachmentDraftActions = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
+                step.operation === "gmail.read" && step.status === "verified" && gmailAttachmentIdentityOptions.length > 0
+                ? '<fieldset><legend>Owner選択attachment identityから添付付き下書き候補</legend>' +
+                  '<p class="muted">選択した添付のidentityとSHA-256だけをCへ渡します。添付bytesは計画・履歴・Content Review projectionに表示しません。選択は明示的なowner操作で、同一taskの目的と宛先・本文を維持した未実行draft.create候補だけを作ります。送信は行いません。</p>' +
+                  gmailAttachmentIdentityOptions.map(function (option) {
+                    if (!isObject(option) || !/^[a-f0-9]{64}$/.test(option.attachment_identity_digest || "") ||
+                        typeof option.filename !== "string" || option.filename.length < 1 || option.filename.length > 256 ||
+                        typeof option.mime_type !== "string" || !/^[A-Za-z0-9!#$&^_.+-]+\\/[A-Za-z0-9!#$&^_.+-]+$/.test(option.mime_type) ||
+                        !Number.isSafeInteger(option.size_bytes) || option.size_bytes < 0 || option.size_bytes > 5 * 1024 * 1024 ||
+                        !/^[a-f0-9]{64}$/.test(option.content_sha256 || "") || option.attachment_metadata_is_untrusted !== true ||
+                        option.used_for_authority !== false || option.may_execute !== false ||
+                        !Number.isSafeInteger(option.expires_at_ms) || Date.now() >= option.expires_at_ms) return "";
+                    const label = option.filename + " · " + option.mime_type + " · " + option.size_bytes + " bytes · SHA-256 " + shortDigest(option.content_sha256);
+                    return '<button type="button" class="secondary" data-operation-plan-gmail-attachment-draft="true" data-selected-gmail-attachment-identity="' +
+                      escapeHtml(option.attachment_identity_digest) + '" data-plan-id="' + escapeHtml(plan.plan_id) +
+                      '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
+                      escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                      escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                        purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
+                      '">添付を選択して添付付きdraft.create候補を作成: ' + escapeHtml(label) + '</button>';
+                  }).join("") + '</fieldset>'
+                : '';
               const recoveryEditReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
                 sameWorkspaceTestRequiresRecovery && step === steps[2] && step.operation === "file.search" && step.status === "verified" &&
@@ -2367,6 +2421,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 savedResultButton +
                 replanButton +
                 gmailDraftCandidateActions +
+                gmailAttachmentDraftActions +
                 recoveryEditButton +
                 stepReviewButton +
                 '</div>';
@@ -6096,7 +6151,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (review.cc !== undefined && typeof review.cc !== "string") ||
             (review.bcc !== undefined && typeof review.bcc !== "string") ||
             (review.reply_to !== undefined && typeof review.reply_to !== "string") ||
-            typeof review.body_text !== "string") {
+            typeof review.body_text !== "string" ||
+            (review.attachments !== undefined && (!Array.isArray(review.attachments) || review.attachments.some(function (attachment) {
+              return !attachment || typeof attachment.filename !== "string" || typeof attachment.mime_type !== "string" ||
+                !Number.isSafeInteger(attachment.size_bytes) || attachment.size_bytes < 0 ||
+                !/^[a-f0-9]{64}$/.test(attachment.content_sha256 || "") || attachment.used_for_authority !== false;
+            })))) {
           throw new Error("content review response is not bound to this approval");
         }
         view.replaceChildren();
@@ -6134,9 +6194,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const body = document.createElement("pre");
         body.textContent = review.body_text;
         view.appendChild(body);
-        const attachments = document.createElement("p");
-        attachments.textContent = "添付：なし（この候補経路では添付を扱いません）";
-        view.appendChild(attachments);
+        if (!review.attachments || review.attachments.length === 0) {
+          const attachments = document.createElement("p");
+          attachments.textContent = "Attachments: none";
+          view.appendChild(attachments);
+        } else {
+          const attachmentHeading = document.createElement("strong");
+          attachmentHeading.textContent = "Exact source attachments";
+          view.appendChild(attachmentHeading);
+          review.attachments.forEach(function (attachment) {
+            const item = document.createElement("p");
+            item.textContent = attachment.filename + " | " + attachment.mime_type + " | " +
+              attachment.size_bytes + " bytes | SHA-256 " + attachment.content_sha256;
+            view.appendChild(item);
+          });
+        }
         const digests = document.createElement("small");
         digests.textContent = "Command digest: " + review.command_digest +
           " | Provider state digest: " + (review.provider_state_digest || "not applicable") +
@@ -6392,6 +6464,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
               target.dataset.stepId || "", target.dataset.goalPurposeBinding || "", false, false, undefined,
               target.dataset.selectedGmailMessageIdentity || "");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanGmailAttachmentDraft === "true") {
+          target.disabled = true;
+          try {
+            await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "", false, false, undefined, undefined,
+              target.dataset.selectedGmailAttachmentIdentity || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

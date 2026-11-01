@@ -180,6 +180,13 @@ export interface WebChatGmailApprovalContentReview {
   from?: string;
   subject: string;
   body_text: string;
+  attachments?: readonly {
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    content_sha256: string;
+    used_for_authority: false;
+  }[];
   used_for_authority: false;
 }
 

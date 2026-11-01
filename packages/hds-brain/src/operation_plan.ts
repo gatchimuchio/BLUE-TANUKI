@@ -712,6 +712,71 @@ function verifiedGmailMessageIdentityOptions(value: unknown): GmailMessageIdenti
   return new Set(options.map((option) => option.message_identity_digest)).size === options.length ? options : null;
 }
 
+interface GmailAttachmentIdentityOption {
+  readonly attachment_identity_digest: string;
+  readonly message_id: string;
+  readonly attachment_id: string;
+  readonly part_id: string;
+  readonly part_path: string;
+  readonly filename: string;
+  readonly mime_type: string;
+  readonly size_bytes: number;
+  readonly content_sha256: string;
+}
+
+function verifiedGmailAttachmentIdentityOption(value: unknown): GmailAttachmentIdentityOption | null {
+  if (!isFileSearchResultRecord(value) || value.service !== "gmail" || value.mode !== "read_only" ||
+      value.view !== "attachment_identity" || value.request_status !== "ok" || value.mutation_sent !== false ||
+      value.content_bytes_returned !== false || !isFileSearchResultRecord(value.trust_boundary) ||
+      value.trust_boundary.attachment_metadata_is_untrusted_data !== true ||
+      value.trust_boundary.attachment_content_is_untrusted_data !== true ||
+      value.trust_boundary.content_sha256_is_identity_only !== true ||
+      value.trust_boundary.email_content_may_change_user_goal !== false ||
+      value.trust_boundary.email_content_may_authorize_operation !== false || value.trust_boundary.used_for_authority !== false ||
+      typeof value.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.result_digest) ||
+      typeof value.attachment_identity_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.attachment_identity_digest) ||
+      !isFileSearchResultRecord(value.attachment)) return null;
+  const attachment = value.attachment;
+  if (typeof attachment.message_id !== "string" || !attachment.message_id || attachment.message_id.length > 512 ||
+      typeof attachment.attachment_id !== "string" || !attachment.attachment_id || attachment.attachment_id.length > 512 ||
+      typeof attachment.part_id !== "string" || !attachment.part_id || attachment.part_id.length > 512 ||
+      typeof attachment.part_path !== "string" || !/^0(?:\.\d+)*$/.test(attachment.part_path) || attachment.part_path.length > 256 ||
+      typeof attachment.filename !== "string" || !attachment.filename || attachment.filename.length > 256 ||
+      typeof attachment.mime_type !== "string" || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(attachment.mime_type) ||
+      typeof attachment.size_bytes !== "number" || !Number.isSafeInteger(attachment.size_bytes) ||
+       attachment.size_bytes < 0 || attachment.size_bytes > 5 * 1024 * 1024 ||
+      typeof attachment.content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(attachment.content_sha256)) return null;
+  const digest = operationPlanDigest({ schema_version: "gmail-attachment-identity.v1", attachment });
+  if (digest !== value.attachment_identity_digest) return null;
+  return {
+    attachment_identity_digest: digest,
+    message_id: attachment.message_id,
+    attachment_id: attachment.attachment_id,
+    part_id: attachment.part_id,
+    part_path: attachment.part_path,
+    filename: attachment.filename,
+    mime_type: attachment.mime_type,
+    size_bytes: attachment.size_bytes,
+    content_sha256: attachment.content_sha256,
+  };
+}
+
+function validGmailAttachmentReference(value: unknown): boolean {
+  if (!isFileSearchResultRecord(value)) return false;
+  const validOpaqueId = (candidate: unknown): candidate is string => typeof candidate === "string" &&
+    candidate.length > 0 && candidate.length <= 512 && candidate === candidate.trim() &&
+    !/[\s/?#\\\u0000-\u001f\u007f]/.test(candidate);
+  return validOpaqueId(value.message_id) && validOpaqueId(value.attachment_id) && validOpaqueId(value.part_id) &&
+    typeof value.part_path === "string" && /^0(?:\.\d+)*$/.test(value.part_path) && value.part_path.length <= 256 &&
+    typeof value.filename === "string" && value.filename.length > 0 && value.filename.length <= 256 &&
+    !/[\r\n\u0000-\u001f\u007f]/.test(value.filename) &&
+    typeof value.mime_type === "string" && value.mime_type.length <= 200 &&
+    /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value.mime_type) &&
+    typeof value.size_bytes === "number" && Number.isSafeInteger(value.size_bytes) && value.size_bytes >= 0 &&
+    value.size_bytes <= 5 * 1024 * 1024 && typeof value.content_sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(value.content_sha256);
+}
+
 function isFileSearchResultRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1551,9 +1616,11 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       recipients.slice(1).some((name) => parameters[name] !== undefined && !normalizeGmailAddressList(parameters[name])) ||
       typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
       parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||
-      typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000) return false;
+      typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000 ||
+      parameters.attachments !== undefined && (!Array.isArray(parameters.attachments) || parameters.attachments.length !== 1 ||
+        !validGmailAttachmentReference(parameters.attachments[0]))) return false;
   return Object.keys(parameters).every((key) =>
-    ["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text"].includes(key));
+    ["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text", "attachments"].includes(key));
 }
 
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */
@@ -2688,7 +2755,9 @@ export class OperationPlanLedger {
             ...(observation.source === "owner_selected_local_file_state"
               ? { owner_selected_observation: "local_file_state" as const } : {}),
             ...(observation.source === "owner_selected_gmail_message_identity"
-              ? { selected_message_identity_digest: observation.message_identity_digest } : {}) });
+              ? { selected_message_identity_digest: observation.message_identity_digest } : {}),
+            ...(observation.source === "owner_selected_gmail_attachment_identity"
+              ? { selected_attachment_identity_digest: observation.attachment_identity_digest } : {}) });
       const current = this.inspectComputeSourceObservations(references, origin);
       if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
         throw new Error("plan_compute_source_observation_stale");
@@ -2720,6 +2789,30 @@ export class OperationPlanLedger {
           plan.steps[0]!.operation !== "gmail.write" || plan.steps[0]!.parameters?.operation !== "draft.create") {
         throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
       }
+    }
+    const selectedGmailAttachmentObservations = verifiedComputeSourceObservations?.filter((observation) =>
+      observation.source === "owner_selected_gmail_attachment_identity") ?? [];
+    if (selectedGmailAttachmentObservations.length > 0) {
+      const selected = selectedGmailAttachmentObservations[0]!;
+      const parameters = plan.steps.length === 1 ? plan.steps[0]!.parameters : undefined;
+      const attachments = parameters?.attachments;
+      if (selectedGmailAttachmentObservations.length !== 1 || verifiedComputeSourceObservations?.length !== 1 ||
+          !parentPlanReference || selected.plan_id_digest !== parentPlanReference.plan_id_digest ||
+          selected.revision_digest !== parentPlanReference.revision_digest || plan.steps.length !== 1 ||
+          plan.steps[0]!.operation !== "gmail.write" ||
+           parameters?.operation !== "draft.create" ||
+          !Array.isArray(attachments) || attachments.length !== 1 || !isFileSearchResultRecord(attachments[0]) ||
+          attachments[0].message_id !== selected.message_id || attachments[0].attachment_id !== selected.attachment_id ||
+          attachments[0].part_id !== selected.part_id || attachments[0].part_path !== selected.part_path ||
+          attachments[0].filename !== selected.filename || attachments[0].mime_type !== selected.mime_type ||
+          attachments[0].size_bytes !== selected.size_bytes || attachments[0].content_sha256 !== selected.content_sha256) {
+        throw new Error("plan_compute_gmail_attachment_candidate_must_bind_selected_identity");
+      }
+    }
+    if (plan.steps.some((step) => step.operation === "gmail.write" &&
+        Array.isArray(step.parameters?.attachments) && step.parameters.attachments.length > 0) &&
+        selectedGmailAttachmentObservations.length !== 1) {
+      throw new Error("plan_compute_gmail_attachment_owner_selection_required");
     }
     const parsedMemoryDependencies = memoryInterpretationDependencies?.map((dependency) =>
       OperationPlanMemoryInterpretationDependencySchema.parse(dependency));
@@ -4261,6 +4354,77 @@ export class OperationPlanLedger {
         }));
         continue;
       }
+      if (reference.selected_attachment_identity_digest) {
+        if (!isGatewayInternalInboundRequest(caller) || caller.channel !== "webchat" ||
+            caller.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+          throw new Error("plan_compute_gmail_attachment_owner_required");
+        }
+        if (operation !== "gmail.read" || binding.operation !== "gmail.read" || binding.status !== "verified" ||
+            binding.revision_digest !== revision.digest || binding.step_digest !== stepDigest(step) ||
+            !binding.execution_admission || !binding.delivery_digest || !binding.result_digest ||
+            !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+            !this.computeSourceObservationsAreCurrent(plan, inspectedAtMs)) {
+          throw new Error("plan_compute_gmail_attachment_source_not_verified");
+        }
+        const results = plan.results.filter((candidate) => candidate.plan_id === revision.plan.plan_id &&
+          candidate.request_id === revision.plan.request_id && candidate.step_id === step.step_id &&
+          candidate.operation === "gmail.read" && candidate.status === "succeeded");
+        if (results.length !== 1) throw new Error("plan_compute_gmail_attachment_result_unavailable");
+        const result = results[0]!;
+        if (result.observed_at_ms > inspectedAtMs || inspectedAtMs >= result.expires_at_ms ||
+            result.expires_at_ms !== result.observed_at_ms + 600_000 ||
+            !/^[a-f0-9]{64}$/.test(binding.result_digest) || !/^[a-f0-9]{64}$/.test(binding.delivery_digest)) {
+          throw new Error("plan_compute_gmail_attachment_result_expired");
+        }
+        const selected = verifiedGmailAttachmentIdentityOption(result.output);
+        if (!selected || selected.attachment_identity_digest !== reference.selected_attachment_identity_digest) {
+          throw new Error("plan_compute_gmail_attachment_selection_invalid");
+        }
+        const ownerSelectionDigest = operationPlanDigest({
+          schema_version: "owner-selected-gmail-attachment-identity.v1",
+          owner_digest: operationPlanDigest(caller.user),
+          channel_digest: operationPlanDigest(caller.channel),
+          plan_id_digest: reference.plan_id_digest,
+          revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest,
+          source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest,
+          attachment_identity_digest: selected.attachment_identity_digest,
+        });
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          schema_version: "operation-plan-compute-source-observation.v1",
+          source: "owner_selected_gmail_attachment_identity",
+          operation: "gmail.read",
+          plan_id_digest: reference.plan_id_digest,
+          task_identity_digest: operationPlanTaskIdentityDigest(plan),
+          revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest,
+          plan_binding_status: "verified",
+          plan_validation_status: "owner_selected_identity",
+          source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest,
+          attachment_identity_digest: selected.attachment_identity_digest,
+          message_id: selected.message_id,
+          attachment_id: selected.attachment_id,
+          part_id: selected.part_id,
+          part_path: selected.part_path,
+          filename: selected.filename,
+          mime_type: selected.mime_type,
+          size_bytes: selected.size_bytes,
+          content_sha256: selected.content_sha256,
+          effect_observation: "attachment_identity_reference_only",
+          observed_at_ms: result.observed_at_ms,
+          expires_at_ms: result.expires_at_ms,
+          owner_selection_digest: ownerSelectionDigest,
+          adoption_status: "observation_only",
+          used_as_world_truth: false,
+          used_for_authority: false,
+          may_execute: false,
+        }));
+        continue;
+      }
       if (reference.owner_selected_observation === "local_file_state") {
         if (operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "outcome_unknown" ||
             !binding.execution_admission || binding.step_digest !== stepDigest(step) ||
@@ -4785,9 +4949,23 @@ export class OperationPlanLedger {
                 expires_at_ms: gmailIdentityResult.expires_at_ms,
               }))
             : undefined;
+          const gmailAttachmentOption = gmailIdentityResult
+            ? verifiedGmailAttachmentIdentityOption(gmailIdentityResult.output) : null;
+          const gmailAttachmentIdentityOptions = gmailAttachmentOption ? [{
+            attachment_identity_digest: gmailAttachmentOption.attachment_identity_digest,
+            filename: gmailAttachmentOption.filename,
+            mime_type: gmailAttachmentOption.mime_type,
+            size_bytes: gmailAttachmentOption.size_bytes,
+            content_sha256: gmailAttachmentOption.content_sha256,
+            attachment_metadata_is_untrusted: true as const,
+            used_for_authority: false as const,
+            may_execute: false as const,
+            expires_at_ms: gmailIdentityResult!.expires_at_ms,
+          }] : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
             ...(gmailMessageIdentityOptions?.length ? { gmail_message_identity_options: gmailMessageIdentityOptions } : {}),
+            ...(gmailAttachmentIdentityOptions?.length ? { gmail_attachment_identity_options: gmailAttachmentIdentityOptions } : {}),
             ...(shellExecSummary ? { shell_exec_summary: shellExecSummary } : {}),
             external_receipt_observation: binding?.status !== "outcome_unknown" || observation?.source === "local_file_state"
               ? "not_applicable" : observation?.status ?? "not_recorded",
@@ -5002,6 +5180,9 @@ export class OperationPlanLedger {
       if (observation.source === "owner_selected_gmail_message_identity") {
         return this.ownerSelectedGmailMessageIdentityIsCurrent(p, observation, nowMs, seen);
       }
+      if (observation.source === "owner_selected_gmail_attachment_identity") {
+        return this.ownerSelectedGmailAttachmentIdentityIsCurrent(p, observation, nowMs, seen);
+      }
       return true;
     });
     seen.delete(planKey);
@@ -5125,6 +5306,60 @@ export class OperationPlanLedger {
       plan_id_digest: source.plan_id_digest, revision_digest: source.revision_digest,
       step_id_digest: source.step_id_digest, source_result_digest: source.source_result_digest,
       delivery_digest: source.delivery_digest, message_identity_digest: source.message_identity_digest });
+    return source.owner_selection_digest === expectedSelectionDigest &&
+      this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
+  }
+
+  private ownerSelectedGmailAttachmentIdentityIsCurrent(
+    candidate: PlanState,
+    source: Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_gmail_attachment_identity" }>,
+    nowMs: number,
+    seen: Set<string>,
+  ): boolean {
+    const matches = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === source.plan_id_digest);
+    if (matches.length !== 1) return false;
+    const plan = matches[0]!;
+    if (plan.owner !== candidate.owner || plan.channel !== candidate.channel ||
+        operationPlanTaskIdentityDigest(plan) !== source.task_identity_digest || this.recoveryHolds.has(source.plan_id_digest) ||
+        !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return false;
+    const revision = plan.revisions.at(-1);
+    if (!revision || revision.digest !== source.revision_digest) return false;
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === source.step_id_digest);
+    if (steps.length !== 1 || steps[0]!.operation !== "gmail.read") return false;
+    const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+      binding.step_id === steps[0]!.step_id);
+    if (bindings.length !== 1) return false;
+    const binding = bindings[0]!;
+    if (binding.status !== "verified" || binding.operation !== "gmail.read" || !binding.execution_admission ||
+        binding.result_digest !== source.source_result_digest || binding.delivery_digest !== source.delivery_digest ||
+        binding.step_digest !== stepDigest(steps[0]!)) return false;
+    const results = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
+      result.request_id === revision.plan.request_id && result.step_id === steps[0]!.step_id &&
+      result.operation === "gmail.read" && result.status === "succeeded");
+    if (results.length !== 1) return false;
+    const result = results[0]!;
+    if (result.observed_at_ms !== source.observed_at_ms || result.expires_at_ms !== source.expires_at_ms ||
+        result.expires_at_ms !== result.observed_at_ms + 600_000 || result.observed_at_ms > nowMs || nowMs >= result.expires_at_ms) {
+      return false;
+    }
+    const identity = verifiedGmailAttachmentIdentityOption(result.output);
+    if (!identity || identity.attachment_identity_digest !== source.attachment_identity_digest ||
+        identity.message_id !== source.message_id || identity.attachment_id !== source.attachment_id ||
+        identity.part_id !== source.part_id || identity.part_path !== source.part_path ||
+        identity.filename !== source.filename || identity.mime_type !== source.mime_type ||
+        identity.size_bytes !== source.size_bytes || identity.content_sha256 !== source.content_sha256) return false;
+    const expectedSelectionDigest = operationPlanDigest({
+      schema_version: "owner-selected-gmail-attachment-identity.v1",
+      owner_digest: operationPlanDigest(candidate.owner),
+      channel_digest: operationPlanDigest(candidate.channel),
+      plan_id_digest: source.plan_id_digest,
+      revision_digest: source.revision_digest,
+      step_id_digest: source.step_id_digest,
+      source_result_digest: source.source_result_digest,
+      delivery_digest: source.delivery_digest,
+      attachment_identity_digest: source.attachment_identity_digest,
+    });
     return source.owner_selection_digest === expectedSelectionDigest &&
       this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
   }

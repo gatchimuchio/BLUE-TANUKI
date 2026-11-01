@@ -983,12 +983,26 @@ export class Executor {
       }
       return review;
     }
-    if (command.payload.tool_name !== "gmail.write" || command.payload.arguments.operation !== "draft.send") return undefined;
+    if (command.payload.tool_name !== "gmail.write") return undefined;
+    const gmailOperation = command.payload.arguments.operation;
+    if (gmailOperation !== "draft.send" && gmailOperation !== "draft.create" && gmailOperation !== "message.send") return undefined;
     const tool = this.deps.tools.get("gmail.write");
     if (tool !== gmailWriteTool || !tool.inspect_content_review) {
       throw new Error("gmail.write content review requires the registered built-in adapter");
     }
-    const review = await tool.inspect_content_review(command.payload.arguments, env ? { env } : undefined);
+    const review = await tool.inspect_content_review(command.payload.arguments, {
+      ...(env ? { env } : {}),
+      command_digest: operationPlanDigest(command),
+    });
+    if (gmailOperation !== "draft.send") {
+      if (!("kind" in review) || review.kind !== "gmail_write_content" ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments) ||
+          !/^[a-f0-9]{64}$/.test(review.review_digest) || review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("gmail.write content review returned evidence for another command or attachment content");
+      }
+      return review;
+    }
     return "diff" in review ? undefined : review;
   }
 

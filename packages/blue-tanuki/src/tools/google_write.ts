@@ -14,14 +14,16 @@ import { GmailWriteTargetVersionObservationSchema, GoogleCalendarEventTargetObse
   type GoogleDriveUpdateTargetVersionObservation, type GoogleDrivePermissionCreateTargetVersionObservation,
   type GoogleDriveTrashTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, readGoogleCalendarEventTarget,
+import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, MAX_GMAIL_ATTACHMENT_BYTES,
+  readGmailAttachmentContent, readGoogleCalendarEventTarget,
   type GoogleCalendarEventTargetSnapshot } from "./google_read.js";
-import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type GoogleCalendarEventCreateContentReview,
+import { assertToolExecutionNotCancelled, type GmailAttachmentContentReview, type GmailDraftContentReview,
+  type GmailWriteContentReview, type GoogleCalendarEventCreateContentReview,
   type GoogleCalendarEventUpdateContentReview, type GoogleCalendarEventDeleteContentReview,
   type GoogleCalendarEventInviteContentReview, type GoogleDriveFileCreateContentReview,
   type GoogleDriveFileUpdateContentReview, type GoogleDrivePermissionCreateContentReview,
   type GoogleDriveFileTrashContentReview, type GoogleDrivePermissionReview,
-  type Tool, type ToolContext } from "./registry.js";
+  type Tool, type ToolContentReview, type ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -133,7 +135,25 @@ const DEFAULT_MAX_BYTES = 128_000;
 const MAX_MAX_BYTES = 512_000;
 const DEFAULT_MAX_CONTENT_BYTES = 64_000;
 const MAX_CONTENT_BYTES = 512_000;
+const MAX_GMAIL_WRITE_ATTACHMENTS = 5;
+const MAX_GMAIL_WRITE_ATTACHMENTS_TOTAL_BYTES = 8 * 1024 * 1024;
+const GMAIL_WRITE_ATTACHMENT_RESPONSE_MAX_BYTES = Math.ceil(MAX_GMAIL_ATTACHMENT_BYTES * 4 / 3) + 64_000;
 const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,webViewLink,parents,driveId,version,headRevisionId,shared,trashed";
+
+interface GmailWriteAttachmentReference {
+  message_id: string;
+  attachment_id: string;
+  part_id: string;
+  part_path: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  content_sha256: string;
+}
+
+interface GmailResolvedWriteAttachment extends GmailWriteAttachmentReference {
+  bytes: Buffer;
+}
 
 function stringArg(
   args: Record<string, unknown>,
@@ -566,11 +586,90 @@ function operationArg(args: Record<string, unknown>, allowed: readonly string[])
   return operation;
 }
 
+function gmailWriteAttachmentReferences(args: Record<string, unknown>): GmailWriteAttachmentReference[] {
+  if (args.attachments === undefined) return [];
+  if (!Array.isArray(args.attachments) || args.attachments.length > MAX_GMAIL_WRITE_ATTACHMENTS) {
+    throw new Error("gmail.write attachments must contain at most five exact source references; mutation_sent=false");
+  }
+  const allowed = new Set(["message_id", "attachment_id", "part_id", "part_path", "filename", "mime_type", "size_bytes", "content_sha256"]);
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  const references: GmailWriteAttachmentReference[] = [];
+  for (const raw of args.attachments) {
+    if (!isRecord(raw) || Object.keys(raw).some((key) => !allowed.has(key))) {
+      throw new Error("gmail.write attachment source reference is invalid; mutation_sent=false");
+    }
+    const messageId = stringArg(raw, "message_id")!;
+    const attachmentId = stringArg(raw, "attachment_id")!;
+    const partId = stringArg(raw, "part_id")!;
+    const partPath = stringArg(raw, "part_path")!;
+    const filename = stringArg(raw, "filename")!;
+    const mimeType = stringArg(raw, "mime_type")!;
+    const sizeBytes = raw.size_bytes;
+    const contentSha256 = stringArg(raw, "content_sha256")!;
+    const safeOpaqueId = (value: string): boolean => value.length <= 512 && value === value.trim() &&
+      !/[\s/?#\\\u0000-\u001f\u007f]/.test(value);
+    if (!safeOpaqueId(messageId) || !safeOpaqueId(attachmentId) || !safeOpaqueId(partId) || !/^0(?:\.\d+)*$/.test(partPath) ||
+        filename.length > 256 || /[\r\n\u0000-\u001f\u007f]/.test(filename) ||
+        mimeType.length > 200 || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mimeType) ||
+        typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0 ||
+        sizeBytes > MAX_GMAIL_ATTACHMENT_BYTES || !/^[a-f0-9]{64}$/.test(contentSha256)) {
+      throw new Error("gmail.write attachment source identity or content digest is invalid; mutation_sent=false");
+    }
+    const identityKey = `${messageId}\u0000${attachmentId}`;
+    if (seen.has(identityKey)) throw new Error("gmail.write duplicate attachment source is not allowed; mutation_sent=false");
+    seen.add(identityKey);
+    totalBytes += sizeBytes;
+    if (totalBytes > MAX_GMAIL_WRITE_ATTACHMENTS_TOTAL_BYTES) {
+      throw new Error("gmail.write attachments exceed the total size bound; mutation_sent=false");
+    }
+    references.push({ message_id: messageId, attachment_id: attachmentId, part_id: partId, part_path: partPath,
+      filename, mime_type: mimeType, size_bytes: sizeBytes, content_sha256: contentSha256 });
+  }
+  return references;
+}
+
+async function resolveGmailWriteAttachments(
+  args: Record<string, unknown>,
+  options: Pick<GoogleWriteOptions, "env" | "signal" | "request"> = {},
+  tokenOverride?: string,
+): Promise<GmailResolvedWriteAttachment[]> {
+  const references = gmailWriteAttachmentReferences(args);
+  if (references.length === 0) return [];
+  const token = tokenOverride ?? googleToken(options.env ?? process.env,
+    ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write attachment review");
+  const request = options.request ?? defaultGoogleWriteRequest;
+  const resolved: GmailResolvedWriteAttachment[] = [];
+  for (const reference of references) {
+    assertToolExecutionNotCancelled(options.signal, "gmail.write attachment review");
+    const content = await readGmailAttachmentContent(reference, {
+      env: options.env,
+      signal: options.signal,
+      token,
+      request: async (target, signal) => {
+        const response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path: target.path,
+          method: "GET", maxBytes: GMAIL_WRITE_ATTACHMENT_RESPONSE_MAX_BYTES, token }, signal);
+        if (response.body_utf8_valid === false) {
+          throw new Error("gmail attachment response encoding is invalid; content_read=false");
+        }
+        return { ...response, body_bytes: Buffer.from(response.body, "utf8") };
+      },
+    });
+    if (content.content_sha256 !== reference.content_sha256 || content.identity.part_path !== reference.part_path ||
+        content.identity.filename !== reference.filename || content.identity.mime_type !== reference.mime_type ||
+        content.identity.size_bytes !== reference.size_bytes || content.identity.part_id !== reference.part_id) {
+      throw new Error("gmail.write attachment content changed after identity resolution; mutation_sent=false");
+    }
+    resolved.push({ ...reference, bytes: Buffer.from(content.bytes) });
+  }
+  return resolved;
+}
+
 function assertSupportedGmailWriteArguments(args: Record<string, unknown>): string {
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
   const supported = operation === "draft.send"
     ? new Set(["operation", "draft_id", "max_bytes"])
-    : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "max_bytes"]);
+    : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "attachments", "max_bytes"]);
   const unsupported = Object.keys(args).filter((key) => !supported.has(key));
   if (unsupported.length > 0) {
     const attachmentArgument = unsupported.some((key) => /attachment|file/i.test(key));
@@ -581,6 +680,10 @@ function assertSupportedGmailWriteArguments(args: Record<string, unknown>): stri
   if (operation !== "draft.send" && args.body !== undefined && args.body_text !== undefined) {
     throw new Error("gmail.write body and body_text are ambiguous; request_sent=false; mutation_sent=false");
   }
+  if (operation !== "draft.create" && args.attachments !== undefined) {
+    throw new Error("gmail.write attachments are supported only for draft.create; request_sent=false; mutation_sent=false");
+  }
+  if (operation !== "draft.send") gmailWriteAttachmentReferences(args);
   return operation;
 }
 
@@ -623,16 +726,28 @@ function encodedSubject(value: string): string {
     : `=?UTF-8?B?${Buffer.from(safe, "utf8").toString("base64")}?=`;
 }
 
-function encodedMimeMessage(args: Record<string, unknown>): string {
+function base64MimeLines(bytes: Uint8Array): string {
+  const encoded = Buffer.from(bytes).toString("base64");
+  return encoded.match(/.{1,76}/g)?.join("\r\n") ?? "";
+}
+
+function encodedMimeFilename(filename: string): string {
+  const fallback = filename.replace(/[^\x20-\x7e]/g, "_").replace(/[\\";\r\n]/g, "_").slice(0, 120) || "attachment";
+  const extended = encodeURIComponent(filename).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `filename="${fallback}"; filename*=UTF-8''${extended}`;
+}
+
+function encodedMimeMessage(args: Record<string, unknown>, attachments: readonly GmailResolvedWriteAttachment[] = []): string {
   const to = safeAddressList(args, "to", true)!;
   const subject = encodedSubject(stringArg(args, "subject")!);
   const bodyText = stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "";
+  if (Buffer.byteLength(bodyText, "utf8") > MAX_CONTENT_BYTES) {
+    throw new Error("gmail.write body exceeds the content bound; mutation_sent=false");
+  }
   const headers = [
     `To: ${to}`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 8bit",
   ];
   const cc = safeAddressList(args, "cc");
   if (cc) headers.splice(1, 0, `Cc: ${safeHeaderValue(cc, "cc")}`);
@@ -642,7 +757,20 @@ function encodedMimeMessage(args: Record<string, unknown>): string {
   if (from) headers.unshift(`From: ${safeHeaderValue(from, "from")}`);
   const replyTo = safeAddressList(args, "reply_to");
   if (replyTo) headers.splice(headers.indexOf(`Subject: ${subject}`), 0, `Reply-To: ${replyTo}`);
-  return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${bodyText}`, "utf8").toString("base64url");
+  if (attachments.length === 0) {
+    headers.push('Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit");
+    return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${bodyText}`, "utf8").toString("base64url");
+  }
+  const boundary = `=_blue_tanuki_${gmailWriteRequestPayloadDigest(args).slice(0, 40)}`;
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [
+    `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64MimeLines(Buffer.from(bodyText, "utf8"))}`,
+    ...attachments.map((attachment) =>
+      `--${boundary}\r\nContent-Type: ${attachment.mime_type}\r\nContent-Transfer-Encoding: base64\r\n` +
+      `Content-Disposition: attachment; ${encodedMimeFilename(attachment.filename)}\r\n\r\n${base64MimeLines(attachment.bytes)}`),
+  ];
+  parts.push(`--${boundary}--`);
+  return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${parts.join("\r\n")}`, "utf8").toString("base64url");
 }
 
 function googleResultSummary(data: unknown, fallback: Record<string, unknown> = {}): Record<string, unknown> {
@@ -698,6 +826,7 @@ export async function invokeGmailWrite(
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write");
   const sendRequest = opts.request ?? defaultGoogleWriteRequest;
+  const attachments = operation === "draft.send" ? [] : await resolveGmailWriteAttachments(args, { ...opts, env }, token);
 
   let draftSnapshot: GmailDraftSnapshot | undefined;
   if (operation === "draft.send") {
@@ -713,7 +842,7 @@ export async function invokeGmailWrite(
       throw new Error("gmail.write draft.send content or provider version changed; request_sent=false; mutation_sent=false");
     }
   }
-  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw);
+  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, attachments);
   const { path, body } = builtRequest;
 
   const target = {
@@ -732,16 +861,28 @@ export async function invokeGmailWrite(
   return mutationResult("gmail.write", "gmail", operation, target, response);
 }
 
-/** Gmailのdraft.create / message.sendで送る正確なrequest body digest。資格情報の読取り・送信は行わない。 */
+/** Gmailのdraft.create / message.send intentを、本文と添付source digestまで含めて結ぶ。 */
 export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): string {
   const operation = assertSupportedGmailWriteArguments(args);
   if (operation === "draft.send") throw new Error("gmail_target_version_operation_unsupported");
-  const request = gmailWriteRequest(args);
-  if ((operation === "draft.create" && request.path !== "/gmail/v1/users/me/drafts") ||
-      (operation === "message.send" && request.path !== "/gmail/v1/users/me/messages/send")) {
-    throw new Error("gmail_target_version_operation_unsupported");
+  const subject = encodedSubject(stringArg(args, "subject")!);
+  const bodyText = stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "";
+  if (Buffer.byteLength(bodyText, "utf8") > MAX_CONTENT_BYTES) {
+    throw new Error("gmail.write body exceeds the content bound; mutation_sent=false");
   }
-  return createHash("sha256").update(request.body, "utf8").digest("hex");
+  const from = stringArg(args, "from", false);
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.gmail-write-intent.v2",
+    operation,
+    to: safeAddressList(args, "to", true),
+    cc: safeAddressList(args, "cc") ?? null,
+    bcc: safeAddressList(args, "bcc") ?? null,
+    reply_to: safeAddressList(args, "reply_to") ?? null,
+    from: from ? safeHeaderValue(from, "from") : null,
+    subject,
+    body_text: bodyText,
+    attachments: gmailWriteAttachmentReferences(args),
+  });
 }
 
 /** draft.sendの正確なrequest intentをdraft IDとprovider MIME digestで束ねる。MIME本文は保持しない。 */
@@ -821,10 +962,14 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
   return observation;
 }
 
-function gmailWriteRequest(args: Record<string, unknown>, draftRaw?: string): { path: string; body: string } {
+function gmailWriteRequest(
+  args: Record<string, unknown>,
+  draftRaw?: string,
+  attachments: readonly GmailResolvedWriteAttachment[] = [],
+): { path: string; body: string } {
   const operation = assertSupportedGmailWriteArguments(args);
-  if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args) } }) };
-  if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args) }) };
+  if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args, attachments) } }) };
+  if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args, attachments) }) };
   if (!draftRaw) throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");
   return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({
     id: stringArg(args, "draft_id")!, message: { raw: draftRaw },
@@ -3245,12 +3390,56 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         env: resolverOptions.env ? { ...resolverOptions.env } : options.env,
       });
     },
-    async inspect_content_review(args, reviewOptions = {}): Promise<GmailDraftContentReview> {
-      const snapshot = await readGmailDraftSnapshot(args, {
+    async inspect_content_review(args, reviewOptions = {}): Promise<ToolContentReview> {
+      const operation = assertSupportedGmailWriteArguments(args);
+      if (operation === "draft.send") {
+        const snapshot = await readGmailDraftSnapshot(args, {
+          ...options,
+          ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
+        });
+        return snapshot.content_review;
+      }
+      const commandDigest = reviewOptions.command_digest;
+      if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+        throw new Error("gmail.write content review requires the exact command digest; content_review=unavailable");
+      }
+      const effectiveOptions: GoogleWriteOptions = {
         ...options,
         ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
+      };
+      const resolved = await resolveGmailWriteAttachments(args, effectiveOptions);
+      const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+      const attachments: GmailAttachmentContentReview[] = resolved.map((attachment) => ({
+        filename: attachment.filename,
+        mime_type: attachment.mime_type,
+        size_bytes: attachment.size_bytes,
+        content_sha256: attachment.content_sha256,
+        used_for_authority: false,
+      }));
+      const reviewDigest = operationPlanDigest({
+        schema_version: "blue-tanuki.gmail-write-content-review.v2",
+        command_digest: commandDigest,
+        request_payload_digest: requestPayloadDigest,
+        attachment_content_digests: attachments.map((attachment) => attachment.content_sha256),
       });
-      return snapshot.content_review;
+      const review: GmailWriteContentReview = {
+        kind: "gmail_write_content",
+        operation: operation === "draft.create" ? "gmail.write.draft.create" : "gmail.write.message.send",
+        to: safeAddressList(args, "to", true)!,
+        ...(safeAddressList(args, "cc") ? { cc: safeAddressList(args, "cc") } : {}),
+        ...(safeAddressList(args, "bcc") ? { bcc: safeAddressList(args, "bcc") } : {}),
+        ...(safeAddressList(args, "reply_to") ? { reply_to: safeAddressList(args, "reply_to") } : {}),
+        ...(stringArg(args, "from", false) ? { from: stringArg(args, "from", false) } : {}),
+        subject: stringArg(args, "subject")!,
+        body_text: stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "",
+        ...(attachments.length > 0 ? { attachments } : {}),
+        request_payload_digest: requestPayloadDigest,
+        command_digest: commandDigest,
+        review_digest: reviewDigest,
+        used_for_authority: false,
+        may_execute: false,
+      };
+      return review;
     },
     async invoke(args, context): Promise<unknown> {
       if (typeof context.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(context.idempotency_key) ||

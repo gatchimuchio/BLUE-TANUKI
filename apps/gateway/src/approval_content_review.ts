@@ -16,10 +16,13 @@ const GMAIL_WRITE_ARGUMENTS = new Set([
   "subject",
   "body_text",
   "body",
+  "attachments",
   "max_bytes",
 ]);
 
-export function isGmailWriteContentReviewCommand(command: ExecuteCommand): boolean {
+export function isGmailWriteContentReviewCommand(
+  command: ExecuteCommand,
+): boolean {
   if (command.type !== "tool_call" || command.payload.tool_name !== "gmail.write" ||
       typeof command.payload.arguments.operation !== "string") return false;
   const operation = command.payload.arguments.operation.trim().toLowerCase();
@@ -49,7 +52,7 @@ export function projectGmailDraftSendContentReview(
     provider_raw_digest: string;
     request_payload_digest: string;
   },
-): WebChatApprovalContentReview | null {
+): (WebChatApprovalContentReview & { operation: "gmail.write.draft.send" }) | null {
   if (!isGmailDraftSendReviewCommand(command) || !/^[a-f0-9]{64}$/.test(commandDigest) ||
       !/^[a-f0-9]{64}$/.test(snapshot.provider_state_digest) ||
       !/^[a-f0-9]{64}$/.test(snapshot.provider_raw_digest) ||
@@ -100,7 +103,19 @@ export function validateGmailDraftSendContentReview(
 export function projectGmailWriteContentReview(
   command: ExecuteCommand,
   commandDigest: string,
-): WebChatApprovalContentReview | null {
+  verifiedSnapshot?: {
+    kind: "gmail_write_content";
+    command_digest: string;
+    request_payload_digest: string;
+    review_digest: string;
+    attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
+      used_for_authority: false }[];
+    used_for_authority: false;
+    may_execute: false;
+  },
+): (WebChatApprovalContentReview & {
+  operation: "gmail.write.draft.create" | "gmail.write.message.send";
+}) | null {
   if (command.type !== "tool_call" || !isGmailWriteContentReviewCommand(command) ||
       !/^[a-f0-9]{64}$/.test(commandDigest)) return null;
   const args = command.payload.arguments;
@@ -127,10 +142,36 @@ export function projectGmailWriteContentReview(
   const bodyText = preferredBody ?? alternateBody ?? "";
 
   try {
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const attachmentReferences = Array.isArray(args.attachments) ? args.attachments : [];
+    let attachmentProjection: {
+      kind?: "gmail_write_content";
+      review_digest?: string;
+      attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
+        used_for_authority: false }[];
+    } = {};
+    if (attachmentReferences.length > 0) {
+      if (!verifiedSnapshot || verifiedSnapshot.kind !== "gmail_write_content" ||
+          verifiedSnapshot.command_digest !== commandDigest || verifiedSnapshot.request_payload_digest !== requestPayloadDigest ||
+          verifiedSnapshot.used_for_authority !== false || verifiedSnapshot.may_execute !== false ||
+          !/^[a-f0-9]{64}$/.test(verifiedSnapshot.review_digest) ||
+          !Array.isArray(verifiedSnapshot.attachments) || verifiedSnapshot.attachments.length !== attachmentReferences.length) return null;
+      const refs = attachmentReferences as Record<string, unknown>[];
+      const sameExactAttachments = verifiedSnapshot.attachments.every((attachment, index) => {
+        const ref = refs[index];
+        return ref && attachment.filename === ref.filename && attachment.mime_type === ref.mime_type &&
+          attachment.size_bytes === ref.size_bytes && attachment.content_sha256 === ref.content_sha256 &&
+          attachment.used_for_authority === false;
+      });
+      if (!sameExactAttachments) return null;
+      attachmentProjection = { kind: "gmail_write_content", review_digest: verifiedSnapshot.review_digest,
+        attachments: verifiedSnapshot.attachments };
+    }
     return {
       command_id: command.id,
       command_digest: commandDigest,
-      request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      ...attachmentProjection,
+      request_payload_digest: requestPayloadDigest,
       operation: operation === "draft.create" ? "gmail.write.draft.create" : "gmail.write.message.send",
       to,
       ...(cc ? { cc } : {}),
@@ -152,12 +193,15 @@ export function validateGmailWriteContentReview(
   current: boolean,
   revealedDigest: string | undefined,
   submittedDigest: string | undefined,
+  verifiedSnapshot?: Parameters<typeof projectGmailWriteContentReview>[2],
 ): WebChatApprovalContentReviewValidation {
   if (!isGmailWriteContentReviewCommand(command)) return "not_required";
   if (!current || !/^[a-f0-9]{64}$/.test(commandDigest)) return "stale";
-  if (!projectGmailWriteContentReview(command, commandDigest)) return "unavailable";
+  const projection = projectGmailWriteContentReview(command, commandDigest, verifiedSnapshot);
+  if (!projection) return "unavailable";
   if (!revealedDigest || !submittedDigest) return "required";
-  return revealedDigest === commandDigest && submittedDigest === commandDigest
+  const expectedDigest = projection.review_digest ?? commandDigest;
+  return revealedDigest === expectedDigest && submittedDigest === expectedDigest
     ? "valid"
     : "stale";
 }
