@@ -303,6 +303,33 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   } else if (editTaskDetails && parentContexts.length === 0 && observationContexts.length === 0) {
     kind = "edit";
     fileDetails = editTaskDetails;
+  } else if (editTaskDetails && parentContexts.length === 1 && observationContexts.length === 1) {
+    const parent = parseContextTail(parentContexts[0]!.content);
+    const observationPayload = parseContextTail(observationContexts[0]!.content);
+    const observations = observationPayload?.observations;
+    const observation = Array.isArray(observations) && observations.length === 1
+      ? OperationPlanComputeSourceObservationSchema.safeParse(observations[0])
+      : undefined;
+    const parentFileTask = typeof parent?.original_task === "string"
+      ? parseSyntheticExactFileReadTask(parent.original_task) ?? parseSyntheticSearchTask(parent.original_task)
+      : undefined;
+    if (!parent || !parentFileTask?.file_path || !isDigest(parent.task_identity_digest) ||
+        !isDigest(parent.parent_plan_id_digest) || !isDigest(parent.parent_revision_digest) || !observation?.success ||
+        editTaskDetails.file_path !== parentFileTask.file_path ||
+        observation.data.source !== "verified_file_search_result" || observation.data.operation !== "file.search" ||
+        observation.data.plan_id_digest !== parent.parent_plan_id_digest ||
+        observation.data.revision_digest !== parent.parent_revision_digest ||
+        observation.data.task_identity_digest !== parent.task_identity_digest ||
+        observation.data.plan_binding_status !== "verified" || observation.data.plan_validation_status !== "matched" ||
+        observation.data.match_count < 1 || observation.data.match_count > 5 || observation.data.visited_files !== 1 ||
+        observation.data.search_completeness !== "unknown" || observation.data.expires_at_ms <= Date.now() ||
+        observation.data.adoption_status !== "observation_only" || observation.data.used_as_world_truth !== false ||
+        observation.data.used_for_authority !== false || observation.data.may_execute !== false) {
+      return undefined;
+    }
+    kind = "edit";
+    fileDetails = editTaskDetails;
+    parentPlanIdDigest = parent.parent_plan_id_digest;
   } else if (editVerifyTaskDetails && parentContexts.length === 0 && observationContexts.length === 0) {
     kind = "edit_verify";
     fileDetails = editVerifyTaskDetails;
@@ -401,8 +428,9 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
 
 /**
  * Local development-only C fixture. It can propose bounded file create/search/delete
- * tasks, an owner-reviewed edit -> isolated summary-only test -> reread flow, and
- * an explicit same-task inverse-edit candidate after a failed test observation;
+ * tasks, an owner-specified same-task edit after a verified exact-file read/search observation,
+ * an owner-reviewed edit -> isolated summary-only test -> reread flow, and an
+ * explicit same-task inverse-edit candidate after a failed test observation;
  * HDS, Approval Gate, Broker, Executor, and the file sandbox keep their existing
  * authority and execution responsibilities.
  */

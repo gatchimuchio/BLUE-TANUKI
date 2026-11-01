@@ -1275,12 +1275,31 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
-      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit) {
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit, rawExplicitFileEdit) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         if (!ownerToken) throw new Error("同一taskの再計画にはowner tokenを入力してください");
         if (ownerSelectedFileState && recoveryEdit) throw new Error("file-state observation and test recovery cannot be combined");
+        let explicitFileEditTask = "";
+        if (rawExplicitFileEdit !== undefined) {
+          if (ownerSelectedFileState || recoveryEdit || !isObject(rawExplicitFileEdit)) {
+            throw new Error("明示編集候補の入力が無効です");
+          }
+          const filePath = typeof rawExplicitFileEdit.path === "string" ? rawExplicitFileEdit.path.trim() : "";
+          const editSearch = typeof rawExplicitFileEdit.search === "string" ? rawExplicitFileEdit.search : "";
+          const editReplace = typeof rawExplicitFileEdit.replace === "string" ? rawExplicitFileEdit.replace : "";
+          const emptyReplacementConfirmed = rawExplicitFileEdit.emptyReplacementConfirmed === true;
+          if (!filePath || filePath.length > 512 || !editSearch || editSearch.length > 2_000 ||
+              editSearch === editReplace ||
+              editReplace.length > 2_000 || (editReplace.length === 0 && !emptyReplacementConfirmed) ||
+              (editReplace.length > 0 && emptyReplacementConfirmed)) {
+            throw new Error("相対path・置換前・置換後を明示してください。置換後を空にする場合は専用確認を選んでください");
+          }
+          explicitFileEditTask = "sandbox内の指定した相対パスのテキストファイルで、指定文字列を一回だけ置換してください。\\n編集JSON: " +
+            JSON.stringify({ "相対パス": filePath, "置換前": editSearch, "置換後": editReplace });
+          if (explicitFileEditTask.length > 20_000) throw new Error("編集候補の入力が上限を超えています");
+        }
         const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
         if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
           throw new Error("current plan and verified step digests are unavailable");
@@ -1292,11 +1311,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("goal-purpose binding is invalid");
         }
         const control = {
-          task: ownerSelectedFileState
+          task: explicitFileEditTask || (ownerSelectedFileState
             ? "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。"
             : recoveryEdit
               ? "同じtaskのsame-workspace test失敗を受け、ownerが現在状態を確認した上で、新しい逆編集候補だけを作成してください。未実行candidateとし、編集の自動復元やowner承認なしの作用は行わないでください。"
-              : "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
+              : "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください."),
           goal_purpose_binding: { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
             purpose_digest: binding.purpose_digest },
           parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
@@ -1314,7 +1333,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ? "ownerが現在状態の観測を候補計算へ明示選択しました（元の作用結果は不明のまま）"
           : recoveryEdit
             ? "test失敗後の現在状態をもとに、未実行の逆編集候補を依頼しました"
-            : "同一taskの検証済み結果に基づく再計画を依頼しました");
+            : explicitFileEditTask
+              ? "ownerが相対pathと置換内容を明示した同一taskの未実行file.edit候補を依頼しました"
+              : "同一taskの検証済み結果に基づく再計画を依頼しました");
         appendChat("accepted", result.request_id || "HDSへ未実行の次候補計画を依頼しました", result.request_id);
       }
 
@@ -2132,6 +2153,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 localFileState.memory_status === "receipt_confirmed" && localFileState.used_for_authority === false &&
                 localFileState.raw_receipt_exposed === false && /^[a-f0-9]{64}$/.test(localFileState.evidence_digest || "") &&
                 /^[a-f0-9]{64}$/.test(localFileState.target_identity_digest || "");
+              const explicitFileEditGroup = replanSourceReady && step.operation === "file.search"
+                ? '<fieldset><legend>この結果に続くfile.edit候補（任意）</legend>' +
+                  '<label>sandbox相対path<input type="text" data-operation-plan-edit-path="' + escapeHtml(step.step_id) +
+                  '" maxlength="512" aria-label="編集対象のsandbox相対path"></label>' +
+                  '<label>置換前の完全一致文字列<textarea data-operation-plan-edit-search="' + escapeHtml(step.step_id) +
+                  '" maxlength="2000" rows="2" aria-label="置換前の完全一致文字列"></textarea></label>' +
+                  '<label>置換後の文字列<textarea data-operation-plan-edit-replace="' + escapeHtml(step.step_id) +
+                  '" maxlength="2000" rows="2" aria-label="置換後の文字列"></textarea></label>' +
+                  '<label><input type="checkbox" data-operation-plan-edit-empty-replacement="' + escapeHtml(step.step_id) +
+                  '">置換後を空にする（対象文字列の削除）</label>' +
+                  '<button type="button" class="secondary" data-operation-plan-explicit-file-edit="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
+                  '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                  escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                    purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
+                  '">明示した内容で未実行file.edit候補を作成</button>' +
+                  '<p class="muted">保存済み検索結果本文は自動添付しません。選択観測はdigest／件数の要約です。対象pathと置換内容はこの依頼に明示してください。候補は未実行で、実差分確認・L3 Approval・Broker判定が別途必要です。</p></fieldset>'
+                : '';
               const replanButton = replanSourceReady || ownerSelectedFileStateReady
                 ? '<button type="button" class="secondary" data-operation-plan-replan="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
@@ -2142,7 +2181,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   (ownerSelectedFileStateReady ? '現在状態を明示選択して候補を再計算' : '検証済み結果から同一taskを再計画') + '</button>' +
                   '<p class="muted">' + (ownerSelectedFileStateReady
                     ? 'Gatewayの永続実行receiptをJのcommand／epoch／taskへ再照合し、digest-onlyの現在状態をownerがC候補の文脈として選びます。元のfile.writeは結果不明のままです。次候補は未実行で、選択後もJのstep審査と必要なowner Approval／Broker判定が必要です。'
-                    : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>'
+                    : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>' +
+                  explicitFileEditGroup
                 : '';
               const recoveryEditReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
@@ -5375,6 +5415,40 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await replyToOperationPlanWait(target.dataset.planId || "", target.dataset.revisionDigest || "",
               responseInput?.value || "");
             if (responseInput) responseInput.value = "";
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanExplicitFileEdit === "true") {
+          target.disabled = true;
+          const container = target.closest(".trace-item");
+          const stepId = target.dataset.stepId || "";
+          const findStepField = function (attribute) {
+            return container
+              ? Array.from(container.querySelectorAll("[" + attribute + "]"))
+                .find((input) => input.getAttribute(attribute) === stepId)
+              : undefined;
+          };
+          const pathInput = findStepField("data-operation-plan-edit-path");
+          const searchInput = findStepField("data-operation-plan-edit-search");
+          const replaceInput = findStepField("data-operation-plan-edit-replace");
+          const emptyReplacementInput = findStepField("data-operation-plan-edit-empty-replacement");
+          const editRequest = {
+            path: pathInput?.value || "",
+            search: searchInput?.value || "",
+            replace: replaceInput?.value || "",
+            emptyReplacementConfirmed: emptyReplacementInput?.checked === true,
+          };
+          try {
+            await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              stepId, target.dataset.goalPurposeBinding || "", false, false, editRequest);
+            if (pathInput) pathInput.value = "";
+            if (searchInput) searchInput.value = "";
+            if (replaceInput) replaceInput.value = "";
+            if (emptyReplacementInput) emptyReplacementInput.checked = false;
           } catch (error) {
             appendChat("error", error.message);
           } finally {

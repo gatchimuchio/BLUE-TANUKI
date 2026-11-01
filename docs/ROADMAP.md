@@ -38,6 +38,8 @@
 
 2026-11-01の前batchでは、Tasksのowner task受付状態からrequest ID一致plan、同一`task_identity_digest`の計画件数、依頼一致plan stepのM receipt状態を既存の非権威Runtime projectionで表示する接続を追加した。WebChat対象テスト1件、package typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。表示上限・step省略・不正bindingは未確認とし、完了や権限へ昇格しない。E2E-01全体と製品全体BUILDは未成立。
 
+2026-11-01、verified `file.search`結果からownerがsandbox相対path・置換前後を明示し、同一taskの未実行`file.edit`候補を作るControl Center consumerとsynthetic C受け口を接続した。保存済み検索本文を自動添付せず、選択observationはdigest／件数のみとする。synthetic Cは親のexact `file.read`またはpath-bound `file.search` path、現行plan／revision／task identity、期限内のverified observationとの一致を候補生成前に確認する。core／WebChat／HDS no-emit typecheckと生成script構文解析はPASS。build／test／Gateway process／browser／providerはNOT_RUNのためruntime未確認。次consumerは実差分のowner確認から既存L3 Approval／Broker、receipt／M、結果返信まで。E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
 #### 2026-11-01 E2E-01 BUILD — sandbox内の単一ファイル検索
 
 `file.search`へsandbox内相対`file_path`を指定する経路を追加した。directory全体検索は従来どおり維持し、単一ファイル検索では1 MiB上限、symlink・path traversal拒否、承認時のpath digestと内容digest再照合を行う。これにより合成file.write後の同一task再計画が、sandbox内の他ファイル数に依存しない候補を作れる。Protocol／HDS-BRAIN／core（Windows isolation含む）／Gateway package buildとtypecheck、`git diff --check`はPASS。runtimeとtestはNOT_RUNのため`CODE_PRESENT`に留まり、E2E-01や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
