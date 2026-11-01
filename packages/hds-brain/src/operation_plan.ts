@@ -673,6 +673,36 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+interface GmailMessageIdentityOption {
+  readonly message_identity_digest: string;
+}
+
+/** Only bounded Gmail message identity fields can be selected as non-authority plan context. */
+function verifiedGmailMessageIdentityOptions(value: unknown): GmailMessageIdentityOption[] | null {
+  if (!isFileSearchResultRecord(value) || value.service !== "gmail" || value.mode !== "read_only" ||
+      value.request_status !== "ok" || value.mutation_sent !== false || value.truncated === true ||
+      !["complete_provider_scope", "partial"].includes(String(value.identity_coverage)) ||
+      !isFileSearchResultRecord(value.mailbox_identity) || value.mailbox_identity.human_owner_relationship !== "not_verified" ||
+      typeof value.result_digest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(value.result_digest) || !Array.isArray(value.messages) ||
+      value.messages.length === 0 || value.messages.length > 100) return null;
+  const options: GmailMessageIdentityOption[] = [];
+  for (const message of value.messages) {
+    if (!isFileSearchResultRecord(message) || typeof message.id !== "string" || message.id.length === 0 ||
+        typeof message.thread_id !== "string" || message.thread_id.length === 0 ||
+        message.truncated === true || !isFileSearchResultRecord(message.trust_boundary) ||
+        message.trust_boundary.message_headers_are_untrusted_data !== true ||
+        message.trust_boundary.email_content_may_change_user_goal !== false ||
+        message.trust_boundary.email_content_may_authorize_operation !== false ||
+        message.trust_boundary.used_for_authority !== false) return null;
+    options.push({
+      message_identity_digest: operationPlanDigest({ schema_version: "gmail-message-identity.v1",
+        mailbox_identity_digest: operationPlanDigest(value.mailbox_identity), message_id: message.id, thread_id: message.thread_id }),
+    });
+  }
+  return new Set(options.map((option) => option.message_identity_digest)).size === options.length ? options : null;
+}
+
 function isFileSearchResultRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2349,7 +2379,9 @@ export class OperationPlanLedger {
           : { plan_id_digest: observation.plan_id_digest, revision_digest: observation.revision_digest,
             step_id_digest: observation.step_id_digest,
             ...(observation.source === "owner_selected_local_file_state"
-              ? { owner_selected_observation: "local_file_state" as const } : {}) });
+              ? { owner_selected_observation: "local_file_state" as const } : {}),
+            ...(observation.source === "owner_selected_gmail_message_identity"
+              ? { selected_message_identity_digest: observation.message_identity_digest } : {}) });
       const current = this.inspectComputeSourceObservations(references, origin);
       if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
         throw new Error("plan_compute_source_observation_stale");
@@ -2370,6 +2402,17 @@ export class OperationPlanLedger {
       }
       parentTaskIdentityDigest = parent.task_identity_digest;
       retainedTaskGoal = parent.goal;
+    }
+    const selectedGmailIdentityObservations = verifiedComputeSourceObservations?.filter((observation) =>
+      observation.source === "owner_selected_gmail_message_identity") ?? [];
+    if (selectedGmailIdentityObservations.length > 0) {
+      const selected = selectedGmailIdentityObservations[0]!;
+      if (selectedGmailIdentityObservations.length !== 1 || verifiedComputeSourceObservations?.length !== 1 ||
+          !parentPlanReference || selected.plan_id_digest !== parentPlanReference.plan_id_digest ||
+          selected.revision_digest !== parentPlanReference.revision_digest || plan.steps.length !== 1 ||
+          plan.steps[0]!.operation !== "gmail.write" || plan.steps[0]!.parameters?.operation !== "draft.create") {
+        throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
+      }
     }
     const parsedMemoryDependencies = memoryInterpretationDependencies?.map((dependency) =>
       OperationPlanMemoryInterpretationDependencySchema.parse(dependency));
@@ -3720,6 +3763,63 @@ export class OperationPlanLedger {
       if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
       const binding = bindings[0]!;
       const operation = step.operation;
+      if (reference.selected_message_identity_digest) {
+        if (!isGatewayInternalInboundRequest(caller) || caller.channel !== "webchat" ||
+            caller.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+          throw new Error("plan_compute_gmail_identity_owner_required");
+        }
+        if (operation !== "gmail.read" || binding.operation !== "gmail.read" || binding.status !== "verified" ||
+            binding.revision_digest !== revision.digest || binding.step_digest !== stepDigest(step) ||
+            !binding.execution_admission || !binding.delivery_digest || !binding.result_digest ||
+            !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+            !this.computeSourceObservationsAreCurrent(plan, inspectedAtMs)) {
+          throw new Error("plan_compute_gmail_identity_source_not_verified");
+        }
+        const results = plan.results.filter((candidate) => candidate.plan_id === revision.plan.plan_id &&
+          candidate.request_id === revision.plan.request_id && candidate.step_id === step.step_id &&
+          candidate.operation === "gmail.read" && candidate.status === "succeeded");
+        if (results.length !== 1) throw new Error("plan_compute_gmail_identity_result_unavailable");
+        const result = results[0]!;
+        if (result.observed_at_ms > inspectedAtMs || inspectedAtMs >= result.expires_at_ms ||
+            result.expires_at_ms !== result.observed_at_ms + 600_000 ||
+            !/^[a-f0-9]{64}$/.test(binding.result_digest) || !/^[a-f0-9]{64}$/.test(binding.delivery_digest)) {
+          throw new Error("plan_compute_gmail_identity_result_expired");
+        }
+        const identities = verifiedGmailMessageIdentityOptions(result.output);
+        const selected = identities?.filter((candidate) => candidate.message_identity_digest ===
+          reference.selected_message_identity_digest) ?? [];
+        if (selected.length !== 1) throw new Error("plan_compute_gmail_identity_selection_invalid");
+        const ownerSelectionDigest = operationPlanDigest({ schema_version: "owner-selected-gmail-message-identity.v1",
+          owner_digest: operationPlanDigest(caller.user), channel_digest: operationPlanDigest(caller.channel),
+          plan_id_digest: reference.plan_id_digest, revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest, source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest, message_identity_digest: reference.selected_message_identity_digest });
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          schema_version: "operation-plan-compute-source-observation.v1",
+          source: "owner_selected_gmail_message_identity",
+          operation: "gmail.read",
+          plan_id_digest: reference.plan_id_digest,
+          task_identity_digest: operationPlanTaskIdentityDigest(plan),
+          revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest,
+          plan_binding_status: "verified",
+          plan_validation_status: "owner_selected_identity",
+          source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest,
+          message_identity_digest: reference.selected_message_identity_digest,
+          effect_observation: "identity_reference_only",
+          observed_at_ms: result.observed_at_ms,
+          expires_at_ms: result.expires_at_ms,
+          owner_selection_digest: ownerSelectionDigest,
+          adoption_status: "observation_only",
+          used_as_world_truth: false,
+          used_for_authority: false,
+          may_execute: false,
+        }));
+        continue;
+      }
       if (reference.owner_selected_observation === "local_file_state") {
         if (operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "outcome_unknown" ||
             !binding.execution_admission || binding.step_digest !== stepDigest(step) ||
@@ -4211,8 +4311,28 @@ export class OperationPlanLedger {
           const observationMemory = observation?.source === "local_file_state"
             ? p.receipt_memory?.find((entry) => entry.evidence_digest === observation.evidence_digest)
             : undefined;
+          const gmailIdentityResult = step.operation === "gmail.read" && binding?.revision_digest === currentRevision.digest &&
+              binding.status === "verified" && binding.operation === "gmail.read" && !!binding.execution_admission &&
+              !!binding.delivery_digest && !!binding.result_digest && binding.step_digest === stepDigest(step) &&
+              this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) && this.computeSourceObservationsAreCurrent(p, Date.now()) &&
+              stepResults.length === 1 && stepResults[0]!.status === "succeeded" &&
+              stepResults[0]!.expires_at_ms === stepResults[0]!.observed_at_ms + 600_000 &&
+              stepResults[0]!.observed_at_ms <= Date.now() && Date.now() < stepResults[0]!.expires_at_ms
+            ? stepResults[0] : undefined;
+          const gmailMessageIdentityOptions = gmailIdentityResult
+            ? verifiedGmailMessageIdentityOptions(gmailIdentityResult.output)?.map((option, index) => ({
+                message_identity_digest: option.message_identity_digest,
+                display_index: index + 1,
+                mailbox_owner_relationship: "not_verified" as const,
+                message_headers_are_untrusted: true as const,
+                used_for_authority: false as const,
+                may_execute: false as const,
+                expires_at_ms: gmailIdentityResult.expires_at_ms,
+              }))
+            : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
+            ...(gmailMessageIdentityOptions?.length ? { gmail_message_identity_options: gmailMessageIdentityOptions } : {}),
             ...(shellExecSummary ? { shell_exec_summary: shellExecSummary } : {}),
             external_receipt_observation: binding?.status !== "outcome_unknown" || observation?.source === "local_file_state"
               ? "not_applicable" : observation?.status ?? "not_recorded",
@@ -4422,6 +4542,9 @@ export class OperationPlanLedger {
       if (observation.source === "owner_selected_local_file_state") {
         return this.ownerSelectedLocalFileStateIsCurrent(p, observation, nowMs, seen);
       }
+      if (observation.source === "owner_selected_gmail_message_identity") {
+        return this.ownerSelectedGmailMessageIdentityIsCurrent(p, observation, nowMs, seen);
+      }
       return true;
     });
     seen.delete(planKey);
@@ -4499,6 +4622,52 @@ export class OperationPlanLedger {
       observation_digest: source.observation_digest,
       decision: "use_as_non_authority_candidate_context",
     });
+    return source.owner_selection_digest === expectedSelectionDigest &&
+      this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
+  }
+
+  private ownerSelectedGmailMessageIdentityIsCurrent(
+    candidate: PlanState,
+    source: Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_gmail_message_identity" }>,
+    nowMs: number,
+    seen: Set<string>,
+  ): boolean {
+    const matches = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === source.plan_id_digest);
+    if (matches.length !== 1) return false;
+    const plan = matches[0]!;
+    if (plan.owner !== candidate.owner || plan.channel !== candidate.channel ||
+        operationPlanTaskIdentityDigest(plan) !== source.task_identity_digest || this.recoveryHolds.has(source.plan_id_digest) ||
+        !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return false;
+    const revision = plan.revisions.at(-1);
+    if (!revision || revision.digest !== source.revision_digest) return false;
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === source.step_id_digest);
+    if (steps.length !== 1 || steps[0]!.operation !== "gmail.read") return false;
+    const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+      binding.step_id === steps[0]!.step_id);
+    if (bindings.length !== 1) return false;
+    const binding = bindings[0]!;
+    if (binding.status !== "verified" || binding.operation !== "gmail.read" || !binding.execution_admission ||
+        binding.result_digest !== source.source_result_digest || binding.delivery_digest !== source.delivery_digest ||
+        binding.step_digest !== stepDigest(steps[0]!)) return false;
+    const results = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
+      result.request_id === revision.plan.request_id && result.step_id === steps[0]!.step_id &&
+      result.operation === "gmail.read" && result.status === "succeeded");
+    if (results.length !== 1) return false;
+    const result = results[0]!;
+    if (result.observed_at_ms !== source.observed_at_ms || result.expires_at_ms !== source.expires_at_ms ||
+        result.expires_at_ms !== result.observed_at_ms + 600_000 || result.observed_at_ms > nowMs || nowMs >= result.expires_at_ms) {
+      return false;
+    }
+    const identities = verifiedGmailMessageIdentityOptions(result.output);
+    if (identities?.filter((identity) => identity.message_identity_digest === source.message_identity_digest).length !== 1) {
+      return false;
+    }
+    const expectedSelectionDigest = operationPlanDigest({ schema_version: "owner-selected-gmail-message-identity.v1",
+      owner_digest: operationPlanDigest(candidate.owner), channel_digest: operationPlanDigest(candidate.channel),
+      plan_id_digest: source.plan_id_digest, revision_digest: source.revision_digest,
+      step_id_digest: source.step_id_digest, source_result_digest: source.source_result_digest,
+      delivery_digest: source.delivery_digest, message_identity_digest: source.message_identity_digest });
     return source.owner_selection_digest === expectedSelectionDigest &&
       this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
   }

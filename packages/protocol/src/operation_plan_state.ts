@@ -21,7 +21,13 @@ const OperationPlanPlanComputeSourceObservationReferenceSchema = z.object({
   step_id_digest: Digest,
   /** Owner explicitly selects a current local file-state observation; this does not resolve execution success. */
   owner_selected_observation: z.literal("local_file_state").optional(),
-}).strict();
+  /** Owner explicitly selects one identity from a verified Gmail read; the raw provider ID is never projected. */
+  selected_message_identity_digest: Digest.optional(),
+}).strict().superRefine((reference, context) => {
+  if (reference.owner_selected_observation && reference.selected_message_identity_digest) {
+    context.addIssue({ code: "custom", message: "conflicting_plan_source_selection" });
+  }
+});
 /** Explicit selection of one digest-only shell result report. */
 const OperationPlanShellResultComputeSourceObservationReferenceSchema = z.object({
   command_id_digest: Digest,
@@ -128,6 +134,28 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     memory_revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     memory_receipt_digest: Digest,
     observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    owner_selection_digest: Digest,
+    adoption_status: z.literal("observation_only"),
+    used_as_world_truth: z.literal(false),
+    used_for_authority: z.literal(false),
+    may_execute: z.literal(false),
+  }).strict(),
+  z.object({
+    schema_version: z.literal("operation-plan-compute-source-observation.v1"),
+    source: z.literal("owner_selected_gmail_message_identity"),
+    operation: z.literal("gmail.read"),
+    plan_id_digest: Digest,
+    task_identity_digest: Digest,
+    revision_digest: Digest,
+    step_id_digest: Digest,
+    plan_binding_status: z.literal("verified"),
+    plan_validation_status: z.literal("owner_selected_identity"),
+    source_result_digest: Digest,
+    delivery_digest: Digest,
+    message_identity_digest: Digest,
+    effect_observation: z.literal("identity_reference_only"),
+    observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     owner_selection_digest: Digest,
     adoption_status: z.literal("observation_only"),
     used_as_world_truth: z.literal(false),

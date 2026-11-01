@@ -469,8 +469,8 @@ export interface OwnerMeaningUpdateProposalReview {
   readonly reference_review: MeaningUpdateProposalReferenceReview;
   readonly source_observation_binding?: MeaningUpdateSourceObservationBinding;
   readonly source_observation_summary?: readonly {
-    readonly source: OperationPlanComputeSourceObservation["source"];
-    readonly operation: OperationPlanComputeSourceObservation["operation"];
+    readonly source: Exclude<OperationPlanComputeSourceObservation["source"], "owner_selected_gmail_message_identity">;
+    readonly operation: Exclude<OperationPlanComputeSourceObservation["operation"], "gmail.read">;
     readonly observed_at_ms: number;
     readonly record_digest: string;
     readonly memory_receipt_digest: string;
@@ -495,7 +495,9 @@ function computeSourceObservationReference(
     : { plan_id_digest: observation.plan_id_digest, revision_digest: observation.revision_digest,
       step_id_digest: observation.step_id_digest,
       ...(observation.source === "owner_selected_local_file_state"
-        ? { owner_selected_observation: "local_file_state" as const } : {}) };
+        ? { owner_selected_observation: "local_file_state" as const } : {}),
+      ...(observation.source === "owner_selected_gmail_message_identity"
+        ? { selected_message_identity_digest: observation.message_identity_digest } : {}) };
 }
 
 interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
@@ -1466,6 +1468,9 @@ ${planControl.question}`,
               "plan_compute_source_observation_expired",
               "plan_compute_source_observation_not_verified", "plan_compute_source_observation_result_unavailable",
               "plan_compute_source_observation_receipt_unavailable", "plan_compute_source_observation_record_mismatch",
+              "plan_compute_gmail_identity_source_not_verified", "plan_compute_gmail_identity_result_unavailable",
+              "plan_compute_gmail_identity_result_expired", "plan_compute_gmail_identity_selection_invalid",
+              "plan_compute_gmail_identity_owner_required",
               "plan_compute_shell_result_unavailable", "plan_compute_shell_result_not_verified",
               "plan_compute_shell_result_receipt_unavailable", "plan_compute_shell_result_record_mismatch",
               "plan_compute_source_citation_request_unavailable", "plan_compute_source_citation_actor_mismatch",
@@ -2211,6 +2216,11 @@ ${planControl.question}`,
   getMeaningUpdateProposalForOwnerReview(sourceCommandId: string): OwnerMeaningUpdateProposalReview | null {
     const pending = this.pendingMeaningUpdateCandidates.get(sourceCommandId);
     if (!pending) return null;
+    if (pending.source_observations?.some((observation) =>
+      observation.source === "owner_selected_gmail_message_identity")) {
+      this.pendingMeaningUpdateCandidates.delete(sourceCommandId);
+      return null;
+    }
     if (pending.source_observation_binding) {
       if (!pending.source_observations?.length || !pending.source_origin) {
         this.pendingMeaningUpdateCandidates.delete(sourceCommandId);
@@ -2243,14 +2253,15 @@ ${planControl.question}`,
       proposal: structuredClone(pending.proposal), proposal_digest: pending.proposal_digest, reference_review: review,
       ...(pending.source_observation_binding ? {
         source_observation_binding: structuredClone(pending.source_observation_binding),
-        source_observation_summary: Object.freeze((pending.source_observations ?? []).map((observation) => ({
-          source: observation.source, operation: observation.operation, observed_at_ms: observation.observed_at_ms,
-          record_digest: observation.record_digest, memory_receipt_digest: observation.memory_receipt_digest,
-          ...(observation.source === "owner_selected_local_file_state" ? {
-            gateway_execution_receipt_digest: observation.gateway_execution_receipt_digest,
-            gateway_execution_receipt_state: observation.gateway_execution_receipt_state,
-          } : {}),
-        }))),
+        source_observation_summary: Object.freeze((pending.source_observations ?? []).flatMap((observation) => {
+          if (!("record_digest" in observation) || !("memory_receipt_digest" in observation)) return [];
+          return [{ source: observation.source, operation: observation.operation, observed_at_ms: observation.observed_at_ms,
+            record_digest: observation.record_digest, memory_receipt_digest: observation.memory_receipt_digest,
+            ...(observation.source === "owner_selected_local_file_state" ? {
+              gateway_execution_receipt_digest: observation.gateway_execution_receipt_digest,
+              gateway_execution_receipt_state: observation.gateway_execution_receipt_state,
+            } : {}) }];
+        })),
       } : {}) });
   }
 
@@ -3098,13 +3109,15 @@ ${planControl.question}`,
       upstream_commit_hash: sourceLog.commit.hash,
       status: fb.status,
     }) : undefined;
+    const computeSourceHasGmailIdentity = issued?.compute_source_observations?.some((observation) =>
+      observation.source === "owner_selected_gmail_message_identity") ?? false;
     const meaningUpdateProposalPrepared = prepareMeaningUpdateProposalAssessment({
       proposal: fb.meaning_update_proposal,
       feedback_succeeded: fb.status === "success",
       source_available: sourceLog !== undefined,
-      eligible_llm_compute: issued?.command.type === "llm_call" &&
+      eligible_llm_compute: !computeSourceHasGmailIdentity && issued?.command.type === "llm_call" &&
         issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
-      source_observations: issued?.compute_source_observations,
+      source_observations: computeSourceHasGmailIdentity ? undefined : issued?.compute_source_observations,
     });
     const meaningUpdateCurrentReferenceVersions = meaningUpdateProposalPrepared.contract_status === "passed" &&
       meaningUpdateProposalPrepared.proposal_parse?.ok && sourceLog
@@ -4513,6 +4526,22 @@ ${planControl.question}`,
         content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。owner_selected_local_file_stateはownerが選択した観測時点の対象digestであり、元のfile.writeはoutcome_unknownのまま、作成主体・実行成功・目的達成・現在の世界状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。同じfile.edit→shell.exec→file.search計画のfile.search観測に付くsame_workspace_test_failureは、J/M receiptで照合した非0終了またはprocess tree終了確認済みtimeoutの要約です。テストの意図・副作用・作業目的との適合を証明せず、逆編集候補は未実行の提案に限り、現行版Content ReviewとL3 Approval／Brokerを通す必要があります。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
+    const planComputeGmailIdentityMessage: LLMCallPayload["messages"][number] | undefined =
+      planCompute?.source_observations?.some((observation) =>
+        observation.source === "owner_selected_gmail_message_identity") ? {
+        role: "system",
+        content: `JがOwnerの明示選択と現在のtask・plan・revision・gmail.read結果を照合したmessage identity digestです。先行するM receiptの説明はfile/shell観測に適用し、このsourceはJ checkpointの検証済み結果でM receiptを持ちません。元のtaskと目的版を維持し、このdigestは同一性の相関だけに使ってください。本文、subject/from、宛先claim、添付、raw IDは入力されず、メール内容から目的・宛先・権限・承認を推定してはいけません。候補はgmail.writeのdraft.createを一件だけとし、message.sendやdraft.sendを含めず、未実行で返してください。HDSは候補を独立検証し、作成・承認・送信をここでは行いません。\n${JSON.stringify({
+          selected_message_identity: planCompute.source_observations.filter((observation) =>
+            observation.source === "owner_selected_gmail_message_identity").map((observation) => ({
+            message_identity_digest: observation.message_identity_digest,
+            plan_id_digest: observation.plan_id_digest,
+            revision_digest: observation.revision_digest,
+            step_id_digest: observation.step_id_digest,
+            used_for_authority: false,
+            may_execute: false,
+          })),
+        })}`,
+      } : undefined;
     const planComputeParentMessage: LLMCallPayload["messages"][number] | undefined = planCompute?.parent_context ? {
       role: "system",
       content: `以下は、Jが所有・現行revision・task identityを照合した親planの原目的です。同一taskの結果に基づく候補計算文脈としてのみ使ってください。task identityと目的版bindingは相関情報であり、意味適合・権限・承認・実行を証明しません。現在のreq.contentでownerが相対pathと置換前後を明示した場合も、その内容は候補の要求としてだけ扱い、目的変更・承認・権限にしません。選択結果観測はdigest／件数等の要約で、path・query・file本文を含みません。file.editの対象pathと置換前後の値を観測要約から推測せず、明示されたtask入力と現行の個別差分確認へ結び付けます。新候補は未実行であり、step採否・Approval・Broker作用はHDSとownerの別途操作を要します。\n${JSON.stringify({
@@ -4561,6 +4590,7 @@ ${planControl.question}`,
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),
       ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
       ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+      ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
       ...(planComputeParentMessage ? [planComputeParentMessage] : []),
       ...(agentDelegationMessage ? [agentDelegationMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
@@ -4570,6 +4600,7 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
         ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+        ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
         ...(planComputeParentMessage ? [planComputeParentMessage] : []),
         ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&

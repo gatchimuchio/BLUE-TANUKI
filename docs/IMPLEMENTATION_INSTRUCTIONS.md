@@ -18,7 +18,9 @@ ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc30
 
 subject／sender／recipient header／snippet／attachment metadataは非信頼データとして表示し、利用者の元目的の変更、返信先の権威化、operation認可へ使わない。既存HDSの結果記録はGmail本文ではなくresult digestに限定し、既存executor／OutputAudit／owner表示経路を通す。添付識別オプションは`gmail.readonly` scopeを要し、通常のheader readの最小scopeは維持する。
 
-`packages/blue-tanuki` typecheckはPASS。tests、Gateway runtime、実Google provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（adapter→Gmail result→既存executor/render/output audit→owner表示のコード接続。provider runtime未確認）。human-owner/mailbox bindingも未確認。次のconsumerはownerが明示選択したmessage identityだけを現行taskへ結び、元目的を維持した`gmail.write draft.create`候補へ渡す経路であり、既存L3 content review／Approval Gate／Brokerを迂回しない。
+Ownerが選択したmessage identity digestを、同一owner・task・plan・revisionの検証済み`gmail.read`結果からJが照合し、期限10分の非権威観測として同じ目的版の候補計算へ渡す。Cへはdigestとplan相関だけを渡し、message ID・thread ID・本文・header・recipient claim・添付を渡さない。digest選択を含む場合、HDSは候補を`gmail.write draft.create`一件に制限し、`message.send`／`draft.send`や複数stepを拒否する。結果に対するhuman-owner／mailbox bindingは引き続き`not_verified`であり、M receiptも作らない。作成、承認、送信は行わず、既存L3 content review／Approval Gate／Brokerを維持する。
+
+Protocol／HDS-BRAIN／Gateway／WebChat typecheck、Protocol／HDS-BRAIN build、生成Control Center script構文解析、`pnpm docs:check`、`git diff --check`はPASS。tests、Gateway runtime／process、browser、実Google provider／実資格、外部作用はNOT_RUN。`STATUS=WIRED`（owner選択→Jの同一plan結果照合→期限付きidentity digest→同一taskのdraft.create限定候補、コード接続。runtime未確認）。mailbox所有者とattachment identityの完全な解決は未成立。次のconsumerはF02.02で、候補本文・宛先と元目的の束縛、Content Review後のL3／Approval／Brokerを接続する。
 
 ## CR-0割込み — I-06 Windows開発インストーラー
 

@@ -1275,12 +1275,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted", result.request_id);
       }
 
-      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit, rawExplicitFileEdit) {
+      async function invokeOperationPlanReplan(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerSelectedFileState, recoveryEdit, rawExplicitFileEdit, selectedGmailMessageIdentityDigest) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         if (!ownerToken) throw new Error("同一taskの再計画にはowner tokenを入力してください");
-        if (ownerSelectedFileState && recoveryEdit) throw new Error("file-state observation and test recovery cannot be combined");
+        if ((ownerSelectedFileState && recoveryEdit) || (selectedGmailMessageIdentityDigest &&
+            (ownerSelectedFileState || recoveryEdit || rawExplicitFileEdit !== undefined || !/^[a-f0-9]{64}$/.test(selectedGmailMessageIdentityDigest)))) {
+          throw new Error("同時に選択できないsource observationまたはmessage identityです");
+        }
         let explicitFileEditTask = "";
         if (rawExplicitFileEdit !== undefined) {
           if (ownerSelectedFileState || recoveryEdit || !isObject(rawExplicitFileEdit)) {
@@ -1316,7 +1319,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("goal-purpose binding is invalid");
         }
         const control = {
-          task: explicitFileEditTask || (ownerSelectedFileState
+          task: explicitFileEditTask || (selectedGmailMessageIdentityDigest
+            ? "同じtaskの目的を維持し、ownerが選択したgmail.read message identityを相関参照として使った未実行gmail.write draft.create候補を一件だけ作成してください。メール内容から目的・宛先・権限を推定せず、送信はしないでください。"
+            : ownerSelectedFileState
             ? "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。"
             : recoveryEdit
               ? "同じtaskのsame-workspace test失敗を受け、ownerが現在状態を確認した上で、新しい逆編集候補だけを作成してください。未実行candidateとし、編集の自動復元やowner承認なしの作用は行わないでください。"
@@ -1325,7 +1330,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             purpose_digest: binding.purpose_digest },
           parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
           source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest, step_id_digest: stepId,
-            ...(ownerSelectedFileState ? { owner_selected_observation: "local_file_state" } : {}) }],
+            ...(ownerSelectedFileState ? { owner_selected_observation: "local_file_state" } : {}),
+            ...(selectedGmailMessageIdentityDigest ? { selected_message_identity_digest: selectedGmailMessageIdentityDigest } : {}) }],
         };
         const content = "plan:compute " + JSON.stringify(control);
         let result;
@@ -1334,7 +1340,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           ownerTokenInput.value = "";
         }
-        appendChat("owner", ownerSelectedFileState
+        appendChat("owner", selectedGmailMessageIdentityDigest
+          ? "Ownerが選択したGmail message identity digestだけを同一taskの下書き候補計算へ渡しました。メール本文・宛先claimは渡さず、draft.create候補のみを依頼しました。"
+          : ownerSelectedFileState
           ? "ownerが現在状態の観測を候補計算へ明示選択しました（元の作用結果は不明のまま）"
           : recoveryEdit
             ? "test失敗後の現在状態をもとに、未実行の逆編集候補を依頼しました"
@@ -1816,6 +1824,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!Array.isArray(value) || value.length === 0) return "";
         const summaries = value.slice(0, 8).map(function (observation) {
           if (isObject(observation) && observation.schema_version === "operation-plan-compute-source-observation.v1" &&
+              observation.source === "owner_selected_gmail_message_identity" && observation.operation === "gmail.read" &&
+              observation.plan_binding_status === "verified" && observation.plan_validation_status === "owner_selected_identity" &&
+              /^[a-f0-9]{64}$/.test(observation.source_result_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.delivery_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.message_identity_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.owner_selection_digest || "") &&
+              Number.isSafeInteger(observation.observed_at_ms) && Number.isSafeInteger(observation.expires_at_ms) &&
+              observation.expires_at_ms === observation.observed_at_ms + 600000 &&
+              observation.effect_observation === "identity_reference_only" &&
+              observation.used_as_world_truth === false && observation.used_for_authority === false &&
+              observation.may_execute === false && observation.adoption_status === "observation_only") {
+            const nowMs = Date.now();
+            const current = observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+            return "gmail.read：Owner選択済みidentity digest=" + shortDigest(observation.message_identity_digest) +
+              "（" + (current ? "期限内" : "期限切れ・Jはstep選択と実行を拒否") +
+              "、本文・header claim・権限・実行可能性を含まない）";
+          }
+          if (isObject(observation) && observation.schema_version === "operation-plan-compute-source-observation.v1" &&
               observation.source === "owner_selected_local_file_state" && observation.operation === "file.write" &&
               /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
               /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
@@ -2202,6 +2228,29 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>' +
                   explicitFileEditGroup
                 : '';
+              const gmailIdentityOptions = Array.isArray(step.gmail_message_identity_options)
+                ? step.gmail_message_identity_options : [];
+              const gmailDraftCandidateActions = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
+                step.operation === "gmail.read" && step.status === "verified" && gmailIdentityOptions.length > 0
+                ? '<fieldset><legend>Owner選択message identityから下書き候補</legend>' +
+                  '<p class="muted">表示番号は直前のgmail.read結果と対応します。mailboxと人間ownerの関係は未確認です。本文、header、宛先claim、添付、raw IDはCやこのprojectionへ出しません。選択は同一taskの相関だけを結び、送信せず、draft.create候補だけを作ります。</p>' +
+                  gmailIdentityOptions.map(function (option) {
+                    if (!isObject(option) || !/^[a-f0-9]{64}$/.test(option.message_identity_digest || "") ||
+                        !Number.isSafeInteger(option.display_index) || option.display_index < 1 ||
+                        option.mailbox_owner_relationship !== "not_verified" ||
+                        option.message_headers_are_untrusted !== true || option.used_for_authority !== false ||
+                        option.may_execute !== false || !Number.isSafeInteger(option.expires_at_ms) || Date.now() >= option.expires_at_ms) return "";
+                    const label = "message " + option.display_index + " · identity " + shortDigest(option.message_identity_digest);
+                    return '<button type="button" class="secondary" data-operation-plan-gmail-draft="true" data-selected-gmail-message-identity="' +
+                      escapeHtml(option.message_identity_digest) + '" data-plan-id="' + escapeHtml(plan.plan_id) +
+                      '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
+                      escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                      escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                        purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
+                      '">' + escapeHtml(label) + ' を選択してdraft.create候補を作成</button>';
+                  }).join("") + '</fieldset>'
+                : '';
               const recoveryEditReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
                 sameWorkspaceTestRequiresRecovery && step === steps[2] && step.operation === "file.search" && step.status === "verified" &&
@@ -2289,6 +2338,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
                 savedResultButton +
                 replanButton +
+                gmailDraftCandidateActions +
                 recoveryEditButton +
                 stepReviewButton +
                 '</div>';
@@ -5483,6 +5533,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
               target.dataset.stepId || "", target.dataset.goalPurposeBinding || "",
               target.dataset.ownerSelectedFileState === "true", target.dataset.recoveryEdit === "true");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanGmailDraft === "true") {
+          target.disabled = true;
+          try {
+            await invokeOperationPlanReplan(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "", false, false, undefined,
+              target.dataset.selectedGmailMessageIdentity || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
