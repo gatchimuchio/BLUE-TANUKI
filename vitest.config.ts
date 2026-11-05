@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 
@@ -18,5 +18,8 @@ export default defineConfig({
       { find: "@blue-tanuki/channel-teams", replacement: resolve(root, "packages/channel-teams/src/index.ts") },
       { find: "@blue-tanuki/channel-line", replacement: resolve(root, "packages/channel-line/src/index.ts") },
     ],
+  },
+  test: {
+    exclude: ["**/.codex-tmp/**", ...configDefaults.exclude],
   },
 });

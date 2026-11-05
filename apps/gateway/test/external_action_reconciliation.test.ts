@@ -168,6 +168,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       hds = createHds(planStore);
       const tools = new ToolRegistry();
       const observedRequests: Array<{ idempotency_key?: string; command_digest?: string; request_payload_digest?: string }> = [];
+      let expectedRequestPayloadDigest: string | undefined;
       vi.stubEnv("GMAIL_ACCESS_TOKEN", FIXTURE_TOKEN);
       const fixtureGmailTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
         const requestPayload = target.body ?? "";
@@ -176,7 +177,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         const response = await fetch(new URL("/send", endpoint), { method: target.method,
           headers: { authorization: `Bearer ${target.token}`, "content-type": target.contentType ?? "application/json",
             "idempotency-key": target.idempotency_key!, "x-command-digest": target.command_digest!,
-            "x-google-path": target.path }, body: requestPayload });
+            "x-google-path": target.path, "x-fixture-intent-payload-digest": expectedRequestPayloadDigest ?? "" }, body: requestPayload });
         return { status: response.status, ok: response.ok, content_type: response.headers.get("content-type"),
           body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
       } });
@@ -218,6 +219,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       expect(approvalEvaluation.final_review_required).toBe(true);
       const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
       const targetVersion = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
+      expectedRequestPayloadDigest = targetVersion.request_payload_digest;
       const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);
       const approved = authority.approve(command, {
         source: approvalEvaluation.final_review_required ? "human_final_review" : "approval_gate",
@@ -322,12 +324,12 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           plan_id_digest: currentPlan.plan_id,
           revision_digest: currentPlan.revision_digest,
           step_id_digest: currentPlan.steps[0]!.step_id,
-          request_payload_digest: observedRequests[0]!.request_payload_digest!,
+          request_payload_digest: targetVersion.request_payload_digest,
           response: { status: "accepted", matches: [{ idempotency_key: command_key,
-            command_digest: receipt!.command_digest, payload_digest: observedRequests[0]!.request_payload_digest!,
+            command_digest: receipt!.command_digest, payload_digest: targetVersion.request_payload_digest,
             receipt_id: originalReceiptId }] },
         };
-        expect(observation).toMatchObject({ status: "matched", match_count: 1, source: "local_inspection",
+        expect(observation, JSON.stringify(observation)).toMatchObject({ status: "matched", match_count: 1, source: "local_inspection",
           used_for_authority: false, raw_receipt_exposed: false });
         expect(() => ingestLocalInspectionReceipt(hds, { ...receiptObservationInput,
           caller: request("unauthorized receipt observation", "another-owner") })).toThrow(/owner_mismatch/);

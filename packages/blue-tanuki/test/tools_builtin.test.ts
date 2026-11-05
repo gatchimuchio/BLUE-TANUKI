@@ -43,6 +43,7 @@ import {
 } from "../src/tools/builtin.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
+import { inspectGoogleDriveWriteTargetVersion } from "../src/tools/google_write.js";
 
 const ctx = {
   command_id: "cmd-1",
@@ -614,7 +615,8 @@ describe("built-in tools", () => {
     const googleController = new AbortController();
     let googleSignal: AbortSignal | undefined;
     await expect(invokeGoogleCalendarWrite({ operation: "event.create", summary: "cancel fixture",
-      start: "2026-10-22T09:00:00Z", end: "2026-10-22T09:15:00Z" }, {
+      start: "2026-05-12T09:00:00Z", end: "2026-05-12T09:15:00Z",
+      availability_observation: await observedCalendarAvailability() }, {
       ...fakeGoogleWrite(async (_target, signal) => {
         googleSignal = signal;
         googleController.abort();
@@ -1022,8 +1024,14 @@ describe("built-in tools", () => {
       mutation_sent: false,
       messages: [{ subject: "Daily report" }],
     });
-    expect(calendar.events).toEqual([{ id: "event-1", status: "confirmed", summary: "Standup", start: "2026-05-12T09:00:00Z", end: "2026-05-12T09:15:00Z", html_link: "https://calendar.google.com/event?eid=event-1" }]);
-    expect(drive.files).toEqual([{ id: "file-1", name: "Spec notes", mime_type: "application/vnd.google-apps.document", modified_time: "2026-05-12T08:00:00Z", web_view_link: "https://drive.google.com/file/d/file-1/view" }]);
+    expect(calendar.events).toMatchObject([{ id: "event-1", status: "confirmed", summary: "Standup",
+      start: "2026-05-12T09:00:00Z", end: "2026-05-12T09:15:00Z",
+      html_link: "https://calendar.google.com/event?eid=event-1", identity_complete: false,
+      event_id: { original: "event-1", normalized: "event-1" },
+      start_identity: { kind: "date_time", complete: true }, end_identity: { kind: "date_time", complete: true } }]);
+    expect(drive.files).toMatchObject([{ id: "file-1", name: "Spec notes",
+      mime_type: "application/vnd.google-apps.document", modified_time: "2026-05-12T08:00:00Z",
+      web_view_link: "https://drive.google.com/file/d/file-1/view" }]);
     expect(seen.map((item) => item.hostname)).toEqual([
       "gmail.googleapis.com",
       "gmail.googleapis.com",
@@ -1112,14 +1120,8 @@ describe("built-in tools", () => {
           htmlLink: "https://calendar.google.com/event?eid=event-1",
         }, 200);
       }
-      if (target.path.startsWith("/upload/drive/v3/files?uploadType=multipart")) {
-        return googleWriteJson({
-          id: "file-1",
-          name: "notes.txt",
-          mimeType: "text/plain",
-          webViewLink: "https://drive.google.com/file/d/file-1/view",
-        }, 200);
-      }
+      const driveRead = syntheticDriveCreateRead(target);
+      if (driveRead) return driveRead;
       throw new Error(`unexpected Google write path: ${target.path}`);
     });
 
@@ -1133,6 +1135,7 @@ describe("built-in tools", () => {
       },
       opts,
     )) as { mutation_sent: boolean; mutation_status: string; result: Record<string, unknown> };
+    const availabilityObservation = await observedCalendarAvailability();
     const calendar = (await invokeGoogleCalendarWrite(
       {
         operation: "event.create",
@@ -1140,20 +1143,19 @@ describe("built-in tools", () => {
         summary: "Standup",
         start: "2026-05-12T09:00:00Z",
         end: "2026-05-12T09:15:00Z",
+        availability_observation: availabilityObservation,
         max_bytes: 4096,
       },
       opts,
     )) as { result: Record<string, unknown> };
-    const drive = (await invokeGoogleDriveWrite(
-      {
-        operation: "file.create",
-        name: "notes.txt",
-        content: "hello",
-        mime_type: "text/plain",
-        max_bytes: 4096,
-      },
-      opts,
-    )) as { result: Record<string, unknown> };
+    const driveArgs = { operation: "file.create", parent_id: "parent-1", name: "notes.txt",
+      content: "hello", mime_type: "text/plain", max_bytes: 4096 };
+    const driveCommandDigest = "a".repeat(64);
+    const driveTargetVersionObservation = await inspectGoogleDriveWriteTargetVersion(driveArgs, {
+      ...opts, command_digest: driveCommandDigest, operation_plan_binding_digest: "b".repeat(64),
+    });
+    const drive = (await invokeGoogleDriveWrite(driveArgs, { ...opts, command_digest: driveCommandDigest,
+      target_version_observation: driveTargetVersionObservation })) as { result: Record<string, unknown> };
 
     expect(gmail).toMatchObject({
       mutation_sent: true,
@@ -1161,16 +1163,17 @@ describe("built-in tools", () => {
       result: { id: "draft-1", message_id: "msg-1", message_thread_id: "thread-1" },
     });
     expect(calendar.result).toMatchObject({ id: "event-1", status: "confirmed", summary: "Standup" });
-    expect(drive.result).toMatchObject({ id: "file-1", name: "notes.txt", mimeType: "text/plain" });
-    expect(seen.map((item) => [item.service, item.hostname, item.method])).toEqual([
+    expect(drive.result).toMatchObject({ id: "file-1", verification: { name: "notes.txt", mime_type: "text/plain",
+      metadata_verified: true, content_verified: true } });
+    expect(seen.filter((item) => item.method === "POST").map((item) => [item.service, item.hostname, item.method])).toEqual([
       ["gmail", "gmail.googleapis.com", "POST"],
       ["calendar", "www.googleapis.com", "POST"],
       ["drive", "www.googleapis.com", "POST"],
     ]);
-    expect(seen[0]!.body).toContain("raw");
-    expect(seen[1]!.path).toContain("sendUpdates=none");
-    expect(seen[1]!.body).not.toContain("attendees");
-    expect(seen[2]!.contentType).toContain("multipart/related");
+    expect(seen.find((item) => item.service === "gmail" && item.method === "POST")!.body).toContain("raw");
+    expect(seen.find((item) => item.service === "calendar" && item.method === "POST")!.path).toContain("sendUpdates=none");
+    expect(seen.find((item) => item.service === "calendar" && item.method === "POST")!.body).not.toContain("attendees");
+    expect(seen.find((item) => item.service === "drive" && item.method === "POST")!.contentType).toContain("multipart/related");
     expect(JSON.stringify({ gmail, calendar, drive })).not.toContain("google-write-token");
   });
 
@@ -1180,15 +1183,21 @@ describe("built-in tools", () => {
       called = true;
       throw new Error("should not call network");
     }, {});
+    const driveArgs = { operation: "file.create", parent_id: "parent-1", name: "notes.txt", content: "hello" };
+    const driveTargetVersionObservation = await inspectGoogleDriveWriteTargetVersion(driveArgs, {
+      ...fakeGoogleWrite(syntheticDriveCreateRead), command_digest: "a".repeat(64),
+      operation_plan_binding_digest: "b".repeat(64),
+    });
 
     await expect(
       invokeGmailWrite({ operation: "message.send", to: "owner@example.test", subject: "hi", body_text: "hello" }, opts),
     ).rejects.toThrow(/GMAIL_ACCESS_TOKEN.*GOOGLE_ACCESS_TOKEN.*request_sent=false.*mutation_sent=false/);
     await expect(
-      invokeGoogleCalendarWrite({ operation: "event.create", summary: "Standup", start: "2026-05-12T09:00:00Z", end: "2026-05-12T09:15:00Z" }, opts),
+      invokeGoogleCalendarWrite({ operation: "event.create", summary: "Standup", start: "2026-05-12T09:00:00Z", end: "2026-05-12T09:15:00Z", availability_observation: await observedCalendarAvailability() }, opts),
     ).rejects.toThrow(/GOOGLE_CALENDAR_ACCESS_TOKEN.*GOOGLE_ACCESS_TOKEN.*request_sent=false.*mutation_sent=false/);
     await expect(
-      invokeGoogleDriveWrite({ operation: "file.create", name: "notes.txt", content: "hello" }, opts),
+      invokeGoogleDriveWrite(driveArgs, { ...opts, command_digest: "a".repeat(64),
+        target_version_observation: driveTargetVersionObservation }),
     ).rejects.toThrow(/GOOGLE_DRIVE_ACCESS_TOKEN.*GOOGLE_ACCESS_TOKEN.*request_sent=false.*mutation_sent=false/);
 
     await expect(
@@ -2252,6 +2261,43 @@ function fakeGoogleWrite(
     env,
     request,
   };
+}
+
+async function observedCalendarAvailability(): Promise<Record<string, unknown>> {
+  return await invokeGoogleCalendarRead({ calendar_id: "primary", view: "freebusy",
+    time_min: "2026-05-12T09:00:00Z", time_max: "2026-05-12T09:15:00Z" }, fakeGoogle(async () => googleJson({
+    timeMin: "2026-05-12T09:00:00Z", timeMax: "2026-05-12T09:15:00Z",
+    calendars: { primary: { busy: [] } },
+  }))) as Record<string, unknown>;
+}
+
+function syntheticDriveCreateRead(
+  target: Parameters<NonNullable<GoogleWriteOptions["request"]>>[0],
+): Awaited<ReturnType<NonNullable<GoogleWriteOptions["request"]>>> {
+  if (target.path.startsWith("/drive/v3/files/parent-1/permissions?")) {
+    return googleWriteJson({ permissions: [{ id: "owner-permission", type: "user",
+      emailAddress: "owner@example.test", role: "owner", deleted: false }] });
+  }
+  if (target.path.startsWith("/drive/v3/files/parent-1?")) {
+    return googleWriteJson({ id: "parent-1", name: "Parent", mimeType: "application/vnd.google-apps.folder",
+      modifiedTime: "2026-05-12T08:00:00Z", parents: ["root"], version: "1", shared: false, trashed: false,
+      inheritedPermissionsDisabled: false });
+  }
+  if (target.path.startsWith("/drive/v3/files?")) return googleWriteJson({ files: [] });
+  if (target.path.startsWith("/upload/drive/v3/files?uploadType=multipart")) {
+    return googleWriteJson({ id: "file-1", name: "notes.txt", mimeType: "text/plain",
+      webViewLink: "https://drive.google.com/file/d/file-1/view" }, 200);
+  }
+  if (target.path.startsWith("/drive/v3/files/file-1?alt=media")) {
+    return { status: 200, ok: true, content_type: "text/plain", body: "hello", truncated: false,
+      request_id: "GOOGLE-WRITE-REQ" };
+  }
+  if (target.path.startsWith("/drive/v3/files/file-1?")) {
+    return googleWriteJson({ id: "file-1", name: "notes.txt", mimeType: "text/plain",
+      modifiedTime: "2026-05-12T08:01:00Z", parents: ["parent-1"], version: "2", headRevisionId: "rev-1",
+      shared: false, trashed: false });
+  }
+  throw new Error(`unexpected synthetic Drive path: ${target.path}`);
 }
 
 function fakeBrowserAutomation(opts: {

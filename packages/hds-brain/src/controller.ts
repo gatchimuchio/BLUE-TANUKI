@@ -402,7 +402,9 @@ function sourceDecisionBindingMatchesAudit(
   if (!isMeaningUpdateSourceDecisionBinding(binding)) return false;
   const matches: DecisionLog[] = [];
   for (const { log } of entries) {
-    if (!("kind" in log) && log.commit.hash === binding.decision_hash) matches.push(log);
+    if (!("kind" in log) && log.commit.hash === binding.decision_hash &&
+        (binding.schema_version === "blue-tanuki.meaning-update-source-decision-binding.v1" ||
+          log.request_id === binding.request_id)) matches.push(log);
   }
   if (matches.length !== 1 || matches[0]!.commit.decision !== "ASSERT") return false;
   const observed = decisionBindingForLog(matches[0]!);
@@ -416,7 +418,8 @@ function decisionBindingForLog(log: DecisionLog): MeaningUpdateSourceDecisionBin
       !Number.isSafeInteger(purpose.purpose_version) || purpose.purpose_version < 1 ||
       !/^[a-f0-9]{64}$/.test(purpose.purpose_digest))) return undefined;
   return Object.freeze({
-    schema_version: "blue-tanuki.meaning-update-source-decision-binding.v1",
+    schema_version: "blue-tanuki.meaning-update-source-decision-binding.v2",
+    request_id: log.request_id,
     decision_hash: log.commit.hash,
     ...(purpose ? { goal_purpose_binding: Object.freeze({ ...purpose }) } : {}),
     used_for_authority: false,
@@ -431,6 +434,9 @@ function sourceDecisionBindingsEqual(
   if (left === undefined || right === undefined) return left === right;
   if (!isMeaningUpdateSourceDecisionBinding(left) || !isMeaningUpdateSourceDecisionBinding(right)) return false;
   return left.schema_version === right.schema_version && left.decision_hash === right.decision_hash &&
+    (left.schema_version === "blue-tanuki.meaning-update-source-decision-binding.v1" ||
+      (right.schema_version === "blue-tanuki.meaning-update-source-decision-binding.v2" &&
+        left.request_id === right.request_id)) &&
     left.used_for_authority === right.used_for_authority && left.may_execute === right.may_execute &&
     left.goal_purpose_binding?.goal_id_digest === right.goal_purpose_binding?.goal_id_digest &&
     left.goal_purpose_binding?.purpose_version === right.goal_purpose_binding?.purpose_version &&
@@ -440,11 +446,14 @@ function sourceDecisionBindingsEqual(
 function isMeaningUpdateSourceDecisionBinding(value: unknown): value is MeaningUpdateSourceDecisionBinding {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const binding = value as Record<string, unknown>;
-  if (binding.schema_version !== "blue-tanuki.meaning-update-source-decision-binding.v1" ||
+  const isV1 = binding.schema_version === "blue-tanuki.meaning-update-source-decision-binding.v1";
+  const isV2 = binding.schema_version === "blue-tanuki.meaning-update-source-decision-binding.v2";
+  if ((!isV1 && !isV2) || (isV2 && (typeof binding.request_id !== "string" ||
+      binding.request_id.length === 0 || binding.request_id.length > 512)) ||
       typeof binding.decision_hash !== "string" || !/^[a-f0-9]{64}$/.test(binding.decision_hash) ||
       binding.used_for_authority !== false || binding.may_execute !== false ||
-      Object.keys(binding).some((key) => !["schema_version", "decision_hash", "goal_purpose_binding",
-        "used_for_authority", "may_execute"].includes(key))) return false;
+      Object.keys(binding).some((key) => !["schema_version", ...(isV2 ? ["request_id"] : []),
+        "decision_hash", "goal_purpose_binding", "used_for_authority", "may_execute"].includes(key))) return false;
   if (!Object.hasOwn(binding, "goal_purpose_binding")) return true;
   const purpose = binding.goal_purpose_binding;
   if (typeof purpose !== "object" || purpose === null || Array.isArray(purpose)) return false;
@@ -3116,6 +3125,7 @@ ${planControl.question}`,
       : SkepticalReviewRequestSchema.safeParse(fb.skeptical_review);
     const sourceLog = this.inflight.get(fb.command_id);
     const issued = this.issuedLLM.get(fb.command_id);
+    const issuedExecution = this.issuedExecutionCommandsById.get(fb.command_id)?.command;
     const rawResourceUse = fb.compute_resource_use;
     const resourceUseParse = rawResourceUse === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(rawResourceUse);
@@ -3150,8 +3160,9 @@ ${planControl.question}`,
       proposal: fb.meaning_update_proposal,
       feedback_succeeded: fb.status === "success",
       source_available: sourceLog !== undefined,
-      eligible_llm_compute: !computeSourceHasGmailIdentity && issued?.command.type === "llm_call" &&
-        issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+      eligible_llm_compute: !computeSourceHasGmailIdentity && this.issuedLLMFeedbackCommands.has(fb.command_id) &&
+        issuedExecution?.type === "llm_call" &&
+        issuedExecution.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
       source_observations: computeSourceHasGmailIdentity ? undefined : issued?.compute_source_observations,
     });
     const meaningUpdateCurrentReferenceVersions = meaningUpdateProposalPrepared.contract_status === "passed" &&

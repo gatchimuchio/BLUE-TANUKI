@@ -1,6 +1,10 @@
-# BLUE-TANUKI 現行QE_BUILD指示
+# BLUE-TANUKI QE_BUILD指示・作業状態参照
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev3.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
+
+## 現在のowner作業ポインタ — 2026-11-05 リポジトリ健全化
+
+現在のactive taskは、一回限りのリポジトリ健全化である。対象は先頭の [`開発進捗.md`](開発進捗.md) に固定し、このtaskを閉じるまでは下記F05.01を実施中として扱わない。F05.01は最後に記録されたfeature BUILD_BATCH、F05.02は未着手である。本taskはQE_STAGEやrev3.0三点セットを変更せず、製品機能、別repo、QE_QC／QE_QA、外部provider、公開・出荷判断を開始しない。
 
 ## QE状態
 
@@ -8,7 +12,7 @@
 
 rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS Runtime Kernelの有限なJ/M制御を分け、Runtime核を段階的に独立させる。現行のTypeScript HDS-BRAINが単独の実行authority／状態writerである間、Rust shadowは作用権限もM正本書込みも持たない。明示された検証条件を満たすsingle-writer cutover前に旧経路を無効化・削除せず、Rustのcrate・schema・shadow結果だけから移管完了を主張しない。
 
-## 現在のBUILD_BATCH — F05.01 GitHub repository/base commit identity read
+## 最後に記録されたBUILD_BATCH — F05.01 GitHub repository/base commit identity read
 
 `github.read resource=base owner=<owner> repo=<repo> [base_ref=<branch>]`を既存の公開読取経路へ接続する。Repository APIから数値repository ID・canonical `full_name`・owner・default branchを読み、指定branchまたはdefault branchのcommit SHAを取得する。取得結果が要求したrepository／branchと一致しない、JSONでない、切詰められた、途中でrepository ID／名前が変化した場合はidentityを返さず失敗する。branch名はGit ref規則とpath境界を検査し、各path segmentをencodeする。
 

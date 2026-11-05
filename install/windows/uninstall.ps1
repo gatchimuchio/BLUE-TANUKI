@@ -8,9 +8,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "safe-target.ps1")
 
 function Fail($Message) {
-  Write-Error $Message
+  Write-Error -Message $Message -ErrorAction Continue
   exit 1
 }
 
@@ -19,26 +20,11 @@ function Normalize-Path($Path) {
 }
 
 function Assert-SafeTarget($Target, $Label) {
-  $normalized = Normalize-Path $Target
-  $root = [System.IO.Path]::GetPathRoot($normalized)
-  $trimmed = $normalized.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $rootTrimmed = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $denied = @(
-    (Normalize-Path $env:USERPROFILE),
-    (Normalize-Path $env:LOCALAPPDATA),
-    (Normalize-Path $env:APPDATA)
-  )
-
-  if ($trimmed -eq $rootTrimmed) {
-    Fail "$Label points to a filesystem root: $normalized"
+  try {
+    return Resolve-SafeDirectoryTarget -Path $Target -Label $Label
+  } catch {
+    Fail $_.Exception.Message
   }
-  foreach ($path in $denied) {
-    $deniedTrimmed = $path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-    if ($trimmed -eq $deniedTrimmed) {
-      Fail "$Label points to a broad user directory: $normalized"
-    }
-  }
-  return $normalized
 }
 
 function Remove-Target($Target, $Label) {
@@ -50,6 +36,9 @@ function Remove-Target($Target, $Label) {
   if ($DryRun) {
     Write-Host "Would remove ${Label}: $safe"
     return
+  }
+  try { Assert-NoReparsePointsInTree -Path $safe -Label $Label } catch {
+    Fail "Refusing recursive removal of ${Label}. $($_.Exception.Message)"
   }
   Remove-Item -LiteralPath $safe -Recurse -Force
   Write-Host "Removed ${Label}: $safe"
@@ -65,12 +54,28 @@ function Remove-FileIfPresent($Path, $Label) {
     Write-Host "Would remove ${Label}: $safe"
     return
   }
+  $item = Get-Item -Force -LiteralPath $safe
+  if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    Fail "Refusing to remove ${Label} because it is not a regular file: $safe"
+  }
   Remove-Item -LiteralPath $safe -Force
   Write-Host "Removed ${Label}: $safe"
 }
 
-$installRootResolved = Assert-SafeTarget $InstallRoot "InstallRoot"
-$dataRootResolved = Assert-SafeTarget $DataRoot "DataRoot"
+$safeTargets = Assert-SafeInstallTargets -InstallRoot $InstallRoot -DataRoot $DataRoot -SourceRoot $null
+$installRootResolved = $safeTargets.InstallRoot
+$dataRootResolved = $safeTargets.DataRoot
+try {
+  [void](Assert-ManagedWindowsDevelopmentInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy)
+  if ($Purge) {
+    [void](Assert-ManagedWindowsDevelopmentData -DataRoot $dataRootResolved -InstallRoot $installRootResolved)
+    Assert-NoReparsePointsInTree -Path $dataRootResolved -Label 'DevelopmentDataRoot'
+  } else {
+    [void](Assert-ManagedWindowsDevelopmentData -DataRoot $dataRootResolved -InstallRoot $installRootResolved -AllowEmpty)
+  }
+} catch {
+  Fail "Refusing to uninstall because development install ownership and structure could not be verified. No files were removed. $($_.Exception.Message)"
+}
 $binRoot = Join-Path $dataRootResolved "bin"
 $launcher = Join-Path $binRoot "blue-tanuki.ps1"
 $cmdLauncher = Join-Path $binRoot "blue-tanuki.cmd"
@@ -81,27 +86,34 @@ if (Test-Path -LiteralPath $residentScript) {
     Write-Host "Would stop resident gateway and disable resident autostart."
   }
   else {
+    try { [void](Assert-ManagedWindowsDevelopmentInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+      Fail "Refusing to run the development resident helper because the installed inventory changed. No files were removed. $($_.Exception.Message)"
+    }
     & powershell -ExecutionPolicy Bypass -File $residentScript -Command "resident-stop" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
     & powershell -ExecutionPolicy Bypass -File $residentScript -Command "resident-autostart-disable" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
   }
 }
 
-Remove-Target $installRootResolved "app"
-Remove-FileIfPresent $launcher "PowerShell launcher"
-Remove-FileIfPresent $cmdLauncher "cmd launcher"
-
-if ((Test-Path -LiteralPath $binRoot) -and -not $Purge) {
-  $remaining = @(Get-ChildItem -Force -LiteralPath $binRoot -ErrorAction SilentlyContinue)
-  if ($remaining.Count -eq 0) {
-    Remove-Target $binRoot "empty bin directory"
-  }
+try { [void](Assert-ManagedWindowsDevelopmentInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+  Fail "Refusing to remove the development app because its installed inventory changed. No files were removed. $($_.Exception.Message)"
 }
+Remove-Target $installRootResolved "app"
 
 if ($Purge) {
   Remove-Target $dataRootResolved "data root"
   Write-Host "BLUE-TANUKI uninstalled with data purge."
 }
 else {
+  [void](Assert-ManagedWindowsDevelopmentData -DataRoot $dataRootResolved -InstallRoot $installRootResolved -AllowEmpty)
+  Remove-FileIfPresent $launcher "PowerShell launcher"
+  Remove-FileIfPresent $cmdLauncher "cmd launcher"
+  Remove-FileIfPresent (Join-Path $dataRootResolved "blue-tanuki-development-data.json") "development launcher ownership marker"
+  if ((Test-Path -LiteralPath $binRoot) -and -not $Purge) {
+    $remaining = @(Get-ChildItem -Force -LiteralPath $binRoot -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 0) {
+      Remove-Target $binRoot "empty bin directory"
+    }
+  }
   Write-Host "BLUE-TANUKI app removed. Data retained at: $dataRootResolved"
   Write-Host "Re-run with -Purge to remove env, audit, session, and local data."
 }

@@ -668,7 +668,7 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("sends explicit digest-bound plan step review through the existing Developer invoke path", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOperationPlanControl(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -706,7 +706,7 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("sends cross-channel plan review with the exact source identity and fresh owner token", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOperationPlanControl(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
     const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
     const calls: Array<{ path: string; token: string; body: unknown }> = [];
@@ -726,14 +726,14 @@ describe("WebChatChannel — Control Center shell", () => {
       });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    expect(calls[0]).toMatchObject({ path: "/owner/inbound", token: "owner-token" });
     expect(JSON.parse((calls[0]!.body as { content: string }).content.slice("plan:review ".length)))
       .toMatchObject({ owner_reauthentication: ownerReauthenticationBinding });
     expect(nodes["owner-task-token"].value).toBe("");
   });
 
   it("sends a saved-result read through the authenticated Developer invoke path", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanResult(");
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOperationPlanControl(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -764,7 +764,7 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("re-authenticates an owner before reading a saved result from another entry", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanResult(");
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOperationPlanControl(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -786,7 +786,7 @@ describe("WebChatChannel — Control Center shell", () => {
       });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    expect(calls[0]).toMatchObject({ path: "/owner/inbound", token: "owner-token" });
     expect(JSON.parse((calls[0]!.body as { content: string }).content.slice("plan:result ".length)))
       .toMatchObject({ owner_reauthentication: binding });
     expect(nodes["owner-task-token"].value).toBe("");
@@ -853,8 +853,8 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("disconnects only the WebChat socket and leaves task cancellation to its separate route", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("function disconnectChat()");
-    const end = CONTROL_CENTER_SCRIPT.indexOf("\n\n      async function connectChat()", start + 1);
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function disconnectChat(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n\n      function scheduleChatReconnect(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
@@ -865,7 +865,8 @@ describe("WebChatChannel — Control Center shell", () => {
     const fetch = () => { fetchCount += 1; };
     const postJson = () => { postCount += 1; };
     const statuses: Array<[string, string | undefined]> = [];
-    const state = { chatConnectionGeneration: 3, chatSocket: { close } };
+    const state = { chatConnectionGeneration: 3, chatSocket: { close }, chatReconnectTimer: null,
+      chatReconnectEnabled: true };
     new Script(`${helper}\ndisconnectChat()`).runInNewContext({ state,
       setChatStatus: (value: string, tone?: string) => statuses.push([value, tone]), fetch, postJson });
 
@@ -1120,8 +1121,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）");
     expect(rendered.match(/data-operation-plan-review="true"/g)).toHaveLength(1);
     expect(rendered.match(/data-operation-plan-result="true"/g)).toHaveLength(1);
-    expect(rendered).toContain("保存済み検索結果を読む");
-    expect(rendered).toContain("保存時点の観測であり、現在状態の再検索や検索完全性を示しません。");
+    expect(rendered).toContain("保存済み検索結果／限定previewを読む");
+    expect(rendered).toContain("J/M receipt確認済みの保存結果を表示します。指定条件によっては指定開始行から最大5行のfile.read previewを返します。");
     expect(rendered).toContain('data-plan-id="' + "e".repeat(64) + '" data-revision-digest="' + "f".repeat(64) + '"');
     expect(rendered).toContain('data-step-id="' + "9".repeat(64) + '"');
     expect(rendered).toContain("Jが現在のrevision・依存・対象を再確認します。");
@@ -1927,7 +1928,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。");
       expect(html).toContain("状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。");
       expect(html).toContain("loopbackで読取照合");
-      expect(html).toContain("照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし");
+      expect(html).toContain("照合はDeveloper入口から明示要求した場合だけ対象の読取を1回行います。");
       expect(html).toContain("local inspectionの1件がcommand/payload digest一致");
       expect(html).toContain("成功・目標達成は未確認");
       expect(html).toContain("operation_core_projection");
@@ -3459,6 +3460,7 @@ describe("WebChatChannel — HTTP inbound", () => {
           purpose_digest: goal.purpose_digest },
       });
       expect(observedActors).toEqual([
+        "webchat-owner-token-holder",
         "webchat-owner-token-holder",
       ]);
 

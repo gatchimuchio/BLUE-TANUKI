@@ -25,139 +25,48 @@ function Get-InstallPathIdentity($Path) {
   return $normalized
 }
 
-function Test-LegacyDevelopmentInstall($TargetRoot) {
-  try {
-    $defaultInstallRoot = Get-InstallPathIdentity "$env:LOCALAPPDATA\BlueTanuki\app"
-    $defaultDataRoot = Get-InstallPathIdentity "$env:APPDATA\BlueTanuki"
-    $targetInstallRoot = Get-InstallPathIdentity $TargetRoot
-    $targetDataRoot = Get-InstallPathIdentity $dataRootResolved
-  } catch {
-    return $false
-  }
-
-  if (-not [System.String]::Equals($targetInstallRoot, $defaultInstallRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-      -not [System.String]::Equals($targetDataRoot, $defaultDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    return $false
-  }
-
-  $packagePath = Join-Path $targetInstallRoot "package.json"
-  $runtimeEntry = Join-Path $targetInstallRoot "apps\gateway\dist\main.js"
-  $installerEntry = Join-Path $targetInstallRoot "install\windows\install.ps1"
-  $envPath = Join-Path $targetDataRoot "blue-tanuki.env"
-  $launcherPath = Join-Path $targetDataRoot "bin\blue-tanuki.ps1"
-  $cmdLauncherPath = Join-Path $targetDataRoot "bin\blue-tanuki.cmd"
-  foreach ($path in @($packagePath, $runtimeEntry, $installerEntry, $envPath, $launcherPath, $cmdLauncherPath)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
-    try {
-      $parentPath = Split-Path -Parent $path
-      $resolvedParent = Resolve-SafeDirectoryTarget -Path $parentPath -Label "Legacy development install path"
-      if (-not [System.String]::Equals(
-        (Get-InstallPathIdentity $resolvedParent),
-        (Get-InstallPathIdentity $parentPath),
-        [System.StringComparison]::OrdinalIgnoreCase
-      )) { return $false }
-    } catch {
-      return $false
-    }
-    $item = Get-Item -Force -LiteralPath $path
-    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
-  }
-
-  try {
-    $manifestItem = Get-Item -Force -LiteralPath $packagePath
-    $launcherItem = Get-Item -Force -LiteralPath $launcherPath
-    $cmdLauncherItem = Get-Item -Force -LiteralPath $cmdLauncherPath
-    if ($manifestItem.Length -gt 65536 -or $launcherItem.Length -gt 65536 -or $cmdLauncherItem.Length -gt 8192) { return $false }
-    $manifest = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
-    if ($manifest.name -ne "blue-tanuki-workspace" -or $manifest.private -ne $true) { return $false }
-    $launcherContent = Get-Content -LiteralPath $launcherPath -Raw
-    $cmdLauncherContent = Get-Content -LiteralPath $cmdLauncherPath -Raw
-  } catch {
-    return $false
-  }
-
-  $expectedBindings = @(
-    ('$env:BLUE_TANUKI_ENV_FILE = "' + $envPath + '"'),
-    ('Set-Location "' + $targetInstallRoot + '"'),
-    ('$residentScript = Join-Path "' + $targetInstallRoot + '" "install\resident\blue-tanuki-resident.ps1"'),
-    ('-InstallRoot "' + $targetInstallRoot + '" -EnvFile "' + $envPath + '" -DataRoot "' + $targetDataRoot + '" -Launcher "' + $launcherPath + '"')
-  )
-  foreach ($binding in $expectedBindings) {
-    if ($launcherContent.IndexOf($binding, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
-  }
-  $expectedCommand = 'powershell -ExecutionPolicy Bypass -File "' + $launcherPath + '" %*'
-  return $cmdLauncherContent.IndexOf($expectedCommand, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-}
-
 function Assert-ReplaceableInstallRoot($TargetRoot) {
   if (-not (Test-Path -LiteralPath $TargetRoot)) { return }
   if (-not $Force) {
     Fail "$TargetRoot already exists. Re-run with -Force to replace the app. Add -ResetConfig only if you also want to regenerate the env file."
   }
+  try {
+    $classification = Assert-ManagedWindowsDevelopmentInstall -InstallRoot $TargetRoot -DataRoot $dataRootResolved -AllowLegacy
+  } catch {
+    Fail "Refusing to replace $TargetRoot because ownership and installed structure could not be verified. No files were removed. $($_.Exception.Message)"
+  }
   if ($WhatIfPreference) {
-    Write-Host "WhatIf preview only: an existing target is replaceable only when its development-install marker matches both current targets or the exact default legacy install signature matches."
+    Write-Host "WhatIf preview only: managed development install verified ($classification); user data remains at $dataRootResolved."
     return
-  }
-
-  $rootItem = Get-Item -Force -LiteralPath $TargetRoot
-  if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    Fail "Refusing to replace an install target that is not a real directory: $TargetRoot"
-  }
-
-  $markerPath = Join-Path $TargetRoot "blue-tanuki-development-install.json"
-  if (-not (Test-Path -LiteralPath $markerPath)) {
-    if (Test-LegacyDevelopmentInstall $TargetRoot) {
-      return
-    }
-    Fail "Refusing to replace $TargetRoot because it is not a recognized BLUE-TANUKI development install. No files were removed."
-  }
-  if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker is not a regular file. No files were removed."
-  }
-  $markerItem = Get-Item -Force -LiteralPath $markerPath
-  if (($markerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    Fail "Refusing to replace an install target with a redirected ownership marker: $markerPath"
-  }
-
-  $marker = $null
-  try {
-    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-  } catch {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker is invalid. No files were removed."
-  }
-
-  if ($null -eq $marker) {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker is empty. No files were removed."
-  }
-  $properties = @($marker.PSObject.Properties.Name)
-  if ($properties -notcontains "schema_version" -or $properties -notcontains "product_id" -or
-      $properties -notcontains "install_root" -or $properties -notcontains "data_root" -or
-      $marker.schema_version -ne 1 -or $marker.product_id -ne "blue-tanuki-development-install") {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker is not recognized. No files were removed."
-  }
-
-  try {
-    $markerInstallRoot = Get-InstallPathIdentity ([string]$marker.install_root)
-    $markerDataRoot = Get-InstallPathIdentity ([string]$marker.data_root)
-    $targetInstallRoot = Get-InstallPathIdentity $TargetRoot
-    $targetDataRoot = Get-InstallPathIdentity $dataRootResolved
-  } catch {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker contains invalid paths. No files were removed."
-  }
-  if (-not [System.String]::Equals($markerInstallRoot, $targetInstallRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-      -not [System.String]::Equals($markerDataRoot, $targetDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    Fail "Refusing to replace $TargetRoot because its BLUE-TANUKI install marker does not match the current targets. No files were removed."
   }
 }
 
 function Write-DevelopmentInstallMarker($TargetRoot) {
+  $managedFilesSha256 = Write-ManagedTreeInventory -Root $TargetRoot `
+    -MetadataFileName "blue-tanuki-development-install.json" -InventoryFileName "blue-tanuki-managed-files.json" `
+    -ProductId "blue-tanuki-development-install"
   $marker = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     product_id = "blue-tanuki-development-install"
     install_root = $TargetRoot
     data_root = $dataRootResolved
+    managed_files_sha256 = $managedFilesSha256
   }
   $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $TargetRoot "blue-tanuki-development-install.json") -Encoding UTF8
+}
+
+function Write-DevelopmentDataMarker {
+  $marker = [ordered]@{
+    schema_version = 1
+    product_id = "blue-tanuki-development-data"
+    install_root = $installRootResolved
+    data_root = $dataRootResolved
+    launcher_path = $launcher
+    launcher_sha256 = Get-Sha256HexFromFile -Path $launcher
+    cmd_launcher_path = $cmdLauncher
+    cmd_launcher_sha256 = Get-Sha256HexFromFile -Path $cmdLauncher
+  }
+  $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $dataRootResolved "blue-tanuki-development-data.json") -Encoding UTF8
 }
 
 function Require-Command($Name, $Hint) {
@@ -196,16 +105,19 @@ function Copy-App {
   $SourceRoot = $safeTargets.SourceRoot
   Assert-ReplaceableInstallRoot $TargetRoot
   if (Test-Path -LiteralPath $TargetRoot) {
+    try { Assert-NoReparsePointsInTree -Path $TargetRoot -Label "DevelopmentInstallRoot" } catch {
+      Fail "Refusing to recursively replace $TargetRoot. $($_.Exception.Message)"
+    }
     Remove-Item -LiteralPath $TargetRoot -Recurse -Force
   }
   New-Item -ItemType Directory -Force -Path $TargetRoot | Out-Null
-  Write-DevelopmentInstallMarker $TargetRoot
   $exclude = @("node_modules", ".git", ".codex-tmp", ".blue-tanuki", "blue-tanuki-development-install.json", "release")
   Get-ChildItem -Force -LiteralPath $SourceRoot |
     Where-Object { $exclude -notcontains $_.Name } |
     ForEach-Object {
       Copy-Item -LiteralPath $_.FullName -Destination $TargetRoot -Recurse -Force
     }
+  Write-DevelopmentInstallMarker $TargetRoot
 }
 
 function Invoke-SetupIfNeeded {
@@ -270,13 +182,15 @@ $binRoot = Join-Path $dataRootResolved "bin"
 $launcher = Join-Path $binRoot "blue-tanuki.ps1"
 $cmdLauncher = Join-Path $binRoot "blue-tanuki.cmd"
 
+[void](Assert-ManagedWindowsDevelopmentData -DataRoot $dataRootResolved -InstallRoot $installRootResolved -AllowEmpty)
+
 Assert-ReplaceableInstallRoot $installRootResolved
 
 Write-Host "Install plan:"
 Write-Host "  App target: $installRootResolved"
 Write-Host "  User data:  $dataRootResolved"
 Write-Host "  Force replacement requested: $([bool]$Force)"
-if (-not $PSCmdlet.ShouldProcess($installRootResolved, "Install BLUE-TANUKI; replace only a matching marked or narrowly recognized legacy app and preserve user data at $dataRootResolved")) {
+if (-not $PSCmdlet.ShouldProcess($installRootResolved, "Install BLUE-TANUKI; replace only an inventory-verified development app and preserve user data at $dataRootResolved")) {
   Write-Host "No changes made."
   exit 0
 }
@@ -303,6 +217,8 @@ Invoke-SetupIfNeeded
 if (-not $SkipDoctor) {
   Invoke-PostInstallDoctor
 }
+
+Write-DevelopmentInstallMarker $installRootResolved
 
 @"
 param(
@@ -390,6 +306,8 @@ switch (`$cmd) {
 @echo off
 powershell -ExecutionPolicy Bypass -File "$launcher" %*
 "@ | Set-Content -LiteralPath $cmdLauncher -Encoding ASCII
+
+Write-DevelopmentDataMarker
 
 Write-Host ""
 Write-Host "BLUE-TANUKI installed."

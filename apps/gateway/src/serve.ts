@@ -398,7 +398,7 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     return [...header, ...lines].join("\n");
   }
   const header = [
-    "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容や検索完全性は保証しません。",
+    "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
     `観測ファイル数: ${projection.visited_files}`,
     `一致行数: ${projection.matches.length}`,
@@ -3252,9 +3252,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
-    const restoreEffectScope = arguments_.scope_kind === "task_identity"
-      ? "selected_task_lineage"
-      : "entire_selected_store";
+    const restoreEffectScope = toolName === "recovery.restore" &&
+      arguments_.store_key === "operation_plans" && arguments_.scope_kind === "operation_plan"
+      ? "selected_operation_plan"
+      : arguments_.scope_kind === "task_identity"
+        ? "selected_task_lineage"
+        : "entire_selected_store";
     if (toolName === "recovery.restore" && arguments_.store_key === "cron_events" &&
         Array.from(pendingApprovals.values()).some((pending) => pending.cron_event !== undefined)) {
       return {

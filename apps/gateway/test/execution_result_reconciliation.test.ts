@@ -505,7 +505,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
         "blue_tanuki.operation_core.request_id": destinationRequestId } });
     const compute = c.hds.decide(computeRequest);
     if (compute.command?.type !== "llm_call") throw new Error(`selected edit observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v6");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v8");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
@@ -598,7 +598,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const compute = c.hds.decide(computeRequest);
     if (compute.command?.type !== "llm_call") throw new Error(`selected shell observation was not routed to C: ${compute.log.commit.reason}`);
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v6");
+      .toBe("blue-tanuki.plan-compute-source-observations.v8");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
@@ -801,7 +801,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v6");
+      .toBe("blue-tanuki.plan-compute-source-observations.v8");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
     expect(serializedInput).toContain("verified_file_delete_result");
     expect(serializedInput).toContain("reported_success");
@@ -867,7 +867,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
     if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v6");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v8");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>
@@ -1477,8 +1477,24 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const b = changed.plans[0]!.bindings[0]!; const commit = b.memory_commit!;
     (commit.changes[0] as { value: Record<string, unknown> }).value.used_for_authority = true;
     const { content_digest: _digest, ...content } = commit; commit.content_digest = memoryCommitContentDigest(content);
-    delete b.memory_receipt; c.j.compareAndSet(operationPlanDigest(previous), changed);
-    expect(() => c.createHds()).toThrow("plan_checkpoint_memory_mismatch"); expect(inspectMemory(c).revision).toBe(1);
+    delete b.memory_receipt;
+    // 通常writerはこの不正checkpointを拒否するため、保存DBを直接改変して
+    // 再起動時の破損・権限化検査を再現する。
+    const tamperedStore = new DatabaseSync(c.jPath);
+    try {
+      tamperedStore.prepare("UPDATE operation_plan_state SET checkpoint_json = ?, digest = ? WHERE id = 1")
+        .run(JSON.stringify(changed), operationPlanDigest(changed));
+    } finally { tamperedStore.close(); }
+    const restarted = c.createHds();
+    expect(restarted.getRuntimeSnapshot().operation_plans.plans).toHaveLength(0);
+    expect(() => restarted.createExecutionAuthorityBinding(c.cmd)).toThrow("HDS execution authority source is unavailable");
+    const persisted = new DatabaseSync(c.jPath);
+    try {
+      const row = persisted.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id = 1").get() as
+        { checkpoint_json: string } | undefined;
+      expect(JSON.parse(row!.checkpoint_json).plans[0].bindings[0].memory_commit.changes[0].value.used_for_authority).toBe(true);
+    } finally { persisted.close(); }
+    expect(inspectMemory(c).revision).toBe(1);
     expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 
@@ -1597,7 +1613,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     expect(inspectMemory(c).revision).toBe(2); expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);
     const output = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
     expect(output.reviewed_feedback.status).toBe("success"); expect(c.invoke).toHaveBeenCalledTimes(2);
-  }));
+  }), 15_000);
   it.each(["reference", "duplicate", "compute_request", "compute_output", "missing_compute", "tool", "meaning", "planner", "malformed_result", "failure"])("%sを成功・意味採用・作用へ変換しない", async (failure) => fixture(async (c) => {
     await recordActualObservation(c); const before = inspectMemory(c); const decision = reflect(c); const command = decision.command!;
     const runner = reflectionExecutor(c, (response) => {

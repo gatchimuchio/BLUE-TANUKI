@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
 import {
+  createGatewayInternalInboundRequest,
   MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
   meaningUpdateCandidateDigest,
 } from "@blue-tanuki/protocol";
@@ -32,10 +33,19 @@ function setup(memory = new LongTermMemoryStore()) {
   const hds = new HDSUpperController({ memory });
   hds.decide(inbound("first source fact", "citation-support"));
   hds.decide(inbound("second source counterpoint", "citation-counter"));
-  const decided = hds.decide(inbound(
-    "compare F:citation-support with F:citation-counter",
-    "citation-current-request",
-  ));
+  const decided = hds.decide(createGatewayInternalInboundRequest({
+    id: "citation-current-request",
+    channel: "test",
+    user: "fixture-owner",
+    content: "compare F:citation-support with F:citation-counter",
+    timestamp: Date.now(),
+    metadata: {
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner",
+    },
+  }));
   if (!decided.command || decided.command.type !== "llm_call") {
     throw new Error("expected an HDS-routed LLM command");
   }

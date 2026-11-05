@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { createRequire } from "node:module";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
@@ -8,12 +9,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const maintenanceToken = "recovery-l3-maintenance-test-token";
 const resumeToken = "recovery-l3-owner-resume-test-token";
@@ -200,6 +203,11 @@ describe("Recovery mutation HDS L3 entry", () => {
       const freshPlanRuntimeEnv = {
         ...runtimeEnv,
         LLM_BACKEND: "synthetic-plan-provider",
+          BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+          BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+            "synthetic-plan-provider": { capabilities: ["llm.text.generate"],
+              max_cost_per_attempt: { amount: 0, currency: "USD" } },
+          }),
         LLM_PROVIDERS_JSON: JSON.stringify([{
           name: "synthetic-plan-provider",
           endpoint: syntheticProvider.endpoint,
@@ -233,7 +241,10 @@ describe("Recovery mutation HDS L3 entry", () => {
         expect(freshPlanRequest.status, `${JSON.stringify(freshPlanRequest.body)}\n${gateway.output.join("")}`).toBe(202);
         freshPlanRequestId = freshPlanRequest.body.request_id as string;
         await waitForHistoryDecision(port, gateway, freshPlanRequestId);
-        await freshPlanReply;
+        const freshPlanMessage = await freshPlanReply;
+        const providerCallsAfterCompute = syntheticProvider.callCount();
+        expect(providerCallsAfterCompute,
+          `${freshPlanMessage}\nprovider_request_ids=${JSON.stringify(syntheticProvider.requestIds())}\n${gateway.output.join("")}`).toBe(5);
 
         let freshRuntime: { body: Record<string, unknown> } | undefined;
         const planDeadline = Date.now() + 5_000;
@@ -246,7 +257,8 @@ describe("Recovery mutation HDS L3 entry", () => {
         }
         const retainedPlans = ((freshRuntime?.body.hds as { operation_plans?: { plans?: Array<Record<string, unknown>> } })
           .operation_plans?.plans ?? []);
-        expect(retainedPlans, gateway.output.join("")).toHaveLength(2);
+        expect(retainedPlans, `${freshPlanMessage}\nprovider_calls=${syntheticProvider.callCount()} ` +
+          `provider_failure=${syntheticProvider.failureReason() ?? "none"}\n${gateway.output.join("")}`).toHaveLength(2);
         const heldPlan = retainedPlans.find((plan) => plan.plan_id === planIdDigest);
         const freshPlan = retainedPlans.find((plan) => plan.plan_id !== planIdDigest);
         expect(heldPlan).toMatchObject({ recovery_hold_reason: "held_unverified" });
@@ -272,7 +284,8 @@ describe("Recovery mutation HDS L3 entry", () => {
         expect(((reviewedRuntime.body.hds as { operation_plans: { plans: Array<Record<string, unknown>> } })
           .operation_plans.plans.find((plan) => plan.plan_id === planIdDigest)))
           .toMatchObject({ recovery_hold_reason: "held_unverified" });
-        expect(syntheticProvider.callCount()).toBe(1);
+        // Current plan compute uses four bounded child roles plus one parent synthesis call.
+        expect(syntheticProvider.callCount(), `provider calls after compute=${providerCallsAfterCompute}`).toBe(5);
 
         const combinedRecoveryInspection = await requestJson(port, "/recovery/inspection", { token: maintenanceToken });
         expect(combinedRecoveryInspection.status, gateway.output.join("")).toBe(200);
@@ -307,10 +320,12 @@ describe("Recovery mutation HDS L3 entry", () => {
         expect(JSON.stringify(combinedRecoveryInspection.body)).not.toContain("restore-review-plan");
         expect(JSON.stringify(combinedRecoveryInspection.body)).not.toContain("fresh-request-plan");
 
-        const planInspectionStore = new OperationPlanStateStore(planStatePath);
+        const planInspectionDatabase = new DatabaseSync(planStatePath);
         try {
-          const currentCheckpoint = planInspectionStore.load();
-          if (!currentCheckpoint) throw new Error("Operation Plan checkpoint disappeared during the test");
+          const row = planInspectionDatabase.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as
+            { checkpoint_json: string } | undefined;
+          if (!row) throw new Error("Operation Plan checkpoint disappeared during the test");
+          const currentCheckpoint = OperationPlanCheckpointSchema.parse(JSON.parse(row.checkpoint_json) as unknown);
           const damagedCheckpoint = OperationPlanCheckpointSchema.parse({
             ...currentCheckpoint,
             plans: currentCheckpoint.plans.map((planState) => planState.revisions[0]?.plan.plan_id !== "restore-review-plan"
@@ -322,7 +337,14 @@ describe("Recovery mutation HDS L3 entry", () => {
                     : revision),
                 }),
           });
-          planInspectionStore.compareAndSet(operationPlanDigest(currentCheckpoint), damagedCheckpoint);
+          const damagedJson = JSON.stringify(damagedCheckpoint);
+          planInspectionDatabase.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+            .run(damagedJson, operationPlanDigest(damagedCheckpoint));
+        } finally {
+          planInspectionDatabase.close();
+        }
+        const planInspectionStore = new OperationPlanStateStore(planStatePath);
+        try {
           expect(planInspectionStore.loadRecoveryHoldState()).toMatchObject({
             holds: [{ plan_id_digest: planIdDigest, reason: "held_unverified" }],
             used_for_authority: false,
@@ -394,7 +416,7 @@ describe("Recovery mutation HDS L3 entry", () => {
           may_execute: false,
         });
         expect(restartedStore.load()?.plans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)))
-          .toEqual(expect.arrayContaining([planIdDigest, operationPlanDigest("fresh-request-plan")]));
+          .toEqual([operationPlanDigest("fresh-request-plan")]);
       } finally {
         restartedStore.close();
       }
@@ -616,7 +638,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
-  it("restores a verified Operation Plan store through L3, gates dependent review on its result, and holds only the residual collateral plan", async () => {
+  it("restores one verified plan through L3, preserves the collateral plan hold, and gates dependent review on its result", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-operation-plan-restore-l3-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
@@ -665,17 +687,26 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(backup.status).toBe(200);
       const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
 
-      // Change only the fixture's selected SQLite store after backup. The running
-      // Gateway then has to consume the restored checkpoint through its HDS refresh.
+      // Remove only the selected plan after backup. Selective restore must preserve
+      // the live collateral plan and then expose it as held residual state.
       const changedStore = new OperationPlanStateStore(planStatePath);
       try {
         const current = changedStore.load();
         expect(current?.plans).toHaveLength(2);
-        const empty = OperationPlanCheckpointSchema.parse({
-          schema_version: "operation-plan-state.v1",
-          plans: [],
+        const holdsBeforeRestore = changedStore.loadRecoveryHoldState();
+        expect(holdsBeforeRestore?.holds).toEqual(expect.arrayContaining([
+          { plan_id_digest: cleanPlanIdDigest, reason: "held_unverified", restore_scope_relation: "unknown",
+            provenance: expect.any(Object) },
+          { plan_id_digest: residualPlanIdDigest, reason: "held_unverified", restore_scope_relation: "unknown",
+            provenance: expect.any(Object) },
+        ]));
+        expect(holdsBeforeRestore).toMatchObject({ used_for_authority: false, may_execute: false });
+        const withoutSelectedPlan = OperationPlanCheckpointSchema.parse({
+          ...current,
+          plans: current?.plans.filter((plan) =>
+            operationPlanDigest(plan.revisions[0]!.plan.plan_id) === residualPlanIdDigest) ?? [],
         });
-        changedStore.compareAndSet(current ? operationPlanDigest(current) : null, empty);
+        changedStore.compareAndSet(current ? operationPlanDigest(current) : null, withoutSelectedPlan);
       } finally {
         changedStore.close();
       }
@@ -692,13 +723,13 @@ describe("Recovery mutation HDS L3 entry", () => {
         },
       });
       const expectedTarget =
-        `recovery.restore:${backupId}:store:operation_plans:effect:whole_store:scope:operation_plan:${cleanPlanIdDigest}`;
+        `recovery.restore:${backupId}:store:operation_plans:effect:selected_operation_plan:scope:operation_plan:${cleanPlanIdDigest}`;
       expect(queued.status, JSON.stringify(queued.body)).toBe(202);
       expect(queued.body).toMatchObject({ ok: true, result: {
         status: "approval_required",
         executed: false,
         target: expectedTarget,
-        restore_effect_scope: "entire_selected_store",
+        restore_effect_scope: "selected_operation_plan",
         scope_applicability: {
           status: "matched",
           matched_plan_id_digest: cleanPlanIdDigest,
@@ -733,9 +764,10 @@ describe("Recovery mutation HDS L3 entry", () => {
       const restoredStore = new OperationPlanStateStore(planStatePath);
       try {
         expect(restoredStore.load()?.plans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)))
-          .toEqual([cleanPlanIdDigest, residualPlanIdDigest]);
+          .toEqual(expect.arrayContaining([cleanPlanIdDigest, residualPlanIdDigest]));
+        expect(restoredStore.load()?.plans).toHaveLength(2);
         expect(restoredStore.loadRecoveryHoldState()).toMatchObject({
-          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_residual" }],
+          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_unverified" }],
           used_for_authority: false,
           may_execute: false,
         });
@@ -746,7 +778,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       const runtimePlans = runtime.body.hds.operation_plans.plans as Array<Record<string, unknown>>;
       expect(runtimePlans).toEqual(expect.arrayContaining([
         expect.objectContaining({ plan_id: cleanPlanIdDigest }),
-        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_unverified" }),
       ]));
       expect(runtimePlans.find((plan) => plan.plan_id === cleanPlanIdDigest)?.recovery_hold_reason).toBeUndefined();
       expect(runtime.body.hds.operation_plans.used_for_authority).toBe(false);
@@ -765,7 +797,8 @@ describe("Recovery mutation HDS L3 entry", () => {
       cleanPlanReviewRequestId = cleanReview.body.request_id as string;
       await waitForHistoryDecision(port, gateway, cleanPlanReviewRequestId);
       const cleanReviewRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
-      expect(cleanReviewRuntime.body.pending_approvals, gateway.output.join("")).toEqual(expect.arrayContaining([
+      expect(cleanReviewRuntime.body.pending_approvals,
+        `${JSON.stringify(cleanReviewRuntime.body.hds.operation_plans)}\n${gateway.output.join("")}`).toEqual(expect.arrayContaining([
         expect.objectContaining({ request_id: cleanPlanReviewRequestId, operation: "tool.file.search", approval_level: "L1_observe" }),
       ]));
 
@@ -787,7 +820,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       ]);
       expect(afterResidualReview.body.hds.operation_plans.plans).toEqual(expect.arrayContaining([
         expect.objectContaining({ plan_id: cleanPlanIdDigest }),
-        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_unverified" }),
       ]));
 
       const prematureDependentReview = await requestJson(port, "/operators/developer/invoke", {
@@ -841,7 +874,7 @@ describe("Recovery mutation HDS L3 entry", () => {
             expect.objectContaining({ step_id: operationPlanDigest("restore-clean-step-dependent"), status: "not_selected" }),
           ]),
         }),
-        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_unverified" }),
       ]));
       expect(afterCleanSearch.body.hds.operation_plans.used_for_authority).toBe(false);
       expect(afterCleanSearch.body.hds.operation_plans.raw_payload_exposed).toBe(false);
@@ -899,7 +932,7 @@ describe("Recovery mutation HDS L3 entry", () => {
             expect.objectContaining({ step_id: operationPlanDigest("restore-clean-step-dependent"), status: "verified" }),
           ]),
         }),
-        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_unverified" }),
       ]));
       expect(JSON.stringify(afterDependentSearch.body)).not.toContain(searchLine);
       expect(afterDependentSearch.body.hds.operation_plans.used_for_authority).toBe(false);
@@ -932,7 +965,7 @@ describe("Recovery mutation HDS L3 entry", () => {
               }),
             ]),
           }),
-          expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+          expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_unverified" }),
         ]),
       });
       expect(JSON.stringify(afterDependentSearch.body.operation_plan_status)).not.toContain(searchLine);
@@ -977,7 +1010,7 @@ describe("Recovery mutation HDS L3 entry", () => {
           }),
         ]);
         expect(resultStore.loadRecoveryHoldState()).toMatchObject({
-          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_residual" }],
+          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_unverified" }],
           used_for_authority: false,
           may_execute: false,
         });
@@ -1007,7 +1040,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     expect(JSON.stringify(dependentExecutionHistory)).not.toContain(searchLine);
     expect(reviewHistory.replay({ kind: "hds_decision", request_id: residualPlanReviewRequestId! })[0]?.payload).toMatchObject({
       decision: "FAIL",
-      reason: "plan_control_denied:plan_recovery_residual_hold",
+      reason: "plan_control_denied:plan_recovery_unverified_hold",
       command: null,
     });
     expect(reviewHistory.replay({ kind: "hds_decision", request_id: prematureDependentReviewRequestId! })[0]?.payload).toMatchObject({
@@ -1059,7 +1092,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         result: {
           status: "blocked_unverified_scope",
           executed: false,
-          restore_effect_scope: "entire_selected_store",
+          restore_effect_scope: "selected_operation_plan",
           used_for_authority: false,
           may_execute: false,
           scope_applicability: { status: "unverified", used_for_authority: false, may_execute: false },
@@ -1082,7 +1115,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         },
       });
       const expectedPlanRestoreTarget =
-        `recovery.restore:${backupId}:store:operation_plans:effect:whole_store:scope:operation_plan:${planScopeDigest}`;
+        `recovery.restore:${backupId}:store:operation_plans:effect:selected_operation_plan:scope:operation_plan:${planScopeDigest}`;
       expect(planRestoreQueued.status, JSON.stringify(planRestoreQueued.body)).toBe(202);
       expect(planRestoreQueued.body).toMatchObject({
         ok: true,
@@ -1091,7 +1124,7 @@ describe("Recovery mutation HDS L3 entry", () => {
           executed: false,
           operation: "recovery.restore",
           target: expectedPlanRestoreTarget,
-          restore_effect_scope: "entire_selected_store",
+          restore_effect_scope: "selected_operation_plan",
           scope_applicability: {
             status: "matched",
             scope_digest: planScopeDigest,
@@ -1347,6 +1380,7 @@ function seedOperationPlanState(filepath: string): {
       owner: "fixture-owner",
       channel: "webchat",
       goal: "fixture recovery review",
+      request_goal_criteria: noRequestCriteria("fixture recovery review", plan.request_id),
       revisions: [{ digest: revisionDigest, plan }],
       receipt_observations: [],
       bindings: [],
@@ -1412,6 +1446,7 @@ function seedMixedOperationPlanRestoreState(filepath: string, cleanSearch: Synth
         owner: "fixture-owner",
         channel: "webchat",
         goal: "fixture clean collateral plan",
+        request_goal_criteria: noRequestCriteria("fixture clean collateral plan", cleanPlan.request_id),
         revisions: [{ digest: cleanRevisionDigest, plan: cleanPlan }],
         receipt_observations: [],
         bindings: [],
@@ -1421,6 +1456,7 @@ function seedMixedOperationPlanRestoreState(filepath: string, cleanSearch: Synth
         owner: "fixture-owner",
         channel: "webchat",
         goal: "fixture residual collateral plan",
+        request_goal_criteria: noRequestCriteria("fixture residual collateral plan", residualPlan.request_id),
         revisions: [{ digest: residualRevisionDigest, plan: residualPlan }],
         receipt_observations: [],
         bindings: [residualBinding],
@@ -1449,6 +1485,16 @@ type SyntheticFileSearchFixture = {
   expectedResult: Record<string, unknown>;
   dependentExpectedResult?: Record<string, unknown>;
 };
+
+function noRequestCriteria(content: string, requestId: string) {
+  return {
+    status: "not_provided" as const,
+    request_id: requestId,
+    content_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    criteria: [],
+    used_for_authority: false as const,
+  };
+}
 
 function syntheticOperationPlan(requestId: string, planId: string, stepId: string, search?: SyntheticFileSearchFixture) {
   const targetId = search?.targetId ?? "fixture-workspace";
@@ -1512,9 +1558,13 @@ function syntheticOperationPlan(requestId: string, planId: string, stepId: strin
 async function startSyntheticPlanProvider(): Promise<{
   endpoint: string;
   callCount(): number;
+  requestIds(): readonly string[];
+  failureReason(): string | undefined;
   close(): Promise<void>;
 }> {
   let calls = 0;
+  const requestIds: string[] = [];
+  let failureReason: string | undefined;
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -1524,9 +1574,14 @@ async function startSyntheticPlanProvider(): Promise<{
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
           messages?: Array<{ role?: unknown; content?: unknown }>;
         };
-        const system = body.messages?.find((message) => message.role === "system")?.content;
-        const requestId = typeof system === "string" ? /固定request_id=([^。]+)/.exec(system)?.[1] : undefined;
+        const requestId = body.messages?.flatMap((message) => {
+          if (message.role !== "system" || typeof message.content !== "string") return [];
+          const value = /固定request_id=([^。]+)/.exec(message.content)?.[1];
+          return value ? [value] : [];
+        })[0];
+        if (requestId) requestIds.push(requestId);
         if (!requestId) {
+          failureReason = `synthetic request binding missing at ${request.url ?? "unknown path"}`;
           response.writeHead(400, { "content-type": "application/json" });
           response.end(JSON.stringify({ error: "synthetic request binding missing" }));
           return;
@@ -1541,6 +1596,7 @@ async function startSyntheticPlanProvider(): Promise<{
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         }));
       } catch {
+        failureReason = `synthetic request invalid at ${request.url ?? "unknown path"}`;
         response.writeHead(400, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "synthetic request invalid" }));
       }
@@ -1553,6 +1609,8 @@ async function startSyntheticPlanProvider(): Promise<{
   return {
     endpoint: `http://127.0.0.1:${address.port}/v1/chat/completions`,
     callCount: () => calls,
+    requestIds: () => [...requestIds],
+    failureReason: () => failureReason,
     close: () => new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     }),

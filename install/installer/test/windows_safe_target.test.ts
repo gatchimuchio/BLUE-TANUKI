@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -78,9 +78,11 @@ describe("Windows developer installer target guard", () => {
         ],
         { cwd: root, encoding: "utf8" },
       );
-      expect(forceWhatIf.status, `${forceWhatIf.stdout}\n${forceWhatIf.stderr}`).toBe(0);
-      expect(`${forceWhatIf.stdout}\n${forceWhatIf.stderr}`).toContain("What if:");
+      const forceOutput = `${forceWhatIf.stdout}\n${forceWhatIf.stderr}`;
+      expect(forceWhatIf.status).not.toBe(0);
+      expect(forceOutput).toMatch(/ownership|managed|marker|verify/i);
       expect(existsSync(marker)).toBe(true);
+      expect(readFileSync(marker, "utf8")).toBe("fixture marker\n");
       expect(existsSync(data)).toBe(false);
     } finally {
       rmSync(temp, { recursive: true, force: true });

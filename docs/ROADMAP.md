@@ -6,6 +6,10 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 現在のowner作業ポインタ — 2026-11-05
+
+現在進行する施工は一回限りのリポジトリ健全化である。対象・非対象・完了条件は先頭の [`開発進捗.md`](開発進捗.md) を参照する。以下のF02.02等の日付付きBUILD_BATCH記録は当時の開発履歴であり、今回の実施対象や次のfeature BUILD_BATCHを指さない。F05.02を含む製品機能の追加、QE_QC／QE_QA、公開・出荷判断はこの作業では開始しない。
+
 2026-11-01、Control CenterのWebSocket再接続枠を成功接続ごとに回復するよう修正した。再接続成功後に失敗回数を0へ戻し、自動再接続であることは接続試行のローカル値で保つ。taskの再送・切断中frameの再配送は行わない。channel-webchat typecheck／build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。browser／Gateway process確認はNOT_RUN、STATUS=WIRED（静的接続、実接続未確認）。
 
 2026-11-01、Gateway再起動後の同一plan `plan:result` consumerへverified `file.write`／`file.delete`保存結果のdigest／M receipt束縛要約を追加した。writeは相対path・byte数のみ、deleteは相対path・削除時点の報告のみを返し、本文・sandbox絶対root・現在状態を返さず再実行もしない。HDS-BRAIN／Gateway typecheck・build、`pnpm docs:check`、`git diff --check`はPASS。process／browser／test suiteはNOT_RUNで、STATUS=WIRED（コード接続、runtime未確認）。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
@@ -18,7 +22,7 @@
 
 2026-11-01、単一fileのbounded `file.read` previewに開始行指定を接続した。exact sandbox相対pathと空queryの組合せに限定し、開始行は1〜1,000,000、返却は最大5行のまま。候補の開始行をOperation Plan validationへ結び、返却行番号の連続性を照合する。保存済みOwner結果にも開始行を表示し、既存のroot／file version確認、Approval／Broker、M receipt、非権威projectionを維持する。実装初回のworkspace `pnpm typecheck`／`pnpm build`はPASS。controller promptの最終追記後はHDS no-emit typecheck／package build、`pnpm docs:check`、`git diff --check`がPASS。workspace typecheck再実行は`apps/gateway/dist/active_task_execution_registry.js`の削除時`EBUSY`でclean段階停止。test／Gateway process／browser／provider／外部作用はNOT_RUN。STATUS=WIRED（型・build・実consumer接続の静的確認）、runtime未確認。F01.01、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。
 
-## 現在のBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
+## 最後に記録されたBUILD_BATCH — F02.02 Gmail添付identityからcontent-bound draft.create
 
 OwnerがUIで明示選択した、期限内の`gmail.read view=attachment_identity`結果だけをsourceにする。message／attachment／part identity・filename・MIME・size・SHA-256を厳密再照合し、最大5 MiBの添付bytesはprocess memoryだけで取得する。C、plan、command、履歴、audit、Control Center projectionにはbytesを渡さず、no-store L3 reviewへ宛先・件名・本文とfilename／MIME／size／SHA-256を表示する。HDSは選択結果を同一task／plan／revisionへ再照合し、添付一件のidentity・content hashが完全一致する未実行`gmail.write draft.create`候補だけを受理する。添付付き`message.send`／`draft.send`、Owner選択なし、別添付、内容からの目的・宛先・権限推定は拒否する。
 

@@ -74,7 +74,50 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         providerCalls += 1;
         const raw = await readRequest(request);
         const body = JSON.parse(raw) as { messages?: Array<{ content?: unknown }> };
-        const contexts = (body.messages ?? []).flatMap((message) => {
+        const messages = body.messages ?? [];
+        const citationMessage = messages.find((message) => typeof message.content === "string" &&
+          message.content.includes("source_citation_request_id"))?.content;
+        if (typeof citationMessage === "string") {
+          let citationContext: { source_citation_request_id?: string; dependencies?: Array<{ reference?: { record_id?: string; version?: string } }> } | undefined;
+          if (typeof citationMessage === "string") {
+            try { citationContext = JSON.parse(citationMessage.slice(citationMessage.indexOf("\n") + 1)) as typeof citationContext; }
+            catch { /* validated below */ }
+          }
+          const supportDependency = citationContext?.dependencies?.find((item) =>
+            item.reference?.record_id === support.f_reference && item.reference.version === support.entry_hash);
+          if (!planComputeRequestId || !citationContext?.source_citation_request_id || !supportDependency ||
+              messages.some((message) => typeof message.content === "string" &&
+                message.content.includes("blue-tanuki.memory-candidates.v1"))) {
+            throw new Error("plan compute did not receive only its J-selected current citation dependency");
+          }
+          const plan = {
+            version: "operation-core.v1",
+            plan_id: `c0702-post-reassessment-plan:${planComputeRequestId}`,
+            request_id: planComputeRequestId,
+            state: "planned",
+            steps: [{ step_id: "delete-synthetic-target", operation: "file.delete",
+              target: { kind: "file", id: "delete-target.txt" }, state: "planned", effects: ["delete"],
+              permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+                hds_brain_authority_required: true, approval_gate_required: true },
+              adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+              parameters: { path: "delete-target.txt", max_bytes: 128 },
+              preparation: { depends_on: [], bindings: [], preconditions: [],
+                validation: [{ check_id: "deleted-synthetic-target", method: "result_equals",
+                  target: { kind: "file", id: "delete-target.txt" }, expected: { deleted: true } }],
+                compensation: { available: false,
+                  reason: "deletion requires a separate owner-reviewed create operation to recover" } } }],
+            rollback: { available: false },
+            raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+            planner_output_used_for_authority: false,
+            hds_brain_authority_required: true,
+          };
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "c0702-local-fixture", object: "chat.completion", created: 1,
+            model: "c0702-local-fixture", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify({ plan }) },
+              finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        const contexts = messages.flatMap((message) => {
           if (typeof message.content !== "string" || !message.content.includes("blue-tanuki.memory-candidates.v1")) return [];
           const jsonStart = message.content.indexOf("\n") + 1;
           try { return [JSON.parse(message.content.slice(jsonStart)) as {
@@ -85,7 +128,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           item.version === support.entry_hash) && context.records?.some((item) => item.record_id === counter.f_reference &&
           item.version === counter.entry_hash));
         const context = contexts.at(-1);
-        if (!context) throw new Error("current-M projection with both synthetic references was not sent to C");
+        if (!context) throw new Error(`current-M projection with both synthetic references was not sent to C; provider_call=${providerCalls}`);
         const planId = context.search_plan?.plan_id;
         const applicationScopeId = context.search_plan?.application_scope_id;
         const records = context.records ?? [];
@@ -116,31 +159,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           may_apply: false as const,
           used_for_authority: false as const,
         } : undefined;
-        const plan = providerCalls === 9 ? {
-          version: "operation-core.v1",
-          plan_id: `c0702-post-reassessment-plan:${planComputeRequestId ?? "missing"}`,
-          request_id: planComputeRequestId,
-          state: "planned",
-          steps: [{ step_id: "delete-synthetic-target", operation: "file.delete",
-            target: { kind: "file", id: "delete-target.txt" }, state: "planned", effects: ["delete"],
-            permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
-              hds_brain_authority_required: true, approval_gate_required: true },
-            adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
-            parameters: { path: "delete-target.txt", max_bytes: 128 },
-            preparation: { depends_on: [], bindings: [], preconditions: [],
-              validation: [{ check_id: "deleted-synthetic-target", method: "result_equals",
-                target: { kind: "file", id: "delete-target.txt" }, expected: { deleted: true } }],
-              compensation: { available: false,
-                reason: "deletion requires a separate owner-reviewed create operation to recover" } } }],
-          rollback: { available: false },
-          raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
-          planner_output_used_for_authority: false,
-          hds_brain_authority_required: true,
-        } : undefined;
-        if (providerCalls === 9 && (!planComputeRequestId || !context)) {
-          throw new Error("post-reassessment plan compute context was not available");
-        }
-        const content = plan ? JSON.stringify({ plan }) : JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
+        const content = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
           answer: "Synthetic C response with current references.", citations: [{
             claim: "Synthetic candidate statement.",
             supporting: { record_id: currentSupport.record_id, version: currentSupport.version },
@@ -527,7 +546,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       const pendingDeleteApproval = await waitForPendingFileDeleteApproval(gatewayPort, gateway,
         () => providerFailure, auditDir);
       expect(pendingDeleteApproval).toMatchObject({ operation: "tool.file.delete", risk: "high",
-        approval_level: "L3_final_review", final_review_required: true, content_review_required: false });
+        approval_level: "L3_final_review", final_review_required: true, content_review_required: true });
       const planShadowEvent = await waitForPlanShadowAdoption(gateway);
       expect(planShadowEvent).toMatchObject({ comparison_kind: "decision", comparison_status: "matched",
         command_present: true, plan_step_adoption: { status: "matched", matches: true },
@@ -542,9 +561,28 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       expect(providerCalls).toBe(9);
 
       const deleteApprovalPath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pendingDeleteApproval.command_id))}`;
-      const deleteApproved = await fetchRespectingRetryAfter(deleteApprovalPath, { method: "POST",
+      const prematureDeleteApproval = await fetchRespectingRetryAfter(deleteApprovalPath, { method: "POST",
         headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ verdict: "approve", approval_token: pendingDeleteApproval.approval_token }) });
+      expect(prematureDeleteApproval.status).toBe(409);
+      expect(await prematureDeleteApproval.json()).toMatchObject({ error: "approval_content_review_required" });
+      expect(existsSync(join(fileRoot, "delete-target.txt"))).toBe(true);
+      const deleteContentReviewResponse = await fetchRespectingRetryAfter(`${deleteApprovalPath}/content`, {
+        method: "POST", headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      const deleteContentReview = await deleteContentReviewResponse.json() as Record<string, unknown>;
+      expect(deleteContentReviewResponse.status, JSON.stringify(deleteContentReview)).toBe(200);
+      expect(deleteContentReviewResponse.headers.get("cache-control")).toBe("no-store");
+      expect(deleteContentReview).toMatchObject({ kind: "file_delete_target", operation: "file.delete",
+        path: "delete-target.txt", used_for_authority: false, may_execute: false });
+      expect(deleteContentReview.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(deleteContentReview.review_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(deleteContentReview)).not.toContain(fileRoot);
+      expect(JSON.stringify(deleteContentReview)).not.toContain("synthetic pending-delete target");
+      const deleteApproved = await fetchRespectingRetryAfter(deleteApprovalPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pendingDeleteApproval.approval_token,
+          content_review_digest: deleteContentReview.review_digest }) });
       expect(deleteApproved.status).toBe(200);
       expect(await deleteApproved.json()).toMatchObject({ ok: true, result: {
         approval: "approve", executed: true, status: "success",

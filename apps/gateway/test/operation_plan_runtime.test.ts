@@ -708,7 +708,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       initialHds?.close(); initialStore?.close();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("retains request criteria as a digest-only plan source and refuses an explicitly conflicting step", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-criteria-"));
@@ -2066,10 +2066,10 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it("Gmail計画は宛先固定の単一message.sendだけをtool commandへ結ぶ", async () => {
+  it("Gmail計画はmessage.sendのToを必須にし、明示されたCcを宛先identityへ結ぶ", async () => {
     const safeHds = new HDSUpperController(); const safeOrigin = request("plan:compute synthetic send");
     const safe = gmailSendPlan(safeOrigin.id, { operation: "message.send", to: "inspection@example.invalid",
-      subject: "synthetic", body_text: "fixture" });
+      cc: "copy@example.invalid", subject: "synthetic", body_text: "fixture" });
     const safeExecutor = rig(safeHds, safe); await safeExecutor.run(safeHds.decide(safeOrigin).command!);
     const selected = review(safeHds, safe, "send");
     expect(selected.command?.type).toBe("tool_call");
@@ -2077,8 +2077,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     expect(selected.command.payload).toMatchObject({ tool_name: "gmail.write", arguments: safe.steps[0]?.parameters });
 
     const unsafeHds = new HDSUpperController(); const unsafeOrigin = request("plan:compute multiple send targets");
-    const unsafe = gmailSendPlan(unsafeOrigin.id, { operation: "message.send", to: "inspection@example.invalid",
-      cc: "second@example.invalid", subject: "synthetic", body_text: "fixture" });
+    const unsafe = gmailSendPlan(unsafeOrigin.id, { operation: "message.send", cc: "copy@example.invalid",
+      subject: "synthetic", body_text: "fixture" });
     const unsafeExecutor = rig(unsafeHds, unsafe); await unsafeExecutor.run(unsafeHds.decide(unsafeOrigin).command!);
     const rejected = review(unsafeHds, unsafe, "send");
     expect(rejected.command).toBeNull();

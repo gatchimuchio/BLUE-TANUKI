@@ -356,7 +356,10 @@ describe("Executor.executeToolCall - permission envelope", () => {
     expect(signalSeen).toBe(true);
     expect(aborted).toBe(true);
     expect(fb.status).toBe("failed");
-    expect(fb.error).toContain("timeout after 10ms");
+    expect(fb.error).toMatch(/^timeout after \d+ms$/);
+    const elapsedMs = Number(/^timeout after (\d+)ms$/.exec(fb.error ?? "")?.[1]);
+    expect(elapsedMs).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThanOrEqual(command.constraints?.timeout_ms ?? 0);
   });
 
   it("propagates caller cancellation to a running tool and discards its late result", async () => {

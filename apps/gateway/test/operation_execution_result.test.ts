@@ -200,7 +200,9 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
     const tools = new ToolRegistry(); tools.register({ name: "echo", description: "held fixture worker",
       invoke: async () => { invocations++; return new Promise((resolve) => { finish = resolve; }); } });
     const command = toolDecision(new HDSUpperController()).command;
-    command.constraints = { ...command.constraints, timeout_ms: 1 };
+    // Executor の同期検証・永続 admission が完了して adapter に到達した後、
+    // 未解決のfixture Promiseがtimeoutする時間を確保する。
+    command.constraints = { ...command.constraints, timeout_ms: 1000 };
     const exec = executor(tools);
     const feedback = await exec.instance.execute(exec.approve(command));
     expect(feedback.operation_core_result).toMatchObject({ state: "failed", action_outcome: "unknown", execution_boundary: "tool_adapter" });

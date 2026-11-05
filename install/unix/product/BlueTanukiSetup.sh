@@ -175,49 +175,225 @@ LAUNCHER="$INSTALL_ROOT/BlueTanukiLauncher.sh"
 UNINSTALLER="$INSTALL_ROOT/BlueTanukiUninstall.sh"
 BIN_LAUNCHER="$BIN_ROOT/blue-tanuki"
 BIN_LAUNCHER=$(safe_file_target "$BIN_LAUNCHER" "BIN_LAUNCHER")
+if [ "$PLATFORM" = "macos" ]; then
+  SURFACE_FILE=$(safe_file_target "$HOME/Applications/BlueTanuki.command" "macOS_surface_file")
+else
+  SURFACE_FILE=$(safe_file_target "${XDG_DATA_HOME:-$HOME/.local/share}/applications/blue-tanuki.desktop" "Linux_surface_file")
+fi
 
 [ -d "$PACKAGE_ROOT/app" ] || fail_source_tree
 [ -d "$PACKAGE_ROOT/runtime" ] || fail_source_tree
 [ -d "$PACKAGE_ROOT/launcher" ] || fail_source_tree
-[ -f "$PACKAGE_ROOT/unix-installer-manifest.json" ] || fail_source_tree
+[ -f "$PACKAGE_ROOT/unix-installer-manifest.json" ] && [ ! -L "$PACKAGE_ROOT/unix-installer-manifest.json" ] || fail_source_tree
 [ -f "$PACKAGE_ROOT/launcher/BlueTanukiLauncher.sh" ] || fail_source_tree
 [ -f "$PACKAGE_ROOT/launcher/BlueTanukiUninstall.sh" ] || fail_source_tree
+assert_no_symlinks_in_tree "$PACKAGE_ROOT/app" packaged_app
+assert_no_symlinks_in_tree "$PACKAGE_ROOT/runtime" packaged_runtime
+assert_no_symlinks_in_tree "$PACKAGE_ROOT/launcher" packaged_launchers
+PACKAGE_MANIFEST="$PACKAGE_ROOT/unix-installer-manifest.json"
+[ "$(wc -c < "$PACKAGE_MANIFEST" | tr -d '[:space:]')" -le 1048576 ] || fail "installer manifest exceeds the size limit"
+grep -Fqx '  "schema_version": 1,' "$PACKAGE_MANIFEST" || fail "installer manifest schema is not recognized"
+grep -Fqx '  "name": "blue-tanuki",' "$PACKAGE_MANIFEST" || fail "installer manifest does not identify BLUE-TANUKI"
+grep -Eq "^  \\\"package_type\\\": \\\"$PLATFORM-(x64|arm64)-tar-installer\\\",?$" "$PACKAGE_MANIFEST" || fail "installer manifest platform does not match $PLATFORM"
+PACKAGE_MANIFEST_SHA256=$(sha256_file "$PACKAGE_MANIFEST")
+case "$PACKAGE_MANIFEST_SHA256" in
+  *[!0-9a-fA-F]*|'') fail "installer manifest SHA-256 could not be verified" ;;
+esac
+[ "${#PACKAGE_MANIFEST_SHA256}" -eq 64 ] || fail "installer manifest SHA-256 has an invalid length"
 
 runtime_archive=$(find "$PACKAGE_ROOT/runtime" -type f -name "$RUNTIME_GLOB" | sort | sed -n '1p')
 [ -n "$runtime_archive" ] || fail "bundled Node runtime archive not found for $PLATFORM"
+manifest_runtime_archive=$(sed -n 's/^    "archive": "\([^"]*\)",$/\1/p' "$PACKAGE_MANIFEST")
+manifest_runtime_sha256=$(sed -n 's/^    "sha256": "\([0-9A-Fa-f]\{64\}\)",$/\1/p' "$PACKAGE_MANIFEST")
+[ "$manifest_runtime_archive" = "$(basename -- "$runtime_archive")" ] || fail "bundled Node runtime does not match the installer manifest"
+[ "$(printf '%s' "$manifest_runtime_sha256" | tr '[:upper:]' '[:lower:]')" = "$(sha256_file "$runtime_archive" | tr '[:upper:]' '[:lower:]')" ] || fail "bundled Node runtime SHA-256 does not match the installer manifest"
 
-if [ -d "$INSTALL_ROOT" ] && [ "$FORCE" != "1" ]; then
-  echo "Existing install will be repaired in place: $INSTALL_ROOT"
+quote_sh() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+assert_fresh_directory() {
+  fresh_root=$1
+  fresh_label=$2
+  if [ -e "$fresh_root" ] || [ -L "$fresh_root" ]; then
+    [ -d "$fresh_root" ] && [ ! -L "$fresh_root" ] || fail "$fresh_label exists but is not a regular directory: $fresh_root"
+    assert_no_symlinks_in_tree "$fresh_root" "$fresh_label"
+    fresh_contents=$(find "$fresh_root" ! -path "$fresh_root" -print -quit 2>/dev/null) || fail "$fresh_label could not be inspected: $fresh_root"
+    [ -z "$fresh_contents" ] || fail "$fresh_label contains unowned content and cannot be adopted: $fresh_root"
+  fi
+}
+
+assert_managed_external_file() {
+  managed_file=$1
+  expected_line=$2
+  managed_label=$3
+  if [ -e "$managed_file" ] || [ -L "$managed_file" ]; then
+    [ -f "$managed_file" ] && [ ! -L "$managed_file" ] || fail "$managed_label is not a regular file: $managed_file"
+    grep -Fqx "$expected_line" "$managed_file" || fail "$managed_label does not belong to this install: $managed_file"
+  fi
+}
+
+INSTALL_EXISTS=0
+if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
+  [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] || fail "Install target exists but is not a regular directory: $INSTALL_ROOT"
+  INSTALL_EXISTS=1
+  [ "$FORCE" = "1" ] || fail "$INSTALL_ROOT already exists. Re-run with --force to replace a verified BLUE-TANUKI install."
+  if [ -e "$INSTALL_ROOT/.blue-tanuki-owner" ] || [ -L "$INSTALL_ROOT/.blue-tanuki-owner" ]; then
+    assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  else
+    assert_legacy_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM"
+  fi
+else
+  if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
+    fail "Runtime target exists without a verified product install and will not be replaced: $RUNTIME_ROOT"
+  fi
+  if [ -e "$DATA_ROOT/.blue-tanuki-owner" ] || [ -L "$DATA_ROOT/.blue-tanuki-owner" ] || [ -e "$CONFIG_ROOT/.blue-tanuki-owner" ] || [ -L "$CONFIG_ROOT/.blue-tanuki-owner" ]; then
+    assert_product_data_root_markers "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  else
+    assert_fresh_directory "$DATA_ROOT" DATA_ROOT
+    if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then
+      assert_fresh_directory "$CONFIG_ROOT" CONFIG_ROOT
+    fi
+  fi
 fi
 
-mkdir -p "$DATA_ROOT" "$CONFIG_ROOT" "$BIN_ROOT" "$RUNTIME_ROOT"
-rm -rf -- "$INSTALL_ROOT" "$RUNTIME_ROOT"
-mkdir -p "$INSTALL_ROOT" "$RUNTIME_ROOT"
+if [ "$INSTALL_EXISTS" = "1" ]; then
+  assert_no_symlinks_in_tree "$INSTALL_ROOT" INSTALL_ROOT
+  assert_no_symlinks_in_tree "$RUNTIME_ROOT" RUNTIME_ROOT
+fi
 
-cp -R "$PACKAGE_ROOT/app/." "$INSTALL_ROOT/"
-cp "$PACKAGE_ROOT/launcher/BlueTanukiLauncher.sh" "$LAUNCHER"
-cp "$PACKAGE_ROOT/launcher/BlueTanukiUninstall.sh" "$UNINSTALLER"
-chmod +x "$LAUNCHER" "$UNINSTALLER"
+desktop_dir=$(dirname -- "$SURFACE_FILE")
+if [ "$PLATFORM" = "macos" ]; then
+  assert_managed_external_file "$BIN_LAUNCHER" "exec \"$LAUNCHER\" \"\$@\"" BIN_LAUNCHER
+  assert_managed_external_file "$SURFACE_FILE" "exec \"$BIN_LAUNCHER\" launch" macOS_application_command
+else
+  assert_managed_external_file "$BIN_LAUNCHER" "exec \"$LAUNCHER\" \"\$@\"" BIN_LAUNCHER
+  assert_managed_external_file "$SURFACE_FILE" "Exec=$BIN_LAUNCHER launch" Linux_desktop_entry
+fi
+
+INSTALL_PARENT=$(dirname -- "$INSTALL_ROOT")
+RUNTIME_PARENT=$(dirname -- "$RUNTIME_ROOT")
+INSTALL_NAME=$(basename -- "$INSTALL_ROOT")
+RUNTIME_NAME=$(basename -- "$RUNTIME_ROOT")
+STAGE_SUFFIX="$(date +%s).$$"
+INSTALL_STAGE="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-stage-$STAGE_SUFFIX"
+RUNTIME_STAGE="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-stage-$STAGE_SUFFIX"
+ROLLBACK_INSTALL="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-rollback-$STAGE_SUFFIX"
+ROLLBACK_RUNTIME="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-rollback-$STAGE_SUFFIX"
+ENV_FILE_STAGE="$CONFIG_ROOT/.blue-tanuki.env-stage-$STAGE_SUFFIX"
+ENV_FILE_BACKUP="$CONFIG_ROOT/.blue-tanuki.env-rollback-$STAGE_SUFFIX"
+INSTALL_ENV_STAGE="$INSTALL_STAGE/blue-tanuki-install.env"
+INSTALL_JSON_STAGE="$INSTALL_STAGE/blue-tanuki-install.json"
+STAGE_LAUNCHER="$INSTALL_STAGE/BlueTanukiLauncher.sh"
+STAGE_UNINSTALLER="$INSTALL_STAGE/BlueTanukiUninstall.sh"
+STAGE_BIN_WRAPPER="$INSTALL_STAGE/BlueTanuki.sh"
+PREVIOUS_APP_MOVED=0
+PREVIOUS_RUNTIME_MOVED=0
+NEW_APP_MOVED=0
+NEW_RUNTIME_MOVED=0
+ENV_FILE_BACKED_UP=0
+ENV_FILE_INSTALLED=0
+cleanup_setup() {
+  setup_status=$1
+  trap - EXIT
+  set +e
+  if [ "$setup_status" -ne 0 ]; then
+    if [ "$NEW_APP_MOVED" = "1" ] && [ "$NEW_RUNTIME_MOVED" = "1" ] && [ -d "$INSTALL_ROOT" ] && [ -d "$RUNTIME_ROOT" ]; then
+      if (assert_managed_product_install_inventories "$INSTALL_ROOT" "$RUNTIME_ROOT"); then
+        rm -rf -- "$RUNTIME_ROOT"
+        rm -rf -- "$INSTALL_ROOT"
+      fi
+    elif [ "$NEW_APP_MOVED" = "1" ] && [ -d "$INSTALL_ROOT" ]; then
+      if (assert_managed_product_app_inventory "$INSTALL_ROOT"); then rm -rf -- "$INSTALL_ROOT"; fi
+    fi
+    if [ "$PREVIOUS_APP_MOVED" = "1" ] && [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] &&
+        [ -d "$ROLLBACK_INSTALL" ] && [ -d "$ROLLBACK_RUNTIME" ] && [ ! -e "$INSTALL_ROOT" ] && [ ! -e "$RUNTIME_ROOT" ]; then
+      if (assert_managed_product_install_inventories "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME"); then
+        mv -- "$ROLLBACK_INSTALL" "$INSTALL_ROOT" && PREVIOUS_APP_MOVED=0
+        mv -- "$ROLLBACK_RUNTIME" "$RUNTIME_ROOT" && PREVIOUS_RUNTIME_MOVED=0
+      fi
+    elif [ "$PREVIOUS_APP_MOVED" = "1" ] && [ -d "$ROLLBACK_INSTALL" ] && [ ! -e "$INSTALL_ROOT" ]; then
+      if (assert_managed_product_app_inventory "$ROLLBACK_INSTALL"); then
+        mv -- "$ROLLBACK_INSTALL" "$INSTALL_ROOT" && PREVIOUS_APP_MOVED=0
+      fi
+    elif [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] && [ -d "$ROLLBACK_RUNTIME" ] && [ ! -e "$RUNTIME_ROOT" ]; then
+      runtime_metadata_root=$INSTALL_ROOT
+      [ -d "$ROLLBACK_INSTALL" ] && runtime_metadata_root=$ROLLBACK_INSTALL
+      if (assert_managed_product_runtime_inventory "$runtime_metadata_root" "$ROLLBACK_RUNTIME"); then
+        mv -- "$ROLLBACK_RUNTIME" "$RUNTIME_ROOT" && PREVIOUS_RUNTIME_MOVED=0
+      fi
+    fi
+    if [ "$ENV_FILE_BACKED_UP" = "1" ]; then
+      if [ "$ENV_FILE_INSTALLED" = "1" ] && [ -f "$ENV_FILE" ]; then rm -f -- "$ENV_FILE"; fi
+      if [ -f "$ENV_FILE_BACKUP" ] && [ ! -e "$ENV_FILE" ]; then
+        mv -- "$ENV_FILE_BACKUP" "$ENV_FILE" && ENV_FILE_BACKED_UP=0
+      fi
+    elif [ "$ENV_FILE_INSTALLED" = "1" ] && [ -f "$ENV_FILE" ]; then
+      rm -f -- "$ENV_FILE"
+    fi
+    if [ -d "$INSTALL_STAGE" ] && [ -d "$RUNTIME_STAGE" ]; then
+      if (assert_managed_product_install_inventories "$INSTALL_STAGE" "$RUNTIME_STAGE"); then
+        rm -rf -- "$RUNTIME_STAGE"
+        rm -rf -- "$INSTALL_STAGE"
+      fi
+    elif [ -d "$INSTALL_STAGE" ] && (assert_managed_product_app_inventory "$INSTALL_STAGE"); then
+      rm -rf -- "$INSTALL_STAGE"
+    fi
+    [ ! -f "$ENV_FILE_STAGE" ] || rm -f -- "$ENV_FILE_STAGE"
+    if [ "$PREVIOUS_APP_MOVED" = "1" ] || [ "$PREVIOUS_RUNTIME_MOVED" = "1" ]; then
+      echo "error: rollback could not restore every previous install path; recovery paths were preserved: $ROLLBACK_INSTALL ; $ROLLBACK_RUNTIME" >&2
+    fi
+  else
+    if [ "$PREVIOUS_APP_MOVED" = "1" ] && [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] &&
+        [ -d "$ROLLBACK_INSTALL" ] && [ -d "$ROLLBACK_RUNTIME" ]; then
+      if (assert_managed_product_install_inventories "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME"); then
+        rm -rf -- "$ROLLBACK_RUNTIME"
+        rm -rf -- "$ROLLBACK_INSTALL"
+        PREVIOUS_RUNTIME_MOVED=0
+        PREVIOUS_APP_MOVED=0
+      else
+        echo "warning: previous app and runtime retained for recovery: $ROLLBACK_INSTALL ; $ROLLBACK_RUNTIME" >&2
+      fi
+    fi
+    [ ! -f "$ENV_FILE_BACKUP" ] || rm -f -- "$ENV_FILE_BACKUP"
+  fi
+  exit "$setup_status"
+}
+trap 'cleanup_setup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for candidate in "$INSTALL_STAGE" "$RUNTIME_STAGE" "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME" "$ENV_FILE_STAGE" "$ENV_FILE_BACKUP"; do
+  [ ! -e "$candidate" ] && [ ! -L "$candidate" ] || fail "installer staging path already exists: $candidate"
+done
+mkdir -p "$INSTALL_PARENT" "$RUNTIME_PARENT" "$DATA_ROOT" "$CONFIG_ROOT" "$BIN_ROOT" "$desktop_dir"
+mkdir "$INSTALL_STAGE" "$RUNTIME_STAGE"
+
+cp -R "$PACKAGE_ROOT/app/." "$INSTALL_STAGE/"
+cp "$PACKAGE_ROOT/launcher/BlueTanukiLauncher.sh" "$STAGE_LAUNCHER"
+cp "$PACKAGE_ROOT/launcher/BlueTanukiUninstall.sh" "$STAGE_UNINSTALLER"
+cp "$PACKAGE_MANIFEST" "$INSTALL_STAGE/blue-tanuki-package-manifest.json"
+chmod +x "$STAGE_LAUNCHER" "$STAGE_UNINSTALLER"
 
 case "$runtime_archive" in
   *.tar.xz)
-    tar -xJf "$runtime_archive" -C "$RUNTIME_ROOT"
+    tar -xJf "$runtime_archive" -C "$RUNTIME_STAGE"
     ;;
   *.tar.gz|*.tgz)
-    tar -xzf "$runtime_archive" -C "$RUNTIME_ROOT"
+    tar -xzf "$runtime_archive" -C "$RUNTIME_STAGE"
     ;;
   *)
     fail "unsupported runtime archive: $runtime_archive"
     ;;
 esac
 
-NODE_EXE=$(find "$RUNTIME_ROOT" -type f -path "*/bin/node" | sort | sed -n '1p')
-[ -n "$NODE_EXE" ] || fail "bundled node executable not found under $RUNTIME_ROOT"
+assert_no_symlinks_in_tree "$INSTALL_STAGE" staged_install
+assert_no_symlinks_in_tree "$RUNTIME_STAGE" staged_runtime
+NODE_EXE=$(find "$RUNTIME_STAGE" -type f -path "*/bin/node" | sort | sed -n '1p')
+[ -n "$NODE_EXE" ] || fail "bundled node executable not found under $RUNTIME_STAGE"
 chmod +x "$NODE_EXE" || true
-
-quote_sh() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
+NODE_TOP_DIRECTORY=$(basename -- "$(dirname -- "$(dirname -- "$NODE_EXE")")")
+NODE_EXE_FINAL="$RUNTIME_ROOT/$NODE_TOP_DIRECTORY/bin/node"
 
 {
   printf 'INSTALL_ROOT=%s\n' "$(quote_sh "$INSTALL_ROOT")"
@@ -226,11 +402,11 @@ quote_sh() {
   printf 'RUNTIME_ROOT=%s\n' "$(quote_sh "$RUNTIME_ROOT")"
   printf 'BIN_ROOT=%s\n' "$(quote_sh "$BIN_ROOT")"
   printf 'ENV_FILE=%s\n' "$(quote_sh "$ENV_FILE")"
-  printf 'NODE_EXE=%s\n' "$(quote_sh "$NODE_EXE")"
+  printf 'NODE_EXE=%s\n' "$(quote_sh "$NODE_EXE_FINAL")"
   printf 'CONTROL_CENTER_URL=%s\n' "$(quote_sh "$CONTROL_CENTER_URL")"
   printf 'PLATFORM=%s\n' "$(quote_sh "$PLATFORM")"
-} > "$INSTALL_ENV"
-chmod 600 "$INSTALL_ENV" || true
+} > "$INSTALL_ENV_STAGE"
+chmod 600 "$INSTALL_ENV_STAGE" || true
 
 INSTALL_ROOT_VALUE="$INSTALL_ROOT" \
 DATA_ROOT_VALUE="$DATA_ROOT" \
@@ -238,7 +414,8 @@ CONFIG_ROOT_VALUE="$CONFIG_ROOT" \
 RUNTIME_ROOT_VALUE="$RUNTIME_ROOT" \
 BIN_ROOT_VALUE="$BIN_ROOT" \
 ENV_FILE_VALUE="$ENV_FILE" \
-NODE_EXE_VALUE="$NODE_EXE" \
+NODE_EXE_VALUE="$NODE_EXE_FINAL" \
+PACKAGE_MANIFEST_SHA256_VALUE="$PACKAGE_MANIFEST_SHA256" \
 CONTROL_CENTER_URL_VALUE="$CONTROL_CENTER_URL" \
 PLATFORM_VALUE="$PLATFORM" \
 "$NODE_EXE" -e '
@@ -252,11 +429,14 @@ const keys = [
   "BIN_ROOT_VALUE",
   "ENV_FILE_VALUE",
   "NODE_EXE_VALUE",
+  "PACKAGE_MANIFEST_SHA256_VALUE",
   "CONTROL_CENTER_URL_VALUE",
   "PLATFORM_VALUE",
 ];
 const data = {
-  schema_version: 1,
+  schema_version: 2,
+  product_id: "blue-tanuki-product-install",
+  package_manifest_sha256: process.env.PACKAGE_MANIFEST_SHA256_VALUE,
   install_root: process.env.INSTALL_ROOT_VALUE,
   data_root: process.env.DATA_ROOT_VALUE,
   config_root: process.env.CONFIG_ROOT_VALUE,
@@ -271,22 +451,27 @@ const data = {
 };
 for (const key of keys) if (!process.env[key]) throw new Error(`${key} missing`);
 fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
-' "$INSTALL_JSON"
+' "$INSTALL_JSON_STAGE"
 
+if { [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; } && { [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; }; then
+  fail "Existing config path is not a regular file: $ENV_FILE"
+fi
+DOCTOR_ENV_FILE="$ENV_FILE"
 if [ -f "$ENV_FILE" ] && [ "$RESET_CONFIG" != "1" ]; then
   echo "Existing env file retained: $ENV_FILE"
 else
   if [ -f "$ENV_FILE" ] && [ "$RESET_CONFIG" = "1" ]; then
     echo "warning: RESET_CONFIG=1 is enabled. Existing env file will be regenerated: $ENV_FILE" >&2
-    "$NODE_EXE" "$INSTALL_ROOT/apps/gateway/dist/main.js" --setup --yes --output "$ENV_FILE" --base-dir "$DATA_ROOT/data" --force --no-doctor
+    "$NODE_EXE" "$INSTALL_STAGE/apps/gateway/dist/main.js" --setup --yes --output "$ENV_FILE_STAGE" --base-dir "$DATA_ROOT/data" --force --no-doctor
   else
-    "$NODE_EXE" "$INSTALL_ROOT/apps/gateway/dist/main.js" --setup --yes --output "$ENV_FILE" --base-dir "$DATA_ROOT/data" --no-doctor
+    "$NODE_EXE" "$INSTALL_STAGE/apps/gateway/dist/main.js" --setup --yes --output "$ENV_FILE_STAGE" --base-dir "$DATA_ROOT/data" --no-doctor
   fi
+  DOCTOR_ENV_FILE="$ENV_FILE_STAGE"
 fi
 
 if [ "$RUN_DOCTOR" != "0" ]; then
   doctor_code=0
-  "$NODE_EXE" "$INSTALL_ROOT/apps/gateway/dist/main.js" --doctor --env-file "$ENV_FILE" --json || doctor_code=$?
+  "$NODE_EXE" "$INSTALL_STAGE/apps/gateway/dist/main.js" --doctor --env-file "$DOCTOR_ENV_FILE" --json || doctor_code=$?
   if [ "$doctor_code" -eq 2 ]; then
     fail "post-install doctor found blocking errors."
   fi
@@ -298,29 +483,72 @@ if [ "$RUN_DOCTOR" != "0" ]; then
   fi
 fi
 
+cat > "$STAGE_BIN_WRAPPER" <<EOF
+#!/usr/bin/env sh
+exec "$(printf '%s' "$LAUNCHER")" "\$@"
+EOF
+chmod +x "$STAGE_BIN_WRAPPER"
+
+if [ -f "$ENV_FILE_STAGE" ]; then chmod 600 "$ENV_FILE_STAGE"; fi
+write_product_owner_marker "$INSTALL_STAGE/.blue-tanuki-owner" install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+INSTALL_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$INSTALL_STAGE" blue-tanuki-install.json \
+  blue-tanuki-managed-files.txt blue-tanuki-product-install)
+RUNTIME_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$RUNTIME_STAGE" __no_metadata__ \
+  blue-tanuki-runtime-files.txt blue-tanuki-product-runtime)
+INSTALL_MANAGED_FILES_SHA256_VALUE="$INSTALL_MANAGED_FILES_SHA256" \
+RUNTIME_MANAGED_FILES_SHA256_VALUE="$RUNTIME_MANAGED_FILES_SHA256" \
+"$NODE_EXE" -e '
+const fs = require("fs");
+const out = process.argv[1];
+const data = JSON.parse(fs.readFileSync(out, "utf8"));
+const installInventory = process.env.INSTALL_MANAGED_FILES_SHA256_VALUE;
+const runtimeInventory = process.env.RUNTIME_MANAGED_FILES_SHA256_VALUE;
+if (!/^[a-f0-9]{64}$/i.test(installInventory || "") || !/^[a-f0-9]{64}$/i.test(runtimeInventory || "")) {
+  throw new Error("managed file inventory digest missing");
+}
+data.schema_version = 3;
+data.managed_install_files_sha256 = installInventory;
+data.managed_runtime_files_sha256 = runtimeInventory;
+fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
+' "$INSTALL_JSON_STAGE"
+
+if [ "$INSTALL_EXISTS" = "1" ]; then
+  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  sh "$LAUNCHER" resident-stop >/dev/null 2>&1 || true
+  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  mv -- "$INSTALL_ROOT" "$ROLLBACK_INSTALL"
+  PREVIOUS_APP_MOVED=1
+  mv -- "$RUNTIME_ROOT" "$ROLLBACK_RUNTIME"
+  PREVIOUS_RUNTIME_MOVED=1
+fi
+mv -- "$INSTALL_STAGE" "$INSTALL_ROOT"
+NEW_APP_MOVED=1
+mv -- "$RUNTIME_STAGE" "$RUNTIME_ROOT"
+NEW_RUNTIME_MOVED=1
+assert_managed_product_install_inventories "$INSTALL_ROOT" "$RUNTIME_ROOT"
+
+if [ -f "$ENV_FILE_STAGE" ]; then
+  if [ -f "$ENV_FILE" ]; then
+    mv -- "$ENV_FILE" "$ENV_FILE_BACKUP"
+    ENV_FILE_BACKED_UP=1
+  fi
+  mv -- "$ENV_FILE_STAGE" "$ENV_FILE"
+  ENV_FILE_INSTALLED=1
+fi
+
 cat > "$BIN_LAUNCHER" <<EOF
 #!/usr/bin/env sh
 exec "$(printf '%s' "$LAUNCHER")" "\$@"
 EOF
 chmod +x "$BIN_LAUNCHER"
-
-cat > "$INSTALL_ROOT/BlueTanuki.sh" <<EOF
-#!/usr/bin/env sh
-exec "$(printf '%s' "$LAUNCHER")" "\$@"
-EOF
-chmod +x "$INSTALL_ROOT/BlueTanuki.sh"
-
 if [ "$PLATFORM" = "macos" ]; then
-  mkdir -p "$HOME/Applications"
-  cat > "$HOME/Applications/BlueTanuki.command" <<EOF
+  cat > "$SURFACE_FILE" <<EOF
 #!/usr/bin/env sh
 exec "$(printf '%s' "$BIN_LAUNCHER")" launch
 EOF
-  chmod +x "$HOME/Applications/BlueTanuki.command"
+  chmod +x "$SURFACE_FILE"
 else
-  desktop_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-  mkdir -p "$desktop_dir"
-  cat > "$desktop_dir/blue-tanuki.desktop" <<EOF
+  cat > "$SURFACE_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=BLUE-TANUKI
@@ -330,6 +558,16 @@ Terminal=false
 Categories=Utility;
 EOF
 fi
+
+if [ "$CONFIG_ROOT" = "$DATA_ROOT" ]; then
+  write_product_owner_marker "$DATA_ROOT/.blue-tanuki-owner" shared-root "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+else
+  write_product_owner_marker "$DATA_ROOT/.blue-tanuki-owner" data "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  write_product_owner_marker "$CONFIG_ROOT/.blue-tanuki-owner" config "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+fi
+assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+ENV_FILE_BACKED_UP=0
+ENV_FILE_INSTALLED=0
 
 echo ""
 echo "BLUE-TANUKI ${PLATFORM_LABEL} installed."
@@ -341,5 +579,5 @@ echo "user_requires_node_pnpm_git=false"
 echo "install_result=pass"
 
 if [ "$LAUNCH_AFTER_INSTALL" != "0" ]; then
-  "$BIN_LAUNCHER" launch
+  "$BIN_LAUNCHER" launch || echo "warning: product installed but launch failed; run $BIN_LAUNCHER launch to retry." >&2
 fi

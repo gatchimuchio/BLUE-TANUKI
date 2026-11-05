@@ -514,7 +514,7 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         ? args.scope_digest.toLowerCase() : undefined;
       const planScope = storeKey === "operation_plans"
         ? scopeKind === "operation_plan" && scopeDigest
-          ? `:effect:whole_store:scope:operation_plan:${scopeDigest}`
+          ? `:effect:selected_operation_plan:scope:operation_plan:${scopeDigest}`
           : scopeKind === "task_identity" && scopeDigest
             ? `:effect:task_lineage:scope:task_identity:${scopeDigest}`
           : ":effect:whole_store:scope:missing_or_invalid"

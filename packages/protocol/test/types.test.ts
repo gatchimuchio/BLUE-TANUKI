@@ -153,7 +153,7 @@ describe("ExecuteFeedback skeptical review boundary", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("rejects malformed or unbounded review fields", () => {
+  it("passes skeptical review through as untrusted data for HDS validation", () => {
     const malformed = ExecuteFeedbackSchema.safeParse({
       ...base,
       skeptical_review: {
@@ -163,7 +163,14 @@ describe("ExecuteFeedback skeptical review boundary", () => {
       },
     });
 
-    expect(malformed.success).toBe(false);
+    expect(malformed.success).toBe(true);
+    if (malformed.success) {
+      expect(malformed.data.skeptical_review).toEqual({
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{ criterion_ref: "", finding: "", relation: "supports" }],
+        unexpected: true,
+      });
+    }
   });
 });
 

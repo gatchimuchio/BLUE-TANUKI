@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -250,16 +250,85 @@ describe("Windows product installer package", () => {
     expect(read("install/windows/product/BlueTanukiSafeMode.cmd")).toContain("safe-mode");
     expect(uninstall).toContain("PurgeData");
     expect(uninstall).toContain("User data retained");
-    expect(uninstall).toContain("Assert-SafeTarget");
+    expect(uninstall).toContain("Assert-ManagedWindowsProductInstall");
+    expect(uninstall).toContain("Assert-ManagedWindowsProductData");
+    expect(uninstall).toContain("Test-ShortcutOwnedByInstall");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
-    expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT");
+    expect(uninstall).toContain("GetFullPath($PSCommandPath)");
+    expect(uninstall).toContain("^BlueTanukiUninstall-[A-Za-z0-9-]+\\.ps1$");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_STATUS_FILE");
     expect(uninstall).toContain("Write-UninstallStatus");
     expect(uninstallCmd).toContain("copy /Y");
     expect(uninstallCmd).toContain("start \"\" /b powershell.exe");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
+    expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_SAFE_TARGET");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_STATUS_FILE");
     expect(uninstallCmd).toContain("exit /b 0");
+  });
+
+  it("fails closed when a Windows product uninstall target has no ownership marker", () => {
+    const command = findPowerShell();
+    if (!command) {
+      expect(read("install/windows/product/BlueTanukiUninstall.ps1")).toContain("Assert-ManagedWindowsProductInstall");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-uninstall-unowned-"));
+    const install = join(temp, "app");
+    const guard = join(install, "install", "windows", "safe-target.ps1");
+    const keep = join(install, "owner-data.txt");
+    try {
+      mkdirSync(join(install, "install", "windows"), { recursive: true });
+      writeFileSync(guard, read("install/windows/safe-target.ps1"), "utf8");
+      writeFileSync(keep, "must remain\n", "utf8");
+      const result = runPowerShellFile(command, join(root, "install/windows/product/BlueTanukiUninstall.ps1"), [
+        "-InstallRoot",
+        install,
+        "-DataRoot",
+        join(temp, "data"),
+      ], temp);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(keep)).toBe(true);
+      expect(readFileSync(keep, "utf8")).toBe("must remain\n");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not dot-source an environment-selected safety helper that differs from the install copy", () => {
+    const command = findPowerShell();
+    if (!command) {
+      expect(read("install/windows/product/BlueTanukiUninstall.ps1")).toContain("Staged shared target safety guard does not match");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-uninstall-helper-"));
+    const install = join(temp, "app");
+    const guard = join(install, "install", "windows", "safe-target.ps1");
+    const malicious = join(temp, "BlueTanukiSafeTarget-attacker.ps1");
+    const sentinel = join(temp, "helper-was-executed.txt");
+    try {
+      mkdirSync(join(install, "install", "windows"), { recursive: true });
+      writeFileSync(guard, read("install/windows/safe-target.ps1"), "utf8");
+      writeFileSync(malicious, `Set-Content -LiteralPath '${sentinel}' -Value 'executed'\n`, "utf8");
+      const result = spawnSync(
+        command,
+        powerShellFileArgs(command, join(root, "install/windows/product/BlueTanukiUninstall.ps1"), [
+          "-InstallRoot",
+          install,
+          "-DataRoot",
+          join(temp, "data"),
+        ]),
+        {
+          cwd: temp,
+          env: { ...process.env, BLUE_TANUKI_UNINSTALL_SAFE_TARGET: malicious, BLUE_TANUKI_NO_PAUSE: "1" },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status).not.toBe(0);
+      expect(existsSync(sentinel)).toBe(false);
+      expect(existsSync(malicious)).toBe(true);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it("declares real package, verify, installer, and installed smoke scripts", () => {

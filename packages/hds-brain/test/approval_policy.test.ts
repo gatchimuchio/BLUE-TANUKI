@@ -474,7 +474,7 @@ describe("Recovery mutation final review", () => {
     const planScopeDigest = "a".repeat(64);
     const cases = [
       { name: "recovery.restore", args: { backup_id: "backup-2026-01", confirm: "RESTORE" }, target: "recovery.restore:backup-2026-01" },
-      { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "operation_plans", scope_kind: "operation_plan", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: `recovery.restore:backup-2026-01:store:operation_plans:effect:whole_store:scope:operation_plan:${planScopeDigest}` },
+      { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "operation_plans", scope_kind: "operation_plan", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: `recovery.restore:backup-2026-01:store:operation_plans:effect:selected_operation_plan:scope:operation_plan:${planScopeDigest}` },
       { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "operation_plans", scope_kind: "task_identity", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: `recovery.restore:backup-2026-01:store:operation_plans:effect:task_lineage:scope:task_identity:${planScopeDigest}` },
       { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "broker", scope_kind: "task_identity", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: `recovery.restore:backup-2026-01:store:broker:effect:task_lineage:scope:task_identity:${planScopeDigest}` },
       { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "broker", scope_kind: "operation_plan", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: "recovery.restore:backup-2026-01:store:broker:effect:task_lineage:scope:missing_or_invalid" },

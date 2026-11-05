@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 const FIXTURE_TOKEN = "local-inspection-only-token";
-const digest = (value) => createHash("sha256").update(value).digest("hex");
 const accepted = [];
 let effects = 0;
 let readQueries = 0;
@@ -31,8 +29,10 @@ const server = createServer((request, response) => {
     const body = Buffer.concat(chunks).toString("utf8");
     const key = request.headers["idempotency-key"];
     const commandDigest = request.headers["x-command-digest"];
+    const payloadDigest = request.headers["x-fixture-intent-payload-digest"];
     if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
-        typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest) || !body) {
+        typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+        typeof payloadDigest !== "string" || !/^[a-f0-9]{64}$/.test(payloadDigest) || !body) {
       response.writeHead(400).end();
       return;
     }
@@ -42,7 +42,9 @@ const server = createServer((request, response) => {
     const record = {
       idempotency_key: key,
       command_digest: commandDigest,
-      payload_digest: digest(body),
+      // The local inspection fixture carries the reviewed intent digest separately
+      // from the serialized HTTP body digest used by this synthetic provider.
+      payload_digest: payloadDigest,
       receipt_id: `inspection-receipt-${effects}`,
     };
     accepted.push(record);

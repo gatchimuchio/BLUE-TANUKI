@@ -18,6 +18,17 @@ function requireIncludes(file: string, text: string, needle: string): void {
   }
 }
 
+function requireOrderedIncludes(file: string, text: string, needles: string[]): void {
+  let cursor = -1;
+  for (const needle of needles) {
+    const index = text.indexOf(needle, cursor + 1);
+    if (index < 0) {
+      throw new Error(`${file}: required safety checks are missing or out of order: ${needle}`);
+    }
+    cursor = index;
+  }
+}
+
 function requireNotIncludes(file: string, text: string, needle: string): void {
   if (text.includes(needle)) {
     throw new Error(`${file}: forbidden text present: ${needle}`);
@@ -273,7 +284,8 @@ function main(): void {
   const winProductUninstall = read("install/windows/product/BlueTanukiUninstall.ps1");
   requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "PurgeData");
   requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "User data retained");
-  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-SafeTarget");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-SafeInstallTargets");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-ManagedWindowsProductInstall");
 
   const packageWindows = read("scripts/package_windows.ts");
   requireIncludes("scripts/package_windows.ts", packageWindows, "windows-x64-zip-installer");
@@ -489,7 +501,22 @@ function main(): void {
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "exec \"$NODE_EXE\" apps/gateway/dist/main.js --serve");
 
   const unixProductUninstall = read("install/unix/product/BlueTanukiUninstall.sh");
-  requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "safe_target");
+  requireOrderedIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, [
+    '. "$SAFE_TARGET_LIB"',
+    'assert_managed_product_install "$INSTALL_ROOT"',
+    'assert_no_symlinks_in_tree "$target" "$2"',
+    'rm -rf -- "$target"',
+  ]);
+  requireIncludes(
+    "install/unix/product/BlueTanukiUninstall.sh",
+    unixProductUninstall,
+    'if [ "$PURGE" = "1" ]; then\n  remove_target "$DATA_ROOT" data_root',
+  );
+  requireIncludes(
+    "install/unix/product/BlueTanukiUninstall.sh",
+    unixProductUninstall,
+    'if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then remove_target "$CONFIG_ROOT" config_root; fi',
+  );
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Data retained");
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Config retained");
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "uninstall_result=pass");

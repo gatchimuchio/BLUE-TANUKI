@@ -15,7 +15,7 @@ function Fail($Message) {
   Write-Host ""
   Write-Host "BLUE-TANUKI setup failed." -ForegroundColor Red
   Write-Host $Message
-  exit 1
+  throw [System.InvalidOperationException]::new([string]$Message)
 }
 
 function Fail-SourceTreeSetup($MissingEntries) {
@@ -52,7 +52,8 @@ function Assert-PackagedInstallerRoot($PackageRoot) {
     "app",
     "runtime",
     "launcher",
-    "windows-installer-manifest.json"
+    "windows-installer-manifest.json",
+    "app\install\windows\safe-target.ps1"
   )
   $missing = @()
   foreach ($entry in $requiredEntries) {
@@ -63,33 +64,16 @@ function Assert-PackagedInstallerRoot($PackageRoot) {
   if ($missing.Count -gt 0) {
     Fail-SourceTreeSetup $missing
   }
+  foreach ($directory in @('app', 'runtime', 'launcher')) {
+    $item = Get-Item -Force -LiteralPath (Join-Path $PackageRoot $directory)
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      Fail "Packaged installer entry is not a real directory: $directory"
+    }
+  }
 }
 
 function Normalize-Path($Path) {
   return [System.IO.Path]::GetFullPath($Path)
-}
-
-function Assert-SafeTarget($Target, $Label) {
-  $normalized = Normalize-Path $Target
-  $root = [System.IO.Path]::GetPathRoot($normalized)
-  $trimmed = $normalized.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $rootTrimmed = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-  $denied = @(
-    (Normalize-Path $env:USERPROFILE),
-    (Normalize-Path $env:LOCALAPPDATA),
-    (Normalize-Path $env:APPDATA),
-    (Normalize-Path (Join-Path $env:LOCALAPPDATA "Programs"))
-  )
-  if ($trimmed -eq $rootTrimmed) {
-    Fail "$Label points to a filesystem root: $normalized"
-  }
-  foreach ($path in $denied) {
-    $deniedTrimmed = $path.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-    if ($trimmed -eq $deniedTrimmed) {
-      Fail "$Label points to a broad user directory: $normalized"
-    }
-  }
-  return $normalized
 }
 
 function Find-NodeExe($Root) {
@@ -202,6 +186,7 @@ function New-Shortcut($Path, $TargetPath, $Arguments, $WorkingDirectory, $Descri
 }
 
 function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
+  Assert-ShortcutTargetsCompatible $InstallRootResolved $DesktopShortcutEnabled
   $programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\BLUE-TANUKI"
   New-Item -ItemType Directory -Force -Path $programs | Out-Null
   $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -217,6 +202,46 @@ function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
   if ($DesktopShortcutEnabled) {
     $desktop = [Environment]::GetFolderPath("Desktop")
     New-Shortcut (Join-Path $desktop "BLUE-TANUKI.lnk") $ps "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcher`" open" $InstallRootResolved "Open BLUE-TANUKI Control Center" $icon
+  }
+}
+
+function Test-ShortcutTargetBelongsToInstall($Path, $InstallRootResolved) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+  $item = Get-Item -Force -LiteralPath $Path
+  if ($item.Extension -ne '.lnk' -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($Path)
+    $launcher = Get-InstallPathIdentity (Join-Path $InstallRootResolved 'BlueTanukiLauncher.ps1')
+    $uninstaller = Get-InstallPathIdentity (Join-Path $InstallRootResolved 'UninstallBlueTanuki.cmd')
+    $target = if ($shortcut.TargetPath) { Get-InstallPathIdentity $shortcut.TargetPath } else { '' }
+    if ([string]::Equals($target, $launcher, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($target, $uninstaller, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    return ([string]$shortcut.Arguments).IndexOf($launcher, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+  } catch {
+    return $false
+  }
+}
+
+function Assert-ShortcutTargetsCompatible($InstallRootResolved, $DesktopShortcutEnabled) {
+  $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\BLUE-TANUKI'
+  if (Test-Path -LiteralPath $programs) {
+    $folder = Get-Item -Force -LiteralPath $programs
+    if (-not $folder.PSIsContainer -or ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      Fail "Start Menu target is not a regular directory: $programs"
+    }
+    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
+      $path = Join-Path $programs $name
+      if ((Test-Path -LiteralPath $path) -and -not (Test-ShortcutTargetBelongsToInstall $path $InstallRootResolved)) {
+        Fail "Refusing to replace an unrelated Start Menu item: $path"
+      }
+    }
+  }
+  if ($DesktopShortcutEnabled) {
+    $desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BLUE-TANUKI.lnk'
+    if ((Test-Path -LiteralPath $desktopShortcut) -and -not (Test-ShortcutTargetBelongsToInstall $desktopShortcut $InstallRootResolved)) {
+      Fail "Refusing to replace an unrelated desktop item: $desktopShortcut"
+    }
   }
 }
 
@@ -236,65 +261,234 @@ function Register-Uninstaller($InstallRootResolved, $DataRootResolved, $Version)
   New-ItemProperty -Path $key -Name "BlueTanukiDataRoot" -Value $DataRootResolved -PropertyType String -Force | Out-Null
 }
 
-function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version) {
+function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version, $PackageManifestSha256) {
+  $managedFilesSha256 = Write-ManagedTreeInventory -Root $InstallRootResolved `
+    -MetadataFileName 'blue-tanuki-install.json' -InventoryFileName 'blue-tanuki-managed-files.json' `
+    -ProductId 'blue-tanuki-product-install'
   $metadata = [ordered]@{
-    schema_version = 1
+    schema_version = 3
+    product_id = "blue-tanuki-product-install"
     install_root = $InstallRootResolved
     data_root = $DataRootResolved
     version = $Version
+    package_manifest_sha256 = $PackageManifestSha256
+    managed_files_sha256 = $managedFilesSha256
   }
   $metadataPath = Join-Path $InstallRootResolved "blue-tanuki-install.json"
   $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 }
 
-$packageRoot = Split-Path -Parent $PSCommandPath
-$sourceApp = Join-Path $packageRoot "app"
-$sourceLaunchers = Join-Path $packageRoot "launcher"
-$manifestPath = Join-Path $packageRoot "windows-installer-manifest.json"
-Assert-PackagedInstallerRoot $packageRoot
-$installRootResolved = Assert-SafeTarget $InstallRoot "InstallRoot"
-$dataRootResolved = Assert-SafeTarget $DataRoot "DataRoot"
-$envFile = Join-Path $dataRootResolved "blue-tanuki.env"
-$dataDir = Join-Path $dataRootResolved "data"
-$logDir = Join-Path $dataRootResolved "logs"
-$version = "unknown"
-if (Test-Path -LiteralPath $manifestPath) {
-  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-  $version = [string]$manifest.version
+function Write-DataInstallMetadata($DataRootResolved, $InstallRootResolved, $Version) {
+  $metadata = [ordered]@{
+    schema_version = 1
+    product_id = "blue-tanuki-product-data"
+    install_root = $InstallRootResolved
+    data_root = $DataRootResolved
+    version = $Version
+  }
+  $metadataPath = Join-Path $DataRootResolved "blue-tanuki-product-data.json"
+  $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 }
 
-Write-Host "Installing BLUE-TANUKI to $installRootResolved"
-Write-Host "User data root: $dataRootResolved"
-Write-Host "Autostart: not enabled by installer"
-
-Stop-ExistingResident $installRootResolved
-if (Test-Path -LiteralPath $installRootResolved) {
-  Remove-Item -LiteralPath $installRootResolved -Recurse -Force
+function Assert-RegistryTargetCompatible($InstallRootResolved) {
+  $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BlueTanuki'
+  if (-not (Test-Path -LiteralPath $key)) { return }
+  try { $entry = Get-ItemProperty -LiteralPath $key -ErrorAction Stop } catch {
+    Fail "Existing BLUE-TANUKI uninstall registration could not be read safely: $key"
+  }
+  $expectedLocation = Get-InstallPathIdentity $InstallRootResolved
+  $expectedCommand = Get-InstallPathIdentity (Join-Path $InstallRootResolved 'UninstallBlueTanuki.cmd')
+  $registeredLocation = ''
+  $registeredCommand = ''
+  try { if ($entry.InstallLocation) { $registeredLocation = Get-InstallPathIdentity ([string]$entry.InstallLocation) } } catch { }
+  try {
+    if ($entry.UninstallString -match '^\s*"(?<path>[^"]+)"') { $registeredCommand = Get-InstallPathIdentity $Matches.path }
+    elseif ($entry.UninstallString -match '^\s*(?<path>.+?\.cmd)(?:\s|$)') { $registeredCommand = Get-InstallPathIdentity $Matches.path }
+  } catch { }
+  if (-not [string]::Equals($registeredLocation, $expectedLocation, [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals($registeredCommand, $expectedCommand, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail "Existing uninstall registration does not identify this installation. No files were changed: $key"
+  }
 }
-New-Item -ItemType Directory -Force -Path $installRootResolved, $dataRootResolved, $dataDir, $logDir | Out-Null
 
-Copy-DirectoryContents $sourceApp $installRootResolved
-Expand-BundledNode $packageRoot $installRootResolved
-Copy-DirectoryContents $sourceLaunchers $installRootResolved
-Write-InstallMetadata $installRootResolved $dataRootResolved $version
-
-$nodeExe = Find-NodeExe $installRootResolved
-Invoke-BundledSetup $nodeExe $installRootResolved $envFile $dataDir
-if (-not $SkipDoctor) {
-  Invoke-PostInstallDoctor $nodeExe $installRootResolved $envFile $logDir
+function Assert-DataRootAdoptable($DataRootResolved, $InstallRootResolved, $ExistingProductInstall) {
+  if (-not (Test-Path -LiteralPath $DataRootResolved -PathType Container)) { return }
+  Assert-NoReparsePointsInTree -Path $DataRootResolved -Label 'ProductDataRoot'
+  $markerPath = Join-Path $DataRootResolved 'blue-tanuki-product-data.json'
+  if (Test-Path -LiteralPath $markerPath) {
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { Fail "Product data ownership marker is not a regular file: $markerPath" }
+    $markerItem = Get-Item -Force -LiteralPath $markerPath
+    if (($markerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $markerItem.Length -gt 65536) {
+      Fail "Product data ownership marker is not a bounded regular file: $markerPath"
+    }
+    try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch {
+      Fail "Product data ownership marker is invalid: $markerPath"
+    }
+    if ($marker.schema_version -ne 1 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+        -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $DataRootResolved), [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $InstallRootResolved), [System.StringComparison]::OrdinalIgnoreCase)) {
+      Fail "Product data ownership marker points to a different install or data root. No data was changed."
+    }
+    return
+  }
+  $existing = @(Get-ChildItem -Force -LiteralPath $DataRootResolved -ErrorAction Stop)
+  if ($existing.Count -gt 0 -and -not $ExistingProductInstall) {
+    Fail "Data root already contains unowned files and cannot be adopted safely: $DataRootResolved. Preserve or relocate them before setup."
+  }
 }
-Install-Shortcuts $installRootResolved $DesktopShortcut
-Register-Uninstaller $installRootResolved $dataRootResolved $version
 
-Write-Host ""
-Write-Host "BLUE-TANUKI installed."
-Write-Host "Start Menu: BLUE-TANUKI"
-Write-Host "Install root: $installRootResolved"
-Write-Host "Env file: $envFile"
-Write-Host "Logs: $logDir"
-Write-Host "Control Center: http://127.0.0.1:8787/app"
-Write-Host "Uninstall: Windows Apps / Control Panel or $installRootResolved\UninstallBlueTanuki.cmd"
+$stageRoot = $null
+$rollbackRoot = $null
+$envBackup = $null
+$oldMoved = $false
+$newMoved = $false
+$existingProductInstall = $false
+$installRootResolved = $null
+$dataRootResolved = $null
+$envFile = $null
+try {
+  $packageRoot = Split-Path -Parent $PSCommandPath
+  $sourceApp = Join-Path $packageRoot "app"
+  $sourceLaunchers = Join-Path $packageRoot "launcher"
+  $manifestPath = Join-Path $packageRoot "windows-installer-manifest.json"
+  Assert-PackagedInstallerRoot $packageRoot
+  . (Join-Path $sourceApp "install\windows\safe-target.ps1")
+  Assert-NoReparsePointsInTree -Path $packageRoot -Label 'PackagedInstallerRoot'
+  $packageManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  if ($packageManifest.schema_version -ne 1 -or $packageManifest.name -ne 'blue-tanuki' -or $packageManifest.package_type -ne 'windows-x64-zip-installer') {
+    Fail "Packaged installer manifest does not identify a BLUE-TANUKI Windows installer."
+  }
+  $manifestSha256 = Get-Sha256HexFromFile -Path $manifestPath
+  $version = [string]$packageManifest.version
+  $safeTargets = Assert-SafeInstallTargets -InstallRoot $InstallRoot -DataRoot $DataRoot -SourceRoot $packageRoot
+  $installRootResolved = $safeTargets.InstallRoot
+  $dataRootResolved = $safeTargets.DataRoot
+  $envFile = Join-Path $dataRootResolved "blue-tanuki.env"
+  $dataDir = Join-Path $dataRootResolved "data"
+  $logDir = Join-Path $dataRootResolved "logs"
+  $existingProductInstall = Test-Path -LiteralPath $installRootResolved -PathType Container
+  if (Test-Path -LiteralPath $installRootResolved) {
+    if (-not $existingProductInstall) { Fail "Install target exists but is not a directory. No files were changed: $installRootResolved" }
+    try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+      Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
+    }
+  }
+  Assert-DataRootAdoptable $dataRootResolved $installRootResolved $existingProductInstall
+  Assert-RegistryTargetCompatible $installRootResolved
+  Assert-ShortcutTargetsCompatible $installRootResolved $DesktopShortcut
 
-if (-not $NoLaunch) {
-  Start-Process -FilePath (Join-Path $installRootResolved "BlueTanuki.cmd")
+  Write-Host "Installing BLUE-TANUKI to $installRootResolved"
+  Write-Host "User data root: $dataRootResolved"
+  Write-Host "Autostart: not enabled by installer"
+
+  $installParent = Split-Path -Parent $installRootResolved
+  $installName = Split-Path -Leaf $installRootResolved
+  $installParent = Resolve-SafeDirectoryTarget -Path $installParent -Label 'InstallParent'
+  if (-not (Test-Path -LiteralPath $installParent -PathType Container)) {
+    New-Item -ItemType Directory -Force -Path $installParent | Out-Null
+    $installParent = Resolve-SafeDirectoryTarget -Path $installParent -Label 'InstallParent'
+  }
+  $suffix = [Guid]::NewGuid().ToString('N')
+  $stageRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-stage-" + $suffix)
+  $rollbackRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-rollback-" + $suffix)
+  if ((Test-Path -LiteralPath $stageRoot) -or (Test-Path -LiteralPath $rollbackRoot)) { Fail "Could not allocate unique installer staging paths." }
+  New-Item -ItemType Directory -Path $stageRoot | Out-Null
+
+  Copy-DirectoryContents $sourceApp $stageRoot
+  Expand-BundledNode $packageRoot $stageRoot
+  Copy-DirectoryContents $sourceLaunchers $stageRoot
+  Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $stageRoot 'blue-tanuki-package-manifest.json')
+  Write-InstallMetadata $stageRoot $dataRootResolved $version $manifestSha256
+  [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved -MetadataInstallRoot $installRootResolved)
+  Assert-NoReparsePointsInTree -Path $stageRoot -Label 'StagedProductInstall'
+
+  New-Item -ItemType Directory -Force -Path $dataRootResolved, $dataDir, $logDir | Out-Null
+  if ($ResetConfig -and (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+    $envBackup = Join-Path $dataRootResolved ('.blue-tanuki-env-rollback-' + $suffix)
+    Copy-Item -LiteralPath $envFile -Destination $envBackup
+  }
+  $nodeExe = Find-NodeExe $stageRoot
+  Invoke-BundledSetup $nodeExe $stageRoot $envFile $dataDir
+  if (-not $SkipDoctor) { Invoke-PostInstallDoctor $nodeExe $stageRoot $envFile $logDir }
+
+  if ($existingProductInstall) {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+    Stop-ExistingResident $installRootResolved
+  }
+  if ($existingProductInstall) {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+    Assert-NoReparsePointsInTree -Path $installRootResolved -Label 'ExistingProductInstall'
+    Move-Item -LiteralPath $installRootResolved -Destination $rollbackRoot
+    $oldMoved = $true
+  }
+  try {
+    Move-Item -LiteralPath $stageRoot -Destination $installRootResolved
+    $newMoved = $true
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+    Write-DataInstallMetadata $dataRootResolved $installRootResolved $version
+    Install-Shortcuts $installRootResolved $DesktopShortcut
+    Register-Uninstaller $installRootResolved $dataRootResolved $version
+    if (-not $NoLaunch) {
+      try { Start-Process -FilePath (Join-Path $installRootResolved "BlueTanuki.cmd") } catch {
+        Write-Warning "BLUE-TANUKI is installed, but the Control Center did not launch. Start it from the Start Menu or $installRootResolved\BlueTanuki.cmd. $($_.Exception.Message)"
+      }
+    }
+  } catch {
+    if ($newMoved -and (Test-Path -LiteralPath $installRootResolved -PathType Container)) {
+      try {
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+        Assert-NoReparsePointsInTree -Path $installRootResolved -Label 'FailedNewProductInstall'
+        Remove-Item -LiteralPath $installRootResolved -Recurse -Force
+        $newMoved = $false
+      } catch {
+        throw "New install failed and could not be safely removed for rollback. Both paths were preserved where possible. install=$installRootResolved; rollback=$rollbackRoot; reason=$($_.Exception.Message)"
+      }
+    }
+    if ($oldMoved -and (Test-Path -LiteralPath $rollbackRoot -PathType Container) -and -not (Test-Path -LiteralPath $installRootResolved)) {
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $rollbackRoot -DataRoot $dataRootResolved `
+        -MetadataInstallRoot $installRootResolved)
+      Move-Item -LiteralPath $rollbackRoot -Destination $installRootResolved
+      $oldMoved = $false
+    }
+    throw
+  }
+
+  if ($envBackup -and (Test-Path -LiteralPath $envBackup -PathType Leaf)) {
+    Remove-Item -LiteralPath $envBackup -Force
+  }
+  if ($oldMoved -and (Test-Path -LiteralPath $rollbackRoot -PathType Container)) {
+    try {
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $rollbackRoot -DataRoot $dataRootResolved `
+        -MetadataInstallRoot $installRootResolved)
+      Assert-NoReparsePointsInTree -Path $rollbackRoot -Label 'PreviousProductInstall'
+      Remove-Item -LiteralPath $rollbackRoot -Recurse -Force
+      $oldMoved = $false
+    } catch {
+      Write-Warning "The new install is active; the previous managed app was retained for recovery at $rollbackRoot. $($_.Exception.Message)"
+    }
+  }
+
+  Write-Host ""
+  Write-Host "BLUE-TANUKI installed."
+  Write-Host "Start Menu: BLUE-TANUKI"
+  Write-Host "Install root: $installRootResolved"
+  Write-Host "Env file: $envFile"
+  Write-Host "Logs: $logDir"
+  Write-Host "Control Center: http://127.0.0.1:8787/app"
+  Write-Host "Uninstall: Windows Apps / Control Panel or $installRootResolved\UninstallBlueTanuki.cmd"
+} catch {
+  if ($stageRoot -and (Test-Path -LiteralPath $stageRoot -PathType Container)) {
+    try {
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved `
+        -MetadataInstallRoot $installRootResolved)
+      Remove-Item -LiteralPath $stageRoot -Recurse -Force
+    } catch { Write-Warning "Staging directory was preserved for inspection: $stageRoot" }
+  }
+  if ($envBackup -and (Test-Path -LiteralPath $envBackup -PathType Leaf) -and $envFile) {
+    try { Copy-Item -LiteralPath $envBackup -Destination $envFile -Force; Remove-Item -LiteralPath $envBackup -Force } catch {
+      Write-Warning "The prior configuration could not be restored automatically; backup retained at $envBackup"
+    }
+  }
+  Write-Host "BLUE-TANUKI setup failed. $($_.Exception.Message)" -ForegroundColor Red
+  exit 1
 }

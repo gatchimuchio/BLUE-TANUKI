@@ -316,14 +316,26 @@ export interface GoalPurposeBindingReference {
   readonly purpose_digest: string;
 }
 
-/** Non-authoritative audit provenance from an approved M update to its source J record. */
-export interface MeaningUpdateSourceDecisionBinding {
+/** Legacy non-authoritative audit provenance; hash-only links fail closed when ambiguous. */
+export interface MeaningUpdateSourceDecisionBindingV1 {
   readonly schema_version: "blue-tanuki.meaning-update-source-decision-binding.v1";
   readonly decision_hash: string;
   readonly goal_purpose_binding?: GoalPurposeBindingReference;
   readonly used_for_authority: false;
   readonly may_execute: false;
 }
+
+/** Non-authoritative audit provenance bound to an exact source decision identity. */
+export interface MeaningUpdateSourceDecisionBindingV2 {
+  readonly schema_version: "blue-tanuki.meaning-update-source-decision-binding.v2";
+  readonly request_id: string;
+  readonly decision_hash: string;
+  readonly goal_purpose_binding?: GoalPurposeBindingReference;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export type MeaningUpdateSourceDecisionBinding = MeaningUpdateSourceDecisionBindingV1 | MeaningUpdateSourceDecisionBindingV2;
 
 export interface DecisionLog {
   request_id: string;

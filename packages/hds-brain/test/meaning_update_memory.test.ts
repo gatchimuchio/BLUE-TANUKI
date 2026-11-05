@@ -228,7 +228,8 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
         evaluation: approvalEntry.log.evaluation });
       expect(committed).toEqual({ ok: true, proposal_digest: ownerReview!.proposal_digest,
         candidate_digest: ownerReview!.proposal.candidate_digest, approval_status: "approved",
-        memory_application_status: "applied", follow_up_action_status: "unconfirmed" });
+        memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+        memory_revision_before: 0, memory_revision_after: 1, pending_reassessment_required_count: 0 });
 
       const citationRequest = createGatewayInternalInboundRequest({ id: "citation-after-interpretation",
         channel: "test", user: "webchat-owner-token-holder",
@@ -297,9 +298,10 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
       const nextEvaluation = evaluateApproval(nextApproval.command, [], { actor: proposalActor, default_mode: "full_access" });
       hds.onApprovalEvaluation(nextEvaluation, { request_id: nextApprovalRequestId });
       const nextCommandDigest = "c".repeat(64);
-      expect(hds.recordMeaningUpdateProposalContentReview({ source_command_id: citationDecision.command.id, args: nextArgs,
+      const nextContentReview = hds.recordMeaningUpdateProposalContentReview({ source_command_id: citationDecision.command.id, args: nextArgs,
         request_id: nextApprovalRequestId, command_id: nextApproval.command.id, proposal_actor: proposalActor,
-        command_digest: nextCommandDigest })).toBe(true);
+        command_digest: nextCommandDigest });
+      expect(nextContentReview).toBe(true);
       const nextApprovalEntry = hds.getAudit().list().find(({ log }) => "kind" in log && log.kind === "approval_gate" &&
         log.request_id === nextApprovalRequestId && log.command_id === nextApproval.command!.id);
       if (!nextApprovalEntry || !("kind" in nextApprovalEntry.log) || nextApprovalEntry.log.kind !== "approval_gate") {
@@ -313,7 +315,8 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
         content_review_digest: nextCommandDigest, proposal_actor: proposalActor, reviewer_actor: proposalActor,
         evaluation: nextApprovalEntry.log.evaluation })).toEqual({ ok: true, proposal_digest: nextOwnerReview!.proposal_digest,
         candidate_digest: nextOwnerReview!.proposal.candidate_digest, approval_status: "approved",
-        memory_application_status: "applied", follow_up_action_status: "unconfirmed" });
+        memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+        memory_revision_before: 1, memory_revision_after: 2, pending_reassessment_required_count: 2 });
       const interpretationAfterUpdate = new MeaningUpdateMemoryConsumer(storage, {
         readVerifiedMemoryApproval: (reference) => ({ ...reference }),
       });

@@ -194,10 +194,10 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect(customCalls).toBe(0);
   }));
 
-  it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
+  it.each(["content", "task", "missing-task", "missing-task-identity", "changed-task-identity",
+    "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"] as const)(
+    "実IPC childは%s packetを拒否し結果を返さない", async (kind) => temporary(async (store, workspace) => {
     const hostAudienceDigest = currentHostAudienceDigest();
-    for (const kind of ["content", "task", "missing-task", "missing-task-identity", "changed-task-identity",
-      "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const commandSource = source();
       const { executor } = rig(store, workspace);
@@ -242,6 +242,5 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         child.send(workerPacket(packet));
         const [code] = await closed; expect(code).toBe(2); expect(results).toBe(0);
       } finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) { child.kill(); await closed; } }
-    }
   }), 20_000);
 });

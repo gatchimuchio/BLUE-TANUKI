@@ -111,7 +111,7 @@ describe("gateway inbound boundary", () => {
     expect(feedbackLog && "kind" in feedbackLog && feedbackLog.kind === "executor_feedback")
       .toBe(true);
     if (feedbackLog && "kind" in feedbackLog && feedbackLog.kind === "executor_feedback") {
-      expect(feedbackLog.feedback.meaning_update_proposal_contract_status).toBe("passed");
+      expect(feedbackLog.feedback.meaning_update_proposal_contract_status).toBe("passed", JSON.stringify(feedbackLog.feedback));
       expect(feedbackLog.feedback.meaning_update_proposal_used_for_authority).toBe(false);
       expect(feedbackLog.feedback.meaning_update_proposal_applied).toBe(false);
     }
