@@ -2,9 +2,9 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev3.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現在のowner作業ポインタ — 2026-11-05 リポジトリ健全化
+## 最後のowner委任 — 2026-11-05 リポジトリ健全化（完了）
 
-現在のactive taskは、一回限りのリポジトリ健全化である。対象は先頭の [`開発進捗.md`](開発進捗.md) に固定し、このtaskを閉じるまでは下記F05.01を実施中として扱わない。F05.01は最後に記録されたfeature BUILD_BATCH、F05.02は未着手である。本taskはQE_STAGEやrev3.0三点セットを変更せず、製品機能、別repo、QE_QC／QE_QA、外部provider、公開・出荷判断を開始しない。
+一回限りのリポジトリ健全化は、対象commit `1603a10f0f7433a2481d7bc1a79e1f744fb8c633`で実装・検証を完了した。範囲と証拠は先頭の [`開発進捗.md`](開発進捗.md) に記録する。本taskはQE_STAGEやrev3.0三点セットを変更せず、製品機能、別repo、QE_QC／QE_QA、外部provider、公開・出荷判断を開始していない。F05.01は最後に記録されたfeature BUILD_BATCH、F05.02は未着手であり、次のfeature BUILD_BATCHはownerの次指示から再同期する。
 
 ## QE状態
 

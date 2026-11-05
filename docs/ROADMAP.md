@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 現在のowner作業ポインタ — 2026-11-05
+### 最後のowner委任 — 2026-11-05 リポジトリ健全化（完了）
 
-現在進行する施工は一回限りのリポジトリ健全化である。対象・非対象・完了条件は先頭の [`開発進捗.md`](開発進捗.md) を参照する。以下のF02.02等の日付付きBUILD_BATCH記録は当時の開発履歴であり、今回の実施対象や次のfeature BUILD_BATCHを指さない。F05.02を含む製品機能の追加、QE_QC／QE_QA、公開・出荷判断はこの作業では開始しない。
+一回限りのリポジトリ健全化は対象commit `1603a10f0f7433a2481d7bc1a79e1f744fb8c633`で実装・検証を完了した。対象・結果・検証範囲は先頭の [`開発進捗.md`](開発進捗.md) を参照する。以下の日付付きBUILD_BATCH記録は当時の開発履歴であり、今回の実施対象や次のfeature BUILD_BATCHを指さない。F05.01が最後に記録されたfeature BUILD_BATCH、F05.02は未着手。次のfeature施工はownerの次指示から再同期する。
 
 2026-11-01、Control CenterのWebSocket再接続枠を成功接続ごとに回復するよう修正した。再接続成功後に失敗回数を0へ戻し、自動再接続であることは接続試行のローカル値で保つ。taskの再送・切断中frameの再配送は行わない。channel-webchat typecheck／build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。browser／Gateway process確認はNOT_RUN、STATUS=WIRED（静的接続、実接続未確認）。
 
