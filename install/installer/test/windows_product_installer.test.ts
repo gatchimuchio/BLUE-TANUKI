@@ -43,6 +43,28 @@ function runPowerShellFile(
 }
 
 describe("Windows product installer package", () => {
+  it("keeps legacy allowance confined to the development install guard", () => {
+    const safeTarget = read("install/windows/safe-target.ps1");
+    const productGuardStart = safeTarget.indexOf("function Assert-ManagedWindowsProductInstall {");
+    const productGuardEnd = safeTarget.indexOf("function Assert-ManagedWindowsProductData {", productGuardStart);
+    const developmentGuardStart = safeTarget.indexOf("function Assert-ManagedWindowsDevelopmentInstall {");
+    const developmentGuardEnd = safeTarget.indexOf("function Assert-SafeInstallTargets {", developmentGuardStart);
+    expect(productGuardStart).toBeGreaterThanOrEqual(0);
+    expect(productGuardEnd).toBeGreaterThan(productGuardStart);
+    expect(developmentGuardStart).toBeGreaterThanOrEqual(0);
+    expect(developmentGuardEnd).toBeGreaterThan(developmentGuardStart);
+
+    const productGuard = safeTarget.slice(productGuardStart, productGuardEnd);
+    const developmentGuard = safeTarget.slice(developmentGuardStart, developmentGuardEnd);
+    expect(productGuard).not.toContain("AllowLegacy");
+    expect(developmentGuard).toContain("[switch]$AllowLegacy");
+    expect(developmentGuard).toContain("if ($AllowLegacy)");
+
+    for (const rel of ["install/windows/product/BlueTanukiSetup.ps1", "install/windows/product/BlueTanukiUninstall.ps1"]) {
+      expect(read(rel)).not.toMatch(/Assert-ManagedWindowsProductInstall[^\r\n]*-AllowLegacy/u);
+    }
+  });
+
   it("uses bundled runtime and gives source-tree mislaunch guidance", () => {
     const setup = read("install/windows/product/BlueTanukiSetup.ps1");
     expect(setup).toContain("Expand-BundledNode");

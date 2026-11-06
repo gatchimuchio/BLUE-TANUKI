@@ -369,7 +369,7 @@ try {
   $existingProductInstall = Test-Path -LiteralPath $installRootResolved -PathType Container
   if (Test-Path -LiteralPath $installRootResolved) {
     if (-not $existingProductInstall) { Fail "Install target exists but is not a directory. No files were changed: $installRootResolved" }
-    try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+    try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
     }
   }

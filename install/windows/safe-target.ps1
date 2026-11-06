@@ -236,8 +236,7 @@ function Assert-ManagedWindowsProductInstall {
   param(
     [Parameter(Mandatory = $true)][string]$InstallRoot,
     [Parameter(Mandatory = $true)][string]$DataRoot,
-    [string]$MetadataInstallRoot,
-    [switch]$AllowLegacy
+    [string]$MetadataInstallRoot
   )
   $install = Resolve-SafeDirectoryTarget -Path $InstallRoot -Label 'ProductInstallRoot'
   $data = Resolve-SafeDirectoryTarget -Path $DataRoot -Label 'ProductDataRoot'

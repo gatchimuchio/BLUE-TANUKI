@@ -50,6 +50,25 @@ afterEach(async () => {
 });
 
 describe("served Telegram result return and request-bound media ingress", () => {
+  it("treats only an absent capture as not yet received and keeps read or data failures visible", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-capture-read-"));
+    const captureFile = join(tempRoot, "capture.jsonl");
+    const gateway = { child: { exitCode: null } } as unknown as CapturedProcess;
+    try {
+      expect(readCaptureEvents(captureFile)).toEqual([]);
+      expect(captureDeliveryDiagnostic(captureFile, gateway, 0))
+        .toContain("capture=missing; delivery=unreceived; gateway=running; provider_requests=0");
+      expect(() => readCaptureEvents(tempRoot)).toThrow();
+
+      writeFileSync(captureFile, "{invalid json\n", "utf8");
+      expect(() => readCaptureEvents(captureFile)).toThrow(SyntaxError);
+      writeFileSync(captureFile, "null\n", "utf8");
+      expect(() => readCaptureEvents(captureFile)).toThrow(/non-object event/u);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("deduplicates a Telegram text attachment and returns the same saved job result after WebChat reconnect", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-f1003-same-job-"));
     const auditDir = join(tempRoot, "audit");
@@ -173,7 +192,7 @@ describe("served Telegram result return and request-bound media ingress", () => 
       }, gateway, () => `Telegram wait reply was not reconciled into the shared HDS plan ledger; providerCalls=${providerCalls}; ` +
         `lastOperationPlanSnapshot=${JSON.stringify({ waits: lastSnapshot?.operation_plan_status?.waits,
           plans: lastSnapshot?.operation_plan_status?.plans })}; ` +
-        `telegramCaptureTail=${readFileSync(captureFile, "utf8").trim().split(/\r?\n/u).slice(-8).join("\n")}; ` +
+        `${captureDeliveryDiagnostic(captureFile, gateway, providerCalls)}; ` +
         `gatewayStdout=${gateway.stdout.join("")}`);
 
       expect(providerCalls).toBeGreaterThan(0);
@@ -337,12 +356,11 @@ describe("served Telegram result return and request-bound media ingress", () => 
       await waitForHealth(gatewayPort, gateway);
       const delivered = await waitFor(() => {
         if (providerFailure) throw providerFailure;
-        const events = readFileSync(captureFile, "utf8").split(/\r?\n/u).filter(Boolean)
-          .map((line) => JSON.parse(line) as { method?: string; text?: string });
+        const events = readCaptureEvents<{ method?: string; text?: string }>(captureFile);
         const replies = events.filter((event) => event.method === "sendMessage");
         return replies.length >= 2 && providerRequests.length === 2 ? { events, replies } : null;
       }, gateway, () => `served Telegram media did not reach C and return; providerRequests=${providerRequests.map(({ path }) => path)}; ` +
-        `capture=${readFileSync(captureFile, "utf8")}; stderr=${gateway?.stderr.join("")}`);
+        `${captureDeliveryDiagnostic(captureFile, gateway, providerRequests.length)}; stderr=${gateway?.stderr.join("")}`);
 
       const imageRequest = providerRequests.find((item) => item.path.endsWith("/chat/completions"));
       const audioRequest = providerRequests.find((item) => item.path.endsWith("/audio/transcriptions"));
@@ -439,14 +457,13 @@ describe("served Telegram result return and request-bound media ingress", () => 
       await waitForHealth(gatewayPort, gateway);
       const delivered = await waitFor(() => {
         if (providerFailure) throw providerFailure;
-        const events = readFileSync(captureFile, "utf8").split(/\r?\n/u).filter(Boolean)
-          .map((line) => JSON.parse(line) as { method?: string; text?: string; path?: string; byte_count?: number });
+        const events = readCaptureEvents<{ method?: string; text?: string; path?: string; byte_count?: number }>(captureFile);
         const replies = events.filter((event) => event.method === "sendMessage");
         const fetched = events.some((event) => event.method === "getFile") &&
           events.some((event) => event.method === "getFileBinary" && event.byte_count === attachmentBytes.byteLength);
         return replies.length >= 1 && fetched && providerRequests.length === 1 ? { events, replies } : null;
       }, gateway, () => `served Telegram text attachment did not reach C and return; providerRequests=${providerRequests.map(({ path }) => path)}; ` +
-        `capture=${readFileSync(captureFile, "utf8")}; stderr=${gateway?.stderr.join("")}`);
+        `${captureDeliveryDiagnostic(captureFile, gateway, providerRequests.length)}; stderr=${gateway?.stderr.join("")}`);
 
       const providerRequest = providerRequests[0];
       expect(providerRequest?.path).toMatch(/\/chat\/completions$/u);
@@ -677,6 +694,44 @@ async function invokeOwnerControl(port: number, user: string, token: string, act
   return fetch(`http://127.0.0.1:${port}/operators/developer/invoke`, { method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ user, content: `plan:${action} ${JSON.stringify(control)}` }) });
+}
+
+function readCaptureText(captureFile: string): string | undefined {
+  try {
+    return readFileSync(captureFile, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function parseCaptureEvents<T extends Record<string, unknown>>(raw: string | undefined): T[] {
+  if (raw === undefined) return [];
+  return raw.split(/\r?\n/u).filter(Boolean).map((line, index) => {
+    const value: unknown = JSON.parse(line);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error(`capture file contains a non-object event at line ${index + 1}`);
+    }
+    return value as T;
+  });
+}
+
+function readCaptureEvents<T extends Record<string, unknown>>(captureFile: string): T[] {
+  return parseCaptureEvents<T>(readCaptureText(captureFile));
+}
+
+function captureDeliveryDiagnostic(captureFile: string, gateway: CapturedProcess, providerRequestCount: number): string {
+  const raw = readCaptureText(captureFile);
+  const gatewayStatus = gateway.child.exitCode === null ? "running" : `exited(${gateway.child.exitCode})`;
+  if (raw === undefined) {
+    return `capture=missing; delivery=unreceived; gateway=${gatewayStatus}; provider_requests=${providerRequestCount}`;
+  }
+  const events = parseCaptureEvents<{ method?: string }>(raw);
+  const sendMessageCount = events.filter((event) => event.method === "sendMessage").length;
+  const delivery = sendMessageCount > 0
+    ? `delivery=partial; sendMessage_events=${sendMessageCount}`
+    : "delivery=unreceived";
+  return `capture=present; event_count=${events.length}; ${delivery}; gateway=${gatewayStatus}; provider_requests=${providerRequestCount}`;
 }
 
 async function waitFor<T>(probe: () => Promise<T | null> | T | null, gateway: CapturedProcess,

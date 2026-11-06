@@ -244,7 +244,7 @@ try {
   $safeTargets = Assert-SafeInstallTargets -InstallRoot $installRootInput -DataRoot $dataRootInput -SourceRoot $null
   $installRootResolved = $safeTargets.InstallRoot
   $dataRootResolved = $safeTargets.DataRoot
-  [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy)
+  [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
   if ($PurgeData) { [void](Assert-ManagedWindowsProductData -DataRoot $dataRootResolved -InstallRoot $installRootResolved) }
 } catch {
   Fail "Refusing to uninstall because product ownership and structure could not be verified. No files were changed. $($_.Exception.Message)"
@@ -255,7 +255,7 @@ if (Test-Path -LiteralPath $launcher -PathType Leaf) {
   if ($DryRun) {
     Write-Host 'Would stop resident runtime.'
   } else {
-    try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+    try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to run the product launcher because the installed inventory changed. No files were removed. $($_.Exception.Message)"
     }
     try {
@@ -267,7 +267,7 @@ if (Test-Path -LiteralPath $launcher -PathType Leaf) {
   }
 }
 
-try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
+try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
   Fail "Refusing to remove product files because the installed inventory changed. No files were removed. $($_.Exception.Message)"
 }
 Remove-Target $installRootResolved 'installed app'

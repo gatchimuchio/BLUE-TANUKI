@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
+import { parseEnvFile } from "../src/env_file.js";
 import {
   createDefaultSetupConfig,
   renderSetupEnvFile,
@@ -40,9 +41,26 @@ describe("setup_config", () => {
     config.paths.shell_root = path.join("local-data", "files");
 
     const env = setupConfigToEnv(config);
+    const rendered = renderSetupEnvFile(config);
+    const parsedEnv = parseEnvFile(rendered).values;
     expect(env.BLUE_TANUKI_SHELL_ROOT).toBe(path.resolve("local-data", "files"));
-    expect(renderSetupEnvFile(config)).toContain(`BLUE_TANUKI_SHELL_ROOT=${JSON.stringify(path.resolve("local-data", "files"))}`);
+    expect(parsedEnv.BLUE_TANUKI_SHELL_ROOT).toBe(path.resolve("local-data", "files"));
+    expect(setupConfigFromEnv(parsedEnv).paths.shell_root).toBe(path.resolve("local-data", "files"));
     expect(setupConfigFromEnv(env).paths.shell_root).toBe(path.resolve("local-data", "files"));
+  });
+
+  it("round-trips quoted env values without turning embedded line breaks into entries", () => {
+    const config = createDefaultSetupConfig();
+    const ownerToken = 'owner token with \\backslash, "quote", # and =\r\nBLUE_TANUKI_APPROVAL_MODE=ask_every_time';
+    config.webchat.owner_token = ownerToken;
+
+    const rendered = renderSetupEnvFile(config);
+    const parsedEnv = parseEnvFile(rendered).values;
+
+    expect(rendered.match(/^BLUE_TANUKI_OWNER_TOKEN=/gmu)).toHaveLength(1);
+    expect(parsedEnv.BLUE_TANUKI_OWNER_TOKEN).toBe(ownerToken);
+    expect(parsedEnv.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
+    expect(setupConfigFromEnv(parsedEnv).webchat.owner_token).toBe(ownerToken);
   });
 
   it("renders an OpenAI-compatible provider into runtime env", () => {

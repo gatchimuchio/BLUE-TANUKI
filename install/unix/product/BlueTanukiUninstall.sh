@@ -20,7 +20,7 @@ fail() {
 
 OWNER_MARKER="$SCRIPT_DIR/.blue-tanuki-owner"
 if [ ! -f "$OWNER_MARKER" ] || [ -L "$OWNER_MARKER" ]; then
-  fail "product ownership marker is missing; no files were changed. A legacy install can be migrated by rerunning its verified packaged installer with --force before uninstalling."
+  fail "product ownership marker is missing; no files were changed. Automatic migration or removal is unavailable without independently verified ownership and version evidence. Preserve the old install and verify its contents. Install the current version only to a separate verified-empty install target with separately verified data/config paths. Back up and verify old files and user data before any manual removal; --force does not bypass ownership or inventory checks."
 fi
 [ "$(wc -l < "$OWNER_MARKER" | tr -d '[:space:]')" = 10 ] || fail "product ownership marker has an unexpected shape; no files were changed"
 

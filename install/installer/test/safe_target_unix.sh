@@ -230,6 +230,23 @@ fi
 grep -Fq "Would remove app: $PRODUCT_INSTALL" "$TMP_ROOT/product-uninstall.out" || exit 24
 [ -f "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" ] && [ -f "$PRODUCT_RUNTIME/node-v-test/bin/node" ] || exit 25
 [ -f "$PRODUCT_DATA/.blue-tanuki-owner" ] && [ -f "$PRODUCT_CONFIG/.blue-tanuki-owner" ] || exit 26
+PRODUCT_OWNER_MARKER="$PRODUCT_INSTALL/.blue-tanuki-owner"
+cp "$PRODUCT_OWNER_MARKER" "$TMP_ROOT/product-owner-marker.backup"
+sed "s|^install_root=.*|install_root=$PRODUCT_HOME/mismatched-app|" "$TMP_ROOT/product-owner-marker.backup" > "$PRODUCT_OWNER_MARKER"
+if (
+  HOME="$PRODUCT_HOME" \
+  XDG_DATA_HOME="$PRODUCT_HOME/.local/share" \
+  XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --purge
+) > "$TMP_ROOT/product-uninstall-scope-mismatch.out" 2>&1; then
+  echo "product uninstall accepted a mismatched install ownership scope" >&2
+  exit 69
+fi
+grep -Eiq "ownership marker|does not match|install root" "$TMP_ROOT/product-uninstall-scope-mismatch.out" || exit 70
+mv -- "$TMP_ROOT/product-owner-marker.backup" "$PRODUCT_OWNER_MARKER"
+[ -f "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" ] && [ -f "$PRODUCT_RUNTIME/node-v-test/bin/node" ] || exit 71
+[ -f "$PRODUCT_DATA/.blue-tanuki-owner" ] && [ -f "$PRODUCT_CONFIG/.blue-tanuki-owner" ] || exit 72
+
 printf 'unrelated user file\n' > "$PRODUCT_INSTALL/user-added.txt"
 if (
   HOME="$PRODUCT_HOME" \
@@ -406,6 +423,79 @@ if ! run_fixture_setup --no-launch --skip-doctor > "$TMP_ROOT/setup-initial.out"
 fi
 [ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 30
 [ -f "$SETUP_DATA/.blue-tanuki-owner" ] && [ -f "$SETUP_CONFIG/.blue-tanuki-owner" ] || exit 31
+
+LEGACY_HOME="$TMP_ROOT/markerless-legacy-home"
+LEGACY_INSTALL="$LEGACY_HOME/legacy-app"
+LEGACY_DATA="$LEGACY_HOME/data"
+LEGACY_CONFIG="$LEGACY_HOME/config"
+LEGACY_RUNTIME="$LEGACY_HOME/runtime"
+LEGACY_BIN="$LEGACY_HOME/bin"
+mkdir -p "$LEGACY_INSTALL/apps/gateway/dist" "$LEGACY_DATA" "$LEGACY_CONFIG" "$LEGACY_RUNTIME" "$LEGACY_BIN"
+printf 'legacy application\n' > "$LEGACY_INSTALL/apps/gateway/dist/main.js"
+printf 'legacy user data\n' > "$LEGACY_DATA/user.txt"
+mkdir -p "$LEGACY_INSTALL/install/unix"
+cp "$REPO_ROOT/install/unix/safe-target.sh" "$LEGACY_INSTALL/install/unix/safe-target.sh"
+cp "$REPO_ROOT/install/unix/product/BlueTanukiUninstall.sh" "$LEGACY_INSTALL/BlueTanukiUninstall.sh"
+LEGACY_INSTALL_SHA256=$(sha256_file "$LEGACY_INSTALL/apps/gateway/dist/main.js")
+LEGACY_DATA_SHA256=$(sha256_file "$LEGACY_DATA/user.txt")
+if (
+  HOME="$LEGACY_HOME" \
+  XDG_DATA_HOME="$LEGACY_HOME/xdg-data" \
+  XDG_CONFIG_HOME="$LEGACY_HOME/xdg-config" \
+  sh "$LEGACY_INSTALL/BlueTanukiUninstall.sh" --purge
+) > "$TMP_ROOT/uninstall-markerless.out" 2>&1; then
+  echo "product uninstall accepted a markerless legacy install" >&2
+  exit 57
+fi
+grep -Fq "Automatic migration or removal is unavailable" "$TMP_ROOT/uninstall-markerless.out" || exit 58
+grep -Fq "no files were changed" "$TMP_ROOT/uninstall-markerless.out" || exit 59
+if (
+  env HOME="$LEGACY_HOME" \
+    XDG_DATA_HOME="$LEGACY_HOME/xdg-data" \
+    XDG_CONFIG_HOME="$LEGACY_HOME/xdg-config" \
+    LAUNCH_AFTER_INSTALL=0 \
+    sh "$SETUP_PACKAGE/BlueTanukiSetup.sh" \
+      --install-root "$LEGACY_INSTALL" \
+      --data-root "$LEGACY_DATA" \
+      --config-root "$LEGACY_CONFIG" \
+      --runtime-root "$LEGACY_RUNTIME" \
+      --bin-root "$LEGACY_BIN" \
+      --force --no-launch --skip-doctor
+) > "$TMP_ROOT/setup-markerless-force.out" 2>&1; then
+  echo "packaged product setup migrated a markerless legacy install with --force" >&2
+  exit 60
+fi
+grep -Fq "legacy install has no installed-file inventory" "$TMP_ROOT/setup-markerless-force.out" || exit 61
+[ "$(sha256_file "$LEGACY_INSTALL/apps/gateway/dist/main.js")" = "$LEGACY_INSTALL_SHA256" ] || exit 62
+[ "$(sha256_file "$LEGACY_DATA/user.txt")" = "$LEGACY_DATA_SHA256" ] || exit 63
+[ ! -e "$LEGACY_INSTALL/.blue-tanuki-owner" ] || exit 64
+
+LEGACY_SYMLINK_HOME="$TMP_ROOT/markerless-symlink-home"
+LEGACY_SYMLINK_TARGET="$LEGACY_SYMLINK_HOME/legacy-target"
+LEGACY_SYMLINK_INSTALL="$LEGACY_SYMLINK_HOME/legacy-link"
+mkdir -p "$LEGACY_SYMLINK_TARGET/apps/gateway/dist"
+printf 'symlink target must remain\n' > "$LEGACY_SYMLINK_TARGET/apps/gateway/dist/main.js"
+ln -s "$LEGACY_SYMLINK_TARGET" "$LEGACY_SYMLINK_INSTALL"
+if (
+  env HOME="$LEGACY_SYMLINK_HOME" \
+    XDG_DATA_HOME="$LEGACY_SYMLINK_HOME/xdg-data" \
+    XDG_CONFIG_HOME="$LEGACY_SYMLINK_HOME/xdg-config" \
+    LAUNCH_AFTER_INSTALL=0 \
+    sh "$SETUP_PACKAGE/BlueTanukiSetup.sh" \
+      --install-root "$LEGACY_SYMLINK_INSTALL" \
+      --data-root "$LEGACY_SYMLINK_HOME/data" \
+      --config-root "$LEGACY_SYMLINK_HOME/config" \
+      --runtime-root "$LEGACY_SYMLINK_HOME/runtime" \
+      --bin-root "$LEGACY_SYMLINK_HOME/bin" \
+      --force --no-launch --skip-doctor
+) > "$TMP_ROOT/setup-markerless-symlink.out" 2>&1; then
+  echo "packaged product setup accepted a markerless symlink install target" >&2
+  exit 65
+fi
+grep -Fq "symlink" "$TMP_ROOT/setup-markerless-symlink.out" || exit 66
+[ "$(cat "$LEGACY_SYMLINK_TARGET/apps/gateway/dist/main.js")" = "symlink target must remain" ] || exit 67
+[ ! -e "$LEGACY_SYMLINK_HOME/data" ] && [ ! -e "$LEGACY_SYMLINK_HOME/config" ] || exit 68
+
 cp "$SETUP_PACKAGE/unix-installer-manifest.json" "$TMP_ROOT/setup-manifest.backup"
 sed "s/$SETUP_RUNTIME_SHA256/0000000000000000000000000000000000000000000000000000000000000000/" "$TMP_ROOT/setup-manifest.backup" > "$SETUP_PACKAGE/unix-installer-manifest.json"
 if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-manifest-mismatch.out" 2>&1; then

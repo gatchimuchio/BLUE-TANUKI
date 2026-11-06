@@ -284,7 +284,7 @@ describe("settings surface", () => {
       expect(raw).toContain("COMPOSIO_LIVE_EXECUTION=true");
       expect(raw).toContain("WEBCHAT_PORT=8877");
       expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
-      expect(raw).toContain(`BLUE_TANUKI_SHELL_ROOT=${JSON.stringify(path.resolve(dir, "files"))}`);
+      expect(parseEnvFile(raw).values.BLUE_TANUKI_SHELL_ROOT).toBe(path.resolve(dir, "files"));
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");
 
