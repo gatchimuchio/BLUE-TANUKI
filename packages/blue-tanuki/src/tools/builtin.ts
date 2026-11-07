@@ -14,6 +14,8 @@ import {
   FileWriteTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
   FileEditTargetVersionObservationSchema,
+  GitHubIssueCreateTargetVersionObservationSchema,
+  GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
@@ -22,16 +24,20 @@ import {
   fileEditTargetIdentityDigest,
   githubIssueCreateRequestPayloadDigest,
   githubIssueCreateTargetIdentityDigest,
+  githubIssueUpdateRequestPayloadDigest,
+  githubIssueUpdateTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation,
   type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation,
+  type GitHubIssueCreateTargetVersionObservation,
+  type GitHubIssueUpdateTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
-  type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type Tool } from "./registry.js";
+  type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -861,18 +867,6 @@ function sha256Hex(value: unknown): string {
   return createHash("sha256").update(stableJson(value)).digest("hex");
 }
 
-function githubResultSummary(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { value_type: typeof value };
-  }
-  const record = value as Record<string, unknown>;
-  const summary: Record<string, unknown> = {};
-  for (const key of ["id", "node_id", "number", "state", "title", "html_url", "url"] as const) {
-    if (record[key] !== undefined) summary[key] = record[key];
-  }
-  return summary;
-}
-
 function parseJsonOrText(body: string): unknown {
   try {
     return JSON.parse(body) as unknown;
@@ -1352,6 +1346,7 @@ export async function invokeGitHubWrite(
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const env = opts.env ?? process.env;
   const route = githubWriteRoute(args);
+  if (route.operation === "issue.update") return await invokeGitHubIssueUpdate(args, opts);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} is not connected to a plan-bound review path; mutation_sent=false; status=BUILD_GAP`);
   }
@@ -1424,22 +1419,10 @@ export async function invokeGitHubWrite(
   }
   const issue = isRecord(data) ? data : null;
   const expectedBody = typeof args.body === "string" ? args.body : undefined;
-  const returnedBody = typeof issue?.body === "string" ? issue.body : undefined;
-  let issueUrl: URL | undefined;
-  try {
-    issueUrl = typeof issue?.html_url === "string" ? new URL(issue.html_url) : undefined;
-  } catch {
-    issueUrl = undefined;
-  }
-  const expectedIssuePath = issue && typeof issue.number === "number"
-    ? `/${expected.canonical_full_name}/issues/${issue.number}`.toLowerCase() : "";
-  const returnedIssuePath = issueUrl?.pathname.replace(/\/+$/, "").toLowerCase() ?? "";
+  const returnedBody = issue?.body;
   if (!issue || typeof issue.id !== "number" || !Number.isSafeInteger(issue.id) || issue.id <= 0 ||
       typeof issue.number !== "number" || !Number.isSafeInteger(issue.number) || issue.number <= 0 ||
-      issue.title !== args.title || (expectedBody !== undefined && returnedBody !== expectedBody) ||
-      !issueUrl || issueUrl.origin.toLowerCase() !== "https://github.com" ||
-      issueUrl.username || issueUrl.password || issueUrl.search || issueUrl.hash ||
-      returnedIssuePath !== expectedIssuePath) {
+      issue.title !== args.title || returnedBody !== (expectedBody ?? null)) {
     throw new Error("github.write issue.create response did not confirm the exact created issue; outcome_unknown; do not retry automatically");
   }
   return {
@@ -1461,7 +1444,7 @@ export async function invokeGitHubWrite(
     rate_limit_remaining: response.rate_limit_remaining,
     github_request_id: response.request_id,
     result_digest: sha256Hex(data),
-    result: githubResultSummary(issue),
+    result: { id: issue.id, number: issue.number, title: issue.title },
     provider_data_is_untrusted: true,
     used_for_authority: false,
     may_execute: false,
@@ -1471,7 +1454,7 @@ export async function invokeGitHubWrite(
 export async function inspectGitHubIssueCreateTargetVersion(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
-): Promise<GitHubWriteTargetVersionObservation> {
+): Promise<GitHubIssueCreateTargetVersionObservation> {
   const route = githubWriteRoute(args);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} target observation is not implemented; status=BUILD_GAP`);
@@ -1507,7 +1490,7 @@ export async function inspectGitHubIssueCreateTargetVersion(
       !sameRepository || typeof isPrivate !== "boolean") {
     throw new Error("github.write issue.create repository identity or visibility is incomplete or mismatched");
   }
-  return GitHubWriteTargetVersionObservationSchema.parse({
+  return GitHubIssueCreateTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.github-write-target-version.v1",
     operation: "issue.create",
     repository_id: repositoryId,
@@ -1530,15 +1513,19 @@ export async function inspectGitHubIssueCreateTargetVersion(
 }
 
 export function assertGitHubIssueCreateTargetVersion(args: Record<string, unknown>, value: unknown,
-  commandDigest: string, operationPlanBindingDigest: string): GitHubWriteTargetVersionObservation {
+  commandDigest: string, operationPlanBindingDigest: string): GitHubIssueCreateTargetVersionObservation {
   const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "issue.create") {
+    throw new Error("github.write issue.create target observation has another operation");
+  }
   const route = githubWriteRoute(args);
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
   const payloadDigest = githubIssueCreateRequestPayloadDigest({ owner, repo, title: String(route.body.title),
     ...(typeof route.body.body === "string" ? { body: route.body.body } : {}) });
   if (Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "max_bytes"].includes(key)) ||
-      route.operation !== "issue.create" || observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      route.operation !== "issue.create" ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
       observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
       observation.command_digest !== commandDigest ||
@@ -1577,6 +1564,273 @@ export async function inspectGitHubIssueCreateContentReview(args: Record<string,
     may_execute: false as const,
   };
   return { ...base, review_digest: sha256Hex(base) };
+}
+
+export async function inspectGitHubIssueUpdateTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubIssueUpdateTargetVersionObservation> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "issue.update") {
+    throw new Error("github.write " + route.operation + " target observation is not implemented; status=BUILD_GAP");
+  }
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "title", "body", "max_bytes"].includes(key))) {
+    throw new Error("github.write issue.update contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write issue.update target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const issueNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.update target inspection");
+  const repositoryResponse = await readRequest({
+    path: "/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo),
+    maxBytes,
+    token,
+  }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "issue.update target repository");
+  const repositoryId = repository.id;
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerLogin = isRecord(repository.owner) && typeof repository.owner.login === "string"
+    ? repository.owner.login : "";
+  const isPrivate = repository.private;
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      fullName.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
+      repositoryName.toLowerCase() !== repo.toLowerCase() || ownerLogin.toLowerCase() !== owner.toLowerCase() ||
+      typeof isPrivate !== "boolean") {
+    throw new Error("github.write issue.update repository identity or visibility is incomplete or mismatched");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.update target inspection");
+  const issueResponse = await readRequest({ path: route.path, maxBytes, token }, opts.signal);
+  const issue = requireGitHubJsonRecord(issueResponse, "issue.update target issue");
+  const issueId = issue.id;
+  const observedNumber = issue.number;
+  const state = issue.state;
+  const locked = issue.locked;
+  const updatedAt = issue.updated_at;
+  const title = issue.title;
+  const body = issue.body;
+  if ("pull_request" in issue) {
+    throw new Error("github.write issue.update target is a pull request; mutation_sent=false; status=BUILD_GAP");
+  }
+  if (typeof issueId !== "number" || !Number.isSafeInteger(issueId) || issueId <= 0 ||
+      observedNumber !== issueNumber || (state !== "open" && state !== "closed") || typeof locked !== "boolean" ||
+      typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt)) ||
+      typeof title !== "string" || title.length === 0 || title.length > 65_536 ||
+      (body !== null && typeof body !== "string") || (typeof body === "string" && body.length > 500_000)) {
+    throw new Error("github.write issue.update target state is incomplete or mismatched; mutation_sent=false");
+  }
+  return GitHubIssueUpdateTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "issue.update",
+    repository_id: repositoryId,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: fullName,
+    repository_visibility: isPrivate ? "private" : "public",
+    issue_id: issueId,
+    issue_number: observedNumber,
+    issue_state: state,
+    issue_locked: locked,
+    issue_updated_at: updatedAt,
+    issue_title: title,
+    issue_body: body,
+    target_identity_digest: githubIssueUpdateTargetIdentityDigest({
+      repository_id: repositoryId, canonical_full_name: fullName, issue_id: issueId, issue_number: observedNumber,
+    }),
+    request_payload_digest: githubIssueUpdateRequestPayloadDigest({
+      owner, repo, issue_number: issueNumber,
+      ...(typeof route.body.title === "string" ? { title: route.body.title } : {}),
+      ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+    }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+export function assertGitHubIssueUpdateTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubIssueUpdateTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "issue.update") {
+    throw new Error("github.write issue.update target observation has another operation");
+  }
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const issueNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const payloadDigest = githubIssueUpdateRequestPayloadDigest({
+    owner, repo, issue_number: issueNumber,
+    ...(typeof route.body.title === "string" ? { title: route.body.title } : {}),
+    ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+  });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "title", "body", "max_bytes"].includes(key)) ||
+      route.operation !== "issue.update" ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
+      observation.issue_number !== issueNumber || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest ||
+      observation.target_identity_digest !== githubIssueUpdateTargetIdentityDigest({
+        repository_id: observation.repository_id,
+        canonical_full_name: observation.canonical_full_name,
+        issue_id: observation.issue_id,
+        issue_number: observation.issue_number,
+      }) || observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write issue.update target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubIssueUpdateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubIssueUpdateContentReview> {
+  const observation = await inspectGitHubIssueUpdateTargetVersion(args, opts);
+  const route = githubWriteRoute(args);
+  const base = {
+    kind: "github_issue_update" as const,
+    operation: "github.write.issue.update" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    issue_id: observation.issue_id,
+    issue_number: observation.issue_number,
+    issue_state: observation.issue_state,
+    issue_locked: observation.issue_locked,
+    issue_updated_at: observation.issue_updated_at,
+    current_title: observation.issue_title,
+    current_body: observation.issue_body,
+    ...(typeof route.body.title === "string" ? { requested_title: route.body.title } : {}),
+    ...(typeof route.body.body === "string" ? { requested_body: route.body.body } : {}),
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(
+      canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
+async function invokeGitHubIssueUpdate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const env = opts.env ?? process.env;
+  const route = githubWriteRoute(args);
+  if (route.operation !== "issue.update") throw new Error("github.write issue.update route mismatch; mutation_sent=false");
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write issue.update requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+  }
+  const expected = assertGitHubIssueUpdateTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const current = await inspectGitHubIssueUpdateTargetVersion(args, {
+    env,
+    signal: opts.signal,
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    ...(opts.read_request ? { read_request: opts.read_request } : {}),
+  });
+  if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write issue.update target changed after review; mutation_sent=false; outcome=stale");
+  }
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.update");
+  let response: GitHubWriteResponse;
+  try {
+    response = await request({ method: route.method, path: route.path, body: route.body, maxBytes, token }, opts.signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "provider_request_failed";
+    throw new Error("github.write issue.update outcome_unknown; do not retry automatically; check GitHub before a new Owner decision; " + message);
+  }
+  const data = parseJsonOrText(response.body);
+  if (!response.ok || response.status !== 200 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
+    const explicitRejection = !response.ok && !response.truncated &&
+      [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+    if (explicitRejection) {
+      return {
+        schema_version: "blue-tanuki.github-write-result.v1",
+        operation: "issue.update",
+        api_host: "api.github.com",
+        repo: route.repo,
+        repository_id: expected.repository_id,
+        target_identity_digest: expected.target_identity_digest,
+        request_payload_digest: expected.request_payload_digest,
+        command_digest: expected.command_digest,
+        operation_plan_binding_digest: expected.operation_plan_binding_digest,
+        method: route.method,
+        path: route.path,
+        status: response.status,
+        mutation_status: "provider_rejected",
+        result_digest: sha256Hex(data),
+        retry_permitted: false,
+        next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+        provider_data_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    }
+    const message = isRecord(data) ? optionalString(data.message) : null;
+    throw new Error("github.write issue.update outcome_unknown; HTTP " + response.status +
+      "; do not retry automatically; check GitHub before a new Owner decision" + (message ? "; message=" + message : ""));
+  }
+  const issue = isRecord(data) ? data : null;
+  const desiredTitle = typeof route.body.title === "string" ? route.body.title : expected.issue_title;
+  const desiredBody = typeof route.body.body === "string" ? route.body.body : expected.issue_body;
+  if (!issue || "pull_request" in issue || issue.id !== expected.issue_id || issue.number !== expected.issue_number ||
+      issue.title !== desiredTitle || issue.body !== desiredBody || issue.state !== expected.issue_state ||
+      issue.locked !== expected.issue_locked || typeof issue.updated_at !== "string" ||
+      !Number.isFinite(Date.parse(issue.updated_at))) {
+    throw new Error("github.write issue.update response did not confirm the reviewed issue and exact content; outcome_unknown; do not retry automatically");
+  }
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1",
+    operation: "issue.update",
+    api_host: "api.github.com",
+    repo: route.repo,
+    repository_id: expected.repository_id,
+    target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest,
+    command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest,
+    method: route.method,
+    path: route.path,
+    status: response.status,
+    mutation_status: "provider_accepted",
+    content_type: response.content_type,
+    truncated: response.truncated,
+    rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id,
+    result_digest: sha256Hex(data),
+    result: { id: issue.id, number: issue.number, title: issue.title, state: issue.state, locked: issue.locked },
+    provider_data_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 export async function invokeBrowserRead(
@@ -2872,16 +3126,30 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create one plan-bound GitHub issue after target recheck and no-store L3 review. Other write operations remain BUILD_GAP.",
+  description: "Create one plan-bound GitHub issue or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Other write operations remain BUILD_GAP.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
+    if (githubOperation(args) === "issue.update") {
+      return await inspectGitHubIssueUpdateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     return await inspectGitHubIssueCreateTargetVersion(args, {
       ...(options.env ? { env: options.env } : {}),
       ...(options.command_digest ? { command_digest: options.command_digest } : {}),
       ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
     });
   },
-  async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview> {
+  async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview> {
+    if (githubOperation(args) === "issue.update") {
+      return await inspectGitHubIssueUpdateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     return await inspectGitHubIssueCreateContentReview(args, {
       ...(options.env ? { env: options.env } : {}),
       ...(options.command_digest ? { command_digest: options.command_digest } : {}),

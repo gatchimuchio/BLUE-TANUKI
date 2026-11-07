@@ -8,7 +8,7 @@
 
 ### 現在のBUILD_BATCH — F05.02 GitHub write実consumer接続
 
-rev3.1施工指示に基づき、F05.01で得たrepository/base identity観測を既存の5つのGitHub write操作へ接続する。現在は`issue.create`をOperation Plan・target-version・no-store L3 content review・Executor/Brokerへコード接続済み（`WIRED`、Gateway実runtime未確認）。`pr.create`／`pr.comment.create`／`issue.update`／`issue.comment.create`は未接続の`BUILD_GAP`。Issue／PR／commentの外部送信、実資格情報を伴う外部作用、他repo変更は行わない。CODE_PRESENT／WIRED／BUILD_GAPを現物のproducer・consumerごとに記録し、全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQC／QAへ昇格しない。
+rev3.1施工指示に基づき、F05.01で得たrepository/base identity観測を既存の5つのGitHub write操作へ接続する。現在は`issue.create`と既存issueのタイトル／本文だけを更新する`issue.update`を、Operation Plan・target-version・no-store L3 content review・Executor/Brokerへコード接続済み（`WIRED`、Gateway実runtime未確認）。issue.updateはPRを除外し、現在状態・変更前後の本文・状態・ロック・通知可能性・非原子的更新を確認し、作用直前に再読取する。`pr.create`／`pr.comment.create`／`issue.comment.create`は未接続の`BUILD_GAP`。Issue／PR／commentの外部送信、実資格情報を伴う外部作用、他repo変更は行わない。CODE_PRESENT／WIRED／BUILD_GAPを現物のproducer・consumerごとに記録し、全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQC／QAへ昇格しない。
 
 ### 保留を維持する健全化残件 — 2026-11-07 follow-up D
 

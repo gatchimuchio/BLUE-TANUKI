@@ -666,13 +666,43 @@ export interface WebChatGitHubIssueCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubIssueUpdateContentReview {
+  kind: "github_issue_update";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.issue.update";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  issue_id: number;
+  issue_number: number;
+  issue_state: "open" | "closed";
+  issue_locked: boolean;
+  issue_updated_at: string;
+  current_title: string;
+  current_body: string | null;
+  requested_title?: string;
+  requested_body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |
-  WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview;
+  WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview |
+  WebChatGitHubIssueUpdateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

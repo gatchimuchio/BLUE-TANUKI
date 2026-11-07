@@ -23,6 +23,8 @@ import {
   invokeGitHubWrite,
   inspectGitHubIssueCreateTargetVersion,
   inspectGitHubIssueCreateContentReview,
+  inspectGitHubIssueUpdateTargetVersion,
+  inspectGitHubIssueUpdateContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -1285,7 +1287,7 @@ describe("built-in tools", () => {
       status: number;
       github_request_id: string;
       result_digest: string;
-      result: { number: number; title: string; html_url: string };
+      result: { id: number; number: number; title: string };
     };
 
     expect(seen).toEqual([
@@ -1306,9 +1308,9 @@ describe("built-in tools", () => {
       status: 201,
       github_request_id: "ABC123",
       result: {
+        id: 123,
         number: 7,
         title: "Phase smoke",
-        html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/7",
       },
     });
     expect(result.result_digest).toMatch(/^[a-f0-9]{64}$/);
@@ -1317,6 +1319,7 @@ describe("built-in tools", () => {
       "/repos/gatchimuchio/blue-tanuki",
     ]);
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+    expect(JSON.stringify(result)).not.toContain("html_url");
   });
 
   it("github.write issue.create sends no mutation when the reviewed repository identity changes", async () => {
@@ -1393,12 +1396,194 @@ describe("built-in tools", () => {
     expect(JSON.stringify(review)).not.toContain("ghp_dummy");
   });
 
-  it("github.write issue.create treats a mismatched issue URL as outcome unknown without retrying", async () => {
+  it("github.write issue.update review binds the current issue and exact requested changes without authority", async () => {
+    const args = {
+      operation: "issue.update",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      title: "Revised title",
+    };
+    const options = fakeGitHubIssueUpdate();
+    const review = await inspectGitHubIssueUpdateContentReview(args, {
+      ...options,
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+    });
+
+    expect(review).toMatchObject({
+      kind: "github_issue_update",
+      operation: "github.write.issue.update",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      repository_visibility: "public",
+      issue_id: 456,
+      issue_number: 7,
+      issue_state: "open",
+      issue_locked: false,
+      issue_updated_at: "2026-11-07T12:00:00Z",
+      current_title: "Original title",
+      current_body: "Original body",
+      requested_title: "Revised title",
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+      notification_effect: "github_api_may_trigger_notifications",
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(review.request_payload_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(review)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.update rechecks the exact issue before one PATCH and verifies the receipt", async () => {
+    const args = {
+      operation: "issue.update",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      title: "Revised title",
+      body: "Revised body",
+    };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const options = await reviewedGitHubIssueUpdate(args, fakeGitHubIssueUpdate(async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body });
+      return {
+        status: 200,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({
+          id: 456,
+          number: 7,
+          state: "open",
+          locked: false,
+          updated_at: "2026-11-08T01:00:00Z",
+          title: "Revised title",
+          body: "Revised body",
+          html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/7",
+        }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "UPDATE123",
+      };
+      }));
+
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(seen).toEqual([{
+      method: "PATCH",
+      path: "/repos/gatchimuchio/blue-tanuki/issues/7",
+      body: { title: "Revised title", body: "Revised body" },
+    }]);
+    expect(result).toMatchObject({
+      operation: "issue.update",
+      method: "PATCH",
+      status: 200,
+      mutation_status: "provider_accepted",
+      result: { id: 456, number: 7, title: "Revised title", state: "open", locked: false },
+      provider_data_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("html_url");
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.update reports a mismatched PATCH receipt as unknown without retrying", async () => {
+    const args = {
+      operation: "issue.update",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      title: "Requested title",
+    };
+    let writes = 0;
+    const options = await reviewedGitHubIssueUpdate(args, fakeGitHubIssueUpdate(async () => {
+      writes += 1;
+      return {
+        status: 200,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({
+          id: 456,
+          number: 7,
+          state: "open",
+          locked: false,
+          updated_at: "2026-11-08T01:00:00Z",
+          title: "Different title",
+          body: "Original body",
+        }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "MISMATCH",
+      };
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(writes).toBe(1);
+  });
+
+  it("github.write issue.update sends no PATCH after the reviewed issue state changes", async () => {
+    const args = {
+      operation: "issue.update",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      body: "New body",
+    };
+    let reads = 0;
+    let writes = 0;
+    const options = await reviewedGitHubIssueUpdate(args, fakeGitHubIssueUpdate(async () => {
+      writes += 1;
+      throw new Error("stale issue must not be patched");
+    }, async (target) => {
+      reads += 1;
+      if (target.path.endsWith("/issues/7")) {
+        const changed = reads > 2;
+        return githubReadJson({
+          id: 456,
+          number: 7,
+          state: changed ? "closed" : "open",
+          locked: false,
+          updated_at: changed ? "2026-11-08T01:00:00Z" : "2026-11-07T12:00:00Z",
+          title: "Original title",
+          body: "Original body",
+        });
+      }
+      return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false });
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(reads).toBe(4);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write issue.update rejects pull requests before any PATCH", async () => {
+    let writes = 0;
+    const args = { operation: "issue.update", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, title: "No PR edit" };
+    const options = fakeGitHubIssueUpdate(async () => {
+      writes += 1;
+      throw new Error("pull requests are not issue.update targets");
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+        title: "PR title", body: null, pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" } })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+
+    await expect(inspectGitHubIssueUpdateTargetVersion(args, {
+      ...options, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    })).rejects.toThrow(/target is a pull request.*BUILD_GAP/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write issue.create treats mismatched returned issue content as outcome unknown without retrying", async () => {
     const args = {
       operation: "issue.create",
       owner: "gatchimuchio",
       repo: "blue-tanuki",
-      title: "URL mismatch",
+      title: "Result mismatch",
       body: "result identity must match",
     };
     let writes = 0;
@@ -1411,9 +1596,9 @@ describe("built-in tools", () => {
         body: JSON.stringify({
           id: 123,
           number: 7,
-          title: args.title,
+          title: "different provider title",
           body: args.body,
-          html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/8",
+          html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/7",
         }),
         truncated: false,
         rate_limit_remaining: "58",
@@ -1425,7 +1610,7 @@ describe("built-in tools", () => {
     expect(writes).toBe(1);
   });
 
-  it("github.write keeps the other four operations unavailable until they have plan-bound review paths", async () => {
+  it("github.write keeps the other three operations unavailable until they have plan-bound review paths", async () => {
     const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     const opts = fakeGitHubWrite(async (target) => {
       seen.push({ method: target.method, path: target.path, body: target.body });
@@ -1459,16 +1644,6 @@ describe("built-in tools", () => {
         repo: "blue-tanuki",
         number: 42,
         body: "review note",
-      },
-      opts,
-    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
-    await expect(invokeGitHubWrite(
-      {
-        operation: "issue.update",
-        owner: "gatchimuchio",
-        repo: "blue-tanuki",
-        number: 7,
-        title: "Updated issue",
       },
       opts,
     )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
@@ -2366,6 +2541,59 @@ async function reviewedGitHubIssue(args: Record<string, unknown>, options: GitHu
   const command_digest = "c".repeat(64);
   const operation_plan_binding_digest = "d".repeat(64);
   const target = await inspectGitHubIssueCreateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
+}
+
+function githubReadJson(body: unknown) {
+  return {
+    status: 200,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify(body),
+    truncated: false,
+    rate_limit_remaining: "60",
+  };
+}
+
+function fakeGitHubIssueUpdate(
+  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
+    status: 200,
+    ok: true,
+    content_type: "application/json",
+    body: "{}",
+    truncated: false,
+    rate_limit_remaining: "60",
+    request_id: "UPDATE-REQ",
+  }),
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.endsWith("/issues/7")
+    ? githubReadJson({
+      id: 456,
+      number: 7,
+      state: "open",
+      locked: false,
+      updated_at: "2026-11-07T12:00:00Z",
+      title: "Original title",
+      body: "Original body",
+    })
+    : githubReadJson({
+      id: 123,
+      name: "blue-tanuki",
+      full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" },
+      private: false,
+    }),
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
+async function reviewedGitHubIssueUpdate(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubIssueUpdate()): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubIssueUpdateTargetVersion(args, {
     ...options, command_digest, operation_plan_binding_digest,
   });
   return { ...options, command_digest, operation_plan_binding_digest,
