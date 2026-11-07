@@ -8,6 +8,8 @@
 
 DのWindows実機製品Setup／Uninstall隔離target一連試験は`NOT_RUN`であり、健全化は未完了。Codex自動コマンド審査が試験用harnessを実行前に拒否した。通常のinstaller／guard／dry-run testはPASSだが、実製品の動的Setup／Uninstall証明へ拡張しない。拒否された経路を迂回せず、動的試験を実行できる正規の手段が成立するまでDを未成立として扱う。
 
+作業資産の閉包ではWSL検証cloneを削除済み。Windows一時validation worktreeは正規の解除を試みたがOS ACLで拒否され、残存copyを`保留`として記録した。ACL変更・削除迂回はしていない。詳細と容量は先頭の[`開発進捗.md`](開発進捗.md)にある。
+
 ## 前回owner委任 — 2026-11-05 リポジトリ健全化（完了）
 
 一回限りのリポジトリ健全化は、対象commit `1603a10f0f7433a2481d7bc1a79e1f744fb8c633`で実装・検証を完了した。範囲と証拠は先頭の [`開発進捗.md`](開発進捗.md) に記録する。本taskはQE_STAGEやrev3.0三点セットを変更せず、製品機能、別repo、QE_QC／QE_QA、外部provider、公開・出荷判断を開始していない。F05.01は最後に記録されたfeature BUILD_BATCH、F05.02は未着手であり、次のfeature BUILD_BATCHはownerの次指示から再同期する。
