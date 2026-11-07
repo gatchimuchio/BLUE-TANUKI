@@ -2,13 +2,17 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。2026-10-22にowner指定の現行正本をrev3.0へ切り替えた。HDS Framework Kernelの意味責務とBLUE HDS Runtime Kernelの有限J/M制御を区別し、Runtime核は段階移管する。現行TypeScript HDS-BRAINは明示的なsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。ownerは2026-11-08にrev3.1を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Framework Kernelの意味責務とBLUE HDS Runtime Kernelの有限J/M制御を区別し、Runtime核は段階移管する。現行TypeScript HDS-BRAINは明示的なsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 最後のowner委任 — 2026-11-05 リポジトリ健全化（完了）
+### 現在のBUILD_BATCH — F05.02 GitHub write実consumer接続
 
-一回限りのリポジトリ健全化は対象commit `1603a10f0f7433a2481d7bc1a79e1f744fb8c633`で実装・検証を完了した。対象・結果・検証範囲は先頭の [`開発進捗.md`](開発進捗.md) を参照する。以下の日付付きBUILD_BATCH記録は当時の開発履歴であり、今回の実施対象や次のfeature BUILD_BATCHを指さない。F05.01が最後に記録されたfeature BUILD_BATCH、F05.02は未着手。次のfeature施工はownerの次指示から再同期する。
+rev3.1施工指示に基づき、F05.01で得たrepository/base identity観測を既存の5つのGitHub write操作へ接続する。Issue／PR／commentの外部送信、実資格情報、他repo変更は行わない。CODE_PRESENT／WIRED／BUILD_GAPを現物のproducer・consumerごとに記録し、全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQC／QAへ昇格しない。
+
+### 保留を維持する健全化残件 — 2026-11-07 follow-up D
+
+2026-11-05の一回限りのリポジトリ健全化は対象commit `1603a10f0f7433a2481d7bc1a79e1f744fb8c633`で実装・検証を完了した。追加健全化はA〜Cを限定条件で検証済み、DのWindows製品Setup→Uninstall動的試験は`NOT_RUN`で保留する。詳細は先頭の[`開発進捗.md`](開発進捗.md)を参照する。以下の日付付きBUILD_BATCH記録は当時の開発履歴であり、現在の施工対象を定めない。
 
 2026-11-01、Control CenterのWebSocket再接続枠を成功接続ごとに回復するよう修正した。再接続成功後に失敗回数を0へ戻し、自動再接続であることは接続試行のローカル値で保つ。taskの再送・切断中frameの再配送は行わない。channel-webchat typecheck／build、生成script構文解析、`pnpm docs:check`、`git diff --check`はPASS。browser／Gateway process確認はNOT_RUN、STATUS=WIRED（静的接続、実接続未確認）。
 

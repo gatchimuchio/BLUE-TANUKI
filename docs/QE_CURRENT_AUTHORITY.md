@@ -1,18 +1,20 @@
 # QE 現行正本ポインタ
 
-このページが、owner指定のQE三点セットについて公開リポジトリ内で参照する唯一の現行ピンである。仕様本文・工程表本文・施工指示書本文と内部原典はPublic Gitへ複製しない。
+このページが、owner指定のQE三点セットについて公開リポジトリ内で参照する唯一の現行ピンである。仕様本文・工程表本文・施工指示書本文、内部原典、要求対応表はPublic Gitへ複製しない。
 
 ## 現行セット
 
-- owner指定版：BLUE-TANUKI HDSカーネル主導再構築・QE施工パッケージ rev3.0（2026-10-22）
-- 配布ZIP SHA-256：`E757FC0D091910A28589BDF1C59E63CA379DB82CAFADAD5E5227F4131B6BA3E0`
-- 仕様書 `01_BLUE-TANUKI_HDSカーネル統合仕様書_rev3_0.md` SHA-256：`C71FD4B5983911752F523780BB52B15B01784D1B0B4F7AE3DBF678C8B2211085`
-- 工程表 `02_BLUE-TANUKI_HDSカーネル再構築工程表_rev3_0.md` SHA-256：`14B2185C36D1F191948C7DE8D9F5B1D4D4E410A3C86DA244EE4164232D314B39`
-- 施工指示書 `03_BLUE-TANUKI_HDSカーネルCodex施工指示書_rev3_0.md` SHA-256：`32E26B062DFB0A2FA1AB6F2125C1BF1AB13C7A605BA5E41DB581AC3444F4082F`
+- owner指定版：BLUE-TANUKI HDSカーネル再構築・QE施工パッケージ rev3.1（2026-11-07）
+- owner採用日：2026-11-08
+- 配布ZIP SHA-256：`CFC9907CD17FFA87B461C5D7C8F8AA97A89FEA410C7E2F74EE60D37017D52C74`
+- 配布 `MANIFEST.sha256` SHA-256：`EA172EF221516B27311119237BE6B28AC4DBBDBEB164C3AA0BCDC7DB1C06C29A`
+- 仕様書 `01_BLUE-TANUKI_HDSカーネル統合仕様書_rev3_1.md` SHA-256：`651E016524A240976E0DF23E55AD76DB7A1CA8396AC57DE5103380A66273A054`
+- 工程表 `02_BLUE-TANUKI_HDSカーネル再構築工程表_rev3_1.md` SHA-256：`926E6082CE4E4A962A969F23E2D248A144F86534488383230CC01756F4B29D2D`
+- 施工指示書 `03_BLUE-TANUKI_HDSカーネルCodex施工指示書_rev3_1.md` SHA-256：`A924B705F170C7CC47718EA8262274FACB89122B22C54F1A50F4E89FA282F270`
 
-rev3.0内のSHA-256 manifestは296資産すべてを照合し、不足・余分・hash不一致がないことを確認した。2026-10-23にowner提供ZIPそのもののSHA-256、ZIP内296資産とmanifestの全hash、三文書の個別hashを再確認し、fresh展開上の同梱静的検証器もPASSした。パッケージ記載の観測main SHA `e28a73f330cb155f46aea00e58cffd3a6b005ae8` は作成時点の記録であり、ownerが本版を指定した時点の実HEAD／remote HEAD `2964db41dc11ddc3057f47447a85f8a49395c377` を置き換えない。ownerの2026-10-22の明示指定でrev3.0を現行正本へ採用し、2026-10-23にownerから再指定された同一ZIPと全hashを再照合して現行正本として再確認した。内部文書本文・原典・全要求対応表はPublic Gitへ転載していない。
+ownerの指定によりrev3.1を現行正本として採用した。添付ZIPは三文書とmanifestの計4項目で構成され、manifestに列挙された全三文書の個別SHA-256が一致し、ZIP全体のSHA-256も上記値と一致した。採用時のlocal／remote `main` は `11cf1309cc6b9fd1922ba8d758b4764d4c5aad9f` で一致していた。ZIP内の作成時点の「未採用」「未着手」等の状態記述は採用後の現行状態を上書きしない。
 
-添付ZIP内のmanifestと冒頭文書・三点本文には、作成時点の `current_public_pin=rev2.3; rev3.0 not activated` および「改訂候補」の記述が残る。これはZIP作成時の状態記録であり、ownerの後発の明示採用と本ページの現行pinにより置き換わった。元のZIPはhash証拠として変更せず保持し、この作成時記述を現行repo状態へ転記しない。静的検証PASSは要求索引・資産・文書の同一性を示すだけで、製品runtime、Rust cutover、5OS実機、QE_QC／QE_QAやownerの公開・出荷GOを証明しない。
+旧rev3.0のpinと作業履歴はGit履歴に保持する。内部本文や296資産をPublic Gitへ転載しない。現行工程はQE_BUILDで、F05.02 GitHub write実consumer接続を開始する。実GitHub送信、他repo変更、Rust authority cutover、QE_QC／QE_QA、公開・出荷GOは本pinで成立しない。
 
 ## 更新と参照
 
