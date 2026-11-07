@@ -21,6 +21,8 @@ import {
   invokeWebSearch,
   invokeGitHubRead,
   invokeGitHubWrite,
+  inspectGitHubIssueCreateTargetVersion,
+  inspectGitHubIssueCreateContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -601,15 +603,26 @@ describe("built-in tools", () => {
 
     const githubController = new AbortController();
     let githubSignal: AbortSignal | undefined;
-    await expect(invokeGitHubWrite({ operation: "issue.create", owner: "gatchimuchio", repo: "blue-tanuki",
-      title: "cancel fixture", body: "no external request" }, {
-      ...fakeGitHubWrite(async (_target, signal) => {
+    const githubArgs = { operation: "issue.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "cancel fixture", body: "no external request" };
+    const githubOptions = fakeGitHubWrite(async (_target, signal) => {
       githubSignal = signal;
       githubController.abort();
       throw new Error("request aborted");
-    }, { GITHUB_TOKEN: "ghp_fixture", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" }),
+    }, { GITHUB_TOKEN: "ghp_fixture", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" });
+    const githubCommandDigest = "a".repeat(64);
+    const githubPlanDigest = "b".repeat(64);
+    const githubTargetVersion = await inspectGitHubIssueCreateTargetVersion(githubArgs, {
+      ...githubOptions, command_digest: githubCommandDigest, operation_plan_binding_digest: githubPlanDigest,
+    });
+    await expect(invokeGitHubWrite({ operation: "issue.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "cancel fixture", body: "no external request" }, {
+      ...githubOptions,
+      command_digest: githubCommandDigest,
+      operation_plan_binding_digest: githubPlanDigest,
+      expected_target_version_observation: githubTargetVersion,
       signal: githubController.signal,
-    })).rejects.toThrow("request aborted");
+    })).rejects.toThrow(/outcome_unknown.*request aborted/);
     expect(githubSignal).toBe(githubController.signal);
 
     const googleController = new AbortController();
@@ -1220,32 +1233,49 @@ describe("built-in tools", () => {
       maxBytes: number;
       token: string;
     }> = [];
+    const readPaths: string[] = [];
+    const args = {
+      operation: "issue.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "Phase smoke",
+      body: "created by test",
+      max_bytes: 4096,
+    };
+    const baseOptions = fakeGitHubWrite(async (target) => {
+      seen.push(target);
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({
+          id: 123,
+          number: 7,
+          title: "Phase smoke",
+          body: "created by test",
+          html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/7",
+        }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "ABC123",
+      };
+    }, undefined, async (target) => {
+      readPaths.push(target.path);
+      expect(target.token).toBe("ghp_dummy");
+      return {
+        status: 200,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, private: false }),
+        truncated: false,
+        rate_limit_remaining: "58",
+      };
+    });
+    const options = await reviewedGitHubIssue(args, baseOptions);
     const result = (await invokeGitHubWrite(
-      {
-        operation: "issue.create",
-        owner: "gatchimuchio",
-        repo: "blue-tanuki",
-        title: "Phase smoke",
-        body: "created by test",
-        max_bytes: 4096,
-      },
-      fakeGitHubWrite(async (target) => {
-        seen.push(target);
-        return {
-          status: 201,
-          ok: true,
-          content_type: "application/json",
-          body: JSON.stringify({
-            id: 123,
-            number: 7,
-            title: "Phase smoke",
-            html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/7",
-          }),
-          truncated: false,
-          rate_limit_remaining: "58",
-          request_id: "ABC123",
-        };
-      }),
+      args,
+      options,
     )) as {
       operation: string;
       api_host: string;
@@ -1282,10 +1312,120 @@ describe("built-in tools", () => {
       },
     });
     expect(result.result_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(readPaths).toEqual([
+      "/repos/gatchimuchio/blue-tanuki",
+      "/repos/gatchimuchio/blue-tanuki",
+    ]);
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
   });
 
-  it("github.write supports PR creation and comment/update paths", async () => {
+  it("github.write issue.create sends no mutation when the reviewed repository identity changes", async () => {
+    const args = {
+      operation: "issue.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "Stale target",
+      body: "must not be sent",
+    };
+    let reads = 0;
+    let writes = 0;
+    const options = await reviewedGitHubIssue(args, fakeGitHubWrite(async () => {
+      writes += 1;
+      throw new Error("mutation must not be sent for a stale target");
+    }, undefined, async () => {
+      reads += 1;
+      return {
+        status: 200,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({
+          id: 123,
+          name: "blue-tanuki",
+          full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" },
+          private: reads > 1,
+        }),
+        truncated: false,
+        rate_limit_remaining: "58",
+      };
+    }));
+
+    await expect(invokeGitHubWrite(args, options))
+      .rejects.toThrow(/repository target changed after review.*mutation_sent=false/);
+    expect(reads).toBe(2);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write issue.create content review binds the exact repository and payload without authority", async () => {
+    const args = {
+      operation: "issue.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "Reviewed title",
+      body: "Reviewed body",
+    };
+    const review = await inspectGitHubIssueCreateContentReview(args, {
+      ...fakeGitHubWrite(),
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+    });
+
+    expect(review).toMatchObject({
+      kind: "github_issue_create",
+      operation: "github.write.issue.create",
+      requested_owner: "gatchimuchio",
+      requested_repo: "blue-tanuki",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      repository_visibility: "public",
+      title: "Reviewed title",
+      body: "Reviewed body",
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+      notification_effect: "github_api_may_trigger_notifications",
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(review.request_payload_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(review)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.create treats a mismatched issue URL as outcome unknown without retrying", async () => {
+    const args = {
+      operation: "issue.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "URL mismatch",
+      body: "result identity must match",
+    };
+    let writes = 0;
+    const options = await reviewedGitHubIssue(args, fakeGitHubWrite(async () => {
+      writes += 1;
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({
+          id: 123,
+          number: 7,
+          title: args.title,
+          body: args.body,
+          html_url: "https://github.com/gatchimuchio/blue-tanuki/issues/8",
+        }),
+        truncated: false,
+        rate_limit_remaining: "58",
+      };
+    }));
+
+    await expect(invokeGitHubWrite(args, options))
+      .rejects.toThrow(/did not confirm the exact created issue; outcome_unknown/);
+    expect(writes).toBe(1);
+  });
+
+  it("github.write keeps the other four operations unavailable until they have plan-bound review paths", async () => {
     const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     const opts = fakeGitHubWrite(async (target) => {
       seen.push({ method: target.method, path: target.path, body: target.body });
@@ -1300,7 +1440,7 @@ describe("built-in tools", () => {
       };
     });
 
-    await invokeGitHubWrite(
+    await expect(invokeGitHubWrite(
       {
         operation: "pr.create",
         owner: "gatchimuchio",
@@ -1311,8 +1451,8 @@ describe("built-in tools", () => {
         draft: "true",
       },
       opts,
-    );
-    await invokeGitHubWrite(
+    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
+    await expect(invokeGitHubWrite(
       {
         operation: "pr.comment.create",
         owner: "gatchimuchio",
@@ -1321,8 +1461,8 @@ describe("built-in tools", () => {
         body: "review note",
       },
       opts,
-    );
-    await invokeGitHubWrite(
+    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
+    await expect(invokeGitHubWrite(
       {
         operation: "issue.update",
         owner: "gatchimuchio",
@@ -1331,25 +1471,13 @@ describe("built-in tools", () => {
         title: "Updated issue",
       },
       opts,
-    );
+    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
+    await expect(invokeGitHubWrite(
+      { operation: "issue.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "comment" },
+      opts,
+    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
 
-    expect(seen).toEqual([
-      {
-        method: "POST",
-        path: "/repos/gatchimuchio/blue-tanuki/pulls",
-        body: { title: "Add feature", head: "feature", base: "main", draft: true },
-      },
-      {
-        method: "POST",
-        path: "/repos/gatchimuchio/blue-tanuki/issues/42/comments",
-        body: { body: "review note" },
-      },
-      {
-        method: "PATCH",
-        path: "/repos/gatchimuchio/blue-tanuki/issues/7",
-        body: { title: "Updated issue" },
-      },
-    ]);
+    expect(seen).toEqual([]);
   });
 
   it("github.write fails closed before network request when token or repo allowlist is missing", async () => {
@@ -1404,16 +1532,14 @@ describe("built-in tools", () => {
     expect(called).toBe(false);
   });
 
-  it("github.write reports safe retry state on GitHub API errors", async () => {
-    await expect(
-      invokeGitHubWrite(
-        {
-          operation: "issue.create",
-          owner: "gatchimuchio",
-          repo: "blue-tanuki",
-          title: "bad",
-        },
-        fakeGitHubWrite(async () => ({
+  it("github.write preserves explicit provider rejection without retrying", async () => {
+    const args = {
+      operation: "issue.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "bad",
+    };
+    const options = await reviewedGitHubIssue(args, fakeGitHubWrite(async () => ({
           status: 422,
           ok: false,
           content_type: "application/json",
@@ -1421,9 +1547,17 @@ describe("built-in tools", () => {
           truncated: false,
           rate_limit_remaining: "56",
           request_id: "ERR",
-        })),
-      ),
-    ).rejects.toThrow(/mutation_status=not_confirmed.*check GitHub\/audit/);
+        })));
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(result).toMatchObject({
+      schema_version: "blue-tanuki.github-write-result.v1",
+      operation: "issue.create",
+      status: 422,
+      mutation_status: "provider_rejected",
+      retry_permitted: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
   });
 
   it("browser.read extracts bounded readable text and links through http.fetch", async () => {
@@ -2209,8 +2343,33 @@ function fakeGitHubWrite(
     GITHUB_TOKEN: "ghp_dummy",
     BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki",
   },
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async () => ({
+    status: 200,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({
+      id: 123,
+      name: "blue-tanuki",
+      full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" },
+      private: false,
+    }),
+    truncated: false,
+    rate_limit_remaining: "60",
+  }),
 ): GitHubWriteOptions {
-  return { request, env };
+  return { request, env, read_request };
+}
+
+async function reviewedGitHubIssue(args: Record<string, unknown>, options: GitHubWriteOptions = fakeGitHubWrite())
+  : Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubIssueCreateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
 }
 
 function googleJson(body: unknown): Awaited<ReturnType<NonNullable<GoogleReadOptions["request"]>>> {

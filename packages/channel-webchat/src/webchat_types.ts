@@ -644,13 +644,35 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubIssueCreateContentReview {
+  kind: "github_issue_create";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.issue.create";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  title: string;
+  body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |
-  WebChatGoogleDriveFileTrashContentReview;
+  WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

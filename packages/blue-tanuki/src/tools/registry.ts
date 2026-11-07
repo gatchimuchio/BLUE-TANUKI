@@ -4,14 +4,38 @@ import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation
   type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation,
   type GoogleDriveUpdateTargetVersionObservation,
   type GoogleDrivePermissionCreateTargetVersionObservation,
-  type GoogleDriveTrashTargetVersionObservation } from "@blue-tanuki/protocol";
+  type GoogleDriveTrashTargetVersionObservation,
+  type GitHubWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
   GmailWriteTargetVersionObservation | GoogleCalendarWriteTargetVersionObservation |
   GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
-  GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation;
+  GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation |
+  GitHubWriteTargetVersionObservation;
+
+/** No-store projection of one exact, plan-bound GitHub issue.create payload. */
+export interface GitHubIssueCreateContentReview {
+  kind: "github_issue_create";
+  operation: "github.write.issue.create";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  title: string;
+  body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
 
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {
@@ -337,6 +361,7 @@ export interface GoogleDriveFileTrashContentReview {
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
+  GitHubIssueCreateContentReview |
   GoogleDrivePermissionCreateContentReview | GoogleDriveFileTrashContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */

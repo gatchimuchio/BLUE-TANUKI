@@ -20,6 +20,10 @@ import {
   GoogleDriveUpdateTargetVersionObservationSchema,
   GoogleDrivePermissionCreateTargetVersionObservationSchema,
   GoogleDriveTrashTargetVersionObservationSchema,
+  GitHubWriteTargetVersionObservationSchema,
+  canonicalGitHubWriteTargetVersionObservation,
+  githubIssueCreateRequestPayloadDigest,
+  githubIssueCreateTargetIdentityDigest,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
@@ -66,8 +70,9 @@ import {
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
-import { brokerFileResourceLockDigest, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool,
-  googleCalendarWriteTool, googleDriveWriteTool, shellExecTool } from "./tools/builtin.js";
+import { assertGitHubIssueCreateTargetVersion, brokerFileResourceLockDigest, fileDeleteTool, fileEditTool,
+  fileSearchTool, fileWriteTool, gmailWriteTool, googleCalendarWriteTool, googleDriveWriteTool, githubWriteTool,
+  shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
@@ -266,7 +271,25 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
       ["draft.create", "message.send", "draft.send"].includes(String(args.operation))) {
     return `gmail:${observation.target_identity_digest}`;
   }
+  if (tool_name === "github.write" && observation?.schema_version === "blue-tanuki.github-write-target-version.v1") {
+    return `github:${observation.target_identity_digest}`;
+  }
   return undefined;
+}
+
+function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown): boolean {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "github.write" ||
+      typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  const target = APPROVED_COMMAND_RECORDS.get(command)?.target_version_observation;
+  return target?.schema_version === "blue-tanuki.github-write-target-version.v1" &&
+    result.schema_version === "blue-tanuki.github-write-result.v1" &&
+    result.operation === "issue.create" && result.mutation_status === "provider_rejected" &&
+    result.repository_id === target.repository_id && result.target_identity_digest === target.target_identity_digest &&
+    result.request_payload_digest === target.request_payload_digest && result.command_digest === target.command_digest &&
+    result.operation_plan_binding_digest === target.operation_plan_binding_digest &&
+    result.retry_permitted === false && result.provider_data_is_untrusted === true &&
+    result.used_for_authority === false && result.may_execute === false;
 }
 
 export type ApprovedCommand = ExecuteCommand & {
@@ -433,6 +456,29 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: gmail.write target version does not match command");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "github.write") {
+      const observation = GitHubWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      const owner = typeof args.owner === "string" ? args.owner : "";
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      const title = typeof args.title === "string" ? args.title : "";
+      const body = typeof args.body === "string" ? args.body : undefined;
+      if (!hds_binding?.operation_plan_binding_digest || args.operation !== "issue.create" ||
+          Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "max_bytes"].includes(key)) ||
+          !owner || !repo || !title || observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+          observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+          observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+          observation.target_identity_digest !== githubIssueCreateTargetIdentityDigest({
+            repository_id: observation.repository_id, canonical_full_name: observation.canonical_full_name,
+          }) || observation.request_payload_digest !== githubIssueCreateRequestPayloadDigest({ owner, repo, title,
+            ...(body === undefined ? {} : { body }) }) || observation.provider_observation_is_atomic ||
+          !observation.provider_data_is_untrusted || observation.mutation_sent || observation.used_for_authority ||
+          observation.may_execute) {
+        throw new Error("Executor approval rejected: github.write issue.create target version does not match command or Operation Plan");
+      }
+      target_version_observation = Object.freeze(observation);
     } else {
       throw new Error("Executor approval rejected: target version evidence is unsupported for this tool command");
     }
@@ -446,6 +492,11 @@ function approveCommandForExecution(
       ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation)) &&
       target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "github.write" &&
+      (snapshot.payload.arguments.operation !== "issue.create" || !hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.github-write-target-version.v1")) {
+    throw new Error("Executor approval rejected: github.write requires supported Operation Plan-bound target version evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "google.calendar.write" &&
       target_version_observation?.schema_version !== "blue-tanuki.google-calendar-write-target-version.v3") {
@@ -611,6 +662,26 @@ export class Executor {
     if (command.type !== "tool_call") return undefined;
     if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
       throw new Error("Broker target version resolver received an invalid operation plan binding");
+    }
+    if (command.payload.tool_name === "github.write") {
+      if (!operationPlanBindingDigest || command.payload.arguments.operation !== "issue.create") {
+        throw new Error("github.write target version resolver requires a supported selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("github.write");
+      if (tool !== githubWriteTool || !tool.inspect_target_version) {
+        throw new Error("github.write target version resolver requires the registered built-in adapter");
+      }
+      const observation = await tool.inspect_target_version(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      const args = command.payload.arguments;
+      if (Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "max_bytes"].includes(key))) {
+        throw new Error("github.write target version resolver rejected unsupported arguments");
+      }
+      return Object.freeze(assertGitHubIssueCreateTargetVersion(args, observation,
+        operationPlanDigest(command), operationPlanBindingDigest));
     }
     if (command.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
@@ -812,6 +883,51 @@ export class Executor {
         throw new Error("file.edit content review returned evidence for another command or plan source");
       }
       return review;
+    }
+    if (command.payload.tool_name === "github.write") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+          command.payload.arguments.operation !== "issue.create") {
+        throw new Error("github.write issue.create content review requires a supported Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("github.write");
+      if (tool !== githubWriteTool || !tool.inspect_content_review) {
+        throw new Error("github.write content review requires the registered built-in adapter");
+      }
+      const args = command.payload.arguments;
+      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest);
+      if (!observation || observation.schema_version !== "blue-tanuki.github-write-target-version.v1") {
+        throw new Error("github.write content review could not obtain bound repository evidence");
+      }
+      const review = await tool.inspect_content_review(args, {
+        ...(env ? { env } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      const githubReview = review as Extract<ToolContentReview, { kind: "github_issue_create" }>;
+      const { review_digest, ...reviewBase } = githubReview;
+      const expectedTargetVersionDigest = createHash("sha256").update(
+        canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex");
+      const owner = typeof args.owner === "string" ? args.owner : "";
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      const title = typeof args.title === "string" ? args.title : "";
+      const body = typeof args.body === "string" ? args.body : undefined;
+      if (githubReview.kind !== "github_issue_create" || githubReview.operation !== "github.write.issue.create" ||
+          githubReview.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+          githubReview.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+          githubReview.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+          githubReview.repository_id !== observation.repository_id ||
+          githubReview.repository_visibility !== observation.repository_visibility || githubReview.title !== title ||
+          githubReview.body !== body || githubReview.command_digest !== operationPlanDigest(command) ||
+          githubReview.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          githubReview.request_payload_digest !== observation.request_payload_digest ||
+          githubReview.target_version_digest !== expectedTargetVersionDigest ||
+          githubReview.notification_effect !== "github_api_may_trigger_notifications" ||
+          githubReview.provider_observation_is_atomic !== false || githubReview.used_for_authority !== false ||
+          githubReview.may_execute !== false || !/^[a-f0-9]{64}$/.test(githubReview.review_digest) ||
+          operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("github.write content review returned evidence for another command, target, or plan source");
+      }
+      return githubReview;
     }
     if (command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) {
@@ -1074,8 +1190,10 @@ export class Executor {
       const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
       try {
         record.runtime.assert_execution_owner?.();
+        const explicitGitHubRejection = isGitHubWriteProviderRejection(cmd, feedback.result);
         record.runtime.store?.complete(record.ticket, {
-          state: !invocation ? "not_attempted" : feedback.status === "success" ? "adapter_returned" : "outcome_unknown",
+          state: !invocation ? "not_attempted" : feedback.status === "success" || explicitGitHubRejection
+            ? "adapter_returned" : "outcome_unknown",
           feedback_status: feedback.status, observed_at_ms: feedback.operation_core_result?.observed_at_ms ?? Date.now(),
           output_digest: feedback.operation_core_result?.output_digest,
           error_digest: feedback.error ? createHash("sha256").update(feedback.error).digest("hex") : undefined,
@@ -1457,6 +1575,15 @@ export class Executor {
         observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
           state: "late_result_discarded", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
         throw new Error("Tool result arrived after cancellation; result discarded and outcome unknown");
+      }
+      if (isGitHubWriteProviderRejection(command, result)) {
+        return {
+          command_id: id,
+          status: "failed",
+          error: "github_write_provider_rejected",
+          result,
+          metrics: { duration_ms: elapsedMilliseconds(start), tool_calls: 1 },
+        };
       }
       const targetVersion = record.target_version_observation;
       const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"

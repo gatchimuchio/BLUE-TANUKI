@@ -47,6 +47,8 @@ export interface WebSearchResult {
 export interface GitHubReadTarget {
   path: string;
   maxBytes: number;
+  /** Used only by the built-in GitHub write preflight to observe a private allowlisted repository. */
+  token?: string;
 }
 
 export interface GitHubReadResponse {
@@ -87,6 +89,10 @@ export interface GitHubWriteOptions {
   env?: Env;
   signal?: AbortSignal;
   request?: (target: GitHubWriteTarget, signal?: AbortSignal) => Promise<GitHubWriteResponse>;
+  read_request?: (target: GitHubReadTarget, signal?: AbortSignal) => Promise<GitHubReadResponse>;
+  expected_target_version_observation?: import("@blue-tanuki/protocol").GitHubWriteTargetVersionObservation;
+  command_digest?: string;
+  operation_plan_binding_digest?: string;
 }
 
 export interface BrowserReadOptions extends HttpFetchOptions {}
