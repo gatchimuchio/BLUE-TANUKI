@@ -29,6 +29,8 @@ import { TeamsAgentsTransport, type TeamsAgentCredentials } from "./agents_trans
 
 export interface TeamsRetryConfig {
   max_retries: number;
+  /** Injected clock for deterministic durable retry scheduling; defaults to Date.now. */
+  now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -250,7 +252,7 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
           channel: "teams",
           target: payload.target,
           text: payload.content,
-        });
+        }, this.currentTimeMs());
         enqueued = true;
       } catch {
         r = { ok: false, delivery_status: "not_delivered", error: "teams_delivery_store_unavailable",
@@ -317,12 +319,17 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
     (this.opts.log ?? console.log)(line);
   }
 
+  private currentTimeMs(): number {
+    const retry = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
+    return retry?.now?.() ?? Date.now();
+  }
+
   private async dispatchPersistedDelivery(deliveryId: string, callerSignal?: AbortSignal): Promise<TeamsPostResult> {
     const store = this.opts.delivery_store!;
     const retry = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
     while (true) {
       if (callerSignal?.aborted) {
-        try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+        try { store.cancelPending(deliveryId, this.currentTimeMs()); } catch { /* already claimed or settled */ }
         return { ...cancelledBeforeDispatch(), error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
       }
       const pending = store.pending().find((row) => row.delivery_id === deliveryId);
@@ -334,29 +341,29 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
         return { ok: false, delivery_status, error: status?.error_code ?? "teams_delivery_state_unavailable",
           error_code: status?.error_code, ...(status?.retry_after_ms ? { retry_after_ms: status.retry_after_ms } : {}) };
       }
-      const delay = Math.max(0, pending.not_before_ms - Date.now());
+      const delay = Math.max(0, pending.not_before_ms - this.currentTimeMs());
       const lifecycleSignal = this.lifecycleAbort.signal;
       const waitSignal = callerSignal ? AbortSignal.any([callerSignal, lifecycleSignal]) : lifecycleSignal;
       if (delay > 0 && !await sleepWithSignal(delay, waitSignal, retry?.sleep)) {
         if (callerSignal?.aborted) {
-          try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+          try { store.cancelPending(deliveryId, this.currentTimeMs()); } catch { /* already claimed or settled */ }
           return { ...cancelledBeforeDispatch(), error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
         }
         return { ok: false, delivery_status: "not_delivered", error: "teams_delivery_wait_interrupted",
           error_code: "delivery_wait_interrupted", retry_after_ms: delay };
       }
       if (callerSignal?.aborted) {
-        try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+        try { store.cancelPending(deliveryId, this.currentTimeMs()); } catch { /* already claimed or settled */ }
         return cancelledBeforeDispatch();
       }
       if (lifecycleSignal.aborted) {
         return { ok: false, delivery_status: "not_delivered", error: "teams_delivery_wait_interrupted",
           error_code: "delivery_wait_interrupted", ...(delay > 0 ? { retry_after_ms: delay } : {}) };
       }
-      const claim = store.claimDelivery(deliveryId);
+      const claim = store.claimDelivery(deliveryId, this.currentTimeMs());
       if (!claim) continue;
       if (callerSignal?.aborted) {
-        store.settleDelivery(deliveryId, "not_delivered", { error_code: "cancelled_before_dispatch" });
+        store.settleDelivery(deliveryId, "not_delivered", { error_code: "cancelled_before_dispatch" }, this.currentTimeMs());
         return cancelledBeforeDispatch();
       }
       let result: TeamsPostResult;
@@ -368,34 +375,37 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
           error_kind: "non_recoverable", error_code: "delivery_outcome_unknown" };
       }
       if (result.ok) {
-        store.settleDelivery(deliveryId, "delivered", { ...(result.message_id ? { external_message_id: result.message_id } : {}) });
+        store.settleDelivery(deliveryId, "delivered", { ...(result.message_id ? { external_message_id: result.message_id } : {}) },
+          this.currentTimeMs());
         return { ...result, delivery_status: "delivered" };
       }
       if (isExplicitRateLimitRejection(result)) {
-        const retryAfter = validRetryAfter(result);
+        const nowMs = this.currentTimeMs();
+        const retryAfter = validRetryAfter(result, nowMs);
         if (result.retry_after_invalid) {
-          store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "retry_after_invalid" });
+          store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "retry_after_invalid" }, this.currentTimeMs());
           return { ...result, delivery_status: "not_delivered", error_code: "retry_after_invalid" };
         }
         if (retryAfter === null) {
-          store.settleDelivery(deliveryId, "not_delivered", { error_code: "retry_after_missing" });
+          store.settleDelivery(deliveryId, "not_delivered", { error_code: "retry_after_missing" }, this.currentTimeMs());
           return { ...result, delivery_status: "not_delivered", error_code: "retry_after_missing" };
         }
-        if (retry && claim.attempt_count <= retry.max_retries && retryAfter <= Number.MAX_SAFE_INTEGER - Date.now()) {
-          store.scheduleRetry(deliveryId, Date.now() + retryAfter, retryAfter);
+        if (retry && claim.attempt_count <= retry.max_retries && retryAfter <= Number.MAX_SAFE_INTEGER - nowMs) {
+          store.scheduleRetry(deliveryId, nowMs + retryAfter, retryAfter, nowMs);
           if (callerSignal?.aborted) {
-            try { store.cancelPending(deliveryId); } catch { /* already settled */ }
+            try { store.cancelPending(deliveryId, this.currentTimeMs()); } catch { /* already settled */ }
             return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
           }
           if (lifecycleSignal.aborted) return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
           this.log(`[teams] persisted retry attempt=${claim.attempt_count} delay_ms=${retryAfter} target=${claim.target}`);
           continue;
         }
-        store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "rate_limited", retry_after_ms: retryAfter });
+        store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "rate_limited", retry_after_ms: retryAfter },
+          this.currentTimeMs());
         return { ...result, delivery_status: "not_delivered", error_code: "rate_limited", retry_after_ms: retryAfter };
       }
       store.settleDelivery(deliveryId, result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown",
-        { ...(result.error_code ? { error_code: result.error_code } : {}) });
+        { ...(result.error_code ? { error_code: result.error_code } : {}) }, this.currentTimeMs());
       return result;
     }
   }
@@ -491,9 +501,9 @@ function isExplicitRateLimitRejection(result: TeamsPostResult): boolean {
   return !result.ok && result.delivery_status === "not_delivered" && result.rate_limit_rejected === true;
 }
 
-function validRetryAfter(result: TeamsPostResult): number | null {
+function validRetryAfter(result: TeamsPostResult, nowMs = Date.now()): number | null {
   const retryAfter = result.retry_after_ms;
-  return Number.isSafeInteger(retryAfter) && retryAfter! > 0 && retryAfter! <= Number.MAX_SAFE_INTEGER - Date.now()
+  return Number.isSafeInteger(retryAfter) && retryAfter! > 0 && retryAfter! <= Number.MAX_SAFE_INTEGER - nowMs
     ? retryAfter!
     : null;
 }
@@ -521,7 +531,7 @@ async function sleepWithSignal(ms: number, signal?: AbortSignal, injectedSleep?:
   while (remaining > 0) {
     if (signal?.aborted) return false;
     const chunk = Math.min(remaining, 2_147_000_000);
-    const began = Date.now();
+    const began = performance.now();
     const completed = await new Promise<boolean>((resolve) => {
       const finish = (value: boolean): void => {
         clearTimeout(timer);
@@ -534,7 +544,7 @@ async function sleepWithSignal(ms: number, signal?: AbortSignal, injectedSleep?:
       if (signal?.aborted) abort();
     });
     if (!completed) return false;
-    remaining -= Math.max(1, Date.now() - began);
+    remaining -= Math.max(1, Math.ceil(performance.now() - began));
   }
   return true;
 }

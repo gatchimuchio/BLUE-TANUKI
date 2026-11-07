@@ -651,8 +651,8 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
 }
 
 function spawnGateway(env: NodeJS.ProcessEnv, preloadFile: string): CapturedProcess {
-  const child = spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(preloadFile).href,
-    "apps/gateway/src/main.ts", "--serve"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(process.execPath, ["--import", pathToFileURL(preloadFile).href,
+    "apps/gateway/dist/main.js", "--serve"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   childProcesses.add(child);
   const stdout: string[] = [];
   const stderr: string[] = [];

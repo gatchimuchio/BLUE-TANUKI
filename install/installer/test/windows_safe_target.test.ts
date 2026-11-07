@@ -15,8 +15,6 @@ describe("Windows developer installer target guard", () => {
       [
         "-NoProfile",
         "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
         "-File",
         join(root, "install/installer/test/windows_safe_target.ps1"),
       ],
@@ -38,8 +36,6 @@ describe("Windows developer installer target guard", () => {
         [
           "-NoProfile",
           "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
           "-File",
           join(root, "install/windows/install.ps1"),
           "-InstallRoot",
@@ -65,8 +61,6 @@ describe("Windows developer installer target guard", () => {
         [
           "-NoProfile",
           "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
           "-File",
           join(root, "install/windows/install.ps1"),
           "-InstallRoot",

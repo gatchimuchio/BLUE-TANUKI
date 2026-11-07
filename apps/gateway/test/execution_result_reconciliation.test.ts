@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
-  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -147,10 +147,17 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite"); const executionEpoch = randomUUID();
   const execution = new GatewayExecutionIntentStore(executionPath, executionEpoch); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
+  const hostWallNow = Date.now.bind(Date);
+  let harnessWallFloor = Math.max(1, hostWallNow());
+  const harnessWallNow = () => {
+    harnessWallFloor = Math.max(harnessWallFloor, hostWallNow());
+    return harnessWallFloor;
+  };
   const controllers: HDSUpperController[] = [];
   const oldMemory = { capture: vi.fn(), recent: vi.fn(() => []), all: vi.fn(() => []) };
   function createHds(state = j, installPurpose = false) {
     const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory, memory: oldMemory,
+      wall_clock: harnessWallNow,
       ...(installPurpose ? { audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
         goal_purpose_memory: goalPurposeMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") }),
         goal_governance: testGoalGovernance() } : {}) });
@@ -160,8 +167,15 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
   tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
+  // HDS and approval share a monotonic wall-clock floor; the executor worker still observes the real host clock.
+  // Executor rollback/expiry behavior is covered by execution_intent_runtime.test.ts.
+  let approvalMonotonicMs = 0;
+  const approvalClock: ExecutorApprovalClock = {
+    wallNow: harnessWallNow,
+    monotonicNow: () => ++approvalMonotonicMs,
+  };
   const authority = createExecutorApprovalAuthority({ execution_store: execution, execution_epoch: executionEpoch,
-    require_hds_execution_binding: true });
+    require_hds_execution_binding: true, clock: approvalClock });
   const actualWorker = createFileSearchWorker({ execution_epoch: executionEpoch,
     env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } });
   const invoke = vi.fn(actualWorker.invoke); const worker = { invoke };
@@ -179,6 +193,13 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   };
   const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker, llm,
     compute: new LLMComputeAdapter(llm, computeBudget), on_agent_worker_lifecycle: () => true });
+  const execute = executor.execute.bind(executor);
+  vi.spyOn(executor, "execute").mockImplementation(async (command, context) => {
+    const feedback = await execute(command, context);
+    const observedAt = feedback.operation_core_result?.observed_at_ms;
+    if (observedAt !== undefined) harnessWallFloor = Math.max(harnessWallFloor, observedAt);
+    return feedback;
+  });
   async function approve(cmd: ExecuteCommand) {
     const a = evaluateApproval(cmd, [], { actor: "fixture-owner", default_mode: "full_access" });
     const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
@@ -186,7 +207,7 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersion);
     return authority.approve(cmd, { source: a.final_review_required ? "human_final_review" : "approval_gate",
       decision: a.final_review_required ? "approve" : "allow",
-      approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: cmd.upstream_decision.commit_hash,
+      approved_by: "fixture-owner", approved_at_ms: harnessWallNow(), upstream_commit_hash: cmd.upstream_decision.commit_hash,
       operation: a.context.operation, risk: a.risk, final_review_required: a.final_review_required, reason: "fixture" },
       undefined, hdsBinding, targetVersion);
   }
@@ -194,8 +215,12 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
   const cmd = review(hds, plan, plan.steps[0]!.step_id)!; const approved = await approve(cmd);
   const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
+  const advanceWallClockTo = (timestamp: number) => {
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0) throw new Error("fixture clock target is invalid");
+    harnessWallFloor = Math.max(harnessWallFloor, timestamp);
+  };
   return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory,
-    controllers, createHds, approve, oldMemory, purposeBinding: undefined as
+    controllers, createHds, approve, advanceWallClockTo, currentWallClock: harnessWallNow, oldMemory, purposeBinding: undefined as
       { goal_ref: string; purpose_version: number; purpose_digest: string } | undefined };
 }
 
@@ -254,7 +279,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("旧generationの遅延結果をprivate evidenceへ隔離し、現行J/Mへ適用しない", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
-    expect(feedback.status).toBe("success");
+    expect(feedback.status, feedback.status === "failed" ? feedback.error ?? "executor_failed_without_error" : undefined).toBe("success");
     const saved = c.execution.pendingResults()[0]!;
     c.hds.closeOperationPlanMemory();
     const restarted = c.createHds();
@@ -358,7 +383,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       expect(review(restarted, c.plan, "create-note")).toBeNull();
       expect(review(restarted, c.plan, "verify-note")).toBeNull();
 
-      const now = Date.now();
+      const now = c.currentWallClock();
       expect(() => restartedExecution.issue({ ...c.admission, ticket_id: randomUUID(),
         execution_epoch: restartedEpoch, issued_at_ms: now, expires_at_ms: now + 60_000 })).toThrow(/command already issued/);
       expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic planned file content\n");
@@ -772,7 +797,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("明示選択されたfile.delete履歴を現在J/M照合後に非権威入力として後続plan:computeへ渡す", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
-    expect(feedback.status).toBe("success");
+    expect(feedback.status, feedback.error?.replaceAll(c.workspace, "[workspace]") ?? "file.delete returned no error detail")
+      .toBe("success");
     expect(feedback.result).toEqual({ deleted: true });
     expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
       .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
@@ -866,7 +892,20 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
-    if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
+    if (compute.command?.type !== "llm_call") {
+      const result = sourceCheckpoint.results.find((entry) => entry.step_id === "search");
+      const now = c.currentWallClock();
+      const freshness = !result ? "missing" : now < result.observed_at_ms ? "future"
+        : now >= result.expires_at_ms ? "expired" : "fresh";
+      const ageMs = result ? now - result.observed_at_ms : "unavailable";
+      const remainingMs = result ? result.expires_at_ms - now : "unavailable";
+      const output = result?.output;
+      const outputShape = !output || typeof output !== "object" || Array.isArray(output) ? "invalid"
+        : Array.isArray((output as { matches?: unknown }).matches) &&
+          Number.isSafeInteger((output as { visited_files?: unknown }).visited_files) ? "valid" : "invalid";
+      throw new Error(`selected search observation was not routed to C: reason=${compute.log.commit.reason}; ` +
+        `freshness=${freshness}; age_ms=${ageMs}; remaining_ms=${remainingMs}; output=${outputShape}`);
+    }
     expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v8");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
@@ -900,7 +939,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const secondCompute = c.hds.decide(makeComputeRequest(secondRequestId));
     if (secondCompute.command?.type !== "llm_call") throw new Error("fresh search observation was not reusable before expiry");
     const expiredCandidate = fileWriteCandidate(secondRequestId, c.workspace);
-    const now = vi.spyOn(Date, "now").mockReturnValue(sourceResult.expires_at_ms);
+    c.advanceWallClockTo(sourceResult.expires_at_ms);
     c.hds.onFeedback({ command_id: secondCompute.command.id, status: "success",
       result: { operation_core: { status: "valid_plan", plan: expiredCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
@@ -910,7 +949,6 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const expired = c.hds.decide(makeComputeRequest(randomUUID()));
     expect(expired.command?.type).not.toBe("llm_call");
     expect(expired.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_expired");
-    now.mockRestore();
   }));
 
   it("file.writeの応答が計画のresult_equals条件に合わない場合はMへ昇格しない", async () => fixture(async (c) => {
@@ -1053,7 +1091,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("startup reconciles a pending Broker result into M under an observed restore hold without releasing the plan", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
-    expect(feedback.status).toBe("success");
+    expect(feedback.status, feedback.status === "failed" ? feedback.error ?? "executor_failed_without_error" : undefined).toBe("success");
     expect(c.execution.pendingResults()).toHaveLength(1);
 
     c.hds.closeOperationPlanMemory();
@@ -1108,7 +1146,9 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     let originalJOpen = true;
     let restartedJ: OperationPlanStateStore | undefined;
     try {
-      expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+      const rejectionReasons: string[] = [];
+      const attemptStarted = c.hds.beginOperationPlanAttempt(c.cmd, c.admission, (reason) => rejectionReasons.push(reason));
+      expect(attemptStarted, rejectionReasons.join(",") || "attempt_rejected_without_reason").toBe(true);
       const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
       expect(feedback.status).toBe("success");
       finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id,
@@ -1251,7 +1291,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const revised = structuredClone(c.plan); revised.steps[1]!.parameters!.max_results = 2;
     c.hds.decide(request(`plan:revise ${JSON.stringify({ plan_id: c.plan.plan_id, expected_revision_digest: operationPlanDigest(c.plan), plan: revised })}`));
     const now = feedback.operation_core_result!.observed_at_ms + 600_001;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    c.advanceWallClockTo(now);
     c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
     expect(reconcileExecutionResults(restarted, c.execution, c.admission.execution_epoch).adopted).toBe(1);
     expect(review(restarted, revised, "dependent")).toBeNull();
@@ -1543,7 +1583,8 @@ function reflectionExecutor(c: Awaited<ReturnType<typeof setup>>, mutate?: (resp
 }
 async function recordActualObservation(c: Awaited<ReturnType<typeof setup>>) {
   expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
-  expect((await c.executor.execute(c.approved, { save_result_delivery: true })).status).toBe("success");
+  const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+  expect(feedback.status, feedback.status === "failed" ? feedback.error ?? "executor_failed_without_error" : undefined).toBe("success");
   expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
 }
 describe("受領済みM実観測→有限C射影→表示前J照合", () => {
@@ -1615,7 +1656,17 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     expect(output.reviewed_feedback.status).toBe("success"); expect(c.invoke).toHaveBeenCalledTimes(2);
   }), 15_000);
   it.each(["reference", "duplicate", "compute_request", "compute_output", "missing_compute", "tool", "meaning", "planner", "malformed_result", "failure"])("%sを成功・意味採用・作用へ変換しない", async (failure) => fixture(async (c) => {
-    await recordActualObservation(c); const before = inspectMemory(c); const decision = reflect(c); const command = decision.command!;
+    await recordActualObservation(c); const before = inspectMemory(c); const decision = reflect(c);
+    if (!decision.command) {
+      const result = c.j.load()?.plans[0]?.results.find((entry) => entry.step_id === "search");
+      const now = c.currentWallClock();
+      const freshness = !result ? "missing" : now < result.observed_at_ms ? "future"
+        : now >= result.expires_at_ms ? "expired" : "fresh";
+      throw new Error(`result reflection command was not issued for ${failure}; decision=${decision.log.commit.decision}; ` +
+        `reason=${decision.log.commit.reason}; freshness=${freshness}; age_ms=${result ? now - result.observed_at_ms : "unavailable"}; ` +
+        `remaining_ms=${result ? result.expires_at_ms - now : "unavailable"}`);
+    }
+    const command = decision.command;
     const runner = reflectionExecutor(c, (response) => {
       if (failure === "tool") return { ...response, tool_calls: [{
         schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
@@ -1646,12 +1697,14 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     expect(inspectMemory(c)).toEqual(before); expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
   it("関連M破損・J読取不能・観測期限切れはC送信と返答を遮断する", async () => fixture(async (c) => {
-    await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
+    await recordActualObservation(c); const decision = reflect(c);
+    if (!decision.command) throw new Error(`result reflection command was not issued; decision=${decision.log.commit.decision}; reason=${decision.log.commit.reason}`);
+    const command = decision.command;
     const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(await c.approve(command));
     const unreadable = vi.spyOn(c.j, "load").mockImplementation(() => { throw new Error("fixture read failure"); });
     expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false); unreadable.mockRestore();
-    const observed = c.j.load()!.plans[0]!.results[0]!; const clock = vi.spyOn(Date, "now").mockReturnValue(observed.expires_at_ms);
-    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false); clock.mockRestore();
+    const observed = c.j.load()!.plans[0]!.results[0]!; c.advanceWallClockTo(observed.expires_at_ms);
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false);
     const db = new DatabaseSync(c.memory.memory_database_path);
     try { db.exec("UPDATE m_records SET value_json='{}'"); } finally { db.close(); }
     expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false);

@@ -193,7 +193,7 @@ try {
   $developmentMarker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $developmentInstall "blue-tanuki-development-install.json") -Encoding UTF8
 
   $developmentUninstall = Join-Path $PSScriptRoot "../../windows/uninstall.ps1"
-  $dryRunOutput = (& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $developmentUninstall -InstallRoot $developmentInstall -DataRoot $developmentData -DryRun 2>&1 | Out-String)
+  $dryRunOutput = (& powershell.exe -NoProfile -NonInteractive -File $developmentUninstall -InstallRoot $developmentInstall -DataRoot $developmentData -DryRun 2>&1 | Out-String)
   if ($LASTEXITCODE -ne 0 -or $dryRunOutput -notmatch "Would remove app:") {
     throw "owned Windows development uninstall dry-run failed: $dryRunOutput"
   }
@@ -208,7 +208,7 @@ try {
     $rejectedPurgeStdout = Join-Path $tempRoot "development-purge-rejected.stdout.txt"
     $rejectedPurgeStderr = Join-Path $tempRoot "development-purge-rejected.stderr.txt"
     $rejectedPurgeProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $developmentUninstall,
+      "-NoProfile", "-NonInteractive", "-File", $developmentUninstall,
       "-InstallRoot", $developmentInstall, "-DataRoot", $developmentData, "-Purge") -PassThru -Wait -NoNewWindow `
         -RedirectStandardOutput $rejectedPurgeStdout -RedirectStandardError $rejectedPurgeStderr
     $rejectedPurgeOutput = (Get-Content -LiteralPath $rejectedPurgeStdout -Raw) + (Get-Content -LiteralPath $rejectedPurgeStderr -Raw)
@@ -225,7 +225,7 @@ try {
   $developmentUninstallStdout = Join-Path $tempRoot "development-uninstall.stdout.txt"
   $developmentUninstallStderr = Join-Path $tempRoot "development-uninstall.stderr.txt"
   $developmentUninstallProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $developmentUninstall,
+    "-NoProfile", "-NonInteractive", "-File", $developmentUninstall,
     "-InstallRoot", $developmentInstall, "-DataRoot", $developmentData) -PassThru -Wait -NoNewWindow `
       -RedirectStandardOutput $developmentUninstallStdout -RedirectStandardError $developmentUninstallStderr
   $uninstallOutput = (Get-Content -LiteralPath $developmentUninstallStdout -Raw) + (Get-Content -LiteralPath $developmentUninstallStderr -Raw)
@@ -255,7 +255,7 @@ try {
     $rejectedStdout = Join-Path $tempRoot "product-uninstall-rejected.stdout.txt"
     $rejectedStderr = Join-Path $tempRoot "product-uninstall-rejected.stderr.txt"
     $rejectedProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $productUninstaller,
+      "-NoProfile", "-NonInteractive", "-File", $productUninstaller,
       "-InstallRoot", $productInstall, "-DataRoot", $productData, "-Quiet") -PassThru -Wait -NoNewWindow `
         -RedirectStandardOutput $rejectedStdout -RedirectStandardError $rejectedStderr
     $rejectedOutput = (Get-Content -LiteralPath $rejectedStdout -Raw) + (Get-Content -LiteralPath $rejectedStderr -Raw)
@@ -275,7 +275,7 @@ try {
     $successStdout = Join-Path $tempRoot "product-uninstall-success.stdout.txt"
     $successStderr = Join-Path $tempRoot "product-uninstall-success.stderr.txt"
     $successProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $productUninstaller,
+      "-NoProfile", "-NonInteractive", "-File", $productUninstaller,
       "-InstallRoot", $productInstall, "-DataRoot", $productData, "-Quiet") -PassThru -Wait -NoNewWindow `
         -RedirectStandardOutput $successStdout -RedirectStandardError $successStderr
     if ($successProcess.ExitCode -ne 0) {

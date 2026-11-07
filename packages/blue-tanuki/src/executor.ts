@@ -527,9 +527,13 @@ function approveCommandForExecution(
 
 function readApprovalClock(runtime: ApprovalRuntime): { wall: number; monotonic: number } {
   const wall = runtime.clock.wallNow(); const monotonic = runtime.clock.monotonicNow();
-  if (!Number.isSafeInteger(wall) || wall <= 0 || !Number.isFinite(monotonic) || monotonic < 0 ||
-      wall < runtime.last_wall_ms || monotonic < runtime.last_monotonic_ms) {
-    throw new Error("Executor rejected command: approval clock invalid or rolled back");
+  const clockFailures: string[] = [];
+  if (!Number.isSafeInteger(wall) || wall <= 0) clockFailures.push("wall_invalid");
+  else if (wall < runtime.last_wall_ms) clockFailures.push("wall_rollback");
+  if (!Number.isFinite(monotonic) || monotonic < 0) clockFailures.push("monotonic_invalid");
+  else if (monotonic < runtime.last_monotonic_ms) clockFailures.push("monotonic_rollback");
+  if (clockFailures.length > 0) {
+    throw new Error(`Executor rejected command: approval clock invalid or rolled back (${clockFailures.join(",")})`);
   }
   runtime.last_wall_ms = wall; runtime.last_monotonic_ms = monotonic;
   return { wall, monotonic };
@@ -1007,7 +1011,7 @@ export class Executor {
   }
 
   async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {
-    const start = Date.now();
+    const start = performance.now();
     let proof: ExecutorApprovalProof | undefined;
     let observation: ReturnType<typeof captureOperationCommandObservation>;
     const execution = { boundary: "not_invoked" as OperationExecutionBoundary };
@@ -1045,13 +1049,13 @@ export class Executor {
                   command_id: cmd.id,
                   status: "failed",
                   error,
-                  metrics: { duration_ms: Date.now() - start },
+                  metrics: { duration_ms: elapsedMilliseconds(start) },
                 }
               : {
                   command_id: cmd.id,
                   status: "success",
                   result: null,
-                  metrics: { duration_ms: Date.now() - start },
+                  metrics: { duration_ms: elapsedMilliseconds(start) },
                 };
           }
           break;
@@ -1062,7 +1066,7 @@ export class Executor {
         command_id: cmd.id,
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
-        metrics: { duration_ms: Date.now() - start },
+        metrics: { duration_ms: elapsedMilliseconds(start) },
       };
       if (proof) feedback = attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary);
     }
@@ -1089,7 +1093,7 @@ export class Executor {
         // 保存失敗は成功へ変換しない。同じ承認の再作用も許可しない。
         feedback = attachOperationCoreTrace(cmd, { command_id: cmd.id, status: "failed",
           error: "Executor receipt persistence failed; execution outcome requires inspection",
-          metrics: { duration_ms: Date.now() - start } }, proof, observation, execution.boundary);
+          metrics: { duration_ms: elapsedMilliseconds(start) } }, proof, observation, execution.boundary);
       }
     }
     return feedback;
@@ -1195,7 +1199,7 @@ export class Executor {
     } catch (error) {
       return buildLLMFailureFeedback(id,
         error instanceof LLMComputeResourceFailure ? error.original_error : error,
-        requestedProvider, Date.now() - start,
+        requestedProvider, elapsedMilliseconds(start),
         error instanceof LLMComputeResourceFailure ? error.compute_resource_use : undefined);
     }
 
@@ -1236,7 +1240,7 @@ export class Executor {
       );
       if (toolCandidates) resp = { ...resp, tool_calls: toolCandidates };
     } catch (error) {
-      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start, computeResourceUse);
+      return buildLLMFailureFeedback(id, error, requestedProvider, elapsedMilliseconds(start), computeResourceUse);
     }
 
     const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
@@ -1255,7 +1259,7 @@ export class Executor {
         result: { operation_core: { status: "rejected", planner_output_used_for_authority: false } },
         ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
         metrics: {
-          duration_ms: Date.now() - start,
+          duration_ms: elapsedMilliseconds(start),
           tokens_used: resp.tokens_used,
         },
       };
@@ -1293,7 +1297,7 @@ export class Executor {
       ...(meaningUpdateProposalPresent ? { meaning_update_proposal: meaningUpdateProposal } : {}),
       ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
       metrics: {
-        duration_ms: Date.now() - start,
+        duration_ms: elapsedMilliseconds(start),
         tokens_used: resp.tokens_used,
       },
     };
@@ -1313,7 +1317,7 @@ export class Executor {
         command_id: id,
         status: "failed",
         error: `Tool not in allowed_tools: ${payload.tool_name}`,
-        metrics: { duration_ms: Date.now() - start },
+        metrics: { duration_ms: elapsedMilliseconds(start) },
       };
     }
 
@@ -1323,7 +1327,7 @@ export class Executor {
         command_id: id,
         status: "failed",
         error: `Tool not registered: ${payload.tool_name}`,
-        metrics: { duration_ms: Date.now() - start },
+        metrics: { duration_ms: elapsedMilliseconds(start) },
       };
     }
 
@@ -1337,7 +1341,7 @@ export class Executor {
         error:
           `Tool capability not allowed: ${payload.tool_name} requires ` +
           missing.join(", "),
-        metrics: { duration_ms: Date.now() - start },
+        metrics: { duration_ms: elapsedMilliseconds(start) },
       };
     }
 
@@ -1396,7 +1400,7 @@ export class Executor {
       });
       if (!worker || !dispatched || !exited) throw new Error("File search worker lifecycle incomplete");
       const result = readFileSearchWorkerResult(workerResponse, record.target_version_observation);
-      return { command_id: id, status: "success", result, metrics: { duration_ms: Date.now() - start, tool_calls: 1 } };
+      return { command_id: id, status: "success", result, metrics: { duration_ms: elapsedMilliseconds(start), tool_calls: 1 } };
     }
     const record = APPROVED_COMMAND_RECORDS.get(command)!;
     const controller = new AbortController();
@@ -1412,7 +1416,7 @@ export class Executor {
     if (signal?.aborted) abortFromCaller();
     const remainingTimeoutMs = (): number | undefined => {
       if (constraints?.timeout_ms === undefined) return undefined;
-      const remaining = constraints.timeout_ms - (Date.now() - start);
+      const remaining = constraints.timeout_ms - elapsedMilliseconds(start);
       if (remaining <= 0) throw new Error(`timeout after ${constraints.timeout_ms}ms`);
       return remaining;
     };
@@ -1461,7 +1465,7 @@ export class Executor {
         command_id: id,
         status: "success",
         result: publicResult,
-        metrics: { duration_ms: Date.now() - start, tool_calls: 1 },
+        metrics: { duration_ms: elapsedMilliseconds(start), tool_calls: 1 },
       };
     } finally {
       signal?.removeEventListener("abort", abortFromCaller);
@@ -1481,7 +1485,7 @@ export class Executor {
     if (signal?.aborted) {
       return { command_id: id, status: "failed", error: "channel_send_cancelled_before_dispatch",
         result: { delivery_status: "not_delivered", used_for_authority: false, may_execute: false },
-        metrics: { duration_ms: Date.now() - start } };
+        metrics: { duration_ms: elapsedMilliseconds(start) } };
     }
     if (this.deps.dispatcher) {
       markInvoked("channel_adapter");
@@ -1495,7 +1499,7 @@ export class Executor {
           result: { delivery_status: "unknown", external_processing: "unknown",
             next_action: "Check the destination's delivery status before deciding whether to send again.",
             used_for_authority: false, may_execute: false },
-          metrics: { duration_ms: Date.now() - start } };
+          metrics: { duration_ms: elapsedMilliseconds(start) } };
       }
       if (r.delivered) {
         return {
@@ -1507,7 +1511,7 @@ export class Executor {
             target: payload.target,
             external_id: r.external_id,
           },
-          metrics: { duration_ms: Date.now() - start },
+          metrics: { duration_ms: elapsedMilliseconds(start) },
         };
       }
       return {
@@ -1523,7 +1527,7 @@ export class Executor {
           retry_after_ms: r.retry_after_ms,
           next_action: r.next_action,
         },
-        metrics: { duration_ms: Date.now() - start },
+        metrics: { duration_ms: elapsedMilliseconds(start) },
       };
     }
 
@@ -1539,7 +1543,7 @@ export class Executor {
         used_for_authority: false,
         may_execute: false,
       },
-      metrics: { duration_ms: Date.now() - start },
+      metrics: { duration_ms: elapsedMilliseconds(start) },
     };
   }
 
@@ -1640,6 +1644,10 @@ function safeLLMFailureMessage(kind: LLMErrorKind): string {
     case "partial_response": return "The provider returned a partial response.";
     case "unknown": return "The LLM request failed.";
   }
+}
+
+function elapsedMilliseconds(startedAt: number): number {
+  return Math.max(0, Math.ceil(performance.now() - startedAt));
 }
 
 function buildLLMFailureFeedback(

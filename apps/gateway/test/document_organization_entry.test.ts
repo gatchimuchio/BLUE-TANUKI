@@ -15,7 +15,14 @@ import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@b
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-const tsxArgs = ["--import", "tsx"];
+
+function isSqliteBusyError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const sqliteError = error as Error & { code?: unknown; errcode?: unknown };
+  return sqliteError.code === "ERR_SQLITE_ERROR" &&
+    (sqliteError.errcode === 5 || sqliteError.errcode === 6 || /database (?:is|table is) locked/iu.test(error.message));
+}
+const gatewayEntry = "apps/gateway/dist/main.js";
 const source = "決定事項:青\n未確認:期限";
 const firstExcerpt = "決定事項:青";
 const secondExcerpt = "未確認:期限";
@@ -56,7 +63,7 @@ describe("document organization ordinary entries", () => {
 
     try {
       const cli = await runChild(
-        [...tsxArgs, "apps/gateway/src/main.ts", "--organize", source],
+        [gatewayEntry, "--organize", source],
         runtimeEnv,
       );
       const cliOutput = extractProjection(cli.stdout.join(""));
@@ -81,7 +88,9 @@ describe("document organization ordinary entries", () => {
       webSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
       await once(webSocket, "open");
 
-      const received = waitForWebChatSend(webSocket);
+      let resolveInboundRequestId!: (requestId: string) => void;
+      const inboundRequestId = new Promise<string>((resolve) => { resolveInboundRequestId = resolve; });
+      const received = waitForWebChatSend(webSocket, "webhook-token inbound", inboundRequestId);
       const inboundResponse = await fetch(`http://127.0.0.1:${gatewayPort}/inbound`, {
         method: "POST",
         headers: {
@@ -91,6 +100,9 @@ describe("document organization ordinary entries", () => {
         body: JSON.stringify({ user: "c0801-owner", content: `/organize\n${source}` }),
       });
       expect(inboundResponse.ok).toBe(true);
+      const inboundAccepted = await inboundResponse.json() as { request_id?: unknown };
+      if (typeof inboundAccepted.request_id !== "string") throw new Error("WebChat inbound did not return a request identity");
+      resolveInboundRequestId(inboundAccepted.request_id);
       const webchatOutput = await received;
 
       expect(webchatOutput).toContain("状態: completed");
@@ -99,6 +111,9 @@ describe("document organization ordinary entries", () => {
       expect(webchatOutput).toContain("分類意味:未検証");
       expect(webchatOutput).toContain("権限利用: false / 実行可能: false / 永続記憶反映: false");
       expect(cliOutput).toBe(webchatOutput);
+      let resolveOwnerRequestId!: (requestId: string) => void;
+      const ownerRequestId = new Promise<string>((resolve) => { resolveOwnerRequestId = resolve; });
+      const ownerReceived = waitForWebChatSend(webSocket, "owner inbound", ownerRequestId);
       const ownerInboundResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/inbound`, {
         method: "POST",
         headers: {
@@ -113,7 +128,9 @@ describe("document organization ordinary entries", () => {
         }),
       });
       expect(ownerInboundResponse.status).toBe(202);
-      const ownerReceived = waitForWebChatSend(webSocket);
+      const ownerAccepted = await ownerInboundResponse.json() as { request_id?: unknown };
+      if (typeof ownerAccepted.request_id !== "string") throw new Error("owner inbound did not return a request identity");
+      resolveOwnerRequestId(ownerAccepted.request_id);
       const ownerOutput = await ownerReceived;
       expect(ownerOutput).toContain("状態: completed");
       expect(ownerOutput).toContain("決定事項:青");
@@ -143,7 +160,9 @@ describe("document organization ordinary entries", () => {
       await closeServer(upstream);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 45_000);
+    // The composite CLI + Gateway/WebChat path has an internal 45s health deadline;
+    // keep the outer test budget above it so parallel-load failures retain diagnostics.
+  }, 90_000);
 
   it("BT-U-C08.02-P-E2E: resumes after a process kill from confirmed J spans and stops after completion", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0802-positive-"));
@@ -179,7 +198,7 @@ describe("document organization ordinary entries", () => {
     firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
     seedPersistentMemory(memoryFile, "c0802-memory-seed-1");
     const memoryBeforeRestart = readFileSync(memoryFile, "utf8");
-    const childOne = spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], firstEnv);
+    const childOne = spawnCaptured([gatewayEntry, "--organize", restartSource], firstEnv);
 
     try {
       await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
@@ -202,7 +221,7 @@ describe("document organization ordinary entries", () => {
       resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
 
       try {
-        const resumed = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        const resumed = await runChild([gatewayEntry, "--organize", restartSource], resumedEnv);
         const resumedOutput = extractProjection(resumed.stdout.join(""));
         expect(resumedOutput).toContain("状態: completed");
         expect(resumedOutput).toContain("C08_PRIVATE_RESTART_SOURCE:決定事項は青。");
@@ -211,7 +230,7 @@ describe("document organization ordinary entries", () => {
         expect(providerTwoCalls).toBe(1);
         expect(providerTwoPrompts[0]).toContain(`"start":0,"end":${firstQuote.length}`);
 
-        const repeated = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        const repeated = await runChild([gatewayEntry, "--organize", restartSource], resumedEnv);
         expect(extractProjection(repeated.stdout.join(""))).toContain("状態: completed");
         expect(providerTwoCalls).toBe(1);
         expect(readFileSync(memoryFile, "utf8")).toBe(memoryBeforeRestart);
@@ -266,7 +285,7 @@ describe("document organization ordinary entries", () => {
     const firstEnv = isolatedRuntimeEnvironment(providerOnePort, runtimePort, auditDir, historyFile, sessionDir);
     firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
     seedPersistentMemory(memoryFile, "c0802-memory-seed-negative");
-    const childOne = spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], firstEnv);
+    const childOne = spawnCaptured([gatewayEntry, "--organize", changedSource], firstEnv);
 
     try {
       await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
@@ -288,14 +307,14 @@ describe("document organization ordinary entries", () => {
       resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
 
       try {
-        const held = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        const held = await runChild([gatewayEntry, "--organize", changedSource], resumedEnv);
         const heldOutput = extractProjection(held.stdout.join(""));
         expect(heldOutput).toContain("状態: held");
         expect(heldOutput).toContain("memory_state_changed");
         expect(heldOutput).toContain("再起動復旧済み範囲");
         expect(providerTwoCalls).toBe(0);
 
-        const repeated = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        const repeated = await runChild([gatewayEntry, "--organize", changedSource], resumedEnv);
         expect(extractProjection(repeated.stdout.join(""))).toContain("memory_state_changed");
         expect(providerTwoCalls).toBe(0);
         const checkpointBytes = readFileSync(join(auditDir, "file-root", "document-organization", "j-checkpoints.sqlite"));
@@ -1423,13 +1442,21 @@ describe("delegated goal purpose owner review", () => {
       expect(stepReviewResponse.status).toBe(202);
       const stepReviewReplyText = await stepReviewReply;
       expect(stepReviewReplyText.length).toBeGreaterThan(0);
-      const completedSnapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(completedSnapshotResponse.status).toBe(200);
-      const completedSnapshot = await completedSnapshotResponse.json() as {
-        operation_plan_status?: { plans?: Array<Record<string, unknown>> };
-      };
+      const completedSnapshot = await waitFor(async () => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as {
+          operation_plan_status?: { plans?: Array<Record<string, unknown>> };
+        };
+        const plan = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === selectedPlan?.plan_id);
+        const planSteps = plan?.steps as Array<Record<string, unknown>> | undefined;
+        const reviewedStep = planSteps?.find((candidate) => candidate.step_id === step?.step_id);
+        return plan?.status === "results_verified" && reviewedStep?.status === "verified" &&
+          (reviewedStep.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed"
+          ? snapshot : null;
+      }, gateway, "reviewed file.search result was not reconciled to a durable receipt");
       expect(completedSnapshot.operation_plan_status?.plans).toMatchObject([{
         plan_id: selectedPlan?.plan_id,
         task_identity_digest: selectedPlan?.task_identity_digest,
@@ -1490,7 +1517,10 @@ describe("delegated goal purpose owner review", () => {
         const candidate = resumedWait && body.operation_plan_status?.plans?.find((plan) =>
           plan.plan_id === resumedWait.candidate_plan_id);
         return resumedWait && candidate ? { wait: resumedWait, candidate } : null;
-      }, gateway, "same-task reply did not retain a new J candidate");
+      }, gateway, `same-task reply did not retain a new J candidate; provider_calls=${providerCalls}; ` +
+        `provider_request_count=${providerRequestIds.length}; planner_prompt_count=${plannerPrompts.length}; ` +
+        `wait_compute_outcome=${recentWaitComputeOutcome(join(auditDir, "audit.jsonl"))}; ` +
+        `synthetic_llm_failure=${recentSyntheticLLMFailure(join(auditDir, "audit.jsonl"))}`);
       expect(providerRequestIds).toHaveLength(2);
       expect(providerRequestIds).toEqual([initialComputeRequestId, ownerReplyBody.request_id]);
       expect(plannerPrompts[1]).toContain(JSON.stringify(proposedPurpose).slice(1, -1));
@@ -1581,7 +1611,8 @@ describe("delegated goal purpose owner review", () => {
         const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
         return body.operation_plan_status?.plans?.find((plan) => Array.isArray(plan.steps) &&
           (plan.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.write")) ?? null;
-      }, gateway, `synthetic task did not reach the file.write plan consumer; WebChat reply=${syntheticTaskOutput}`);
+      }, gateway, `synthetic task did not reach the file.write plan consumer; ` +
+        `WebChat reply=${syntheticTaskOutput}; synthetic_llm_failure=${recentSyntheticLLMFailure(join(auditDir, "audit.jsonl"))}`);
       expect(writePlan).toMatchObject({ owner_authentication_required: true,
         goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
       const writePlanId = String(writePlan.plan_id);
@@ -1634,7 +1665,48 @@ describe("delegated goal purpose owner review", () => {
             step_id: writeStepId, goal_purpose_binding: goalPurposeBinding }) }),
       });
       expect(writeReviewResponse.status).toBe(202);
-      const writeReviewOutput = await writeReviewReply;
+      let writeReviewOutput: string;
+      try {
+        writeReviewOutput = await writeReviewReply;
+      } catch (error) {
+        let currentPlan: Record<string, unknown> | undefined;
+        let pendingOperations: string[] = [];
+        let receipts: Array<Record<string, unknown>> = [];
+        try {
+          const [snapshotResponse, approvalQueue] = await Promise.all([
+            fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+              headers: { authorization: "Bearer " + token },
+            }),
+            loadQueue(),
+          ]);
+          const snapshot = snapshotResponse.ok ? await snapshotResponse.json() as {
+            operation_plan_status?: { plans?: Array<Record<string, unknown>> };
+            execution_receipts?: { records?: Array<Record<string, unknown>> };
+          } : undefined;
+          currentPlan = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === writePlanId);
+          pendingOperations = approvalQueue.pending_approvals.map((item) => String(item.operation ?? "unknown"));
+          receipts = snapshot?.execution_receipts?.records?.slice(-8).map((receipt) => ({
+            ticket_digest: receipt.ticket_digest,
+            command_digest: receipt.command_digest,
+            state: receipt.state,
+            invocation_boundary: receipt.invocation_boundary,
+            feedback_status: receipt.feedback_status,
+            error_digest: receipt.error_digest,
+            worker_platform: receipt.worker_platform,
+            worker_exit_observed: receipt.worker_exit_observed,
+          })) ?? [];
+        } catch {
+          // Preserve the original WebChat timeout if diagnostic projections are unavailable.
+        }
+        const steps = Array.isArray(currentPlan?.steps) ? currentPlan.steps as Array<Record<string, unknown>> : [];
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; ` +
+          `plan_status=${String(currentPlan?.status ?? "missing")}; steps=${JSON.stringify(steps.map((step) => ({
+            operation: step.operation, status: step.status, binding_keys: step.binding && typeof step.binding === "object"
+              ? Object.keys(step.binding) : [],
+          })))}; pending_operations=${JSON.stringify(pendingOperations)}; ` +
+          `execution_receipts=${JSON.stringify(receipts)}; gateway_exit=${gateway.child.exitCode ?? "running"}; ` +
+          `websocket_state=${taskWebSocket.readyState}`);
+      }
       expect(writeReviewOutput.length).toBeGreaterThan(0);
 
       let completedWritePlan: Record<string, unknown>;
@@ -1733,7 +1805,8 @@ describe("delegated goal purpose owner review", () => {
         return body.operation_plan_status?.plans?.find((plan) => plan.plan_id !== writePlanId &&
           plan.task_identity_digest === writePlan.task_identity_digest && Array.isArray(plan.steps) &&
           (plan.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.search")) ?? null;
-      }, gateway, "file.write M receipt did not reach the same-task file.search planner");
+      }, gateway, `file.write M receipt did not reach the same-task file.search planner; provider_calls=${providerCalls}; ` +
+        `planner_prompts=${plannerPrompts.length}; synthetic_llm_failure=${recentSyntheticLLMFailure(join(auditDir, "audit.jsonl"))}`);
       expect(verificationPlan).toMatchObject({ task_identity_digest: writePlan.task_identity_digest,
         goal_purpose_binding_status: "current", goal_purpose_relation: { candidate_outcome: "unknown" } });
       const verificationStep = (verificationPlan.steps as Array<Record<string, unknown>>)
@@ -1963,7 +2036,13 @@ describe("delegated goal purpose owner review", () => {
       expect(editTestRelationApprovalResponse.status).toBe(200);
 
       const runReviewedPlanStep = async (step: Record<string, unknown>, label: string, expectEditDiff = false) => {
-        const ownerReply = waitForWebChatSend(taskWebSocket, label);
+        let resolveOwnerRequestId!: (requestId: string) => void;
+        const ownerRequestId = new Promise<string>((resolve) => { resolveOwnerRequestId = resolve; });
+        let releaseOwnerReplyDeadline!: () => void;
+        const ownerReplyDeadline = step.operation === "file.edit"
+          ? new Promise<void>((resolve) => { releaseOwnerReplyDeadline = resolve; }) : undefined;
+        const ownerReply = waitForWebChatSend(taskWebSocket, label, ownerRequestId, ownerReplyDeadline);
+        void ownerReply.catch(() => undefined);
         const reviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
           method: "POST",
           headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
@@ -1972,39 +2051,139 @@ describe("delegated goal purpose owner review", () => {
               step_id: step.step_id, goal_purpose_binding: editTestBinding }) }),
         });
         expect(reviewResponse.status).toBe(202);
+        const reviewReceipt = await reviewResponse.json() as { request_id?: unknown };
+        if (typeof reviewReceipt.request_id !== "string") throw new Error("owner review response omitted its request identity");
+        resolveOwnerRequestId(reviewReceipt.request_id);
         let approvalResult: Record<string, unknown> | undefined;
         if (step.operation === "file.edit") {
-          const pending = await waitFor(async () => {
-            const queue = await loadQueue();
-            return queue.pending_approvals.find((item) => typeof item.operation === "string" &&
-              (item.operation === step.operation || item.operation.endsWith(`.${String(step.operation)}`)) &&
-              item.final_review_required) ?? null;
-          }, gateway, `${String(step.operation)} did not reach the owner Approval Gate`);
-          let contentReviewDigest: unknown;
-          if (pending.content_review_required) {
-            const contentResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
-              encodeURIComponent(String(pending.command_id)) + "/content", {
-              method: "POST", headers: { authorization: "Bearer " + resumeToken },
-            });
-            expect(contentResponse.status).toBe(200);
-            const content = await contentResponse.json() as Record<string, unknown>;
-            if (expectEditDiff) {
-              expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
-              expect(String(content.diff)).toContain("-before");
-              expect(String(content.diff)).toContain("+after");
+          try {
+            const pending = await waitFor(async () => {
+              const queue = await loadQueue();
+              return queue.pending_approvals.find((item) => typeof item.operation === "string" &&
+                (item.operation === step.operation || item.operation.endsWith(`.${String(step.operation)}`)) &&
+                item.final_review_required) ?? null;
+            }, gateway, `${String(step.operation)} did not reach the owner Approval Gate`);
+            let contentReviewDigest: unknown;
+            if (pending.content_review_required) {
+              const contentResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
+                encodeURIComponent(String(pending.command_id)) + "/content", {
+                method: "POST", headers: { authorization: "Bearer " + resumeToken },
+              });
+              expect(contentResponse.status).toBe(200);
+              const content = await contentResponse.json() as Record<string, unknown>;
+              if (expectEditDiff) {
+                expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
+                expect(String(content.diff)).toContain("-before");
+                expect(String(content.diff)).toContain("+after");
+              }
+              contentReviewDigest = content.review_digest;
             }
-            contentReviewDigest = content.review_digest;
+            const approvalResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
+              encodeURIComponent(String(pending.command_id)), {
+              method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
+              body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
+                ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }),
+            });
+            expect(approvalResponse.status).toBe(200);
+            approvalResult = await approvalResponse.json() as Record<string, unknown>;
+          } finally {
+            releaseOwnerReplyDeadline();
           }
-          const approvalResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
-            encodeURIComponent(String(pending.command_id)), {
-            method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
-            body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
-              ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }),
-          });
-          expect(approvalResponse.status).toBe(200);
-          approvalResult = await approvalResponse.json() as Record<string, unknown>;
         }
-        const output = await ownerReply;
+        let output: string;
+        try {
+          output = await ownerReply;
+        } catch (error) {
+          let planStatus = "unavailable";
+          let steps: Array<Record<string, unknown>> = [];
+          let receipts: Array<Record<string, unknown>> = [];
+          let pendingOperations: string[] = [];
+          const deliveryLogs = [...gateway.stdout, ...gateway.stderr]
+            .filter((line) => line.includes("command result channel delivery was not confirmed"))
+            .slice(-8);
+        const planAdmissionFailures = [...gateway.stdout, ...gateway.stderr]
+          .filter((line) => line.includes("operation-plan attempt was not admitted"))
+          .slice(-8)
+          .map((line) => ({
+            reason: line.match(/reason=([a-z0-9_]+)/)?.[1] ?? "unclassified",
+          }));
+        const handlerFailures = [...gateway.stdout, ...gateway.stderr]
+          .filter((line) => line.includes("[inbound-router] handler threw on "))
+          .slice(-8)
+          .map((line) => {
+            const match = line.match(/\[inbound-router\] handler threw on ([^:]+): (.+)$/);
+            const errorCode = match?.[2]?.match(/^(?:Executor rejected command: approval clock invalid or rolled back(?: \([a-z_,]+\))?|(?:plan|operation_plan|goal_purpose)_[a-z0-9_]+)$/)?.[0];
+            return { channel: match?.[1]?.split("/")[0] ?? "unknown", error: errorCode ?? "unclassified" };
+          });
+        let auditEvents: Array<Record<string, unknown>> = [];
+        let requestAuditEvents: Array<Record<string, unknown>> = [];
+        try {
+          const entries = readFileSync(join(auditDir, "audit.jsonl"), "utf8").split("\n").filter(Boolean)
+            .map((line) => JSON.parse(line) as { log?: Record<string, unknown> });
+          const projectAuditEvents = (items: Array<{ log?: Record<string, unknown> }>) => items.map(({ log }) => {
+              const evaluation = log?.evaluation && typeof log.evaluation === "object"
+                ? log.evaluation as Record<string, unknown> : undefined;
+              const context = evaluation?.context && typeof evaluation.context === "object"
+                ? evaluation.context as Record<string, unknown> : undefined;
+              const feedback = log?.feedback && typeof log.feedback === "object"
+                ? log.feedback as Record<string, unknown> : undefined;
+              const rawError = typeof feedback?.error === "string" ? feedback.error : "";
+              const safeError = rawError.match(/^(?:Executor rejected command: approval clock invalid or rolled back(?: \([a-z_,]+\))?|(?:plan|operation_plan|goal_purpose)_[a-z0-9_]+)$/)?.[0];
+              const safeCode = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,96}$/.test(value)
+                ? value : undefined;
+              return {
+                kind: safeCode(log?.kind), event: safeCode(log?.event), reason: safeCode(log?.reason),
+                decision: safeCode(evaluation?.decision), operation: safeCode(context?.operation),
+                feedback_status: safeCode(feedback?.status), feedback_error: safeError ?? (rawError ? "other" : undefined),
+              };
+            });
+          auditEvents = projectAuditEvents(entries.slice(-24));
+          requestAuditEvents = projectAuditEvents(entries.filter((entry) => entry.log?.request_id === reviewReceipt.request_id)
+            .slice(-16));
+        } catch {
+          // Keep diagnostics categorical and preserve the original timeout.
+        }
+          try {
+            const [snapshotResponse, approvalQueue] = await Promise.all([
+              fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
+              loadQueue(),
+            ]);
+            const snapshot = snapshotResponse.ok ? await snapshotResponse.json() as {
+              operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
+              execution_receipts?: { records?: Array<Record<string, unknown>> };
+            } : undefined;
+            const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === editTestPlanId);
+            planStatus = String(current?.status ?? snapshot?.operation_plan_status?.status ?? "missing");
+            steps = Array.isArray(current?.steps) ? (current.steps as Array<Record<string, unknown>>).map((currentStep) => ({
+              operation: currentStep.operation,
+              status: currentStep.status,
+              memory_status: (currentStep.binding as Record<string, unknown> | undefined)?.memory_status,
+            })) : [];
+            receipts = snapshot?.execution_receipts?.records?.slice(-8).map((receipt) => ({
+              ticket_digest: receipt.ticket_digest,
+              command_digest: receipt.command_digest,
+              state: receipt.state,
+              invocation_boundary: receipt.invocation_boundary,
+              feedback_status: receipt.feedback_status,
+              error_digest: receipt.error_digest,
+              worker_platform: receipt.worker_platform,
+              worker_task_identity_digest: receipt.worker_task_identity_digest,
+              worker_operation_plan_binding_digest: receipt.worker_operation_plan_binding_digest,
+              worker_exit_observed: receipt.worker_exit_observed,
+            })) ?? [];
+            pendingOperations = approvalQueue.pending_approvals.map((item) => String(item.operation ?? "unknown"));
+          } catch {
+            // Preserve the original timeout if the diagnostic read is also unavailable.
+          }
+          throw new Error(`${error instanceof Error ? error.message : "WebChat result wait failed"}; ` +
+            `request_id_digest=${createHash("sha256").update(String(reviewReceipt.request_id), "utf8").digest("hex").slice(0, 16)}; ` +
+            `plan_status=${planStatus}; steps=${JSON.stringify(steps)}; ` +
+            `pending_operations=${JSON.stringify(pendingOperations)}; receipts=${JSON.stringify(receipts)}; ` +
+            `delivery_logs=${JSON.stringify(deliveryLogs)}; handler_failures=${JSON.stringify(handlerFailures)}; ` +
+            `plan_admission_failures=${JSON.stringify(planAdmissionFailures)}; ` +
+            `request_audit_events=${JSON.stringify(requestAuditEvents)}; audit_events=${JSON.stringify(auditEvents)}; ` +
+            `gateway_exit=${gateway.child.exitCode ?? "running"}; websocket_state=${taskWebSocket.readyState}`);
+        }
         const completedPlan = await waitFor(async () => {
           const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
             headers: { authorization: "Bearer " + token },
@@ -2136,6 +2315,47 @@ describe("delegated goal purpose owner review", () => {
             .filter((name) => /^blue-tanuki-synthetic-[a-f0-9]{20}\.txt$/.test(name));
           if (filesAtCrash.length === filesBeforeUnknownWrite.length) await new Promise((resolve) => setTimeout(resolve, 1));
         }
+        if (filesAtCrash.length !== filesBeforeUnknownWrite.length + 1) {
+          const diagnosticResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          let pendingOperations: string[] = [];
+          try {
+            const queue = await loadQueue();
+            pendingOperations = queue.pending_approvals.map((item) => String(item.operation ?? "unknown"));
+          } catch {
+            // The runtime snapshot remains the primary diagnostic if the approval projection is unavailable.
+          }
+          const diagnosticSnapshot = diagnosticResponse.ok ? await diagnosticResponse.json() as {
+            operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
+            execution_receipts?: { records?: Array<Record<string, unknown>> };
+          } : undefined;
+          const planStates = diagnosticSnapshot?.operation_plan_status?.plans?.map((plan) => ({
+            plan_id: plan.plan_id,
+            status: plan.status,
+            steps: (plan.steps as Array<Record<string, unknown>> | undefined)?.map((step) => ({
+              operation: step.operation,
+              status: step.status,
+              binding_keys: step.binding && typeof step.binding === "object" ? Object.keys(step.binding) : [],
+            })),
+          }));
+          const receipts = diagnosticSnapshot?.execution_receipts?.records?.slice(-8).map((receipt) => ({
+            ticket_digest: receipt.ticket_digest,
+            command_digest: receipt.command_digest,
+            state: receipt.state,
+            invocation_boundary: receipt.invocation_boundary,
+            feedback_status: receipt.feedback_status,
+            error_digest: receipt.error_digest,
+            worker_platform: receipt.worker_platform,
+            worker_task_identity_digest: receipt.worker_task_identity_digest,
+            worker_operation_plan_binding_digest: receipt.worker_operation_plan_binding_digest,
+            worker_exit_observed: receipt.worker_exit_observed,
+          }));
+          throw new Error(`synthetic file.write did not reach its exact target before the existing effect deadline; ` +
+            `plan_status=${diagnosticSnapshot?.operation_plan_status?.status ?? "unavailable"}; ` +
+            `plan_states=${JSON.stringify(planStates)}; pending_operations=${JSON.stringify(pendingOperations)}; ` +
+            `execution_receipts=${JSON.stringify(receipts)}; gateway_exit=${gateway.child.exitCode ?? "running"}`);
+        }
         expect(filesAtCrash).toHaveLength(filesBeforeUnknownWrite.length + 1);
         const receiptDeadline = Date.now() + 20_000;
         let unsettledIntent: {
@@ -2147,15 +2367,28 @@ describe("delegated goal purpose owner review", () => {
           if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) {
             throw new Error(`Gateway exited before durable result capture: ${gateway.stderr.join("")}`);
           }
-          const receiptRow = crashWindowExecutionDb.prepare(`SELECT receipt_json FROM execution_intents
-            WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
-            .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
-          if (receiptRow) {
+          let receiptRow: { receipt_json: string } | undefined;
+          let readerBusy = false;
+          try {
+            receiptRow = crashWindowExecutionDb.prepare(`SELECT receipt_json FROM execution_intents
+              WHERE json_extract(receipt_json,'$.task_identity_digest')=? ORDER BY rowid DESC LIMIT 1`)
+              .get(uncertainTaskIdentity) as { receipt_json: string } | undefined;
+          } catch (error) {
+            if (!isSqliteBusyError(error)) throw error;
+            readerBusy = true;
+          }
+          if (!readerBusy && receiptRow) {
             const receipt = JSON.parse(receiptRow.receipt_json) as typeof unsettledIntent;
             if (receipt?.state === "adapter_returned" && receipt.result_delivery_digest) {
-              const delivery = crashWindowExecutionDb.prepare("SELECT delivery_digest,delivery_json FROM execution_result_outbox WHERE ticket_id=?")
-                .get(receipt.ticket_id) as typeof outboxRow;
-              if (delivery?.delivery_digest === receipt.result_delivery_digest) {
+              let delivery: typeof outboxRow;
+              try {
+                delivery = crashWindowExecutionDb.prepare("SELECT delivery_digest,delivery_json FROM execution_result_outbox WHERE ticket_id=?")
+                  .get(receipt.ticket_id) as typeof outboxRow;
+              } catch (error) {
+                if (!isSqliteBusyError(error)) throw error;
+                readerBusy = true;
+              }
+              if (!readerBusy && delivery?.delivery_digest === receipt.result_delivery_digest) {
                 unsettledIntent = receipt;
                 outboxRow = delivery;
                 break;
@@ -2330,8 +2563,48 @@ describe("delegated goal purpose owner review", () => {
           content: "plan:compute " + JSON.stringify(ownerObservationReplanControl) }),
       });
       expect(ownerObservationReplanResponse.status).toBe(202);
-      const ownerObservationReplanOutput = await ownerObservationReplanReply.catch(() => {
-        throw new Error("owner replan WebChat response unavailable; request accepted before timeout");
+      const acceptedOwnerObservationReplan = await ownerObservationReplanResponse.json() as { request_id?: unknown };
+      expect(typeof acceptedOwnerObservationReplan.request_id).toBe("string");
+      const ownerObservationReplanOutput = await ownerObservationReplanReply.catch(async (error: unknown) => {
+        let planState: Record<string, unknown> | undefined;
+        let waitStates: Array<Record<string, unknown>> = [];
+        try {
+          const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+            headers: { authorization: "Bearer " + token },
+          });
+          if (response.ok) {
+            const snapshot = await response.json() as { operation_plan_status?: {
+              status?: string; plans?: Array<Record<string, unknown>>; waits?: Array<Record<string, unknown>>;
+            } };
+            const plan = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === uncertainPlanId);
+            planState = plan ? {
+              status: plan.status,
+              recovery_hold_reason: plan.recovery_hold_reason,
+              step_states: (plan.steps as Array<Record<string, unknown>> | undefined)?.map((step) => ({
+                operation: step.operation,
+                status: step.status,
+                memory_status: (step.binding as Record<string, unknown> | undefined)?.memory_status,
+              })),
+            } : undefined;
+            waitStates = snapshot.operation_plan_status?.waits?.filter((wait) => wait.plan_id === uncertainPlanId)
+              .map((wait) => ({ state: wait.state, wake_reason: wait.wake_reason,
+                compute_outcome: wait.compute_outcome, request_id_present: typeof wait.request_id === "string" })) ?? [];
+          }
+        } catch {
+          // Preserve the original WebChat timeout and report the snapshot as unavailable.
+        }
+        const waitFailure = error instanceof Error ? error.message : "unknown_wait_failure";
+        const providerRequestDigests = providerRequestIds.slice(-4).map((requestId) =>
+          createHash("sha256").update(requestId, "utf8").digest("hex").slice(0, 16));
+        throw new Error("owner replan WebChat response unavailable; " +
+          `request_id_digest=${createHash("sha256").update(String(acceptedOwnerObservationReplan.request_id), "utf8").digest("hex").slice(0, 16)}; ` +
+          `wait_failure=${waitFailure}; provider_calls=${providerCalls}; provider_request_count=${providerRequestIds.length}; ` +
+          `provider_request_id_digests=${JSON.stringify(providerRequestDigests)}; planner_prompt_count=${plannerPrompts.length}; ` +
+          `wait_compute_outcome=${recentWaitComputeOutcome(join(auditDir, "audit.jsonl"))}; ` +
+          `synthetic_llm_failure=${recentSyntheticLLMFailure(join(auditDir, "audit.jsonl"))}; ` +
+          `provider_failure_kind=${providerFailure instanceof Error ? providerFailure.name : providerFailure ? "non_error" : "none"}; ` +
+          `plan_state=${JSON.stringify(planState ?? "unavailable")}; wait_states=${JSON.stringify(waitStates)}; ` +
+          `gateway_exit=${gateway.child.exitCode ?? "running"}`);
       });
       expect(ownerObservationReplanOutput.length).toBeGreaterThan(0);
       expect(providerFailure).toBeUndefined();
@@ -2452,7 +2725,8 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
       } });
 
-      const ownerObservationSearchReviewReply = waitForWebChatSend(taskWebSocket, "owner-selected file.search review");
+      const ownerObservationSearchReviewReply = waitForWebChatSend(taskWebSocket,
+        "owner-selected file.search review", undefined, undefined, 45_000);
       const ownerObservationSearchReview = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
@@ -2483,14 +2757,26 @@ describe("delegated goal purpose owner review", () => {
             ? { plan, step } : null;
         }, gateway, "owner-selected same-task file.search did not persist its J/M receipt");
       } catch (error) {
-        const [snapshotResponse, approvalQueue] = await Promise.all([
-          fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", { headers: { authorization: "Bearer " + token } }),
-          loadQueue(),
-        ]);
-        const snapshot = snapshotResponse.ok ? await snapshotResponse.json() as {
+        let snapshot: {
           operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
           execution_receipts?: { records?: Array<Record<string, unknown>> };
-        } : undefined;
+        } | undefined;
+        let pendingApprovals: Array<Record<string, unknown>> = [];
+        let diagnosticReadError: string | undefined;
+        try {
+          const [snapshotResponse, approvalQueue] = await Promise.all([
+            fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+              headers: { authorization: "Bearer " + token },
+            }),
+            loadQueue(),
+          ]);
+          snapshot = snapshotResponse.ok ? await snapshotResponse.json() as typeof snapshot : undefined;
+          pendingApprovals = approvalQueue.pending_approvals;
+        } catch (diagnosticError) {
+          const code = diagnosticError && typeof diagnosticError === "object" && "code" in diagnosticError
+            ? String((diagnosticError as { code?: unknown }).code) : "unavailable";
+          diagnosticReadError = `${diagnosticError instanceof Error ? diagnosticError.name : "Error"}:${code}`;
+        }
         const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === ownerObservationPlanId);
         const steps = Array.isArray(current?.steps) ? current.steps as Array<Record<string, unknown>> : [];
         const receipts = snapshot?.execution_receipts?.records?.slice(-8).map((receipt) => ({
@@ -2501,6 +2787,8 @@ describe("delegated goal purpose owner review", () => {
           feedback_status: receipt.feedback_status,
           error_digest: receipt.error_digest,
           worker_platform: receipt.worker_platform,
+          worker_task_identity_digest: receipt.worker_task_identity_digest,
+          worker_operation_plan_binding_digest: receipt.worker_operation_plan_binding_digest,
           worker_exit_observed: receipt.worker_exit_observed,
         }));
         throw new Error(`${error instanceof Error ? error.message : "search result wait failed"}; ` +
@@ -2515,10 +2803,14 @@ describe("delegated goal purpose owner review", () => {
           `review_reply_received=${ownerObservationSearchReviewOutput !== "WebChat review response unavailable"}; ` +
           `execution_receipts=${JSON.stringify(receipts)}; ` +
           `provider_failure_present=${providerFailure !== undefined}; ` +
-          `approvals=${JSON.stringify(approvalQueue.pending_approvals.map((item) => ({ approval_level: item.approval_level,
+          `diagnostic_read_error=${diagnosticReadError ?? "none"}; ` +
+          `gateway_exit=${gateway?.child.exitCode ?? "running"}; ` +
+          `approvals=${JSON.stringify(pendingApprovals.map((item) => ({ approval_level: item.approval_level,
             final_review_required: item.final_review_required, content_review_required: item.content_review_required })))}; ` +
           `gateway_stderr=${JSON.stringify(gateway?.stderr.slice(-4) ?? [])}`);
       }
+      expect(ownerObservationSearchReviewOutput).not.toBe("WebChat review response unavailable");
+      expect(ownerObservationSearchReviewOutput.length).toBeGreaterThan(0);
       expect(completedOwnerObservationSearch.plan).toMatchObject({ status: "results_verified",
         goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
       expect(completedOwnerObservationSearch.step).toMatchObject({ operation: "file.search", status: "verified",
@@ -2700,6 +2992,39 @@ function seedPersistentMemory(filepath: string, requestId: string): void {
   if (memory.size() === 0 || !memory.verify()) throw new Error("synthetic M seed was not confirmed");
 }
 
+function recentSyntheticLLMFailure(filepath: string): string {
+  try {
+    const entries = readFileSync(filepath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-80).reverse();
+    for (const line of entries) {
+      const entry = JSON.parse(line) as { kind?: unknown; feedback?: {
+        llm_failure?: { provider?: unknown; kind?: unknown; status?: unknown };
+      } };
+      const failure = entry.kind === "executor_feedback" ? entry.feedback?.llm_failure : undefined;
+      if (failure?.provider === "synthetic-file-write-plan") {
+        return `kind=${String(failure.kind ?? "unknown")},status=${String(failure.status ?? "none")}`;
+      }
+    }
+    return "none";
+  } catch {
+    return "unavailable";
+  }
+}
+
+function recentWaitComputeOutcome(filepath: string): string {
+  try {
+    const entries = readFileSync(filepath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-120).reverse();
+    for (const line of entries) {
+      const entry = JSON.parse(line) as { kind?: unknown; event?: unknown; reason?: unknown };
+      if (entry.kind === "operation_plan" && entry.event === "wait_compute_outcome_recorded") {
+        return typeof entry.reason === "string" && /^[a-z_]{1,48}$/.test(entry.reason) ? entry.reason : "other";
+      }
+    }
+    return "none";
+  } catch {
+    return "unavailable";
+  }
+}
+
 async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess, message: string): Promise<void> {
   await Promise.race([
     signal,
@@ -2711,13 +3036,23 @@ async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess,
 async function waitFor<T>(probe: () => Promise<T | null> | T | null, gateway: CapturedProcess,
   failureMessage: string, timeout_ms = 8_000): Promise<T> {
   const deadline = Date.now() + timeout_ms;
+  let lastFetchFailure: string | undefined;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
-    const value = await probe();
-    if (value !== null) return value;
+    try {
+      const value = await probe();
+      if (value !== null) return value;
+    } catch (error) {
+      if (!(error instanceof TypeError) || error.message !== "fetch failed") throw error;
+      const cause = error.cause;
+      const causeCode = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code) : undefined;
+      lastFetchFailure = causeCode ? `fetch failed (${causeCode})` : "fetch failed";
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`${failureMessage}\nGateway stderr:\n${gateway.stderr.join("")}`);
+  throw new Error(`${failureMessage}${lastFetchFailure ? `\nLast transient probe error: ${lastFetchFailure}` : ""}` +
+    `\nGateway stderr:\n${gateway.stderr.join("")}`);
 }
 
 async function forceStopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -2746,7 +3081,7 @@ async function reserveLoopbackPort(): Promise<number> {
 }
 
 function spawnGateway(env: NodeJS.ProcessEnv): CapturedProcess {
-  return spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--serve"], env);
+  return spawnCaptured([gatewayEntry, "--serve"], env);
 }
 
 async function runChild(args: string[], env: NodeJS.ProcessEnv): Promise<CapturedProcess> {
@@ -2786,24 +3121,91 @@ async function waitForHealth(port: number, gateway: CapturedProcess): Promise<vo
   throw new Error(`gateway health timed out\nstdout:\n${gateway.stdout.join("")}\nstderr:\n${gateway.stderr.join("")}`);
 }
 
-function waitForWebChatSend(webSocket: WebSocket, label = "operator request"): Promise<string> {
+function waitForWebChatSend(webSocket: WebSocket, label = "operator request", expectedRequestId?: Promise<string>,
+  timeoutAfter?: Promise<unknown>, timeout_ms = 15_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`WebChat ${label} result timed out`)), 15_000);
-    webSocket.on("message", (data) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let expectedId: string | undefined;
+    let requestIdReady = expectedRequestId === undefined;
+    let timeoutPhaseReady = timeoutAfter === undefined;
+    const observedRequestIds: unknown[] = [];
+    const observedFrameKinds: string[] = [];
+    const observedFrameRequestIdDigests: string[] = [];
+    const buffered: Array<{ requestId: unknown; content: string }> = [];
+    const matchingFrames: string[] = [];
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      webSocket.off("message", onMessage);
+      webSocket.off("error", onError);
+    };
+    const finish = (content: string) => { cleanup(); resolve(content); };
+    const fail = (error: Error) => { cleanup(); reject(error); };
+    const armResultTimeout = () => {
+      if (!requestIdReady || !timeoutPhaseReady) return;
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => fail(new Error(`WebChat ${label} result timed out; ` +
+        `observed_channel_send_frames=${observedRequestIds.length}; ` +
+        `channel_send_request_id_digests=${JSON.stringify(observedRequestIds.map((id) =>
+          typeof id === "string" ? createHash("sha256").update(id).digest("hex").slice(0, 16) : "missing"))}; ` +
+        `observed_frame_kinds=${JSON.stringify(observedFrameKinds)}; ` +
+        `observed_frame_request_id_digests=${JSON.stringify(observedFrameRequestIdDigests)}`)), timeout_ms);
+    };
+    if (!requestIdReady) timeout = setTimeout(() => fail(new Error(`WebChat ${label} request identity timed out`)), 15_000);
+    const onMessage = (data: unknown) => {
       let message: unknown;
       try {
-        message = JSON.parse(data.toString());
+        message = JSON.parse(String(data));
       } catch {
         return;
       }
-      if (!message || typeof message !== "object" || (message as { kind?: unknown }).kind !== "channel_send") return;
-      clearTimeout(timeout);
-      resolve((message as { content?: string }).content ?? "");
-    });
-    webSocket.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
+      if (!message || typeof message !== "object") return;
+      const frame = message as { kind?: unknown; request_id?: unknown; content?: unknown };
+      if (typeof frame.kind === "string" && /^[a-z_]{1,48}$/u.test(frame.kind)) {
+        observedFrameKinds.push(frame.kind);
+        if (observedFrameKinds.length > 16) observedFrameKinds.shift();
+      }
+      if (typeof frame.request_id === "string") {
+        observedFrameRequestIdDigests.push(createHash("sha256").update(frame.request_id).digest("hex").slice(0, 16));
+        if (observedFrameRequestIdDigests.length > 16) observedFrameRequestIdDigests.shift();
+      }
+      if (frame.kind !== "channel_send") return;
+      observedRequestIds.push(frame.request_id);
+      if (observedRequestIds.length > 16) observedRequestIds.shift();
+      const content = typeof frame.content === "string" ? frame.content : "";
+      if (!expectedRequestId) { finish(content); return; }
+      if (expectedId !== undefined) {
+        if (frame.request_id === expectedId) {
+          if (timeoutAfter && !timeoutPhaseReady) {
+            matchingFrames.push(content);
+            if (matchingFrames.length > 16) matchingFrames.shift();
+          } else finish(content);
+        }
+        return;
+      }
+      buffered.push({ requestId: frame.request_id, content });
+    };
+    const onError = (error: Error) => fail(error);
+    webSocket.on("message", onMessage);
+    webSocket.once("error", onError);
+    if (expectedRequestId) {
+      void expectedRequestId.then((requestId) => {
+        expectedId = requestId;
+        requestIdReady = true;
+        if (timeoutAfter && !timeoutPhaseReady && timeout) { clearTimeout(timeout); timeout = undefined; }
+        const matches = buffered.filter((frame) => frame.requestId === requestId);
+        if (timeoutAfter && !timeoutPhaseReady) matchingFrames.push(...matches.map((frame) => frame.content));
+        else if (matches.length > 0) finish(matches.at(-1)!.content);
+        else armResultTimeout();
+      }, (error: unknown) => fail(error instanceof Error ? error : new Error("WebChat request identity unavailable")));
+    }
+    if (timeoutAfter) {
+      void timeoutAfter.then(() => {
+        timeoutPhaseReady = true;
+        if (matchingFrames.length > 0) finish(matchingFrames.at(-1)!);
+        else armResultTimeout();
+      }, (error: unknown) => fail(error instanceof Error ? error : new Error("WebChat result deadline phase unavailable")));
+    }
+    if (requestIdReady) armResultTimeout();
   });
 }
 

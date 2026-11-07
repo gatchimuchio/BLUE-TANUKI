@@ -1657,7 +1657,7 @@ function isolatedRuntimeEnvironment(root: string, envFile: string, historyFile: 
 }
 
 function spawnGateway(env: NodeJS.ProcessEnv): { child: ChildProcessWithoutNullStreams; output: string[] } {
-  const child = spawn(process.execPath, ["--import", "tsx", "apps/gateway/src/main.ts", "--serve"], {
+  const child = spawn(process.execPath, ["apps/gateway/dist/main.js", "--serve"], {
     cwd: repositoryRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],

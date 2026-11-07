@@ -203,6 +203,54 @@ class CapturingCompute implements ComputeBackend<LLMRequest, LLMResponse> {
 }
 
 describe("Executor compute boundary", () => {
+  it("measures executor and compute durations monotonically when the wall clock moves backward", async () => {
+    let wall = 1_000; let monotonic = 0;
+    const localAuthority = createExecutorApprovalAuthority({ clock: {
+      wallNow: () => wall++, monotonicNow: () => monotonic++,
+    } });
+    const cmd = command("wall-clock-rollback-duration");
+    if (cmd.type !== "llm_call" || !cmd.payload.compute_context) throw new Error("fixture command lacks compute context");
+    cmd.payload.compute_context.budget_scope = {
+      parent_task_identity_digest: "b".repeat(64), task_identity_digest: "c".repeat(64),
+    };
+    const approvedCommand = localAuthority.approve(cmd, {
+      source: "approval_gate", decision: "allow", approved_by: "fixture-owner", approved_at_ms: wall,
+      upstream_commit_hash: cmd.upstream_decision.commit_hash, operation: "llm.call", risk: "low",
+      final_review_required: false, reason: "fixture test approval",
+    });
+    const settlements: Array<Parameters<ComputeBudgetPort["settle"]>[1]> = [];
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        return { reservation_id: "wall-clock-rollback-reservation", reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: structuredClone(input.reserved_cost) };
+      },
+      settle(_reservationId, settlement) { settlements.push(settlement); },
+    };
+    const backend: LLMBackend = {
+      name: "fixture-provider",
+      async call() {
+        vi.spyOn(Date, "now").mockReturnValue(1);
+        return { content: "fixture reply", tokens_used: 2, model: "fixture-model-v1" };
+      },
+    };
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } }).register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.01, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const executor = new Executor({ approval_authority: localAuthority, llm: backend,
+      compute: new LLMComputeAdapter(registry, budget), tools: new ToolRegistry() });
+    try {
+      const result = await executor.execute(approvedCommand);
+      expect(result.status, result.error?.replaceAll("fixture reply", "[fixture-output]") ?? "executor returned no error detail")
+        .toBe("success");
+      expect(result.metrics.duration_ms).toBeGreaterThanOrEqual(0);
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.compute_ms).toBeGreaterThanOrEqual(0);
+      expect(Number.isSafeInteger(settlements[0]?.compute_ms)).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("routes one-call image bytes to C, declares their exposure, and keeps them out of session history", async () => {
     const backend = new CapturingBackend();
     const compute = new CapturingCompute(new LLMComputeAdapter(backend));

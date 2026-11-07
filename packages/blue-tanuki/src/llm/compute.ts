@@ -258,14 +258,14 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         reserved_cost: maxCost,
       });
     }
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     let response: LLMResponse;
     try {
       response = this.backend instanceof LLMRegistry
         ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization)
         : await this.backend.call(request.input, signal);
     } catch (error) {
-      const computeMs = Math.max(0, Date.now() - startedAt);
+      const computeMs = Math.max(0, Math.ceil(performance.now() - startedAt));
       let computeResourceUse: ComputeResourceUse | undefined;
       if (reservation) {
         await this.budget!.settle(reservation.reservation_id, {
@@ -307,7 +307,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         state: "settled",
         tokens_used: settlementTokens,
         tokens_usage_status: maximumCalls === 1 && measuredTokensValid ? tokensUsageStatus : "unknown",
-        compute_ms: Math.max(0, Date.now() - startedAt),
+        compute_ms: Math.max(0, Math.ceil(performance.now() - startedAt)),
         cost,
       };
       await this.budget!.settle(reservation.reservation_id, settlement);

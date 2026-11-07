@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "clean": "node scripts/clean.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "node node_modules/vitest/vitest.mjs run && node scripts/assert_test_minimums.mjs",
+    "test": "pnpm build && node packages/blue-tanuki/scripts/build-windows-isolation.mjs --fixtures && node node_modules/vitest/vitest.mjs run --maxWorkers=2 --minWorkers=2 && node scripts/assert_test_minimums.mjs",
     "docs:check": "node scripts/check_docs.mjs && tsx scripts/japanese_base_gate.ts && tsx scripts/licensing_gate.ts",
     "validate:licensing": "tsx scripts/licensing_gate.ts",
     "validate:japanese-base": "tsx scripts/japanese_base_gate.ts",

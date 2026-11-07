@@ -486,7 +486,7 @@ export async function verifyLlmProvisioning(
   env: Env,
   plugins: PluginRuntime,
 ): Promise<LlmProvisioningVerifyResult> {
-  const started = Date.now();
+  const started = performance.now();
   let candidateEnv: Env = env;
   let provider: SetupProviderKind = "stub";
   let model = "(provider default)";
@@ -508,7 +508,7 @@ export async function verifyLlmProvisioning(
         changed: false,
         safe: true,
         secret_exposed: false,
-        duration_ms: Date.now() - started,
+        duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
         detail: "stub backend verified without external network access",
         compute_readiness: computeReadiness,
         next_action: computeReadiness.status === "ready"
@@ -541,7 +541,7 @@ export async function verifyLlmProvisioning(
       changed: false,
       safe: true,
       secret_exposed: false,
-      duration_ms: Date.now() - started,
+      duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
       detail: `provider responded; tokens=${response.tokens_used}`,
       compute_readiness: computeReadiness,
       next_action: computeReadiness.status === "ready"
@@ -557,7 +557,7 @@ export async function verifyLlmProvisioning(
       changed: false,
       safe: true,
       secret_exposed: false,
-      duration_ms: Date.now() - started,
+      duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
       detail: redactKnownSecretValues(message, candidateEnv),
       compute_readiness: computeReadiness,
       next_action: "Check provider, model, endpoint, and API key, then run this verification again before saving.",

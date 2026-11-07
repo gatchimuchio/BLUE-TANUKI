@@ -199,7 +199,16 @@ async function createCheckpointRows(
   await mkdir(fileRoot, { recursive: true });
   const databasePath = path.join(fileRoot, "document-organization", "j-checkpoints.sqlite");
   const store = new DocumentOrganizationCheckpointStore(databasePath);
+  store.close();
+  const database = new DatabaseSync(databasePath);
+  // Seed inspector fixtures in one transaction; per-row EXTRA-sync writes dominate this read-only test.
+  database.exec("BEGIN IMMEDIATE");
   try {
+    const insert = database.prepare(`
+      INSERT INTO document_organization_checkpoints
+        (actor_digest, source_sha256, status, checkpoint_json, checkpoint_digest, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
     for (const row of rows) {
       const sourceDigest = sha256(row.source);
       const coordinator = new DocumentOrganizationCoordinator({
@@ -207,10 +216,18 @@ async function createCheckpointRows(
         request_id: row.requestId,
         source_text: row.source,
       });
-      store.getOrCreate({ channel: "cli", actor: row.actor, source_sha256: sourceDigest }, coordinator.checkpoint());
+      const checkpoint = coordinator.checkpoint();
+      const actorDigest = sha256(`3:cli|${row.actor.length}:${row.actor}`);
+      const checkpointJson = JSON.stringify(checkpoint);
+      insert.run(actorDigest, sourceDigest, checkpoint.status, checkpointJson,
+        sha256(`${actorDigest}|${sourceDigest}|${checkpointJson}`), Date.now());
     }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   } finally {
-    store.close();
+    database.close();
   }
   return databasePath;
 }

@@ -159,6 +159,7 @@ describe("GatewayTeamsEventStore", () => {
         retry_after_ms: 100, error: "synthetic Graph 429", error_code: "rate_limited" },
       { ok: true, delivery_status: "delivered", message_id: "synthetic-reply-id" },
     ]);
+    let nowMs = Date.now();
     let observedRetryWait = false;
     const channel = new TeamsChannel({
       transport,
@@ -166,12 +167,20 @@ describe("GatewayTeamsEventStore", () => {
       delivery_store: store,
       inbound_grants: [grant],
       retry: { max_retries: 1,
+        now: () => nowMs,
         sleep: async (ms) => {
           const pending = store.pending();
           expect(pending).toHaveLength(1);
           expect(pending[0]?.delivery_state).toBe("retry_wait");
+          expect(pending[0]?.not_before_ms).toBe(nowMs + ms);
+          expect(store.status(pending[0]!.delivery_id)).toMatchObject({
+            delivery_state: "retry_wait",
+            retry_after_ms: ms,
+            attempt_count: 1,
+          });
+          expect(transport.posts).toHaveLength(1);
           observedRetryWait = true;
-          await new Promise((resolve) => setTimeout(resolve, ms));
+          nowMs += ms;
         } },
       log: () => {},
     });

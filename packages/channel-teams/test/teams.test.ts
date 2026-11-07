@@ -547,15 +547,17 @@ describe("TeamsChannel", () => {
       return { ok: true, message_id: "done" };
     };
     const sleeps: number[] = [];
+    let nowMs = Date.now();
     const channel = new TeamsChannel({
       transport,
       delivery_store: new MemoryTeamsOutbox(),
       log: () => undefined,
       retry: {
         max_retries: 3,
+        now: () => nowMs,
         sleep: async (ms) => {
           sleeps.push(ms);
-          await new Promise((resolve) => setTimeout(resolve, ms));
+          nowMs += ms;
         },
       },
     });

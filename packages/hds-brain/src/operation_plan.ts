@@ -1653,6 +1653,11 @@ export class OperationPlanLedger {
     provenance: OperationPlanRecoveryHoldProvenance;
   }>();
   private recoveryRefreshPending = false;
+  private nowMs(): number {
+    const now = this.wallNow();
+    if (!Number.isSafeInteger(now) || now <= 0) throw new Error("operation_plan_clock_invalid");
+    return now;
+  }
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence,
     private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined,
@@ -1662,7 +1667,8 @@ export class OperationPlanLedger {
     private readonly memoryCitationJudgmentVerifier?: (dependency: OperationPlanMemoryInterpretationDependency) => boolean,
     brokerRestoreEvidence?: OperationPlanBrokerRestoreDependencyEvidence,
     private readonly brokerRestoreDependencyVerifier?: OperationPlanBrokerRestoreDependencyVerifier,
-    private readonly meaningUpdateMemoryRestoreVerifier?: () => boolean) {
+    private readonly meaningUpdateMemoryRestoreVerifier?: () => boolean,
+    private readonly wallNow: () => number = () => Date.now()) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -1729,7 +1735,7 @@ export class OperationPlanLedger {
   }
 
   /** Validate a bounded, explicit J wait request without changing plan or execution authority. */
-  inspectWait(control: Extract<OperationPlanControl, { action: "wait" }>, caller: InboundRequest, nowMs = Date.now()): {
+  inspectWait(control: Extract<OperationPlanControl, { action: "wait" }>, caller: InboundRequest, nowMs = this.nowMs()): {
     readonly wait_id: string;
     readonly plan_id_digest: string;
     readonly task_identity_digest: string;
@@ -1766,7 +1772,7 @@ export class OperationPlanLedger {
 
   /** Persist one J-owned wait state against the exact current plan revision. */
   registerWait(control: Extract<OperationPlanControl, { action: "wait" }>, caller: InboundRequest,
-    nowMs = Date.now()): OperationPlanWaitState {
+    nowMs = this.nowMs()): OperationPlanWaitState {
     const inspected = this.inspectWait(control, caller, nowMs);
     const plan = this.ownedPlan(control.plan_id, caller);
     const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
@@ -1789,7 +1795,7 @@ export class OperationPlanLedger {
   }
 
   /** One unambiguous inbound event can wake a wait in its owner/channel session. */
-  matchWaitForInbound(caller: InboundRequest, nowMs = Date.now()): OperationPlanWaitState | null {
+  matchWaitForInbound(caller: InboundRequest, nowMs = this.nowMs()): OperationPlanWaitState | null {
     const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
     const ownerDigest = operationPlanDigest(caller.user);
     const channelDigest = operationPlanDigest(caller.channel);
@@ -1810,7 +1816,7 @@ export class OperationPlanLedger {
 
   /** Consume a canonical reply or due-deadline event once; the event ID is correlation only. */
   resumeWait(waitId: string, eventId: string, commandId: string, reason: "reply" | "deadline",
-    nowMs = Date.now()): OperationPlanWaitState | null {
+    nowMs = this.nowMs()): OperationPlanWaitState | null {
     if (!/^[a-f0-9]{64}$/.test(waitId) || !eventId.trim() || !commandId.trim()) return null;
     const current = (this.state.waits ?? []).find((wait) => wait.wait_id === waitId);
     if (!current || current.state !== "waiting" || current.revision_digest !== this.currentRevisionDigest(current.plan_id_digest)) return null;
@@ -1832,7 +1838,7 @@ export class OperationPlanLedger {
   /** Bind the returned C candidate or failure to the exact resumed wait in J's durable state. */
   recordWaitComputeOutcome(waitId: string, commandId: string,
     outcome: "candidate_retained" | "candidate_rejected" | "failed", resultDigest?: string,
-    candidatePlanIdDigest?: string, computeResourceUse?: ComputeResourceUse, nowMs = Date.now()): OperationPlanWaitState {
+    candidatePlanIdDigest?: string, computeResourceUse?: ComputeResourceUse, nowMs = this.nowMs()): OperationPlanWaitState {
     if (!/^[a-f0-9]{64}$/.test(waitId) || !commandId.trim() ||
         (resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
         (candidatePlanIdDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidatePlanIdDigest)) ||
@@ -1885,7 +1891,7 @@ export class OperationPlanLedger {
   }
 
   /** Startup reconciliation: bind an already-retained exact candidate or expose an interrupted C computation. */
-  reconcilePendingWaitComputations(nowMs = Date.now()): readonly {
+  reconcilePendingWaitComputations(nowMs = this.nowMs()): readonly {
     readonly disposition: "candidate_reconciled" | "interrupted";
     readonly wait: OperationPlanWaitState;
   }[] {
@@ -1959,7 +1965,7 @@ export class OperationPlanLedger {
 
   /** Bind a fresh explicit owner reply to an interrupted wait without retaining the reply in J state. */
   resumeInterruptedWait(control: OperationPlanWaitResumeControl, caller: InboundRequest, commandId: string,
-    nowMs = Date.now()): OperationPlanWaitState {
+    nowMs = this.nowMs()): OperationPlanWaitState {
     if (!caller.id.trim() || !commandId.trim() || !Number.isSafeInteger(nowMs) || nowMs < 0) {
       throw new Error("plan_wait_resume_invalid");
     }
@@ -2928,7 +2934,7 @@ export class OperationPlanLedger {
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
-    if (control.action === "review" && !this.computeSourceObservationsAreCurrent(p, Date.now())) {
+    if (control.action === "review" && !this.computeSourceObservationsAreCurrent(p, this.nowMs())) {
       throw new Error("plan_compute_source_observation_expired");
     }
     if (control.action === "review") this.assertMemoryInterpretationDependenciesCurrent(p);
@@ -2946,7 +2952,7 @@ export class OperationPlanLedger {
     if (p.bindings.some((b) => b.step_id === stepId && !["invalidated", "not_attempted"].includes(b.status))) {
       throw new Error("plan_step_already_selected_or_attempted");
     }
-    const inspected = prepareOperationPlan(current.plan, { now_ms: Date.now(), results: p.results, observations: [] });
+    const inspected = prepareOperationPlan(current.plan, { now_ms: this.nowMs(), results: p.results, observations: [] });
     if (inspected.kind === "rejected") throw new Error(`plan_${inspected.code}`);
     const step = inspected.plan.steps.find((s) => s.step_id === stepId);
     if (!step || inspected.summary.steps.find((s) => s.step_id === stepId)?.status !== "ready") throw new Error("plan_step_not_ready");
@@ -3015,7 +3021,7 @@ export class OperationPlanLedger {
     control: OperationPlanReceiptReconciliationControl,
     caller: InboundRequest,
     command: ExecuteCommand,
-    now_ms = Date.now(),
+    now_ms = this.nowMs(),
   ): void {
     if (command.type !== "noop" || command.payload.control_event !== "operation_plan_receipt_reconciliation" ||
         command.upstream_decision.request_id !== caller.id || !Number.isSafeInteger(now_ms) || now_ms <= 0) {
@@ -3054,7 +3060,7 @@ export class OperationPlanLedger {
   takeReceiptReconciliationAuthorization(
     command: ExecuteCommand,
     caller: InboundRequest,
-    now_ms = Date.now(),
+    now_ms = this.nowMs(),
   ): OperationPlanReceiptReconciliationAuthorization | null {
     const issued = this.receiptReconciliations.get(command.id);
     this.receiptReconciliations.delete(command.id);
@@ -3325,7 +3331,7 @@ export class OperationPlanLedger {
     const step = revision?.plan.steps.find((entry) => entry.step_id === match.b.step_id);
     const descriptor = step ? getOperationDescriptor(step.operation) : undefined;
     const computeSourceObservations = match.p.compute_source_observations ?? [];
-    if (!this.computeSourceObservationsAreCurrent(match.p, Date.now())) {
+    if (!this.computeSourceObservationsAreCurrent(match.p, this.nowMs())) {
       throw new Error("plan_execution_source_observation_expired");
     }
     if (!this.canExecute(command) ||
@@ -3414,7 +3420,7 @@ export class OperationPlanLedger {
     try { this.assertMemoryInterpretationDependenciesCurrent(p); }
     catch { return false; }
     if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) || this.goalPurposeRelationIssue(p) !== undefined) return false;
-    const nowMs = Date.now();
+    const nowMs = this.nowMs();
     if (!this.computeSourceObservationsAreCurrent(p, nowMs)) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     if (!step || this.requestGoalCriteriaIssue(p, step) !== undefined) return false;
@@ -3434,15 +3440,34 @@ export class OperationPlanLedger {
       operationPlanDigest(command) === b.command_digest && matchesCanonicalExecutorCommandDigest(command, b.executor_command_digest);
     return currentBinding;
   }
-  beginAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
-    if (!this.canExecute(command)) return false;
+  beginAttempt(command: ExecuteCommand, admission?: ExecutionAdmission, onRejected?: (reason: string) => void): boolean {
+    if (!this.canExecute(command)) {
+      onRejected?.("plan_source_or_state_stale");
+      return false;
+    }
     if (!this.isBound(command.id)) return true;
     const admitted = admission === undefined ? undefined : ExecutionAdmissionSchema.parse(admission);
     const binding = this.binding(command.id)?.b;
-    if (admitted && (!binding?.executor_command_digest || admitted.command_digest !== binding.executor_command_digest ||
-        admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
-        admitted.task_identity_digest !== this.executionTaskIdentityDigest(command) ||
-        Date.now() < admitted.issued_at_ms || Date.now() >= admitted.expires_at_ms)) return false;
+    if (admitted) {
+      const now = this.nowMs();
+      const admissionFailure = !binding?.executor_command_digest || admitted.command_digest !== binding.executor_command_digest ||
+          admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")
+        ? "execution_admission_command_mismatch"
+        : admitted.task_identity_digest !== this.executionTaskIdentityDigest(command)
+          ? "execution_admission_task_identity_mismatch"
+          : !Number.isSafeInteger(now) || now <= 0 || !Number.isSafeInteger(admitted.issued_at_ms) ||
+              !Number.isSafeInteger(admitted.expires_at_ms)
+            ? "execution_admission_clock_invalid"
+            : now < admitted.issued_at_ms
+              ? "execution_admission_not_yet_valid"
+              : now >= admitted.expires_at_ms
+                ? "execution_admission_expired"
+                : undefined;
+      if (admissionFailure) {
+        onRejected?.(admissionFailure);
+        return false;
+      }
+    }
     this.change((state) => { for (const p of state.plans) {
       const b = p.bindings.find((b) => b.command_id === command.id);
       if (b) { b.status = "intent_committed"; if (admitted) b.execution_admission = admitted; }
@@ -3494,7 +3519,7 @@ export class OperationPlanLedger {
     if (!matched || matched.adapter !== "shell" || matched.execution_boundary !== "tool_adapter" ||
         matched.action_outcome !== "reported_success" || matched.plan_step_binding !== "unbound" ||
         matched.command_payload_digest !== commandPayloadDigest(command) || matched.output_digest !== input.result_digest ||
-        !Number.isSafeInteger(matched.observed_at_ms) || matched.observed_at_ms > Date.now()) return false;
+        !Number.isSafeInteger(matched.observed_at_ms) || matched.observed_at_ms > this.nowMs()) return false;
     const observation = OperationPlanShellExecResultObservationSchema.parse({
       schema_version: "operation-plan-shell-exec-result.v1",
       owner_digest: operationPlanDigest(input.owner),
@@ -4017,7 +4042,7 @@ export class OperationPlanLedger {
     if (bindings.length !== 1) throw new Error("owner_gateway_receipt_recheck_binding_unavailable");
     const binding = bindings[0]!;
     const admission = binding.execution_admission;
-    const nowMs = Date.now();
+    const nowMs = this.nowMs();
     if (step.operation !== "file.write" || step.parameters?.mode !== "create" ||
         typeof step.parameters.path !== "string" || typeof step.parameters.content !== "string" ||
         binding.operation !== "file.write" || binding.status !== "outcome_unknown" || !admission ||
@@ -4066,7 +4091,7 @@ export class OperationPlanLedger {
   issueOwnerSelectedFileStateObservationAuthorization(
     rawReference: OperationPlanComputeSourceObservationReference,
     caller: InboundRequest,
-    nowMs = Date.now(),
+    nowMs = this.nowMs(),
   ): OperationPlanOwnerSelectedFileStateObservationAuthorization {
     const reference = OperationPlanComputeSourceObservationReferenceSchema.parse(rawReference);
     if (!("plan_id_digest" in reference) || reference.owner_selected_observation !== "local_file_state" ||
@@ -4123,7 +4148,7 @@ export class OperationPlanLedger {
     authorizationId: string,
     rawObservation: unknown,
     caller: InboundRequest,
-    nowMs = Date.now(),
+    nowMs = this.nowMs(),
   ): { readonly request_id: string; readonly command_id: string; readonly evidence_digest: string;
       readonly reused: boolean } | null {
     const authorization = this.ownerSelectedFileStateObservations.get(authorizationId);
@@ -4221,7 +4246,7 @@ export class OperationPlanLedger {
       throw new Error("plan_compute_source_observation_reference_invalid");
     }
     const observations: OperationPlanComputeSourceObservation[] = [];
-    const inspectedAtMs = Date.now();
+    const inspectedAtMs = this.nowMs();
     for (const reference of references) {
       if ("command_id_digest" in reference) {
         const matches = (this.state.shell_exec_result_observations ?? []).filter((entry) =>
@@ -4593,7 +4618,7 @@ export class OperationPlanLedger {
       throw new Error("plan_compute_source_observation_stale");
     }
     if (observations.some((observation) => observation.source === "verified_file_search_result" &&
-        Date.now() >= observation.expires_at_ms)) throw new Error("plan_compute_source_observation_expired");
+        this.nowMs() >= observation.expires_at_ms)) throw new Error("plan_compute_source_observation_expired");
     return observations;
   }
 
@@ -4670,7 +4695,7 @@ export class OperationPlanLedger {
         throw new Error("plan_reflection_record_mismatch");
       }
       const result = p.results.find((r) => r.step_id === b.step_id)!;
-      if (!result || Date.now() < result.observed_at_ms || Date.now() >= result.expires_at_ms) throw new Error("plan_reflection_observation_expired");
+      if (!result || this.nowMs() < result.observed_at_ms || this.nowMs() >= result.expires_at_ms) throw new Error("plan_reflection_observation_expired");
       const output = result.output;
       if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray(output.matches) ||
           typeof output.visited_files !== "number" || !Number.isSafeInteger(output.visited_files) || output.visited_files < 0) {
@@ -4713,7 +4738,7 @@ export class OperationPlanLedger {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const observation = OperationPlanExternalReceiptObservationSchema.parse(value);
     const { evidence_digest, observed_at_ms, ...evidence } = observation;
-    if (operationPlanDigest(evidence) !== evidence_digest || observed_at_ms > Date.now() + 30_000) {
+    if (operationPlanDigest(evidence) !== evidence_digest || observed_at_ms > this.nowMs() + 30_000) {
       throw new Error("external_receipt_observation_integrity_failed");
     }
     const matches = this.state.plans.filter((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id) === observation.plan_id_digest);
@@ -4825,7 +4850,7 @@ export class OperationPlanLedger {
       request_id: b.request_id, command_id: b.command_id, upstream_commit_hash: b.commit_hash, status: fb.status, operation: b.operation,
     });
     if (!result || result.command_payload_digest !== b.payload_digest || result.observed_at_ms < delivery.admission.issued_at_ms ||
-        result.observed_at_ms > Date.now() || (fb.result === undefined ? result.output_digest !== undefined :
+        result.observed_at_ms > this.nowMs() || (fb.result === undefined ? result.output_digest !== undefined :
           createHash("sha256").update(JSON.stringify(fb.result)).digest("hex") !== result.output_digest)) throw new Error("plan_delivery_result_mismatch");
     if (["intent_committed", "outcome_unknown"].includes(b.status) && !b.result_digest) {
       this.applyResult(match, fb, delivery_digest);
@@ -4933,10 +4958,10 @@ export class OperationPlanLedger {
           const gmailIdentityResult = step.operation === "gmail.read" && binding?.revision_digest === currentRevision.digest &&
               binding.status === "verified" && binding.operation === "gmail.read" && !!binding.execution_admission &&
               !!binding.delivery_digest && !!binding.result_digest && binding.step_digest === stepDigest(step) &&
-              this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) && this.computeSourceObservationsAreCurrent(p, Date.now()) &&
+              this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) && this.computeSourceObservationsAreCurrent(p, this.nowMs()) &&
               stepResults.length === 1 && stepResults[0]!.status === "succeeded" &&
               stepResults[0]!.expires_at_ms === stepResults[0]!.observed_at_ms + 600_000 &&
-              stepResults[0]!.observed_at_ms <= Date.now() && Date.now() < stepResults[0]!.expires_at_ms
+              stepResults[0]!.observed_at_ms <= this.nowMs() && this.nowMs() < stepResults[0]!.expires_at_ms
             ? stepResults[0] : undefined;
           const gmailMessageIdentityOptions = gmailIdentityResult
             ? verifiedGmailMessageIdentityOptions(gmailIdentityResult.output)?.map((option, index) => ({

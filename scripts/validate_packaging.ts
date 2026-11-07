@@ -286,6 +286,7 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "User data retained");
   requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-SafeInstallTargets");
   requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-ManagedWindowsProductInstall");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-ManagedWindowsProductData");
 
   const packageWindows = read("scripts/package_windows.ts");
   requireIncludes("scripts/package_windows.ts", packageWindows, "windows-x64-zip-installer");

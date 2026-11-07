@@ -110,6 +110,10 @@ describe("GatewayDiscordEventStore", () => {
       { ok: true, message_id: "987654321" },
     ]);
     let retryWasDurable = false;
+    let enterRetryWait!: () => void;
+    const retryWaitEntered = new Promise<void>((resolve) => { enterRetryWait = resolve; });
+    let releaseRetryWait!: () => void;
+    const retryWaitGate = new Promise<void>((resolve) => { releaseRetryWait = resolve; });
     const channel = new DiscordChannel({
       transport,
       inbox: first,
@@ -117,13 +121,18 @@ describe("GatewayDiscordEventStore", () => {
       delivery_store: first,
       log: () => {},
       retry: { max_retries: 2,
-        sleep: async (ms) => {
+        sleep: async () => {
           const pending = first.pending();
           expect(pending).toHaveLength(1);
           expect(pending[0]?.delivery_state).toBe("retry_wait");
-          expect(pending[0]?.not_before_ms).toBeGreaterThan(Date.now() - ms - 10);
+          expect(first.status(pending[0]!.delivery_id)).toMatchObject({
+            delivery_state: "retry_wait",
+            retry_after_ms: 50,
+            attempt_count: 1,
+          });
           retryWasDurable = true;
-          await new Promise((resolve) => setTimeout(resolve, ms));
+          enterRetryWait();
+          await retryWaitGate;
         } },
     });
     const router = new InboundRouter({
@@ -146,10 +155,15 @@ describe("GatewayDiscordEventStore", () => {
         expect(result).toMatchObject({ delivered: true, delivery_status: "delivered", external_id: "987654321" });
         handlerCalls += 1;
       });
-      await transport.emitInbound({
+      const inbound = transport.emitInbound({
         channel_id: "111222333", user_id: "444555666", user_display: "mutable-name",
         text: "synthetic inbound request", message_id: "777888999", is_dm: true, is_mention: false,
       });
+      await retryWaitEntered;
+      expect(retryWasDurable).toBe(true);
+      expect(transport.posts).toHaveLength(1);
+      releaseRetryWait();
+      await inbound;
       expect(handlerCalls).toBe(1);
       expect(retryWasDurable).toBe(true);
       expect(transport.posts).toEqual([
@@ -161,6 +175,7 @@ describe("GatewayDiscordEventStore", () => {
       expect(stored.includes(Buffer.from("synthetic reply body"))).toBe(false);
       expect(stored.includes(Buffer.from(token))).toBe(false);
     } finally {
+      releaseRetryWait();
       await router.stop();
       first.close();
       await fs.rm(dir, { recursive: true, force: true });
@@ -229,10 +244,20 @@ describe("GatewayDiscordEventStore", () => {
       { ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
         retry_after_ms: 100, error: "rate-limited", error_code: "rate_limited" },
     ]);
+    let enterRetryWait!: () => void;
+    const retryWaitEntered = new Promise<void>((resolve) => { enterRetryWait = resolve; });
+    let releaseRetryWait!: () => void;
+    const retryWaitGate = new Promise<void>((resolve) => { releaseRetryWait = resolve; });
     let deliveryId = "";
     const enqueue = store.enqueue.bind(store);
     store.enqueue = (input, nowMs) => { deliveryId = input.delivery_id; enqueue(input, nowMs); };
-    const channel = new DiscordChannel({ transport, delivery_store: store, log: () => {} });
+    const channel = new DiscordChannel({ transport, delivery_store: store, log: () => {}, retry: {
+      max_retries: 2,
+      sleep: async () => {
+        enterRetryWait();
+        await retryWaitGate;
+      },
+    } });
     let restartedChannel: DiscordChannel | undefined;
     let reopenedStore: GatewayDiscordEventStore | undefined;
     try {
@@ -241,16 +266,10 @@ describe("GatewayDiscordEventStore", () => {
         { channel: "discord", target: "111222333", content: "shutdown retry fixture" },
         { command_id: "discord-shutdown-fixture", upstream_commit_hash: "h" },
       );
-      let retryPending = false;
-      for (let i = 0; i < 100; i += 1) {
-        if (store.pending().some((row) => row.delivery_state === "retry_wait")) {
-          retryPending = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(retryPending).toBe(true);
+      await retryWaitEntered;
+      expect(store.pending().map((row) => row.delivery_state)).toEqual(["retry_wait"]);
       await channel.stop();
+      releaseRetryWait();
       await expect(send).resolves.toMatchObject({ delivered: false, delivery_status: "not_delivered" });
       expect(transport.posts).toHaveLength(1);
       expect(store.pending()).toHaveLength(1);
@@ -275,6 +294,7 @@ describe("GatewayDiscordEventStore", () => {
         retry_after_ms: 100, external_message_id: "987654322" });
       expect(reopened.pending()).toEqual([]);
     } finally {
+      releaseRetryWait();
       await restartedChannel?.stop();
       reopenedStore?.close();
       await channel.stop();

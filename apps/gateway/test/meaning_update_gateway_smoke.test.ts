@@ -658,7 +658,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       const approvalToken = suspendedFrame?.content?.match(/(?:^|\s)approval_token=([A-Za-z0-9_-]+)/)?.[1];
       expect(approvalToken).toBeTruthy();
 
-      const resumed = await fetch(`http://127.0.0.1:${gatewayPort}/resume`, {
+      const resumed = await fetchRespectingRetryAfter(`http://127.0.0.1:${gatewayPort}/resume`, {
         method: "POST", headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ request_id: suspendAccepted.request_id, verdict: "reject", approval_token: approvalToken }),
       });
@@ -903,7 +903,7 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
 }
 
 function spawnGateway(env: NodeJS.ProcessEnv): CapturedProcess {
-  const child = spawn(process.execPath, ["--import", "tsx", "apps/gateway/src/main.ts", "--serve"], {
+  const child = spawn(process.execPath, ["apps/gateway/dist/main.js", "--serve"], {
     cwd: ROOT, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
   });
   childProcesses.add(child);

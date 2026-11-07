@@ -2016,7 +2016,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }, reviewedDigest, hdsBinding, targetVersionObservation);
     const planBound = hds.isOperationPlanCommand(cmd.id);
     const admission = planBound ? executionAdmissionForCommand(cmd, executorApproval.receipt(approvedCommand)) : undefined;
-    if (!hds.beginOperationPlanAttempt(cmd, admission)) {
+    let planAttemptRejection: string | undefined;
+    if (!hds.beginOperationPlanAttempt(cmd, admission, (reason) => { planAttemptRejection = reason; })) {
+      gatewayLog.warn("operation-plan attempt was not admitted", {
+        command_id_digest: digestString(cmd.id),
+        reason: planAttemptRejection ?? "plan_attempt_not_admitted",
+        used_for_authority: false,
+      });
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
       return { status: "plan_binding_stale" };
     }
@@ -2803,7 +2809,18 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         });
       }
     }
-    if (content) await dispatcher.dispatch(replyPayload(origin, content), { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
+    if (content) {
+      const delivery = await dispatcher.dispatch(replyPayload(origin, content), {
+        command_id: cmd.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id,
+      });
+      if (!delivery.delivered) gatewayLog.warn("command result channel delivery was not confirmed", {
+        command_id_digest: digestString(cmd.id),
+        channel: origin.channel,
+        delivery_status: delivery.delivery_status ?? null,
+        error_code: delivery.error_code ?? null,
+        error_kind: delivery.error_kind ?? null,
+      });
+    }
     return { status: finalized.reviewed_feedback.status };
   }
 
@@ -5813,6 +5830,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         }, {
           command_id: `notify-${authorityReq.id}`,
           upstream_commit_hash: log.commit.hash,
+          request_id: authorityReq.id,
         });
       }
       return;
@@ -5884,6 +5902,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         }, {
           command_id: result.command_id ?? `notify-${authorityReq.id}`,
           upstream_commit_hash: result.upstream_commit_hash,
+          request_id: authorityReq.id,
         });
       }
       return;
@@ -5899,12 +5918,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         request_id: log.request_id });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, output_audit, command);
       if (rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, rendered_output),
-      { command_id: command.id, upstream_commit_hash: log.commit.hash });
+      { command_id: command.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id });
       return;
     }
 
     if (command?.type === "noop" && command.payload.control_event === "operation_plan_receipt_reconciliation") {
-      const startedAt = Date.now();
+      const startedAt = performance.now();
       const result = await runLocalInspectionReconciliation({
         hds,
         command,
@@ -5918,13 +5937,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         status: result.status === "observed" ? "success" : "failed",
         result: { content },
         ...(result.status === "observed" ? {} : { error: result.reason }),
-        metrics: { duration_ms: Math.max(0, Date.now() - startedAt) },
+        metrics: { duration_ms: Math.max(0, Math.ceil(performance.now() - startedAt)) },
       };
       const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id,
         development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit);
       if (finalized.rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, finalized.rendered_output),
-        { command_id: command.id, upstream_commit_hash: log.commit.hash });
+        { command_id: command.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id });
       return;
     }
 
@@ -5941,7 +5960,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit, command);
       if (finalized.rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, finalized.rendered_output),
-      { command_id: command.id, upstream_commit_hash: log.commit.hash });
+      { command_id: command.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id });
       return;
     }
 
@@ -5967,7 +5986,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     );
     await dispatcher.dispatch(
       replyPayload(authorityReq, human),
-      { command_id: `notify-${authorityReq.id}`, upstream_commit_hash: log.commit.hash },
+      { command_id: `notify-${authorityReq.id}`, upstream_commit_hash: log.commit.hash, request_id: authorityReq.id },
     );
   };
 

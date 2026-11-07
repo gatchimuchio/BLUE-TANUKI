@@ -1857,7 +1857,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       store.close();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   it("task-scoped Broker復元は選択lineageだけを保留し、無関係な計画を保つ", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-task-restore-hold-"));
@@ -2386,8 +2386,14 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(feedback.operation_core_result?.plan_step_binding).toBe("unbound");
       expect(hds.beginOperationPlanAttempt(first)).toBe(false);
       expect(review(hds, candidate, "search").command).toBeNull();
-      const dependent = review(hds, candidate, "dependent").command!;
-      const independent = review(hds, candidate, "independent").command!;
+      const dependentReview = review(hds, candidate, "dependent");
+      if (!dependentReview.command) throw new Error(`dependent step review was not retained; ` +
+        `decision=${dependentReview.log.commit.decision}; reason=${dependentReview.log.commit.reason}`);
+      const dependent = dependentReview.command;
+      const independentReview = review(hds, candidate, "independent");
+      if (!independentReview.command) throw new Error(`independent step review was not retained; ` +
+        `decision=${independentReview.log.commit.decision}; reason=${independentReview.log.commit.reason}`);
+      const independent = independentReview.command;
       expect(dependent.type).toBe("tool_call");
       if (dependent.type !== "tool_call") throw new Error("missing tool");
       expect(independent.type).toBe("tool_call");

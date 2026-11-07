@@ -327,6 +327,8 @@ export interface ControllerOptions {
   failure_memory_store?: FailureMemoryStore;
   operation_plan_state?: OperationPlanStatePort;
   operation_plan_memory?: OperationPlanMemoryStorage;
+  /** Trusted construction-time clock port; defaults to the host wall clock. */
+  wall_clock?: () => number;
   /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
   operation_plan_recovery_evidence?: OperationPlanRecoveryEvidence;
   /** Broker restore correlation can only hold existing plan selection pending a fresh J review. */
@@ -941,6 +943,7 @@ function isMemoryCitationReviewLog(value: unknown): value is MemoryCitationRevie
 
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
+  private readonly wall_clock: () => number;
   private readonly audit: AuditLog;
   private readonly policy: PolicyConfig;
   private readonly detectors: DetectorRegistry;
@@ -987,6 +990,7 @@ export class HDSUpperController {
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
   constructor(opts: ControllerOptions = {}) {
+    this.wall_clock = opts.wall_clock ?? (() => Date.now());
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -1006,14 +1010,15 @@ export class HDSUpperController {
       throw new Error("persisted meaning updates require their private M store");
     }
     this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
-      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
+      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(this.nowMs()),
       (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
       (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence),
       (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null,
       (dependency) => this.verifyCurrentMemoryCitationJudgment(dependency),
       opts.operation_plan_broker_restore_dependency_evidence,
       opts.operation_plan_broker_restore_dependency_verifier,
-      () => this.meaningUpdateMemory?.readyForCanonicalRestore() === true);
+      () => this.meaningUpdateMemory?.readyForCanonicalRestore() === true,
+      () => this.nowMs());
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -1042,6 +1047,12 @@ export class HDSUpperController {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
       ...(opts.self_health ?? {}),
     };
+  }
+
+  private nowMs(): number {
+    const now = this.wall_clock();
+    if (!Number.isSafeInteger(now) || now <= 0) throw new Error("HDS wall clock is invalid");
+    return now;
   }
 
   /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
@@ -1135,10 +1146,10 @@ export class HDSUpperController {
         channel: "invalid",
         user: "unknown",
         content: "Invalid inbound request rejected at authority boundary",
-        timestamp: Date.now(),
+        timestamp: this.nowMs(),
       };
       const input = normalizeForDetection(fallbackReq.content);
-      const goalGovernanceProjection = this.goal_governance?.project(Date.now());
+      const goalGovernanceProjection = this.goal_governance?.project(this.nowMs());
       const f = frame(fallbackReq, {
         default_policy: this.policy,
         memory_reader: this.memory,
@@ -1187,14 +1198,14 @@ export class HDSUpperController {
         frame: f,
         model: m,
         commit: c,
-        timestamp: Date.now(),
+        timestamp: this.nowMs(),
       };
       this.audit.append(log);
       this.state = "SUSPENDED";
       this.suspended.set(fallbackReq.id, {
         request_id: fallbackReq.id,
         log,
-        suspended_at: Date.now(),
+        suspended_at: this.nowMs(),
         reason: c.reason,
         fail_safe: true,
         resume_allowed: false,
@@ -1586,7 +1597,7 @@ ${planControl.question}`,
           source_content_chars: req.content.length,
         }
       : input;
-    const goalGovernanceProjection = this.goal_governance?.project(Date.now());
+    const goalGovernanceProjection = this.goal_governance?.project(this.nowMs());
     const initialFrame = frame(authorityReq, {
       default_policy: this.policy,
       ...(isolatedContextReason || transientAudioTranscript ? {} : { memory_reader: this.memory }),
@@ -1623,7 +1634,7 @@ ${planControl.question}`,
         frame: f,
         model: m,
         commit: c,
-        timestamp: Date.now(),
+        timestamp: this.nowMs(),
         ...(isolatedContextReason ? {
           memory_retrieval_suppressed_for: isolatedContextReason,
           memory_capture_suppressed_for: isolatedContextReason,
@@ -1636,7 +1647,7 @@ ${planControl.question}`,
       this.suspended.set(req.id, {
         request_id: req.id,
         log,
-        suspended_at: Date.now(),
+        suspended_at: this.nowMs(),
         reason: c.reason,
         fail_safe: true,
         resume_allowed: false,
@@ -1669,7 +1680,7 @@ ${planControl.question}`,
       frame: f,
       model: m,
       commit: c,
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
       ...(isolatedContextReason ? {
         memory_retrieval_suppressed_for: isolatedContextReason,
         memory_capture_suppressed_for: isolatedContextReason,
@@ -1696,7 +1707,7 @@ ${planControl.question}`,
           command_id: candidate.id,
           prior_commit_hash: c.hash,
         });
-        log = { ...log, commit: c, timestamp: Date.now() };
+        log = { ...log, commit: c, timestamp: this.nowMs() };
       } else {
         command = candidate;
       }
@@ -1719,7 +1730,7 @@ ${planControl.question}`,
           event: planComputeWaitResume.reason === "recovery" ? "wait_compute_recovery_requested" : "wait_resumed", request_id: req.id,
           command_id: command.id, projection_digest: operationPlanDigest(resumed),
           candidate_digest: resumed.task_identity_digest, target_digest: resumed.plan_id_digest,
-          reason: planComputeWaitResume.reason, used_for_authority: false, timestamp: Date.now() });
+          reason: planComputeWaitResume.reason, used_for_authority: false, timestamp: this.nowMs() });
       } catch {
         c = securityCommit("plan_wait_resume_denied", "wait_or_command_binding_failed", { request_id: req.id });
         log = { ...log, commit: c }; command = null;
@@ -1736,7 +1747,7 @@ ${planControl.question}`,
           this.audit.append({ kind: "operation_plan", event: "wait_registered", request_id: req.id,
             command_id: command.id, projection_digest: operationPlanDigest(wait), proposal_digest: wait.revision_digest,
             candidate_digest: wait.task_identity_digest, target_digest: wait.plan_id_digest,
-            reason: `deadline_at_ms=${wait.deadline_at_ms}`, used_for_authority: false, timestamp: Date.now() });
+            reason: `deadline_at_ms=${wait.deadline_at_ms}`, used_for_authority: false, timestamp: this.nowMs() });
         } else if (planControl.action === "review") this.operationPlans.bind(planControl, controlCaller, command);
         else if (planControl.action === "revise") {
           const invalidated = this.operationPlans.revise(planControl, controlCaller);
@@ -1755,7 +1766,7 @@ ${planControl.question}`,
         } else {
           this.operationPlans.bindReflection(planControl, controlCaller, command, reflection!);
           this.audit.append({ kind: "operation_plan", event: "reflection_projection_selected", request_id: req.id,
-            command_id: command.id, projection_digest: operationPlanDigest(reflection), used_for_authority: false, timestamp: Date.now() });
+            command_id: command.id, projection_digest: operationPlanDigest(reflection), used_for_authority: false, timestamp: this.nowMs() });
         }
       } catch {
         c = securityCommit("plan_control_denied", "plan_state_or_command_binding_failed", { request_id: req.id });
@@ -1801,7 +1812,7 @@ ${planControl.question}`,
         this.suspended.set(req.id, {
           request_id: req.id,
           log,
-          suspended_at: Date.now(),
+          suspended_at: this.nowMs(),
           reason: c.reason,
           ...(planControl ? { resume_allowed: false, resume_denied_reason: "plan_control_requires_fresh_review" } : {}),
         });
@@ -1907,7 +1918,7 @@ ${planControl.question}`,
             ...selfHealth.failed_preconditions.map((precondition) => `hds_fail_safe:${precondition}=false`),
           ],
         },
-        timestamp: Date.now(),
+        timestamp: this.nowMs(),
       };
       this.audit.append(deniedLog);
       this.state = "SUSPENDED";
@@ -1927,7 +1938,7 @@ ${planControl.question}`,
         ? "FAIL"
         : "OUT_OF_SCOPE";
 
-    const now = Date.now();
+    const now = this.nowMs();
     const actor = opts.actor?.trim() || "unknown";
     const token_kind = opts.token_kind ?? "resume";
     const resumeHash = sha256({
@@ -2008,7 +2019,7 @@ ${planControl.question}`,
       command_id: evaluation.context.command_id,
       upstream_commit_hash: evaluation.context.upstream_commit_hash,
       evaluation,
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(approvalLog);
     this.onAuthorityEvent(
@@ -2067,7 +2078,7 @@ ${planControl.question}`,
       target_scope: opts.evaluation?.context.target_scope,
       risk: opts.evaluation?.risk,
       authority_trace: opts.evaluation?.authority_trace,
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(log);
   }
@@ -2145,7 +2156,7 @@ ${planControl.question}`,
       };
     }
 
-    const current = ledger.project(Date.now()).goals.find((goal) => goal.goal_ref === input.goal_ref);
+    const current = ledger.project(this.nowMs()).goals.find((goal) => goal.goal_ref === input.goal_ref);
     if (!current || current.goal_kind !== "delegated" || current.current_version !== input.prior_version ||
         current.current_purpose_digest !== input.prior_purpose_digest ||
         !/^[a-f0-9]{64}$/.test(input.new_purpose_digest) || input.new_purpose_digest === input.prior_purpose_digest) {
@@ -2350,7 +2361,7 @@ ${planControl.question}`,
         target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
         ...(review.source_observation_binding ? { source_observation_digest: review.source_observation_binding.digest } : {}),
         source_decision_binding: sourceDecisionBinding,
-        review_status: review.reference_review.review_status, used_for_authority: false, timestamp: Date.now() });
+        review_status: review.reference_review.review_status, used_for_authority: false, timestamp: this.nowMs() });
       return this.audit.verify();
     } catch { return false; }
   }
@@ -2461,7 +2472,7 @@ ${planControl.question}`,
         source_decision_binding: sourceDecisionBinding,
         review_status: review.reference_review.review_status,
         approval_status: "approved", memory_application_status: "blocked", follow_up_action_status: "unconfirmed",
-        reason: committed.reason, used_for_authority: false, timestamp: Date.now() });
+        reason: committed.reason, used_for_authority: false, timestamp: this.nowMs() });
       return { ok: false, reason: committed.reason };
     }
     this.audit.append({ kind: "operation_plan", event: "meaning_update_adoption_committed", request_id, command_id,
@@ -2532,7 +2543,7 @@ ${planControl.question}`,
       citation_audit_digest: input.args.citation_audit_digest,
       target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
       reassesses_digest: memoryJudgmentRefsDigest(proposal.reassesses_judgment_refs),
-      used_for_authority: false, timestamp: Date.now() });
+      used_for_authority: false, timestamp: this.nowMs() });
     return this.audit.verify();
   }
 
@@ -2763,7 +2774,7 @@ ${planControl.question}`,
       cron_event_id: event_id,
       cron_payload_digest: payload_digest,
       cron_disposition: "acknowledge_no_replay",
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     });
     return { event_id, payload_digest, disposition: "acknowledge_no_replay" };
   }
@@ -2816,7 +2827,7 @@ ${planControl.question}`,
       upstream_decision: sourceLog?.commit.decision ?? null,
       actor: opts.actor?.trim() || "system",
       reason: opts.reason ?? phase,
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(lifecycleLog);
     if (phase === "approval_rejected" || phase === "approval_cancelled") {
@@ -2840,7 +2851,7 @@ ${planControl.question}`,
       kind: "schedule_lifecycle",
       event,
       ...opts,
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(log);
   }
@@ -2970,7 +2981,7 @@ ${planControl.question}`,
       const reviewed = reviewResultReflection(command, feedback, projection, projection ? operationPlanDigest(projection) : undefined);
       this.audit.append({ kind: "operation_plan", event: reviewed.accepted ? "reflection_references_verified" : "reflection_candidate_rejected",
         request_id: source?.request_id ?? null, command_id: command.id, projection_digest: command.payload.compute_context.projection_digest,
-        used_for_authority: false, timestamp: Date.now() });
+        used_for_authority: false, timestamp: this.nowMs() });
       return { command_id: feedback.command_id, metrics: feedback.metrics,
         status: reviewed.accepted ? "success" : feedback.status === "suspended" ? "suspended" : "failed",
         ...(reviewed.accepted ? { result: { content: reviewed.content } } : { error: reviewed.content }) };
@@ -3086,7 +3097,7 @@ ${planControl.question}`,
         problem_definition_id: log.frame.problem_definition_id,
         abstraction: log.model.abstraction,
       },
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(referenceLog);
   }
@@ -3393,7 +3404,7 @@ ${planControl.question}`,
         ...(computeResourceUse ? { compute_resource_use_digest: sha256(computeResourceUse) } : {}),
         metrics: fb.metrics,
       },
-      timestamp: Date.now(),
+      timestamp: this.nowMs(),
     };
     this.audit.append(feedbackLog);
     this.issuedLLMFeedbackCommands.delete(fb.command_id);
@@ -3511,7 +3522,7 @@ ${planControl.question}`,
         projection_digest: operationPlanDigest(recorded), proposal_digest: recorded.compute_result_digest,
         candidate_digest: recorded.task_identity_digest,
         target_digest: recorded.candidate_plan_id_digest ?? recorded.plan_id_digest,
-        reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
+        reason: waitComputeOutcome, used_for_authority: false, timestamp: this.nowMs() });
       if (computeResourceUse && waitComputeOutcome !== "candidate_retained" &&
           (computeResourceUse.charged_compute_ms > 0 || computeResourceUse.charged_tokens > 0 ||
             computeResourceUse.charged_cost_amount > 0)) {
@@ -3519,7 +3530,7 @@ ${planControl.question}`,
           request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
           projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
           candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
-          reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
+          reason: waitComputeOutcome, used_for_authority: false, timestamp: this.nowMs() });
       }
     }
     if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id, planCandidateRejectionReason);
@@ -3565,7 +3576,7 @@ ${planControl.question}`,
     if (started) this.audit.append({ kind: "operation_plan", event: "recovery_refresh_started",
       request_id: command.upstream_decision.request_id ?? null, command_id: command.id,
       projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false,
-      timestamp: Date.now() });
+      timestamp: this.nowMs() });
     return started;
   }
   refreshOperationPlansAfterRecoveryRestore(command: ExecuteCommand, recoveryEvidence?: OperationPlanRecoveryEvidence): string {
@@ -3578,7 +3589,7 @@ ${planControl.question}`,
       this.audit.append({ kind: "operation_plan", event: "recovery_refresh_completed",
         request_id: command.upstream_decision.request_id ?? null, command_id: command.id,
         projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false,
-        timestamp: Date.now() });
+        timestamp: this.nowMs() });
     } catch (error) {
       // No event-loop yield occurs before the audit append; reacquire the gate
       // immediately if the completion record cannot be durably emitted.
@@ -3894,10 +3905,13 @@ ${planControl.question}`,
       consumed: false });
     return binding;
   }
-  beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
+  beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission, onRejected?: (reason: string) => void): boolean {
     const known = this.inflight.get(command.id);
-    if (this.operationPlans.isBound(command.id) && (!known || known.commit.hash !== command.upstream_decision.commit_hash)) return false;
-    const allowed = this.operationPlans.beginAttempt(command, admission);
+    if (this.operationPlans.isBound(command.id) && (!known || known.commit.hash !== command.upstream_decision.commit_hash)) {
+      onRejected?.("hds_inflight_source_mismatch");
+      return false;
+    }
+    const allowed = this.operationPlans.beginAttempt(command, admission, onRejected);
     if (allowed && this.operationPlans.isBound(command.id)) this.planEvent("intent_committed", command.id);
     return allowed;
   }
@@ -3974,7 +3988,7 @@ ${planControl.question}`,
         request_id: null, command_id: update.wait.resume_command_id_digest!,
         projection_digest: operationPlanDigest(update.wait), proposal_digest: update.wait.wake_event_id_digest,
         candidate_digest: update.wait.task_identity_digest, target_digest: update.wait.wait_id,
-        reason: update.disposition, used_for_authority: false, timestamp: Date.now() });
+        reason: update.disposition, used_for_authority: false, timestamp: this.nowMs() });
     }
     return { candidate_reconciled: candidateReconciled, interrupted };
   }
@@ -3996,7 +4010,7 @@ ${planControl.question}`,
       request_id: source.request_id, command_id: command.id,
       projection_digest: operationPlanDigest(projection ?? { schema_version: "operation-plan-saved-result-return-withheld.v1",
         command_digest: operationPlanDigest(command), used_for_authority: false }),
-      used_for_authority: false, timestamp: Date.now() });
+      used_for_authority: false, timestamp: this.nowMs() });
     return projection;
   }
   operationPlanReceiptObservationMemoryIsDurable(evidence_digest: string): boolean {
@@ -4077,7 +4091,7 @@ ${planControl.question}`,
   }
   private planEvent(event: string, command_id: string, reason?: string): void {
     this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,
-      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now(),
+      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: this.nowMs(),
       ...(reason ? { reason } : {}) });
   }
 
@@ -4164,7 +4178,7 @@ ${planControl.question}`,
       report,
       used_for_authority: false,
       reason: opts.reason ?? "runtime_invariants_evidence",
-      timestamp: opts.timestamp ?? Date.now(),
+      timestamp: opts.timestamp ?? this.nowMs(),
     };
     this.audit.append(log);
     return log;
@@ -4190,7 +4204,7 @@ ${planControl.question}`,
       log.used_for_authority === false);
   }
 
-  getGoalGovernanceProjection(asOf = Date.now()): ReadonlyGoalGovernanceProjection | undefined {
+  getGoalGovernanceProjection(asOf = this.nowMs()): ReadonlyGoalGovernanceProjection | undefined {
     return this.goal_governance?.project(asOf);
   }
 
@@ -4335,7 +4349,7 @@ ${planControl.question}`,
         log.evaluation.final_review_required);
       if (!ask) return false;
       this.audit.append({ kind: "operation_plan", event: "goal_purpose_relation_content_reviewed", request_id,
-        command_id, projection_digest: input.command_digest, used_for_authority: false, timestamp: Date.now() });
+        command_id, projection_digest: input.command_digest, used_for_authority: false, timestamp: this.nowMs() });
       return this.audit.verify();
     } catch { return false; }
   }
