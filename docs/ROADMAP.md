@@ -6,13 +6,23 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近の完了BUILD_BATCH — F05.02 PR diff範囲review comment consumer（限定WIRED）
+### 直近の完了BUILD_BATCH — F05.02 cross-repository fork-head PR create（限定WIRED）
 
-#### 現在の施工状態 — 2026-11-08
+#### 現在の施工状態 — 2026-11-09
+
+既存`github.write pr.create`を拡張し、Ownerが`head_repository`を明示した場合に限り、base／head両repositoryがallowlist内で、headがbaseと同じGitHub fork networkに属するforkならcross-repository PRを作成できる経路を、既存Operation Plan／HDS J／no-store L3／Approval Gate／Broker／Executor／receipt／M／Owner結果照会へ接続した。両repositoryの数値ID・canonical name・可視性・fork network root、head/base branch refとcommit SHAを観測し、target／payload digest、計画、承認画面、作用直前再観測、応答照合へ束縛する。Control Centerはbase/head・各可視性・network・ref/SHA、通知可能性、read/writeの非原子性、PR作成の非可逆性を表示する。送信はcross-repository時のみGitHub APIの`head=owner:branch`／`head_repo=repo`形式を用い、同一repository時の既存形式を維持する。結果不明は自動再送しない。
+
+同一repository回帰を含む合成検査とtest-owned loopback Gateway processだけで確認した。`corepack pnpm typecheck`／全workspace `corepack pnpm build`（15 project）はPASS。`tools_builtin.test.ts -t "github.write pr.create"`は3 passed／94 skipped、`executor_approval_content.test.ts -t "GitHub pr.create"`は1 passed／16 skipped、Gateway `execution_result_reconciliation.test.ts -t "pr.create"`は4 passed／75 skipped。実GitHub・実資格情報・外部作用はNOT_RUN。processで確認したのは受理経路で、拒否／結果不明はin-process検査の範囲に限る。
+
+cross-repository fork-head `pr.create`のこの経路を限定`WIRED`とする。F05.02の他の残差、F05全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner GOへ昇格しない。次は現行実装からF05.02の残るproducer／consumer gapを選び、実provider・live外部作用を追加しない。
+
+### 前回の完了BUILD_BATCH — F05.02 PR diff範囲review comment consumer（限定WIRED）
+
+#### 当時の施工状態 — 2026-11-08
 
 既存5操作（`issue.create`、`issue.update`、`issue.comment.create`、`pr.create`、`pr.comment.create`）の合成受理・明示拒否・結果不明15件と、built Gateway `--serve` process受理5経路は直前のBUILD_BATCHで確認済み。今回、既存`pr.comment.create`へ複数行`pull_request_review_inline`を追加し、開始・終点のpath／line／side、PR head/base SHA、bounded patch digest／excerptをtarget version・request digest・Operation Plan・no-store L3 reviewへ束縛した。両端は同一unified-diff hunkの一意な実行行で、diff順序が正しい場合のみ許可する。LEFT／RIGHTは独立座標として扱い、数値降順でもdiff順が正しければ有効。選択excerptが4,096文字を超える場合は作用前に拒否する。Review後と作用直前にPR・diffを再観測し、同一head commitを指定して単回POSTする。従来のtimeline／単一行variantは維持する。inline各形態の合成in-process受理・明示拒否・結果不明6件とbuilt Gateway process accepted 2経路がPASSし、process fixtureはtest-owned loopback以外の外向き通信を遮断した。本文やtokenはM／audit／history／session／process出力へ残らず、保存結果は再送しない。core関連testは107 passed／6 skipped、Gateway選択testは8 passed／71 skipped、WebChat script testは1 passed／114 skipped。`corepack pnpm build`（15 workspace projects）、`corepack pnpm typecheck`、`pnpm docs:check`、`git diff --check`はPASS。実GitHub／実資格情報／外部作用は未実施。rangeを含む`pr.comment.create`だけ合成範囲で`WIRED`とする。
 
-現行のwrite pathは`issue.create`、既存Issueのtitle/body限定`issue.update`、`issue.comment.create`、同一repository内の`pr.create`、`pr.comment.create`のtimeline／単一行inline／複数行inlineをOperation Plan・target-version・no-store L3 content review・Executor/Brokerへ接続する。inlineは安全な相対path、同一hunk内の順序づけ可能な行範囲、LEFT／RIGHT sideに限定し、差分excerptは未信頼表示としてtext nodeへ出す。合成Gateway processでinline単一行・rangeのacceptedを確認したが、process拒否／結果不明は未確認である。全write結果のin-process受理・明示拒否・結果不明、5操作のprocess受理経路、inline各形態の3状態＋process受理を確認したが、実GitHub runtimeは未確認。Issue／PR targetを作用直前に再読取し、PR作成はhead/base branch ref・commit SHAを再観測して変化時はPOSTしない。通知可能性、非原子的なread/write競合、作成・通知の不可逆性を表示し、結果不明時は自動再送しない。別repository headの`pr.create`、実GitHubへの送信は引き続き未成立または`BUILD_GAP`。F05全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner GOへ昇格しない。
+2026-11-08時点のwrite pathは`issue.create`、既存Issueのtitle/body限定`issue.update`、`issue.comment.create`、同一repository内の`pr.create`、`pr.comment.create`のtimeline／単一行inline／複数行inlineをOperation Plan・target-version・no-store L3 content review・Executor/Brokerへ接続していた。inlineは安全な相対path、同一hunk内の順序づけ可能な行範囲、LEFT／RIGHT sideに限定し、差分excerptは未信頼表示としてtext nodeへ出す。合成Gateway processでinline単一行・rangeのacceptedを確認したが、process拒否／結果不明は未確認であった。別repository headの`pr.create`はこの時点では未成立の`BUILD_GAP`だった。F05全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner GOへ昇格していない。
 
 ### 保留を維持する健全化残件 — 2026-11-07 follow-up D
 

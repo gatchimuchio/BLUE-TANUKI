@@ -852,6 +852,12 @@ function validGitHubName(value: unknown): value is string {
     /^[A-Za-z0-9_.-]+$/.test(value) && value !== "." && value !== "..";
 }
 
+function validGitHubRepositoryFullName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 201 || value !== value.trim()) return false;
+  const parts = value.split("/");
+  return parts.length === 2 && parts.every(validGitHubName);
+}
+
 function validGitHubBranchRef(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const segments = value.split("/");
@@ -934,16 +940,20 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
   if (operation === "pr.create") {
     const title = githubWriteText(parameters, "title", 256, true);
     const head = parameters.head;
+    const headRepository = parameters.head_repository;
     const base = parameters.base;
     const draft = parameters.draft ?? false;
     const maintainerCanModify = parameters.maintainer_can_modify;
-    if (!title || !validGitHubBranchRef(head) || !validGitHubBranchRef(base) || head === base ||
-        head.includes(":") || typeof draft !== "boolean" ||
+    if (!title || !validGitHubBranchRef(head) || !validGitHubBranchRef(base) ||
+        (headRepository !== undefined && !validGitHubRepositoryFullName(headRepository)) ||
+        (head === base && (typeof headRepository !== "string" ||
+          headRepository.toLowerCase() === `${owner}/${repo}`.toLowerCase())) || typeof draft !== "boolean" ||
         maintainerCanModify !== undefined && typeof maintainerCanModify !== "boolean" ||
-        !allowedKeys(["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify"])) {
+        !allowedKeys(["operation", "owner", "repo", "title", "body", "head", "head_repository", "base", "draft", "maintainer_can_modify"])) {
       return undefined;
     }
     return githubPullRequestCreateRequestPayloadDigest({ owner, repo, title, head_ref: head, base_ref: base,
+      ...(typeof headRepository === "string" ? { head_repository: headRepository } : {}),
       draft, ...(body === undefined ? {} : { body }),
       ...(maintainerCanModify === undefined ? {} : { maintainer_can_modify: maintainerCanModify as boolean }) });
   }
@@ -1027,13 +1037,19 @@ function githubWriteResultMatches(
     return Object.keys(result).join(",") === "id" && Number.isSafeInteger(result.id) && (result.id as number) > 0;
   }
   const expectedDraft = parameters.draft ?? false;
+  const expectedHeadRepository = typeof parameters.head_repository === "string"
+    ? parameters.head_repository : `${String(parameters.owner)}/${String(parameters.repo)}`;
   return parameters.operation === "pr.create" &&
-    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "id", "number", "title"]
+    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "head_repository_id",
+      "head_canonical_full_name", "id", "number", "title"]
       .every((key) => Object.hasOwn(result, key)) &&
     Object.keys(result).every((key) => ["id", "number", "title", "head_ref", "head_commit_sha", "base_ref",
-      "base_commit_sha", "draft", "maintainer_can_modify"].includes(key)) &&
+      "base_commit_sha", "draft", "maintainer_can_modify", "head_repository_id", "head_canonical_full_name"].includes(key)) &&
     Number.isSafeInteger(result.id) && (result.id as number) > 0 && Number.isSafeInteger(result.number) &&
-    (result.number as number) > 0 && result.title === parameters.title && result.head_ref === parameters.head &&
+    (result.number as number) > 0 && Number.isSafeInteger(result.head_repository_id) &&
+    (result.head_repository_id as number) > 0 && typeof result.head_canonical_full_name === "string" &&
+    result.head_canonical_full_name.toLowerCase() === expectedHeadRepository.toLowerCase() &&
+    result.title === parameters.title && result.head_ref === parameters.head &&
     result.base_ref === parameters.base && typeof result.head_commit_sha === "string" &&
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.head_commit_sha) &&
     typeof result.base_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.base_commit_sha) &&

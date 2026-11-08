@@ -6067,6 +6067,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   !segment.startsWith(".") && !segment.endsWith(".lock") && !segment.endsWith(".");
               });
           };
+          const sameRepositoryId = review.head_repository_id === review.repository_id;
+          const sameRepositoryName = typeof review.head_canonical_full_name === "string" &&
+            typeof review.canonical_full_name === "string" &&
+            review.head_canonical_full_name.toLowerCase() === review.canonical_full_name.toLowerCase();
+          const sameRepository = sameRepositoryId && sameRepositoryName;
           if (review.command_id !== commandId || review.operation !== "github.write.pr.create" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               review.provider_observation_is_atomic !== false || review.creation_is_reversible !== false ||
@@ -6076,14 +6081,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
               !isDigest(review.operation_plan_binding_digest) ||
               !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
-              !Number.isSafeInteger(review.head_repository_id) || review.head_repository_id !== review.repository_id ||
+              !Number.isSafeInteger(review.head_repository_id) || review.head_repository_id <= 0 ||
+              !Number.isSafeInteger(review.repository_network_root_id) || review.repository_network_root_id <= 0 ||
+              !Number.isSafeInteger(review.head_repository_network_root_id) || review.head_repository_network_root_id <= 0 ||
+              review.repository_network_root_id !== review.head_repository_network_root_id ||
+              typeof review.head_repository_is_fork !== "boolean" || (!sameRepository && !review.head_repository_is_fork) ||
               typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
               typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
               typeof review.canonical_full_name !== "string" ||
               review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
-              review.head_canonical_full_name !== review.canonical_full_name ||
               (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
-              !validRef(review.head_ref) || !validRef(review.base_ref) || review.head_ref === review.base_ref ||
+              (review.head_repository_visibility !== "public" && review.head_repository_visibility !== "private") ||
+              typeof review.head_canonical_full_name !== "string" || review.head_canonical_full_name.length < 3 ||
+              review.head_canonical_full_name.length > 201 ||
+              sameRepositoryId !== sameRepositoryName ||
+              !validRef(review.head_ref) || !validRef(review.base_ref) || (sameRepository && review.head_ref === review.base_ref) ||
               !isCommitSha(review.head_commit_sha) || !isCommitSha(review.base_commit_sha) ||
               typeof review.title !== "string" || review.title.length === 0 || review.title.length > 65536 ||
               (review.body !== undefined && (typeof review.body !== "string" || review.body.length > 500000)) ||
@@ -6097,9 +6109,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(heading);
           [
             ["操作", review.operation],
-            ["Repository", review.canonical_full_name],
-            ["Repository ID", String(review.repository_id)],
-            ["可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Base / PR作成先", review.canonical_full_name + " (ID " + review.repository_id + ")"],
+            ["Base可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Head / 変更元", review.head_canonical_full_name + " (ID " + review.head_repository_id + ")"],
+            ["Head可視性", review.head_repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Fork network", String(review.repository_network_root_id) + (review.head_repository_is_fork ? "（headはfork）" : "（同一repository）")],
             ["Head", review.head_canonical_full_name + ":" + review.head_ref + " @ " + review.head_commit_sha],
             ["Base", review.canonical_full_name + ":" + review.base_ref + " @ " + review.base_commit_sha],
             ["Draft", (review.draft ? "はい" : "いいえ") + (review.draft_was_defaulted ? "（未指定時のアプリ既定値）" : "")],
@@ -6127,7 +6141,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.append(bodyHeading, body);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "Head／BaseとRepository identityは承認前・送信直前に再読取しますが、読取とPOSTは非原子的です。応答不明やbranch SHA不一致は自動再送しません。同一repository内のbranchだけを対象にします。";
+          note.textContent = "Base repositoryの公開先へPull requestを作成します。別repositoryのheadは同じGitHub fork networkに属するforkだけを許可します。両repository・branch・network identityは承認前・送信直前に再読取しますが、読取とPOSTは非原子的です。応答不明やbranch SHA不一致は自動再送しません。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +

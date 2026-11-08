@@ -391,13 +391,19 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
     return Object.keys(summary).join(",") === "id" && Number.isSafeInteger(summary.id) && (summary.id as number) > 0;
   }
   const expectedDraft = args.draft ?? false;
+  const expectedHeadRepository = typeof args.head_repository === "string"
+    ? args.head_repository : `${String(args.owner)}/${String(args.repo)}`;
   return operation === "pr.create" &&
-    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "id", "number", "title"]
+    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "head_repository_id",
+      "head_canonical_full_name", "id", "number", "title"]
       .every((key) => Object.hasOwn(summary, key)) &&
     Object.keys(summary).every((key) => ["id", "number", "title", "head_ref", "head_commit_sha", "base_ref",
-      "base_commit_sha", "draft", "maintainer_can_modify"].includes(key)) &&
+      "base_commit_sha", "draft", "maintainer_can_modify", "head_repository_id", "head_canonical_full_name"].includes(key)) &&
     Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && Number.isSafeInteger(summary.number) &&
-    (summary.number as number) > 0 && summary.title === args.title && summary.head_ref === args.head &&
+    (summary.number as number) > 0 && Number.isSafeInteger(summary.head_repository_id) &&
+    (summary.head_repository_id as number) > 0 && typeof summary.head_canonical_full_name === "string" &&
+    summary.head_canonical_full_name.toLowerCase() === expectedHeadRepository.toLowerCase() &&
+    summary.title === args.title && summary.head_ref === args.head &&
     summary.base_ref === args.base && typeof summary.head_commit_sha === "string" &&
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.head_commit_sha) &&
     typeof summary.base_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.base_commit_sha) &&
@@ -1134,8 +1140,12 @@ export class Executor {
           : args.maintainer_can_modify === true || args.maintainer_can_modify === "true";
         if (!pullRequestObservation || command.payload.arguments.operation !== "pr.create" ||
             githubReview.operation !== "github.write.pr.create" || commonMismatch ||
-            githubReview.head_repository_id !== pullRequestObservation.repository_id ||
-            githubReview.head_canonical_full_name !== pullRequestObservation.canonical_full_name ||
+            githubReview.head_repository_id !== pullRequestObservation.head_repository_id ||
+            githubReview.head_canonical_full_name !== pullRequestObservation.head_canonical_full_name ||
+            githubReview.head_repository_visibility !== pullRequestObservation.head_repository_visibility ||
+            githubReview.repository_network_root_id !== pullRequestObservation.repository_network_root_id ||
+            githubReview.head_repository_network_root_id !== pullRequestObservation.head_repository_network_root_id ||
+            githubReview.head_repository_is_fork !== pullRequestObservation.head_repository_is_fork ||
             githubReview.head_ref !== pullRequestObservation.head_ref ||
             githubReview.head_commit_sha !== pullRequestObservation.head_commit_sha ||
             githubReview.base_ref !== pullRequestObservation.base_ref ||

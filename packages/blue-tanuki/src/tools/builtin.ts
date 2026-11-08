@@ -556,6 +556,20 @@ function githubNameArg(args: Record<string, unknown>, name: string): string {
   return value;
 }
 
+function githubRepositoryFullNameArg(value: unknown, name: string): { owner: string; repo: string; fullName: string } {
+  if (typeof value !== "string" || value.length > 201 || value !== value.trim()) {
+    throw new Error(`${name} must be an owner/repo name`);
+  }
+  const parts = value.split("/");
+  if (parts.length !== 2) throw new Error(`${name} must be an owner/repo name`);
+  const [owner, repo] = parts;
+  if (!owner || !repo || !/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo) ||
+      owner === "." || owner === ".." || repo === "." || repo === "..") {
+    throw new Error(`${name} must be an owner/repo name`);
+  }
+  return { owner, repo, fullName: `${owner}/${repo}` };
+}
+
 function githubBaseRefArg(value: string): string {
   return githubBranchRefArg(value, "base_ref");
 }
@@ -732,6 +746,42 @@ async function readGitHubBaseIdentity(
   };
 }
 
+async function readGitHubRepositoryNetworkIdentity(input: {
+  owner: string;
+  repo: string;
+  request: NonNullable<GitHubReadOptions["request"]>;
+  max_bytes: number;
+  signal?: AbortSignal;
+  token: string;
+}): Promise<{ id: number; full_name: string; visibility: "public" | "private"; is_fork: boolean; network_root_id: number }> {
+  const requested = `${input.owner}/${input.repo}`;
+  assertToolExecutionNotCancelled(input.signal, "github.write pr.create repository network inspection");
+  const response = await input.request({ path: `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`,
+    maxBytes: input.max_bytes, token: input.token }, input.signal);
+  const repository = requireGitHubJsonRecord(response, "pull request repository network");
+  const owner = isRecord(repository.owner) && typeof repository.owner.login === "string" ? repository.owner.login : "";
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const name = typeof repository.name === "string" ? repository.name : "";
+  const isFork = repository.fork;
+  if (typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id <= 0 ||
+      typeof repository.private !== "boolean" || typeof isFork !== "boolean" ||
+      owner.toLowerCase() !== input.owner.toLowerCase() || name.toLowerCase() !== input.repo.toLowerCase() ||
+      fullName.toLowerCase() !== requested.toLowerCase()) {
+    throw new Error("github.write pr.create repository network identity is incomplete or mismatched; mutation_sent=false");
+  }
+  let networkRootId = repository.id;
+  if (isFork) {
+    const source = isRecord(repository.source) ? repository.source : null;
+    const sourceId = source?.id;
+    if (typeof sourceId !== "number" || !Number.isSafeInteger(sourceId) || sourceId <= 0 || sourceId === repository.id) {
+      throw new Error("github.write pr.create fork network root is unavailable; mutation_sent=false; status=BUILD_GAP");
+    }
+    networkRootId = sourceId;
+  }
+  return { id: repository.id, full_name: fullName, visibility: repository.private ? "private" : "public",
+    is_fork: isFork, network_root_id: networkRootId };
+}
+
 function githubBoolArg(
   args: Record<string, unknown>,
   name: string,
@@ -878,18 +928,23 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
   if (operation === "pr.create") {
     const head = stringArg(args, "head")!;
     const base = stringArg(args, "base")!;
-    if (head.includes(":")) {
-      throw new Error("cross-repository pr.create is not connected; mutation_sent=false; status=BUILD_GAP");
-    }
     githubBranchRefArg(head, "head");
     githubBranchRefArg(base, "base");
-    if (head === base) throw new Error("pr.create head and base must identify different branches; mutation_sent=false");
+    const baseFullName = `${owner}/${repoName}`;
+    const headRepository = args.head_repository === undefined
+      ? { owner, repo: repoName, fullName: baseFullName }
+      : githubRepositoryFullNameArg(args.head_repository, "head_repository");
+    const crossRepository = headRepository.fullName.toLowerCase() !== baseFullName.toLowerCase();
+    if (!crossRepository && head === base) {
+      throw new Error("pr.create head and base must identify different branches in the same repository; mutation_sent=false");
+    }
     const body: Record<string, unknown> = {
       title: stringArg(args, "title")!,
-      head,
+      head: crossRepository ? `${headRepository.owner}:${head}` : head,
       base,
       draft: githubBoolArg(args, "draft", false),
     };
+    if (crossRepository) body.head_repo = headRepository.repo;
     const prBody = githubOptionalBody(args);
     if (prBody !== undefined) body.body = prBody;
     if (args.maintainer_can_modify !== undefined) {
@@ -1635,7 +1690,11 @@ async function invokeGitHubPullRequestCreate(args: Record<string, unknown>, opts
       (typeof maintainerCanModify === "boolean" && pull.maintainer_can_modify !== maintainerCanModify) ||
       !head || !base || head.ref !== expected.head_ref || head.sha !== expected.head_commit_sha ||
       base.ref !== expected.base_ref || base.sha !== expected.base_commit_sha ||
-      !headRepo || !baseRepo || headRepo.id !== expected.repository_id || baseRepo.id !== expected.repository_id) {
+      !headRepo || !baseRepo || headRepo.id !== expected.head_repository_id || baseRepo.id !== expected.repository_id ||
+      typeof headRepo.full_name !== "string" ||
+      headRepo.full_name.toLowerCase() !== expected.head_canonical_full_name.toLowerCase() ||
+      typeof baseRepo.full_name !== "string" ||
+      baseRepo.full_name.toLowerCase() !== expected.canonical_full_name.toLowerCase()) {
     throw new Error("github.write pr.create response did not confirm the reviewed pull request and branch tips; outcome_unknown; do not retry automatically");
   }
   return {
@@ -1661,6 +1720,8 @@ async function invokeGitHubPullRequestCreate(args: Record<string, unknown>, opts
       id: pull.id,
       number: pull.number,
       title: pull.title,
+      head_repository_id: expected.head_repository_id,
+      head_canonical_full_name: expected.head_canonical_full_name,
       head_ref: expected.head_ref,
       head_commit_sha: expected.head_commit_sha,
       base_ref: expected.base_ref,
@@ -1798,7 +1859,8 @@ export async function inspectGitHubPullRequestCreateTargetVersion(
   if (route.operation !== "pr.create") {
     throw new Error("github.write " + route.operation + " target observation is not implemented; status=BUILD_GAP");
   }
-  const allowedArgs = ["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify", "max_bytes"];
+  const allowedArgs = ["operation", "owner", "repo", "title", "body", "head", "head_repository", "base", "draft",
+    "maintainer_can_modify", "max_bytes"];
   if (Object.keys(args).some((key) => !allowedArgs.includes(key))) {
     throw new Error("github.write pr.create contains unsupported arguments; mutation_sent=false");
   }
@@ -1814,44 +1876,43 @@ export async function inspectGitHubPullRequestCreateTargetVersion(
   const token = githubWriteToken(env);
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
-  const headRef = String(route.body.head);
-  const baseRef = String(route.body.base);
+  const headRef = stringArg(args, "head")!;
+  const baseRef = stringArg(args, "base")!;
+  const headRepository = args.head_repository === undefined
+    ? { owner, repo, fullName: `${owner}/${repo}` }
+    : githubRepositoryFullNameArg(args.head_repository, "head_repository");
+  const crossRepository = headRepository.fullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase();
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const readRequest = opts.read_request ?? defaultGitHubReadRequest;
-  const identityArgs = { owner, repo };
+  if (crossRepository) assertGitHubRepoAllowed(env, headRepository.fullName);
 
-  // Reuse the F05.01 repository/base identity reader for both branch tips.
-  const baseSnapshot = await readGitHubBaseIdentity({ ...identityArgs, base_ref: baseRef }, readRequest,
+  const baseSnapshot = await readGitHubBaseIdentity({ owner, repo, base_ref: baseRef }, readRequest,
     maxBytes, opts.signal, token);
-  const headSnapshot = await readGitHubBaseIdentity({ ...identityArgs, base_ref: headRef }, readRequest,
+  const headSnapshot = await readGitHubBaseIdentity({ owner: headRepository.owner, repo: headRepository.repo,
+    base_ref: headRef }, readRequest,
     maxBytes, opts.signal, token);
   const baseIdentity = isRecord(baseSnapshot) && isRecord(baseSnapshot.data) ? baseSnapshot.data : null;
   const headIdentity = isRecord(headSnapshot) && isRecord(headSnapshot.data) ? headSnapshot.data : null;
   if (!baseIdentity || !headIdentity || baseIdentity.schema_version !== "blue-tanuki.github.base-identity.v1" ||
       headIdentity.schema_version !== "blue-tanuki.github.base-identity.v1" ||
       baseIdentity.base_ref !== baseRef || headIdentity.base_ref !== headRef ||
-      baseIdentity.repository_id !== headIdentity.repository_id ||
-      baseIdentity.full_name !== headIdentity.full_name ||
       typeof baseIdentity.base_commit_sha !== "string" || typeof headIdentity.base_commit_sha !== "string") {
-    throw new Error("github.write pr.create branch observations did not identify the same repository and requested refs");
+    throw new Error("github.write pr.create branch observations did not identify the requested repositories and refs");
   }
 
-  // The base-identity contract intentionally omits visibility; read it as a separate final observation.
-  const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  assertToolExecutionNotCancelled(opts.signal, "github.write pr.create target inspection");
-  const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
-  const repository = requireGitHubJsonRecord(repositoryResponse, "pull request target repository");
-  const repositoryOwner = isRecord(repository.owner) && typeof repository.owner.login === "string"
-    ? repository.owner.login : "";
-  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
-  const repositoryName = typeof repository.name === "string" ? repository.name : "";
-  if (typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id <= 0 ||
-      typeof repository.private !== "boolean" || repository.id !== baseIdentity.repository_id ||
-      repository.id !== headIdentity.repository_id || fullName !== baseIdentity.full_name ||
-      fullName !== headIdentity.full_name || repositoryName.toLowerCase() !== repo.toLowerCase() ||
-      repositoryOwner.toLowerCase() !== owner.toLowerCase() ||
-      fullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+  const baseRepository = await readGitHubRepositoryNetworkIdentity({ owner, repo, request: readRequest,
+    max_bytes: maxBytes, signal: opts.signal, token });
+  const headRepositoryIdentity = crossRepository
+    ? await readGitHubRepositoryNetworkIdentity({ owner: headRepository.owner, repo: headRepository.repo,
+      request: readRequest, max_bytes: maxBytes, signal: opts.signal, token })
+    : baseRepository;
+  if (baseRepository.id !== baseIdentity.repository_id || baseRepository.full_name !== baseIdentity.full_name ||
+      headRepositoryIdentity.id !== headIdentity.repository_id || headRepositoryIdentity.full_name !== headIdentity.full_name) {
     throw new Error("github.write pr.create repository identity or visibility changed during branch observation");
+  }
+  if (crossRepository && (!headRepositoryIdentity.is_fork ||
+      headRepositoryIdentity.network_root_id !== baseRepository.network_root_id)) {
+    throw new Error("github.write pr.create head repository must be a fork in the base repository's GitHub network; mutation_sent=false; status=BUILD_GAP");
   }
 
   const body = typeof route.body.body === "string" ? route.body.body : undefined;
@@ -1860,11 +1921,17 @@ export async function inspectGitHubPullRequestCreateTargetVersion(
   return GitHubPullRequestCreateTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.github-write-target-version.v1",
     operation: "pr.create",
-    repository_id: repository.id,
+    repository_id: baseRepository.id,
     requested_owner: owner,
     requested_repo: repo,
-    canonical_full_name: fullName,
-    repository_visibility: repository.private ? "private" : "public",
+    canonical_full_name: baseRepository.full_name,
+    repository_visibility: baseRepository.visibility,
+    head_repository_id: headRepositoryIdentity.id,
+    head_canonical_full_name: headRepositoryIdentity.full_name,
+    head_repository_visibility: headRepositoryIdentity.visibility,
+    repository_network_root_id: baseRepository.network_root_id,
+    head_repository_network_root_id: headRepositoryIdentity.network_root_id,
+    head_repository_is_fork: headRepositoryIdentity.is_fork,
     head_ref: headRef,
     head_commit_sha: headIdentity.base_commit_sha,
     base_ref: baseRef,
@@ -1872,11 +1939,16 @@ export async function inspectGitHubPullRequestCreateTargetVersion(
     draft: route.body.draft === true,
     maintainer_can_modify: maintainerCanModify,
     target_identity_digest: githubPullRequestCreateTargetIdentityDigest({
-      repository_id: repository.id, canonical_full_name: fullName, head_ref: headRef, base_ref: baseRef,
+      repository_id: baseRepository.id, canonical_full_name: baseRepository.full_name, head_ref: headRef, base_ref: baseRef,
+      head_repository_id: headRepositoryIdentity.id, head_canonical_full_name: headRepositoryIdentity.full_name,
+      repository_network_root_id: baseRepository.network_root_id,
+      head_repository_network_root_id: headRepositoryIdentity.network_root_id,
+      head_repository_is_fork: headRepositoryIdentity.is_fork,
     }),
     request_payload_digest: githubPullRequestCreateRequestPayloadDigest({
       owner, repo, title: String(route.body.title), ...(body !== undefined ? { body } : {}),
-      head_ref: headRef, base_ref: baseRef, draft: route.body.draft === true,
+      head_ref: headRef, base_ref: baseRef, ...(crossRepository ? { head_repository: headRepository.fullName } : {}),
+      draft: route.body.draft === true,
       ...(maintainerCanModify !== null ? { maintainer_can_modify: maintainerCanModify } : {}),
     }),
     command_digest: commandDigest,
@@ -1898,24 +1970,33 @@ export function assertGitHubPullRequestCreateTargetVersion(args: Record<string, 
   const route = githubWriteRoute(args);
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
+  const headRepository = args.head_repository === undefined
+    ? { owner, repo, fullName: `${owner}/${repo}` }
+    : githubRepositoryFullNameArg(args.head_repository, "head_repository");
+  const headRef = stringArg(args, "head")!;
+  const baseRef = stringArg(args, "base")!;
   const body = typeof route.body.body === "string" ? route.body.body : undefined;
   const maintainerCanModify = typeof route.body.maintainer_can_modify === "boolean"
     ? route.body.maintainer_can_modify : null;
   const payloadDigest = githubPullRequestCreateRequestPayloadDigest({
     owner, repo, title: String(route.body.title), ...(body !== undefined ? { body } : {}),
-    head_ref: String(route.body.head), base_ref: String(route.body.base), draft: route.body.draft === true,
+    head_repository: headRepository.fullName, head_ref: headRef, base_ref: baseRef, draft: route.body.draft === true,
     ...(maintainerCanModify !== null ? { maintainer_can_modify: maintainerCanModify } : {}),
   });
   const targetDigest = githubPullRequestCreateTargetIdentityDigest({
     repository_id: observation.repository_id, canonical_full_name: observation.canonical_full_name,
-    head_ref: String(route.body.head), base_ref: String(route.body.base),
+    head_repository_id: observation.head_repository_id, head_canonical_full_name: observation.head_canonical_full_name,
+    repository_network_root_id: observation.repository_network_root_id,
+    head_repository_network_root_id: observation.head_repository_network_root_id,
+    head_repository_is_fork: observation.head_repository_is_fork, head_ref: headRef, base_ref: baseRef,
   });
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify", "max_bytes"].includes(key)) ||
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "head", "head_repository", "base", "draft", "maintainer_can_modify", "max_bytes"].includes(key)) ||
       route.operation !== "pr.create" ||
       observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
       observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
-      observation.head_ref !== route.body.head || observation.base_ref !== route.body.base ||
+      observation.head_canonical_full_name.toLowerCase() !== headRepository.fullName.toLowerCase() ||
+      observation.head_ref !== headRef || observation.base_ref !== baseRef ||
       observation.draft !== (route.body.draft === true) || observation.maintainer_can_modify !== maintainerCanModify ||
       observation.command_digest !== commandDigest || observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
       observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
@@ -1938,8 +2019,12 @@ export async function inspectGitHubPullRequestCreateContentReview(args: Record<s
     canonical_full_name: observation.canonical_full_name,
     repository_id: observation.repository_id,
     repository_visibility: observation.repository_visibility,
-    head_repository_id: observation.repository_id,
-    head_canonical_full_name: observation.canonical_full_name,
+    head_repository_id: observation.head_repository_id,
+    head_canonical_full_name: observation.head_canonical_full_name,
+    head_repository_visibility: observation.head_repository_visibility,
+    repository_network_root_id: observation.repository_network_root_id,
+    head_repository_network_root_id: observation.head_repository_network_root_id,
+    head_repository_is_fork: observation.head_repository_is_fork,
     head_ref: observation.head_ref,
     head_commit_sha: observation.head_commit_sha,
     base_ref: observation.base_ref,
@@ -4257,7 +4342,7 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests, regular pull request timeline comments, and single-line or bounded multi-line pull request diff review comments after target recheck and no-store L3 review. Inline comments require a changed path, exact diff line and side; multi-line comments additionally bind the start line and side. Cross-repository pull requests remain BUILD_GAP. Update only the reviewed title/body of an existing issue.",
+  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests, and cross-repository pull requests from an allowlisted fork in the same GitHub network; create regular pull request timeline comments and single-line or bounded multi-line pull request diff review comments after target recheck and no-store L3 review. Pull request creation binds both repositories and branch tips. Inline comments require a changed path, exact diff line and side; multi-line comments additionally bind the start line and side. Update only the reviewed title/body of an existing issue.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "pr.create") {

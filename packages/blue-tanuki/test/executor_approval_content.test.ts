@@ -231,7 +231,7 @@ describe("承認内容からExecutorへの固定", () => {
       return {
         status: 200, ok: true, content_type: "application/json",
         body: JSON.stringify({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
-          owner: { login: "gatchimuchio" }, default_branch: "main", private: false }),
+          owner: { login: "gatchimuchio" }, default_branch: "main", private: false, fork: false }),
         truncated: false, rate_limit_remaining: "60",
       };
     };

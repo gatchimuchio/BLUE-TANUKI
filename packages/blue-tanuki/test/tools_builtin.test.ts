@@ -2127,8 +2127,10 @@ describe("built-in tools", () => {
           state: "open",
           draft: true,
           maintainer_can_modify: false,
-          head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA, repo: { id: 123 } },
-          base: { ref: "main", sha: GITHUB_PR_BASE_SHA, repo: { id: 123 } },
+          head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA,
+            repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+          base: { ref: "main", sha: GITHUB_PR_BASE_SHA,
+            repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
         }),
         truncated: false,
         rate_limit_remaining: "57",
@@ -2174,6 +2176,43 @@ describe("built-in tools", () => {
       },
     }]);
 
+    const explicitSameRepositoryArgs = { ...args, head_repository: "gatchimuchio/blue-tanuki" };
+    const explicitSameRepositoryWrites: Array<Record<string, unknown>> = [];
+    const explicitSameRepositoryOptions = await reviewedGitHubPullRequestCreate(explicitSameRepositoryArgs,
+      fakeGitHubPullRequestCreate(async (target) => {
+        explicitSameRepositoryWrites.push(target.body ?? {});
+        return {
+          status: 201,
+          ok: true,
+          content_type: "application/json",
+          body: JSON.stringify({
+            id: 988,
+            number: 43,
+            title: "Add the feature",
+            body: "Exact PR body",
+            state: "open",
+            draft: true,
+            maintainer_can_modify: false,
+            head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA,
+              repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+            base: { ref: "main", sha: GITHUB_PR_BASE_SHA,
+              repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+          }),
+          truncated: false,
+          rate_limit_remaining: "57",
+          request_id: "REQ-EXPLICIT-SAME-REPOSITORY",
+        };
+      }));
+    await invokeGitHubWrite(explicitSameRepositoryArgs, explicitSameRepositoryOptions);
+    expect(explicitSameRepositoryWrites).toEqual([{
+      title: "Add the feature",
+      head: "feature/pr-creation",
+      base: "main",
+      draft: true,
+      body: "Exact PR body",
+      maintainer_can_modify: false,
+    }]);
+
     const branchReads = new Map<string, number>();
     let writes = 0;
     const changingBranch = fakeGitHubPullRequestCreate(async () => {
@@ -2190,7 +2229,7 @@ describe("built-in tools", () => {
         return githubReadJson({ name: ref, commit: { sha: count === 1 ? GITHUB_PR_HEAD_SHA : "c".repeat(40) } });
       }
       return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
-        owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
+        owner: { login: "gatchimuchio" }, default_branch: "main", private: false, fork: false });
     });
     const approved = await reviewedGitHubPullRequestCreate(args, changingBranch);
     await expect(invokeGitHubWrite(args, approved)).rejects.toThrow(/target changed after review.*outcome=stale/);
@@ -2199,7 +2238,89 @@ describe("built-in tools", () => {
     await expect(invokeGitHubWrite(
       { ...args, head: "gatchimuchio:feature/pr-creation" },
       writeOptions,
-    )).rejects.toThrow(/cross-repository pr.create is not connected.*status=BUILD_GAP/);
+    )).rejects.toThrow(/head is not a valid GitHub branch name/);
+  });
+
+  it("github.write pr.create binds an allowlisted fork head to the base repository network and exact POST", async () => {
+    const args = { operation: "pr.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "Add the feature", body: "Exact PR body", head: "feature/pr-creation",
+      head_repository: "contributor/blue-tanuki", base: "main", draft: true, maintainer_can_modify: false };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const read: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/branches/main") {
+        return githubReadJson({ name: "main", commit: { sha: GITHUB_PR_BASE_SHA } });
+      }
+      if (target.path === "/repos/contributor/blue-tanuki/branches/feature/pr-creation") {
+        return githubReadJson({ name: "feature/pr-creation", commit: { sha: GITHUB_PR_HEAD_SHA } });
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") {
+        return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, default_branch: "main", private: false, fork: false });
+      }
+      if (target.path === "/repos/contributor/blue-tanuki") {
+        return githubReadJson({ id: 456, name: "blue-tanuki", full_name: "contributor/blue-tanuki",
+          owner: { login: "contributor" }, default_branch: "main", private: true, fork: true,
+          source: { id: 123, full_name: "gatchimuchio/blue-tanuki" } });
+      }
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const request: NonNullable<GitHubWriteOptions["request"]> = async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body ?? {} });
+      return { status: 201, ok: true, content_type: "application/json", truncated: false,
+        rate_limit_remaining: "57", request_id: "CROSS-PR-REQ", body: JSON.stringify({
+          id: 987, number: 42, title: "Add the feature", body: "Exact PR body", state: "open", draft: true,
+          maintainer_can_modify: false,
+          head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA,
+            repo: { id: 456, full_name: "contributor/blue-tanuki" } },
+          base: { ref: "main", sha: GITHUB_PR_BASE_SHA,
+            repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+        }) };
+    };
+    const options = await reviewedGitHubPullRequestCreate(args, fakeGitHubPullRequestCreate(request, read, {
+      GITHUB_TOKEN: "ghp_dummy",
+      BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki contributor/blue-tanuki",
+    }));
+    const review = await inspectGitHubPullRequestCreateContentReview(args, options);
+    expect(review).toMatchObject({ canonical_full_name: "gatchimuchio/blue-tanuki", repository_id: 123,
+      repository_visibility: "public", head_repository_id: 456, head_canonical_full_name: "contributor/blue-tanuki",
+      head_repository_visibility: "private", repository_network_root_id: 123,
+      head_repository_network_root_id: 123, head_repository_is_fork: true });
+    expect(seen).toEqual([]);
+    const result = await invokeGitHubWrite(args, options);
+    expect(result).toMatchObject({ mutation_status: "provider_accepted", result: {
+      head_repository_id: 456, head_canonical_full_name: "contributor/blue-tanuki",
+      head_ref: "feature/pr-creation", base_ref: "main" } });
+    expect(seen).toEqual([{ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls", body: {
+      title: "Add the feature", head: "contributor:feature/pr-creation", head_repo: "blue-tanuki",
+      base: "main", draft: true, body: "Exact PR body", maintainer_can_modify: false,
+    } }]);
+
+    let unsafeWrites = 0;
+    const unrelatedNetworkRead: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      const response = await read(target);
+      if (target.path === "/repos/contributor/blue-tanuki") {
+        return githubReadJson({ id: 456, name: "blue-tanuki", full_name: "contributor/blue-tanuki",
+          owner: { login: "contributor" }, default_branch: "main", private: true, fork: true,
+          source: { id: 999, full_name: "unrelated/root" } });
+      }
+      return response;
+    };
+    const unsafeOptions = fakeGitHubPullRequestCreate(async () => {
+      unsafeWrites += 1;
+      throw new Error("an unrelated fork network must not receive a POST");
+    }, unrelatedNetworkRead, { GITHUB_TOKEN: "ghp_dummy",
+      BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki contributor/blue-tanuki" });
+    await expect(inspectGitHubPullRequestCreateTargetVersion(args, { ...unsafeOptions,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/head repository must be a fork.*status=BUILD_GAP/);
+    expect(unsafeWrites).toBe(0);
+
+    const missingAllowlist = fakeGitHubPullRequestCreate(request, read, {
+      GITHUB_TOKEN: "ghp_dummy", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki",
+    });
+    await expect(inspectGitHubPullRequestCreateTargetVersion(args, { ...missingAllowlist,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/denied repository contributor\/blue-tanuki/);
   });
 
   it("github.write pr.create distinguishes provider rejection from unknown response without retry", async () => {
@@ -3264,8 +3385,10 @@ function fakeGitHubPullRequestCreate(
       state: "open",
       draft: true,
       maintainer_can_modify: false,
-      head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA, repo: { id: 123 } },
-      base: { ref: "main", sha: GITHUB_PR_BASE_SHA, repo: { id: 123 } },
+      head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA,
+        repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+      base: { ref: "main", sha: GITHUB_PR_BASE_SHA,
+        repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
     }),
     truncated: false,
     rate_limit_remaining: "60",
@@ -3288,10 +3411,15 @@ function fakeGitHubPullRequestCreate(
       owner: { login: "gatchimuchio" },
       default_branch: "main",
       private: false,
+      fork: false,
     });
   },
+  env: Record<string, string | undefined> = {
+    GITHUB_TOKEN: "ghp_dummy",
+    BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki",
+  },
 ): GitHubWriteOptions {
-  return fakeGitHubWrite(request, undefined, read_request);
+  return fakeGitHubWrite(request, env, read_request);
 }
 
 async function reviewedGitHubIssueCommentCreate(args: Record<string, unknown>,

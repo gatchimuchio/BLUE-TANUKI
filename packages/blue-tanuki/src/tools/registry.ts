@@ -143,6 +143,10 @@ export interface GitHubPullRequestCreateContentReview {
   repository_visibility: "public" | "private";
   head_repository_id: number;
   head_canonical_full_name: string;
+  head_repository_visibility: "public" | "private";
+  repository_network_root_id: number;
+  head_repository_network_root_id: number;
+  head_repository_is_fork: boolean;
   head_ref: string;
   head_commit_sha: string;
   base_ref: string;

@@ -3946,21 +3946,34 @@ ${planControl.question}`,
         const title = optionalText("title");
         const body = optionalText("body");
         const head = optionalText("head");
+        const headRepository = optionalText("head_repository");
         const base = optionalText("base");
         const draft = args.draft ?? false;
         const maintainerCanModify = args.maintainer_can_modify;
-        if (!title || title.length > 256 || !head || !base || head === base ||
+        const headRepositoryParts = headRepository?.split("/");
+        const validHeadRepository = headRepository === undefined ||
+          headRepository.length <= 201 && headRepositoryParts?.length === 2 &&
+          headRepositoryParts.every((part) => /^[A-Za-z0-9_.-]{1,100}$/.test(part) && part !== "." && part !== "..");
+        const expectedHeadRepository = headRepository ?? `${owner}/${repo}`;
+        if (!title || title.length > 256 || !head || !base ||
+            !validHeadRepository ||
+            (head === base && expectedHeadRepository.toLowerCase() === `${owner}/${repo}`.toLowerCase()) ||
             (body !== undefined && body.length > 500_000) || typeof draft !== "boolean" ||
             (maintainerCanModify !== undefined && typeof maintainerCanModify !== "boolean") ||
-            observation.operation !== "pr.create" || observation.head_ref !== head || observation.base_ref !== base) {
+            observation.operation !== "pr.create" || observation.head_ref !== head || observation.base_ref !== base ||
+            observation.head_canonical_full_name.toLowerCase() !== expectedHeadRepository.toLowerCase()) {
           throw new Error("HDS github.write pr.create parameters or observed branches are invalid");
         }
         requestPayloadDigest = githubPullRequestCreateRequestPayloadDigest({ owner, repo, title,
-          head_ref: head, base_ref: base, draft,
+          head_ref: head, base_ref: base, ...(headRepository === undefined ? {} : { head_repository: headRepository }), draft,
           ...(body === undefined ? {} : { body }),
           ...(maintainerCanModify === undefined ? {} : { maintainer_can_modify: maintainerCanModify }) });
         targetIdentityDigest = githubPullRequestCreateTargetIdentityDigest({ repository_id: observation.repository_id,
-          canonical_full_name: observation.canonical_full_name, head_ref: head, base_ref: base });
+          canonical_full_name: observation.canonical_full_name, head_ref: head, base_ref: base,
+          head_repository_id: observation.head_repository_id, head_canonical_full_name: observation.head_canonical_full_name,
+          repository_network_root_id: observation.repository_network_root_id,
+          head_repository_network_root_id: observation.head_repository_network_root_id,
+          head_repository_is_fork: observation.head_repository_is_fork });
       }
       if (observation.request_payload_digest !== requestPayloadDigest ||
           observation.target_identity_digest !== targetIdentityDigest) {

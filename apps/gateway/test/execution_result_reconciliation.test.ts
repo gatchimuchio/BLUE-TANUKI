@@ -157,6 +157,7 @@ function fileEditCandidate(id: string): OperationPlan {
 }
 type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create";
 type GitHubWriteCase = { operation: GitHubWriteOperation; comment_kind?: "pull_request_review_inline"; inline_range?: boolean };
+const GITHUB_PR_HEAD_REPOSITORY = "fixture-contributor/synthetic-repo";
 const githubWriteCases: readonly GitHubWriteCase[] = [
   { operation: "issue.create" },
   { operation: "issue.update" },
@@ -278,21 +279,32 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
   const prBody = "synthetic pull request body never retained in M";
   const head = "feature/synthetic";
   const base = "main";
+  const headRepository = GITHUB_PR_HEAD_REPOSITORY;
+  const headRepositoryId = 424_247;
   const headSha = "a".repeat(40);
   const baseSha = "b".repeat(40);
   return { operation, step_id: "write-pr-create",
-    parameters: { operation, owner, repo, title: prTitle, body: prBody, head, base, draft: true, maintainer_can_modify: false },
+    parameters: { operation, owner, repo, title: prTitle, body: prBody, head,
+      head_repository: headRepository, base, draft: true, maintainer_can_modify: false },
     target_identity_digest: githubPullRequestCreateTargetIdentityDigest({ repository_id: repositoryId,
-      canonical_full_name: canonicalFullName, head_ref: head, base_ref: base }),
+      canonical_full_name: canonicalFullName, head_ref: head, base_ref: base,
+      head_repository_id: headRepositoryId, head_canonical_full_name: headRepository,
+      repository_network_root_id: repositoryId, head_repository_network_root_id: repositoryId,
+      head_repository_is_fork: true }),
     request_payload_digest: githubPullRequestCreateRequestPayloadDigest({ owner, repo, title: prTitle, body: prBody,
-      head_ref: head, base_ref: base, draft: true, maintainer_can_modify: false }),
+      head_ref: head, base_ref: base, head_repository: headRepository, draft: true, maintainer_can_modify: false }),
     target_fields: { head_ref: head, head_commit_sha: headSha, base_ref: base, base_commit_sha: baseSha,
+      head_repository_id: headRepositoryId, head_canonical_full_name: headRepository,
+      head_repository_visibility: "public", repository_network_root_id: repositoryId,
+      head_repository_network_root_id: repositoryId, head_repository_is_fork: true,
       draft: true, maintainer_can_modify: false },
     method: "POST", path: `/repos/${owner}/${repo}/pulls`, accepted_status: 201,
     accepted_provider_response: { id: 42_448, number, title: prTitle, body: prBody, state: "open", draft: true,
-      maintainer_can_modify: false, head: { ref: head, sha: headSha, repo: { id: repositoryId } },
-      base: { ref: base, sha: baseSha, repo: { id: repositoryId } } },
-    accepted_result: { id: 42_448, number, title: prTitle, head_ref: head, head_commit_sha: headSha,
+      maintainer_can_modify: false, head: { ref: head, sha: headSha,
+        repo: { id: headRepositoryId, full_name: headRepository } },
+      base: { ref: base, sha: baseSha, repo: { id: repositoryId, full_name: canonicalFullName } } },
+    accepted_result: { id: 42_448, number, title: prTitle, head_repository_id: headRepositoryId,
+      head_canonical_full_name: headRepository, head_ref: head, head_commit_sha: headSha,
       base_ref: base, base_commit_sha: baseSha, draft: true, maintainer_can_modify: false },
     private_values: [prTitle, prBody] };
 }
@@ -2001,6 +2013,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const title = String(scenario.parameters.title ?? "");
     const body = String(scenario.parameters.body);
     const repositoryPath = "/repos/fixture-owner/synthetic-repo";
+    const headRepositoryFullName = typeof scenario.parameters.head_repository === "string"
+      ? scenario.parameters.head_repository : "fixture-owner/synthetic-repo";
+    const headRepositoryPath = "/repos/" + headRepositoryFullName;
     const issueTargetPath = `/repos/${String(scenario.parameters.owner)}/${String(scenario.parameters.repo)}/issues/${String(scenario.parameters.number ?? 7)}`;
     const fakeGitHubToken = "f05.02-synthetic-github-token";
     const tempRoot = mkdtempSync(join(tmpdir(), "blue-github-write-served-"));
@@ -2027,20 +2042,30 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         response.on("close", () => { responseRecord.closed = true; });
         mockRequests.push({ method, path, authorization: request.headers.authorization, body: requestBody });
         response.setHeader("content-type", "application/json; charset=utf-8");
-        if (method === "GET" && path === repositoryPath) {
+        if (method === "GET" && (path === repositoryPath || path === headRepositoryPath)) {
           response.statusCode = 200;
           responseRecord.status = response.statusCode;
-          response.end(JSON.stringify({ id: 424242, full_name: "fixture-owner/synthetic-repo", name: "synthetic-repo",
-            private: false, default_branch: "main", owner: { login: "fixture-owner" } }));
+          if (path === headRepositoryPath && headRepositoryPath !== repositoryPath) {
+            response.end(JSON.stringify({ id: 424247, full_name: headRepositoryFullName, name: "synthetic-repo",
+              private: false, fork: true, source: { id: 424242, full_name: "fixture-owner/synthetic-repo" },
+              default_branch: "main", owner: { login: "fixture-contributor" } }));
+          } else {
+            response.end(JSON.stringify({ id: 424242, full_name: "fixture-owner/synthetic-repo", name: "synthetic-repo",
+              private: false, fork: false, default_branch: "main", owner: { login: "fixture-owner" } }));
+          }
           return;
         }
-        const branchPathPrefix = `${repositoryPath}/branches/`;
-        if (operation === "pr.create" && method === "GET" && path.startsWith(branchPathPrefix)) {
+        const branchRepositoryPath = operation === "pr.create"
+          ? [repositoryPath, headRepositoryPath].find((candidate) => path.startsWith(candidate + "/branches/"))
+          : undefined;
+        if (operation === "pr.create" && method === "GET" && branchRepositoryPath) {
+          const branchPathPrefix = branchRepositoryPath + "/branches/";
           const branchRef = decodeURIComponent(path.slice(branchPathPrefix.length));
           const headRef = String(scenario.parameters.head);
           const baseRef = String(scenario.parameters.base);
-          const sha = branchRef === headRef ? scenario.target_fields.head_commit_sha
-            : branchRef === baseRef ? scenario.target_fields.base_commit_sha : undefined;
+          const isHeadRepository = branchRepositoryPath === headRepositoryPath;
+          const sha = isHeadRepository && branchRef === headRef ? scenario.target_fields.head_commit_sha
+            : !isHeadRepository && branchRef === baseRef ? scenario.target_fields.base_commit_sha : undefined;
           if (sha) {
             response.statusCode = 200;
             responseRecord.status = response.statusCode;
@@ -2208,7 +2233,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
               issue_updated_at: "2026-11-08T01:02:03.000Z", issue_title: "synthetic issue target title", body }
             : operation === "pr.create"
               ? { kind: "github_pull_request_create", operation: "github.write.pr.create",
-                head_repository_id: 424242, head_canonical_full_name: "fixture-owner/synthetic-repo",
+                head_repository_id: 424247, head_canonical_full_name: "fixture-contributor/synthetic-repo",
+                head_repository_visibility: "public", repository_network_root_id: 424242,
+                head_repository_network_root_id: 424242, head_repository_is_fork: true,
                 head_ref: "feature/synthetic", head_commit_sha: "a".repeat(40), base_ref: "main",
                 base_commit_sha: "b".repeat(40), title, body, draft: true, draft_was_defaulted: false,
                 maintainer_can_modify: false, publication_effect: "visible_to_repository_audience",
@@ -2278,7 +2305,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         : operation === "issue.comment.create" || operation === "pr.comment.create"
           ? { body }
         : operation === "pr.create"
-          ? { title, body, head: scenario.parameters.head, base: scenario.parameters.base, draft: true, maintainer_can_modify: false }
+          ? { title, body, head: String(scenario.parameters.head_repository).split("/")[0] + ":" + scenario.parameters.head,
+            head_repo: String(scenario.parameters.head_repository).split("/")[1], base: scenario.parameters.base,
+            draft: true, maintainer_can_modify: false }
           : { title, body };
       expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);
       if (operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") {
@@ -2290,10 +2319,11 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         expect(postApprovalIssueReadIndexes.at(-1)!).toBeLessThan(writeIndex);
       }
       if (operation === "pr.create") {
-        const branchPathPrefix = `${repositoryPath}/branches/`;
         const prBranchRefs = [String(scenario.parameters.head), String(scenario.parameters.base)];
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         for (const branchRef of prBranchRefs) {
+          const branchRepositoryPath = branchRef === String(scenario.parameters.head) ? headRepositoryPath : repositoryPath;
+          const branchPathPrefix = branchRepositoryPath + "/branches/";
           const postApprovalBranchReadIndexes = mockRequests.map((item, index) => ({ item, index }))
             .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" &&
               item.path.startsWith(branchPathPrefix) && decodeURIComponent(item.path.slice(branchPathPrefix.length)) === branchRef)
@@ -2420,7 +2450,7 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
   if (options.githubMockPort !== undefined) {
     Object.assign(env, {
       GITHUB_TOKEN: "f05.02-synthetic-github-token",
-      BLUE_TANUKI_GITHUB_REPOS: "fixture-owner/synthetic-repo",
+      BLUE_TANUKI_GITHUB_REPOS: ["fixture-owner/synthetic-repo", GITHUB_PR_HEAD_REPOSITORY].join(" "),
       BT_F05_02_GITHUB_MOCK_PORT: String(options.githubMockPort),
     });
   }

@@ -68,6 +68,12 @@ export const GitHubPullRequestCommentCreateTargetVersionObservationSchema = GitH
 /** Plan-bound, non-authority branch observations for a GitHub pull request create. */
 export const GitHubPullRequestCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("pr.create"),
+  head_repository_id: z.number().int().positive().safe(),
+  head_canonical_full_name: z.string().min(3).max(201),
+  head_repository_visibility: z.enum(["public", "private"]),
+  repository_network_root_id: z.number().int().positive().safe(),
+  head_repository_network_root_id: z.number().int().positive().safe(),
+  head_repository_is_fork: z.boolean(),
   head_ref: z.string().min(1).max(255),
   head_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   base_ref: z.string().min(1).max(255),
@@ -83,6 +89,18 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
+  if (value.operation === "pr.create") {
+    const sameRepository = value.head_repository_id === value.repository_id &&
+      value.head_canonical_full_name.toLowerCase() === value.canonical_full_name.toLowerCase();
+    if ((value.head_repository_id === value.repository_id) !==
+        (value.head_canonical_full_name.toLowerCase() === value.canonical_full_name.toLowerCase()) ||
+        value.repository_network_root_id !== value.head_repository_network_root_id ||
+        (!sameRepository && !value.head_repository_is_fork)) {
+      context.addIssue({ code: z.ZodIssueCode.custom,
+        message: "pull request head repository must be the base repository or a fork in the same GitHub network" });
+    }
+    return;
+  }
   if (value.operation !== "pr.comment.create") return;
   const inlineFields = [value.path, value.start_line, value.start_side, value.line, value.side, value.pull_request_head_sha,
     value.pull_request_base_sha, value.pull_request_diff_digest];
@@ -273,7 +291,34 @@ export function githubPullRequestCreateTargetIdentityDigest(input: {
   canonical_full_name: string;
   head_ref: string;
   base_ref: string;
+  head_repository_id?: number;
+  head_canonical_full_name?: string;
+  repository_network_root_id?: number;
+  head_repository_network_root_id?: number;
+  head_repository_is_fork?: boolean;
 }): string {
+  const crossRepository = input.head_repository_id !== undefined &&
+    (input.head_repository_id !== input.repository_id ||
+      input.head_canonical_full_name?.toLowerCase() !== input.canonical_full_name.toLowerCase());
+  if (crossRepository) {
+    if (input.head_repository_id === undefined || !input.head_canonical_full_name ||
+        input.repository_network_root_id === undefined || input.head_repository_network_root_id === undefined ||
+        input.head_repository_is_fork !== true || input.repository_network_root_id !== input.head_repository_network_root_id) {
+      throw new Error("cross-repository pull request target identity is incomplete or outside one fork network");
+    }
+    return createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.github-pull-request-cross-repository-target-identity.v1",
+      input.repository_id,
+      input.canonical_full_name,
+      input.repository_network_root_id,
+      input.head_repository_id,
+      input.head_canonical_full_name,
+      input.head_repository_network_root_id,
+      input.head_repository_is_fork,
+      input.head_ref,
+      input.base_ref,
+    ]), "utf8").digest("hex");
+  }
   return createHash("sha256").update(JSON.stringify([
     "blue-tanuki.github-pull-request-create-target-identity.v1",
     input.repository_id,
@@ -290,9 +335,26 @@ export function githubPullRequestCreateRequestPayloadDigest(input: {
   body?: string;
   head_ref: string;
   base_ref: string;
+  head_repository?: string;
   draft: boolean;
   maintainer_can_modify?: boolean;
 }): string {
+  const sameRepository = !input.head_repository ||
+    input.head_repository.toLowerCase() === `${input.owner}/${input.repo}`.toLowerCase();
+  if (!sameRepository) {
+    return createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.github-pull-request-cross-repository-create-request-payload.v1",
+      input.owner,
+      input.repo,
+      input.title,
+      input.body ?? null,
+      input.head_repository,
+      input.head_ref,
+      input.base_ref,
+      input.draft,
+      input.maintainer_can_modify ?? null,
+    ]), "utf8").digest("hex");
+  }
   return createHash("sha256").update(JSON.stringify([
     "blue-tanuki.github-pull-request-create-request-payload.v1",
     input.owner,

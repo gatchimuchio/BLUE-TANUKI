@@ -2,9 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev3.1三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近の完了BUILD_BATCH — QE_BUILD / F05.02 PR diff範囲review comment consumer（限定WIRED）
+## 直近の完了BUILD_BATCH — QE_BUILD / F05.02 cross-repository fork-head PR create（限定WIRED）
 
-### 現在の施工状態 — 2026-11-08
+### 現在の施工状態 — 2026-11-09
+
+既存`github.write pr.create`へ、Ownerが明示した別repositoryのhead branchをつなぐ。base／head repositoryをそれぞれallowlist・identity・可視性・fork network rootまで観測し、headはbaseと同じnetworkのforkだけを受け付ける。head/base branch refとcommit SHAを含むtarget／payload digestをOperation Plan、HDS J、no-store L3、Approval Gate／Broker／Executor、成功／拒否／結果不明receipt、M、Owner結果照会まで同一taskに束縛した。L3画面は両repository・各可視性・fork network・両ref/SHA・通知可能性・非原子競合・作成非可逆性を示す。cross-repository requestだけGitHub APIの`head=owner:branch`と`head_repo=repo`を使い、同一repositoryの旧request形式を保つ。応答不明は自動再送しない。
+
+同一repository回帰を含む合成・test-owned loopback検査では、全workspace typecheck／build、`github.write pr.create`選択test 3 passed／94 skipped、Executor選択test 1 passed／16 skipped、Gateway process選択test 4 passed／75 skippedを確認済み。実GitHub・実資格情報・外部作用、process拒否／結果不明はNOT_RUN。現行差分は前回の同じ選択検査後から変わっていないため、今回test suiteは再実行していない。
+
+このcross-repository `pr.create`経路だけを限定`WIRED`とする。F05.02の他の残差、F05全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner GOへ一般化しない。次のBUILD_BATCHは現行実物からF05.02の残るproducer／consumer gapを選定する。実provider・live外部作用・公開判断は行わない。
+
+## 前回完了BUILD_BATCH — QE_BUILD / F05.02 PR diff範囲review comment consumer（限定WIRED）
+
+### 当時の施工状態 — 2026-11-08
 
 既存5 write操作の結果consumerは、承認済みcommand・Operation Plan binding・target/request digestをHDSで再照合し、Executorで受理receipt／限定拒否receipt／結果不明を区別してJへ配送する。Jは`verified`／`provider_rejected`／`verification_failed`／`outcome_unknown`を記録し、Mには本文やprovider応答本文を置かずdigest-only観測を保存する。Owner結果照会は保存状態とHTTP statusを返し、再送しない。既存5操作の合成受理・明示拒否・結果不明15件と、built Gateway processの5操作受理経路は前段で確認済み。
 
