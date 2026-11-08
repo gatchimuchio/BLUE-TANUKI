@@ -6,6 +6,10 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — D03.01 Runtime intentの受け手存在条件
+
+`POST /runtime/intent`のRuntime認証・runtime ID照合後、Gateway handlerが未設定なら`503 runtime_intent_handler_unavailable`を返すようにし、consumer不在の`202 accepted`を防ぐ。handler設定時は既存HDS入口を維持する。WebChat typecheck／build、`git diff --check`はPASS。endpoint test／Gateway process、D4側Adapter／応答、provider／外部作用はNOT_RUN。この限定コードslice以外のD03.01、5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はrev4.0の優先基準で実consumerを再選定する。
+
 ### 直近完了BUILD_BATCH — 親planのM解釈依存を子planへ継承（限定WIRED）
 
 親OperationPlanの現行性確認からJ/M memory interpretation dependencyを返し、`plan:compute`のC入力・候補保持まで継承する。source citationと親由来依存の統合は同一judgmentの一致を検査し、重複・競合・上限超過・再評価要求・現在性不明を拒否する。Mは非権威のまま。対象test 4件、protocol build、HDS-BRAIN typecheck／build、`hds:standalone`がPASS。Gateway親→子plan runtime経路、全workspace suite、実provider／外部作用、5OS、QE_QC／QE_QAは未確認。C04.03／D01.03のコード接続だけを限定`WIRED`とする。
