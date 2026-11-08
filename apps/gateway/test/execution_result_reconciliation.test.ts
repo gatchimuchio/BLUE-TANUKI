@@ -214,7 +214,9 @@ function githubWriteScenario(operation: GitHubWriteOperation): GitHubWriteScenar
       target_fields: { pull_request_id: 424246, pull_request_number: number, pull_request_state: "open",
         pull_request_locked: false, pull_request_updated_at: pullRequestUpdatedAt },
       method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, accepted_status: 201,
-      accepted_provider_response: { id: 42_447, body: comment }, accepted_result: { id: 42_447 }, private_values: [comment] };
+      accepted_provider_response: { id: 42_447, body: comment,
+        issue_url: `https://api.github.com/repos/${owner}/${repo}/issues/${number}` }, accepted_result: { id: 42_447 },
+      private_values: [comment, "synthetic pull request target title"] };
   }
   const prTitle = "synthetic pull request title";
   const prBody = "synthetic pull request body never retained in M";
@@ -231,8 +233,9 @@ function githubWriteScenario(operation: GitHubWriteOperation): GitHubWriteScenar
     target_fields: { head_ref: head, head_commit_sha: headSha, base_ref: base, base_commit_sha: baseSha,
       draft: true, maintainer_can_modify: false },
     method: "POST", path: `/repos/${owner}/${repo}/pulls`, accepted_status: 201,
-    accepted_provider_response: { id: 42_448, number, title: prTitle, body: prBody, head_ref: head, head_commit_sha: headSha,
-      base_ref: base, base_commit_sha: baseSha, draft: true, maintainer_can_modify: false },
+    accepted_provider_response: { id: 42_448, number, title: prTitle, body: prBody, state: "open", draft: true,
+      maintainer_can_modify: false, head: { ref: head, sha: headSha, repo: { id: repositoryId } },
+      base: { ref: base, sha: baseSha, repo: { id: repositoryId } } },
     accepted_result: { id: 42_448, number, title: prTitle, head_ref: head, head_commit_sha: headSha,
       base_ref: base, base_commit_sha: baseSha, draft: true, maintainer_can_modify: false },
     private_values: [prTitle, prBody] };
@@ -1931,8 +1934,8 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
   }
 });
 
-describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", () => {
-  it.each(["issue.create", "issue.update", "issue.comment.create"] as const)(
+describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
+  it.each(["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create"] as const)(
     "実Gateway processは%sを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
     async (operation) => {
     const scenario = githubWriteScenario(operation);
@@ -1951,7 +1954,7 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
     const mockRequests: Array<{ method: string; path: string; authorization: string | undefined; body: string }> = [];
     const mockResponses: Array<{ method: string; path: string; status: number; finished: boolean; closed: boolean }> = [];
     const unexpectedMockRequests: Array<{ method: string; path: string }> = [];
-    const issueWriteRequests = () => mockRequests.filter((item) => item.method === scenario.method && item.path === scenario.path);
+    const mutationRequests = () => mockRequests.filter((item) => item.method === scenario.method && item.path === scenario.path);
     const mockServer = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
@@ -1969,18 +1972,37 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
           response.statusCode = 200;
           responseRecord.status = response.statusCode;
           response.end(JSON.stringify({ id: 424242, full_name: "fixture-owner/synthetic-repo", name: "synthetic-repo",
-            private: false, owner: { login: "fixture-owner" } }));
+            private: false, default_branch: "main", owner: { login: "fixture-owner" } }));
           return;
         }
-        if ((operation === "issue.update" || operation === "issue.comment.create") &&
+        const branchPathPrefix = `${repositoryPath}/branches/`;
+        if (operation === "pr.create" && method === "GET" && path.startsWith(branchPathPrefix)) {
+          const branchRef = decodeURIComponent(path.slice(branchPathPrefix.length));
+          const headRef = String(scenario.parameters.head);
+          const baseRef = String(scenario.parameters.base);
+          const sha = branchRef === headRef ? scenario.target_fields.head_commit_sha
+            : branchRef === baseRef ? scenario.target_fields.base_commit_sha : undefined;
+          if (sha) {
+            response.statusCode = 200;
+            responseRecord.status = response.statusCode;
+            response.end(JSON.stringify({ name: branchRef, commit: { sha } }));
+            return;
+          }
+        }
+        if ((operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") &&
           method === "GET" && path === issueTargetPath) {
+          const isPullRequest = operation === "pr.comment.create";
           response.statusCode = 200;
           responseRecord.status = response.statusCode;
-          response.end(JSON.stringify({ id: scenario.target_fields.issue_id, number: scenario.target_fields.issue_number,
-            state: scenario.target_fields.issue_state, locked: scenario.target_fields.issue_locked,
-            updated_at: scenario.target_fields.issue_updated_at,
-            title: scenario.target_fields.issue_title ?? "synthetic issue target title",
-            body: scenario.target_fields.issue_body ?? null }));
+          response.end(JSON.stringify({
+            id: isPullRequest ? scenario.target_fields.pull_request_id : scenario.target_fields.issue_id,
+            number: isPullRequest ? scenario.target_fields.pull_request_number : scenario.target_fields.issue_number,
+            state: isPullRequest ? scenario.target_fields.pull_request_state : scenario.target_fields.issue_state,
+            locked: isPullRequest ? scenario.target_fields.pull_request_locked : scenario.target_fields.issue_locked,
+            updated_at: isPullRequest ? scenario.target_fields.pull_request_updated_at : scenario.target_fields.issue_updated_at,
+            title: scenario.target_fields.issue_title ?? (isPullRequest ? "synthetic pull request target title" : "synthetic issue target title"),
+            body: scenario.target_fields.issue_body ?? null,
+            ...(isPullRequest ? { pull_request: { url: `https://api.github.com/repos/fixture-owner/synthetic-repo/pulls/${String(scenario.parameters.number)}` } } : {}) }));
           return;
         }
         if (method === scenario.method && path === scenario.path) {
@@ -2072,7 +2094,7 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       expect(typeof pending.command_id).toBe("string");
       expect(typeof pending.approval_token).toBe("string");
       expect(String(pending.operation ?? pending.target)).toContain("github.write");
-      expect(issueWriteRequests()).toHaveLength(0);
+      expect(mutationRequests()).toHaveLength(0);
 
       const approvalUrl = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pending.command_id))}`;
       const prematureApproval = await fetch(approvalUrl, {
@@ -2082,7 +2104,7 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       });
       expect(prematureApproval.status).toBe(409);
       expect(await prematureApproval.json()).toMatchObject({ error: "approval_content_review_required" });
-      expect(issueWriteRequests()).toHaveLength(0);
+      expect(mutationRequests()).toHaveLength(0);
 
       const contentReviewResponse = await fetch(`${approvalUrl}/content`, {
         method: "POST",
@@ -2098,16 +2120,30 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       })).toBe(200);
       expect(contentReviewResponse.headers.get("cache-control")).toBe("no-store");
       const contentReview = JSON.parse(contentReviewText) as Record<string, unknown>;
-      expect(contentReview).toMatchObject({
-        ...(operation === "issue.create"
-          ? { kind: "github_issue_create", operation: "github.write.issue.create", title, body }
-          : operation === "issue.update"
-            ? { kind: "github_issue_update", operation: "github.write.issue.update", issue_number: 7,
-              current_title: "prior synthetic issue title", current_body: "prior synthetic issue body",
-              requested_title: title, requested_body: body }
-            : { kind: "github_issue_comment_create", operation: "github.write.issue.comment.create",
+      const expectedReview = operation === "issue.create"
+        ? { kind: "github_issue_create", operation: "github.write.issue.create", title, body }
+        : operation === "issue.update"
+          ? { kind: "github_issue_update", operation: "github.write.issue.update", issue_number: 7,
+            current_title: "prior synthetic issue title", current_body: "prior synthetic issue body",
+            requested_title: title, requested_body: body }
+          : operation === "issue.comment.create"
+            ? { kind: "github_issue_comment_create", operation: "github.write.issue.comment.create",
               issue_id: 424244, issue_number: 7, issue_state: "open", issue_locked: false,
-              issue_updated_at: "2026-11-08T01:02:03.000Z", issue_title: "synthetic issue target title", body }),
+              issue_updated_at: "2026-11-08T01:02:03.000Z", issue_title: "synthetic issue target title", body }
+            : operation === "pr.create"
+              ? { kind: "github_pull_request_create", operation: "github.write.pr.create",
+                head_repository_id: 424242, head_canonical_full_name: "fixture-owner/synthetic-repo",
+                head_ref: "feature/synthetic", head_commit_sha: "a".repeat(40), base_ref: "main",
+                base_commit_sha: "b".repeat(40), title, body, draft: true, draft_was_defaulted: false,
+                maintainer_can_modify: false, publication_effect: "visible_to_repository_audience",
+                creation_is_reversible: false }
+              : { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
+                pull_request_id: 424246, pull_request_number: 7, pull_request_state: "open", pull_request_locked: false,
+                pull_request_updated_at: "2026-11-08T01:02:04.000Z", pull_request_title: "synthetic pull request target title",
+                comment_kind: "pull_request_timeline", body, publication_effect: "visible_to_repository_audience",
+                comment_removal_retracts_notifications: false };
+      expect(contentReview).toMatchObject({
+        ...expectedReview,
         requested_owner: "fixture-owner", requested_repo: "synthetic-repo", canonical_full_name: "fixture-owner/synthetic-repo",
         repository_id: 424242, repository_visibility: "public",
         request_payload_digest: scenario.request_payload_digest, notification_effect: "github_api_may_trigger_notifications",
@@ -2115,7 +2151,7 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       expect(contentReview.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(contentReview.review_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(contentReview)).not.toContain(fakeGitHubToken);
-      expect(issueWriteRequests()).toHaveLength(0);
+      expect(mutationRequests()).toHaveLength(0);
 
       const githubRequestCountBeforeApproval = mockRequests.length;
       const finalApproval = await fetch(approvalUrl, {
@@ -2136,22 +2172,41 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
         result: { approval: "approve", executed: true } });
 
       const issueWriteDeadline = Date.now() + 10_000;
-      while (Date.now() < issueWriteDeadline && issueWriteRequests().length === 0) {
+      while (Date.now() < issueWriteDeadline && mutationRequests().length === 0) {
         await new Promise((resolveWait) => setTimeout(resolveWait, 20));
       }
-      const issueWrites = issueWriteRequests();
-      expect(issueWrites, JSON.stringify({ mock_requests: mockRequests.map(({ method, path, authorization, body }) => ({ method,
+      const writes = mutationRequests();
+      expect(writes, JSON.stringify({ mock_requests: mockRequests.map(({ method, path, authorization, body }) => ({ method,
         path, authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
         mock_responses: mockResponses, finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toHaveLength(1);
-      expect(issueWrites[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
-      expect(JSON.parse(issueWrites[0]!.body)).toEqual(operation === "issue.comment.create" ? { body } : { title, body });
-      if (operation === "issue.update" || operation === "issue.comment.create") {
+      expect(writes[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
+      const expectedMutationBody = operation === "issue.comment.create" || operation === "pr.comment.create"
+        ? { body }
+        : operation === "pr.create"
+          ? { title, body, head: scenario.parameters.head, base: scenario.parameters.base, draft: true, maintainer_can_modify: false }
+          : { title, body };
+      expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);
+      if (operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") {
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         const postApprovalIssueReadIndexes = mockRequests.map((item, index) => ({ item, index }))
           .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" && item.path === issueTargetPath)
           .map(({ index }) => index);
         expect(postApprovalIssueReadIndexes.length).toBeGreaterThan(0);
         expect(postApprovalIssueReadIndexes.at(-1)!).toBeLessThan(writeIndex);
+      }
+      if (operation === "pr.create") {
+        const branchPathPrefix = `${repositoryPath}/branches/`;
+        const prBranchRefs = [String(scenario.parameters.head), String(scenario.parameters.base)];
+        const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
+        for (const branchRef of prBranchRefs) {
+          const postApprovalBranchReadIndexes = mockRequests.map((item, index) => ({ item, index }))
+            .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" &&
+              item.path.startsWith(branchPathPrefix) && decodeURIComponent(item.path.slice(branchPathPrefix.length)) === branchRef)
+            .map(({ index }) => index);
+          expect(postApprovalBranchReadIndexes.length,
+            JSON.stringify(mockRequests.map(({ method, path }) => ({ method, path })))).toBeGreaterThan(0);
+          expect(postApprovalBranchReadIndexes.at(-1)!).toBeLessThan(writeIndex);
+        }
       }
       expect(unexpectedMockRequests).toEqual([]);
       expect(mockRequests.length).toBeGreaterThan(1);
@@ -2165,7 +2220,9 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
         if (!row) throw new Error("Gateway process did not persist the J Operation Plan checkpoint");
         persistedPlan = (JSON.parse(row.checkpoint_json) as ReturnType<OperationPlanStateStore["load"]>).plans[0]!;
       } finally { persistedDb.close(); }
-      expect(persistedPlan.bindings.at(-1)).toMatchObject({ status: "verified", operation: "github.write",
+      expect(persistedPlan.bindings.at(-1), JSON.stringify({ requests: mockRequests.map(({ method, path }) => ({ method, path })),
+        responses: mockResponses.map(({ method, path, status }) => ({ method, path, status })), unexpectedMockRequests,
+        approval: finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toMatchObject({ status: "verified", operation: "github.write",
         github_write_result: { operation, mutation_status: "provider_accepted", http_status: scenario.accepted_status,
           used_for_authority: false, may_execute: false } });
       const memory = JSON.stringify(inspectMemory(context));
@@ -2191,7 +2248,7 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       expect(resultContent).toContain(`HTTP status: ${scenario.accepted_status}`);
       expect(resultContent).toContain("この結果照会は操作を再実行しません。");
       for (const privateValue of scenario.private_values) expect(resultContent).not.toContain(privateValue);
-      expect(issueWriteRequests()).toHaveLength(1);
+      expect(mutationRequests()).toHaveLength(1);
 
       const persistedAudit = readUtf8FilesUnder(join(tempRoot, "audit")).join("\n");
       const persistedHistory = readFileSync(completeHistoryPath, "utf8");
