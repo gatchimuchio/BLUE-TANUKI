@@ -2,7 +2,8 @@ import { afterAll, describe, it, expect, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -171,7 +172,7 @@ function githubWriteScenario(operation: GitHubWriteOperation): GitHubWriteScenar
       target_identity_digest: githubIssueCreateTargetIdentityDigest({ repository_id: repositoryId, canonical_full_name: canonicalFullName }),
       request_payload_digest: githubIssueCreateRequestPayloadDigest({ owner, repo, title, body }), target_fields: {},
       method: "POST", path: `/repos/${owner}/${repo}/issues`, accepted_status: 201,
-      accepted_result: { id: 42, number, title }, private_values: [title, body] };
+      accepted_result: { id: 42, number, title, body }, private_values: [title, body] };
   }
   if (operation === "issue.update") {
     const updatedTitle = "synthetic updated issue title";
@@ -310,6 +311,20 @@ async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Prom
 }
 async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate,
   owner = "fixture-owner") {
+  const context = await setupInternal(root, workspace, planFactory, owner, true);
+  if (!("cmd" in context)) throw new Error("prepared setup did not select an Operation Plan step");
+  return context;
+}
+
+async function setupPlanOnly(root: string, workspace: string,
+  planFactory: (id: string, root: string) => OperationPlan = candidate, owner = "fixture-owner") {
+  const context = await setupInternal(root, workspace, planFactory, owner, false);
+  if ("cmd" in context) throw new Error("plan-only setup unexpectedly selected an Operation Plan step");
+  return context;
+}
+
+async function setupInternal(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan,
+  owner: string, prepareReviewedStep: boolean) {
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite"); const executionEpoch = randomUUID();
   const execution = new GatewayExecutionIntentStore(executionPath, executionEpoch); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
@@ -380,15 +395,17 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   }
   const initial = hds.decide(origin).command!; const first = await executor.execute(await approve(initial));
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
-  const cmd = review(hds, plan, plan.steps[0]!.step_id)!; const approved = await approve(cmd);
-  const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
   const advanceWallClockTo = (timestamp: number) => {
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0) throw new Error("fixture clock target is invalid");
     harnessWallFloor = Math.max(harnessWallFloor, timestamp);
   };
-  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory,
+  const baseContext = { root, workspace, executionPath, jPath, execution, j, hds, plan, authority, executor, invoke, memory,
     controllers, createHds, approve, advanceWallClockTo, currentWallClock: harnessWallNow, oldMemory, purposeBinding: undefined as
       { goal_ref: string; purpose_version: number; purpose_digest: string } | undefined };
+  if (!prepareReviewedStep) return baseContext;
+  const cmd = review(hds, plan, plan.steps[0]!.step_id)!; const approved = await approve(cmd);
+  const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
+  return { ...baseContext, cmd, approved, admission };
 }
 
 function testGoalGovernance() {
@@ -1908,6 +1925,269 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
   }
 });
 
+describe("WebChat OwnerのL3確認→合成GitHub issue.create→保存結果", () => {
+  it("実Gateway processが明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す", async () => {
+    const scenario = githubWriteScenario("issue.create");
+    const title = String(scenario.parameters.title);
+    const body = String(scenario.parameters.body);
+    const repositoryPath = "/repos/fixture-owner/synthetic-repo";
+    const issuePath = `${repositoryPath}/issues`;
+    const fakeGitHubToken = "f05.02-synthetic-github-token";
+    const tempRoot = mkdtempSync(join(tmpdir(), "blue-github-write-served-"));
+    servedGatewayTempRoots.push(tempRoot);
+    const workspace = join(tempRoot, "workspace");
+    const stateRoot = join(tempRoot, "state");
+    mkdirSync(workspace, { recursive: true });
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+
+    const mockRequests: Array<{ method: string; path: string; authorization: string | undefined; body: string }> = [];
+    const mockResponses: Array<{ method: string; path: string; status: number; finished: boolean; closed: boolean }> = [];
+    const unexpectedMockRequests: Array<{ method: string; path: string }> = [];
+    const mockServer = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      request.on("end", () => {
+        const requestBody = Buffer.concat(chunks).toString("utf8");
+        const path = request.url ?? "";
+        const method = request.method ?? "";
+        const responseRecord = { method, path, status: 0, finished: false, closed: false };
+        mockResponses.push(responseRecord);
+        response.on("finish", () => { responseRecord.finished = true; });
+        response.on("close", () => { responseRecord.closed = true; });
+        mockRequests.push({ method, path, authorization: request.headers.authorization, body: requestBody });
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        if (method === "GET" && path === repositoryPath) {
+          response.statusCode = 200;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify({ id: 424242, full_name: "fixture-owner/synthetic-repo", name: "synthetic-repo",
+            private: false, owner: { login: "fixture-owner" } }));
+          return;
+        }
+        if (method === "POST" && path === issuePath) {
+          response.statusCode = 201;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify(scenario.accepted_result));
+          return;
+        }
+        unexpectedMockRequests.push({ method, path });
+        response.statusCode = 404;
+        responseRecord.status = response.statusCode;
+        response.end(JSON.stringify({ message: "synthetic GitHub fixture has no such route" }));
+      });
+    });
+
+    let context: Awaited<ReturnType<typeof setupPlanOnly>> | undefined;
+    let contextClosed = false;
+    let gateway: ServedGatewayProcess | undefined;
+    let socket: WebSocket | undefined;
+    let mockPort: number | undefined;
+    const frames: ServedGatewayFrame[] = [];
+
+    try {
+      mockServer.listen(0, "127.0.0.1");
+      await once(mockServer, "listening");
+      const mockAddress = mockServer.address();
+      if (!mockAddress || typeof mockAddress === "string") throw new Error("synthetic GitHub loopback port unavailable");
+      mockPort = mockAddress.port;
+
+      context = await setupPlanOnly(tempRoot, workspace, (id) => githubWriteCandidate(id, scenario));
+      const initialPlanState = context.j.load()?.plans[0];
+      if (!initialPlanState) throw new Error("synthetic GitHub Operation Plan was not persisted");
+      expect(initialPlanState.bindings).toHaveLength(0);
+      expect(initialPlanState.revisions.at(-1)?.plan.steps[0]?.state).toBe("planned");
+      const planId = context.plan.plan_id;
+      const initialRevisionDigest = initialPlanState.revisions.at(-1)!.digest;
+      const stepId = scenario.step_id;
+
+      // Transfer the unreviewed plan to the real Gateway process without preserving an open J writer.
+      for (const hds of context.controllers) {
+        hds.closeOperationPlanMemory();
+        hds.close();
+      }
+      context.controllers.splice(0, context.controllers.length);
+      context.execution.close();
+      context.j.close();
+      contextClosed = true;
+      const runtimePlanState = join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      mkdirSync(dirname(runtimePlanState), { recursive: true });
+      copyFileSync(context.jPath, runtimePlanState);
+      const completeHistoryPath = join(tempRoot, "complete-history.jsonl");
+      const completeHistory = new CompleteHistoryStore({ filepath: completeHistoryPath });
+      completeHistory.append({ kind: "audit_history", actor: "synthetic-fixture", source: "f05-02-live-process-seed",
+        timestamp: Date.now(), payload: { synthetic: true, used_for_authority: false } });
+      expect(completeHistory.verify()).toBe(true);
+
+      const gatewayPort = await reserveServedGatewayPort();
+      const networkGuardPath = resolve(findWorkspaceRoot(), "apps", "gateway", "test", "fixtures", "github_loopback_network_guard.cjs");
+      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { githubMockPort: mockPort, networkGuardPath });
+      await waitForServedGatewayHealth(gatewayPort, gateway);
+      socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
+
+      const reviewRequest = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-webchat-token", "content-type": "application/json" },
+        body: JSON.stringify({ user: "fixture-owner", content: `plan:review ${JSON.stringify({
+          plan_id: planId, revision_digest: initialRevisionDigest, step_id: stepId,
+        })}` }),
+      });
+      expect(reviewRequest.status).toBe(202);
+
+      const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+          headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
+        });
+        if (response.status !== 200) throw new Error("synthetic Owner approval queue was unavailable");
+        return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+      };
+      let pending: Record<string, unknown> | undefined;
+      const approvalDeadline = Date.now() + 10_000;
+      while (Date.now() < approvalDeadline && !pending) {
+        const queue = await loadQueue();
+        pending = queue.pending_approvals.find((item) => item.approval_level === "L3_final_review" &&
+          item.final_review_required === true && item.content_review_required === true &&
+          String(item.operation ?? item.target ?? "").includes("github.write"));
+        if (!pending) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      }
+      if (!pending) throw new Error("synthetic GitHub write did not reach the L3 content-review queue");
+      expect(typeof pending.command_id).toBe("string");
+      expect(typeof pending.approval_token).toBe("string");
+      expect(String(pending.operation ?? pending.target)).toContain("github.write");
+      expect(mockRequests.filter((item) => item.method === "POST")).toHaveLength(0);
+
+      const approvalUrl = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pending.command_id))}`;
+      const prematureApproval = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token }),
+      });
+      expect(prematureApproval.status).toBe(409);
+      expect(await prematureApproval.json()).toMatchObject({ error: "approval_content_review_required" });
+      expect(mockRequests.filter((item) => item.method === "POST")).toHaveLength(0);
+
+      const contentReviewResponse = await fetch(`${approvalUrl}/content`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
+      });
+      const contentReviewText = await contentReviewResponse.text();
+      expect(contentReviewResponse.status, JSON.stringify({
+        response: contentReviewText,
+        github_routes: mockRequests.map(({ method, path }) => ({ method, path })),
+        mock_responses: mockResponses,
+        unexpected_routes: unexpectedMockRequests,
+        gateway_stderr: gateway.stderr.join(""),
+      })).toBe(200);
+      expect(contentReviewResponse.headers.get("cache-control")).toBe("no-store");
+      const contentReview = JSON.parse(contentReviewText) as Record<string, unknown>;
+      expect(contentReview).toMatchObject({ kind: "github_issue_create", operation: "github.write.issue.create",
+        requested_owner: "fixture-owner", requested_repo: "synthetic-repo", canonical_full_name: "fixture-owner/synthetic-repo",
+        repository_id: 424242, repository_visibility: "public", title, body,
+        request_payload_digest: scenario.request_payload_digest, notification_effect: "github_api_may_trigger_notifications",
+        provider_observation_is_atomic: false, used_for_authority: false, may_execute: false });
+      expect(contentReview.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(contentReview.review_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(contentReview)).not.toContain(fakeGitHubToken);
+      expect(mockRequests.filter((item) => item.method === "POST")).toHaveLength(0);
+
+      const finalApproval = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
+          content_review_digest: contentReview.review_digest }),
+      });
+      const finalApprovalText = await finalApproval.text();
+      expect(finalApproval.status, JSON.stringify({ response: finalApprovalText,
+        mock_requests: mockRequests.map(({ method, path }) => ({ method, path })), gateway_stderr: gateway.stderr.join("") })).toBe(200);
+      const finalApprovalBody = JSON.parse(finalApprovalText) as Record<string, unknown>;
+      expect(finalApprovalBody, JSON.stringify({ finalApprovalBody,
+        mock_requests: mockRequests.map(({ method, path, authorization, body }) => ({ method, path,
+          authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
+        mock_responses: mockResponses,
+        gateway_stderr: gateway.stderr.join("") })).toMatchObject({ ok: true,
+        result: { approval: "approve", executed: true } });
+
+      const issuePostDeadline = Date.now() + 10_000;
+      while (Date.now() < issuePostDeadline &&
+          !mockRequests.some((item) => item.method === "POST" && item.path === issuePath)) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      const issuePosts = mockRequests.filter((item) => item.method === "POST" && item.path === issuePath);
+      expect(issuePosts, JSON.stringify({ mock_requests: mockRequests.map(({ method, path, authorization, body }) => ({ method,
+        path, authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
+        mock_responses: mockResponses, finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toHaveLength(1);
+      expect(issuePosts[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
+      expect(JSON.parse(issuePosts[0]!.body)).toEqual({ title, body });
+      expect(unexpectedMockRequests).toEqual([]);
+      expect(mockRequests.length).toBeGreaterThan(1);
+      for (const item of mockRequests) expect(item.authorization).toBe(`Bearer ${fakeGitHubToken}`);
+
+      const persistedDb = new DatabaseSync(runtimePlanState);
+      let persistedPlan: ReturnType<OperationPlanStateStore["load"]>["plans"][number];
+      try {
+        const row = persistedDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id = 1").get() as
+          { checkpoint_json: string } | undefined;
+        if (!row) throw new Error("Gateway process did not persist the J Operation Plan checkpoint");
+        persistedPlan = (JSON.parse(row.checkpoint_json) as ReturnType<OperationPlanStateStore["load"]>).plans[0]!;
+      } finally { persistedDb.close(); }
+      expect(persistedPlan.bindings.at(-1)).toMatchObject({ status: "verified", operation: "github.write",
+        github_write_result: { operation: "issue.create", mutation_status: "provider_accepted", http_status: 201,
+          used_for_authority: false, may_execute: false } });
+      const memory = JSON.stringify(inspectMemory(context));
+      expect(inspectMemory(context).receipts.length).toBeGreaterThan(0);
+      for (const privateValue of [...scenario.private_values, fakeGitHubToken]) expect(memory).not.toContain(privateValue);
+      const persistedGatewayMemory = existsSync(join(tempRoot, "memory.jsonl"))
+        ? readFileSync(join(tempRoot, "memory.jsonl"), "utf8") : "";
+
+      const latestRevisionDigest = persistedPlan.revisions.at(-1)!.digest;
+      const resultRead = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-webchat-token", "content-type": "application/json" },
+        body: JSON.stringify({ user: "fixture-owner", content: `plan:result ${JSON.stringify({
+          plan_id: planId, revision_digest: latestRevisionDigest, step_id: stepId,
+        })}` }),
+      });
+      expect(resultRead.status).toBe(202);
+      const resultFrame = await waitForServedGatewayFrame(frames, gateway,
+        (item) => item.kind === "channel_send" && typeof item.content === "string" &&
+          item.content.includes("保存済みGitHub操作結果（issue.create）"));
+      const resultContent = String(resultFrame.content);
+      expect(resultContent).toContain("GitHub APIが受理を返しました。");
+      expect(resultContent).toContain("HTTP status: 201");
+      expect(resultContent).toContain("この結果照会は操作を再実行しません。");
+      for (const privateValue of scenario.private_values) expect(resultContent).not.toContain(privateValue);
+      expect(mockRequests.filter((item) => item.method === "POST" && item.path === issuePath)).toHaveLength(1);
+
+      const persistedAudit = readUtf8FilesUnder(join(tempRoot, "audit")).join("\n");
+      const persistedHistory = readFileSync(completeHistoryPath, "utf8");
+      const persistedSessions = readUtf8FilesUnder(join(tempRoot, "sessions")).join("\n");
+      const processOutput = gateway.stdout.join("") + gateway.stderr.join("");
+      for (const privateValue of [...scenario.private_values, fakeGitHubToken]) {
+        expect(persistedGatewayMemory).not.toContain(privateValue);
+        expect(persistedAudit).not.toContain(privateValue);
+        expect(persistedHistory).not.toContain(privateValue);
+        expect(persistedSessions).not.toContain(privateValue);
+        expect(processOutput).not.toContain(privateValue);
+      }
+      expect(gateway.child.exitCode).toBeNull();
+    } finally {
+      if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) socket.terminate();
+      if (gateway) await stopServedGateway(gateway);
+      if (mockServer.listening) {
+        await new Promise<void>((resolveClose, rejectClose) => mockServer.close((error) => error ? rejectClose(error) : resolveClose()));
+      }
+      if (context && !contextClosed) {
+        for (const hds of context.controllers) {
+          hds.closeOperationPlanMemory();
+          hds.close();
+        }
+        context.execution.close();
+        context.j.close();
+      }
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  }, 45_000);
+});
+
 interface ServedGatewayFrame {
   readonly kind?: string;
   readonly content?: string;
@@ -1920,11 +2200,9 @@ interface ServedGatewayProcess {
   readonly stderr: string[];
 }
 
-function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string): ServedGatewayProcess {
-  let repositoryRoot = resolve(process.cwd());
-  while (!existsSync(join(repositoryRoot, "pnpm-workspace.yaml")) && dirname(repositoryRoot) !== repositoryRoot) {
-    repositoryRoot = dirname(repositoryRoot);
-  }
+function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string,
+  options: { githubMockPort?: number; networkGuardPath?: string } = {}): ServedGatewayProcess {
+  const repositoryRoot = findWorkspaceRoot();
   const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
   if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
   const env: NodeJS.ProcessEnv = {};
@@ -1950,8 +2228,16 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
     BLUE_TANUKI_APPROVAL_MODE: "full_access",
     LLM_BACKEND: "stub",
   });
-  // No GITHUB_TOKEN, provider credential, or external channel credential is copied into this process.
-  const child = spawn(process.execPath, [entrypoint, "--serve"], {
+  if (options.githubMockPort !== undefined) {
+    Object.assign(env, {
+      GITHUB_TOKEN: "f05.02-synthetic-github-token",
+      BLUE_TANUKI_GITHUB_REPOS: "fixture-owner/synthetic-repo",
+      BT_F05_02_GITHUB_MOCK_PORT: String(options.githubMockPort),
+    });
+  }
+  // No host GITHUB_TOKEN or provider credential is inherited; the configured mock gets only a synthetic token.
+  const args = options.networkGuardPath ? ["--require", options.networkGuardPath, entrypoint, "--serve"] : [entrypoint, "--serve"];
+  const child = spawn(process.execPath, args, {
     cwd: repositoryRoot, env, stdio: "pipe", windowsHide: true,
   });
   const stdout: string[] = [];
@@ -1959,6 +2245,29 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
   child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString("utf8")));
   child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
   return { child, stdout, stderr };
+}
+
+function findWorkspaceRoot(): string {
+  let root = resolve(process.cwd());
+  while (!existsSync(join(root, "pnpm-workspace.yaml")) && dirname(root) !== root) root = dirname(root);
+  if (!existsSync(join(root, "pnpm-workspace.yaml"))) throw new Error("Gateway test could not locate pnpm workspace root");
+  return root;
+}
+
+function readUtf8FilesUnder(root: string): string[] {
+  if (!existsSync(root)) return [];
+  const pending = [root];
+  const contents: string[] = [];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.isFile()) contents.push(readFileSync(path, "utf8"));
+    }
+  }
+  return contents;
 }
 
 async function reserveServedGatewayPort(): Promise<number> {

@@ -1582,7 +1582,13 @@ ${planControl.question}`,
     // purpose/parent/M inputs; generic retrieved-memory citation envelopes are not candidate evidence.
     const suppressTransientDocumentOrganizationContext = options.transient_content !== undefined &&
       req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
-    const isolatedContextReason = suppressTransientDocumentOrganizationContext
+    const selectedGitHubToolCall = req.metadata?.["blue_tanuki.tool_call"];
+    const selectedGitHubWrite = isGatewayInternalInboundRequest(req) &&
+      req.metadata?.["blue_tanuki.process_kind"] === "tool" &&
+      typeof selectedGitHubToolCall === "object" && selectedGitHubToolCall !== null && !Array.isArray(selectedGitHubToolCall) &&
+      (selectedGitHubToolCall as Record<string, unknown>).tool_name === "github.write";
+    const isolatedContextReason = selectedGitHubWrite ? "operation_plan_github_write" as const
+      : suppressTransientDocumentOrganizationContext
       ? options.transient_content === "google_drive_document_organization"
         ? "transient_google_drive_document_organization" as const
         : "transient_document_organization" as const
@@ -1594,6 +1600,9 @@ ${planControl.question}`,
       : failureReviewControlRequested ? "failure_review" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
+    const frameRequest = selectedGitHubWrite
+      ? requestWithNormalizedContent(req, "[operation_plan_github_write_content_redacted]")
+      : authorityReq;
     // Gateway marks only a request already matched to one volatile Telegram audio input.
     // The transcription consumer does not use retrieved memory, so do not create citation
     // candidates that its transcript-only response cannot meaningfully cite.
@@ -1609,7 +1618,7 @@ ${planControl.question}`,
         }
       : input;
     const goalGovernanceProjection = this.goal_governance?.project(this.nowMs());
-    const initialFrame = frame(authorityReq, {
+    const initialFrame = frame(frameRequest, {
       default_policy: this.policy,
       ...(isolatedContextReason || transientAudioTranscript ? {} : { memory_reader: this.memory }),
       original_content: req.content,

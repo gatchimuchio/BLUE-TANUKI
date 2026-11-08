@@ -3956,7 +3956,9 @@ export const githubWriteTool: Tool = {
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const observation = context.target_version_observation?.schema_version === "blue-tanuki.github-write-target-version.v1"
       ? context.target_version_observation : undefined;
-    return await invokeGitHubWrite(args, { signal: context.signal, command_digest: context.command_digest,
+    // Target observations bind operationPlanDigest(command); context.command_digest is the Executor ticket digest.
+    return await invokeGitHubWrite(args, { signal: context.signal,
+      command_digest: observation?.command_digest ?? context.command_digest,
       expected_target_version_observation: observation,
       operation_plan_binding_digest: observation?.operation_plan_binding_digest });
   },
