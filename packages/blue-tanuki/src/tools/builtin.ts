@@ -752,11 +752,18 @@ function githubOptionalBody(args: Record<string, unknown>): string | undefined {
   return stringArg(args, "body", false);
 }
 
-type GitHubPullRequestInlineCommentLocation = { path: string; line: number; side: "LEFT" | "RIGHT" };
+type GitHubPullRequestInlineCommentLocation = {
+  path: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  start_line?: number;
+  start_side?: "LEFT" | "RIGHT";
+};
 
 function githubPullRequestInlineCommentLocation(args: Record<string, unknown>): GitHubPullRequestInlineCommentLocation | undefined {
   const kind = args.comment_kind;
-  const hasLocation = args.path !== undefined || args.line !== undefined || args.side !== undefined;
+  const hasLocation = args.path !== undefined || args.start_line !== undefined || args.start_side !== undefined ||
+    args.line !== undefined || args.side !== undefined;
   if (kind !== undefined && kind !== "pull_request_timeline" && kind !== "pull_request_review_inline") {
     throw new Error("comment_kind must be pull_request_timeline or pull_request_review_inline");
   }
@@ -767,14 +774,22 @@ function githubPullRequestInlineCommentLocation(args: Record<string, unknown>): 
   const path = args.path;
   const line = args.line;
   const side = args.side;
+  const startLine = args.start_line;
+  const startSide = args.start_side;
   if (typeof path !== "string" || path.length === 0 || path.length > 4_096 ||
       /[\u0000-\u001f\u007f]/.test(path) || path.startsWith("/") || path.includes("\\") ||
       path.split("/").some((part) => part.length === 0 || part === "." || part === "..") ||
       typeof line !== "number" || !Number.isSafeInteger(line) || line < 1 || line > 1_000_000 ||
-      (side !== "LEFT" && side !== "RIGHT")) {
+      (side !== "LEFT" && side !== "RIGHT") ||
+      (startLine === undefined) !== (startSide === undefined) ||
+      (startLine !== undefined && (typeof startLine !== "number" || !Number.isSafeInteger(startLine) ||
+        startLine < 1 || (startLine === line && startSide === side) || startLine > 1_000_000 ||
+        (startSide !== "LEFT" && startSide !== "RIGHT")))) {
     throw new Error("inline review comment requires a safe relative path, positive line, and LEFT or RIGHT side");
   }
-  return { path, line, side };
+  return { path, line, side,
+    ...(typeof startLine === "number" && (startSide === "LEFT" || startSide === "RIGHT")
+      ? { start_line: startLine, start_side: startSide } : {}) };
 }
 
 function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: string): {
@@ -821,6 +836,9 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
           method: "POST",
           path: `/repos/${ownerPath}/${repoPath}/pulls/${number}/comments`,
           body: { body: commentBody, path: location.path, line: location.line, side: location.side,
+            ...(location.start_line === undefined || location.start_side === undefined ? {} : {
+              start_line: location.start_line, start_side: location.start_side,
+            }),
             ...(inlineCommitSha ? { commit_id: inlineCommitSha } : {}) },
           repo,
         };
@@ -2230,27 +2248,44 @@ function parseGitHubInlineDiff(patch: string, location: GitHubPullRequestInlineC
   }
   finishHunk();
 
-  const matches = parsed.map((line, index) => ({ line, index })).filter(({ line }) =>
-    location.side === "LEFT"
-      ? line.old_line === location.line && line.marker !== "+"
-      : line.new_line === location.line && line.marker !== "-");
-  if (matches.length !== 1) {
+  const locate = (lineNumber: number, side: "LEFT" | "RIGHT") => parsed.map((line, index) => ({ line, index })).filter(({ line }) =>
+    side === "LEFT"
+      ? line.old_line === lineNumber && line.marker !== "+"
+      : line.new_line === lineNumber && line.marker !== "-");
+  const endMatches = locate(location.line, location.side);
+  const startMatches = location.start_line === undefined || location.start_side === undefined
+    ? endMatches
+    : locate(location.start_line, location.start_side);
+  if (endMatches.length !== 1 || startMatches.length !== 1) {
     throw new Error("requested inline review location is not a unique line in the current pull request diff");
   }
-  const selected = matches[0]!;
+  const selectedStart = startMatches[0]!;
+  const selectedEnd = endMatches[0]!;
+  const hasRange = location.start_line !== undefined && location.start_side !== undefined;
+  if (selectedStart.line.hunk_index !== selectedEnd.line.hunk_index ||
+      (hasRange ? selectedStart.index >= selectedEnd.index : selectedStart.index > selectedEnd.index)) {
+    throw new Error("requested inline review range is reversed or crosses pull request diff hunks");
+  }
   const nearby = parsed.map((line, index) => ({ line, index }))
-    .filter(({ line, index }) => line.hunk_index === selected.line.hunk_index && Math.abs(index - selected.index) <= 2);
-  const excerptLines = [selected.line.hunk_header];
-  for (const entry of nearby) {
+    .filter(({ line, index }) => line.hunk_index === selectedStart.line.hunk_index &&
+      index >= selectedStart.index - 2 && index <= selectedEnd.index + 2);
+  const selectedLines = nearby.filter(({ index }) => index >= selectedStart.index && index <= selectedEnd.index);
+  const renderLines = (entries: typeof nearby): string[] => entries.map((entry) => {
     const oldText = entry.line.old_line === null ? "-" : String(entry.line.old_line);
     const newText = entry.line.new_line === null ? "-" : String(entry.line.new_line);
     const safeText = entry.line.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "�");
     const boundedText = safeText.length > 600 ? `${safeText.slice(0, 597)}...` : safeText;
-    excerptLines.push(`${entry.index === selected.index ? ">" : " "} ${oldText} | ${newText} | ${entry.line.marker}${boundedText}`);
+    const inSelectedRange = entry.index >= selectedStart.index && entry.index <= selectedEnd.index;
+    return `${inSelectedRange ? ">" : " "} ${oldText} | ${newText} | ${entry.line.marker}${boundedText}`;
+  });
+  let excerpt = [selectedStart.line.hunk_header, ...renderLines(nearby)].join("\n");
+  if (excerpt.length > GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS) {
+    excerpt = [selectedStart.line.hunk_header, ...renderLines(selectedLines)].join("\n");
   }
-  const excerpt = excerptLines.join("\n");
-  return { excerpt: excerpt.length > GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS
-    ? `${excerpt.slice(0, GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS - 3)}...` : excerpt };
+  if (excerpt.length > GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS) {
+    throw new Error("requested inline review range exceeds the bounded Owner review excerpt; choose a shorter range");
+  }
+  return { excerpt };
 }
 
 async function inspectGitHubPullRequestInlineDiff(input: {
@@ -2314,8 +2349,14 @@ async function inspectGitHubPullRequestInlineDiff(input: {
     snapshot: before,
     excerpt,
     diff_digest: sha256Hex({
-      schema_version: "blue-tanuki.github-pull-request-inline-diff.v1",
+      schema_version: input.location.start_line === undefined
+        ? "blue-tanuki.github-pull-request-inline-diff.v1"
+        : "blue-tanuki.github-pull-request-inline-diff-range.v1",
       path: input.location.path,
+      ...(input.location.start_line === undefined || input.location.start_side === undefined ? {} : {
+        start_line: input.location.start_line,
+        start_side: input.location.start_side,
+      }),
       line: input.location.line,
       side: input.location.side,
       head_sha: before.head_sha,
@@ -2337,7 +2378,7 @@ async function inspectGitHubCommentCreateTargetDetails(
     throw new Error(`github.write ${route.operation} comment target observation does not match ${operation}; status=BUILD_GAP`);
   }
   const allowedArgumentKeys = operation === "pr.comment.create"
-    ? ["operation", "owner", "repo", "number", "body", "max_bytes", "comment_kind", "path", "line", "side"]
+    ? ["operation", "owner", "repo", "number", "body", "max_bytes", "comment_kind", "path", "start_line", "start_side", "line", "side"]
     : ["operation", "owner", "repo", "number", "body", "max_bytes"];
   if (Object.keys(args).some((key) => !allowedArgumentKeys.includes(key))) {
     throw new Error(`github.write ${operation} contains unsupported arguments; mutation_sent=false`);
@@ -2474,6 +2515,10 @@ async function inspectGitHubCommentCreateTargetDetails(
       ...(inlineDiff && inlineLocation ? {
         comment_kind: "pull_request_review_inline",
         path: inlineLocation.path,
+        ...(inlineLocation.start_line === undefined || inlineLocation.start_side === undefined ? {} : {
+          start_line: inlineLocation.start_line,
+          start_side: inlineLocation.start_side,
+        }),
         line: inlineLocation.line,
         side: inlineLocation.side,
         pull_request_head_sha: inlineDiff.snapshot.head_sha,
@@ -2571,7 +2616,7 @@ export function assertGitHubPullRequestCommentCreateTargetVersion(args: Record<s
     pull_request_number: observation.pull_request_number,
   });
   if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes", "comment_kind",
-      "path", "line", "side"].includes(key)) ||
+      "path", "start_line", "start_side", "line", "side"].includes(key)) ||
       route.operation !== "pr.comment.create" ||
       observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
@@ -2580,7 +2625,8 @@ export function assertGitHubPullRequestCommentCreateTargetVersion(args: Record<s
       (inlineLocation === undefined) !== (observation.comment_kind === undefined) ||
       (inlineLocation !== undefined && (observation.comment_kind !== "pull_request_review_inline" ||
         observation.path !== inlineLocation.path || observation.line !== inlineLocation.line ||
-        observation.side !== inlineLocation.side)) ||
+        observation.side !== inlineLocation.side || observation.start_line !== inlineLocation.start_line ||
+        observation.start_side !== inlineLocation.start_side)) ||
       observation.command_digest !== commandDigest ||
       observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
       observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
@@ -2645,6 +2691,11 @@ export async function inspectGitHubPullRequestCommentCreateContentReview(args: R
     comment_kind: inlineDiff ? "pull_request_review_inline" as const : "pull_request_timeline" as const,
     ...(inlineDiff ? {
       path: observation.operation === "pr.comment.create" ? observation.path : undefined,
+      ...(observation.operation === "pr.comment.create" && observation.start_line !== undefined &&
+          observation.start_side !== undefined ? {
+        start_line: observation.start_line,
+        start_side: observation.start_side,
+      } : {}),
       line: observation.operation === "pr.comment.create" ? observation.line : undefined,
       side: observation.operation === "pr.comment.create" ? observation.side : undefined,
       head_commit_sha: inlineDiff.head_sha,
@@ -2766,9 +2817,17 @@ async function invokeGitHubCommentCreate(
       (operation === "issue.comment.create" && message ? "; message=" + message : ""));
   }
   const comment = isRecord(data) ? data : null;
+  const inlineRangeMatches = inlineReviewObservation
+    ? inlineReviewObservation.start_line === undefined
+      ? (comment?.start_line === undefined || comment.start_line === null || comment.start_line === inlineReviewObservation.line) &&
+        (comment?.start_side === undefined || comment.start_side === null || comment.start_side === inlineReviewObservation.side)
+      : comment?.start_line === inlineReviewObservation.start_line &&
+        comment.start_side === inlineReviewObservation.start_side
+    : true;
   const inlineResponseMatches = inlineReviewObservation
     ? !!comment && comment.path === inlineReviewObservation.path && comment.line === inlineReviewObservation.line &&
-      comment.side === inlineReviewObservation.side && comment.commit_id === inlineReviewObservation.pull_request_head_sha &&
+      comment.side === inlineReviewObservation.side && inlineRangeMatches &&
+      comment.commit_id === inlineReviewObservation.pull_request_head_sha &&
       githubPullRequestIssueUrlMatches(comment.pull_request_url, githubNameArg(args, "owner"),
         githubNameArg(args, "repo"), requiredPositiveIntArg(args, "number", 1_000_000))
     : true;
@@ -4198,7 +4257,7 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests, regular pull request timeline comments, and single-line pull request diff review comments after target recheck and no-store L3 review. Inline comments require a changed path, line, LEFT/RIGHT side, and current head commit; multiline inline comments and cross-repository pull requests remain BUILD_GAP. Update only the reviewed title/body of an existing issue.",
+  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests, regular pull request timeline comments, and single-line or bounded multi-line pull request diff review comments after target recheck and no-store L3 review. Inline comments require a changed path, exact diff line and side; multi-line comments additionally bind the start line and side. Cross-repository pull requests remain BUILD_GAP. Update only the reviewed title/body of an existing issue.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "pr.create") {

@@ -1847,6 +1847,78 @@ describe("built-in tools", () => {
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
   });
 
+  it("github.write pr.comment.create accepts a forward cross-side range when file line numbers descend", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Review replaced lines",
+      path: "src/a.ts", start_line: 11, start_side: "LEFT", line: 9, side: "RIGHT" };
+    const patch = "@@ -9,3 +9,1 @@\n-old line nine\n-old line ten\n-old line eleven\n+new line nine";
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const defaultRead = fakeGitHubPullRequestCommentCreate().read_request!;
+    const options = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body });
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 792, body: args.body, path: args.path, start_line: args.start_line,
+          start_side: args.start_side, line: args.line, side: args.side, commit_id: "c".repeat(40),
+          pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "PR-INLINE-RANGE-COMMENT123",
+      };
+    }, async (target, signal) => target.path.includes("/pulls/7/files?")
+      ? githubReadJson([{ filename: "src/a.ts", status: "modified", patch }])
+      : defaultRead(target, signal)));
+
+    const review = await inspectGitHubPullRequestCommentCreateContentReview(args, options);
+    expect(review).toMatchObject({ start_line: 11, start_side: "LEFT", line: 9, side: "RIGHT",
+      diff_excerpt: expect.stringContaining("> 11 | - | -old line eleven\n> - | 9 | +new line nine") });
+    await expect(invokeGitHubWrite(args, options)).resolves.toMatchObject({
+      operation: "pr.comment.create", mutation_status: "provider_accepted", result: { id: 792 },
+    });
+    expect(seen).toEqual([{ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls/7/comments",
+      body: { body: args.body, path: args.path, start_line: 11, start_side: "LEFT", line: 9, side: "RIGHT",
+        commit_id: "c".repeat(40) } }]);
+  });
+
+  it("github.write pr.comment.create rejects a range whose endpoint order is reversed in the diff", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Reversed range",
+      path: "src/a.ts", start_line: 9, start_side: "RIGHT", line: 11, side: "LEFT" };
+    const patch = "@@ -9,3 +9,1 @@\n-old line nine\n-old line ten\n-old line eleven\n+new line nine";
+    let writes = 0;
+    const defaultRead = fakeGitHubPullRequestCommentCreate().read_request!;
+    const options = fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("reversed range must not be posted");
+    }, async (target, signal) => target.path.includes("/pulls/7/files?")
+      ? githubReadJson([{ filename: "src/a.ts", status: "modified", patch }])
+      : defaultRead(target, signal));
+    await expect(reviewedGitHubPullRequestCommentCreate(args, options))
+      .rejects.toThrow(/reversed or crosses pull request diff hunks/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write pr.comment.create refuses a selected range larger than the bounded review excerpt", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Oversized range",
+      path: "src/a.ts", start_line: 1, start_side: "RIGHT", line: 7, side: "RIGHT" };
+    const additions = Array.from({ length: 7 }, () => `+${"x".repeat(600)}`).join("\n");
+    const patch = `@@ -1,0 +1,7 @@\n${additions}`;
+    let writes = 0;
+    const defaultRead = fakeGitHubPullRequestCommentCreate().read_request!;
+    const options = fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("oversized range must not be posted");
+    }, async (target, signal) => target.path.includes("/pulls/7/files?")
+      ? githubReadJson([{ filename: "src/a.ts", status: "modified", patch }])
+      : defaultRead(target, signal));
+    await expect(reviewedGitHubPullRequestCommentCreate(args, options))
+      .rejects.toThrow(/exceeds the bounded Owner review excerpt/);
+    expect(writes).toBe(0);
+  });
+
   it("github.write pr.comment.create rejects an inline line missing from the current diff before POST", async () => {
     const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
       owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Invalid line",
@@ -3130,8 +3202,9 @@ function fakeGitHubPullRequestCommentCreate(
       status: 201,
       ok: true,
       content_type: "application/json",
-      body: JSON.stringify({ id: 791, body: String(target.body.body), path: target.body.path, line: target.body.line,
-        side: target.body.side, commit_id: target.body.commit_id,
+      body: JSON.stringify({ id: 791, body: String(target.body.body), path: target.body.path,
+        ...(target.body.start_line === undefined ? {} : { start_line: target.body.start_line,
+          start_side: target.body.start_side }), line: target.body.line, side: target.body.side, commit_id: target.body.commit_id,
         pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }),
       truncated: false,
       rate_limit_remaining: "60",

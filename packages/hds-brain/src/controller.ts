@@ -3913,22 +3913,31 @@ ${planControl.question}`,
           const path = optionalText("path");
           const line = args.line === undefined ? undefined : positiveNumber("line");
           const side = optionalText("side");
+          const startLine = args.start_line === undefined ? undefined : positiveNumber("start_line");
+          const startSide = optionalText("start_side");
+          const hasRange = startLine !== undefined || startSide !== undefined;
           const inline = commentKind === "pull_request_review_inline";
           if (observation.operation !== operation || observation.pull_request_number !== issueNumber ||
               observation.pull_request_locked ||
               (!inline && commentKind !== undefined && commentKind !== "pull_request_timeline") ||
               (inline && (!path || line === undefined || (side !== "LEFT" && side !== "RIGHT") ||
+                (startLine === undefined) !== (startSide === undefined) ||
+                (startLine !== undefined && ((startLine === line && startSide === side) || startLine > 1_000_000 ||
+                  (startSide !== "LEFT" && startSide !== "RIGHT"))) ||
                 observation.comment_kind !== "pull_request_review_inline" || observation.path !== path ||
                 observation.line !== line || observation.side !== side ||
+                observation.start_line !== startLine || observation.start_side !== startSide ||
                 !observation.pull_request_head_sha || !observation.pull_request_base_sha ||
                 !observation.pull_request_diff_digest)) ||
-              (!inline && (path !== undefined || line !== undefined || side !== undefined ||
+              (!inline && (path !== undefined || line !== undefined || side !== undefined || hasRange ||
                 observation.comment_kind !== undefined))) {
             throw new Error("HDS github.write pull request comment target does not match the issued command");
           }
           requestPayloadDigest = githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo,
             pull_request_number: issueNumber, body,
-            ...(inline ? { path: path!, line: line!, side: side as "LEFT" | "RIGHT" } : {}) });
+            ...(inline ? { path: path!, line: line!, side: side as "LEFT" | "RIGHT",
+              ...(startLine === undefined || startSide === undefined ? {} : { start_line: startLine,
+                start_side: startSide as "LEFT" | "RIGHT" }) } : {}) });
           targetIdentityDigest = githubPullRequestCommentCreateTargetIdentityDigest({ repository_id: observation.repository_id,
             canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
             pull_request_number: observation.pull_request_number });

@@ -908,19 +908,28 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     const path = parameters.path;
     const line = parameters.line;
     const side = parameters.side;
-    const hasLocation = path !== undefined || line !== undefined || side !== undefined;
+    const startLine = parameters.start_line;
+    const startSide = parameters.start_side;
+    const hasLocation = path !== undefined || startLine !== undefined || startSide !== undefined ||
+      line !== undefined || side !== undefined;
     const inline = commentKind === "pull_request_review_inline";
     if ((!inline && commentKind !== undefined && commentKind !== "pull_request_timeline") ||
         (inline && (!validGitHubReviewPath(path) || typeof line !== "number" || !Number.isSafeInteger(line) ||
-          line < 1 || line > 1_000_000 || (side !== "LEFT" && side !== "RIGHT"))) ||
+          line < 1 || line > 1_000_000 || (side !== "LEFT" && side !== "RIGHT") ||
+          (startLine === undefined) !== (startSide === undefined) ||
+          (startLine !== undefined && (typeof startLine !== "number" || !Number.isSafeInteger(startLine) ||
+            startLine < 1 || (startLine === line && startSide === side) || startLine > 1_000_000 ||
+            (startSide !== "LEFT" && startSide !== "RIGHT"))))) ||
         (!inline && hasLocation) ||
         !allowedKeys(inline
-          ? ["operation", "owner", "repo", "number", "body", "comment_kind", "path", "line", "side"]
+          ? ["operation", "owner", "repo", "number", "body", "comment_kind", "path", "start_line", "start_side", "line", "side"]
           : ["operation", "owner", "repo", "number", "body", ...(commentKind === undefined ? [] : ["comment_kind"])])) {
       return undefined;
     }
     return githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo, pull_request_number: number, body,
-      ...(inline ? { path: path as string, line: line as number, side: side as "LEFT" | "RIGHT" } : {}) });
+      ...(inline ? { path: path as string, line: line as number, side: side as "LEFT" | "RIGHT",
+        ...(startLine === undefined || startSide === undefined ? {} : { start_line: startLine as number,
+          start_side: startSide as "LEFT" | "RIGHT" }) } : {}) });
   }
   if (operation === "pr.create") {
     const title = githubWriteText(parameters, "title", 256, true);

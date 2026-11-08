@@ -1093,6 +1093,10 @@ export class Executor {
           ? pullRequestCommentObservation.comment_kind === "pull_request_review_inline"
             ? githubReview.comment_kind === "pull_request_review_inline" &&
               githubReview.path === pullRequestCommentObservation.path && githubReview.path === args.path &&
+              githubReview.start_line === pullRequestCommentObservation.start_line &&
+              githubReview.start_line === args.start_line &&
+              githubReview.start_side === pullRequestCommentObservation.start_side &&
+              githubReview.start_side === args.start_side &&
               githubReview.line === pullRequestCommentObservation.line && githubReview.line === args.line &&
               githubReview.side === pullRequestCommentObservation.side && githubReview.side === args.side &&
               githubReview.head_commit_sha === pullRequestCommentObservation.pull_request_head_sha &&
@@ -1101,6 +1105,7 @@ export class Executor {
               typeof githubReview.diff_excerpt === "string" && githubReview.diff_excerpt.length > 0 &&
               githubReview.diff_excerpt.length <= 4_096 && /^[a-f0-9]{64}$/.test(githubReview.diff_digest ?? "")
             : githubReview.comment_kind === "pull_request_timeline" && githubReview.path === undefined &&
+              githubReview.start_line === undefined && githubReview.start_side === undefined &&
               githubReview.line === undefined && githubReview.side === undefined &&
               githubReview.head_commit_sha === undefined && githubReview.base_commit_sha === undefined &&
               githubReview.diff_digest === undefined && githubReview.diff_excerpt === undefined

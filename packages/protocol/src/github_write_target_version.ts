@@ -56,6 +56,8 @@ export const GitHubPullRequestCommentCreateTargetVersionObservationSchema = GitH
   pull_request_updated_at: z.string().datetime({ offset: true }),
   comment_kind: z.literal("pull_request_review_inline").optional(),
   path: z.string().min(1).max(4_096).optional(),
+  start_line: z.number().int().positive().max(1_000_000).optional(),
+  start_side: z.enum(["LEFT", "RIGHT"]).optional(),
   line: z.number().int().positive().max(1_000_000).optional(),
   side: z.enum(["LEFT", "RIGHT"]).optional(),
   pull_request_head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).optional(),
@@ -82,11 +84,17 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubPullRequestCreateTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
   if (value.operation !== "pr.comment.create") return;
-  const inlineFields = [value.path, value.line, value.side, value.pull_request_head_sha,
+  const inlineFields = [value.path, value.start_line, value.start_side, value.line, value.side, value.pull_request_head_sha,
     value.pull_request_base_sha, value.pull_request_diff_digest];
   if (value.comment_kind === "pull_request_review_inline") {
-    if (inlineFields.some((field) => field === undefined)) {
+    const requiredInlineFields = [value.path, value.line, value.side, value.pull_request_head_sha,
+      value.pull_request_base_sha, value.pull_request_diff_digest];
+    if (requiredInlineFields.some((field) => field === undefined)) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "inline review comment target is incomplete" });
+    }
+    if ((value.start_line === undefined) !== (value.start_side === undefined) ||
+        (value.start_line !== undefined && value.start_line === value.line && value.start_side === value.side)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "inline review comment range is incomplete or empty" });
     }
   } else if (inlineFields.some((field) => field !== undefined)) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "timeline comment target cannot contain inline review fields" });
@@ -211,13 +219,34 @@ export function githubPullRequestCommentCreateRequestPayloadDigest(input: {
   path?: string;
   line?: number;
   side?: "LEFT" | "RIGHT";
+  start_line?: number;
+  start_side?: "LEFT" | "RIGHT";
 }): string {
-  const hasLocation = input.path !== undefined || input.line !== undefined || input.side !== undefined;
+  const hasLocation = input.path !== undefined || input.start_line !== undefined || input.start_side !== undefined ||
+    input.line !== undefined || input.side !== undefined;
   if (hasLocation) {
     if (typeof input.path !== "string" || input.path.length === 0 || input.path.length > 4_096 ||
         typeof input.line !== "number" || !Number.isSafeInteger(input.line) || input.line < 1 || input.line > 1_000_000 ||
-        (input.side !== "LEFT" && input.side !== "RIGHT")) {
+        (input.side !== "LEFT" && input.side !== "RIGHT") ||
+        (input.start_line === undefined) !== (input.start_side === undefined) ||
+        (input.start_line !== undefined && (!Number.isSafeInteger(input.start_line) || input.start_line < 1 ||
+          (input.start_line === input.line && input.start_side === input.side) || input.start_line > 1_000_000 ||
+          (input.start_side !== "LEFT" && input.start_side !== "RIGHT")))) {
       throw new Error("inline pull request review comment location is incomplete or invalid");
+    }
+    if (input.start_line !== undefined && input.start_side !== undefined) {
+      return createHash("sha256").update(JSON.stringify([
+        "blue-tanuki.github-pull-request-review-inline-range-comment-request-payload.v1",
+        input.owner,
+        input.repo,
+        input.pull_request_number,
+        input.body,
+        input.path,
+        input.start_line,
+        input.start_side,
+        input.line,
+        input.side,
+      ]), "utf8").digest("hex");
     }
     return createHash("sha256").update(JSON.stringify([
       "blue-tanuki.github-pull-request-review-inline-comment-request-payload.v1",

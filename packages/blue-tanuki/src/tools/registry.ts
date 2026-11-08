@@ -110,6 +110,8 @@ export interface GitHubPullRequestCommentCreateContentReview {
   pull_request_title: string;
   comment_kind: "pull_request_timeline" | "pull_request_review_inline";
   path?: string;
+  start_line?: number;
+  start_side?: "LEFT" | "RIGHT";
   line?: number;
   side?: "LEFT" | "RIGHT";
   head_commit_sha?: string;
