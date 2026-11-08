@@ -17,6 +17,7 @@ import {
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
+  GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
@@ -30,6 +31,8 @@ import {
   githubIssueUpdateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubIssueCommentCreateTargetIdentityDigest,
+  githubPullRequestCommentCreateRequestPayloadDigest,
+  githubPullRequestCommentCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest,
   githubPullRequestCreateTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
@@ -41,12 +44,14 @@ import {
   type GitHubIssueCreateTargetVersionObservation,
   type GitHubIssueUpdateTargetVersionObservation,
   type GitHubIssueCommentCreateTargetVersionObservation,
+  type GitHubPullRequestCommentCreateTargetVersionObservation,
   type GitHubPullRequestCreateTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
   type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview,
-  type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCreateContentReview, type Tool } from "./registry.js";
+  type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCommentCreateContentReview,
+  type GitHubPullRequestCreateContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -1372,6 +1377,7 @@ export async function invokeGitHubWrite(
   const route = githubWriteRoute(args);
   if (route.operation === "issue.update") return await invokeGitHubIssueUpdate(args, opts);
   if (route.operation === "issue.comment.create") return await invokeGitHubIssueCommentCreate(args, opts);
+  if (route.operation === "pr.comment.create") return await invokeGitHubPullRequestCommentCreate(args, opts);
   if (route.operation === "pr.create") return await invokeGitHubPullRequestCreate(args, opts);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} is not connected to a plan-bound review path; mutation_sent=false; status=BUILD_GAP`);
@@ -2052,22 +2058,43 @@ export async function inspectGitHubIssueUpdateContentReview(args: Record<string,
   return { ...base, review_digest: sha256Hex(base) };
 }
 
-async function inspectGitHubIssueCommentCreateTargetDetails(
+type GitHubCommentCreateOperation = "issue.comment.create" | "pr.comment.create";
+type GitHubCommentCreateTargetObservation = GitHubIssueCommentCreateTargetVersionObservation |
+  GitHubPullRequestCommentCreateTargetVersionObservation;
+
+function githubApiResourceUrlMatches(value: unknown, owner: string, repo: string, resource: "issues" | "pulls", number: number): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.github.com" &&
+      !url.username && !url.password && !url.port && !url.search && !url.hash &&
+      url.pathname.toLowerCase() === (`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${resource}/${number}`).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function githubPullRequestIssueUrlMatches(value: unknown, owner: string, repo: string, number: number): boolean {
+  return githubApiResourceUrlMatches(value, owner, repo, "pulls", number);
+}
+
+async function inspectGitHubCommentCreateTargetDetails(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
-): Promise<{ observation: GitHubIssueCommentCreateTargetVersionObservation; issue_title: string }> {
+  operation: GitHubCommentCreateOperation,
+): Promise<{ observation: GitHubCommentCreateTargetObservation; issue_title: string }> {
   const route = githubWriteRoute(args);
-  if (route.operation !== "issue.comment.create") {
-    throw new Error("github.write " + route.operation + " issue comment target observation is not implemented; status=BUILD_GAP");
+  if (route.operation !== operation) {
+    throw new Error(`github.write ${route.operation} comment target observation does not match ${operation}; status=BUILD_GAP`);
   }
   if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes"].includes(key))) {
-    throw new Error("github.write issue.comment.create contains unsupported arguments; mutation_sent=false");
+    throw new Error(`github.write ${operation} contains unsupported arguments; mutation_sent=false`);
   }
   const commandDigest = opts.command_digest;
   const operationPlanBindingDigest = opts.operation_plan_binding_digest;
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
       !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
-    throw new Error("github.write issue.comment.create target observation requires a command and Operation Plan binding");
+    throw new Error(`github.write ${operation} target observation requires a command and Operation Plan binding`);
   }
   const env = opts.env ?? process.env;
   assertGitHubRepoAllowed(env, route.repo);
@@ -2077,11 +2104,11 @@ async function inspectGitHubIssueCommentCreateTargetDetails(
   const issueNumber = requiredPositiveIntArg(args, "number", 1_000_000);
   const readRequest = opts.read_request ?? defaultGitHubReadRequest;
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
-  assertToolExecutionNotCancelled(opts.signal, "github.write issue.comment.create target inspection");
+  assertToolExecutionNotCancelled(opts.signal, `github.write ${operation} target inspection`);
   const repositoryResponse = await readRequest({
     path: "/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo), maxBytes, token,
   }, opts.signal);
-  const repository = requireGitHubJsonRecord(repositoryResponse, "issue.comment.create target repository");
+  const repository = requireGitHubJsonRecord(repositoryResponse, `${operation} target repository`);
   const repositoryId = repository.id;
   const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
   const repositoryName = typeof repository.name === "string" ? repository.name : "";
@@ -2092,17 +2119,22 @@ async function inspectGitHubIssueCommentCreateTargetDetails(
       fullName.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
       repositoryName.toLowerCase() !== repo.toLowerCase() || ownerLogin.toLowerCase() !== owner.toLowerCase() ||
       typeof isPrivate !== "boolean") {
-    throw new Error("github.write issue.comment.create repository identity or visibility is incomplete or mismatched");
+    throw new Error(`github.write ${operation} repository identity or visibility is incomplete or mismatched`);
   }
-  assertToolExecutionNotCancelled(opts.signal, "github.write issue.comment.create target inspection");
+  assertToolExecutionNotCancelled(opts.signal, `github.write ${operation} target inspection`);
   const issueResponse = await readRequest({
     path: "/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo) + "/issues/" + issueNumber,
     maxBytes,
     token,
   }, opts.signal);
-  const issue = requireGitHubJsonRecord(issueResponse, "issue.comment.create target issue");
-  if ("pull_request" in issue) {
+  const issue = requireGitHubJsonRecord(issueResponse, `${operation} target item`);
+  const pullRequestLink = issue.pull_request;
+  if (operation === "issue.comment.create" && "pull_request" in issue) {
     throw new Error("github.write issue.comment.create target is a pull request; mutation_sent=false; status=BUILD_GAP");
+  }
+  if (operation === "pr.comment.create" &&
+      (!isRecord(pullRequestLink) || !githubPullRequestIssueUrlMatches(pullRequestLink.url, owner, repo, issueNumber))) {
+    throw new Error("github.write pr.comment.create target is not the requested pull request; mutation_sent=false; status=BUILD_GAP");
   }
   const issueId = issue.id;
   const observedNumber = issue.number;
@@ -2114,30 +2146,19 @@ async function inspectGitHubIssueCommentCreateTargetDetails(
       observedNumber !== issueNumber || (state !== "open" && state !== "closed") || typeof locked !== "boolean" ||
       typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt)) ||
       typeof title !== "string" || title.length === 0 || title.length > 65_536) {
-    throw new Error("github.write issue.comment.create target state is incomplete or mismatched; mutation_sent=false");
+    throw new Error(`github.write ${operation} target state is incomplete or mismatched; mutation_sent=false`);
   }
   if (locked) {
-    throw new Error("github.write issue.comment.create target is locked; mutation_sent=false; status=BLOCKED_AUTHORITY");
+    throw new Error(`github.write ${operation} target is locked; mutation_sent=false; status=BLOCKED_AUTHORITY`);
   }
-  const observation = GitHubIssueCommentCreateTargetVersionObservationSchema.parse({
+  const sharedObservation = {
     schema_version: "blue-tanuki.github-write-target-version.v1",
-    operation: "issue.comment.create",
+    operation,
     repository_id: repositoryId,
     requested_owner: owner,
     requested_repo: repo,
     canonical_full_name: fullName,
     repository_visibility: isPrivate ? "private" : "public",
-    issue_id: issueId,
-    issue_number: observedNumber,
-    issue_state: state,
-    issue_locked: locked,
-    issue_updated_at: updatedAt,
-    target_identity_digest: githubIssueCommentCreateTargetIdentityDigest({
-      repository_id: repositoryId, canonical_full_name: fullName, issue_id: issueId, issue_number: observedNumber,
-    }),
-    request_payload_digest: githubIssueCommentCreateRequestPayloadDigest({
-      owner, repo, issue_number: issueNumber, body: stringArg(args, "body")!,
-    }),
     command_digest: commandDigest,
     operation_plan_binding_digest: operationPlanBindingDigest,
     provider_observation_is_atomic: false,
@@ -2145,7 +2166,37 @@ async function inspectGitHubIssueCommentCreateTargetDetails(
     mutation_sent: false,
     used_for_authority: false,
     may_execute: false,
-  });
+  } as const;
+  const observation = operation === "issue.comment.create"
+    ? GitHubIssueCommentCreateTargetVersionObservationSchema.parse({
+      ...sharedObservation,
+      issue_id: issueId,
+      issue_number: observedNumber,
+      issue_state: state,
+      issue_locked: locked,
+      issue_updated_at: updatedAt,
+      target_identity_digest: githubIssueCommentCreateTargetIdentityDigest({
+        repository_id: repositoryId, canonical_full_name: fullName, issue_id: issueId, issue_number: observedNumber,
+      }),
+      request_payload_digest: githubIssueCommentCreateRequestPayloadDigest({
+        owner, repo, issue_number: issueNumber, body: stringArg(args, "body")!,
+      }),
+    })
+    : GitHubPullRequestCommentCreateTargetVersionObservationSchema.parse({
+      ...sharedObservation,
+      pull_request_id: issueId,
+      pull_request_number: observedNumber,
+      pull_request_state: state,
+      pull_request_locked: locked,
+      pull_request_updated_at: updatedAt,
+      target_identity_digest: githubPullRequestCommentCreateTargetIdentityDigest({
+        repository_id: repositoryId, canonical_full_name: fullName,
+        pull_request_id: issueId, pull_request_number: observedNumber,
+      }),
+      request_payload_digest: githubPullRequestCommentCreateRequestPayloadDigest({
+        owner, repo, pull_request_number: issueNumber, body: stringArg(args, "body")!,
+      }),
+    });
   return { observation, issue_title: title };
 }
 
@@ -2153,7 +2204,18 @@ export async function inspectGitHubIssueCommentCreateTargetVersion(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
 ): Promise<GitHubIssueCommentCreateTargetVersionObservation> {
-  return (await inspectGitHubIssueCommentCreateTargetDetails(args, opts)).observation;
+  const { observation } = await inspectGitHubCommentCreateTargetDetails(args, opts, "issue.comment.create");
+  if (observation.operation !== "issue.comment.create") throw new Error("GitHub issue comment target operation mismatch");
+  return observation;
+}
+
+export async function inspectGitHubPullRequestCommentCreateTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubPullRequestCommentCreateTargetVersionObservation> {
+  const { observation } = await inspectGitHubCommentCreateTargetDetails(args, opts, "pr.comment.create");
+  if (observation.operation !== "pr.comment.create") throw new Error("GitHub pull request comment target operation mismatch");
+  return observation;
 }
 
 export function assertGitHubIssueCommentCreateTargetVersion(args: Record<string, unknown>, value: unknown,
@@ -2190,9 +2252,45 @@ export function assertGitHubIssueCommentCreateTargetVersion(args: Record<string,
   return observation;
 }
 
+export function assertGitHubPullRequestCommentCreateTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubPullRequestCommentCreateTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "pr.comment.create") {
+    throw new Error("github.write pr.comment.create target observation has another operation");
+  }
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const pullRequestNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const payloadDigest = githubPullRequestCommentCreateRequestPayloadDigest({
+    owner, repo, pull_request_number: pullRequestNumber, body: stringArg(args, "body")!,
+  });
+  const targetDigest = githubPullRequestCommentCreateTargetIdentityDigest({
+    repository_id: observation.repository_id,
+    canonical_full_name: observation.canonical_full_name,
+    pull_request_id: observation.pull_request_id,
+    pull_request_number: observation.pull_request_number,
+  });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes"].includes(key)) ||
+      route.operation !== "pr.comment.create" ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
+      observation.pull_request_number !== pullRequestNumber || observation.pull_request_locked ||
+      observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
+      observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write pr.comment.create target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
 export async function inspectGitHubIssueCommentCreateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
   : Promise<GitHubIssueCommentCreateContentReview> {
-  const { observation, issue_title } = await inspectGitHubIssueCommentCreateTargetDetails(args, opts);
+  const { observation, issue_title } = await inspectGitHubCommentCreateTargetDetails(args, opts, "issue.comment.create");
+  if (observation.operation !== "issue.comment.create") throw new Error("GitHub issue comment review target mismatch");
   const base = {
     kind: "github_issue_comment_create" as const,
     operation: "github.write.issue.comment.create" as const,
@@ -2221,12 +2319,60 @@ export async function inspectGitHubIssueCommentCreateContentReview(args: Record<
   return { ...base, review_digest: sha256Hex(base) };
 }
 
+export async function inspectGitHubPullRequestCommentCreateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubPullRequestCommentCreateContentReview> {
+  const { observation, issue_title: pullRequestTitle } =
+    await inspectGitHubCommentCreateTargetDetails(args, opts, "pr.comment.create");
+  if (observation.operation !== "pr.comment.create") throw new Error("GitHub pull request comment review target mismatch");
+  const base = {
+    kind: "github_pull_request_comment_create" as const,
+    operation: "github.write.pr.comment.create" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    pull_request_id: observation.pull_request_id,
+    pull_request_number: observation.pull_request_number,
+    pull_request_state: observation.pull_request_state,
+    pull_request_locked: observation.pull_request_locked,
+    pull_request_updated_at: observation.pull_request_updated_at,
+    pull_request_title: pullRequestTitle,
+    comment_kind: "pull_request_timeline" as const,
+    body: stringArg(args, "body")!,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(
+      canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    publication_effect: "visible_to_repository_audience" as const,
+    comment_removal_retracts_notifications: false as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
 async function invokeGitHubIssueCommentCreate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  return await invokeGitHubCommentCreate(args, opts, "issue.comment.create");
+}
+
+async function invokeGitHubPullRequestCommentCreate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  return await invokeGitHubCommentCreate(args, opts, "pr.comment.create");
+}
+
+async function invokeGitHubCommentCreate(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions,
+  operation: GitHubCommentCreateOperation,
+): Promise<unknown> {
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const env = opts.env ?? process.env;
   const route = githubWriteRoute(args);
-  if (route.operation !== "issue.comment.create") {
-    throw new Error("github.write issue.comment.create route mismatch; mutation_sent=false");
+  if (route.operation !== operation) {
+    throw new Error(`github.write ${operation} route mismatch; mutation_sent=false`);
   }
   assertGitHubRepoAllowed(env, route.repo);
   const token = githubWriteToken(env);
@@ -2235,11 +2381,22 @@ async function invokeGitHubIssueCommentCreate(args: Record<string, unknown>, opt
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
       !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
       !opts.expected_target_version_observation) {
-    throw new Error("github.write issue.comment.create requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+    throw new Error(`github.write ${operation} requires a command, Operation Plan binding, and approved target observation; mutation_sent=false`);
   }
-  const expected = assertGitHubIssueCommentCreateTargetVersion(args, opts.expected_target_version_observation,
-    commandDigest, operationPlanBindingDigest);
-  const current = await inspectGitHubIssueCommentCreateTargetVersion(args, {
+  const expected: GitHubCommentCreateTargetObservation = operation === "issue.comment.create"
+    ? assertGitHubIssueCommentCreateTargetVersion(args, opts.expected_target_version_observation,
+      commandDigest, operationPlanBindingDigest)
+    : assertGitHubPullRequestCommentCreateTargetVersion(args, opts.expected_target_version_observation,
+      commandDigest, operationPlanBindingDigest);
+  const current = operation === "issue.comment.create"
+    ? await inspectGitHubIssueCommentCreateTargetVersion(args, {
+      env,
+      signal: opts.signal,
+      command_digest: commandDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      ...(opts.read_request ? { read_request: opts.read_request } : {}),
+    })
+    : await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
     env,
     signal: opts.signal,
     command_digest: commandDigest,
@@ -2247,16 +2404,17 @@ async function invokeGitHubIssueCommentCreate(args: Record<string, unknown>, opt
     ...(opts.read_request ? { read_request: opts.read_request } : {}),
   });
   if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
-    throw new Error("github.write issue.comment.create target changed after review; mutation_sent=false; outcome=stale");
+    throw new Error(`github.write ${operation} target changed after review; mutation_sent=false; outcome=stale`);
   }
   const request = opts.request ?? defaultGitHubWriteRequest;
-  assertToolExecutionNotCancelled(opts.signal, "github.write issue.comment.create");
+  assertToolExecutionNotCancelled(opts.signal, `github.write ${operation}`);
   let response: GitHubWriteResponse;
   try {
     response = await request({ method: route.method, path: route.path, body: route.body, maxBytes, token }, opts.signal);
   } catch (error) {
     const message = error instanceof Error ? error.message : "provider_request_failed";
-    throw new Error("github.write issue.comment.create outcome_unknown; do not retry automatically; check GitHub before a new Owner decision; " + message);
+    throw new Error(`github.write ${operation} outcome_unknown; do not retry automatically; check GitHub before a new Owner decision` +
+      (operation === "issue.comment.create" ? "; " + message : ""));
   }
   const data = parseJsonOrText(response.body);
   if (!response.ok || response.status !== 201 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
@@ -2265,7 +2423,7 @@ async function invokeGitHubIssueCommentCreate(args: Record<string, unknown>, opt
     if (explicitRejection) {
       return {
         schema_version: "blue-tanuki.github-write-result.v1",
-        operation: "issue.comment.create",
+        operation,
         api_host: "api.github.com",
         repo: route.repo,
         repository_id: expected.repository_id,
@@ -2286,17 +2444,19 @@ async function invokeGitHubIssueCommentCreate(args: Record<string, unknown>, opt
       };
     }
     const message = isRecord(data) ? optionalString(data.message) : null;
-    throw new Error("github.write issue.comment.create outcome_unknown; HTTP " + response.status +
-      "; do not retry automatically; check GitHub before a new Owner decision" + (message ? "; message=" + message : ""));
+    throw new Error(`github.write ${operation} outcome_unknown; HTTP ${response.status}; do not retry automatically; check GitHub before a new Owner decision` +
+      (operation === "issue.comment.create" && message ? "; message=" + message : ""));
   }
   const comment = isRecord(data) ? data : null;
   if (!comment || typeof comment.id !== "number" || !Number.isSafeInteger(comment.id) || comment.id <= 0 ||
-      comment.body !== route.body.body) {
-    throw new Error("github.write issue.comment.create response did not confirm the exact comment; outcome_unknown; do not retry automatically");
+      comment.body !== route.body.body ||
+      (operation === "pr.comment.create" && !githubApiResourceUrlMatches(comment.issue_url,
+        githubNameArg(args, "owner"), githubNameArg(args, "repo"), "issues", requiredPositiveIntArg(args, "number", 1_000_000)))) {
+    throw new Error(`github.write ${operation} response did not confirm the exact comment and target; outcome_unknown; do not retry automatically`);
   }
   return {
     schema_version: "blue-tanuki.github-write-result.v1",
-    operation: "issue.comment.create",
+    operation,
     api_host: "api.github.com",
     repo: route.repo,
     repository_id: expected.repository_id,
@@ -3714,7 +3874,7 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create plan-bound GitHub issues, issue comments, and same-repository pull requests, or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Cross-repository pull requests and pull request comments remain BUILD_GAP.",
+  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests and regular pull request timeline comments, or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Cross-repository pull requests and inline pull request review comments remain BUILD_GAP.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "pr.create") {
@@ -3738,6 +3898,13 @@ export const githubWriteTool: Tool = {
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
     }
+    if (githubOperation(args) === "pr.comment.create") {
+      return await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) !== "issue.create") {
       throw new Error(`github.write ${githubOperation(args)} target observation is not implemented; status=BUILD_GAP`);
     }
@@ -3748,7 +3915,7 @@ export const githubWriteTool: Tool = {
     });
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
-    GitHubIssueCommentCreateContentReview | GitHubPullRequestCreateContentReview> {
+    GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview> {
     if (githubOperation(args) === "pr.create") {
       return await inspectGitHubPullRequestCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -3765,6 +3932,13 @@ export const githubWriteTool: Tool = {
     }
     if (githubOperation(args) === "issue.comment.create") {
       return await inspectGitHubIssueCommentCreateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "pr.comment.create") {
+      return await inspectGitHubPullRequestCommentCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),

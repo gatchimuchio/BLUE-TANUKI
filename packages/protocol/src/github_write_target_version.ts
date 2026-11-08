@@ -46,6 +46,16 @@ export const GitHubIssueCommentCreateTargetVersionObservationSchema = GitHubWrit
   issue_updated_at: z.string().datetime({ offset: true }),
 }).strict();
 
+/** Plan-bound, non-authority target evidence for a regular pull request timeline comment. */
+export const GitHubPullRequestCommentCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("pr.comment.create"),
+  pull_request_id: z.number().int().positive().safe(),
+  pull_request_number: z.number().int().positive().max(1_000_000),
+  pull_request_state: z.enum(["open", "closed"]),
+  pull_request_locked: z.boolean(),
+  pull_request_updated_at: z.string().datetime({ offset: true }),
+}).strict();
+
 /** Plan-bound, non-authority branch observations for a GitHub pull request create. */
 export const GitHubPullRequestCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("pr.create"),
@@ -61,6 +71,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
+  GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
 ]);
 
@@ -68,6 +79,7 @@ export type GitHubWriteTargetVersionObservation = z.infer<typeof GitHubWriteTarg
 export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIssueCreateTargetVersionObservationSchema>;
 export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIssueUpdateTargetVersionObservationSchema>;
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
+export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
@@ -154,6 +166,36 @@ export function githubIssueCommentCreateRequestPayloadDigest(input: {
     input.owner,
     input.repo,
     input.issue_number,
+    input.body,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestCommentCreateTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  pull_request_id: number;
+  pull_request_number: number;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-comment-create-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.pull_request_id,
+    input.pull_request_number,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestCommentCreateRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  pull_request_number: number;
+  body: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-comment-create-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.pull_request_number,
     input.body,
   ]), "utf8").digest("hex");
 }

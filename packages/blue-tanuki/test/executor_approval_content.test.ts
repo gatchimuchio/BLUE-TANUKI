@@ -8,6 +8,7 @@ import {
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion,
+  inspectGitHubPullRequestCommentCreateContentReview, inspectGitHubPullRequestCommentCreateTargetVersion,
   inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion } from "../src/tools/builtin.js";
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
@@ -72,6 +73,60 @@ describe("承認内容からExecutorへの固定", () => {
         issue_number: 7,
         issue_title: "対象Issue",
         body: "合成コメント",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("GitHub pr.comment.createをPRタイムライン対象とno-store reviewで同じPlanへ結ぶ", async () => {
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "合成PRコメント" };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-pr-comment",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "選択PRのタイムラインに合成コメントを作る", model_abstraction: "fixture",
+        commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "a".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const read_request = async (target: { path: string }) => ({
+      status: 200,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify(target.path.endsWith("/issues/7")
+        ? { id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+          title: "対象PR", body: "非表示のPR本文",
+          pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" } }
+        : { id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false }),
+      truncated: false,
+      rate_limit_remaining: "60",
+    });
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubPullRequestCommentCreateTargetVersion(args, options);
+    const expectedReview = await inspectGitHubPullRequestCommentCreateContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({
+        kind: "github_pull_request_comment_create",
+        command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        pull_request_number: 7,
+        pull_request_title: "対象PR",
+        comment_kind: "pull_request_timeline",
+        body: "合成PRコメント",
         used_for_authority: false,
         may_execute: false,
       });

@@ -27,6 +27,8 @@ import {
   inspectGitHubIssueUpdateContentReview,
   inspectGitHubIssueCommentCreateTargetVersion,
   inspectGitHubIssueCommentCreateContentReview,
+  inspectGitHubPullRequestCommentCreateTargetVersion,
+  inspectGitHubPullRequestCommentCreateContentReview,
   inspectGitHubPullRequestCreateTargetVersion,
   inspectGitHubPullRequestCreateContentReview,
   invokeGmailRead,
@@ -1755,6 +1757,149 @@ describe("built-in tools", () => {
     expect(writes).toBe(1);
   });
 
+  it("github.write pr.comment.create reviews the exact PR timeline target and body", async () => {
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, body: "Reviewed PR timeline comment" };
+    const review = await inspectGitHubPullRequestCommentCreateContentReview(args, {
+      ...fakeGitHubPullRequestCommentCreate(), command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+    });
+
+    expect(review).toMatchObject({
+      kind: "github_pull_request_comment_create",
+      operation: "github.write.pr.comment.create",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      repository_visibility: "public",
+      pull_request_id: 456,
+      pull_request_number: 7,
+      pull_request_state: "open",
+      pull_request_locked: false,
+      pull_request_updated_at: "2026-11-07T12:00:00Z",
+      pull_request_title: "Original pull request title",
+      comment_kind: "pull_request_timeline",
+      body: args.body,
+      notification_effect: "github_api_may_trigger_notifications",
+      publication_effect: "visible_to_repository_audience",
+      comment_removal_retracts_notifications: false,
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("github.write pr.comment.create rechecks the PR and sends one exact timeline POST", async () => {
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, body: "One exact PR comment" };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const options = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body });
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 790, body: args.body,
+          issue_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/issues/7" }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "PR-COMMENT123",
+      };
+    }));
+
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(seen).toEqual([{ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/issues/7/comments",
+      body: { body: args.body } }]);
+    expect(result).toMatchObject({
+      operation: "pr.comment.create",
+      status: 201,
+      mutation_status: "provider_accepted",
+      result: { id: 790 },
+      provider_data_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(JSON.stringify(result)).not.toContain(args.body);
+    expect(JSON.stringify(result)).not.toContain("issue_url");
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write pr.comment.create rejects an issue or locked PR before POST", async () => {
+    let writes = 0;
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "comment" };
+    const issueTarget = fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("non-PR target must not receive a comment");
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z", title: "Issue" })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    await expect(inspectGitHubPullRequestCommentCreateTargetVersion(args, {
+      ...issueTarget, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    })).rejects.toThrow(/target is not the requested pull request.*BUILD_GAP/);
+
+    const lockedPr = fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("locked PR must not receive a comment");
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: true, updated_at: "2026-11-07T12:00:00Z",
+        title: "Locked PR", pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" } })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    await expect(inspectGitHubPullRequestCommentCreateTargetVersion(args, {
+      ...lockedPr, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    })).rejects.toThrow(/target is locked.*BLOCKED_AUTHORITY/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write pr.comment.create rejects a stale PR without POST", async () => {
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, body: "Do not post on changed PR" };
+    let reads = 0;
+    let writes = 0;
+    const options = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("stale PR must not receive a comment");
+    }, async (target) => {
+      reads += 1;
+      if (target.path.endsWith("/issues/7")) {
+        return githubReadJson({ id: 456, number: 7, state: reads > 2 ? "closed" : "open", locked: false,
+          updated_at: reads > 2 ? "2026-11-08T01:00:00Z" : "2026-11-07T12:00:00Z", title: "Original PR",
+          pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" } });
+      }
+      return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false });
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(reads).toBe(4);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write pr.comment.create keeps explicit rejection distinct and malformed success unknown without retry", async () => {
+    const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, body: "Expected PR comment" };
+    let writes = 0;
+    const rejection = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      return { status: 422, ok: false, content_type: "application/json", body: "{}", truncated: false };
+    }));
+    await expect(invokeGitHubWrite(args, rejection)).resolves.toMatchObject({
+      operation: "pr.comment.create", mutation_status: "provider_rejected", retry_permitted: false,
+    });
+    expect(writes).toBe(1);
+
+    let malformedWrites = 0;
+    const malformed = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async () => {
+      malformedWrites += 1;
+      return { status: 201, ok: true, content_type: "application/json",
+        body: JSON.stringify({ id: 790, body: args.body, issue_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/issues/8" }),
+        truncated: false };
+    }));
+    await expect(invokeGitHubWrite(args, malformed)).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(malformedWrites).toBe(1);
+  });
+
   it("github.write issue.create treats mismatched returned issue content as outcome unknown without retrying", async () => {
     const args = {
       operation: "issue.create",
@@ -1882,17 +2027,6 @@ describe("built-in tools", () => {
     const approved = await reviewedGitHubPullRequestCreate(args, changingBranch);
     await expect(invokeGitHubWrite(args, approved)).rejects.toThrow(/target changed after review.*outcome=stale/);
     expect(writes).toBe(0);
-
-    await expect(invokeGitHubWrite(
-      {
-        operation: "pr.comment.create",
-        owner: "gatchimuchio",
-        repo: "blue-tanuki",
-        number: 42,
-        body: "review note",
-      },
-      writeOptions,
-    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
 
     await expect(invokeGitHubWrite(
       { ...args, head: "gatchimuchio:feature/pr-creation" },
@@ -2894,6 +3028,39 @@ function fakeGitHubIssueCommentCreate(
   return fakeGitHubWrite(request, undefined, read_request);
 }
 
+function fakeGitHubPullRequestCommentCreate(
+  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
+    status: 201,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({ id: 790, body: "Synthetic PR timeline comment",
+      issue_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/issues/7" }),
+    truncated: false,
+    rate_limit_remaining: "60",
+    request_id: "PR-COMMENT-REQ",
+  }),
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.endsWith("/issues/7")
+    ? githubReadJson({
+      id: 456,
+      number: 7,
+      state: "open",
+      locked: false,
+      updated_at: "2026-11-07T12:00:00Z",
+      title: "Original pull request title",
+      body: "Original pull request body",
+      pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" },
+    })
+    : githubReadJson({
+      id: 123,
+      name: "blue-tanuki",
+      full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" },
+      private: false,
+    }),
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
 const GITHUB_PR_HEAD_SHA = "a".repeat(40);
 const GITHUB_PR_BASE_SHA = "b".repeat(40);
 
@@ -2945,6 +3112,17 @@ async function reviewedGitHubIssueCommentCreate(args: Record<string, unknown>,
   const command_digest = "c".repeat(64);
   const operation_plan_binding_digest = "d".repeat(64);
   const target = await inspectGitHubIssueCommentCreateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
+}
+
+async function reviewedGitHubPullRequestCommentCreate(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubPullRequestCommentCreate()): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
     ...options, command_digest, operation_plan_binding_digest,
   });
   return { ...options, command_digest, operation_plan_binding_digest,

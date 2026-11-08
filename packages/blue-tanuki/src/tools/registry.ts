@@ -93,6 +93,36 @@ export interface GitHubIssueCommentCreateContentReview {
   may_execute: false;
 }
 
+/** No-store projection of one exact plan-bound regular pull request timeline comment. */
+export interface GitHubPullRequestCommentCreateContentReview {
+  kind: "github_pull_request_comment_create";
+  operation: "github.write.pr.comment.create";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  pull_request_id: number;
+  pull_request_number: number;
+  pull_request_state: "open" | "closed";
+  pull_request_locked: boolean;
+  pull_request_updated_at: string;
+  pull_request_title: string;
+  comment_kind: "pull_request_timeline";
+  body: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "visible_to_repository_audience";
+  comment_removal_retracts_notifications: false;
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** No-store projection of one plan-bound pull request creation and its observed branch tips. */
 export interface GitHubPullRequestCreateContentReview {
   kind: "github_pull_request_create";
@@ -451,6 +481,7 @@ export type ToolContentReview = GmailDraftContentReview | GmailWriteContentRevie
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
   GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubIssueCommentCreateContentReview |
+  GitHubPullRequestCommentCreateContentReview |
   GitHubPullRequestCreateContentReview |
   GoogleDrivePermissionCreateContentReview | GoogleDriveFileTrashContentReview;
 
