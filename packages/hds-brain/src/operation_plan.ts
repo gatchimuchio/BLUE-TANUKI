@@ -699,6 +699,37 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+/** Merge independently validated non-authority memory references without replacing earlier lineage. */
+export function mergeOperationPlanMemoryInterpretationDependencies(
+  ...groups: (readonly unknown[] | undefined)[]
+): OperationPlanMemoryInterpretationDependency[] {
+  const merged: OperationPlanMemoryInterpretationDependency[] = [];
+  const byJudgment = new Map<string, OperationPlanMemoryInterpretationDependency>();
+  for (const group of groups) {
+    if (!group) continue;
+    if (group.length > 64) throw new Error("plan_memory_interpretation_dependency_invalid");
+    const seenInGroup = new Set<string>();
+    for (const value of group) {
+      const dependency = OperationPlanMemoryInterpretationDependencySchema.parse(value);
+      if (seenInGroup.has(dependency.judgment_ref)) {
+        throw new Error("plan_memory_interpretation_dependency_invalid");
+      }
+      seenInGroup.add(dependency.judgment_ref);
+      const existing = byJudgment.get(dependency.judgment_ref);
+      if (existing) {
+        if (operationPlanDigest(existing) !== operationPlanDigest(dependency)) {
+          throw new Error("plan_memory_interpretation_dependency_invalid");
+        }
+        continue;
+      }
+      if (merged.length >= 64) throw new Error("plan_memory_interpretation_dependency_invalid");
+      byJudgment.set(dependency.judgment_ref, dependency);
+      merged.push(dependency);
+    }
+  }
+  return merged;
+}
+
 function operationPlanExecutionSourceDigest(
   plan: PlanState,
   binding: Binding,
@@ -2990,6 +3021,7 @@ export class OperationPlanLedger {
     readonly task_identity_digest: string;
     readonly goal: string;
     readonly goal_purpose_binding: OperationPlanGoalPurposeBinding;
+    readonly memory_interpretation_dependencies: readonly OperationPlanMemoryInterpretationDependency[];
   } {
     if (this.recoveryRefreshPending || this.memoryQuiesced || !this.port || !this.memoryReady ||
         operationPlanDigest(this.port.load()) !== this.savedDigest || !this.reconcileMemory()) {
@@ -3012,8 +3044,10 @@ export class OperationPlanLedger {
       throw new Error("plan_compute_parent_wait_active");
     }
     if (!parent.goal_purpose_binding) throw new Error("plan_compute_parent_purpose_unavailable");
+    this.assertMemoryInterpretationDependenciesCurrent(parent);
     return { task_identity_digest: operationPlanTaskIdentityDigest(parent), goal: parent.goal,
-      goal_purpose_binding: structuredClone(parent.goal_purpose_binding) };
+      goal_purpose_binding: structuredClone(parent.goal_purpose_binding),
+      memory_interpretation_dependencies: structuredClone(parent.memory_interpretation_dependencies ?? []) };
   }
 
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
@@ -3138,11 +3172,8 @@ export class OperationPlanLedger {
         selectedGmailAttachmentObservations.length !== 1) {
       throw new Error("plan_compute_gmail_attachment_owner_selection_required");
     }
-    const parsedMemoryDependencies = memoryInterpretationDependencies?.map((dependency) =>
-      OperationPlanMemoryInterpretationDependencySchema.parse(dependency));
-    if ((parsedMemoryDependencies?.length ?? 0) > 64 ||
-        new Set((parsedMemoryDependencies ?? []).map((dependency) => dependency.judgment_ref)).size !==
-          (parsedMemoryDependencies?.length ?? 0)) throw new Error("plan_memory_interpretation_dependency_invalid");
+    const parsedMemoryDependencies = memoryInterpretationDependencies?.length
+      ? mergeOperationPlanMemoryInterpretationDependencies(memoryInterpretationDependencies) : undefined;
     const goalPurposeRelation = goalPurposeBinding
       ? this.recordGoalPurposeRelation(plan, retainedTaskGoal, goalPurposeBinding, rawPurposeRelationCandidate)
       : undefined;

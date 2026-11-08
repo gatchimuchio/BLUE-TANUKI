@@ -73,6 +73,7 @@ import {
   OperationPlanComputeInputSchema,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
+  OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   type OperationPlanControl,
   type OperationPlanGoalPurposeBinding,
@@ -92,7 +93,8 @@ import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, 
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
   type OperationPlanGatewayReceiptRechecker,
   type OperationPlanSavedResultReturnProjection,
-  operationPlanGoalPurposeRelationReviewAuditDigest } from "./operation_plan.js";
+  operationPlanGoalPurposeRelationReviewAuditDigest,
+  mergeOperationPlanMemoryInterpretationDependencies } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
@@ -1480,6 +1482,8 @@ ${planControl.question}`,
                     observation.task_identity_digest === parent.task_identity_digest)) {
                 throw new Error("plan_compute_parent_source_observation_mismatch");
               }
+              planComputeMemoryInterpretationDependencies = mergeOperationPlanMemoryInterpretationDependencies(
+                parent.memory_interpretation_dependencies);
               planComputeParentPlan = parsedInput.parent_plan;
               planComputeParentContext = { task_identity_digest: parent.task_identity_digest, goal: parent.goal,
                 plan_id_digest: parsedInput.parent_plan.plan_id_digest,
@@ -1487,8 +1491,9 @@ ${planControl.question}`,
             }
             if (parsedInput.source_citation_request_id) {
               planComputeCitationRequestId = parsedInput.source_citation_request_id;
-              planComputeMemoryInterpretationDependencies = this.inspectCurrentMemoryCitationRequest(
-                parsedInput.source_citation_request_id, req);
+              const citationDependencies = this.inspectCurrentMemoryCitationRequest(parsedInput.source_citation_request_id, req);
+              planComputeMemoryInterpretationDependencies = mergeOperationPlanMemoryInterpretationDependencies(
+                planComputeMemoryInterpretationDependencies ?? [], citationDependencies);
             }
             req = createGatewayInternalInboundRequest({
               ...req,
@@ -1511,6 +1516,8 @@ ${planControl.question}`,
               "plan_compute_parent_recovery_hold", "plan_compute_parent_wait_active", "plan_compute_parent_memory_unavailable",
               "plan_compute_parent_purpose_unavailable", "plan_compute_parent_source_observation_mismatch",
               "plan_compute_parent_conflicts_with_wait_resume",
+              "plan_memory_interpretation_dependency_invalid", "plan_memory_interpretation_reassessment_required",
+              "plan_memory_interpretation_state_unavailable",
               "plan_compute_source_observation_memory_unavailable", "plan_compute_source_observation_reference_invalid",
               "plan_compute_source_observation_unavailable", "plan_compute_source_observation_identity_mismatch",
               "plan_compute_source_observation_recovery_hold", "plan_compute_source_observation_stale",
@@ -3489,10 +3496,12 @@ ${planControl.question}`,
             .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
               entry.request_id === sourceLog?.request_id &&
               (entry.status === "accepted" || entry.status === "accepted_with_rejections"));
-          const memoryInterpretationDependencies = citationReview && isMemoryCitationReviewLog(citationReview)
-            ? citationReview.interpretation_dependencies ?? []
-            : issued.compute_memory_interpretation_dependencies ?? [];
-          if (issued.compute_memory_interpretation_dependencies?.some((dependency) =>
+          const memoryInterpretationDependencies = mergeOperationPlanMemoryInterpretationDependencies(
+            issued.compute_memory_interpretation_dependencies ?? [],
+            citationReview && isMemoryCitationReviewLog(citationReview)
+              ? citationReview.interpretation_dependencies ?? [] : [],
+          );
+          if (memoryInterpretationDependencies.some((dependency) =>
             !this.verifyCurrentMemoryCitationJudgment(dependency))) {
             throw new Error("plan_memory_interpretation_dependency_invalid");
           }
@@ -4835,7 +4844,10 @@ ${planControl.question}`,
     const planComputeMemoryCitationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.memory_interpretation_dependencies?.length ? {
         role: "system",
-        content: `以下は、同一requestのJ受理済み引用判定に含まれ、現在の私有M解釈へ再照合した参照だけです。候補計画の文脈としてのみ使い、意味の真実、権限、承認、実行可能性を証明するものとして扱わないでください。計画は未実行であり、HDSが計画確認時にも現在のJ/M依存を再照合します。引用本文や秘密は含みません。\n${JSON.stringify({ source_citation_request_id: planCompute.source_citation_request_id,
+        content: `以下は、Jが現在の私有M解釈へ再照合した引用依存です。親planから継承した依存と、今回明示された引用判定に由来する依存のいずれか、または双方を含みます。候補計画の文脈としてのみ使い、意味の真実、権限、承認、実行可能性を証明するものとして扱わないでください。計画は未実行であり、HDSが計画確認時にも現在のJ/M依存を再照合します。引用本文や秘密は含みません。\n${JSON.stringify({
+          source_citation_request_id: planCompute.source_citation_request_id ?? null,
+          parent_plan: planCompute.parent_context ? { plan_id_digest: planCompute.parent_context.plan_id_digest,
+            revision_digest: planCompute.parent_context.revision_digest } : null,
           dependencies: planCompute.memory_interpretation_dependencies, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
@@ -4964,7 +4976,9 @@ ${planControl.question}`,
           log.frame.goal_projection.projection_id,
           computeContextMessages,
         ),
-        local_p_version: planCompute?.source_observations?.length
+        local_p_version: planCompute?.source_observations?.length && planCompute.memory_interpretation_dependencies?.length
+          ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION
+          : planCompute?.source_observations?.length
           ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION
           : planCompute?.memory_interpretation_dependencies?.length
           ? OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION

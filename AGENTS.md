@@ -14,7 +14,7 @@
 
 owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) 一か所だけで管理する。ownerが新しい三点一組を指定したら、配布manifestと三文書それぞれのhashを照合し、この唯一の現行ピンを新版へ置き換える。旧版の三点・旧pin・完了した作業や実装は履歴ログとして保持するが、通常作業では旧版群や完了ログを列挙・再読せず、現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合に限り、該当部分を参照する。内部原典や全要求対応表はPublicリポジトリへ転載しない。作業時に内部正本へアクセスできなければ推測で補わず、現行repoの実物と公開可能な要求から作業可能範囲を確定し、欠落条件を明記する。
 
-2026-11-08にowner採用された現行rev3.1は、HDS Framework Kernelの意味責務と言語非依存契約、およびBLUE HDS Runtime Kernelの有限なJ/M制御を分離し、Runtime核を段階移管する。現在実動するTypeScript HDS-BRAINは、移管条件の成立までは唯一の実行authority／状態writerとして扱う。Rust shadowに作用権限・正本M書込みを持たせない。将来のcutoverは現行正本が定める比較・停止・rollback・single-writer条件を満たす時だけ行い、その時点で旧TSの第二権限経路を閉じる。以下のHDS-BRAIN実装参照は、現行資産または移管前の段階を指す。
+2026-11-09にowner採用された現行rev4.0は、HDS Frameworkの意味・関係・反証・学習・原理候補と、BLUE Runtimeの有限なJ/M状態・安全採否を分離する。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行はrev4.0の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
 
 本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
 
@@ -38,7 +38,7 @@ owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程�
 BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観測・記憶・帰還まで統治するAGIエージェントシステムの成立である。既存HDS-BRAINの独立した制御・認可資産を維持し、C（計算）、J（HDS判断）、M（可変記憶）、作用能力境界、環境帰還を一気通貫の実経路へ接続する。HDSの基底理論とC/J/Mの実装上の責任分離を同一視しない。
 
 - Cは候補生成・推論・計画・計算を担当する。既存LLMを使用でき、同じ計算契約でミニドラへ交換できる。Cの出力は権限ではない。
-- J／BLUE HDS Runtime Kernelは委任された目的の保持、候補の採否、進行・停止、記憶更新の判断を担当する。移管前の現行writerはTypeScript HDS-BRAINであり、現行正本のK-B6移管条件が成立するまでは単独authorityを保つ。上位委任そのものを勝手に変更しない。
+- J／BLUE Runtimeは委任された目的の保持、候補の採否、進行・停止、記憶更新の判断を担当する。移管前の現行writerはTypeScript HDS-BRAINであり、現行正本が定めるsingle-writer cutover条件が成立するまでは単独authorityを保つ。上位委任そのものを勝手に変更しない。
 - Mは記憶・根拠・失敗・解釈版・残差の保持を担う。Jの判断根拠に利用できるが、過去承認を現在の権限に復活させない。
 - 作用能力境界はHDS採否とは独立に、現在の実行環境Permission、対象同一性、期限、単回消費、必要なowner承認を検査する。
 - D4Pocket（旧GUI-Shell）は汎用GUI／Runtime／Brokerの外殻として接続する設計対象。BLUE固有のJ／HDS意味機構をD4の汎用Shell Coreへ埋め込まず、認証されたAdapter境界を使う。D4側コードの変更には別repoの限定委任を要する。

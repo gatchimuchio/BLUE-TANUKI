@@ -1,8 +1,18 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
-設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev3.1三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
+設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近の完了BUILD_BATCH — QE_BUILD / C/J/M cited-memory dependency source binding（限定WIRED）
+## 直近完了BUILD_BATCH — QE_BUILD / 親planのM解釈依存を子planへ継承（限定WIRED）
+
+### 現在の施工状態 — 2026-11-09
+
+rev4.0のowner採用後、C04.03「依存版の失効」とD01.03「未実行部分の再審査」にまたがる接続欠損を修正した。親OperationPlanを現在性検査するとき、J/Mのmemory interpretation dependencyを返し、`plan:compute`がその依存を新しい計画候補のC入力へ含める。今回のsource citationがある場合は親由来の依存と合わせ、同一judgmentの同一参照だけを重複除去する。単一group内の重複、内容が競合する同一judgment、64件上限超過、再評価要求・現在性不明は拒否する。候補planの保持直前にも統合済み依存を再確認し、子planの状態へ結合する。引用本文・秘密はCへ渡さず、Mは非権威参照のままとする。
+
+`plan:compute`のprompt形状変更に合わせ、memory citation用local P versionをv2へ進め、source observationとmemory citationを併用する形に専用versionを設けた。限定test 4 passed、protocol build、HDS-BRAIN typecheck／build、`hds:standalone`、`docs:check`、`git diff --check`はPASS。全workspace suite、Gatewayの親→子plan runtime経路、実provider／credential／外部作用、5OS、QE_QC／QE_QAはNOT_RUN。これはC04.03／D01.03のコード接続に限る。実runtimeの一仕事、C/J/M全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+次のBUILD_BATCHはrev4.0の全体接続面と現物から、端から端の仕事に最も距離がある実consumerを選び直す。実provider送信、live外部作用、別repo編集、Rust authority cutover、公開・出荷判断は行わない。
+
+## 前段の完了BUILD_BATCH — QE_BUILD / C/J/M cited-memory dependency source binding（限定WIRED）
 
 ### 現在の施工状態 — 2026-11-09
 

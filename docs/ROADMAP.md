@@ -2,11 +2,17 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。ownerは2026-11-08にrev3.1を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Framework Kernelの意味責務とBLUE HDS Runtime Kernelの有限J/M制御を区別し、Runtime核は段階移管する。現行TypeScript HDS-BRAINは明示的なsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。ownerは2026-11-09にrev4.0を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINはrev4.0のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — C/J/M cited-memory dependency source binding（限定WIRED）
+### 直近完了BUILD_BATCH — 親planのM解釈依存を子planへ継承（限定WIRED）
+
+親OperationPlanの現行性確認からJ/M memory interpretation dependencyを返し、`plan:compute`のC入力・候補保持まで継承する。source citationと親由来依存の統合は同一judgmentの一致を検査し、重複・競合・上限超過・再評価要求・現在性不明を拒否する。Mは非権威のまま。対象test 4件、protocol build、HDS-BRAIN typecheck／build、`hds:standalone`がPASS。Gateway親→子plan runtime経路、全workspace suite、実provider／外部作用、5OS、QE_QC／QE_QAは未確認。C04.03／D01.03のコード接続だけを限定`WIRED`とする。
+
+次はrev4.0全体と現物から、全体接続に最も不足するconsumerを再選定する。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。
+
+### 前段完了BUILD_BATCH — C/J/M cited-memory dependency source binding（限定WIRED）
 
 `OperationPlanLedger`のM解釈依存一覧を、選択済みstepのexecution source digestへ束縛する。依存付きplanはv2 digestに依存一覧digestを含み、依存なしplanのv1形式は維持する。既存のactive interpretation／J judgment再確認はそのまま残る。これは出所束縛の接続であり、Mを権限化せず、意味適合・J採否・外部作用を保証しない。既存v1の依存付きpending bindingはfail-closedし再bindを要する。
 
