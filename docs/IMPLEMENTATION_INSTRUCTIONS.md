@@ -4,6 +4,10 @@
 
 ## 現行施工指示 — QE_BUILD / F05.02
 
+### 現在の施工状態 — 2026-11-08
+
+結果consumerは、承認済みcommand・Operation Plan binding・target/request digestをHDSで再照合し、Executorで受理receipt／限定拒否receipt／結果不明を区別してJへ配送する。Jは`verified`／`provider_rejected`／`verification_failed`／`outcome_unknown`を記録し、Mには本文やprovider応答本文を置かずdigest-only観測を保存する。Owner結果照会は状態とHTTP statusを返し、再送しない。合成integration確認は`issue.create`の受理・拒否・不明の三経路、Gateway result reconciliation 51件、GitHub adapter／Executor 28件、Control Center script構文1件でPASSした。今回の作業で他4操作のoperation-specificなresult経路をend-to-end再実行していない。実GitHubのissue／PR／comment送信、実資格情報、Gateway process、Owner browserは`NOT_RUN`。F05.02は全体閉包していない。
+
 rev3.1の現行指示に従い、F05.01のrepository/base identity読取を、既存GitHub write操作の実consumerへ接続する。現在は`issue.create`、title/body限定の`issue.update`、`issue.comment.create`、同一repository内の`pr.create`、同一repository内の`pr.comment.create`（PRタイムライン会話コメント）をOperation Plan・target-version・no-store L3 content review・Executor/Brokerへコード接続済み（Gateway実runtime未確認）。Issue系操作はrepository／対象Issueを作用直前に再読取し、issue.comment.createはPRおよびlocked Issueを送信前に拒否する。PR作成はhead/base branch refとcommit SHA・repository identity・visibilityを観測し、レビュー後に再観測して変化時はPOSTしない。PRコメントはrepositoryとPR ID／番号／状態／lock／更新時刻、正確な本文をレビューへ束縛し、PR以外およびlocked PRを送信前に拒否する。レビューは正確な内容、可視性、通知可能性、非原子的競合、不可逆性を表示する。コメントはGitHubのIssue comments経路で作成する通常のPRタイムライン会話であり、diff行へ付けるreview commentではない。明示拒否と結果不明を区別し、不明結果は自動再送しない。`pr.comment.create`のdiff行review commentと、別repositoryをheadにする`pr.create`は`BUILD_GAP`として残す。合成・隔離結果による限定疎通を対象とし、実GitHubへのissue／PR／comment送信、実資格情報を伴う外部作用、他repo変更は行わない。コードやschemaの存在だけを`WIRED`とせず、接続したproducer→consumerと残る境界を記録する。実装順・具体的な成立条件は現行三点セットに従う。
 
 ## 保留を維持する健全化残件 — 2026-11-07 follow-up D

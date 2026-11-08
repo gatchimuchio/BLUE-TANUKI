@@ -242,6 +242,7 @@ export function buildOperationCommandExecutionResult(
   observation: CommandObservation | undefined,
   feedback: ExecuteFeedback,
   execution_boundary: OperationExecutionBoundary,
+  reported_rejection = false,
 ): OperationCommandExecutionResult | undefined {
   if (!observation || observation.command_id !== feedback.command_id) return undefined;
   const state = operationStateForFeedbackStatus(feedback.status);
@@ -252,7 +253,8 @@ export function buildOperationCommandExecutionResult(
     role: "command_execution_result",
     state,
     execution_boundary,
-    action_outcome: execution_boundary === "not_invoked" ? "not_attempted"
+    action_outcome: reported_rejection ? "reported_rejection"
+      : execution_boundary === "not_invoked" ? "not_attempted"
       : execution_boundary === "console_preview" ? "preview_only"
         : state === "succeeded" ? "reported_success" : "unknown",
     observed_at_ms: Date.now(),

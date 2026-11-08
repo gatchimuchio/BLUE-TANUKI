@@ -314,10 +314,15 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       this.assertOwnerEpoch(ticket);
       const receipt = this.lookup(ticket.ticket_id);
       if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor receipt rejected: ticket mismatch");
+      const explicitGitHubRejection = result.state === "adapter_returned" && result.feedback_status === "failed" &&
+        delivery !== undefined && delivery.feedback.status === "failed" &&
+        delivery.feedback.operation_core_result.operation === "github.write" &&
+        delivery.feedback.operation_core_result.action_outcome === "reported_rejection" &&
+        isGitHubWriteRejectionReceipt(delivery.feedback.result);
       if ((receipt.state === "intent_committed" && result.state !== "not_attempted") ||
           (receipt.state === "invocation_attempted" && result.state !== "adapter_returned" && result.state !== "outcome_unknown") ||
           (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
-          (result.state === "adapter_returned" && (result.feedback_status !== "success" ||
+          (result.state === "adapter_returned" && (result.feedback_status !== "success" && !explicitGitHubRejection ||
             (receipt.worker_id !== undefined && receipt.worker_exit_observed_at_ms === undefined)))) {
         throw new Error("Executor receipt rejected: invalid state transition");
       }
@@ -1332,7 +1337,36 @@ function validateDelivery(receipt: ExecutionIntentReceipt, delivery: ExecutionRe
       receipt.output_digest !== result.output_digest || receipt.error_digest !== result.error_digest ||
       receipt.observed_at_ms !== result.observed_at_ms ||
       (fb.result === undefined ? result.output_digest !== undefined : digest(JSON.stringify(fb.result)) !== result.output_digest) ||
-      (receipt.state === "adapter_returned" ? result.action_outcome !== "reported_success" || !fb.result
+      (receipt.state === "adapter_returned" ?
+        (result.action_outcome === "reported_success"
+          ? fb.status !== "success" || !fb.result
+          : result.action_outcome !== "reported_rejection" || fb.status !== "failed" || operation !== "github.write" ||
+            !isGitHubWriteRejectionReceipt(fb.result))
         : receipt.state === "not_attempted" ? result.action_outcome !== "not_attempted"
           : receipt.state !== "outcome_unknown" || result.action_outcome !== "unknown")) throw new Error("execution_delivery_receipt_mismatch");
+}
+
+function isGitHubWriteRejectionReceipt(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  const expectedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
+    "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
+    "mutation_status", "result_digest", "retry_permitted", "next_action", "provider_data_is_untrusted",
+    "used_for_authority", "may_execute"].sort();
+  return Object.keys(result).sort().join("\0") === expectedKeys.join("\0") &&
+    result.schema_version === "blue-tanuki.github-write-result.v1" &&
+    ["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create"].includes(String(result.operation)) &&
+    result.api_host === "api.github.com" && typeof result.repo === "string" &&
+    Number.isSafeInteger(result.repository_id) && (result.repository_id as number) > 0 &&
+    typeof result.target_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.target_identity_digest) &&
+    typeof result.request_payload_digest === "string" && /^[a-f0-9]{64}$/.test(result.request_payload_digest) &&
+    typeof result.command_digest === "string" && /^[a-f0-9]{64}$/.test(result.command_digest) &&
+    typeof result.operation_plan_binding_digest === "string" && /^[a-f0-9]{64}$/.test(result.operation_plan_binding_digest) &&
+    typeof result.method === "string" && ["POST", "PATCH"].includes(result.method) &&
+    typeof result.path === "string" && result.path.startsWith("/repos/") &&
+    [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(result.status)) &&
+    result.mutation_status === "provider_rejected" && typeof result.result_digest === "string" &&
+    /^[a-f0-9]{64}$/.test(result.result_digest) && result.retry_permitted === false &&
+    result.next_action === "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision." &&
+    result.provider_data_is_untrusted === true && result.used_for_authority === false && result.may_execute === false;
 }

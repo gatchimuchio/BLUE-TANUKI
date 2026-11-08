@@ -27,6 +27,11 @@ import {
   googleDrivePermissionCreateRequestPayloadDigest,
   googleDrivePermissionCreateTargetIdentityDigest,
   googleDriveTrashTargetIdentityDigest,
+  githubIssueCreateRequestPayloadDigest,
+  githubIssueUpdateRequestPayloadDigest,
+  githubIssueCommentCreateRequestPayloadDigest,
+  githubPullRequestCommentCreateRequestPayloadDigest,
+  githubPullRequestCreateRequestPayloadDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -214,6 +219,18 @@ export type OperationPlanSavedResultReturnProjection =
     readonly preview_limit: number;
     readonly preview_completeness: "unknown";
     readonly lines: readonly { readonly line_number: number; readonly line: string }[];
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v6";
+    readonly operation: "github.write";
+    readonly operation_name: "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create";
+    readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
+    readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
+    readonly http_status: number | null;
+    readonly provider_result_digest: string | null;
+    readonly target_identity_digest: string | null;
+    readonly request_payload_digest: string | null;
+    readonly operation_plan_binding_digest: string;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -682,6 +699,40 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+function operationPlanExecutionSourceDigest(
+  plan: PlanState,
+  binding: Binding,
+  step: OperationStep,
+  computeSourceObservations = plan.compute_source_observations ?? [],
+): string {
+  const revision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
+  if (!revision) throw new Error("plan_execution_source_binding_stale");
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.operation-plan-execution-source.v1",
+    owner_digest: operationPlanDigest(plan.owner),
+    channel: plan.channel,
+    original_goal_digest: operationPlanDigest(plan.goal),
+    plan_id_digest: operationPlanDigest(revision.plan.plan_id),
+    plan_request_id_digest: operationPlanDigest(revision.plan.request_id),
+    revision_digest: binding.revision_digest,
+    step_id_digest: operationPlanDigest(binding.step_id),
+    step_digest: binding.step_digest,
+    prepared_step_digest: operationPlanDigest(binding.prepared_step),
+    operation: binding.operation,
+    adapter: step.adapter,
+    target_digest: operationPlanDigest(binding.prepared_step.target),
+    effects_digest: operationPlanDigest(binding.prepared_step.effects),
+    parameters_digest: operationPlanDigest(binding.prepared_step.parameters ?? {}),
+    preconditions_digest: operationPlanDigest(binding.prepared_step.preparation?.preconditions ?? []),
+    goal_purpose_binding: plan.goal_purpose_binding ?? null,
+    goal_purpose_relation_digest: operationPlanDigest(plan.goal_purpose_relation ?? null),
+    request_goal_criteria_digest: operationPlanDigest(plan.request_goal_criteria ?? null),
+    goal_relation_adoption_assessment_digest: binding.goal_relation_adoption_assessment?.assessment_digest ?? null,
+    compute_source_observations_digest: operationPlanDigest(computeSourceObservations),
+    command_digest: binding.command_digest,
+  });
+}
+
 interface GmailMessageIdentityOption {
   readonly message_identity_digest: string;
 }
@@ -788,6 +839,194 @@ function isFileSearchRelativeResultPath(value: unknown): value is string {
   return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
+function githubWriteText(parameters: Record<string, unknown>, key: string, maxLength: number,
+  required = false): string | undefined {
+  const value = parameters[key];
+  if (value === undefined && !required) return undefined;
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength && value.trim() === value
+    ? value : undefined;
+}
+
+function validGitHubName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 100 &&
+    /^[A-Za-z0-9_.-]+$/.test(value) && value !== "." && value !== "..";
+}
+
+function validGitHubBranchRef(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const segments = value.split("/");
+  return value.length > 0 && value.length <= 255 && value === value.trim() && value !== "@" &&
+    !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") && !value.includes("..") &&
+    !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) && !value.endsWith(".") &&
+    segments.every((segment) => segment && segment !== "." && segment !== ".." && !segment.startsWith(".") &&
+      !segment.endsWith(".lock") && !segment.endsWith("."));
+}
+
+function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | undefined {
+  if (step.operation !== "github.write" || step.adapter !== "external_api" ||
+      step.target.kind !== "external_service" || step.target.id !== "github" || !step.parameters) return undefined;
+  const parameters = step.parameters;
+  const owner = parameters.owner;
+  const repo = parameters.repo;
+  const operation = parameters.operation;
+  if (!validGitHubName(owner) || !validGitHubName(repo) || typeof operation !== "string") return undefined;
+  const maxBytes = parameters.max_bytes ?? 128_000;
+  if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 512_000) return undefined;
+  const allowedKeys = (keys: readonly string[]): boolean => Object.keys(parameters).every((key) =>
+    [...keys, "max_bytes"].includes(key));
+  const body = githubWriteText(parameters, "body", 500_000);
+  if (Object.hasOwn(parameters, "body") && body === undefined) return undefined;
+  if (operation === "issue.create") {
+    const title = githubWriteText(parameters, "title", 256, true);
+    if (!title || !allowedKeys(["operation", "owner", "repo", "title", "body"])) return undefined;
+    return githubIssueCreateRequestPayloadDigest({ owner, repo, title, ...(body === undefined ? {} : { body }) });
+  }
+  if (operation === "issue.update") {
+    const number = parameters.number;
+    const title = githubWriteText(parameters, "title", 256);
+    if (Object.hasOwn(parameters, "title") && title === undefined ||
+        typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
+        title === undefined && body === undefined ||
+        !allowedKeys(["operation", "owner", "repo", "number", "title", "body"])) return undefined;
+    return githubIssueUpdateRequestPayloadDigest({ owner, repo, issue_number: number,
+      ...(title === undefined ? {} : { title }), ...(body === undefined ? {} : { body }) });
+  }
+  if (operation === "issue.comment.create" || operation === "pr.comment.create") {
+    const number = parameters.number;
+    if (!body || typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
+        !allowedKeys(["operation", "owner", "repo", "number", "body"])) return undefined;
+    return operation === "issue.comment.create"
+      ? githubIssueCommentCreateRequestPayloadDigest({ owner, repo, issue_number: number, body })
+      : githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo, pull_request_number: number, body });
+  }
+  if (operation === "pr.create") {
+    const title = githubWriteText(parameters, "title", 256, true);
+    const head = parameters.head;
+    const base = parameters.base;
+    const draft = parameters.draft ?? false;
+    const maintainerCanModify = parameters.maintainer_can_modify;
+    if (!title || !validGitHubBranchRef(head) || !validGitHubBranchRef(base) || head === base ||
+        head.includes(":") || typeof draft !== "boolean" ||
+        maintainerCanModify !== undefined && typeof maintainerCanModify !== "boolean" ||
+        !allowedKeys(["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify"])) {
+      return undefined;
+    }
+    return githubPullRequestCreateRequestPayloadDigest({ owner, repo, title, head_ref: head, base_ref: base,
+      draft, ...(body === undefined ? {} : { body }),
+      ...(maintainerCanModify === undefined ? {} : { maintainer_can_modify: maintainerCanModify as boolean }) });
+  }
+  return undefined;
+}
+
+function githubWriteResultMatches(
+  validation: NonNullable<OperationStep["preparation"]>["validation"][number],
+  step: OperationStep,
+  output: unknown,
+  binding?: Binding,
+): boolean {
+  if (validation.method !== "github_write_result_matches" || step.operation !== "github.write" ||
+      !isFileSearchResultRecord(validation.expected) || !isFileSearchResultRecord(output) ||
+      !step.parameters || !binding?.operation_plan_binding_digest || !binding.executor_command_digest) return false;
+  const expected = validation.expected;
+  const parameters = step.parameters;
+  const requestPayloadDigest = githubWriteRequestPayloadDigestForStep(step);
+  if (!requestPayloadDigest || Object.keys(expected).sort().join(",") !== "operation,schema_version" ||
+      expected.schema_version !== "blue-tanuki.github-write-result-validation.v1" ||
+      expected.operation !== parameters.operation ||
+      Object.keys(output).some((key) => ["body", "raw_body", "response_body", "provider_response"].includes(key)) ||
+      output.schema_version !== "blue-tanuki.github-write-result.v1" || output.operation !== parameters.operation ||
+      output.api_host !== "api.github.com" || output.repo !== `${parameters.owner}/${parameters.repo}` ||
+      typeof output.repository_id !== "number" || !Number.isSafeInteger(output.repository_id) || output.repository_id <= 0 ||
+      typeof output.target_identity_digest !== "string" || !/^[a-f0-9]{64}$/.test(output.target_identity_digest) ||
+      output.request_payload_digest !== requestPayloadDigest || output.command_digest !== binding.command_digest ||
+      output.operation_plan_binding_digest !== binding.operation_plan_binding_digest ||
+      typeof output.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(output.result_digest) ||
+      output.provider_data_is_untrusted !== true || output.used_for_authority !== false || output.may_execute !== false) return false;
+  const owner = encodeURIComponent(String(parameters.owner));
+  const repo = encodeURIComponent(String(parameters.repo));
+  const number = parameters.number;
+  const route = parameters.operation === "issue.create"
+    ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
+    : parameters.operation === "issue.update" && typeof number === "number"
+      ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : (parameters.operation === "issue.comment.create" || parameters.operation === "pr.comment.create") &&
+          typeof number === "number"
+        ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
+        : parameters.operation === "pr.create"
+          ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 } : undefined;
+  if (!route || output.method !== route.method || output.path !== route.path ||
+      output.mutation_status !== "provider_accepted" && output.mutation_status !== "provider_rejected") return false;
+  if (output.mutation_status === "provider_rejected") {
+    const keys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
+      "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
+      "mutation_status", "result_digest", "retry_permitted", "next_action", "provider_data_is_untrusted",
+      "used_for_authority", "may_execute"].sort();
+    return Object.keys(output).sort().join("\0") === keys.join("\0") &&
+      [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(output.status)) &&
+      output.retry_permitted === false &&
+      output.next_action === "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.";
+  }
+  const acceptedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
+    "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
+    "mutation_status", "content_type", "truncated", "rate_limit_remaining", "github_request_id", "result_digest",
+    "result", "provider_data_is_untrusted", "used_for_authority", "may_execute"].sort();
+  if (Object.keys(output).sort().join("\0") !== acceptedKeys.join("\0") || output.status !== route.status ||
+      typeof output.content_type !== "string" || !output.content_type.toLowerCase().includes("json") ||
+      output.truncated !== false ||
+      output.rate_limit_remaining !== null && typeof output.rate_limit_remaining !== "string" ||
+      output.github_request_id !== null && typeof output.github_request_id !== "string" ||
+      !isFileSearchResultRecord(output.result)) return false;
+  const result = output.result;
+  if (parameters.operation === "issue.create") {
+    return Object.keys(result).sort().join(",") === "id,number,title" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 &&
+      Number.isSafeInteger(result.number) && (result.number as number) > 0 &&
+      result.title === parameters.title;
+  }
+  if (parameters.operation === "issue.update") {
+    return Object.keys(result).sort().join(",") === "id,locked,number,state,title" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.number === parameters.number &&
+      (result.state === "open" || result.state === "closed") && typeof result.locked === "boolean" &&
+      typeof result.title === "string" && result.title.length > 0 && result.title.length <= 256;
+  }
+  if (parameters.operation === "issue.comment.create" || parameters.operation === "pr.comment.create") {
+    return Object.keys(result).join(",") === "id" && Number.isSafeInteger(result.id) && (result.id as number) > 0;
+  }
+  const expectedDraft = parameters.draft ?? false;
+  return parameters.operation === "pr.create" &&
+    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "id", "number", "title"]
+      .every((key) => Object.hasOwn(result, key)) &&
+    Object.keys(result).every((key) => ["id", "number", "title", "head_ref", "head_commit_sha", "base_ref",
+      "base_commit_sha", "draft", "maintainer_can_modify"].includes(key)) &&
+    Number.isSafeInteger(result.id) && (result.id as number) > 0 && Number.isSafeInteger(result.number) &&
+    (result.number as number) > 0 && result.title === parameters.title && result.head_ref === parameters.head &&
+    result.base_ref === parameters.base && typeof result.head_commit_sha === "string" &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.head_commit_sha) &&
+    typeof result.base_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.base_commit_sha) &&
+    result.draft === expectedDraft &&
+    (result.maintainer_can_modify === undefined || typeof result.maintainer_can_modify === "boolean");
+}
+
+function githubWriteReceiptSummary(output: unknown): NonNullable<Binding["github_write_result"]> | undefined {
+  if (!isFileSearchResultRecord(output) || output.schema_version !== "blue-tanuki.github-write-result.v1" ||
+      (output.mutation_status !== "provider_accepted" && output.mutation_status !== "provider_rejected") ||
+      typeof output.operation !== "string" || typeof output.status !== "number" ||
+      typeof output.result_digest !== "string" || typeof output.target_identity_digest !== "string" ||
+      typeof output.request_payload_digest !== "string" || typeof output.operation_plan_binding_digest !== "string") return undefined;
+  return {
+    schema_version: "operation-plan-github-write-result.v1",
+    operation: output.operation,
+    mutation_status: output.mutation_status,
+    http_status: output.status,
+    provider_result_digest: output.result_digest,
+    target_identity_digest: output.target_identity_digest,
+    request_payload_digest: output.request_payload_digest,
+    operation_plan_binding_digest: output.operation_plan_binding_digest,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 /**
  * Checks an operation result against the plan's bounded validation contract.
  * File search validates the request binding and result shape without predicting
@@ -797,8 +1036,12 @@ export function operationPlanResultValidationMatches(
   validation: NonNullable<OperationStep["preparation"]>["validation"][number],
   step: OperationStep,
   output: unknown,
+  binding?: Binding,
 ): boolean {
   if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "github_write_result_matches") {
+    return githubWriteResultMatches(validation, step, output, binding);
+  }
   if (validation.method === "result_equals") {
     return operationPlanDigest(validation.expected) === operationPlanDigest(output);
   }
@@ -1601,6 +1844,24 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       Buffer.byteLength(content, "utf8") <= maxContentBytes &&
       Object.keys(parameters).every((key) => ["operation", "parent_id", "name", "mime_type", "content",
         "max_bytes", "max_content_bytes"].includes(key));
+  }
+  if (step.operation === "github.write" && step.adapter === "external_api" &&
+      step.target.kind === "external_service" && step.target.id === "github" && parameters) {
+    const requestPayloadDigest = githubWriteRequestPayloadDigestForStep(step);
+    const validPermission = step.permission.risk === "high" &&
+      step.permission.approval_level === "L3_final_review" && step.permission.final_review_required &&
+      step.permission.approval_gate_required && step.permission.hds_brain_authority_required;
+    const validEffects = step.effects.length === 3 &&
+      ["external_send", "write", "credential_access"].every((effect) =>
+        step.effects.includes(effect as OperationStep["effects"][number]));
+    const validations = step.preparation?.validation ?? [];
+    return !!requestPayloadDigest && validPermission && validEffects && validations.length === 1 &&
+      validations[0]!.method === "github_write_result_matches" &&
+      operationPlanDigest(validations[0]!.target) === operationPlanDigest(step.target) &&
+      isFileSearchResultRecord(validations[0]!.expected) &&
+      Object.keys(validations[0]!.expected).sort().join(",") === "operation,schema_version" &&
+      validations[0]!.expected.schema_version === "blue-tanuki.github-write-result-validation.v1" &&
+      validations[0]!.expected.operation === parameters.operation;
   }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters) return false;
@@ -2486,8 +2747,8 @@ export class OperationPlanLedger {
         return false;
       }
       if (taskScopedRestoreHold && plan.bindings.some((binding) =>
-        !["verified", "invalidated", "not_attempted"].includes(binding.status))) return false;
-      if (plan.bindings.filter((binding) => binding.status === "verified").length === 0 &&
+        !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) return false;
+      if (!plan.bindings.some((binding) => binding.status === "verified" || binding.status === "provider_rejected") &&
           (plan.results.length > 0 || plan.bindings.some((binding) =>
         !["invalidated", "not_attempted"].includes(binding.status) || binding.execution_admission !== undefined ||
         binding.delivery_digest !== undefined || binding.memory_commit !== undefined || binding.memory_receipt !== undefined))) {
@@ -2518,7 +2779,7 @@ export class OperationPlanLedger {
               candidateHold.provenance.restore_task_plan_set_digest !== provenance.restore_task_plan_set_digest ||
               candidateHold.provenance.restore_task_dependency_status !== "observed")) return false;
           if (candidate.bindings.some((binding) => binding.status === "selected" || binding.status === "intent_committed" ||
-              binding.status === "outcome_unknown" || !["verified", "invalidated", "not_attempted"].includes(binding.status))) {
+              binding.status === "outcome_unknown" || !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) {
             return false;
           }
           this.assertMemoryInterpretationDependenciesCurrent(candidate);
@@ -2544,7 +2805,7 @@ export class OperationPlanLedger {
           if (candidate.bindings.some((binding) => binding.status === "selected" || binding.status === "intent_committed" ||
               binding.status === "outcome_unknown")) return false;
           if (candidate.bindings.some((binding) =>
-            !["verified", "invalidated", "not_attempted"].includes(binding.status))) return false;
+            !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) return false;
           this.assertMemoryInterpretationDependenciesCurrent(candidate);
           return this.brokerRestoreDependencyVerifier!(candidateId, candidateHold?.provenance ?? provenance);
         });
@@ -2570,8 +2831,8 @@ export class OperationPlanLedger {
     if (!memory || !lifecycle || lifecycle.status !== "ready" ||
         !["idle", "effect_confirmed"].includes(lifecycle.lifecycle_state) ||
         lifecycle.pending.some((entry) => entry.lifecycle_state !== "effect_confirmed")) return false;
-    const verified = plan.bindings.filter((binding) => binding.status === "verified");
-    return verified.every((binding) => {
+    const recordedResults = plan.bindings.filter((binding) => resultMemoryEligible(binding));
+    return recordedResults.every((binding) => {
       if (!binding.execution_admission || !binding.delivery_digest || !binding.memory_commit || !binding.memory_receipt ||
           !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(binding.memory_receipt, binding.memory_commit)) {
         return false;
@@ -3236,7 +3497,7 @@ export class OperationPlanLedger {
     this.change((state) => {
       const p = state.plans.find((p) => p.revisions[0]!.plan.plan_id === prepared.plan_id)!;
       if (prepared.goal_purpose_binding) p.goal_purpose_binding = prepared.goal_purpose_binding;
-      p.bindings.push({ step_id: step.step_id, revision_digest: prepared.revision_digest,
+      const binding: Binding = { step_id: step.step_id, revision_digest: prepared.revision_digest,
         step_digest: stepDigest(p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === step.step_id)!),
         prepared_step: step,
         command_id: command.id, request_id: command.upstream_decision.request_id!,
@@ -3244,7 +3505,9 @@ export class OperationPlanLedger {
         command_digest: operationPlanDigest(command),
         executor_command_digest: canonicalExecutorCommandDigest(command),
         operation: descriptor.operation_id, goal_relation_adoption_assessment: goalRelationAdoptionAssessment,
-        status: "selected" });
+        status: "selected" };
+      binding.operation_plan_binding_digest = operationPlanExecutionSourceDigest(p, binding, step);
+      p.bindings.push(binding);
     });
     this.issuedBindings.set(command, command.id);
     this.issuedBindingIds.add(command.id);
@@ -3352,30 +3615,11 @@ export class OperationPlanLedger {
         currentGoalRelationAdoptionAssessment.assessment_digest !== match.b.goal_relation_adoption_assessment.assessment_digest) {
       throw new Error("plan_execution_source_binding_stale");
     }
-    return operationPlanDigest({
-      schema_version: "blue-tanuki.operation-plan-execution-source.v1",
-      owner_digest: operationPlanDigest(match.p.owner),
-      channel: match.p.channel,
-      original_goal_digest: operationPlanDigest(match.p.goal),
-      plan_id_digest: operationPlanDigest(revision.plan.plan_id),
-      plan_request_id_digest: operationPlanDigest(revision.plan.request_id),
-      revision_digest: match.b.revision_digest,
-      step_id_digest: operationPlanDigest(match.b.step_id),
-      step_digest: match.b.step_digest,
-      prepared_step_digest: operationPlanDigest(match.b.prepared_step),
-      operation: match.b.operation,
-      adapter: step.adapter,
-      target_digest: operationPlanDigest(match.b.prepared_step.target),
-      effects_digest: operationPlanDigest(match.b.prepared_step.effects),
-      parameters_digest: operationPlanDigest(match.b.prepared_step.parameters ?? {}),
-      preconditions_digest: operationPlanDigest(match.b.prepared_step.preparation?.preconditions ?? []),
-      goal_purpose_binding: match.p.goal_purpose_binding ?? null,
-      goal_purpose_relation_digest: operationPlanDigest(match.p.goal_purpose_relation ?? null),
-      request_goal_criteria_digest: operationPlanDigest(match.p.request_goal_criteria ?? null),
-      goal_relation_adoption_assessment_digest: match.b.goal_relation_adoption_assessment?.assessment_digest ?? null,
-      compute_source_observations_digest: operationPlanDigest(computeSourceObservations),
-      command_digest: match.b.command_digest,
-    });
+    const digest = operationPlanExecutionSourceDigest(match.p, match.b, step, computeSourceObservations);
+    if (match.b.operation_plan_binding_digest && match.b.operation_plan_binding_digest !== digest) {
+      throw new Error("plan_execution_source_binding_stale");
+    }
+    return digest;
   }
   /** J所有計画のstep・改訂をまたぐ安定した非権威task identity。 */
   executionTaskIdentityDigest(command: ExecuteCommand): string | undefined {
@@ -3785,15 +4029,19 @@ export class OperationPlanLedger {
     const step = steps[0]!;
     const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
     const binding = bindings.at(-1);
-    if (bindings.length !== 1 || !binding || binding.status !== "verified" || binding.operation !== step.operation ||
-        (step.operation !== "file.search" && step.operation !== "file.edit" &&
+    const githubWrite = step.operation === "github.write";
+    const allowedBindingStatus = githubWrite
+      ? ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding?.status ?? "")
+      : binding?.status === "verified";
+    if (bindings.length !== 1 || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
+        (!githubWrite && step.operation !== "file.search" && step.operation !== "file.edit" &&
           step.operation !== "file.write" && step.operation !== "file.delete") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
     const results = plan.results.filter((result) => result.plan_id === current.plan.plan_id &&
       result.request_id === current.plan.request_id && result.step_id === step.step_id &&
       result.operation === step.operation && result.status === "succeeded");
-    if (results.length !== 1) throw new Error("plan_saved_result_result_unavailable");
+    if (githubWrite ? results.length !== 0 : results.length !== 1) throw new Error("plan_saved_result_result_unavailable");
     const result = results[0]!;
     const change = binding.memory_commit.changes[0];
     if (!change || change.operation !== "upsert") throw new Error("plan_saved_result_memory_commit_invalid");
@@ -3804,6 +4052,68 @@ export class OperationPlanLedger {
     }
     const committedObservation = change.value as unknown as Record<string, unknown>;
     if (committedObservation.result_digest !== binding.result_digest) throw new Error("plan_saved_result_observation_mismatch");
+    if (githubWrite) {
+      const summary = binding.github_write_result;
+      const operationName = step.parameters?.operation;
+      const expectedMutationStatus = binding.status === "verified" ? "provider_accepted"
+        : binding.status === "provider_rejected" ? "provider_rejected" : null;
+      if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
+          !["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create"].includes(String(operationName)) ||
+          committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
+          committedObservation.record_type !== "github_write_outcome_observation" ||
+          committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          committedObservation.task_identity_digest !== binding.execution_admission.task_identity_digest ||
+          committedObservation.plan_id_digest !== operationPlanDigest(current.plan.plan_id) ||
+          committedObservation.plan_revision_digest !== binding.revision_digest ||
+          committedObservation.step_id_digest !== operationPlanDigest(step.step_id) ||
+          committedObservation.step_digest !== binding.step_digest || committedObservation.operation !== "github.write" ||
+          committedObservation.plan_binding_status !== binding.status ||
+          committedObservation.command_digest !== binding.command_digest ||
+          committedObservation.operation_plan_binding_digest !== binding.operation_plan_binding_digest ||
+          committedObservation.delivery_digest !== binding.delivery_digest ||
+          committedObservation.result_digest !== binding.result_digest ||
+          committedObservation.observed_at_ms !== binding.result_observed_at_ms ||
+          committedObservation.effect_observation !== (binding.status === "verified" ? "reported_success"
+            : binding.status === "provider_rejected" ? "reported_rejection" : "unknown") ||
+          committedObservation.adoption_status !== "observation_only" || committedObservation.used_as_world_truth !== false ||
+          committedObservation.used_for_authority !== false || committedObservation.may_execute !== false ||
+          (expectedMutationStatus === null
+            ? summary !== undefined || committedObservation.provider_mutation_status !== null ||
+              committedObservation.provider_http_status !== null || committedObservation.provider_result_digest !== null ||
+              committedObservation.target_identity_digest !== null || committedObservation.request_payload_digest !== null
+            : !summary || summary.operation !== operationName || summary.mutation_status !== expectedMutationStatus ||
+              summary.operation_plan_binding_digest !== binding.operation_plan_binding_digest ||
+              summary.provider_result_digest !== committedObservation.provider_result_digest ||
+              summary.http_status !== committedObservation.provider_http_status ||
+              summary.target_identity_digest !== committedObservation.target_identity_digest ||
+              summary.request_payload_digest !== committedObservation.request_payload_digest ||
+              summary.used_for_authority !== false || summary.may_execute !== false ||
+              committedObservation.provider_mutation_status !== expectedMutationStatus)) {
+        throw new Error("plan_saved_result_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v6",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms,
+        operation: "github.write",
+        operation_name: operationName as "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create",
+        status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
+        mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
+        provider_result_digest: summary?.provider_result_digest ?? null,
+        target_identity_digest: summary?.target_identity_digest ?? null,
+        request_payload_digest: summary?.request_payload_digest ?? null,
+        operation_plan_binding_digest: binding.operation_plan_binding_digest!,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
+    if (!result) throw new Error("plan_saved_result_result_unavailable");
     const parsedOutput = OperationJsonValueSchema.parse(result.output);
     if (!parsedOutput || typeof parsedOutput !== "object" || Array.isArray(parsedOutput)) {
       throw new Error("plan_saved_result_output_invalid");
@@ -4857,10 +5167,27 @@ export class OperationPlanLedger {
       return true;
     }
     if (b.result_digest !== operationPlanDigest(result)) throw new Error("plan_delivery_result_conflict");
-    if (b.status === "verified") {
+    if (b.status === "verified" && b.operation === "github.write") {
+      const step = b.prepared_step;
+      const summary = githubWriteReceiptSummary(delivery.feedback.result);
+      if (!summary || summary.mutation_status !== "provider_accepted" ||
+          operationPlanDigest(b.github_write_result) !== operationPlanDigest(summary) ||
+          !step.preparation?.validation.every((validation) =>
+            operationPlanResultValidationMatches(validation, step, delivery.feedback.result, b))) {
+        throw new Error("plan_delivery_result_conflict");
+      }
+    } else if (b.status === "verified") {
       const saved = p.results.find((r) => r.step_id === b.step_id && r.result_id === result.result_id);
       if (!saved || saved.observed_at_ms !== result.observed_at_ms ||
           operationPlanDigest(saved.output) !== operationPlanDigest(fb.result)) throw new Error("plan_delivery_result_conflict");
+    } else if (b.status === "provider_rejected") {
+      const summary = githubWriteReceiptSummary(delivery.feedback.result);
+      if (b.operation !== "github.write" || !summary || summary.mutation_status !== "provider_rejected" ||
+          operationPlanDigest(b.github_write_result) !== operationPlanDigest(summary) ||
+          !b.prepared_step.preparation?.validation.every((validation) =>
+            operationPlanResultValidationMatches(validation, b.prepared_step, delivery.feedback.result, b))) {
+        throw new Error("plan_delivery_result_conflict");
+      }
     } else if (!["not_attempted", "outcome_unknown", "verification_failed"].includes(b.status)) return false;
     this.change((state) => { state.plans.flatMap((p) => p.bindings).find((b) => b.command_id === fb.command_id)!.delivery_digest = delivery_digest; });
     return true;
@@ -4873,19 +5200,30 @@ export class OperationPlanLedger {
     });
     const step = b.prepared_step;
     const output = OperationJsonValueSchema.safeParse(feedback.result);
+    const validationMatched = !!result && output.success &&
+      !!step.preparation?.validation.length && step.preparation.validation.every((validation) =>
+        operationPlanResultValidationMatches(validation, step, output.data, b));
+    const githubSummary = b.operation === "github.write" && validationMatched && output.success
+      ? githubWriteReceiptSummary(output.data) : undefined;
     const verified = !!result && result.command_payload_digest === b.payload_digest && result.action_outcome === "reported_success" &&
       output.success && result.output_digest === createHash("sha256").update(JSON.stringify(feedback.result)).digest("hex") &&
-      !!step.preparation?.validation.length && step.preparation.validation.every((validation) =>
-        operationPlanResultValidationMatches(validation, step, output.data));
+      validationMatched && (b.operation !== "github.write" || githubSummary?.mutation_status === "provider_accepted");
+    const providerRejected = !!result && b.operation === "github.write" && result.action_outcome === "reported_rejection" &&
+      feedback.status === "failed" && output.success && result.output_digest === createHash("sha256")
+        .update(JSON.stringify(feedback.result)).digest("hex") && validationMatched &&
+      githubSummary?.mutation_status === "provider_rejected";
     this.change((state) => {
       const target = state.plans.find((entry) => entry.bindings.some((binding) => binding.command_id === b.command_id))!;
       const binding = target.bindings.find((binding) => binding.command_id === b.command_id)!;
       binding.status = !result || result.command_payload_digest !== b.payload_digest ? "outcome_unknown"
         : result.action_outcome === "not_attempted" ? "not_attempted"
+          : providerRejected ? "provider_rejected"
           : verified ? "verified" : result.action_outcome === "reported_success" ? "verification_failed" : "outcome_unknown";
       if (result) binding.result_digest = operationPlanDigest(result);
+      if (result) binding.result_observed_at_ms = result.observed_at_ms;
       if (delivery_digest) binding.delivery_digest = delivery_digest;
-      if (verified && output.success && result) target.results.push({ plan_id: p.revisions[0]!.plan.plan_id,
+      if ((verified || providerRejected) && githubSummary) binding.github_write_result = githubSummary;
+      if (verified && output.success && result && b.operation !== "github.write") target.results.push({ plan_id: p.revisions[0]!.plan.plan_id,
         request_id: p.revisions[0]!.plan.request_id, step_id: b.step_id, result_id: result.result_id, operation: b.operation,
         status: "succeeded", target: step.target, output: output.data, observed_at_ms: result.observed_at_ms,
         expires_at_ms: result.observed_at_ms + 600_000 });

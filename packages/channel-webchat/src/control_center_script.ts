@@ -1038,7 +1038,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               return isObject(step) && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id) &&
                 typeof step.operation === "string" && /^[a-z][a-z0-9._-]{0,159}$/.test(step.operation) &&
                 ["not_selected", "selected", "intent_committed", "outcome_unknown", "not_attempted", "verified",
-                  "verification_failed", "invalidated"].includes(step.status);
+                  "verification_failed", "provider_rejected", "invalidated"].includes(step.status);
             })) {
           return "一致planのstep projectionが不正なため、M receipt状態は未確認です。";
         }
@@ -1819,7 +1819,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function operationPlanStatusTone(status) {
         if (status === "verified" || status === "results_verified") return "good";
-        if (status === "outcome_unknown" || status === "verification_failed") return "warn";
+        if (status === "outcome_unknown" || status === "verification_failed" || status === "provider_rejected") return "warn";
         if (status === "invalidated") return "bad";
         return "review";
       }
@@ -3932,7 +3932,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const commandIdDigest = recoveryInspectionDigest(value.command_id_digest);
               const commandKeyDigest = value.command_key_digest === null ? null : recoveryInspectionDigest(value.command_key_digest);
               const admissionDigest = value.admission_digest === null ? null : recoveryInspectionDigest(value.admission_digest);
-              const bindingStatus = recoveryInspectionEnum(value.status, ["selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]);
+              const bindingStatus = recoveryInspectionEnum(value.status, ["selected", "intent_committed", "verified", "provider_rejected", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]);
               const bindingIntegrity = recoveryInspectionEnum(value.binding_integrity, ["verified", "residuals_present"]);
               const brokerCorrelation = recoveryInspectionEnum(value.broker_correlation, ["matched", "not_admitted", "admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified", "j_binding_unverified"]);
               const deliveryCorrelation = recoveryInspectionEnum(value.delivery_correlation, ["matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed"]);

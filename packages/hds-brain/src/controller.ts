@@ -50,6 +50,17 @@ import {
   GoogleDriveUpdateTargetVersionObservationSchema,
   GoogleDrivePermissionCreateTargetVersionObservationSchema,
   GoogleDriveTrashTargetVersionObservationSchema,
+  GitHubWriteTargetVersionObservationSchema,
+  githubIssueCreateTargetIdentityDigest,
+  githubIssueCreateRequestPayloadDigest,
+  githubIssueUpdateTargetIdentityDigest,
+  githubIssueUpdateRequestPayloadDigest,
+  githubIssueCommentCreateTargetIdentityDigest,
+  githubIssueCommentCreateRequestPayloadDigest,
+  githubPullRequestCommentCreateTargetIdentityDigest,
+  githubPullRequestCommentCreateRequestPayloadDigest,
+  githubPullRequestCreateTargetIdentityDigest,
+  githubPullRequestCreateRequestPayloadDigest,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
@@ -3814,6 +3825,116 @@ ${planControl.question}`,
         }
         brokerTargetVersionObservationDigest = operationPlanDigest(observation);
       }
+    } else if (command.type === "tool_call" && command.payload.tool_name === "github.write") {
+      const args = command.payload.arguments;
+      const operation = args.operation;
+      const owner = args.owner;
+      const repo = args.repo;
+      const planBindingDigest = operation_plan_binding_digest;
+      if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
+          typeof owner !== "string" || typeof repo !== "string" ||
+          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.comment.create" &&
+            operation !== "pr.create" && operation !== "pr.comment.create")) {
+        throw new Error("HDS github.write requires a supported plan-bound target version observation");
+      }
+      const observation = GitHubWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const lowerIdentityMatches = observation.requested_owner.toLowerCase() === owner.toLowerCase() &&
+        observation.requested_repo.toLowerCase() === repo.toLowerCase() &&
+        observation.canonical_full_name.toLowerCase() === `${owner}/${repo}`.toLowerCase();
+      if (observation.operation !== operation || !lowerIdentityMatches ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== planBindingDigest) {
+        throw new Error("HDS github.write target version does not match the issued command or Operation Plan source");
+      }
+      const optionalText = (key: string): string | undefined => {
+        const value = args[key];
+        if (value === undefined) return undefined;
+        if (typeof value !== "string" || value.length === 0) {
+          throw new Error(`HDS github.write ${key} must be a non-empty string when provided`);
+        }
+        return value;
+      };
+      const positiveNumber = (key: string): number => {
+        const value = args[key];
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 1_000_000) {
+          throw new Error(`HDS github.write ${key} must be a bounded positive integer`);
+        }
+        return value;
+      };
+      let requestPayloadDigest: string;
+      let targetIdentityDigest: string;
+      if (operation === "issue.create") {
+        const title = optionalText("title");
+        const body = optionalText("body");
+        if (!title || title.length > 256 || (body !== undefined && body.length > 500_000)) {
+          throw new Error("HDS github.write issue.create parameters are invalid");
+        }
+        requestPayloadDigest = githubIssueCreateRequestPayloadDigest({ owner, repo, title, ...(body === undefined ? {} : { body }) });
+        targetIdentityDigest = githubIssueCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name });
+      } else if (operation === "issue.update") {
+        const issueNumber = positiveNumber("number");
+        const title = optionalText("title");
+        const body = optionalText("body");
+        if ((title === undefined && body === undefined) || (title !== undefined && title.length > 256) ||
+            (body !== undefined && body.length > 500_000) || observation.operation !== "issue.update" ||
+            observation.issue_number !== issueNumber || observation.issue_locked) {
+          throw new Error("HDS github.write issue.update parameters or observed target are invalid");
+        }
+        requestPayloadDigest = githubIssueUpdateRequestPayloadDigest({ owner, repo, issue_number: issueNumber,
+          ...(title === undefined ? {} : { title }), ...(body === undefined ? {} : { body }) });
+        targetIdentityDigest = githubIssueUpdateTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
+          issue_number: observation.issue_number });
+      } else if (operation === "issue.comment.create" || operation === "pr.comment.create") {
+        const issueNumber = positiveNumber("number");
+        const body = optionalText("body");
+        if (!body || body.length > 500_000) throw new Error("HDS github.write comment parameters are invalid");
+        if (operation === "issue.comment.create") {
+          if (observation.operation !== operation || observation.issue_number !== issueNumber || observation.issue_locked) {
+            throw new Error("HDS github.write issue comment target does not match the issued command");
+          }
+          requestPayloadDigest = githubIssueCommentCreateRequestPayloadDigest({ owner, repo,
+            issue_number: issueNumber, body });
+          targetIdentityDigest = githubIssueCommentCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+            canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
+            issue_number: observation.issue_number });
+        } else {
+          if (observation.operation !== operation || observation.pull_request_number !== issueNumber ||
+              observation.pull_request_locked) {
+            throw new Error("HDS github.write pull request comment target does not match the issued command");
+          }
+          requestPayloadDigest = githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo,
+            pull_request_number: issueNumber, body });
+          targetIdentityDigest = githubPullRequestCommentCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+            canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
+            pull_request_number: observation.pull_request_number });
+        }
+      } else {
+        const title = optionalText("title");
+        const body = optionalText("body");
+        const head = optionalText("head");
+        const base = optionalText("base");
+        const draft = args.draft ?? false;
+        const maintainerCanModify = args.maintainer_can_modify;
+        if (!title || title.length > 256 || !head || !base || head === base ||
+            (body !== undefined && body.length > 500_000) || typeof draft !== "boolean" ||
+            (maintainerCanModify !== undefined && typeof maintainerCanModify !== "boolean") ||
+            observation.operation !== "pr.create" || observation.head_ref !== head || observation.base_ref !== base) {
+          throw new Error("HDS github.write pr.create parameters or observed branches are invalid");
+        }
+        requestPayloadDigest = githubPullRequestCreateRequestPayloadDigest({ owner, repo, title,
+          head_ref: head, base_ref: base, draft,
+          ...(body === undefined ? {} : { body }),
+          ...(maintainerCanModify === undefined ? {} : { maintainer_can_modify: maintainerCanModify }) });
+        targetIdentityDigest = githubPullRequestCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, head_ref: head, base_ref: base });
+      }
+      if (observation.request_payload_digest !== requestPayloadDigest ||
+          observation.target_identity_digest !== targetIdentityDigest) {
+        throw new Error("HDS github.write target version does not match the requested payload or target");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
       if (brokerTargetVersionObservation === undefined) {

@@ -451,7 +451,7 @@ function cronResultCorrelation(
   if (bindings.some((binding) => unresolved.has(binding.status))) {
     return { result_correlation_status: "execution_unresolved" };
   }
-  const terminal = new Set(["verified", "verification_failed", "not_attempted"]);
+  const terminal = new Set(["verified", "provider_rejected", "verification_failed", "not_attempted"]);
   const known = new Set([...unresolved, ...terminal, "invalidated"]);
   if (bindings.some((binding) => !known.has(binding.status))) {
     return { result_correlation_status: "ambiguous" };

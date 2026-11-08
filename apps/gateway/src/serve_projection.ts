@@ -279,7 +279,7 @@ export interface OperationPlanStatusProjection {
     steps: Array<{
       step_id: string;
       operation: string;
-      status: "not_selected" | "selected" | "intent_committed" | "outcome_unknown" | "not_attempted" | "verified" | "verification_failed" | "invalidated";
+      status: "not_selected" | "selected" | "intent_committed" | "outcome_unknown" | "not_attempted" | "verified" | "provider_rejected" | "verification_failed" | "invalidated";
       shell_exec_summary?: {
         exit_code: number | null;
         signal: "timeout" | "aborted" | null;
@@ -326,7 +326,7 @@ export interface OperationPlanStatusProjection {
 }
 
 const OPERATION_PLAN_STEP_STATUSES = new Set([
-  "not_selected", "selected", "intent_committed", "outcome_unknown", "not_attempted",
+  "not_selected", "selected", "intent_committed", "outcome_unknown", "not_attempted", "provider_rejected",
   "verified", "verification_failed", "invalidated",
 ]);
 

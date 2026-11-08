@@ -315,7 +315,7 @@ export const OperationStepPreparationSchema = z.object({
   validation: z.array(z.object({
     check_id: z.string().min(1).max(200),
     method: z.enum(["result_equals", "revision_equals", "file_search_result_matches", "file_edit_result_matches",
-      "shell_exec_result_matches"]),
+      "shell_exec_result_matches", "github_write_result_matches"]),
     target: OperationTargetSchema,
     expected: OperationJsonValueSchema,
   }).strict()).min(1).max(100),
@@ -588,7 +588,7 @@ export const OperationCommandExecutionResultSchema = z.object({
   state: z.enum(["succeeded", "failed", "suspended"]),
   adapter: OperationAdapterKindSchema,
   execution_boundary: z.enum(["not_invoked", "tool_adapter", "channel_adapter", "console_preview"]),
-  action_outcome: z.enum(["not_attempted", "reported_success", "unknown", "preview_only"]),
+  action_outcome: z.enum(["not_attempted", "reported_success", "reported_rejection", "unknown", "preview_only"]),
   observed_at_ms: z.number().finite().nonnegative(),
   command_payload_digest: z.string().regex(/^[a-f0-9]{64}$/),
   output_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -601,7 +601,9 @@ export const OperationCommandExecutionResultSchema = z.object({
   const expected = result.execution_boundary === "not_invoked" ? "not_attempted"
     : result.execution_boundary === "console_preview" ? "preview_only"
       : result.state === "succeeded" ? "reported_success" : "unknown";
-  if (result.action_outcome !== expected ||
+  const rejectionIsBounded = result.action_outcome === "reported_rejection" && result.state === "failed" &&
+    result.execution_boundary === "tool_adapter" && result.output_digest !== undefined;
+  if ((result.action_outcome !== expected && !rejectionIsBounded) ||
       (result.execution_boundary === "not_invoked" && result.state === "succeeded")) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "execution boundary and outcome do not agree" });
   }

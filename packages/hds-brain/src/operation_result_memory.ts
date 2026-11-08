@@ -11,6 +11,14 @@ type ShellExecObservation = NonNullable<OperationPlanCheckpoint["shell_exec_resu
 
 /** 実作用の結果記録はMを非権威に保ち、記録だけで権限や成功判定を発行しない。 */
 export function resultMemoryEligible(b: Binding): boolean {
+  if (b.operation === "github.write") {
+    if (!b.execution_admission || !b.execution_admission.task_identity_digest ||
+        !b.delivery_digest || !b.result_digest || !b.operation_plan_binding_digest ||
+        b.result_observed_at_ms === undefined) return false;
+    if (b.status === "verified") return b.github_write_result?.mutation_status === "provider_accepted";
+    if (b.status === "provider_rejected") return b.github_write_result?.mutation_status === "provider_rejected";
+    return (b.status === "outcome_unknown" || b.status === "verification_failed") && !b.github_write_result;
+  }
   if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
     b.operation === "file.delete" || b.operation === "file.edit";
   return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
@@ -19,6 +27,36 @@ export function resultMemoryEligible(b: Binding): boolean {
 /** Jが受領済みの実結果を非権威観測として固定する。意味採用・任意記憶変更の入口ではない。 */
 export function resultObservation(p: Plan, b: Binding) {
   const result = p.results.find((r) => r.step_id === b.step_id);
+  if (b.operation === "github.write" && resultMemoryEligible(b)) {
+    const summary = b.github_write_result;
+    const effectObservation = b.status === "verified" ? "reported_success"
+      : b.status === "provider_rejected" ? "reported_rejection" : "unknown";
+    return {
+      schema_version: "github-write-outcome-observation.v1", record_type: "github_write_outcome_observation",
+      task_identity_digest: b.execution_admission!.task_identity_digest!,
+      plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+      plan_revision_digest: b.revision_digest,
+      step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+      step_digest: b.step_digest,
+      operation: b.operation,
+      plan_binding_status: b.status,
+      command_digest: b.command_digest,
+      operation_plan_binding_digest: b.operation_plan_binding_digest ?? null,
+      target_identity_digest: summary?.target_identity_digest ?? null,
+      request_payload_digest: summary?.request_payload_digest ?? null,
+      provider_result_digest: summary?.provider_result_digest ?? null,
+      provider_mutation_status: summary?.mutation_status ?? null,
+      provider_http_status: summary?.http_status ?? null,
+      delivery_digest: b.delivery_digest!,
+      result_digest: b.result_digest!,
+      observed_at_ms: b.result_observed_at_ms ?? null,
+      effect_observation: effectObservation,
+      adoption_status: "observation_only",
+      used_as_world_truth: false,
+      used_for_authority: false,
+      may_execute: false,
+    };
+  }
   if (b.status === "outcome_unknown" && b.execution_admission && b.delivery_digest && b.result_digest) {
     return {
       schema_version: "operation-action-outcome.v1", record_type: "action_outcome_observation",

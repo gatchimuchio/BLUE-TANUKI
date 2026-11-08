@@ -288,7 +288,7 @@ const OPERATOR_RECORD_LIMIT = 200;
 const OPERATION_PLAN_LIMIT = 64;
 const HEX_DIGEST = /^[0-9a-f]{64}$/i;
 const OPERATION_PLAN_STATUSES: readonly OperationPlanBindingStatus[] = [
-  "selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated",
+  "selected", "intent_committed", "verified", "provider_rejected", "outcome_unknown", "verification_failed", "not_attempted", "invalidated",
 ];
 const UPDATE_DISPOSITIONS: readonly RecoveryUpdateResidual["disposition"][] = [
   "paired", "pending_m_commit", "pending_j_receipt", "missing_verified_j_link", "missing_verified_m_link",

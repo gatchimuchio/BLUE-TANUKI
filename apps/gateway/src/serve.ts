@@ -398,6 +398,22 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     if (projection.lines.length === 0) lines.push("previewから返された行はありません。空ファイルとは確認していません。");
     return [...header, ...lines].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v6") {
+    const resultStatus = projection.mutation_status === "provider_accepted"
+      ? "GitHub APIが受理を返しました。"
+      : projection.mutation_status === "provider_rejected"
+        ? "GitHub APIが明示的に拒否しました。自動再送は行っていません。"
+        : projection.status === "verification_failed"
+          ? "応答を検証できず、作用結果は不明です。自動再送は行っていません。"
+          : "作用結果は不明です。自動再送は行っていません。";
+    return [
+      `保存済みGitHub操作結果（${projection.operation_name}）。J/M receiptを照合済みです。本文・コメント・provider応答本文は保持／返却していません。`,
+      `状態: ${resultStatus}`,
+      `HTTP status: ${projection.http_status ?? "不明"}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "この結果照会は操作を再実行しません。新たなOwner判断までは再送しないでください。",
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,

@@ -7,8 +7,9 @@ import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
-  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
+  githubWriteTool, LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDigest, githubIssueCreateTargetIdentityDigest,
+  GitHubWriteTargetVersionObservationSchema, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
@@ -126,6 +127,67 @@ function fileEditCandidate(id: string): OperationPlan {
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
+function githubWriteCandidate(id: string): OperationPlan {
+  const target = { kind: "external_service" as const, id: "github" };
+  const parameters = { operation: "issue.create", owner: "fixture-owner", repo: "synthetic-repo",
+    title: "synthetic issue title", body: "synthetic issue body never retained in M" };
+  return { version: "operation-core.v1", plan_id: `github-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "create-issue", operation: "github.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters, preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "github-write-receipt", method: "github_write_result_matches", target,
+          expected: { schema_version: "blue-tanuki.github-write-result-validation.v1", operation: "issue.create" } }],
+        compensation: { available: false, reason: "An accepted GitHub create cannot be automatically retracted." } } }],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
+
+function mockSyntheticGitHubWrite(mode: "accepted" | "rejected" | "unknown"): void {
+  vi.spyOn(githubWriteTool, "inspect_target_version").mockImplementation(async (args, options) => {
+    const owner = String(args.owner);
+    const repo = String(args.repo);
+    const title = String(args.title);
+    if (!options?.command_digest || !options.operation_plan_binding_digest) {
+      throw new Error("synthetic github target inspection is missing command binding");
+    }
+    return GitHubWriteTargetVersionObservationSchema.parse({
+      schema_version: "blue-tanuki.github-write-target-version.v1", operation: "issue.create",
+      repository_id: 424242, requested_owner: owner, requested_repo: repo, canonical_full_name: `${owner}/${repo}`,
+      repository_visibility: "public",
+      target_identity_digest: githubIssueCreateTargetIdentityDigest({ repository_id: 424242, canonical_full_name: `${owner}/${repo}` }),
+      request_payload_digest: githubIssueCreateRequestPayloadDigest({ owner, repo, title, body: String(args.body) }),
+      command_digest: options.command_digest, operation_plan_binding_digest: options.operation_plan_binding_digest,
+      provider_observation_is_atomic: false, provider_data_is_untrusted: true, mutation_sent: false,
+      used_for_authority: false, may_execute: false,
+    });
+  });
+  vi.spyOn(githubWriteTool, "invoke").mockImplementation(async (args, context) => {
+    if (mode === "unknown") throw new Error("synthetic provider timeout after dispatch");
+    const target = context.target_version_observation;
+    if (target?.schema_version !== "blue-tanuki.github-write-target-version.v1") {
+      throw new Error("synthetic github target observation missing");
+    }
+    const common = {
+      schema_version: "blue-tanuki.github-write-result.v1", operation: "issue.create", api_host: "api.github.com",
+      repo: `${String(args.owner)}/${String(args.repo)}`, repository_id: target.repository_id,
+      target_identity_digest: target.target_identity_digest, request_payload_digest: target.request_payload_digest,
+      command_digest: target.command_digest, operation_plan_binding_digest: target.operation_plan_binding_digest,
+      method: "POST", path: `/repos/${String(args.owner)}/${String(args.repo)}/issues`,
+      result_digest: mode === "accepted" ? hash({ id: 42, number: 7, title: String(args.title) }) : "c".repeat(64),
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+    };
+    if (mode === "rejected") return { ...common, status: 403, mutation_status: "provider_rejected",
+      retry_permitted: false,
+      next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision." };
+    return { ...common, status: 201, mutation_status: "provider_accepted", content_type: "application/json",
+      truncated: false, rate_limit_remaining: null, github_request_id: null,
+      result: { id: 42, number: 7, title: String(args.title) } };
+  });
+}
 function review(hds: HDSUpperController, plan: OperationPlan, step_id: string) {
   const p = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
   return hds.decide(request(`plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: p.revision_digest, step_id })}`)).command;
@@ -167,6 +229,7 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
   tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
+  tools.register(githubWriteTool);
   // HDS and approval share a monotonic wall-clock floor; the executor worker still observes the real host clock.
   // Executor rollback/expiry behavior is covered by execution_intent_runtime.test.ts.
   let approvalMonotonicMs = 0;
@@ -271,6 +334,77 @@ function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
+  it("github.write受理結果をJの束縛・digest-only M・Owner照会まで運び、内容本文をMへ保存しない", async () => fixture(async (c) => {
+    expect(c.cmd.payload.tool_name).toBe("github.write");
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status, feedback.error).toBe("success");
+    expect(feedback.operation_core_result).toMatchObject({ action_outcome: "reported_success", used_for_authority: false });
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+    const saved = c.j.load()!.plans[0]!;
+    const binding = saved.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", operation: "github.write",
+      github_write_result: { mutation_status: "provider_accepted", http_status: 201,
+        used_for_authority: false, may_execute: false } });
+    expect(saved.results).toHaveLength(0);
+    const memory = JSON.stringify(inspectMemory(c));
+    expect(memory).not.toContain("synthetic issue title");
+    expect(memory).not.toContain("synthetic issue body never retained in M");
+    const resultRead = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: saved.revisions.at(-1)!.digest, step_id: "create-issue" })}`));
+    expect(resultRead.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+    const projection = c.hds.takeOperationPlanSavedResultReturn(resultRead.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v6", operation: "github.write",
+      operation_name: "issue.create", status: "verified", mutation_status: "provider_accepted", http_status: 201,
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(projection)).not.toContain("synthetic issue title");
+    expect(JSON.stringify(projection)).not.toContain("synthetic issue body never retained in M");
+    expect(githubWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, githubWriteCandidate, () => mockSyntheticGitHubWrite("accepted")));
+
+  it("github.write明示拒否を成功・不明と分けてMへ記録し、Ownerへ再送せず返す", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("failed");
+    expect(feedback.operation_core_result).toMatchObject({ action_outcome: "reported_rejection", state: "failed" });
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(c.authority.receipt(c.approved)?.state).toBe("adapter_returned");
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+    const saved = c.j.load()!.plans[0]!;
+    expect(saved.bindings[0]).toMatchObject({ status: "provider_rejected",
+      github_write_result: { mutation_status: "provider_rejected", http_status: 403 } });
+    expect(saved.results).toHaveLength(0);
+    const memory = JSON.stringify(inspectMemory(c));
+    expect(memory).toContain("provider_rejected");
+    expect(memory).not.toContain("synthetic issue title");
+    const resultRead = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: saved.revisions.at(-1)!.digest, step_id: "create-issue" })}`));
+    const projection = c.hds.takeOperationPlanSavedResultReturn(resultRead.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v6",
+      status: "provider_rejected", mutation_status: "provider_rejected", http_status: 403 });
+    expect(githubWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, githubWriteCandidate, () => mockSyntheticGitHubWrite("rejected")));
+
+  it("github.write結果不明もtask-bound M receiptとOwner照会へ届き、自動再送しない", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("failed");
+    expect(feedback.operation_core_result).toMatchObject({ action_outcome: "unknown", state: "failed" });
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+    const saved = c.j.load()!.plans[0]!;
+    expect(saved.bindings[0]).toMatchObject({ status: "outcome_unknown" });
+    expect(saved.bindings[0]?.github_write_result).toBeUndefined();
+    expect(JSON.stringify(inspectMemory(c))).toContain("github_write_outcome_observation");
+    const resultRead = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: saved.revisions.at(-1)!.digest, step_id: "create-issue" })}`));
+    const projection = c.hds.takeOperationPlanSavedResultReturn(resultRead.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v6",
+      status: "outcome_unknown", mutation_status: null, http_status: null });
+    expect(githubWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, githubWriteCandidate, () => mockSyntheticGitHubWrite("unknown")));
+
   it("Jが保持するcanonical action digestとExecutor ticket digestが一致しない限りattemptを開始しない", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, { ...c.admission!, command_digest: "0".repeat(64) })).toBe(false);
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);

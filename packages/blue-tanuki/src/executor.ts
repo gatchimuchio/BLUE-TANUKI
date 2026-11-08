@@ -282,16 +282,111 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
       typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
   const target = APPROVED_COMMAND_RECORDS.get(command)?.target_version_observation;
-  return target?.schema_version === "blue-tanuki.github-write-target-version.v1" &&
-    result.schema_version === "blue-tanuki.github-write-result.v1" &&
-    (target.operation === "issue.create" || target.operation === "issue.update" ||
-      target.operation === "issue.comment.create" || target.operation === "pr.comment.create" || target.operation === "pr.create") &&
-    result.operation === target.operation && result.mutation_status === "provider_rejected" &&
-    result.repository_id === target.repository_id && result.target_identity_digest === target.target_identity_digest &&
+  if (target?.schema_version !== "blue-tanuki.github-write-target-version.v1" ||
+      command.type !== "tool_call" || command.payload.tool_name !== "github.write") return false;
+  const args = command.payload.arguments;
+  const owner = args.owner;
+  const repo = args.repo;
+  const operation = args.operation;
+  if (typeof owner !== "string" || typeof repo !== "string" || typeof operation !== "string" ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo) ||
+      owner === "." || owner === ".." || repo === "." || repo === ".." || operation !== target.operation) return false;
+  const number = args.number;
+  const route = operation === "issue.create"
+    ? { method: "POST", path: `/repos/${owner}/${repo}/issues` }
+    : operation === "issue.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+      ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}` }
+      : (operation === "issue.comment.create" || operation === "pr.comment.create") &&
+          Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+        ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments` }
+        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls` } : undefined;
+  const expectedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
+    "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
+    "mutation_status", "result_digest", "retry_permitted", "next_action", "provider_data_is_untrusted",
+    "used_for_authority", "may_execute"].sort();
+  return !!route && Object.keys(result).sort().join("\0") === expectedKeys.join("\0") &&
+    result.schema_version === "blue-tanuki.github-write-result.v1" && result.operation === target.operation &&
+    result.api_host === "api.github.com" && result.repo === `${owner}/${repo}` &&
+    result.repository_id === target.repository_id && Number.isSafeInteger(result.repository_id) &&
+    result.target_identity_digest === target.target_identity_digest &&
     result.request_payload_digest === target.request_payload_digest && result.command_digest === target.command_digest &&
     result.operation_plan_binding_digest === target.operation_plan_binding_digest &&
-    result.retry_permitted === false && result.provider_data_is_untrusted === true &&
-    result.used_for_authority === false && result.may_execute === false;
+    result.method === route.method && result.path === route.path &&
+    [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(result.status)) &&
+    result.mutation_status === "provider_rejected" && typeof result.result_digest === "string" &&
+    /^[a-f0-9]{64}$/.test(result.result_digest) && result.retry_permitted === false &&
+    result.next_action === "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision." &&
+    result.provider_data_is_untrusted === true && result.used_for_authority === false && result.may_execute === false;
+}
+
+function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown): boolean {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "github.write" ||
+      typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  const target = APPROVED_COMMAND_RECORDS.get(command)?.target_version_observation;
+  if (target?.schema_version !== "blue-tanuki.github-write-target-version.v1") return false;
+  const args = command.payload.arguments;
+  const owner = args.owner;
+  const repo = args.repo;
+  const operation = args.operation;
+  if (typeof owner !== "string" || typeof repo !== "string" || typeof operation !== "string" ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo) ||
+      owner === "." || owner === ".." || repo === "." || repo === ".." || operation !== target.operation) return false;
+  const number = args.number;
+  const route = operation === "issue.create"
+    ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
+    : operation === "issue.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+      ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : (operation === "issue.comment.create" || operation === "pr.comment.create") &&
+          Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+        ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
+        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 } : undefined;
+  const acceptedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
+    "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
+    "mutation_status", "content_type", "truncated", "rate_limit_remaining", "github_request_id", "result_digest",
+    "result", "provider_data_is_untrusted", "used_for_authority", "may_execute"].sort();
+  if (!route || Object.keys(result).sort().join("\0") !== acceptedKeys.join("\0") ||
+      result.schema_version !== "blue-tanuki.github-write-result.v1" || result.operation !== target.operation ||
+      result.api_host !== "api.github.com" || result.repo !== `${owner}/${repo}` ||
+      result.repository_id !== target.repository_id || result.target_identity_digest !== target.target_identity_digest ||
+      result.request_payload_digest !== target.request_payload_digest || result.command_digest !== target.command_digest ||
+      result.operation_plan_binding_digest !== target.operation_plan_binding_digest ||
+      result.method !== route.method || result.path !== route.path || result.status !== route.status ||
+      result.mutation_status !== "provider_accepted" || typeof result.content_type !== "string" ||
+      !result.content_type.toLowerCase().includes("json") || result.truncated !== false ||
+      (result.rate_limit_remaining !== null && typeof result.rate_limit_remaining !== "string") ||
+      (result.github_request_id !== null && typeof result.github_request_id !== "string") ||
+      typeof result.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(result.result_digest) ||
+      typeof result.result !== "object" || result.result === null || Array.isArray(result.result) ||
+      result.provider_data_is_untrusted !== true || result.used_for_authority !== false || result.may_execute !== false) return false;
+  const summary = result.result as Record<string, unknown>;
+  if (operation === "issue.create") {
+    return Object.keys(summary).sort().join(",") === "id,number,title" &&
+      Number.isSafeInteger(summary.id) && (summary.id as number) > 0 &&
+      Number.isSafeInteger(summary.number) && (summary.number as number) > 0 && summary.title === args.title;
+  }
+  if (operation === "issue.update") {
+    return Object.keys(summary).sort().join(",") === "id,locked,number,state,title" &&
+      Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && summary.number === args.number &&
+      (summary.state === "open" || summary.state === "closed") && typeof summary.locked === "boolean" &&
+      typeof summary.title === "string" && summary.title.length > 0 && summary.title.length <= 256;
+  }
+  if (operation === "issue.comment.create" || operation === "pr.comment.create") {
+    return Object.keys(summary).join(",") === "id" && Number.isSafeInteger(summary.id) && (summary.id as number) > 0;
+  }
+  const expectedDraft = args.draft ?? false;
+  return operation === "pr.create" &&
+    ["base_commit_sha", "base_ref", "draft", "head_commit_sha", "head_ref", "id", "number", "title"]
+      .every((key) => Object.hasOwn(summary, key)) &&
+    Object.keys(summary).every((key) => ["id", "number", "title", "head_ref", "head_commit_sha", "base_ref",
+      "base_commit_sha", "draft", "maintainer_can_modify"].includes(key)) &&
+    Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && Number.isSafeInteger(summary.number) &&
+    (summary.number as number) > 0 && summary.title === args.title && summary.head_ref === args.head &&
+    summary.base_ref === args.base && typeof summary.head_commit_sha === "string" &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.head_commit_sha) &&
+    typeof summary.base_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.base_commit_sha) &&
+    summary.draft === expectedDraft &&
+    (summary.maintainer_can_modify === undefined || typeof summary.maintainer_can_modify === "boolean");
 }
 
 export type ApprovedCommand = ExecuteCommand & {
@@ -1297,7 +1392,8 @@ export class Executor {
         record.runtime.assert_execution_owner?.();
         const explicitGitHubRejection = isGitHubWriteProviderRejection(cmd, feedback.result);
         record.runtime.store?.complete(record.ticket, {
-          state: !invocation ? "not_attempted" : feedback.status === "success" || explicitGitHubRejection
+          state: !invocation ? "not_attempted" : feedback.status === "success" ||
+            (explicitGitHubRejection && context.save_result_delivery)
             ? "adapter_returned" : "outcome_unknown",
           feedback_status: feedback.status, observed_at_ms: feedback.operation_core_result?.observed_at_ms ?? Date.now(),
           output_digest: feedback.operation_core_result?.output_digest,
@@ -1690,6 +1786,11 @@ export class Executor {
           metrics: { duration_ms: elapsedMilliseconds(start), tool_calls: 1 },
         };
       }
+      if (command.payload.tool_name === "github.write" &&
+          record.target_version_observation?.schema_version === "blue-tanuki.github-write-target-version.v1" &&
+          !isGitHubWriteProviderAcceptance(command, result) && !isGitHubWriteProviderRejection(command, result)) {
+        throw new Error("github.write result did not match the approved target receipt; outcome_unknown; do not retry automatically");
+      }
       const targetVersion = record.target_version_observation;
       const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"
         ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
@@ -1994,7 +2095,8 @@ function attachOperationCoreTrace(
   observation: ReturnType<typeof captureOperationCommandObservation>,
   execution_boundary: OperationExecutionBoundary,
 ): ExecuteFeedback {
-  const result = buildOperationCommandExecutionResult(observation, feedback, execution_boundary);
+  const result = buildOperationCommandExecutionResult(observation, feedback, execution_boundary,
+    isGitHubWriteProviderRejection(command, feedback.result));
   return {
     ...feedback,
     operation_core: buildOperationCoreExecutorTrace(command, feedback.status, proof),

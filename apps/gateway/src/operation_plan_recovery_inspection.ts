@@ -222,9 +222,15 @@ function inspectResultMemoryLink(
   const commit = binding.memory_commit;
   const receipt = binding.memory_receipt;
   if (!commit && !receipt) {
-    const expected = binding.status === "verified" && binding.operation === "file.search" &&
+    const expectedSearch = binding.status === "verified" && binding.operation === "file.search" &&
       binding.execution_admission !== undefined && binding.delivery_digest !== undefined && binding.result_digest !== undefined &&
       plan.results.some((result) => result.step_id === binding.step_id);
+    const expectedGitHub = binding.operation === "github.write" &&
+      ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding.status) &&
+      binding.execution_admission?.task_identity_digest !== undefined && binding.delivery_digest !== undefined &&
+      binding.result_digest !== undefined && binding.result_observed_at_ms !== undefined &&
+      binding.operation_plan_binding_digest !== undefined;
+    const expected = expectedSearch || expectedGitHub;
     return {
       integrity: expected ? "missing_expected" : "not_recorded",
       update_id_digest: null, j_event_id_digest: null, content_digest: null,
