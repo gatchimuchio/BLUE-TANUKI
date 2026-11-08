@@ -2,16 +2,6 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / D03.01 Runtime intentの受け手存在条件
-
-### 現在の施工状態 — 2026-11-09
-
-`POST /runtime/intent`はruntime tokenと登録済み`runtime_id`を照合し、意図をGateway handlerへ渡す。これまではhandler未設定でも任意呼出しにより`202 accepted`を返す余地があった。handlerを受付条件にし、未設定時は`503 runtime_intent_handler_unavailable`、`accepted=false`で停止させる。レート制限枠を消費せず、入力・session digest・実行内容を応答やlogへ追加しない。handler設定時は既存HDS入口へ送る。D03.01のRuntime intent受信経路に限る保護で、D4側のAdapter接続・返答経路は変更していない。
-
-`@blue-tanuki/channel-webchat` typecheck／buildと`git diff --check`はPASS。Runtime endpointのtest／Gateway process、D4実装、provider／credential／外部作用、全OS、全体QC／QAはNOT_RUN。`WIRED`はコード上のhandler有無判定と既存handler呼出し経路に限定する。D03.01全体、D4接続、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
-
-開始HEAD／`origin/main`=`7bdc2fb678007726125a0222c82ac04b01295e73`。編集前local復旧branchとremote recovery tagはcurrent=`7bdc2fb...`、previous=`a6d3e850...`で一致。既存`.codex-attachments/`／`.codex-remote-attachments/`は保護して未追跡のまま保持。作業者processは観測されず、別repo・WSL・OneDrive保管操作は行っていない。次のBUILD_BATCHはrev4.0と最新HEADから実consumerを動的に再選定する。
-
 ## 直近完了BUILD_BATCH — QE_BUILD / 親planのM解釈依存を子planへ継承（限定WIRED）
 
 ### 現在の施工状態 — 2026-11-09

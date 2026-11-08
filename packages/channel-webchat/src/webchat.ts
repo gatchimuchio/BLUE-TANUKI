@@ -999,12 +999,6 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "runtime_not_registered" }));
         return;
       }
-      const handler = this.handler;
-      if (!handler) {
-        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_handler_unavailable" }));
-        return;
-      }
       if (!this.rateLimitOr429(this.buckets.inbound, D4_RUNTIME_TOKEN_ACTOR, res)) return;
       if (isDirectToolShortcutContent(parsed.data.intent)) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1038,7 +1032,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "blue_tanuki.runtime_ingress.used_for_authority": false,
         },
       });
-      handler(inboundReq).catch(() => {
+      this.handler?.(inboundReq).catch(() => {
         // Keep caller-provided Runtime/Session references and intent out of logs.
         // eslint-disable-next-line no-console
         console.error("[webchat] D4 Runtime intent handler error");
