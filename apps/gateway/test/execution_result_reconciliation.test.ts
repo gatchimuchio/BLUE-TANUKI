@@ -1932,13 +1932,14 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
 });
 
 describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", () => {
-  it.each(["issue.create", "issue.update"] as const)(
+  it.each(["issue.create", "issue.update", "issue.comment.create"] as const)(
     "実Gateway processは%sを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
     async (operation) => {
     const scenario = githubWriteScenario(operation);
-    const title = String(scenario.parameters.title);
+    const title = String(scenario.parameters.title ?? "");
     const body = String(scenario.parameters.body);
     const repositoryPath = "/repos/fixture-owner/synthetic-repo";
+    const issueTargetPath = `/repos/${String(scenario.parameters.owner)}/${String(scenario.parameters.repo)}/issues/${String(scenario.parameters.number ?? 7)}`;
     const fakeGitHubToken = "f05.02-synthetic-github-token";
     const tempRoot = mkdtempSync(join(tmpdir(), "blue-github-write-served-"));
     servedGatewayTempRoots.push(tempRoot);
@@ -1971,13 +1972,15 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
             private: false, owner: { login: "fixture-owner" } }));
           return;
         }
-        if (operation === "issue.update" && method === "GET" && path === scenario.path) {
+        if ((operation === "issue.update" || operation === "issue.comment.create") &&
+          method === "GET" && path === issueTargetPath) {
           response.statusCode = 200;
           responseRecord.status = response.statusCode;
           response.end(JSON.stringify({ id: scenario.target_fields.issue_id, number: scenario.target_fields.issue_number,
             state: scenario.target_fields.issue_state, locked: scenario.target_fields.issue_locked,
-            updated_at: scenario.target_fields.issue_updated_at, title: scenario.target_fields.issue_title,
-            body: scenario.target_fields.issue_body }));
+            updated_at: scenario.target_fields.issue_updated_at,
+            title: scenario.target_fields.issue_title ?? "synthetic issue target title",
+            body: scenario.target_fields.issue_body ?? null }));
           return;
         }
         if (method === scenario.method && path === scenario.path) {
@@ -2098,9 +2101,13 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
       expect(contentReview).toMatchObject({
         ...(operation === "issue.create"
           ? { kind: "github_issue_create", operation: "github.write.issue.create", title, body }
-          : { kind: "github_issue_update", operation: "github.write.issue.update", issue_number: 7,
-            current_title: "prior synthetic issue title", current_body: "prior synthetic issue body",
-            requested_title: title, requested_body: body }),
+          : operation === "issue.update"
+            ? { kind: "github_issue_update", operation: "github.write.issue.update", issue_number: 7,
+              current_title: "prior synthetic issue title", current_body: "prior synthetic issue body",
+              requested_title: title, requested_body: body }
+            : { kind: "github_issue_comment_create", operation: "github.write.issue.comment.create",
+              issue_id: 424244, issue_number: 7, issue_state: "open", issue_locked: false,
+              issue_updated_at: "2026-11-08T01:02:03.000Z", issue_title: "synthetic issue target title", body }),
         requested_owner: "fixture-owner", requested_repo: "synthetic-repo", canonical_full_name: "fixture-owner/synthetic-repo",
         repository_id: 424242, repository_visibility: "public",
         request_payload_digest: scenario.request_payload_digest, notification_effect: "github_api_may_trigger_notifications",
@@ -2137,11 +2144,11 @@ describe("WebChat OwnerのL3確認→合成GitHub issue write→保存結果", (
         path, authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
         mock_responses: mockResponses, finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toHaveLength(1);
       expect(issueWrites[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
-      expect(JSON.parse(issueWrites[0]!.body)).toEqual({ title, body });
-      if (operation === "issue.update") {
+      expect(JSON.parse(issueWrites[0]!.body)).toEqual(operation === "issue.comment.create" ? { body } : { title, body });
+      if (operation === "issue.update" || operation === "issue.comment.create") {
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         const postApprovalIssueReadIndexes = mockRequests.map((item, index) => ({ item, index }))
-          .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" && item.path === scenario.path)
+          .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" && item.path === issueTargetPath)
           .map(({ index }) => index);
         expect(postApprovalIssueReadIndexes.length).toBeGreaterThan(0);
         expect(postApprovalIssueReadIndexes.at(-1)!).toBeLessThan(writeIndex);
