@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近の完了BUILD_BATCH — F05.02 cross-repository fork-head PR create（限定WIRED）
+### 直近完了BUILD_BATCH — C/J/M cited-memory dependency source binding（限定WIRED）
+
+`OperationPlanLedger`のM解釈依存一覧を、選択済みstepのexecution source digestへ束縛する。依存付きplanはv2 digestに依存一覧digestを含み、依存なしplanのv1形式は維持する。既存のactive interpretation／J judgment再確認はそのまま残る。これは出所束縛の接続であり、Mを権限化せず、意味適合・J採否・外部作用を保証しない。既存v1の依存付きpending bindingはfail-closedし再bindを要する。
+
+異なる有効M依存集合を持つotherwise-identical planのsource digest分離と、J再評価要求後の拒否を確認した。対象test 2 passed、HDS-BRAIN typecheck／build、`hds:standalone`、`corepack pnpm docs:check`、`git diff --check`はPASS。全workspace suite、Gateway process、実provider／credential、外部作用、5OS、QE_QC／QE_QAはNOT_RUN。この限定sliceだけを`WIRED`とする。次はF05.02に残る実producer／consumer gapを現物から選び、残差がなければ工程表に沿う次のC/J/M E2E consumerへ進む。
+
+### 前回の完了BUILD_BATCH — F05.02 cross-repository fork-head PR create（限定WIRED）
 
 #### 現在の施工状態 — 2026-11-09
 

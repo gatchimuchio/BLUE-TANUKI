@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev3.1三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近の完了BUILD_BATCH — QE_BUILD / F05.02 cross-repository fork-head PR create（限定WIRED）
+## 直近の完了BUILD_BATCH — QE_BUILD / C/J/M cited-memory dependency source binding（限定WIRED）
+
+### 現在の施工状態 — 2026-11-09
+
+`OperationPlanLedger`が保持・現行性確認するM interpretation dependency群を、選択済みstepのexecution source digestにも含める。dependency付きplanは`blue-tanuki.operation-plan-execution-source.v2`として`memory_interpretation_dependencies_digest`を結び、dependencyなしplanは既存v1形式を保持する。Mは引き続きnon-authority evidenceであり、このdigestは権限・承認・意味適合を生成しない。既存v1のdependency付きpending bindingは新digestと一致しないためfail-closedし、再bindを要する。
+
+異なる有効dependency集合のotherwise-identical planでexecution source digestが異なることと、Jが再評価対象にした引用のexecution拒否を対象test 2件で確認。HDS-BRAIN typecheck／build、`hds:standalone`、`corepack pnpm docs:check`、`git diff --check`はPASS。全workspace suite、Gateway process、実provider／credential／外部作用、5OS、QE_QC／QE_QAはNOT_RUN。次のBUILD_BATCHは現行実物からF05.02に残る実producer／consumer gapを選定し、なければ現行工程表の次のC/J/M E2E consumerへ進む。実provider・live外部作用・公開判断を行わない。
+
+## 前回完了BUILD_BATCH — QE_BUILD / F05.02 cross-repository fork-head PR create（限定WIRED）
 
 ### 現在の施工状態 — 2026-11-09
 

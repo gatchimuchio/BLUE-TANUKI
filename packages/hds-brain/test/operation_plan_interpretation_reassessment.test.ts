@@ -4,6 +4,61 @@ import { createGatewayInternalInboundRequest, type ExecuteCommand, type Operatio
 import { OperationPlanLedger, operationPlanDigest } from "../src/operation_plan.js";
 
 describe("plan review consumes memory interpretation reassessment", () => {
+  it("binds the selected operation source to the exact cited memory interpretation dependencies", () => {
+    const createBoundDigest = (dependency: OperationPlanMemoryInterpretationDependency): string => {
+      const origin = createGatewayInternalInboundRequest({ id: "plan-origin-binding", channel: "webchat",
+        user: "fixture-owner", content: "plan:compute search fixture memory", timestamp: 1,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.operator_surface": "developer" } });
+      const target = { kind: "directory" as const, id: "fixture-root" };
+      const plan: OperationPlan = {
+        version: "operation-core.v1", plan_id: "plan-memory-binding", request_id: origin.id, state: "planned",
+        steps: [{ step_id: "search", operation: "file.search", target, state: "planned", effects: ["read"],
+          permission: { risk: "low", approval_level: "L1_observe", final_review_required: false,
+            hds_brain_authority_required: true, approval_gate_required: true },
+          adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+          parameters: { root: "fixture-root", query: "blue", max_results: 1 },
+          preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{ check_id: "search-result",
+            method: "result_equals", target, expected: { root: "fixture-root" } }],
+            compensation: { available: false, reason: "read-only" } } }],
+        rollback: { available: false },
+        raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+        planner_output_used_for_authority: false, hds_brain_authority_required: true,
+      };
+      const ledger = new OperationPlanLedger(undefined, undefined, undefined, undefined, undefined, undefined,
+        (lineageId) => lineageId === dependency.reference.record_id ? ({ used_for_authority: false,
+          record: { application_state: "active", current_interpretation_id: dependency.interpretation_id,
+            interpretations: [{ interpretation_id: dependency.interpretation_id,
+              basis_ref: `${dependency.reference.record_id}#${dependency.reference.version}` }],
+            dependent_judgments: [{ judgment_ref: dependency.judgment_ref,
+              basis_interpretation_id: dependency.interpretation_id, reassessment_required: false }],
+            used_for_authority: false, may_execute: false },
+        }) : null);
+      ledger.retainCandidate(plan, origin, undefined, undefined, [dependency]);
+
+      const control = { action: "review" as const, plan_id: plan.plan_id,
+        revision_digest: operationPlanDigest(plan), step_id: "search" };
+      ledger.inspectControl(control, origin);
+      const command: ExecuteCommand = {
+        id: "selected-plan-command-binding", type: "tool_call",
+        payload: { tool_name: "file.search", arguments: { root: "fixture-root", query: "blue", max_results: 1 } },
+        upstream_decision: { frame_goal: origin.content, model_abstraction: "fixture", commit_hash: "commit",
+          commit_decision: "ASSERT", request_id: origin.id },
+      };
+      ledger.bind(control, origin, command);
+      const digest = ledger.executionSourceBindingDigest(command);
+      if (!digest) throw new Error("plan_execution_source_binding_unavailable");
+      return digest;
+    };
+
+    const first = createBoundDigest({ reference: { record_id: "F:memory-record-a", version: "a".repeat(64) },
+      interpretation_id: "interpretation-a", judgment_ref: "memory-citation-review:" + "b".repeat(64) });
+    const second = createBoundDigest({ reference: { record_id: "F:memory-record-b", version: "c".repeat(64) },
+      interpretation_id: "interpretation-b", judgment_ref: "memory-citation-review:" + "d".repeat(64) });
+
+    expect(first).not.toBe(second);
+  });
+
   it("allows a current cited interpretation and blocks its plan after J marks the citation for reassessment", () => {
     const origin = createGatewayInternalInboundRequest({ id: "plan-origin", channel: "webchat", user: "fixture-owner",
       content: "plan:compute search fixture memory", timestamp: 1,

@@ -707,8 +707,12 @@ function operationPlanExecutionSourceDigest(
 ): string {
   const revision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
   if (!revision) throw new Error("plan_execution_source_binding_stale");
+  const memoryInterpretationDependencies = plan.memory_interpretation_dependencies ?? [];
+  const hasMemoryInterpretationDependencies = memoryInterpretationDependencies.length > 0;
   return operationPlanDigest({
-    schema_version: "blue-tanuki.operation-plan-execution-source.v1",
+    schema_version: hasMemoryInterpretationDependencies
+      ? "blue-tanuki.operation-plan-execution-source.v2"
+      : "blue-tanuki.operation-plan-execution-source.v1",
     owner_digest: operationPlanDigest(plan.owner),
     channel: plan.channel,
     original_goal_digest: operationPlanDigest(plan.goal),
@@ -729,6 +733,9 @@ function operationPlanExecutionSourceDigest(
     request_goal_criteria_digest: operationPlanDigest(plan.request_goal_criteria ?? null),
     goal_relation_adoption_assessment_digest: binding.goal_relation_adoption_assessment?.assessment_digest ?? null,
     compute_source_observations_digest: operationPlanDigest(computeSourceObservations),
+    ...(hasMemoryInterpretationDependencies ? {
+      memory_interpretation_dependencies_digest: operationPlanDigest(memoryInterpretationDependencies),
+    } : {}),
     command_digest: binding.command_digest,
   });
 }
