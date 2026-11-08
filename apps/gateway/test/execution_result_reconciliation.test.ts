@@ -1,10 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, describe, it, expect, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
-import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
+import WebSocket from "ws";
+import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
   githubWriteTool, LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
@@ -36,8 +39,14 @@ function planTaskIdentityDigest(owner: string, channel: string, task: string, pl
   });
 }
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-function request(content: string): InboundRequest {
-  return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner", timestamp: Date.now(), content,
+const servedGatewayTempRoots: string[] = [];
+afterAll(() => {
+  for (const tempRoot of servedGatewayTempRoots) {
+    rmSync(tempRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+  }
+});
+function request(content: string, user = "fixture-owner"): InboundRequest {
+  return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
 }
 function recoveryCommandIdDigest(commandId: string): string { return createHash("sha256").update(commandId).digest("hex"); }
@@ -299,7 +308,8 @@ async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Prom
     context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true });
   }
 }
-async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate) {
+async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate,
+  owner = "fixture-owner") {
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite"); const executionEpoch = randomUUID();
   const execution = new GatewayExecutionIntentStore(executionPath, executionEpoch); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
@@ -320,7 +330,7 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
     controllers.push(controller); return controller;
   }
   const hds = createHds();
-  const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
+  const origin = request("plan:compute 合成の実行結果を後続へ安全に返す", owner);
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
   tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
   tools.register(githubWriteTool);
@@ -1801,6 +1811,224 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 });
+
+describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () => {
+  for (const mode of ["accepted", "rejected", "unknown"] as const) {
+    it(`${mode}結果を再送せずにOwnerへ返す`, async () => {
+      const scenario = githubWriteScenario("issue.create");
+      const tempRoot = mkdtempSync(join(tmpdir(), "blue-github-result-served-"));
+      servedGatewayTempRoots.push(tempRoot);
+      const workspace = join(tempRoot, "workspace");
+      const stateRoot = join(tempRoot, "state");
+      mkdirSync(workspace, { recursive: true });
+      vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+      let context: Awaited<ReturnType<typeof setup>> | undefined;
+      let contextClosed = false;
+      let gateway: ServedGatewayProcess | undefined;
+      let socket: WebSocket | undefined;
+      const frames: ServedGatewayFrame[] = [];
+
+      try {
+        // Seed a real HDS/J/M receipt using only the test-owned synthetic adapter.
+        mockSyntheticGitHubWrite(mode, scenario);
+        context = await setup(tempRoot, workspace, (id) => githubWriteCandidate(id, scenario));
+        expect(context.hds.beginOperationPlanAttempt(context.cmd, context.admission)).toBe(true);
+        const feedback = await context.executor.execute(context.approved, { save_result_delivery: true });
+        expect(feedback.status).toBe(mode === "accepted" ? "success" : "failed");
+        finalizeCommandOutput({ hds: context.hds, command: context.cmd, feedback,
+          request_id: context.plan.request_id, target_surface: "channel" });
+        expect(reconcileExecutionResults(context.hds, context.execution, context.admission.execution_epoch))
+          .toMatchObject({ adopted: 1, deferred: 0 });
+
+        const savedPlan = context.j.load()?.plans[0];
+        const savedBinding = savedPlan?.bindings.at(-1);
+        expect(savedBinding?.status).toBe(mode === "accepted" ? "verified"
+          : mode === "rejected" ? "provider_rejected" : "outcome_unknown");
+        const memory = JSON.stringify(inspectMemory(context));
+        for (const privateValue of scenario.private_values) expect(memory).not.toContain(privateValue);
+        expect(githubWriteTool.invoke).toHaveBeenCalledTimes(1);
+        if (!savedPlan) throw new Error("synthetic GitHub result plan was not persisted");
+        const resultControl = { plan_id: context.plan.plan_id,
+          revision_digest: savedPlan.revisions.at(-1)!.digest, step_id: scenario.step_id };
+
+        // The served process reopens this exact J checkpoint and the same M receipt store.
+        for (const hds of context.controllers) {
+          hds.closeOperationPlanMemory();
+          hds.close();
+        }
+        context.controllers.splice(0, context.controllers.length);
+        context.execution.close();
+        context.j.close();
+        contextClosed = true;
+        const runtimePlanState = join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+        mkdirSync(dirname(runtimePlanState), { recursive: true });
+        copyFileSync(context.jPath, runtimePlanState);
+        const completeHistory = new CompleteHistoryStore({ filepath: join(tempRoot, "complete-history.jsonl") });
+        completeHistory.append({ kind: "audit_history", actor: "synthetic-fixture", source: "f05-02-result-seed",
+          timestamp: Date.now(), payload: { synthetic: true, used_for_authority: false } });
+        expect(completeHistory.verify()).toBe(true);
+
+        const gatewayPort = await reserveServedGatewayPort();
+        gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot);
+        await waitForServedGatewayHealth(gatewayPort, gateway);
+        socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
+
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+          method: "POST",
+          headers: { authorization: "Bearer f05.02-synthetic-webchat-token", "content-type": "application/json" },
+          body: JSON.stringify({ user: "fixture-owner", content: `plan:result ${JSON.stringify(resultControl)}` }),
+        });
+        expect(response.status).toBe(202);
+        const frame = await waitForServedGatewayFrame(frames, gateway,
+          (item) => item.kind === "channel_send" && typeof item.content === "string" &&
+            item.content.includes("保存済みGitHub操作結果（issue.create）"));
+        const content = String(frame.content);
+        expect(content).toContain("この結果照会は操作を再実行しません。");
+        expect(content).toContain(mode === "accepted" ? "GitHub APIが受理を返しました。"
+          : mode === "rejected" ? "GitHub APIが明示的に拒否しました。自動再送は行っていません。"
+            : "作用結果は不明です。自動再送は行っていません。");
+        expect(content).toContain(`HTTP status: ${mode === "accepted" ? "201" : mode === "rejected" ? "403" : "不明"}`);
+        for (const privateValue of scenario.private_values) expect(content).not.toContain(privateValue);
+        expect(gateway.child.exitCode).toBeNull();
+      } finally {
+        if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) socket.terminate();
+        if (gateway) await stopServedGateway(gateway);
+        if (context && !contextClosed) {
+          for (const hds of context.controllers) {
+            hds.closeOperationPlanMemory();
+            hds.close();
+          }
+          context.execution.close();
+          context.j.close();
+        }
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    }, 45_000);
+  }
+});
+
+interface ServedGatewayFrame {
+  readonly kind?: string;
+  readonly content?: string;
+  readonly [key: string]: unknown;
+}
+
+interface ServedGatewayProcess {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly stdout: string[];
+  readonly stderr: string[];
+}
+
+function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string): ServedGatewayProcess {
+  let repositoryRoot = resolve(process.cwd());
+  while (!existsSync(join(repositoryRoot, "pnpm-workspace.yaml")) && dirname(repositoryRoot) !== repositoryRoot) {
+    repositoryRoot = dirname(repositoryRoot);
+  }
+  const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
+  if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "HOMEDRIVE", "HOMEPATH", "ComSpec"]) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  Object.assign(env, {
+    WEBCHAT_HOST: "127.0.0.1",
+    WEBCHAT_PORT: String(port),
+    WEBCHAT_TOKEN: "f05.02-synthetic-webchat-token",
+    WEBCHAT_RESUME_TOKEN: "f05.02-synthetic-resume-token",
+    BLUE_TANUKI_OWNER_TOKEN: "f05.02-synthetic-owner-token",
+    BLUE_TANUKI_MAINTENANCE_TOKEN: "f05.02-synthetic-maintenance-token",
+    BLUE_TANUKI_FILE_ROOT: workspace,
+    BLUE_TANUKI_STATE_ROOT: stateRoot,
+    BLUE_TANUKI_MEMORY_FILE: join(tempRoot, "memory.jsonl"),
+    BLUE_TANUKI_AUDIT_DIR: join(tempRoot, "audit"),
+    BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(tempRoot, "complete-history.jsonl"),
+    BLUE_TANUKI_SESSION_DIR: join(tempRoot, "sessions"),
+    BLUE_TANUKI_SCHEDULES_DIR: join(tempRoot, "schedules"),
+    BLUE_TANUKI_APPROVAL_MODE: "full_access",
+    LLM_BACKEND: "stub",
+  });
+  // No GITHUB_TOKEN, provider credential, or external channel credential is copied into this process.
+  const child = spawn(process.execPath, [entrypoint, "--serve"], {
+    cwd: repositoryRoot, env, stdio: "pipe", windowsHide: true,
+  });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString("utf8")));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
+  return { child, stdout, stderr };
+}
+
+async function reserveServedGatewayPort(): Promise<number> {
+  const server = (await import("node:http")).createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("served Gateway port reservation failed");
+  const port = address.port;
+  const closed = once(server, "close");
+  server.close();
+  await closed;
+  return port;
+}
+
+async function waitForServedGatewayHealth(port: number, gateway: ServedGatewayProcess): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) {
+      throw new Error(`served Gateway exited before health: ${gateway.stderr.join("")}`);
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+      if (response.ok) return;
+    } catch { /* local Gateway startup is still in progress */ }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`served Gateway health timed out; stdout=${gateway.stdout.join("")}; stderr=${gateway.stderr.join("")}`);
+}
+
+async function connectServedGatewayWebChat(port: number, user: string, frames: ServedGatewayFrame[]): Promise<WebSocket> {
+  const ticketResponse = await fetch(`http://127.0.0.1:${port}/ws-ticket`, {
+    method: "POST",
+    headers: { authorization: "Bearer f05.02-synthetic-webchat-token", "content-type": "application/json" },
+    body: JSON.stringify({ user }),
+  });
+  if (!ticketResponse.ok) throw new Error(`served WebChat ticket failed: ${ticketResponse.status} ${await ticketResponse.text()}`);
+  const ticket = (await ticketResponse.json() as { ticket?: string }).ticket;
+  if (!ticket) throw new Error("served WebChat ticket was missing");
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(ticket)}`);
+  socket.on("message", (data) => {
+    try { frames.push(JSON.parse(data.toString("utf8")) as ServedGatewayFrame); } catch { /* ignore malformed fixture frames */ }
+  });
+  await new Promise<void>((resolveOpen, rejectOpen) => {
+    socket.once("open", () => resolveOpen());
+    socket.once("error", rejectOpen);
+  });
+  return socket;
+}
+
+async function waitForServedGatewayFrame(
+  frames: readonly ServedGatewayFrame[], gateway: ServedGatewayProcess,
+  predicate: (frame: ServedGatewayFrame) => boolean,
+): Promise<ServedGatewayFrame> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`served Gateway exited: ${gateway.stderr.join("")}`);
+    const frame = frames.find(predicate);
+    if (frame) return frame;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  throw new Error(`served Gateway result frame timed out; frames=${JSON.stringify(frames)}; stderr=${gateway.stderr.join("")}`);
+}
+
+async function stopServedGateway(gateway: ServedGatewayProcess): Promise<void> {
+  if (gateway.child.exitCode !== null || gateway.child.signalCode !== null) return;
+  const closed = once(gateway.child, "close");
+  if (!gateway.child.kill("SIGTERM")) throw new Error("test-owned Gateway process could not be stopped");
+  await closed;
+}
 
 function reflect(c: Awaited<ReturnType<typeof setup>>, hds = c.hds, changes: Record<string, unknown> = {}) {
   const p = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
