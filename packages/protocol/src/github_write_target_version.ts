@@ -37,14 +37,25 @@ export const GitHubIssueUpdateTargetVersionObservationSchema = GitHubWriteTarget
   issue_body: z.string().max(500_000).nullable(),
 }).strict();
 
+export const GitHubIssueCommentCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("issue.comment.create"),
+  issue_id: z.number().int().positive().safe(),
+  issue_number: z.number().int().positive().max(1_000_000),
+  issue_state: z.enum(["open", "closed"]),
+  issue_locked: z.boolean(),
+  issue_updated_at: z.string().datetime({ offset: true }),
+}).strict();
+
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
+  GitHubIssueCommentCreateTargetVersionObservationSchema,
 ]);
 
 export type GitHubWriteTargetVersionObservation = z.infer<typeof GitHubWriteTargetVersionObservationSchema>;
 export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIssueCreateTargetVersionObservationSchema>;
 export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIssueUpdateTargetVersionObservationSchema>;
+export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
   repository_id: number;
@@ -101,6 +112,36 @@ export function githubIssueUpdateRequestPayloadDigest(input: {
     input.issue_number,
     input.title ?? null,
     input.body ?? null,
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueCommentCreateTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  issue_id: number;
+  issue_number: number;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-comment-create-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.issue_id,
+    input.issue_number,
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueCommentCreateRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  issue_number: number;
+  body: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-comment-create-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.issue_number,
+    input.body,
   ]), "utf8").digest("hex");
 }
 

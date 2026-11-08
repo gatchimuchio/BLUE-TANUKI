@@ -25,6 +25,8 @@ import {
   inspectGitHubIssueCreateContentReview,
   inspectGitHubIssueUpdateTargetVersion,
   inspectGitHubIssueUpdateContentReview,
+  inspectGitHubIssueCommentCreateTargetVersion,
+  inspectGitHubIssueCommentCreateContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -1578,6 +1580,179 @@ describe("built-in tools", () => {
     expect(writes).toBe(0);
   });
 
+  it("github.write issue.comment.create review binds the exact issue and comment without authority", async () => {
+    const args = {
+      operation: "issue.comment.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      body: "Reviewed comment body",
+    };
+    const options = fakeGitHubIssueCommentCreate();
+    const review = await inspectGitHubIssueCommentCreateContentReview(args, {
+      ...options,
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+    });
+
+    expect(review).toMatchObject({
+      kind: "github_issue_comment_create",
+      operation: "github.write.issue.comment.create",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      repository_visibility: "public",
+      issue_id: 456,
+      issue_number: 7,
+      issue_state: "open",
+      issue_locked: false,
+      issue_updated_at: "2026-11-07T12:00:00Z",
+      issue_title: "Original title",
+      body: args.body,
+      command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+      notification_effect: "github_api_may_trigger_notifications",
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(review.request_payload_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(review)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.comment.create rechecks the issue and verifies one exact POST receipt", async () => {
+    const args = {
+      operation: "issue.comment.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      body: "One exact comment",
+    };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const options = await reviewedGitHubIssueCommentCreate(args, fakeGitHubIssueCommentCreate(async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body });
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 789, body: args.body, issue_url: "https://api.github.test/ignored" }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "COMMENT123",
+      };
+    }));
+
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(seen).toEqual([{
+      method: "POST",
+      path: "/repos/gatchimuchio/blue-tanuki/issues/7/comments",
+      body: { body: args.body },
+    }]);
+    expect(result).toMatchObject({
+      operation: "issue.comment.create",
+      method: "POST",
+      status: 201,
+      mutation_status: "provider_accepted",
+      result: { id: 789 },
+      provider_data_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(JSON.stringify(result)).not.toContain(args.body);
+    expect(JSON.stringify(result)).not.toContain("issue_url");
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.comment.create stops on a stale issue without POST", async () => {
+    const args = {
+      operation: "issue.comment.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      body: "Do not post on changed issue",
+    };
+    let reads = 0;
+    let writes = 0;
+    const options = await reviewedGitHubIssueCommentCreate(args, fakeGitHubIssueCommentCreate(async () => {
+      writes += 1;
+      throw new Error("stale issue must not receive a comment");
+    }, async (target) => {
+      reads += 1;
+      if (target.path.endsWith("/issues/7")) {
+        return githubReadJson({
+          id: 456,
+          number: 7,
+          state: reads > 2 ? "closed" : "open",
+          locked: false,
+          updated_at: reads > 2 ? "2026-11-08T01:00:00Z" : "2026-11-07T12:00:00Z",
+          title: "Original title",
+          body: "Ignored issue body",
+        });
+      }
+      return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false });
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(reads).toBe(4);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write issue.comment.create rejects pull requests and locked issues before POST", async () => {
+    let writes = 0;
+    const args = { operation: "issue.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "comment" };
+    const pullRequest = fakeGitHubIssueCommentCreate(async () => {
+      writes += 1;
+      throw new Error("pull requests are handled by another operation");
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+        title: "PR title", body: null, pull_request: { url: "https://api.github.test/pulls/7" } })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    await expect(inspectGitHubIssueCommentCreateTargetVersion(args, {
+      ...pullRequest, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    })).rejects.toThrow(/target is a pull request.*BUILD_GAP/);
+
+    const lockedIssue = fakeGitHubIssueCommentCreate(async () => {
+      writes += 1;
+      throw new Error("locked issue must not receive a comment");
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: true, updated_at: "2026-11-07T12:00:00Z",
+        title: "Locked issue", body: null })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    await expect(inspectGitHubIssueCommentCreateTargetVersion(args, {
+      ...lockedIssue, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    })).rejects.toThrow(/target is locked.*BLOCKED_AUTHORITY/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write issue.comment.create marks an unconfirmed POST result unknown without retry", async () => {
+    const args = {
+      operation: "issue.comment.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      body: "Expected comment",
+    };
+    let writes = 0;
+    const options = await reviewedGitHubIssueCommentCreate(args, fakeGitHubIssueCommentCreate(async () => {
+      writes += 1;
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 789, body: "Different comment" }),
+        truncated: false,
+        rate_limit_remaining: "58",
+      };
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(writes).toBe(1);
+  });
+
   it("github.write issue.create treats mismatched returned issue content as outcome unknown without retrying", async () => {
     const args = {
       operation: "issue.create",
@@ -1610,7 +1785,7 @@ describe("built-in tools", () => {
     expect(writes).toBe(1);
   });
 
-  it("github.write keeps the other three operations unavailable until they have plan-bound review paths", async () => {
+  it("github.write keeps PR mutations unavailable until they have plan-bound review paths", async () => {
     const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
     const opts = fakeGitHubWrite(async (target) => {
       seen.push({ method: target.method, path: target.path, body: target.body });
@@ -1645,10 +1820,6 @@ describe("built-in tools", () => {
         number: 42,
         body: "review note",
       },
-      opts,
-    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
-    await expect(invokeGitHubWrite(
-      { operation: "issue.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "comment" },
       opts,
     )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
 
@@ -2587,6 +2758,48 @@ function fakeGitHubIssueUpdate(
     }),
 ): GitHubWriteOptions {
   return fakeGitHubWrite(request, undefined, read_request);
+}
+
+function fakeGitHubIssueCommentCreate(
+  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
+    status: 201,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({ id: 789, body: "Synthetic comment" }),
+    truncated: false,
+    rate_limit_remaining: "60",
+    request_id: "COMMENT-REQ",
+  }),
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.endsWith("/issues/7")
+    ? githubReadJson({
+      id: 456,
+      number: 7,
+      state: "open",
+      locked: false,
+      updated_at: "2026-11-07T12:00:00Z",
+      title: "Original title",
+      body: "Original issue body",
+    })
+    : githubReadJson({
+      id: 123,
+      name: "blue-tanuki",
+      full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" },
+      private: false,
+    }),
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
+async function reviewedGitHubIssueCommentCreate(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubIssueCommentCreate()): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubIssueCommentCreateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
 }
 
 async function reviewedGitHubIssueUpdate(args: Record<string, unknown>,

@@ -5871,6 +5871,74 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub issueの変更前後と影響を再確認";
           return;
         }
+        if (review.kind === "github_issue_comment_create") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "github.write.issue.comment.create" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.repository_id !== "number" || !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.issue_id) || review.issue_id <= 0 ||
+              !Number.isSafeInteger(review.issue_number) || review.issue_number <= 0 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              (review.issue_state !== "open" && review.issue_state !== "closed") || review.issue_locked !== false ||
+              typeof review.issue_updated_at !== "string" || !Number.isFinite(Date.parse(review.issue_updated_at)) ||
+              typeof review.issue_title !== "string" || review.issue_title.length === 0 || review.issue_title.length > 65536 ||
+              typeof review.body !== "string" || review.body.length === 0 || review.body.length > 500000) {
+            throw new Error("GitHub issueの対象とコメント本文がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub issueへのコメント投稿（外部作用）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name],
+            ["Repository ID", String(review.repository_id)],
+            ["可視性", review.repository_visibility === "public" ? "Public（コメントは公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Issue", "#" + String(review.issue_number) + "（ID " + String(review.issue_id) + "）"],
+            ["現在の状態", review.issue_state + "・ロックなし"],
+            ["観測時刻", review.issue_updated_at],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const issueTitleHeading = document.createElement("strong");
+          issueTitleHeading.textContent = "対象issueのタイトル";
+          const issueTitle = document.createElement("pre");
+          issueTitle.textContent = review.issue_title;
+          view.append(issueTitleHeading, issueTitle);
+          const bodyHeading = document.createElement("strong");
+          bodyHeading.textContent = "投稿するコメント本文";
+          const body = document.createElement("pre");
+          body.textContent = review.body;
+          view.append(bodyHeading, body);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "承認後にrepositoryとissueを再読取しますが、再読取とPOSTの間は非原子的です。送信後に結果が不明な場合は自動再送せず、GitHub上の状態を確認してOwnerが次の判断を行います。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub issueの対象とコメント本文を再確認";
+          return;
+        }
         if (review.kind === "google_drive_file_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {

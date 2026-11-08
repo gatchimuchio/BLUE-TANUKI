@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
   Executor, createExecutorApprovalAuthority, captureExecutorCommandForApproval,
   executorCommandDigest, type ExecutorApprovalProof,
 } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
+import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion } from "../src/tools/builtin.js";
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id: "synthetic-command", type: "tool_call",
@@ -26,6 +28,57 @@ function runtime(invoke: (args: Record<string, unknown>) => Promise<unknown>, to
 }
 
 describe("承認内容からExecutorへの固定", () => {
+  it("GitHub issue.comment.createのtargetとno-store reviewをExecutorで同じPlanへ結ぶ", async () => {
+    const args = { operation: "issue.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "合成コメント" };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-comment",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:issue.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "選択Issueに合成コメントを作る", model_abstraction: "fixture",
+        commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "f".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const read_request = async (target: { path: string }) => ({
+      status: 200,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify(target.path.endsWith("/issues/7")
+        ? { id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z", title: "対象Issue", body: "非表示の本文" }
+        : { id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false }),
+      truncated: false,
+      rate_limit_remaining: "60",
+    });
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubIssueCommentCreateTargetVersion(args, options);
+    const expectedReview = await inspectGitHubIssueCommentCreateContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({
+        kind: "github_issue_comment_create",
+        command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        issue_number: 7,
+        issue_title: "対象Issue",
+        body: "合成コメント",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("承認後の元引数・許可・proof変更は実adapterへ届かず、固定した内容だけが届く", async () => {
     const seen: unknown[] = [];
     const { approval, executor } = runtime(async (args) => { seen.push(args); return args; });

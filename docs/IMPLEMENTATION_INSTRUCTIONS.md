@@ -4,7 +4,7 @@
 
 ## 現行施工指示 — QE_BUILD / F05.02
 
-rev3.1の現行指示に従い、F05.01のrepository/base identity読取を、既存GitHub write操作の実consumerへ接続する。合成・隔離結果による限定疎通を対象とし、実GitHubへのissue／PR／comment送信、実資格情報を伴う外部作用、他repo変更は行わない。コードやschemaの存在だけを`WIRED`とせず、接続したproducer→consumerと残る境界を記録する。実装順・具体的な成立条件は現行三点セットに従う。
+rev3.1の現行指示に従い、F05.01のrepository/base identity読取を、既存GitHub write操作の実consumerへ接続する。現在は`issue.create`、title/body限定の`issue.update`、`issue.comment.create`をOperation Plan・target-version・no-store L3 content review・Executor/Brokerへコード接続済み（Gateway実runtime未確認）。issue.comment.createはrepository ID／可視性と既存Issue ID／番号／state／lock／updated_atを再読取し、PRおよびlocked Issueを送信前に拒否する。正確な本文をno-store reviewで確認し、結果不明の自動再送はしない。`pr.create`／`pr.comment.create`は`BUILD_GAP`として残す。合成・隔離結果による限定疎通を対象とし、実GitHubへのissue／PR／comment送信、実資格情報を伴う外部作用、他repo変更は行わない。コードやschemaの存在だけを`WIRED`とせず、接続したproducer→consumerと残る境界を記録する。実装順・具体的な成立条件は現行三点セットに従う。
 
 ## 保留を維持する健全化残件 — 2026-11-07 follow-up D
 
