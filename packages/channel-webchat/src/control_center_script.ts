@@ -5939,6 +5939,89 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub issueの対象とコメント本文を再確認";
           return;
         }
+        if (review.kind === "github_pull_request_create") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          const validRef = function (value) {
+            return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
+              value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
+              !value.includes("..") && !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) &&
+              !value.endsWith(".") && value.split("/").every(function (segment) {
+                return segment.length > 0 && segment !== "." && segment !== ".." &&
+                  !segment.startsWith(".") && !segment.endsWith(".lock") && !segment.endsWith(".");
+              });
+          };
+          if (review.command_id !== commandId || review.operation !== "github.write.pr.create" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false || review.creation_is_reversible !== false ||
+              review.publication_effect !== "visible_to_repository_audience" ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.head_repository_id) || review.head_repository_id !== review.repository_id ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              review.head_canonical_full_name !== review.canonical_full_name ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              !validRef(review.head_ref) || !validRef(review.base_ref) || review.head_ref === review.base_ref ||
+              !isCommitSha(review.head_commit_sha) || !isCommitSha(review.base_commit_sha) ||
+              typeof review.title !== "string" || review.title.length === 0 || review.title.length > 65536 ||
+              (review.body !== undefined && (typeof review.body !== "string" || review.body.length > 500000)) ||
+              typeof review.draft !== "boolean" || typeof review.draft_was_defaulted !== "boolean" ||
+              (review.maintainer_can_modify !== null && typeof review.maintainer_can_modify !== "boolean")) {
+            throw new Error("GitHub pull requestの公開先・branch・本文がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub pull requestの新規作成（外部公開作用）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name],
+            ["Repository ID", String(review.repository_id)],
+            ["可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Head", review.head_canonical_full_name + ":" + review.head_ref + " @ " + review.head_commit_sha],
+            ["Base", review.canonical_full_name + ":" + review.base_ref + " @ " + review.base_commit_sha],
+            ["Draft", (review.draft ? "はい" : "いいえ") + (review.draft_was_defaulted ? "（未指定時のアプリ既定値）" : "")],
+            ["Maintainer can modify", review.maintainer_can_modify === null ? "未指定（GitHub側の既定値）" : review.maintainer_can_modify ? "はい" : "いいえ"],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+            ["作成の可逆性", "Pull requestを後から閉じても、公開内容や送信済み通知は取り消せません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const titleHeading = document.createElement("strong");
+          titleHeading.textContent = "作成するpull requestのタイトル";
+          const title = document.createElement("pre");
+          title.textContent = review.title;
+          view.append(titleHeading, title);
+          const bodyHeading = document.createElement("strong");
+          bodyHeading.textContent = "作成するpull requestの本文";
+          const body = document.createElement("pre");
+          body.textContent = review.body === undefined ? "（本文なし）" : review.body;
+          view.append(bodyHeading, body);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "Head／BaseとRepository identityは承認前・送信直前に再読取しますが、読取とPOSTは非原子的です。応答不明やbranch SHA不一致は自動再送しません。同一repository内のbranchだけを対象にします。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub pull requestの公開先・branch・本文を再確認";
+          return;
+        }
         if (review.kind === "google_drive_file_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {

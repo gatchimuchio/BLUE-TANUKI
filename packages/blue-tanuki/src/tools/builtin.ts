@@ -17,6 +17,7 @@ import {
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
+  GitHubPullRequestCreateTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
@@ -29,6 +30,8 @@ import {
   githubIssueUpdateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubIssueCommentCreateTargetIdentityDigest,
+  githubPullRequestCreateRequestPayloadDigest,
+  githubPullRequestCreateTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
@@ -38,11 +41,12 @@ import {
   type GitHubIssueCreateTargetVersionObservation,
   type GitHubIssueUpdateTargetVersionObservation,
   type GitHubIssueCommentCreateTargetVersionObservation,
+  type GitHubPullRequestCreateTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
   type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview,
-  type GitHubIssueCommentCreateContentReview, type Tool } from "./registry.js";
+  type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCreateContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -548,13 +552,17 @@ function githubNameArg(args: Record<string, unknown>, name: string): string {
 }
 
 function githubBaseRefArg(value: string): string {
+  return githubBranchRefArg(value, "base_ref");
+}
+
+function githubBranchRefArg(value: string, name: string): string {
   const segments = value.split("/");
   if (value.length > 255 || value !== value.trim() || value === "@" ||
       value.startsWith("/") || value.endsWith("/") || value.includes("//") ||
       value.includes("..") || value.includes("@{") || /[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) ||
       value.endsWith(".") || segments.some((segment) => !segment || segment === "." || segment === ".." ||
         segment.startsWith(".") || segment.endsWith(".lock") || segment.endsWith("."))) {
-    throw new Error("base_ref is not a valid GitHub branch name");
+    throw new Error(`${name} is not a valid GitHub branch name`);
   }
   return segments.map((segment) => encodeURIComponent(segment)).join("/");
 }
@@ -629,6 +637,7 @@ async function readGitHubBaseIdentity(
   request: NonNullable<GitHubReadOptions["request"]>,
   maxBytes: number,
   signal?: AbortSignal,
+  token?: string,
 ): Promise<unknown> {
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
@@ -641,7 +650,7 @@ async function readGitHubBaseIdentity(
   const encodedRequestedBaseRef = requestedBaseRef === undefined ? undefined : githubBaseRefArg(requestedBaseRef);
   const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   assertToolExecutionNotCancelled(signal, "github.read");
-  const repositoryResponse = await request({ path: repoPath, maxBytes }, signal);
+  const repositoryResponse = await request({ path: repoPath, maxBytes, ...(token ? { token } : {}) }, signal);
   const repository = requireGitHubJsonRecord(repositoryResponse, "repository");
   const repositoryId = repository.id;
   const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
@@ -661,7 +670,7 @@ async function readGitHubBaseIdentity(
   const encodedBaseRef = encodedRequestedBaseRef ?? githubBaseRefArg(baseRef);
   assertToolExecutionNotCancelled(signal, "github.read");
   const branchPath = `${repoPath}/branches/${encodedBaseRef}`;
-  const branchResponse = await request({ path: branchPath, maxBytes }, signal);
+  const branchResponse = await request({ path: branchPath, maxBytes, ...(token ? { token } : {}) }, signal);
   const branch = requireGitHubJsonRecord(branchResponse, "base branch");
   const commit = isRecord(branch.commit) ? branch.commit : null;
   const commitSha = commit && typeof commit.sha === "string" ? commit.sha.toLowerCase() : "";
@@ -670,7 +679,7 @@ async function readGitHubBaseIdentity(
   }
 
   assertToolExecutionNotCancelled(signal, "github.read");
-  const confirmationResponse = await request({ path: repoPath, maxBytes }, signal);
+  const confirmationResponse = await request({ path: repoPath, maxBytes, ...(token ? { token } : {}) }, signal);
   const confirmation = requireGitHubJsonRecord(confirmationResponse, "repository confirmation");
   const confirmationOwner = isRecord(confirmation.owner) && typeof confirmation.owner.login === "string"
     ? confirmation.owner.login : "";
@@ -790,10 +799,18 @@ function githubWriteRoute(args: Record<string, unknown>): {
   }
 
   if (operation === "pr.create") {
+    const head = stringArg(args, "head")!;
+    const base = stringArg(args, "base")!;
+    if (head.includes(":")) {
+      throw new Error("cross-repository pr.create is not connected; mutation_sent=false; status=BUILD_GAP");
+    }
+    githubBranchRefArg(head, "head");
+    githubBranchRefArg(base, "base");
+    if (head === base) throw new Error("pr.create head and base must identify different branches; mutation_sent=false");
     const body: Record<string, unknown> = {
       title: stringArg(args, "title")!,
-      head: stringArg(args, "head")!,
-      base: stringArg(args, "base")!,
+      head,
+      base,
       draft: githubBoolArg(args, "draft", false),
     };
     const prBody = githubOptionalBody(args);
@@ -1355,6 +1372,7 @@ export async function invokeGitHubWrite(
   const route = githubWriteRoute(args);
   if (route.operation === "issue.update") return await invokeGitHubIssueUpdate(args, opts);
   if (route.operation === "issue.comment.create") return await invokeGitHubIssueCommentCreate(args, opts);
+  if (route.operation === "pr.create") return await invokeGitHubPullRequestCreate(args, opts);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} is not connected to a plan-bound review path; mutation_sent=false; status=BUILD_GAP`);
   }
@@ -1453,6 +1471,126 @@ export async function invokeGitHubWrite(
     github_request_id: response.request_id,
     result_digest: sha256Hex(data),
     result: { id: issue.id, number: issue.number, title: issue.title },
+    provider_data_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+async function invokeGitHubPullRequestCreate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const env = opts.env ?? process.env;
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.create") throw new Error("github.write pr.create route mismatch; mutation_sent=false");
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write pr.create requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+  }
+  const expected = assertGitHubPullRequestCreateTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const current = await inspectGitHubPullRequestCreateTargetVersion(args, {
+    env,
+    signal: opts.signal,
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    ...(opts.read_request ? { read_request: opts.read_request } : {}),
+  });
+  if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write pr.create repository or branch target changed after review; mutation_sent=false; outcome=stale");
+  }
+
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.create");
+  let response: GitHubWriteResponse;
+  try {
+    response = await request({ method: route.method, path: route.path, body: route.body, maxBytes, token }, opts.signal);
+  } catch {
+    throw new Error("github.write pr.create outcome_unknown; do not retry automatically; check GitHub before a new Owner decision");
+  }
+  const data = parseJsonOrText(response.body);
+  if (!response.ok || response.status !== 201 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
+    const explicitRejection = !response.ok && !response.truncated &&
+      [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+    if (explicitRejection) {
+      return {
+        schema_version: "blue-tanuki.github-write-result.v1",
+        operation: "pr.create",
+        api_host: "api.github.com",
+        repo: route.repo,
+        repository_id: expected.repository_id,
+        target_identity_digest: expected.target_identity_digest,
+        request_payload_digest: expected.request_payload_digest,
+        command_digest: expected.command_digest,
+        operation_plan_binding_digest: expected.operation_plan_binding_digest,
+        method: route.method,
+        path: route.path,
+        status: response.status,
+        mutation_status: "provider_rejected",
+        result_digest: sha256Hex(data),
+        retry_permitted: false,
+        next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+        provider_data_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    }
+    throw new Error("github.write pr.create outcome_unknown; HTTP " + response.status +
+      "; do not retry automatically; check GitHub before a new Owner decision");
+  }
+
+  const pull = isRecord(data) ? data : null;
+  const head = pull && isRecord(pull.head) ? pull.head : null;
+  const base = pull && isRecord(pull.base) ? pull.base : null;
+  const headRepo = head && isRecord(head.repo) ? head.repo : null;
+  const baseRepo = base && isRecord(base.repo) ? base.repo : null;
+  const expectedBody = typeof route.body.body === "string" ? route.body.body : null;
+  const maintainerCanModify = route.body.maintainer_can_modify;
+  if (!pull || typeof pull.id !== "number" || !Number.isSafeInteger(pull.id) || pull.id <= 0 ||
+      typeof pull.number !== "number" || !Number.isSafeInteger(pull.number) || pull.number <= 0 ||
+      pull.title !== route.body.title || pull.body !== expectedBody || pull.state !== "open" ||
+      pull.draft !== expected.draft ||
+      (typeof maintainerCanModify === "boolean" && pull.maintainer_can_modify !== maintainerCanModify) ||
+      !head || !base || head.ref !== expected.head_ref || head.sha !== expected.head_commit_sha ||
+      base.ref !== expected.base_ref || base.sha !== expected.base_commit_sha ||
+      !headRepo || !baseRepo || headRepo.id !== expected.repository_id || baseRepo.id !== expected.repository_id) {
+    throw new Error("github.write pr.create response did not confirm the reviewed pull request and branch tips; outcome_unknown; do not retry automatically");
+  }
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1",
+    operation: "pr.create",
+    api_host: "api.github.com",
+    repo: route.repo,
+    repository_id: expected.repository_id,
+    target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest,
+    command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest,
+    method: route.method,
+    path: route.path,
+    status: response.status,
+    mutation_status: "provider_accepted",
+    content_type: response.content_type,
+    truncated: response.truncated,
+    rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id,
+    result_digest: sha256Hex(data),
+    result: {
+      id: pull.id,
+      number: pull.number,
+      title: pull.title,
+      head_ref: expected.head_ref,
+      head_commit_sha: expected.head_commit_sha,
+      base_ref: expected.base_ref,
+      base_commit_sha: expected.base_commit_sha,
+      draft: expected.draft,
+      ...(typeof pull.maintainer_can_modify === "boolean"
+        ? { maintainer_can_modify: pull.maintainer_can_modify } : {}),
+    },
     provider_data_is_untrusted: true,
     used_for_authority: false,
     may_execute: false,
@@ -1567,6 +1705,180 @@ export async function inspectGitHubIssueCreateContentReview(args: Record<string,
     operation_plan_binding_digest: observation.operation_plan_binding_digest,
     command_digest: observation.command_digest,
     notification_effect: "github_api_may_trigger_notifications" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
+export async function inspectGitHubPullRequestCreateTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubPullRequestCreateTargetVersionObservation> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.create") {
+    throw new Error("github.write " + route.operation + " target observation is not implemented; status=BUILD_GAP");
+  }
+  const allowedArgs = ["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify", "max_bytes"];
+  if (Object.keys(args).some((key) => !allowedArgs.includes(key))) {
+    throw new Error("github.write pr.create contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write pr.create target observation requires a command and Operation Plan binding");
+  }
+
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const headRef = String(route.body.head);
+  const baseRef = String(route.body.base);
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const identityArgs = { owner, repo };
+
+  // Reuse the F05.01 repository/base identity reader for both branch tips.
+  const baseSnapshot = await readGitHubBaseIdentity({ ...identityArgs, base_ref: baseRef }, readRequest,
+    maxBytes, opts.signal, token);
+  const headSnapshot = await readGitHubBaseIdentity({ ...identityArgs, base_ref: headRef }, readRequest,
+    maxBytes, opts.signal, token);
+  const baseIdentity = isRecord(baseSnapshot) && isRecord(baseSnapshot.data) ? baseSnapshot.data : null;
+  const headIdentity = isRecord(headSnapshot) && isRecord(headSnapshot.data) ? headSnapshot.data : null;
+  if (!baseIdentity || !headIdentity || baseIdentity.schema_version !== "blue-tanuki.github.base-identity.v1" ||
+      headIdentity.schema_version !== "blue-tanuki.github.base-identity.v1" ||
+      baseIdentity.base_ref !== baseRef || headIdentity.base_ref !== headRef ||
+      baseIdentity.repository_id !== headIdentity.repository_id ||
+      baseIdentity.full_name !== headIdentity.full_name ||
+      typeof baseIdentity.base_commit_sha !== "string" || typeof headIdentity.base_commit_sha !== "string") {
+    throw new Error("github.write pr.create branch observations did not identify the same repository and requested refs");
+  }
+
+  // The base-identity contract intentionally omits visibility; read it as a separate final observation.
+  const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.create target inspection");
+  const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "pull request target repository");
+  const repositoryOwner = isRecord(repository.owner) && typeof repository.owner.login === "string"
+    ? repository.owner.login : "";
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  if (typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id <= 0 ||
+      typeof repository.private !== "boolean" || repository.id !== baseIdentity.repository_id ||
+      repository.id !== headIdentity.repository_id || fullName !== baseIdentity.full_name ||
+      fullName !== headIdentity.full_name || repositoryName.toLowerCase() !== repo.toLowerCase() ||
+      repositoryOwner.toLowerCase() !== owner.toLowerCase() ||
+      fullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+    throw new Error("github.write pr.create repository identity or visibility changed during branch observation");
+  }
+
+  const body = typeof route.body.body === "string" ? route.body.body : undefined;
+  const maintainerCanModify = typeof route.body.maintainer_can_modify === "boolean"
+    ? route.body.maintainer_can_modify : null;
+  return GitHubPullRequestCreateTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "pr.create",
+    repository_id: repository.id,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: fullName,
+    repository_visibility: repository.private ? "private" : "public",
+    head_ref: headRef,
+    head_commit_sha: headIdentity.base_commit_sha,
+    base_ref: baseRef,
+    base_commit_sha: baseIdentity.base_commit_sha,
+    draft: route.body.draft === true,
+    maintainer_can_modify: maintainerCanModify,
+    target_identity_digest: githubPullRequestCreateTargetIdentityDigest({
+      repository_id: repository.id, canonical_full_name: fullName, head_ref: headRef, base_ref: baseRef,
+    }),
+    request_payload_digest: githubPullRequestCreateRequestPayloadDigest({
+      owner, repo, title: String(route.body.title), ...(body !== undefined ? { body } : {}),
+      head_ref: headRef, base_ref: baseRef, draft: route.body.draft === true,
+      ...(maintainerCanModify !== null ? { maintainer_can_modify: maintainerCanModify } : {}),
+    }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+export function assertGitHubPullRequestCreateTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubPullRequestCreateTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "pr.create") {
+    throw new Error("github.write pr.create target observation has another operation");
+  }
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const body = typeof route.body.body === "string" ? route.body.body : undefined;
+  const maintainerCanModify = typeof route.body.maintainer_can_modify === "boolean"
+    ? route.body.maintainer_can_modify : null;
+  const payloadDigest = githubPullRequestCreateRequestPayloadDigest({
+    owner, repo, title: String(route.body.title), ...(body !== undefined ? { body } : {}),
+    head_ref: String(route.body.head), base_ref: String(route.body.base), draft: route.body.draft === true,
+    ...(maintainerCanModify !== null ? { maintainer_can_modify: maintainerCanModify } : {}),
+  });
+  const targetDigest = githubPullRequestCreateTargetIdentityDigest({
+    repository_id: observation.repository_id, canonical_full_name: observation.canonical_full_name,
+    head_ref: String(route.body.head), base_ref: String(route.body.base),
+  });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "title", "body", "head", "base", "draft", "maintainer_can_modify", "max_bytes"].includes(key)) ||
+      route.operation !== "pr.create" ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      observation.head_ref !== route.body.head || observation.base_ref !== route.body.base ||
+      observation.draft !== (route.body.draft === true) || observation.maintainer_can_modify !== maintainerCanModify ||
+      observation.command_digest !== commandDigest || observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
+      observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write pr.create target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubPullRequestCreateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubPullRequestCreateContentReview> {
+  const observation = await inspectGitHubPullRequestCreateTargetVersion(args, opts);
+  const route = githubWriteRoute(args);
+  const base = {
+    kind: "github_pull_request_create" as const,
+    operation: "github.write.pr.create" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    head_repository_id: observation.repository_id,
+    head_canonical_full_name: observation.canonical_full_name,
+    head_ref: observation.head_ref,
+    head_commit_sha: observation.head_commit_sha,
+    base_ref: observation.base_ref,
+    base_commit_sha: observation.base_commit_sha,
+    title: String(route.body.title),
+    ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+    draft: observation.draft,
+    draft_was_defaulted: args.draft === undefined,
+    maintainer_can_modify: observation.maintainer_can_modify,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(
+      canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    publication_effect: "visible_to_repository_audience" as const,
+    creation_is_reversible: false as const,
     provider_observation_is_atomic: false as const,
     used_for_authority: false as const,
     may_execute: false as const,
@@ -3402,9 +3714,16 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create a plan-bound GitHub issue or issue comment, or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Pull request writes remain BUILD_GAP.",
+  description: "Create plan-bound GitHub issues, issue comments, and same-repository pull requests, or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Cross-repository pull requests and pull request comments remain BUILD_GAP.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
+    if (githubOperation(args) === "pr.create") {
+      return await inspectGitHubPullRequestCreateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -3419,6 +3738,9 @@ export const githubWriteTool: Tool = {
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
     }
+    if (githubOperation(args) !== "issue.create") {
+      throw new Error(`github.write ${githubOperation(args)} target observation is not implemented; status=BUILD_GAP`);
+    }
     return await inspectGitHubIssueCreateTargetVersion(args, {
       ...(options.env ? { env: options.env } : {}),
       ...(options.command_digest ? { command_digest: options.command_digest } : {}),
@@ -3426,7 +3748,14 @@ export const githubWriteTool: Tool = {
     });
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
-    GitHubIssueCommentCreateContentReview> {
+    GitHubIssueCommentCreateContentReview | GitHubPullRequestCreateContentReview> {
+    if (githubOperation(args) === "pr.create") {
+      return await inspectGitHubPullRequestCreateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -3440,6 +3769,9 @@ export const githubWriteTool: Tool = {
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
+    }
+    if (githubOperation(args) !== "issue.create") {
+      throw new Error(`github.write ${githubOperation(args)} content review is not implemented; status=BUILD_GAP`);
     }
     return await inspectGitHubIssueCreateContentReview(args, {
       ...(options.env ? { env: options.env } : {}),

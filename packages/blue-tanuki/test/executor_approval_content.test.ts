@@ -7,7 +7,8 @@ import {
 } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion } from "../src/tools/builtin.js";
+import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion,
+  inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion } from "../src/tools/builtin.js";
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id: "synthetic-command", type: "tool_call",
@@ -71,6 +72,73 @@ describe("承認内容からExecutorへの固定", () => {
         issue_number: 7,
         issue_title: "対象Issue",
         body: "合成コメント",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("GitHub pr.createのhead/base branch evidenceとno-store reviewをExecutorで同じPlanへ結ぶ", async () => {
+    const args = { operation: "pr.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "合成PR", body: "合成本文", head: "feature/pr", base: "main", draft: true, maintainer_can_modify: false };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-pr-create",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:pr.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "同一repoの合成branchからPR候補を作る", model_abstraction: "fixture",
+        commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "e".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const headSha = "a".repeat(40);
+    const baseSha = "b".repeat(40);
+    const read_request = async (target: { path: string }) => {
+      const branchPrefix = "/branches/";
+      const branchIndex = target.path.indexOf(branchPrefix);
+      if (branchIndex >= 0) {
+        const ref = target.path.slice(branchIndex + branchPrefix.length);
+        return {
+          status: 200, ok: true, content_type: "application/json",
+          body: JSON.stringify({ name: ref, commit: { sha: ref === "main" ? baseSha : headSha } }),
+          truncated: false, rate_limit_remaining: "60",
+        };
+      }
+      return {
+        status: 200, ok: true, content_type: "application/json",
+        body: JSON.stringify({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, default_branch: "main", private: false }),
+        truncated: false, rate_limit_remaining: "60",
+      };
+    };
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubPullRequestCreateTargetVersion(args, options);
+    const expectedReview = await inspectGitHubPullRequestCreateContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({
+        kind: "github_pull_request_create",
+        command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        head_ref: "feature/pr",
+        head_commit_sha: headSha,
+        base_ref: "main",
+        base_commit_sha: baseSha,
+        title: "合成PR",
+        body: "合成本文",
+        draft: true,
+        maintainer_can_modify: false,
         used_for_authority: false,
         may_execute: false,
       });

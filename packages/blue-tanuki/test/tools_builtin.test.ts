@@ -27,6 +27,8 @@ import {
   inspectGitHubIssueUpdateContentReview,
   inspectGitHubIssueCommentCreateTargetVersion,
   inspectGitHubIssueCommentCreateContentReview,
+  inspectGitHubPullRequestCreateTargetVersion,
+  inspectGitHubPullRequestCreateContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -1554,7 +1556,7 @@ describe("built-in tools", () => {
         });
       }
       return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
-        owner: { login: "gatchimuchio" }, private: false });
+        owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
     }));
 
     await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
@@ -1691,7 +1693,7 @@ describe("built-in tools", () => {
         });
       }
       return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
-        owner: { login: "gatchimuchio" }, private: false });
+        owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
     }));
 
     await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
@@ -1785,33 +1787,102 @@ describe("built-in tools", () => {
     expect(writes).toBe(1);
   });
 
-  it("github.write keeps PR mutations unavailable until they have plan-bound review paths", async () => {
+  it("github.write pr.create binds the reviewed same-repository branch tips and exact content to one POST", async () => {
     const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
-    const opts = fakeGitHubWrite(async (target) => {
+    const args = {
+      operation: "pr.create",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      title: "Add the feature",
+      body: "Exact PR body",
+      head: "feature/pr-creation",
+      base: "main",
+      draft: "true",
+      maintainer_can_modify: "false",
+    };
+    const writeOptions = await reviewedGitHubPullRequestCreate(args, fakeGitHubPullRequestCreate(async (target) => {
       seen.push({ method: target.method, path: target.path, body: target.body });
       return {
-        status: target.method === "PATCH" ? 200 : 201,
+        status: 201,
         ok: true,
         content_type: "application/json",
-        body: JSON.stringify({ number: 42, html_url: "https://github.test/42" }),
+        body: JSON.stringify({
+          id: 987,
+          number: 42,
+          title: "Add the feature",
+          body: "Exact PR body",
+          state: "open",
+          draft: true,
+          maintainer_can_modify: false,
+          head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA, repo: { id: 123 } },
+          base: { ref: "main", sha: GITHUB_PR_BASE_SHA, repo: { id: 123 } },
+        }),
         truncated: false,
         rate_limit_remaining: "57",
         request_id: "REQ",
       };
+    }));
+    const review = await inspectGitHubPullRequestCreateContentReview(args, writeOptions);
+    expect(review).toMatchObject({
+      kind: "github_pull_request_create",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      head_repository_id: 123,
+      head_ref: "feature/pr-creation",
+      head_commit_sha: GITHUB_PR_HEAD_SHA,
+      base_ref: "main",
+      base_commit_sha: GITHUB_PR_BASE_SHA,
+      title: "Add the feature",
+      body: "Exact PR body",
+      draft: true,
+      draft_was_defaulted: false,
+      maintainer_can_modify: false,
+      creation_is_reversible: false,
+      used_for_authority: false,
+      may_execute: false,
     });
-
-    await expect(invokeGitHubWrite(
-      {
-        operation: "pr.create",
-        owner: "gatchimuchio",
-        repo: "blue-tanuki",
-        title: "Add feature",
-        head: "feature",
+    const result = await invokeGitHubWrite(args, writeOptions);
+    expect(result).toMatchObject({
+      operation: "pr.create",
+      mutation_status: "provider_accepted",
+      result: { id: 987, number: 42, head_commit_sha: GITHUB_PR_HEAD_SHA, base_commit_sha: GITHUB_PR_BASE_SHA, draft: true },
+    });
+    expect(JSON.stringify(result)).not.toContain("Exact PR body");
+    expect(seen).toEqual([{
+      method: "POST",
+      path: "/repos/gatchimuchio/blue-tanuki/pulls",
+      body: {
+        title: "Add the feature",
+        head: "feature/pr-creation",
         base: "main",
-        draft: "true",
+        draft: true,
+        body: "Exact PR body",
+        maintainer_can_modify: false,
       },
-      opts,
-    )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
+    }]);
+
+    const branchReads = new Map<string, number>();
+    let writes = 0;
+    const changingBranch = fakeGitHubPullRequestCreate(async () => {
+      writes += 1;
+      throw new Error("stale branch must not receive a POST");
+    }, async (target) => {
+      const branchPrefix = "/branches/";
+      const branchIndex = target.path.indexOf(branchPrefix);
+      if (branchIndex >= 0) {
+        const ref = target.path.slice(branchIndex + branchPrefix.length);
+        if (ref === "main") return githubReadJson({ name: ref, commit: { sha: GITHUB_PR_BASE_SHA } });
+        const count = (branchReads.get(ref) ?? 0) + 1;
+        branchReads.set(ref, count);
+        return githubReadJson({ name: ref, commit: { sha: count === 1 ? GITHUB_PR_HEAD_SHA : "c".repeat(40) } });
+      }
+      return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
+    });
+    const approved = await reviewedGitHubPullRequestCreate(args, changingBranch);
+    await expect(invokeGitHubWrite(args, approved)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(writes).toBe(0);
+
     await expect(invokeGitHubWrite(
       {
         operation: "pr.comment.create",
@@ -1820,10 +1891,41 @@ describe("built-in tools", () => {
         number: 42,
         body: "review note",
       },
-      opts,
+      writeOptions,
     )).rejects.toThrow(/mutation_sent=false; status=BUILD_GAP/);
 
-    expect(seen).toEqual([]);
+    await expect(invokeGitHubWrite(
+      { ...args, head: "gatchimuchio:feature/pr-creation" },
+      writeOptions,
+    )).rejects.toThrow(/cross-repository pr.create is not connected.*status=BUILD_GAP/);
+  });
+
+  it("github.write pr.create distinguishes provider rejection from unknown response without retry", async () => {
+    const args = { operation: "pr.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "Add the feature", body: "Exact PR body", head: "feature/pr-creation", base: "main", draft: true };
+    let rejectedPosts = 0;
+    const rejectedOptions = await reviewedGitHubPullRequestCreate(args, fakeGitHubPullRequestCreate(async () => {
+      rejectedPosts += 1;
+      return { status: 422, ok: false, content_type: "application/json", body: "{}", truncated: false,
+        rate_limit_remaining: "59", request_id: "PR-REJECTED" };
+    }));
+    const rejected = await invokeGitHubWrite(args, rejectedOptions);
+    expect(rejected).toMatchObject({ operation: "pr.create", mutation_status: "provider_rejected", retry_permitted: false });
+    expect(rejectedPosts).toBe(1);
+
+    let uncertainPosts = 0;
+    const uncertainOptions = await reviewedGitHubPullRequestCreate(args, fakeGitHubPullRequestCreate(async () => {
+      uncertainPosts += 1;
+      return { status: 201, ok: true, content_type: "application/json", truncated: false,
+        rate_limit_remaining: "58", body: JSON.stringify({
+          id: 987, number: 42, title: "Add the feature", body: "Exact PR body", state: "open", draft: true,
+          head: { ref: "feature/pr-creation", sha: "c".repeat(40), repo: { id: 123 } },
+          base: { ref: "main", sha: GITHUB_PR_BASE_SHA, repo: { id: 123 } },
+        }) };
+    }));
+    await expect(invokeGitHubWrite(args, uncertainOptions))
+      .rejects.toThrow(/response did not confirm the reviewed pull request and branch tips; outcome_unknown/);
+    expect(uncertainPosts).toBe(1);
   });
 
   it("github.write fails closed before network request when token or repo allowlist is missing", async () => {
@@ -2698,6 +2800,7 @@ function fakeGitHubWrite(
       name: "blue-tanuki",
       full_name: "gatchimuchio/blue-tanuki",
       owner: { login: "gatchimuchio" },
+      default_branch: "main",
       private: false,
     }),
     truncated: false,
@@ -2791,6 +2894,52 @@ function fakeGitHubIssueCommentCreate(
   return fakeGitHubWrite(request, undefined, read_request);
 }
 
+const GITHUB_PR_HEAD_SHA = "a".repeat(40);
+const GITHUB_PR_BASE_SHA = "b".repeat(40);
+
+function fakeGitHubPullRequestCreate(
+  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
+    status: 201,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({
+      id: 987,
+      number: 42,
+      title: "Add the feature",
+      body: "Exact PR body",
+      state: "open",
+      draft: true,
+      maintainer_can_modify: false,
+      head: { ref: "feature/pr-creation", sha: GITHUB_PR_HEAD_SHA, repo: { id: 123 } },
+      base: { ref: "main", sha: GITHUB_PR_BASE_SHA, repo: { id: 123 } },
+    }),
+    truncated: false,
+    rate_limit_remaining: "60",
+    request_id: "PR-CREATE-REQ",
+  }),
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+    const branchPrefix = "/branches/";
+    const branchIndex = target.path.indexOf(branchPrefix);
+    if (branchIndex >= 0) {
+      const ref = target.path.slice(branchIndex + branchPrefix.length);
+      return githubReadJson({
+        name: ref,
+        commit: { sha: ref === "main" ? GITHUB_PR_BASE_SHA : GITHUB_PR_HEAD_SHA },
+      });
+    }
+    return githubReadJson({
+      id: 123,
+      name: "blue-tanuki",
+      full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" },
+      default_branch: "main",
+      private: false,
+    });
+  },
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
 async function reviewedGitHubIssueCommentCreate(args: Record<string, unknown>,
   options: GitHubWriteOptions = fakeGitHubIssueCommentCreate()): Promise<GitHubWriteOptions> {
   const command_digest = "c".repeat(64);
@@ -2807,6 +2956,17 @@ async function reviewedGitHubIssueUpdate(args: Record<string, unknown>,
   const command_digest = "c".repeat(64);
   const operation_plan_binding_digest = "d".repeat(64);
   const target = await inspectGitHubIssueUpdateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
+}
+
+async function reviewedGitHubPullRequestCreate(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubPullRequestCreate()): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubPullRequestCreateTargetVersion(args, {
     ...options, command_digest, operation_plan_binding_digest,
   });
   return { ...options, command_digest, operation_plan_binding_digest,

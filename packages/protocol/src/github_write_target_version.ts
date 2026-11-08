@@ -46,16 +46,29 @@ export const GitHubIssueCommentCreateTargetVersionObservationSchema = GitHubWrit
   issue_updated_at: z.string().datetime({ offset: true }),
 }).strict();
 
+/** Plan-bound, non-authority branch observations for a GitHub pull request create. */
+export const GitHubPullRequestCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("pr.create"),
+  head_ref: z.string().min(1).max(255),
+  head_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  base_ref: z.string().min(1).max(255),
+  base_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  draft: z.boolean(),
+  maintainer_can_modify: z.boolean().nullable(),
+}).strict();
+
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
+  GitHubPullRequestCreateTargetVersionObservationSchema,
 ]);
 
 export type GitHubWriteTargetVersionObservation = z.infer<typeof GitHubWriteTargetVersionObservationSchema>;
 export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIssueCreateTargetVersionObservationSchema>;
 export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIssueUpdateTargetVersionObservationSchema>;
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
+export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
   repository_id: number;
@@ -142,6 +155,44 @@ export function githubIssueCommentCreateRequestPayloadDigest(input: {
     input.repo,
     input.issue_number,
     input.body,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestCreateTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  head_ref: string;
+  base_ref: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-create-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.head_ref,
+    input.base_ref,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestCreateRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  title: string;
+  body?: string;
+  head_ref: string;
+  base_ref: string;
+  draft: boolean;
+  maintainer_can_modify?: boolean;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-create-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.title,
+    input.body ?? null,
+    input.head_ref,
+    input.base_ref,
+    input.draft,
+    input.maintainer_can_modify ?? null,
   ]), "utf8").digest("hex");
 }
 
