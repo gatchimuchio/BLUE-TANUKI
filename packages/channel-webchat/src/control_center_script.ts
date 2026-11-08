@@ -5941,12 +5941,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "github_pull_request_comment_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          const isInlineReview = review.comment_kind === "pull_request_review_inline";
+          const inlineLocationValid = isInlineReview
+            ? typeof review.path === "string" && review.path.length > 0 && review.path.length <= 4_096 &&
+              !/[\\u0000-\\u001f\\u007f]/.test(review.path) && !review.path.startsWith("/") && !review.path.includes("\\\\") &&
+              Number.isSafeInteger(review.line) && review.line > 0 && review.line <= 1_000_000 &&
+              (review.side === "LEFT" || review.side === "RIGHT") && isCommitSha(review.head_commit_sha) &&
+              isCommitSha(review.base_commit_sha) && isDigest(review.diff_digest) &&
+              typeof review.diff_excerpt === "string" && review.diff_excerpt.length > 0 && review.diff_excerpt.length <= 4_096
+            : review.comment_kind === "pull_request_timeline" && review.path === undefined && review.line === undefined &&
+              review.side === undefined && review.head_commit_sha === undefined && review.base_commit_sha === undefined &&
+              review.diff_digest === undefined && review.diff_excerpt === undefined;
           if (review.command_id !== commandId || review.operation !== "github.write.pr.comment.create" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               review.provider_observation_is_atomic !== false ||
               review.notification_effect !== "github_api_may_trigger_notifications" ||
               review.publication_effect !== "visible_to_repository_audience" ||
-              review.comment_kind !== "pull_request_timeline" || review.comment_removal_retracts_notifications !== false ||
+              !inlineLocationValid || review.comment_removal_retracts_notifications !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
               !isDigest(review.operation_plan_binding_digest) ||
@@ -5968,7 +5980,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "GitHub pull requestのタイムラインへコメント投稿（外部作用）";
+          heading.textContent = isInlineReview
+            ? "GitHub pull requestのdiff行へレビューコメント投稿（外部作用）"
+            : "GitHub pull requestのタイムラインへコメント投稿（外部作用）";
           view.appendChild(heading);
           [
             ["操作", review.operation],
@@ -5978,7 +5992,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["Pull request", "#" + String(review.pull_request_number) + "（ID " + String(review.pull_request_id) + "）"],
             ["現在の状態", review.pull_request_state + "・ロックなし"],
             ["観測時刻", review.pull_request_updated_at],
-            ["コメント位置", "PRタイムライン。diffの行に付けるレビューコメントではありません。"],
+            ["コメント位置", isInlineReview
+              ? review.path + ":" + String(review.line) + "（" + review.side + " side）"
+              : "PRタイムライン。diffの行に付けるレビューコメントではありません。"],
+            ...(isInlineReview ? [["PR head commit", review.head_commit_sha], ["PR base commit", review.base_commit_sha]] : []),
             ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
             ["削除の限界", "後からコメントを削除しても、送信済み通知や閲覧済みの内容は取り消せません。"],
           ].forEach(function (field) {
@@ -5995,6 +6012,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const title = document.createElement("pre");
           title.textContent = review.pull_request_title;
           view.append(titleHeading, title);
+          if (isInlineReview) {
+            const diffHeading = document.createElement("strong");
+            diffHeading.textContent = "選択した行と近傍のPR差分（GitHub由来・未信頼）";
+            const diffExcerpt = document.createElement("pre");
+            diffExcerpt.textContent = review.diff_excerpt;
+            view.append(diffHeading, diffExcerpt);
+          }
           const bodyHeading = document.createElement("strong");
           bodyHeading.textContent = "投稿するコメント本文";
           const body = document.createElement("pre");
@@ -6006,11 +6030,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
-            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest +
+            (isInlineReview ? " | diff digest: " + review.diff_digest : "");
           view.appendChild(digests);
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
-          button.textContent = "GitHub pull requestのタイムラインとコメント本文を再確認";
+          button.textContent = isInlineReview
+            ? "GitHub pull requestの対象diff行とコメント本文を再確認"
+            : "GitHub pull requestのタイムラインとコメント本文を再確認";
           return;
         }
         if (review.kind === "github_pull_request_create") {

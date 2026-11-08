@@ -738,7 +738,14 @@ export interface WebChatGitHubPullRequestCommentCreateContentReview {
   pull_request_locked: boolean;
   pull_request_updated_at: string;
   pull_request_title: string;
-  comment_kind: "pull_request_timeline";
+  comment_kind: "pull_request_timeline" | "pull_request_review_inline";
+  path?: string;
+  line?: number;
+  side?: "LEFT" | "RIGHT";
+  head_commit_sha?: string;
+  base_commit_sha?: string;
+  diff_digest?: string;
+  diff_excerpt?: string;
   body: string;
   request_payload_digest: string;
   target_version_digest: string;

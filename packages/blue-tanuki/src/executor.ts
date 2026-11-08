@@ -292,13 +292,21 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
       !/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo) ||
       owner === "." || owner === ".." || repo === "." || repo === ".." || operation !== target.operation) return false;
   const number = args.number;
+  const validCommentNumber = Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000;
+  const issueComment = operation === "issue.comment.create" && target.operation === "issue.comment.create" &&
+    args.comment_kind === undefined;
+  const inlinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
+    args.comment_kind === "pull_request_review_inline" && target.comment_kind === "pull_request_review_inline";
+  const timelinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
+    (args.comment_kind === undefined || args.comment_kind === "pull_request_timeline") && target.comment_kind === undefined;
   const route = operation === "issue.create"
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues` }
     : operation === "issue.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}` }
-      : (operation === "issue.comment.create" || operation === "pr.comment.create") &&
-          Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+      : (issueComment || timelinePullRequestComment) && validCommentNumber
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments` }
+        : inlinePullRequestComment && validCommentNumber
+          ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments` }
         : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls` } : undefined;
   const expectedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
     "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
@@ -333,13 +341,21 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
       !/^[A-Za-z0-9_.-]{1,100}$/.test(owner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo) ||
       owner === "." || owner === ".." || repo === "." || repo === ".." || operation !== target.operation) return false;
   const number = args.number;
+  const validCommentNumber = Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000;
+  const issueComment = operation === "issue.comment.create" && target.operation === "issue.comment.create" &&
+    args.comment_kind === undefined;
+  const inlinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
+    args.comment_kind === "pull_request_review_inline" && target.comment_kind === "pull_request_review_inline";
+  const timelinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
+    (args.comment_kind === undefined || args.comment_kind === "pull_request_timeline") && target.comment_kind === undefined;
   const route = operation === "issue.create"
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
     : operation === "issue.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
-      : (operation === "issue.comment.create" || operation === "pr.comment.create") &&
-          Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+      : (issueComment || timelinePullRequestComment) && validCommentNumber
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
+        : inlinePullRequestComment && validCommentNumber
+          ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments`, status: 201 }
         : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 } : undefined;
   const acceptedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
     "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
@@ -1073,6 +1089,22 @@ export class Executor {
         const pullRequestCommentObservation = observation.operation === "pr.comment.create" ? observation : undefined;
         const requestedNumber = typeof args.number === "number" ? args.number : Number(args.number);
         const requestedBody = typeof args.body === "string" ? args.body : "";
+        const inlineReviewMatches = pullRequestCommentObservation
+          ? pullRequestCommentObservation.comment_kind === "pull_request_review_inline"
+            ? githubReview.comment_kind === "pull_request_review_inline" &&
+              githubReview.path === pullRequestCommentObservation.path && githubReview.path === args.path &&
+              githubReview.line === pullRequestCommentObservation.line && githubReview.line === args.line &&
+              githubReview.side === pullRequestCommentObservation.side && githubReview.side === args.side &&
+              githubReview.head_commit_sha === pullRequestCommentObservation.pull_request_head_sha &&
+              githubReview.base_commit_sha === pullRequestCommentObservation.pull_request_base_sha &&
+              githubReview.diff_digest === pullRequestCommentObservation.pull_request_diff_digest &&
+              typeof githubReview.diff_excerpt === "string" && githubReview.diff_excerpt.length > 0 &&
+              githubReview.diff_excerpt.length <= 4_096 && /^[a-f0-9]{64}$/.test(githubReview.diff_digest ?? "")
+            : githubReview.comment_kind === "pull_request_timeline" && githubReview.path === undefined &&
+              githubReview.line === undefined && githubReview.side === undefined &&
+              githubReview.head_commit_sha === undefined && githubReview.base_commit_sha === undefined &&
+              githubReview.diff_digest === undefined && githubReview.diff_excerpt === undefined
+          : false;
         if (!pullRequestCommentObservation || command.payload.arguments.operation !== "pr.comment.create" ||
             githubReview.operation !== "github.write.pr.comment.create" || commonMismatch ||
             githubReview.pull_request_id !== pullRequestCommentObservation.pull_request_id ||
@@ -1083,7 +1115,7 @@ export class Executor {
             githubReview.pull_request_locked ||
             githubReview.pull_request_updated_at !== pullRequestCommentObservation.pull_request_updated_at ||
             typeof githubReview.pull_request_title !== "string" || githubReview.pull_request_title.length === 0 ||
-            githubReview.pull_request_title.length > 65_536 || githubReview.comment_kind !== "pull_request_timeline" ||
+            githubReview.pull_request_title.length > 65_536 || !inlineReviewMatches ||
             githubReview.comment_removal_retracts_notifications !== false ||
             githubReview.publication_effect !== "visible_to_repository_audience" || githubReview.body !== requestedBody) {
           throw new Error("github.write pr.comment.create content review returned evidence for another command, target, or plan source");

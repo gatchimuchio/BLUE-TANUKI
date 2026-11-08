@@ -637,6 +637,16 @@ function requireGitHubJsonRecord(response: GitHubReadResponse, label: string): R
   return value;
 }
 
+function requireGitHubJsonArray(response: GitHubReadResponse, label: string): unknown[] {
+  if (response.status !== 200 || !response.ok || response.truncated ||
+      !response.content_type?.toLowerCase().includes("json")) {
+    throw new Error(`github.read ${label} is incomplete; target_version=unavailable`);
+  }
+  const value = parseJsonOrText(response.body);
+  if (!Array.isArray(value)) throw new Error(`github.read ${label} is invalid; target_version=unavailable`);
+  return value;
+}
+
 async function readGitHubBaseIdentity(
   args: Record<string, unknown>,
   request: NonNullable<GitHubReadOptions["request"]>,
@@ -742,7 +752,32 @@ function githubOptionalBody(args: Record<string, unknown>): string | undefined {
   return stringArg(args, "body", false);
 }
 
-function githubWriteRoute(args: Record<string, unknown>): {
+type GitHubPullRequestInlineCommentLocation = { path: string; line: number; side: "LEFT" | "RIGHT" };
+
+function githubPullRequestInlineCommentLocation(args: Record<string, unknown>): GitHubPullRequestInlineCommentLocation | undefined {
+  const kind = args.comment_kind;
+  const hasLocation = args.path !== undefined || args.line !== undefined || args.side !== undefined;
+  if (kind !== undefined && kind !== "pull_request_timeline" && kind !== "pull_request_review_inline") {
+    throw new Error("comment_kind must be pull_request_timeline or pull_request_review_inline");
+  }
+  if (kind !== "pull_request_review_inline") {
+    if (hasLocation) throw new Error("inline review path, line, and side require comment_kind=pull_request_review_inline");
+    return undefined;
+  }
+  const path = args.path;
+  const line = args.line;
+  const side = args.side;
+  if (typeof path !== "string" || path.length === 0 || path.length > 4_096 ||
+      /[\u0000-\u001f\u007f]/.test(path) || path.startsWith("/") || path.includes("\\") ||
+      path.split("/").some((part) => part.length === 0 || part === "." || part === "..") ||
+      typeof line !== "number" || !Number.isSafeInteger(line) || line < 1 || line > 1_000_000 ||
+      (side !== "LEFT" && side !== "RIGHT")) {
+    throw new Error("inline review comment requires a safe relative path, positive line, and LEFT or RIGHT side");
+  }
+  return { path, line, side };
+}
+
+function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: string): {
   operation: string;
   method: GitHubWriteMethod;
   path: string;
@@ -775,6 +810,25 @@ function githubWriteRoute(args: Record<string, unknown>): {
     const number = requiredPositiveIntArg(args, "number", 1_000_000);
     const commentBody = stringArg(args, "body")!;
     if (commentBody.length > 500_000) throw new Error("body exceeds the 500000-character application limit");
+    if (operation === "pr.comment.create") {
+      const location = githubPullRequestInlineCommentLocation(args);
+      if (location) {
+        if (inlineCommitSha !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(inlineCommitSha)) {
+          throw new Error("inline review comment requires the observed pull request head commit SHA");
+        }
+        return {
+          operation,
+          method: "POST",
+          path: `/repos/${ownerPath}/${repoPath}/pulls/${number}/comments`,
+          body: { body: commentBody, path: location.path, line: location.line, side: location.side,
+            ...(inlineCommitSha ? { commit_id: inlineCommitSha } : {}) },
+          repo,
+        };
+      }
+      if (args.comment_kind !== undefined && args.comment_kind !== "pull_request_timeline") {
+        throw new Error("unsupported pull request comment kind");
+      }
+    }
     return {
       operation,
       method: "POST",
@@ -2078,16 +2132,214 @@ function githubPullRequestIssueUrlMatches(value: unknown, owner: string, repo: s
   return githubApiResourceUrlMatches(value, owner, repo, "pulls", number);
 }
 
+type GitHubPullRequestDiffSnapshot = {
+  id: number;
+  number: number;
+  state: "open" | "closed";
+  head_sha: string;
+  base_sha: string;
+};
+
+type GitHubInlineDiffLine = {
+  hunk_index: number;
+  hunk_header: string;
+  old_line: number | null;
+  new_line: number | null;
+  marker: " " | "+" | "-";
+  text: string;
+};
+
+const GITHUB_INLINE_DIFF_MAX_PAGES = 3;
+const GITHUB_INLINE_DIFF_PAGE_SIZE = 100;
+const GITHUB_INLINE_DIFF_MAX_PATCH_CHARS = 256_000;
+const GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS = 4_096;
+
+function readGitHubPullRequestDiffSnapshot(
+  response: GitHubReadResponse,
+  label: string,
+  expected: { id: number; number: number; state: "open" | "closed" },
+): GitHubPullRequestDiffSnapshot {
+  const pullRequest = requireGitHubJsonRecord(response, label);
+  const head = isRecord(pullRequest.head) ? pullRequest.head : null;
+  const base = isRecord(pullRequest.base) ? pullRequest.base : null;
+  const headSha = head && typeof head.sha === "string" ? head.sha.toLowerCase() : "";
+  const baseSha = base && typeof base.sha === "string" ? base.sha.toLowerCase() : "";
+  if (pullRequest.id !== expected.id || pullRequest.number !== expected.number || pullRequest.state !== expected.state ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(headSha) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha)) {
+    throw new Error(`github.read ${label} did not preserve the requested pull request and commit identities`);
+  }
+  return { id: expected.id, number: expected.number, state: expected.state, head_sha: headSha, base_sha: baseSha };
+}
+
+function parseGitHubInlineDiff(patch: string, location: GitHubPullRequestInlineCommentLocation): { excerpt: string } {
+  if (patch.length === 0 || patch.length > GITHUB_INLINE_DIFF_MAX_PATCH_CHARS) {
+    throw new Error("github.read selected pull request patch is missing or exceeds the inline review limit");
+  }
+  const sourceLines = patch.replace(/\r\n/g, "\n").split("\n");
+  const parsed: GitHubInlineDiffLine[] = [];
+  let hunk: { index: number; header: string; old_line: number; new_line: number; old_expected: number; new_expected: number;
+    old_seen: number; new_seen: number } | undefined;
+  let nextHunkIndex = 0;
+  const finishHunk = (): void => {
+    if (hunk && (hunk.old_seen !== hunk.old_expected || hunk.new_seen !== hunk.new_expected)) {
+      throw new Error("github.read selected pull request patch has inconsistent hunk bounds");
+    }
+  };
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const sourceLine = sourceLines[index]!;
+    if (sourceLine.length === 0 && index === sourceLines.length - 1) continue;
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)$/.exec(sourceLine);
+    if (header) {
+      finishHunk();
+      hunk = {
+        index: nextHunkIndex++,
+        header: sourceLine,
+        old_line: Number(header[1]),
+        new_line: Number(header[3]),
+        old_expected: header[2] === undefined ? 1 : Number(header[2]),
+        new_expected: header[4] === undefined ? 1 : Number(header[4]),
+        old_seen: 0,
+        new_seen: 0,
+      };
+      if (![hunk.old_line, hunk.new_line, hunk.old_expected, hunk.new_expected].every(Number.isSafeInteger)) {
+        throw new Error("github.read selected pull request patch contains invalid hunk bounds");
+      }
+      continue;
+    }
+    if (sourceLine === "\\ No newline at end of file") continue;
+    if (!hunk) throw new Error("github.read selected pull request patch is not a unified diff");
+    const marker = sourceLine[0];
+    if (marker !== " " && marker !== "+" && marker !== "-") {
+      throw new Error("github.read selected pull request patch contains an unsupported diff line");
+    }
+    const oldLine = marker === "+" ? null : hunk.old_line;
+    const newLine = marker === "-" ? null : hunk.new_line;
+    parsed.push({ hunk_index: hunk.index, hunk_header: hunk.header, old_line: oldLine, new_line: newLine,
+      marker, text: sourceLine.slice(1) });
+    if (marker !== "+") {
+      hunk.old_line += 1;
+      hunk.old_seen += 1;
+    }
+    if (marker !== "-") {
+      hunk.new_line += 1;
+      hunk.new_seen += 1;
+    }
+    if (hunk.old_seen > hunk.old_expected || hunk.new_seen > hunk.new_expected) {
+      throw new Error("github.read selected pull request patch exceeds its hunk bounds");
+    }
+  }
+  finishHunk();
+
+  const matches = parsed.map((line, index) => ({ line, index })).filter(({ line }) =>
+    location.side === "LEFT"
+      ? line.old_line === location.line && line.marker !== "+"
+      : line.new_line === location.line && line.marker !== "-");
+  if (matches.length !== 1) {
+    throw new Error("requested inline review location is not a unique line in the current pull request diff");
+  }
+  const selected = matches[0]!;
+  const nearby = parsed.map((line, index) => ({ line, index }))
+    .filter(({ line, index }) => line.hunk_index === selected.line.hunk_index && Math.abs(index - selected.index) <= 2);
+  const excerptLines = [selected.line.hunk_header];
+  for (const entry of nearby) {
+    const oldText = entry.line.old_line === null ? "-" : String(entry.line.old_line);
+    const newText = entry.line.new_line === null ? "-" : String(entry.line.new_line);
+    const safeText = entry.line.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "�");
+    const boundedText = safeText.length > 600 ? `${safeText.slice(0, 597)}...` : safeText;
+    excerptLines.push(`${entry.index === selected.index ? ">" : " "} ${oldText} | ${newText} | ${entry.line.marker}${boundedText}`);
+  }
+  const excerpt = excerptLines.join("\n");
+  return { excerpt: excerpt.length > GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS
+    ? `${excerpt.slice(0, GITHUB_INLINE_DIFF_MAX_EXCERPT_CHARS - 3)}...` : excerpt };
+}
+
+async function inspectGitHubPullRequestInlineDiff(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  id: number;
+  state: "open" | "closed";
+  location: GitHubPullRequestInlineCommentLocation;
+  maxBytes: number;
+  token: string;
+  signal?: AbortSignal;
+  readRequest: NonNullable<GitHubWriteOptions["read_request"]>;
+}): Promise<{ snapshot: GitHubPullRequestDiffSnapshot; diff_digest: string; excerpt: string }> {
+  const pathPrefix = `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls/${input.number}`;
+  assertToolExecutionNotCancelled(input.signal, "github.write pr.comment.create diff inspection");
+  const beforeResponse = await input.readRequest({ path: pathPrefix, maxBytes: input.maxBytes, token: input.token }, input.signal);
+  const before = readGitHubPullRequestDiffSnapshot(beforeResponse, "pull request before diff read", input);
+  let selectedFile: Record<string, unknown> | undefined;
+  for (let page = 1; page <= GITHUB_INLINE_DIFF_MAX_PAGES; page += 1) {
+    assertToolExecutionNotCancelled(input.signal, "github.write pr.comment.create diff inspection");
+    const response = await input.readRequest({
+      path: `${pathPrefix}/files?per_page=${GITHUB_INLINE_DIFF_PAGE_SIZE}&page=${page}`,
+      maxBytes: input.maxBytes,
+      token: input.token,
+    }, input.signal);
+    const files = requireGitHubJsonArray(response, "pull request files");
+    if (files.length > GITHUB_INLINE_DIFF_PAGE_SIZE) {
+      throw new Error("github.read pull request files exceeded the requested page size");
+    }
+    for (const fileValue of files) {
+      if (!isRecord(fileValue) || typeof fileValue.filename !== "string") {
+        throw new Error("github.read pull request files contained an invalid file identity");
+      }
+      if (fileValue.filename === input.location.path) {
+        if (selectedFile) throw new Error("github.read pull request diff contains an ambiguous target path");
+        selectedFile = fileValue;
+      }
+    }
+    if (selectedFile) break;
+    if (files.length < GITHUB_INLINE_DIFF_PAGE_SIZE) break;
+    if (page === GITHUB_INLINE_DIFF_MAX_PAGES) {
+      throw new Error("requested path is outside the bounded 300-file pull request diff inspection window");
+    }
+  }
+  if (!selectedFile) throw new Error("requested path is not changed in the current pull request diff");
+  if ((selectedFile.status !== "added" && selectedFile.status !== "modified" && selectedFile.status !== "removed") ||
+      (selectedFile.previous_filename !== undefined && selectedFile.previous_filename !== input.location.path) ||
+      typeof selectedFile.patch !== "string") {
+    throw new Error("requested pull request file is renamed, binary, truncated, or unsupported for inline review");
+  }
+  const patch = selectedFile.patch;
+  const { excerpt } = parseGitHubInlineDiff(patch, input.location);
+  assertToolExecutionNotCancelled(input.signal, "github.write pr.comment.create diff recheck");
+  const afterResponse = await input.readRequest({ path: pathPrefix, maxBytes: input.maxBytes, token: input.token }, input.signal);
+  const after = readGitHubPullRequestDiffSnapshot(afterResponse, "pull request after diff read", input);
+  if (before.head_sha !== after.head_sha || before.base_sha !== after.base_sha || before.state !== after.state) {
+    throw new Error("pull request head or base changed during inline diff inspection; target_version=stale");
+  }
+  return {
+    snapshot: before,
+    excerpt,
+    diff_digest: sha256Hex({
+      schema_version: "blue-tanuki.github-pull-request-inline-diff.v1",
+      path: input.location.path,
+      line: input.location.line,
+      side: input.location.side,
+      head_sha: before.head_sha,
+      base_sha: before.base_sha,
+      file_status: selectedFile.status,
+      patch,
+    }),
+  };
+}
+
 async function inspectGitHubCommentCreateTargetDetails(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
   operation: GitHubCommentCreateOperation,
-): Promise<{ observation: GitHubCommentCreateTargetObservation; issue_title: string }> {
+): Promise<{ observation: GitHubCommentCreateTargetObservation; issue_title: string;
+  inline_diff?: { head_sha: string; base_sha: string; diff_digest: string; excerpt: string } }> {
   const route = githubWriteRoute(args);
   if (route.operation !== operation) {
     throw new Error(`github.write ${route.operation} comment target observation does not match ${operation}; status=BUILD_GAP`);
   }
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes"].includes(key))) {
+  const allowedArgumentKeys = operation === "pr.comment.create"
+    ? ["operation", "owner", "repo", "number", "body", "max_bytes", "comment_kind", "path", "line", "side"]
+    : ["operation", "owner", "repo", "number", "body", "max_bytes"];
+  if (Object.keys(args).some((key) => !allowedArgumentKeys.includes(key))) {
     throw new Error(`github.write ${operation} contains unsupported arguments; mutation_sent=false`);
   }
   const commandDigest = opts.command_digest;
@@ -2151,6 +2403,36 @@ async function inspectGitHubCommentCreateTargetDetails(
   if (locked) {
     throw new Error(`github.write ${operation} target is locked; mutation_sent=false; status=BLOCKED_AUTHORITY`);
   }
+  let inlineDiff: { snapshot: GitHubPullRequestDiffSnapshot; diff_digest: string; excerpt: string } | undefined;
+  const inlineLocation = operation === "pr.comment.create" ? githubPullRequestInlineCommentLocation(args) : undefined;
+  if (inlineLocation) {
+    inlineDiff = await inspectGitHubPullRequestInlineDiff({
+      owner,
+      repo,
+      number: issueNumber,
+      id: issueId,
+      state,
+      location: inlineLocation,
+      maxBytes,
+      token,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      readRequest,
+    });
+    assertToolExecutionNotCancelled(opts.signal, "github.write pr.comment.create issue target recheck");
+    const issueConfirmationResponse = await readRequest({
+      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
+      maxBytes,
+      token,
+    }, opts.signal);
+    const issueConfirmation = requireGitHubJsonRecord(issueConfirmationResponse, "inline comment target confirmation");
+    if (issueConfirmation.id !== issueId || issueConfirmation.number !== issueNumber ||
+        issueConfirmation.state !== state || issueConfirmation.locked !== locked ||
+        issueConfirmation.updated_at !== updatedAt || issueConfirmation.title !== title ||
+        !isRecord(issueConfirmation.pull_request) ||
+        !githubPullRequestIssueUrlMatches(issueConfirmation.pull_request.url, owner, repo, issueNumber)) {
+      throw new Error("pull request target changed during inline diff inspection; target_version=stale");
+    }
+  }
   const sharedObservation = {
     schema_version: "blue-tanuki.github-write-target-version.v1",
     operation,
@@ -2189,15 +2471,30 @@ async function inspectGitHubCommentCreateTargetDetails(
       pull_request_state: state,
       pull_request_locked: locked,
       pull_request_updated_at: updatedAt,
+      ...(inlineDiff && inlineLocation ? {
+        comment_kind: "pull_request_review_inline",
+        path: inlineLocation.path,
+        line: inlineLocation.line,
+        side: inlineLocation.side,
+        pull_request_head_sha: inlineDiff.snapshot.head_sha,
+        pull_request_base_sha: inlineDiff.snapshot.base_sha,
+        pull_request_diff_digest: inlineDiff.diff_digest,
+      } : {}),
       target_identity_digest: githubPullRequestCommentCreateTargetIdentityDigest({
         repository_id: repositoryId, canonical_full_name: fullName,
         pull_request_id: issueId, pull_request_number: observedNumber,
       }),
       request_payload_digest: githubPullRequestCommentCreateRequestPayloadDigest({
         owner, repo, pull_request_number: issueNumber, body: stringArg(args, "body")!,
+        ...(inlineLocation ? inlineLocation : {}),
       }),
     });
-  return { observation, issue_title: title };
+  return {
+    observation,
+    issue_title: title,
+    ...(inlineDiff ? { inline_diff: { head_sha: inlineDiff.snapshot.head_sha, base_sha: inlineDiff.snapshot.base_sha,
+      diff_digest: inlineDiff.diff_digest, excerpt: inlineDiff.excerpt } } : {}),
+  };
 }
 
 export async function inspectGitHubIssueCommentCreateTargetVersion(
@@ -2262,8 +2559,10 @@ export function assertGitHubPullRequestCommentCreateTargetVersion(args: Record<s
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
   const pullRequestNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const inlineLocation = githubPullRequestInlineCommentLocation(args);
   const payloadDigest = githubPullRequestCommentCreateRequestPayloadDigest({
     owner, repo, pull_request_number: pullRequestNumber, body: stringArg(args, "body")!,
+    ...(inlineLocation ? inlineLocation : {}),
   });
   const targetDigest = githubPullRequestCommentCreateTargetIdentityDigest({
     repository_id: observation.repository_id,
@@ -2271,12 +2570,17 @@ export function assertGitHubPullRequestCommentCreateTargetVersion(args: Record<s
     pull_request_id: observation.pull_request_id,
     pull_request_number: observation.pull_request_number,
   });
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes"].includes(key)) ||
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "body", "max_bytes", "comment_kind",
+      "path", "line", "side"].includes(key)) ||
       route.operation !== "pr.comment.create" ||
       observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
       observation.canonical_full_name.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
       observation.pull_request_number !== pullRequestNumber || observation.pull_request_locked ||
+      (inlineLocation === undefined) !== (observation.comment_kind === undefined) ||
+      (inlineLocation !== undefined && (observation.comment_kind !== "pull_request_review_inline" ||
+        observation.path !== inlineLocation.path || observation.line !== inlineLocation.line ||
+        observation.side !== inlineLocation.side)) ||
       observation.command_digest !== commandDigest ||
       observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
       observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
@@ -2321,7 +2625,7 @@ export async function inspectGitHubIssueCommentCreateContentReview(args: Record<
 
 export async function inspectGitHubPullRequestCommentCreateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
   : Promise<GitHubPullRequestCommentCreateContentReview> {
-  const { observation, issue_title: pullRequestTitle } =
+  const { observation, issue_title: pullRequestTitle, inline_diff: inlineDiff } =
     await inspectGitHubCommentCreateTargetDetails(args, opts, "pr.comment.create");
   if (observation.operation !== "pr.comment.create") throw new Error("GitHub pull request comment review target mismatch");
   const base = {
@@ -2338,7 +2642,16 @@ export async function inspectGitHubPullRequestCommentCreateContentReview(args: R
     pull_request_locked: observation.pull_request_locked,
     pull_request_updated_at: observation.pull_request_updated_at,
     pull_request_title: pullRequestTitle,
-    comment_kind: "pull_request_timeline" as const,
+    comment_kind: inlineDiff ? "pull_request_review_inline" as const : "pull_request_timeline" as const,
+    ...(inlineDiff ? {
+      path: observation.operation === "pr.comment.create" ? observation.path : undefined,
+      line: observation.operation === "pr.comment.create" ? observation.line : undefined,
+      side: observation.operation === "pr.comment.create" ? observation.side : undefined,
+      head_commit_sha: inlineDiff.head_sha,
+      base_commit_sha: inlineDiff.base_sha,
+      diff_digest: inlineDiff.diff_digest,
+      diff_excerpt: inlineDiff.excerpt,
+    } : {}),
     body: stringArg(args, "body")!,
     request_payload_digest: observation.request_payload_digest,
     target_version_digest: createHash("sha256").update(
@@ -2406,11 +2719,16 @@ async function invokeGitHubCommentCreate(
   if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
     throw new Error(`github.write ${operation} target changed after review; mutation_sent=false; outcome=stale`);
   }
+  const inlineReviewObservation = operation === "pr.comment.create" && expected.operation === "pr.comment.create" &&
+    expected.comment_kind === "pull_request_review_inline" ? expected : undefined;
+  const actionRoute = inlineReviewObservation
+    ? githubWriteRoute(args, inlineReviewObservation.pull_request_head_sha!)
+    : route;
   const request = opts.request ?? defaultGitHubWriteRequest;
   assertToolExecutionNotCancelled(opts.signal, `github.write ${operation}`);
   let response: GitHubWriteResponse;
   try {
-    response = await request({ method: route.method, path: route.path, body: route.body, maxBytes, token }, opts.signal);
+    response = await request({ method: actionRoute.method, path: actionRoute.path, body: actionRoute.body, maxBytes, token }, opts.signal);
   } catch (error) {
     const message = error instanceof Error ? error.message : "provider_request_failed";
     throw new Error(`github.write ${operation} outcome_unknown; do not retry automatically; check GitHub before a new Owner decision` +
@@ -2425,14 +2743,14 @@ async function invokeGitHubCommentCreate(
         schema_version: "blue-tanuki.github-write-result.v1",
         operation,
         api_host: "api.github.com",
-        repo: route.repo,
+        repo: actionRoute.repo,
         repository_id: expected.repository_id,
         target_identity_digest: expected.target_identity_digest,
         request_payload_digest: expected.request_payload_digest,
         command_digest: expected.command_digest,
         operation_plan_binding_digest: expected.operation_plan_binding_digest,
-        method: route.method,
-        path: route.path,
+        method: actionRoute.method,
+        path: actionRoute.path,
         status: response.status,
         mutation_status: "provider_rejected",
         result_digest: sha256Hex(data),
@@ -2448,9 +2766,15 @@ async function invokeGitHubCommentCreate(
       (operation === "issue.comment.create" && message ? "; message=" + message : ""));
   }
   const comment = isRecord(data) ? data : null;
+  const inlineResponseMatches = inlineReviewObservation
+    ? !!comment && comment.path === inlineReviewObservation.path && comment.line === inlineReviewObservation.line &&
+      comment.side === inlineReviewObservation.side && comment.commit_id === inlineReviewObservation.pull_request_head_sha &&
+      githubPullRequestIssueUrlMatches(comment.pull_request_url, githubNameArg(args, "owner"),
+        githubNameArg(args, "repo"), requiredPositiveIntArg(args, "number", 1_000_000))
+    : true;
   if (!comment || typeof comment.id !== "number" || !Number.isSafeInteger(comment.id) || comment.id <= 0 ||
-      comment.body !== route.body.body ||
-      (operation === "pr.comment.create" && !githubApiResourceUrlMatches(comment.issue_url,
+      comment.body !== actionRoute.body.body || !inlineResponseMatches ||
+      (operation === "pr.comment.create" && !inlineReviewObservation && !githubApiResourceUrlMatches(comment.issue_url,
         githubNameArg(args, "owner"), githubNameArg(args, "repo"), "issues", requiredPositiveIntArg(args, "number", 1_000_000)))) {
     throw new Error(`github.write ${operation} response did not confirm the exact comment and target; outcome_unknown; do not retry automatically`);
   }
@@ -2458,14 +2782,14 @@ async function invokeGitHubCommentCreate(
     schema_version: "blue-tanuki.github-write-result.v1",
     operation,
     api_host: "api.github.com",
-    repo: route.repo,
+    repo: actionRoute.repo,
     repository_id: expected.repository_id,
     target_identity_digest: expected.target_identity_digest,
     request_payload_digest: expected.request_payload_digest,
     command_digest: expected.command_digest,
     operation_plan_binding_digest: expected.operation_plan_binding_digest,
-    method: route.method,
-    path: route.path,
+    method: actionRoute.method,
+    path: actionRoute.path,
     status: response.status,
     mutation_status: "provider_accepted",
     content_type: response.content_type,
@@ -3874,7 +4198,7 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests and regular pull request timeline comments, or update the reviewed title/body of an existing issue after target recheck and no-store L3 review. Cross-repository pull requests and inline pull request review comments remain BUILD_GAP.",
+  description: "Create plan-bound GitHub issues, issue comments, same-repository pull requests, regular pull request timeline comments, and single-line pull request diff review comments after target recheck and no-store L3 review. Inline comments require a changed path, line, LEFT/RIGHT side, and current head commit; multiline inline comments and cross-repository pull requests remain BUILD_GAP. Update only the reviewed title/body of an existing issue.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "pr.create") {

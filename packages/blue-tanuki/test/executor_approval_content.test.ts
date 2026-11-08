@@ -135,6 +135,72 @@ describe("承認内容からExecutorへの固定", () => {
     }
   });
 
+  it("GitHub pr.comment.createの差分行reviewを観測コミットとno-store reviewへ結ぶ", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "合成差分コメント",
+      path: "src/a.ts", line: 10, side: "RIGHT" as const };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-pr-inline-comment",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "選択PRの合成差分行をレビューする", model_abstraction: "fixture",
+        commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "f".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const patch = "@@ -9,2 +9,2 @@\n context line\n-old source text\n+new source text";
+    const read_request = async (target: { path: string }) => {
+      const body = target.path.endsWith("/issues/7")
+        ? { id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+          title: "対象PR", body: "非表示のPR本文",
+          pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" } }
+        : target.path.endsWith("/pulls/7/files?per_page=100&page=1")
+          ? [{ filename: "src/a.ts", status: "modified", patch }]
+          : target.path.endsWith("/pulls/7")
+            ? { id: 456, number: 7, state: "open", head: { sha: "c".repeat(40) }, base: { sha: "d".repeat(40) } }
+            : { id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+              owner: { login: "gatchimuchio" }, private: false };
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify(body),
+        truncated: false, rate_limit_remaining: "60" };
+    };
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubPullRequestCommentCreateTargetVersion(args, options);
+    const expectedReview = await inspectGitHubPullRequestCommentCreateContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({
+        kind: "github_pull_request_comment_create",
+        command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        pull_request_number: 7,
+        pull_request_title: "対象PR",
+        comment_kind: "pull_request_review_inline",
+        path: "src/a.ts",
+        line: 10,
+        side: "RIGHT",
+        head_commit_sha: "c".repeat(40),
+        base_commit_sha: "d".repeat(40),
+        diff_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        diff_excerpt: expect.stringContaining("new source text"),
+        body: "合成差分コメント",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("GitHub pr.createのhead/base branch evidenceとno-store reviewをExecutorで同じPlanへ結ぶ", async () => {
     const args = { operation: "pr.create", owner: "gatchimuchio", repo: "blue-tanuki",
       title: "合成PR", body: "合成本文", head: "feature/pr", base: "main", draft: true, maintainer_can_modify: false };

@@ -1789,6 +1789,102 @@ describe("built-in tools", () => {
     expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("github.write pr.comment.create reviews a single exact diff line and binds both PR commits", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Reviewed diff line",
+      path: "src/a.ts", line: 10, side: "RIGHT" };
+    const review = await inspectGitHubPullRequestCommentCreateContentReview(args, {
+      ...fakeGitHubPullRequestCommentCreate(), command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+    });
+
+    expect(review).toMatchObject({
+      kind: "github_pull_request_comment_create",
+      comment_kind: "pull_request_review_inline",
+      path: "src/a.ts",
+      line: 10,
+      side: "RIGHT",
+      head_commit_sha: "c".repeat(40),
+      base_commit_sha: "d".repeat(40),
+      diff_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      diff_excerpt: expect.stringContaining("> - | 10 | +new line"),
+      body: args.body,
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(review)).not.toContain("secret");
+  });
+
+  it("github.write pr.comment.create sends an inline comment once at the reviewed head and exact location", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "One inline review comment",
+      path: "src/a.ts", line: 10, side: "RIGHT" };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const options = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async (target) => {
+      seen.push({ method: target.method, path: target.path, body: target.body });
+      return {
+        status: 201,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ id: 791, body: args.body, path: args.path, line: args.line, side: args.side,
+          commit_id: "c".repeat(40), pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }),
+        truncated: false,
+        rate_limit_remaining: "58",
+        request_id: "PR-INLINE-COMMENT123",
+      };
+    }));
+
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(seen).toEqual([{ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls/7/comments",
+      body: { body: args.body, path: args.path, line: args.line, side: args.side, commit_id: "c".repeat(40) } }]);
+    expect(result).toMatchObject({ operation: "pr.comment.create", status: 201, mutation_status: "provider_accepted",
+      method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls/7/comments", result: { id: 791 },
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(result)).not.toContain(args.body);
+    expect(JSON.stringify(result)).not.toContain("pull_request_url");
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write pr.comment.create rejects an inline line missing from the current diff before POST", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Invalid line",
+      path: "src/a.ts", line: 99, side: "RIGHT" };
+    let writes = 0;
+    await expect(reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("invalid diff line must not be posted");
+    }))).rejects.toThrow(/not a unique line in the current pull request diff/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write pr.comment.create refuses to POST when the reviewed diff changes", async () => {
+    const args = { operation: "pr.comment.create", comment_kind: "pull_request_review_inline",
+      owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "Do not post on changed diff",
+      path: "src/a.ts", line: 10, side: "RIGHT" };
+    let diffReads = 0;
+    let writes = 0;
+    const defaultRead = fakeGitHubPullRequestCommentCreate().read_request!;
+    const options = await reviewedGitHubPullRequestCommentCreate(args, fakeGitHubPullRequestCommentCreate(async () => {
+      writes += 1;
+      throw new Error("changed reviewed diff must not receive a comment");
+    }, async (target, signal) => {
+      if (target.path.includes("/pulls/7/files?")) {
+        diffReads += 1;
+        const patch = diffReads === 1
+          ? "@@ -9,2 +9,3 @@\n context line\n-old line\n+new line\n+extra line"
+          : "@@ -9,2 +9,3 @@\n context line\n-old line\n+changed source line\n+extra line";
+        return githubReadJson([{ filename: "src/a.ts", status: "modified", patch }]);
+      }
+      return defaultRead(target, signal);
+    }));
+
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(diffReads).toBe(2);
+    expect(writes).toBe(0);
+  });
+
   it("github.write pr.comment.create rechecks the PR and sends one exact timeline POST", async () => {
     const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki",
       number: 7, body: "One exact PR comment" };
@@ -3029,16 +3125,28 @@ function fakeGitHubIssueCommentCreate(
 }
 
 function fakeGitHubPullRequestCommentCreate(
-  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
-    status: 201,
-    ok: true,
-    content_type: "application/json",
-    body: JSON.stringify({ id: 790, body: "Synthetic PR timeline comment",
-      issue_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/issues/7" }),
-    truncated: false,
-    rate_limit_remaining: "60",
-    request_id: "PR-COMMENT-REQ",
-  }),
+  request: NonNullable<GitHubWriteOptions["request"]> = async (target) => target.path.endsWith("/pulls/7/comments")
+    ? ({
+      status: 201,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify({ id: 791, body: String(target.body.body), path: target.body.path, line: target.body.line,
+        side: target.body.side, commit_id: target.body.commit_id,
+        pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }),
+      truncated: false,
+      rate_limit_remaining: "60",
+      request_id: "PR-INLINE-COMMENT-REQ",
+    })
+    : ({
+      status: 201,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify({ id: 790, body: String(target.body.body),
+        issue_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/issues/7" }),
+      truncated: false,
+      rate_limit_remaining: "60",
+      request_id: "PR-COMMENT-REQ",
+    }),
   read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.endsWith("/issues/7")
     ? githubReadJson({
       id: 456,
@@ -3050,6 +3158,12 @@ function fakeGitHubPullRequestCommentCreate(
       body: "Original pull request body",
       pull_request: { url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" },
     })
+    : target.path.includes("/pulls/7/files?")
+      ? githubReadJson([{ filename: "src/a.ts", status: "modified", sha: "e".repeat(40),
+        patch: "@@ -9,2 +9,3 @@\n context line\n-old line\n+new line\n+extra line" }])
+      : target.path.endsWith("/pulls/7")
+        ? githubReadJson({ id: 456, number: 7, state: "open",
+          head: { sha: "c".repeat(40) }, base: { sha: "d".repeat(40) } })
     : githubReadJson({
       id: 123,
       name: "blue-tanuki",

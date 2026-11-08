@@ -862,6 +862,12 @@ function validGitHubBranchRef(value: unknown): value is string {
       !segment.endsWith(".lock") && !segment.endsWith("."));
 }
 
+function validGitHubReviewPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4_096 &&
+    !/[\u0000-\u001f\u007f]/.test(value) && !value.startsWith("/") && !value.includes("\\") &&
+    value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
 function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | undefined {
   if (step.operation !== "github.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "github" || !step.parameters) return undefined;
@@ -894,10 +900,27 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
   if (operation === "issue.comment.create" || operation === "pr.comment.create") {
     const number = parameters.number;
     if (!body || typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
-        !allowedKeys(["operation", "owner", "repo", "number", "body"])) return undefined;
-    return operation === "issue.comment.create"
-      ? githubIssueCommentCreateRequestPayloadDigest({ owner, repo, issue_number: number, body })
-      : githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo, pull_request_number: number, body });
+        operation === "issue.comment.create" && !allowedKeys(["operation", "owner", "repo", "number", "body"])) return undefined;
+    if (operation === "issue.comment.create") {
+      return githubIssueCommentCreateRequestPayloadDigest({ owner, repo, issue_number: number, body });
+    }
+    const commentKind = parameters.comment_kind;
+    const path = parameters.path;
+    const line = parameters.line;
+    const side = parameters.side;
+    const hasLocation = path !== undefined || line !== undefined || side !== undefined;
+    const inline = commentKind === "pull_request_review_inline";
+    if ((!inline && commentKind !== undefined && commentKind !== "pull_request_timeline") ||
+        (inline && (!validGitHubReviewPath(path) || typeof line !== "number" || !Number.isSafeInteger(line) ||
+          line < 1 || line > 1_000_000 || (side !== "LEFT" && side !== "RIGHT"))) ||
+        (!inline && hasLocation) ||
+        !allowedKeys(inline
+          ? ["operation", "owner", "repo", "number", "body", "comment_kind", "path", "line", "side"]
+          : ["operation", "owner", "repo", "number", "body", ...(commentKind === undefined ? [] : ["comment_kind"])])) {
+      return undefined;
+    }
+    return githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo, pull_request_number: number, body,
+      ...(inline ? { path: path as string, line: line as number, side: side as "LEFT" | "RIGHT" } : {}) });
   }
   if (operation === "pr.create") {
     const title = githubWriteText(parameters, "title", 256, true);
@@ -951,7 +974,9 @@ function githubWriteResultMatches(
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
       : (parameters.operation === "issue.comment.create" || parameters.operation === "pr.comment.create") &&
           typeof number === "number"
-        ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
+        ? parameters.operation === "pr.comment.create" && parameters.comment_kind === "pull_request_review_inline"
+          ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments`, status: 201 }
+          : { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
         : parameters.operation === "pr.create"
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 } : undefined;
   if (!route || output.method !== route.method || output.path !== route.path ||

@@ -3909,12 +3909,26 @@ ${planControl.question}`,
             canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
             issue_number: observation.issue_number });
         } else {
+          const commentKind = args.comment_kind;
+          const path = optionalText("path");
+          const line = args.line === undefined ? undefined : positiveNumber("line");
+          const side = optionalText("side");
+          const inline = commentKind === "pull_request_review_inline";
           if (observation.operation !== operation || observation.pull_request_number !== issueNumber ||
-              observation.pull_request_locked) {
+              observation.pull_request_locked ||
+              (!inline && commentKind !== undefined && commentKind !== "pull_request_timeline") ||
+              (inline && (!path || line === undefined || (side !== "LEFT" && side !== "RIGHT") ||
+                observation.comment_kind !== "pull_request_review_inline" || observation.path !== path ||
+                observation.line !== line || observation.side !== side ||
+                !observation.pull_request_head_sha || !observation.pull_request_base_sha ||
+                !observation.pull_request_diff_digest)) ||
+              (!inline && (path !== undefined || line !== undefined || side !== undefined ||
+                observation.comment_kind !== undefined))) {
             throw new Error("HDS github.write pull request comment target does not match the issued command");
           }
           requestPayloadDigest = githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo,
-            pull_request_number: issueNumber, body });
+            pull_request_number: issueNumber, body,
+            ...(inline ? { path: path!, line: line!, side: side as "LEFT" | "RIGHT" } : {}) });
           targetIdentityDigest = githubPullRequestCommentCreateTargetIdentityDigest({ repository_id: observation.repository_id,
             canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
             pull_request_number: observation.pull_request_number });

@@ -29,6 +29,19 @@ import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_p
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function stableHash(value: unknown): string {
+  const normalize = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(normalize);
+    if (typeof input !== "object" || input === null) return input;
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(input as Record<string, unknown>).sort()) {
+      output[key] = normalize((input as Record<string, unknown>)[key]);
+    }
+    return output;
+  };
+  return createHash("sha256").update(JSON.stringify(normalize(value))).digest("hex");
+}
+const githubInlinePatch = "@@ -9,2 +9,2 @@\n context line\n-old synthetic diff value\n+new synthetic diff value";
 function planTaskIdentityDigest(owner: string, channel: string, task: string, planId: string, requestId: string): string {
   return operationPlanDigest({
     schema_version: "blue-tanuki.operation-plan-task-identity.v1",
@@ -142,6 +155,15 @@ function fileEditCandidate(id: string): OperationPlan {
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
 type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create";
+type GitHubWriteCase = { operation: GitHubWriteOperation; comment_kind?: "pull_request_review_inline" };
+const githubWriteCases: readonly GitHubWriteCase[] = [
+  { operation: "issue.create" },
+  { operation: "issue.update" },
+  { operation: "issue.comment.create" },
+  { operation: "pr.create" },
+  { operation: "pr.comment.create" },
+  { operation: "pr.comment.create", comment_kind: "pull_request_review_inline" },
+];
 type GitHubWriteScenario = {
   operation: GitHubWriteOperation;
   step_id: string;
@@ -157,7 +179,7 @@ type GitHubWriteScenario = {
   private_values: string[];
 };
 
-function githubWriteScenario(operation: GitHubWriteOperation): GitHubWriteScenario {
+function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pull_request_review_inline"): GitHubWriteScenario {
   const owner = "fixture-owner";
   const repo = "synthetic-repo";
   const canonicalFullName = `${owner}/${repo}`;
@@ -205,18 +227,39 @@ function githubWriteScenario(operation: GitHubWriteOperation): GitHubWriteScenar
   }
   if (operation === "pr.comment.create") {
     const comment = "synthetic pull request comment body never retained in M";
+    const path = "src/inline-review.ts";
+    const line = 10;
+    const side = "RIGHT" as const;
+    const headSha = "c".repeat(40);
+    const baseSha = "d".repeat(40);
+    const inline = commentKind === "pull_request_review_inline";
+    const inlineTargetFields = inline ? {
+      comment_kind: "pull_request_review_inline" as const,
+      path,
+      line,
+      side,
+      pull_request_head_sha: headSha,
+      pull_request_base_sha: baseSha,
+      pull_request_diff_digest: stableHash({ schema_version: "blue-tanuki.github-pull-request-inline-diff.v1",
+        path, line, side, head_sha: headSha, base_sha: baseSha, file_status: "modified", patch: githubInlinePatch }),
+    } : {};
     return { operation, step_id: "write-pr-comment",
-      parameters: { operation, owner, repo, number, body: comment },
+      parameters: { operation, owner, repo, number, body: comment,
+        ...(inline ? { comment_kind: "pull_request_review_inline", path, line, side } : {}) },
       target_identity_digest: githubPullRequestCommentCreateTargetIdentityDigest({ repository_id: repositoryId,
         canonical_full_name: canonicalFullName, pull_request_id: 424246, pull_request_number: number }),
       request_payload_digest: githubPullRequestCommentCreateRequestPayloadDigest({ owner, repo,
-        pull_request_number: number, body: comment }),
+        pull_request_number: number, body: comment, ...(inline ? { path, line, side } : {}) }),
       target_fields: { pull_request_id: 424246, pull_request_number: number, pull_request_state: "open",
-        pull_request_locked: false, pull_request_updated_at: pullRequestUpdatedAt },
-      method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, accepted_status: 201,
-      accepted_provider_response: { id: 42_447, body: comment,
-        issue_url: `https://api.github.com/repos/${owner}/${repo}/issues/${number}` }, accepted_result: { id: 42_447 },
-      private_values: [comment, "synthetic pull request target title"] };
+        pull_request_locked: false, pull_request_updated_at: pullRequestUpdatedAt, ...inlineTargetFields },
+      method: "POST", path: inline ? `/repos/${owner}/${repo}/pulls/${number}/comments`
+        : `/repos/${owner}/${repo}/issues/${number}/comments`, accepted_status: 201,
+      accepted_provider_response: inline
+        ? { id: 42_447, body: comment, path, line, side, commit_id: headSha,
+          pull_request_url: `https://api.github.com/repos/${owner}/${repo}/pulls/${number}` }
+        : { id: 42_447, body: comment, issue_url: `https://api.github.com/repos/${owner}/${repo}/issues/${number}` },
+      accepted_result: { id: 42_447 },
+      private_values: [comment, "synthetic pull request target title", ...(inline ? ["old synthetic diff value", "new synthetic diff value"] : [])] };
   }
   const prTitle = "synthetic pull request title";
   const prBody = "synthetic pull request body never retained in M";
@@ -464,11 +507,11 @@ function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
-  const githubWriteOperations: GitHubWriteOperation[] = ["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create"];
-
-  for (const operation of githubWriteOperations) {
-    it(`github.write ${operation}受理をJの束縛・digest-only M・Owner照会まで運ぶ`, async () => {
-      const scenario = githubWriteScenario(operation);
+  for (const writeCase of githubWriteCases) {
+    const { operation } = writeCase;
+    const operationLabel = `${operation}${writeCase.comment_kind === "pull_request_review_inline" ? " inline diff" : ""}`;
+    it(`github.write ${operationLabel}受理をJの束縛・digest-only M・Owner照会まで運ぶ`, async () => {
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind);
       await fixture(async (c) => {
         expect(c.cmd.payload.tool_name).toBe("github.write");
         expect(c.cmd.payload.arguments.operation).toBe(operation);
@@ -499,8 +542,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       }, (id) => githubWriteCandidate(id, scenario), () => mockSyntheticGitHubWrite("accepted", scenario));
     });
 
-    it(`github.write ${operation}明示拒否をMへ記録し、Ownerへ再送せず返す`, async () => {
-      const scenario = githubWriteScenario(operation);
+    it(`github.write ${operationLabel}明示拒否をMへ記録し、Ownerへ再送せず返す`, async () => {
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind);
       await fixture(async (c) => {
         expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
         const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -525,8 +568,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       }, (id) => githubWriteCandidate(id, scenario), () => mockSyntheticGitHubWrite("rejected", scenario));
     });
 
-    it(`github.write ${operation}結果不明をtask-bound M receiptとOwner照会へ運び、自動再送しない`, async () => {
-      const scenario = githubWriteScenario(operation);
+    it(`github.write ${operationLabel}結果不明をtask-bound M receiptとOwner照会へ運び、自動再送しない`, async () => {
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind);
       await fixture(async (c) => {
         expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
         const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -1935,10 +1978,11 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
 });
 
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
-  it.each(["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create"] as const)(
-    "実Gateway processは%sを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
-    async (operation) => {
-    const scenario = githubWriteScenario(operation);
+  it.each(githubWriteCases)(
+    "実Gateway processは$operation/$comment_kindを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
+    async ({ operation, comment_kind }) => {
+    const inlineReview = comment_kind === "pull_request_review_inline";
+    const scenario = githubWriteScenario(operation, comment_kind);
     const title = String(scenario.parameters.title ?? "");
     const body = String(scenario.parameters.body);
     const repositoryPath = "/repos/fixture-owner/synthetic-repo";
@@ -1988,6 +2032,22 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
             response.end(JSON.stringify({ name: branchRef, commit: { sha } }));
             return;
           }
+        }
+        const pullRequestPath = `/repos/${String(scenario.parameters.owner)}/${String(scenario.parameters.repo)}/pulls/${String(scenario.parameters.number ?? 7)}`;
+        if (inlineReview && method === "GET" && path === pullRequestPath) {
+          response.statusCode = 200;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify({ id: scenario.target_fields.pull_request_id,
+            number: scenario.target_fields.pull_request_number, state: scenario.target_fields.pull_request_state,
+            head: { sha: scenario.target_fields.pull_request_head_sha },
+            base: { sha: scenario.target_fields.pull_request_base_sha } }));
+          return;
+        }
+        if (inlineReview && method === "GET" && path === `${pullRequestPath}/files?per_page=100&page=1`) {
+          response.statusCode = 200;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify([{ filename: scenario.parameters.path, status: "modified", patch: githubInlinePatch }]));
+          return;
         }
         if ((operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") &&
           method === "GET" && path === issueTargetPath) {
@@ -2137,7 +2197,20 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
                 base_commit_sha: "b".repeat(40), title, body, draft: true, draft_was_defaulted: false,
                 maintainer_can_modify: false, publication_effect: "visible_to_repository_audience",
                 creation_is_reversible: false }
-              : { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
+              : inlineReview
+                ? { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
+                  pull_request_id: scenario.target_fields.pull_request_id, pull_request_number: 7,
+                  pull_request_state: "open", pull_request_locked: false,
+                  pull_request_updated_at: "2026-11-08T01:02:04.000Z",
+                  pull_request_title: "synthetic pull request target title",
+                  comment_kind: "pull_request_review_inline", path: scenario.parameters.path,
+                  line: scenario.parameters.line, side: scenario.parameters.side,
+                  head_commit_sha: scenario.target_fields.pull_request_head_sha,
+                  base_commit_sha: scenario.target_fields.pull_request_base_sha,
+                  diff_digest: scenario.target_fields.pull_request_diff_digest,
+                  diff_excerpt: expect.stringContaining("new synthetic diff value"), body,
+                  publication_effect: "visible_to_repository_audience", comment_removal_retracts_notifications: false }
+                : { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
                 pull_request_id: 424246, pull_request_number: 7, pull_request_state: "open", pull_request_locked: false,
                 pull_request_updated_at: "2026-11-08T01:02:04.000Z", pull_request_title: "synthetic pull request target title",
                 comment_kind: "pull_request_timeline", body, publication_effect: "visible_to_repository_audience",
@@ -2180,8 +2253,11 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         path, authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
         mock_responses: mockResponses, finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toHaveLength(1);
       expect(writes[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
-      const expectedMutationBody = operation === "issue.comment.create" || operation === "pr.comment.create"
-        ? { body }
+      const expectedMutationBody = operation === "pr.comment.create" && inlineReview
+        ? { body, path: scenario.parameters.path, line: scenario.parameters.line, side: scenario.parameters.side,
+          commit_id: scenario.target_fields.pull_request_head_sha }
+        : operation === "issue.comment.create" || operation === "pr.comment.create"
+          ? { body }
         : operation === "pr.create"
           ? { title, body, head: scenario.parameters.head, base: scenario.parameters.base, draft: true, maintainer_can_modify: false }
           : { title, body };
@@ -2378,7 +2454,8 @@ async function reserveServedGatewayPort(): Promise<number> {
 }
 
 async function waitForServedGatewayHealth(port: number, gateway: ServedGatewayProcess): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  // The Windows workspace review/import of all bundled plugins takes about 12 seconds locally.
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) {
       throw new Error(`served Gateway exited before health: ${gateway.stderr.join("")}`);

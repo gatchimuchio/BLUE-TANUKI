@@ -54,6 +54,13 @@ export const GitHubPullRequestCommentCreateTargetVersionObservationSchema = GitH
   pull_request_state: z.enum(["open", "closed"]),
   pull_request_locked: z.boolean(),
   pull_request_updated_at: z.string().datetime({ offset: true }),
+  comment_kind: z.literal("pull_request_review_inline").optional(),
+  path: z.string().min(1).max(4_096).optional(),
+  line: z.number().int().positive().max(1_000_000).optional(),
+  side: z.enum(["LEFT", "RIGHT"]).optional(),
+  pull_request_head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).optional(),
+  pull_request_base_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).optional(),
+  pull_request_diff_digest: DigestSchema.optional(),
 }).strict();
 
 /** Plan-bound, non-authority branch observations for a GitHub pull request create. */
@@ -73,7 +80,18 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
-]);
+]).superRefine((value, context) => {
+  if (value.operation !== "pr.comment.create") return;
+  const inlineFields = [value.path, value.line, value.side, value.pull_request_head_sha,
+    value.pull_request_base_sha, value.pull_request_diff_digest];
+  if (value.comment_kind === "pull_request_review_inline") {
+    if (inlineFields.some((field) => field === undefined)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "inline review comment target is incomplete" });
+    }
+  } else if (inlineFields.some((field) => field !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "timeline comment target cannot contain inline review fields" });
+  }
+});
 
 export type GitHubWriteTargetVersionObservation = z.infer<typeof GitHubWriteTargetVersionObservationSchema>;
 export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIssueCreateTargetVersionObservationSchema>;
@@ -190,7 +208,28 @@ export function githubPullRequestCommentCreateRequestPayloadDigest(input: {
   repo: string;
   pull_request_number: number;
   body: string;
+  path?: string;
+  line?: number;
+  side?: "LEFT" | "RIGHT";
 }): string {
+  const hasLocation = input.path !== undefined || input.line !== undefined || input.side !== undefined;
+  if (hasLocation) {
+    if (typeof input.path !== "string" || input.path.length === 0 || input.path.length > 4_096 ||
+        typeof input.line !== "number" || !Number.isSafeInteger(input.line) || input.line < 1 || input.line > 1_000_000 ||
+        (input.side !== "LEFT" && input.side !== "RIGHT")) {
+      throw new Error("inline pull request review comment location is incomplete or invalid");
+    }
+    return createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.github-pull-request-review-inline-comment-request-payload.v1",
+      input.owner,
+      input.repo,
+      input.pull_request_number,
+      input.body,
+      input.path,
+      input.line,
+      input.side,
+    ]), "utf8").digest("hex");
+  }
   return createHash("sha256").update(JSON.stringify([
     "blue-tanuki.github-pull-request-comment-create-request-payload.v1",
     input.owner,
