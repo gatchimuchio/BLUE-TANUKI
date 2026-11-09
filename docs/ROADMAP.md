@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E04.02 FailureReviewのbaseline証拠を独立観測から分離（限定WIRED）
+### 直近BUILD_BATCH — D03.01 D4 Runtimeのsession-scoped intent／response transport（限定WIRED）
 
-FailureMemoryの`evidence_log_ids`は署名作成時のbaseline根拠であり、同じCompleteHistory entryを再読しただけでは独立観測にならないことを確認した。Gatewayは元根拠を独立観測欄へ再投入せず、hash-chain不正時は`invalid`、別producerがない場合は`unavailable`としてHDS-Jへ渡す。Jはscope・反例・再開条件を保留し、原因候補を採用・権限化しない。
+Blue Gatewayの専用Runtime credentialで、登録済みruntime IDとsession参照を検証し、sessionをHMAC digest scopeへ変換して単回WebSocket ticketを発行する。ticketで同じsession scopeへ接続した場合だけintentをHDSへ渡し、HDSの既存`channel_send`を同じscopeへ返す。応答経路が未接続なら`409 not_dispatched`でHDS handlerを呼ばない。HTTP `202`は入力受付だけを示す。
 
-Gateway依存7 workspace project build、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASS（既存移行負債76件の注意）。test suite、実FailureReview往復、外部条件の独立再観測producer、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。この証拠分類補正だけを限定`WIRED`とする。E04.02／E04.03全体および製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+この状態はBlue側transportの限定`WIRED`。D4 Runtime側producer／receiver、runtime/session/workspace登録の実結合、切断・再起動後の復帰は未接続であり、D03.01全体・D4接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。直近の確認記録は[`開発進捗.md`](開発進捗.md)と[`IMPLEMENTATION_INSTRUCTIONS.md`](IMPLEMENTATION_INSTRUCTIONS.md)を参照する。C08.02の達成判定はowner明示規則・検証済み結果・M receiptを使う既存J経路を確認済みのため重複実装しない。D4 Pocketの他writer差分はそのrepoで保持し、このrepoから変更しない。
 
 ### 前段BUILD_BATCH — E04.03 FailureMemory条件変化の再評価を承認・実行consumerへ接続（限定WIRED）
 
