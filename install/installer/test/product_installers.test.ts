@@ -59,4 +59,20 @@ describe("downloadable product installer packages", () => {
       expect(text).toContain("signed native installer");
     }
   });
+
+  it("requires same-install process shutdown before Unix update or uninstall removes files", () => {
+    const setup = read("install/unix/product/BlueTanukiSetup.sh");
+    const uninstall = read("install/unix/product/BlueTanukiUninstall.sh");
+    const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
+
+    expect(launcher).toContain("process_identity_state");
+    expect(launcher).toContain("list_owned_process_pids");
+    expect(launcher).toContain("resident-watchdog");
+    expect(launcher).toContain("did not stop within 10 seconds");
+    expect(setup).toContain("existing resident process could not be safely stopped");
+    expect(uninstall).toContain("resident shutdown was not confirmed");
+    expect(setup).not.toMatch(/resident-stop[^\n]*\|\|\s*true/);
+    expect(uninstall).not.toMatch(/resident-stop[^\n]*\|\|\s*true/);
+    expect(uninstall).not.toContain("resident-autostart-disable");
+  });
 });

@@ -514,7 +514,9 @@ fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
 
 if [ "$INSTALL_EXISTS" = "1" ]; then
   assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
-  sh "$LAUNCHER" resident-stop >/dev/null 2>&1 || true
+  if ! sh "$LAUNCHER" resident-stop >/dev/null 2>&1; then
+    fail "the existing resident process could not be safely stopped; the current install and runtime were retained"
+  fi
   assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
   mv -- "$INSTALL_ROOT" "$ROLLBACK_INSTALL"
   PREVIOUS_APP_MOVED=1

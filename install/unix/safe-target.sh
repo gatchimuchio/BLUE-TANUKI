@@ -253,7 +253,7 @@ assert_managed_product_runtime_inventory() {
   bt_metadata="$bt_app_root/blue-tanuki-install.json"
   [ -f "$bt_metadata" ] && [ ! -L "$bt_metadata" ] || safe_target_fail "managed install metadata is missing or not a regular file: $bt_metadata"
   [ "$(wc -c < "$bt_metadata" | tr -d '[:space:]')" -le 65536 ] || safe_target_fail "managed install metadata exceeds the size limit"
-  bt_hash=$(sed -n 's/^  "managed_runtime_files_sha256": "\([0-9A-Fa-f]\{64\}\)",$/\1/p' "$bt_metadata")
+  bt_hash=$(sed -n 's/^  "managed_runtime_files_sha256": "\([0-9A-Fa-f]\{64\}\)",\{0,1\}$/\1/p' "$bt_metadata")
   [ "$(printf '%s\n' "$bt_hash" | wc -l | tr -d '[:space:]')" = 1 ] || safe_target_fail "managed runtime inventory digest is missing or ambiguous"
   assert_managed_tree_inventory "$bt_runtime_root" __no_metadata__ blue-tanuki-runtime-files.txt "$bt_hash"
 }

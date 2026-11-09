@@ -144,10 +144,11 @@ LAUNCHER="$INSTALL_ROOT/BlueTanukiLauncher.sh"
 BIN_LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" BIN_LAUNCHER)
 if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
   if [ "$DRY_RUN" = "1" ]; then
-    say "Would stop resident gateway and disable resident autostart."
+    say "Would stop resident gateway and remove only an owned autostart entry."
   else
-    sh "$LAUNCHER" resident-stop >/dev/null 2>&1 || true
-    sh "$LAUNCHER" resident-autostart-disable >/dev/null 2>&1 || true
+    if ! sh "$LAUNCHER" resident-stop >/dev/null 2>&1; then
+      fail "resident shutdown was not confirmed; install, runtime, and user data were retained"
+    fi
   fi
 fi
 

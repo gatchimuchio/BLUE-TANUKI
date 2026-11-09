@@ -2,6 +2,14 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
+## 直近完了BUILD_BATCH — QE_BUILD / Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
+
+Linux/macOS向けpackaged product Launcherは、PID記録の数値だけを根拠にprocessを停止しない。PID recordの通常ファイル性・単一行・数値範囲を確認し、installed Node／Gateway entry／`--serve`／同一installのenv fileでresident identityを照合する。watchdogはinstalled Launcher pathと`resident-watchdog` commandで識別する。record欠落・stale時は同一installのprocess inventoryから復元可能な一意の対象だけを選び、形式不正・複数候補・identity不明・inventory失敗はfail-closedする。SIGTERM後最大10秒待機し、再走査でresidentとwatchdogが残っていない場合に限りPID／stop recordを除去する。Setup updateとUninstallは`resident-stop`失敗時にswap／install tree削除を中断する。Uninstallの無条件autostart削除を除き、既存のownership-checked removalへ集約した。managed product runtime inventory hashがJSONの最終propertyとなる形もvalidatorが受け付ける。
+
+`install/installer/test/safe_target_unix.sh`のWSL Ubuntu 24.04隔離process fixture（install path内の複数連続空白を含む）、対象shellの`sh -n`、Windows上の`product_installers.test.ts` 4/4、`corepack pnpm typecheck`、`corepack pnpm build`（15 projects）、文書同期後の`corepack pnpm docs:check`と`git diff --check`はPASS。実macOS、実installed Setup／Uninstall、実製品更新・削除、全suite、QE_QC／QE_QAはNOT_RUN。このpackaged Unix product-path sliceだけを限定`WIRED`とし、Linux native／macOS製品全体、5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+次はrev4.0と最新実物から全体の一気通貫仕事に最も不足する実consumerを再選定してQE_BUILDを続ける。実provider／live外部作用、D4-Pocket／ミニドラ別repo編集、Rust authority cutover、公開／出荷判断は保留する。
+
 ## 直近完了BUILD_BATCH — QE_BUILD / G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
 
 Windows製品LauncherはPIDファイルの番号だけで停止対象を決めず、実processの実行ファイル、command line、bundled Nodeまたはinstalled Launcher、Gateway entry、`--serve`、同じDataRootのenv fileを照合する。PID recordが欠落・staleの場合はprocess inventoryから同一installのcandidateを探し、一件だけidentityが一致したときだけ記録を復旧または停止する。recordの読取・形式不正、複数candidate、identity不一致・取得不能では重複起動も停止もfail-closedする。Watchdogもinstalled Launcherを`watchdog` modeで実行するPowerShell processであることを確認する。所有確認したprocessだけを停止し、10秒以内の終了と残存processなしを確認してからPID recordを消す。終了未確認・停止失敗ではrecordを保持する。UninstallはLauncher stopが0を返さない場合にinstall treeの削除を中断し、installed filesとuser dataが未削除である旨を返す。既存のDataRoot保持／明示purge契約は変更していない。

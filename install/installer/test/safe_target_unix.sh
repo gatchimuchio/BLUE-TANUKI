@@ -5,7 +5,17 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 . "$REPO_ROOT/install/unix/safe-target.sh"
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/blue-tanuki-safe-target.XXXXXX")
-trap 'rm -rf -- "$TMP_ROOT"' EXIT HUP INT TERM
+LIFECYCLE_GATEWAY_PID=
+LIFECYCLE_WATCHDOG_PID=
+LIFECYCLE_UNRELATED_PID=
+cleanup_tmp_root() {
+  for process_id in "$LIFECYCLE_GATEWAY_PID" "$LIFECYCLE_WATCHDOG_PID" "$LIFECYCLE_UNRELATED_PID"; do
+    case "$process_id" in ''|*[!0-9]*) continue ;; esac
+    kill -TERM "$process_id" 2>/dev/null || true
+  done
+  rm -rf -- "$TMP_ROOT"
+}
+trap cleanup_tmp_root EXIT HUP INT TERM
 mkdir -p "$TMP_ROOT/physical" "$TMP_ROOT/home/.local" "$TMP_ROOT/home2/.local/bin" "$TMP_ROOT/bin-physical"
 ln -s "$TMP_ROOT/physical" "$TMP_ROOT/physical-alias"
 ln -s "$TMP_ROOT/home" "$TMP_ROOT/home-alias"
@@ -342,6 +352,10 @@ cp "$REPO_ROOT/install/unix/safe-target.sh" "$SETUP_PACKAGE/app/install/unix/saf
 cp "$REPO_ROOT/install/unix/product/BlueTanukiUninstall.sh" "$SETUP_PACKAGE/launcher/BlueTanukiUninstall.sh"
 cat > "$SETUP_PACKAGE/launcher/BlueTanukiLauncher.sh" <<'LAUNCHER'
 #!/usr/bin/env sh
+if [ "${1:-}" = "resident-stop" ] && [ -n "${STOP_FAILURE_FILE:-}" ] && [ -f "$STOP_FAILURE_FILE" ]; then
+  echo "fixture stop failure" >&2
+  exit 9
+fi
 exit 0
 LAUNCHER
 printf 'fixture package\n' > "$SETUP_PACKAGE/unix-installer-manifest.json"
@@ -355,14 +369,19 @@ if [ "${1:-}" = "-e" ]; then
   shift
   javascript=$1
   shift
-  if [ -n "${INSTALL_MANAGED_FILES_SHA256_VALUE:-}" ]; then
-    node -e "$javascript" "$@"
-    exit $?
+  if [ -n "${PACKAGE_MANIFEST_SHA256_VALUE:-}" ]; then
+    printf '{\n  "schema_version": 2,\n  "product_id": "blue-tanuki-product-install",\n  "package_manifest_sha256": "%s",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "env_file": "%s",\n  "node_exe": "%s",\n  "control_center_url": "%s",\n  "platform": "%s",\n  "autostart_enabled_by_default": false\n}\n' \
+      "$PACKAGE_MANIFEST_SHA256_VALUE" "$INSTALL_ROOT_VALUE" "$DATA_ROOT_VALUE" "$CONFIG_ROOT_VALUE" \
+      "$RUNTIME_ROOT_VALUE" "$BIN_ROOT_VALUE" "$ENV_FILE_VALUE" "$NODE_EXE_VALUE" \
+      "$CONTROL_CENTER_URL_VALUE" "$PLATFORM_VALUE" > "$1"
+  else
+    metadata_file=$1
+    metadata_tmp="$metadata_file.test-tmp.$$"
+    sed 's/"schema_version": 2/"schema_version": 3/' "$metadata_file" | sed '$d' > "$metadata_tmp"
+    printf '  "managed_install_files_sha256": "%s",\n  "managed_runtime_files_sha256": "%s"\n}\n' \
+      "$INSTALL_MANAGED_FILES_SHA256_VALUE" "$RUNTIME_MANAGED_FILES_SHA256_VALUE" >> "$metadata_tmp"
+    mv -- "$metadata_tmp" "$metadata_file"
   fi
-  printf '{\n  "schema_version": 3,\n  "product_id": "blue-tanuki-product-install",\n  "package_manifest_sha256": "%s",\n  "managed_install_files_sha256": "%s",\n  "managed_runtime_files_sha256": "%s",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "env_file": "%s",\n  "node_exe": "%s",\n  "control_center_url": "%s",\n  "platform": "%s"\n}\n' \
-    "$PACKAGE_MANIFEST_SHA256_VALUE" "${INSTALL_MANAGED_FILES_SHA256_VALUE:-}" "${RUNTIME_MANAGED_FILES_SHA256_VALUE:-}" \
-    "$INSTALL_ROOT_VALUE" "$DATA_ROOT_VALUE" "$CONFIG_ROOT_VALUE" "$RUNTIME_ROOT_VALUE" "$BIN_ROOT_VALUE" \
-    "$ENV_FILE_VALUE" "$NODE_EXE_VALUE" "$CONTROL_CENTER_URL_VALUE" "$PLATFORM_VALUE" > "$1"
   exit 0
 fi
 script=$1
@@ -529,6 +548,22 @@ fi
 [ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 50
 
 printf 'v2\n' > "$SETUP_PACKAGE/app/apps/gateway/dist/version.txt"
+STOP_FAILURE_FILE="$TMP_ROOT/stop-process-failure"
+export STOP_FAILURE_FILE
+: > "$STOP_FAILURE_FILE"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-stop-failure.out" 2>&1; then
+  echo "product setup continued after resident shutdown failed" >&2
+  exit 69
+fi
+grep -Fq "existing resident process could not be safely stopped" "$TMP_ROOT/setup-stop-failure.out" || {
+  cat "$TMP_ROOT/setup-stop-failure.out" >&2
+  echo "product setup did not report the resident shutdown blocker" >&2
+  exit 70
+}
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 71
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 72
+rm -f -- "$STOP_FAILURE_FILE"
+
 FAIL_MOVE_BIN="$TMP_ROOT/fail-move-bin"
 mkdir -p "$FAIL_MOVE_BIN"
 cat > "$FAIL_MOVE_BIN/mv" <<'MOVE'
@@ -569,6 +604,24 @@ printf 'preserve until explicit purge\n' > "$SETUP_DATA/data/user.txt"
 printf 'unrelated config\n' > "$SETUP_HOME/.config/other-app/keep.txt"
 mkdir -p "$SETUP_HOME/.config/autostart"
 printf '[Desktop Entry]\nName=Unrelated app\nComment=mentions %s\nExec=other-app\n' "$SETUP_INSTALL" > "$SETUP_HOME/.config/autostart/blue-tanuki.desktop"
+: > "$STOP_FAILURE_FILE"
+if (
+  HOME="$SETUP_HOME" \
+  XDG_DATA_HOME="$SETUP_HOME/.local/share" \
+  XDG_CONFIG_HOME="$SETUP_HOME/.config" \
+  sh "$SETUP_INSTALL/BlueTanukiUninstall.sh"
+) > "$TMP_ROOT/uninstall-stop-failure.out" 2>&1; then
+  echo "product uninstall continued after resident shutdown failed" >&2
+  exit 73
+fi
+grep -Fq "resident shutdown was not confirmed" "$TMP_ROOT/uninstall-stop-failure.out" || {
+  cat "$TMP_ROOT/uninstall-stop-failure.out" >&2
+  echo "product uninstall did not report the resident shutdown blocker" >&2
+  exit 74
+}
+[ -d "$SETUP_INSTALL" ] && [ -d "$SETUP_RUNTIME" ] || exit 75
+[ -f "$SETUP_DATA/data/user.txt" ] && [ -f "$SETUP_CONFIG/blue-tanuki.env" ] || exit 76
+rm -f -- "$STOP_FAILURE_FILE"
 if ! (
   HOME="$SETUP_HOME" \
   XDG_DATA_HOME="$SETUP_HOME/.local/share" \
@@ -607,5 +660,93 @@ fi
 safe_container_target "$TMP_ROOT/data" DATA_ROOT >/dev/null
 assert_not_ancestor_target "$TMP_ROOT/data/app" "$TMP_ROOT/data" INSTALL_ROOT DATA_ROOT
 expect_rejection "data ancestor of install" assert_not_ancestor_target "$TMP_ROOT/data" "$TMP_ROOT/data/app" DATA_ROOT INSTALL_ROOT
+
+LIFECYCLE_ROOT="$TMP_ROOT/lifecycle  home"
+LIFECYCLE_INSTALL="$LIFECYCLE_ROOT/install"
+LIFECYCLE_DATA="$LIFECYCLE_ROOT/data"
+LIFECYCLE_RUNTIME="$LIFECYCLE_ROOT/runtime"
+LIFECYCLE_NODE="$LIFECYCLE_RUNTIME/bin/node"
+mkdir -p "$LIFECYCLE_INSTALL" "$LIFECYCLE_DATA" "$LIFECYCLE_RUNTIME/bin"
+cp "$REPO_ROOT/install/unix/product/BlueTanukiLauncher.sh" "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh"
+cat > "$LIFECYCLE_NODE" <<'NODE'
+#!/usr/bin/env sh
+if [ "${1:-}" = "-e" ]; then exit 0; fi
+node_cleanup() {
+  if [ -n "${node_sleep_pid:-}" ]; then
+    kill -TERM "$node_sleep_pid" 2>/dev/null || true
+    wait "$node_sleep_pid" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap node_cleanup TERM INT
+while :; do
+  sleep 30 &
+  node_sleep_pid=$!
+  wait "$node_sleep_pid" || true
+done
+NODE
+chmod +x "$LIFECYCLE_NODE"
+cat > "$LIFECYCLE_INSTALL/blue-tanuki-install.env" <<ENV
+INSTALL_ROOT='$LIFECYCLE_INSTALL'
+DATA_ROOT='$LIFECYCLE_DATA'
+ENV_FILE='$LIFECYCLE_DATA/blue-tanuki.env'
+NODE_EXE='$LIFECYCLE_NODE'
+CONTROL_CENTER_URL='http://127.0.0.1:8787/app'
+PLATFORM='linux'
+ENV
+if ! HOME="$LIFECYCLE_ROOT" sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-start > "$TMP_ROOT/lifecycle-start.out" 2>&1; then
+  cat "$TMP_ROOT/lifecycle-start.out" >&2
+  echo "isolated resident process did not start" >&2
+  exit 77
+fi
+attempt=0
+while [ ! -s "$LIFECYCLE_DATA/blue-tanuki.pid" ] && [ "$attempt" -lt 10 ]; do
+  sleep 1
+  attempt=$((attempt + 1))
+done
+[ -s "$LIFECYCLE_DATA/blue-tanuki.pid" ] && [ -s "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || {
+  echo "resident process identity records were not created" >&2
+  exit 78
+}
+LIFECYCLE_GATEWAY_PID=$(cat "$LIFECYCLE_DATA/blue-tanuki.pid")
+LIFECYCLE_WATCHDOG_PID=$(cat "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid")
+case "$LIFECYCLE_GATEWAY_PID:$LIFECYCLE_WATCHDOG_PID" in *[!0-9:]*|:*) exit 79 ;; esac
+sleep 60 &
+LIFECYCLE_UNRELATED_PID=$!
+printf '%s\n' "$LIFECYCLE_UNRELATED_PID" > "$LIFECYCLE_DATA/blue-tanuki.pid"
+if HOME="$LIFECYCLE_ROOT" sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-stop > "$TMP_ROOT/lifecycle-unowned-pid.out" 2>&1; then
+  echo "resident stop accepted a PID reused by an unrelated process" >&2
+  exit 80
+fi
+kill -0 "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || exit 81
+kill -0 "$LIFECYCLE_GATEWAY_PID" 2>/dev/null || exit 82
+[ ! -e "$LIFECYCLE_DATA/blue-tanuki.stop" ] || exit 83
+[ -f "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 84
+rm -f -- "$LIFECYCLE_DATA/blue-tanuki.pid"
+if ! HOME="$LIFECYCLE_ROOT" sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-stop > "$TMP_ROOT/lifecycle-recovered-stop.out" 2>&1; then
+  cat "$TMP_ROOT/lifecycle-recovered-stop.out" >&2
+  echo "resident stop did not recover the missing PID record by process identity" >&2
+  exit 85
+fi
+[ ! -e "$LIFECYCLE_DATA/blue-tanuki.pid" ] && [ ! -e "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 86
+kill -0 "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || exit 87
+kill -TERM "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || true
+wait "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || true
+LIFECYCLE_UNRELATED_PID=
+LIFECYCLE_GATEWAY_PID=
+LIFECYCLE_WATCHDOG_PID=
+printf 'invalid-pid\n' > "$LIFECYCLE_DATA/blue-tanuki.pid"
+if HOME="$LIFECYCLE_ROOT" sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-start > "$TMP_ROOT/lifecycle-invalid-record.out" 2>&1; then
+  echo "resident start replaced an invalid PID record" >&2
+  exit 88
+fi
+grep -Fq "PID record is invalid" "$TMP_ROOT/lifecycle-invalid-record.out" || {
+  cat "$TMP_ROOT/lifecycle-invalid-record.out" >&2
+  echo "resident start did not report the invalid PID record" >&2
+  exit 89
+}
+[ "$(cat "$LIFECYCLE_DATA/blue-tanuki.pid")" = "invalid-pid" ] || exit 90
+[ ! -e "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 91
+rm -f -- "$LIFECYCLE_DATA/blue-tanuki.pid"
 
 echo "unix_target_guard=pass"

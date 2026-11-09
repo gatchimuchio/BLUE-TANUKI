@@ -6,6 +6,12 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
+
+Linux/macOS packaged product Launcherは、数値PIDだけを停止根拠にせず、PID recordの形式とinstalled Node／Gateway entry／`--serve`／同一install env fileを照合する。watchdogはinstalled Launcher pathと専用`resident-watchdog` commandで同定する。欠落・stale recordはinventoryから一意な同一install processを復元できる場合だけ扱い、異常形式・曖昧・複数候補・inventory失敗はfail-closedする。最大10秒の停止待ちと再走査でresident／watchdogの不存在が確認できるまで、PID recordとstop markerを残す。Setup update／Uninstallは停止失敗時にswapまたはinstall tree削除を中断する。Uninstallの無条件autostart削除を除き、既存ownership-checked removalへ委ねる。runtime inventory hashをJSON最終propertyとして受け付ける。
+
+WSL Ubuntu 24.04の隔離process fixture（install path内の複数連続空白を含む）と対象shell構文検査、Windows上の対象test 4/4、workspace typecheck、build 15 projects、`docs:check`、`git diff --check`はPASS。実macOS、実installed Setup／Uninstall、実製品更新・削除、全suite、QE_QC／QE_QAはNOT_RUN。このUnix packaged product-pathだけを限定`WIRED`とし、OS全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
 ### 直近完了BUILD_BATCH — G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
 
 Windows製品LauncherがPID fileだけを根拠に他processを停止しないよう、bundled `node.exe`／installed `BlueTanukiLauncher.ps1`とlaunch arguments／Gateway entry／DataRoot env fileを照合する。PID recordが欠落・staleなら同一installのprocess inventoryを調べ、一件だけ一致すれば記録を復旧または停止する。record不正・判別不能・複数candidateはfail-closedする。所有確認したprocessだけを停止し、最大10秒のexit確認と残存processなしを確認後にrecordを消す。Uninstallも停止が確認できない限りinstall treeの削除へ進まない。既存のuser data保持／明示purge境界は維持する。
