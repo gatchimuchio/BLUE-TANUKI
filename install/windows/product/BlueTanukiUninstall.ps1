@@ -258,11 +258,17 @@ if (Test-Path -LiteralPath $launcher -PathType Leaf) {
     try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to run the product launcher because the installed inventory changed. No files were removed. $($_.Exception.Message)"
     }
+    $stopExitCode = $null
+    $stopFailure = $null
     try {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher stop | Out-Null
-      if ($LASTEXITCODE -ne 0) { Write-Warning "resident stop returned exit code $LASTEXITCODE" }
+      $stopExitCode = $LASTEXITCODE
     } catch {
-      if (-not $Quiet) { Write-Warning "resident stop failed during uninstall: $($_.Exception.Message)" }
+      $stopFailure = $_.Exception.Message
+    }
+    if ($stopFailure -or $stopExitCode -ne 0) {
+      $reason = if ($stopFailure) { $stopFailure } else { "launcher stop returned exit code $stopExitCode" }
+      Fail "Refusing to remove the installation because resident shutdown was not confirmed. No installed files or user data were removed. $reason"
     }
   }
 }

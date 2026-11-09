@@ -47,6 +47,185 @@ $doctorLog = Join-Path $logDir "doctor.json"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runName = if ($env:BLUE_TANUKI_AUTOSTART_RUN_NAME) { $env:BLUE_TANUKI_AUTOSTART_RUN_NAME } else { "BLUE-TANUKI" }
 
+function Normalize-ProcessImagePath($Path) {
+  return [System.IO.Path]::GetFullPath([string]$Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+}
+
+function Test-CommandLineArgument($CommandLine, $Argument) {
+  if ([string]::IsNullOrWhiteSpace([string]$CommandLine) -or [string]::IsNullOrWhiteSpace([string]$Argument)) {
+    return $false
+  }
+  $escaped = [regex]::Escape([string]$Argument)
+  $pattern = '(?i)(?:^|\s)(?:"' + $escaped + '"|' + $escaped + ')(?:\s|$)'
+  return [regex]::IsMatch([string]$CommandLine, $pattern)
+}
+
+function Get-ProcessSnapshot($PidValue) {
+  $process = Get-Process -Id $PidValue -ErrorAction SilentlyContinue
+  if (-not $process) { return @{ state = "stopped"; process = $null } }
+  try {
+    $record = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PidValue" -ErrorAction Stop
+  } catch {
+    return @{ state = "unknown"; process = $process; reason = "process identity could not be inspected: $($_.Exception.Message)" }
+  }
+  if (-not $record) {
+    try { $process.Refresh() } catch { }
+    if ($process.HasExited) { return @{ state = "stopped"; process = $null } }
+    return @{ state = "unknown"; process = $process; reason = "process identity record is unavailable" }
+  }
+  return @{
+    state = "running"
+    process = $process
+    executable_path = [string]$record.ExecutablePath
+    process_path = [string]$process.Path
+    command_line = [string]$record.CommandLine
+  }
+}
+
+function Get-ManagedProcessSnapshot($PidValue, $Kind) {
+  $snapshot = Get-ProcessSnapshot $PidValue
+  if ($snapshot.state -ne "running") { return $snapshot }
+
+  try {
+    if ($Kind -eq "resident") {
+      $expectedImage = Normalize-ProcessImagePath (Find-NodeExe)
+      $expectedEntry = Normalize-ProcessImagePath (Join-Path $installRoot "apps\gateway\dist\main.js")
+      $expectedEnv = Normalize-ProcessImagePath $envFile
+      $entryMatches = (Test-CommandLineArgument $snapshot.command_line $expectedEntry) -or
+        (Test-CommandLineArgument $snapshot.command_line "apps/gateway/dist/main.js") -or
+        (Test-CommandLineArgument $snapshot.command_line "apps\gateway\dist\main.js")
+      $commandMatches = $entryMatches -and
+        (Test-CommandLineArgument $snapshot.command_line "--serve") -and
+        (Test-CommandLineArgument $snapshot.command_line "--env-file") -and
+        (Test-CommandLineArgument $snapshot.command_line $expectedEnv)
+    } elseif ($Kind -eq "watchdog") {
+      $powerShell = Get-Command powershell.exe -CommandType Application -ErrorAction Stop
+      $expectedImage = Normalize-ProcessImagePath $powerShell.Source
+      $expectedEntry = Normalize-ProcessImagePath (Join-Path $installRoot "BlueTanukiLauncher.ps1")
+      $commandMatches = (Test-CommandLineArgument $snapshot.command_line "-File") -and
+        (Test-CommandLineArgument $snapshot.command_line $expectedEntry) -and
+        ((Test-CommandLineArgument $snapshot.command_line "watchdog") -or
+          (Test-CommandLineArgument $snapshot.command_line "watchdog-safe-mode"))
+    } else {
+      return @{ state = "unknown"; process = $snapshot.process; reason = "unknown managed process kind" }
+    }
+    $recordImage = Normalize-ProcessImagePath $snapshot.executable_path
+    $handleImage = Normalize-ProcessImagePath $snapshot.process_path
+    if ([string]::Equals($recordImage, $expectedImage, [System.StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals($handleImage, $expectedImage, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $commandMatches) {
+      return $snapshot
+    }
+    return @{ state = "unowned"; process = $snapshot.process; reason = "PID does not identify this installation's $Kind process" }
+  } catch {
+    return @{ state = "unknown"; process = $snapshot.process; reason = "managed process identity could not be verified: $($_.Exception.Message)" }
+  }
+}
+
+function Get-ManagedProcessSet($Kind) {
+  try {
+    if ($Kind -eq "resident") {
+      $expectedImage = Normalize-ProcessImagePath (Find-NodeExe)
+      $expectedEntry = Normalize-ProcessImagePath (Join-Path $installRoot "apps\gateway\dist\main.js")
+      $expectedEnv = Normalize-ProcessImagePath $envFile
+    } elseif ($Kind -eq "watchdog") {
+      $powerShell = Get-Command powershell.exe -CommandType Application -ErrorAction Stop
+      $expectedImage = Normalize-ProcessImagePath $powerShell.Source
+      $expectedEntry = Normalize-ProcessImagePath (Join-Path $installRoot "BlueTanukiLauncher.ps1")
+      $expectedEnv = $null
+    } else {
+      return @{ state = "unknown"; processes = @(); reason = "unknown managed process kind" }
+    }
+    $records = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  } catch {
+    return @{ state = "unknown"; processes = @(); reason = "process inventory could not be inspected: $($_.Exception.Message)" }
+  }
+
+  $matches = @()
+  foreach ($record in $records) {
+    $commandLine = [string]$record.CommandLine
+    if ($Kind -eq "resident") {
+      $entryMatches = (Test-CommandLineArgument $commandLine $expectedEntry) -or
+        (Test-CommandLineArgument $commandLine "apps/gateway/dist/main.js") -or
+        (Test-CommandLineArgument $commandLine "apps\gateway\dist\main.js")
+      if (-not $entryMatches -or -not (Test-CommandLineArgument $commandLine "--serve")) {
+        if ([string]::IsNullOrWhiteSpace($commandLine) -and $record.ExecutablePath) {
+          try {
+            if ([string]::Equals((Normalize-ProcessImagePath $record.ExecutablePath), $expectedImage, [System.StringComparison]::OrdinalIgnoreCase)) {
+              return @{ state = "unknown"; processes = @(); reason = "a bundled runtime process has no inspectable command line" }
+            }
+          } catch { }
+        }
+        continue
+      }
+      if (-not (Test-CommandLineArgument $commandLine "--env-file") -or
+          -not (Test-CommandLineArgument $commandLine $expectedEnv)) {
+        return @{ state = "unknown"; processes = @(); reason = "a process uses this Gateway entry but its DataRoot could not be verified" }
+      }
+    } else {
+      $entryMatches = (Test-CommandLineArgument $commandLine "-File") -and
+        (Test-CommandLineArgument $commandLine $expectedEntry)
+      if (-not $entryMatches) {
+        if ([string]::IsNullOrWhiteSpace($commandLine) -and $record.ExecutablePath) {
+          try {
+            if ([string]::Equals((Normalize-ProcessImagePath $record.ExecutablePath), $expectedImage, [System.StringComparison]::OrdinalIgnoreCase)) {
+              return @{ state = "unknown"; processes = @(); reason = "a PowerShell process has no inspectable command line" }
+            }
+          } catch { }
+        }
+        continue
+      }
+      if (-not ((Test-CommandLineArgument $commandLine "watchdog") -or
+          (Test-CommandLineArgument $commandLine "watchdog-safe-mode"))) {
+        continue
+      }
+    }
+
+    try {
+      $recordImage = Normalize-ProcessImagePath ([string]$record.ExecutablePath)
+      if (-not [string]::Equals($recordImage, $expectedImage, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @{ state = "unknown"; processes = @(); reason = "a process uses this product entry from an unexpected executable" }
+      }
+      $process = Get-Process -Id ([int]$record.ProcessId) -ErrorAction SilentlyContinue
+      if (-not $process) { continue }
+      $process.Refresh()
+      if ($process.HasExited) { continue }
+      $handleImage = Normalize-ProcessImagePath $process.Path
+      if (-not [string]::Equals($handleImage, $expectedImage, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @{ state = "unknown"; processes = @(); reason = "process identity changed while it was inspected" }
+      }
+      $matches += $process
+    } catch {
+      return @{ state = "unknown"; processes = @(); reason = "a matching process could not be verified: $($_.Exception.Message)" }
+    }
+  }
+
+  if ($matches.Count -gt 1) {
+    return @{ state = "ambiguous"; processes = @(); reason = "multiple matching product processes were found" }
+  }
+  if ($matches.Count -eq 1) {
+    return @{ state = "running"; processes = $matches; process = $matches[0] }
+  }
+  return @{ state = "stopped"; processes = @() }
+}
+
+function Stop-VerifiedProcess($Process, $Label) {
+  try {
+    $Process.Refresh()
+    if ($Process.HasExited) { return }
+    Stop-Process -InputObject $Process -Force -ErrorAction Stop
+    if (-not $Process.WaitForExit(10000)) {
+      Fail "$Label did not exit after the stop request; its PID record was preserved."
+    }
+    $Process.Refresh()
+    if (-not $Process.HasExited) {
+      Fail "$Label is still running after the stop request; its PID record was preserved."
+    }
+  } catch {
+    Fail "Could not confirm that $Label exited; its PID record was preserved. $($_.Exception.Message)"
+  }
+}
+
 function Find-NodeExe {
   $runtimeRoot = Join-Path $installRoot "runtime"
   $node = Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Filter "node.exe" -ErrorAction SilentlyContinue |
@@ -61,15 +240,14 @@ function Read-ResidentPid {
   if (-not (Test-Path -LiteralPath $pidFile)) {
     return $null
   }
-  $raw = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $raw) {
-    return $null
+  try { $raw = Get-Content -LiteralPath $pidFile -Raw -ErrorAction Stop } catch {
+    Fail "The resident PID record could not be read, so process ownership cannot be verified. $($_.Exception.Message)"
   }
   $pidValue = 0
-  if ([int]::TryParse($raw.Trim(), [ref]$pidValue)) {
+  if ([int]::TryParse(([string]$raw).Trim(), [ref]$pidValue) -and $pidValue -gt 0) {
     return $pidValue
   }
-  return $null
+  Fail "The resident PID record is invalid, so process ownership cannot be verified."
 }
 
 function Parse-EnvValue($RawValue) {
@@ -132,32 +310,69 @@ function Get-HealthUrl {
 function Test-ResidentRunning {
   $pidValue = Read-ResidentPid
   if (-not $pidValue) {
-    return $false
+    $processSet = Get-ManagedProcessSet "resident"
+    if ($processSet.state -eq "running") {
+      Set-Content -LiteralPath $pidFile -Value $processSet.process.Id -Encoding ASCII
+      return $true
+    }
+    if ($processSet.state -eq "stopped") { return $false }
+    Fail "Cannot safely replace resident process state because ownership could not be verified. $($processSet.reason)"
   }
-  return [bool](Get-Process -Id $pidValue -ErrorAction SilentlyContinue)
+  $snapshot = Get-ManagedProcessSnapshot $pidValue "resident"
+  if ($snapshot.state -eq "running") { return $true }
+  if ($snapshot.state -eq "unowned" -or $snapshot.state -eq "unknown") {
+    Fail "Cannot safely replace resident PID $pidValue because ownership could not be verified. $($snapshot.reason)"
+  }
+  $processSet = Get-ManagedProcessSet "resident"
+  if ($processSet.state -eq "running") {
+    Set-Content -LiteralPath $pidFile -Value $processSet.process.Id -Encoding ASCII
+    return $true
+  }
+  if ($processSet.state -ne "stopped") {
+    Fail "Cannot safely replace resident PID $pidValue because process ownership could not be verified. $($processSet.reason)"
+  }
+  return $false
 }
 
 function Read-WatchdogPid {
   if (-not (Test-Path -LiteralPath $watchdogPidFile)) {
     return $null
   }
-  $raw = Get-Content -LiteralPath $watchdogPidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $raw) {
-    return $null
+  try { $raw = Get-Content -LiteralPath $watchdogPidFile -Raw -ErrorAction Stop } catch {
+    Fail "The watchdog PID record could not be read, so process ownership cannot be verified. $($_.Exception.Message)"
   }
   $pidValue = 0
-  if ([int]::TryParse($raw.Trim(), [ref]$pidValue)) {
+  if ([int]::TryParse(([string]$raw).Trim(), [ref]$pidValue) -and $pidValue -gt 0) {
     return $pidValue
   }
-  return $null
+  Fail "The watchdog PID record is invalid, so process ownership cannot be verified."
 }
 
 function Test-WatchdogRunning {
   $pidValue = Read-WatchdogPid
   if (-not $pidValue) {
-    return $false
+    $processSet = Get-ManagedProcessSet "watchdog"
+    if ($processSet.state -eq "running") {
+      Set-Content -LiteralPath $watchdogPidFile -Value $processSet.process.Id -Encoding ASCII
+      return $true
+    }
+    if ($processSet.state -eq "stopped") { return $false }
+    Fail "Cannot safely replace watchdog process state because ownership could not be verified. $($processSet.reason)"
   }
-  return [bool](Get-Process -Id $pidValue -ErrorAction SilentlyContinue)
+  $snapshot = Get-ManagedProcessSnapshot $pidValue "watchdog"
+  if ($snapshot.state -eq "running") { return $true }
+  if ($snapshot.state -eq "unowned" -or $snapshot.state -eq "unknown") {
+    Fail "Cannot safely replace watchdog PID $pidValue because ownership could not be verified. $($snapshot.reason)"
+  }
+  $processSet = Get-ManagedProcessSet "watchdog"
+  if ($processSet.state -eq "running") {
+    Set-Content -LiteralPath $watchdogPidFile -Value $processSet.process.Id -Encoding ASCII
+    return $true
+  }
+  if ($processSet.state -ne "stopped") {
+    Fail "Cannot safely replace watchdog PID $pidValue because process ownership could not be verified. $($processSet.reason)"
+  }
+  return $false
 }
 
 function Quote-Arg($Value) {
@@ -317,36 +532,73 @@ function Start-Resident($SafeMode = $false) {
 
 function Stop-Watchdog {
   $pidValue = Read-WatchdogPid
-  if (-not $pidValue) {
-    return
-  }
+  $processes = @()
   if ($pidValue -ne $PID) {
-    $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-    if ($process) {
-      Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
-      Write-Host "watchdog_status=stopped pid=$pidValue"
-    } else {
-      Write-Host "watchdog_status=stale pid=$pidValue"
+    if ($pidValue) {
+      $snapshot = Get-ManagedProcessSnapshot $pidValue "watchdog"
+      if ($snapshot.state -eq "running") { $processes += $snapshot.process }
+      elseif ($snapshot.state -ne "stopped") {
+        Fail "Refusing to stop watchdog PID $pidValue because ownership could not be verified. $($snapshot.reason)"
+      } else {
+        Write-Host "watchdog_status=stale pid=$pidValue"
+      }
+    }
+    $processSet = Get-ManagedProcessSet "watchdog"
+    if ($processSet.state -eq "running") {
+      foreach ($process in $processSet.processes) {
+        if (-not ($processes | Where-Object { $_.Id -eq $process.Id })) { $processes += $process }
+      }
+    } elseif ($processSet.state -ne "stopped") {
+      Fail "Refusing to stop watchdog processes because ownership could not be verified. $($processSet.reason)"
+    }
+    foreach ($process in $processes) {
+      Stop-VerifiedProcess $process "watchdog"
+      Write-Host "watchdog_status=stopped pid=$($process.Id)"
+    }
+    $remaining = Get-ManagedProcessSet "watchdog"
+    if ($remaining.state -ne "stopped") {
+      Fail "Refusing to clear watchdog PID record because shutdown could not be confirmed. $($remaining.reason)"
+    }
+  } else {
+    $remaining = Get-ManagedProcessSet "watchdog"
+    if ($remaining.state -ne "stopped") {
+      Fail "Refusing to stop watchdog PID $pidValue because ownership could not be verified. $($remaining.reason)"
     }
   }
-  Remove-Item -LiteralPath $watchdogPidFile -Force -ErrorAction SilentlyContinue
+  if ($pidValue) { Remove-Item -LiteralPath $watchdogPidFile -Force -ErrorAction Stop }
 }
 
 function Stop-Resident {
   Stop-Watchdog
   $pidValue = Read-ResidentPid
-  if (-not $pidValue) {
-    Write-Host "resident_status=stopped"
-    return
+  $processes = @()
+  if ($pidValue) {
+    $snapshot = Get-ManagedProcessSnapshot $pidValue "resident"
+    if ($snapshot.state -eq "running") { $processes += $snapshot.process }
+    elseif ($snapshot.state -ne "stopped") {
+      Fail "Refusing to stop resident PID $pidValue because ownership could not be verified. $($snapshot.reason)"
+    } else {
+      Write-Host "resident_status=stale pid=$pidValue"
+    }
   }
-  $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-  if ($process) {
-    Stop-Process -Id $pidValue -ErrorAction SilentlyContinue
-    Write-Host "resident_status=stopped pid=$pidValue"
-  } else {
-    Write-Host "resident_status=stale pid=$pidValue"
+  $processSet = Get-ManagedProcessSet "resident"
+  if ($processSet.state -eq "running") {
+    foreach ($process in $processSet.processes) {
+      if (-not ($processes | Where-Object { $_.Id -eq $process.Id })) { $processes += $process }
+    }
+  } elseif ($processSet.state -ne "stopped") {
+    Fail "Refusing to stop resident processes because ownership could not be verified. $($processSet.reason)"
   }
-  Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+  foreach ($process in $processes) {
+    Stop-VerifiedProcess $process "resident runtime"
+    Write-Host "resident_status=stopped pid=$($process.Id)"
+  }
+  $remaining = Get-ManagedProcessSet "resident"
+  if ($remaining.state -ne "stopped") {
+    Fail "Refusing to clear resident PID record because shutdown could not be confirmed. $($remaining.reason)"
+  }
+  if ($pidValue) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction Stop }
+  if (-not $processes.Count) { Write-Host "resident_status=stopped" }
 }
 
 function Show-Status {

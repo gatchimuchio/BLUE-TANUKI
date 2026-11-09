@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — G02.03 Windows更新中断からの所有済みinstall復旧（限定WIRED）
+### 直近完了BUILD_BATCH — G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
+
+Windows製品LauncherがPID fileだけを根拠に他processを停止しないよう、bundled `node.exe`／installed `BlueTanukiLauncher.ps1`とlaunch arguments／Gateway entry／DataRoot env fileを照合する。PID recordが欠落・staleなら同一installのprocess inventoryを調べ、一件だけ一致すれば記録を復旧または停止する。record不正・判別不能・複数candidateはfail-closedする。所有確認したprocessだけを停止し、最大10秒のexit確認と残存processなしを確認後にrecordを消す。Uninstallも停止が確認できない限りinstall treeの削除へ進まない。既存のuser data保持／明示purge境界は維持する。
+
+全workspace typecheck、15 project build、Windows installer対象test 18件、PowerShell parser、`git diff --check`がPASS。隔離fixtureのprocess境界までを限定`WIRED`とする。実installed Setup／Uninstall、registry／Start Menu、実package更新、他OS、全suite、QE_QC／QE_QAはNOT_RUN。G02の全体E2E、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へは拡張しない。
+
+### 前段完了BUILD_BATCH — G02.03 Windows更新中断からの所有済みinstall復旧（限定WIRED）
 
 Windows製品Setupは、active install rootが無い場合に限り、同一parent内の正確なGUID形式rollback候補を確認する。候補の一意性、managed metadata、package manifest、全file inventory、data-root binding、reparse不在を照合し、一件だけ一致すれば同じparentへ復旧して再検査後にpackaged updateを続行する。複数・不正・未所有候補は保持してfail-closedする。既存install、DataRoot、user dataはこの復旧sliceでは変更しない。
 

@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
@@ -40,6 +40,32 @@ function runPowerShellFile(
     env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
     encoding: "utf8",
   });
+}
+
+async function waitForPath(path: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return existsSync(path);
+}
+
+async function waitForProcessExit(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return Promise.race([
+    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+}
+
+function isProcessRunning(command: string, pid: number): boolean {
+  const result = spawnSync(command, [
+    "-NoProfile",
+    "-Command",
+    `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 0 }; exit 1`,
+  ], { encoding: "utf8" });
+  return result.status === 0;
 }
 
 describe("Windows product installer package", () => {
@@ -284,6 +310,8 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("^BlueTanukiUninstall-[A-Za-z0-9-]+\\.ps1$");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_STATUS_FILE");
     expect(uninstall).toContain("Write-UninstallStatus");
+    expect(uninstall).toContain("shutdown was not confirmed");
+    expect(uninstall).toContain("$stopFailure -or $stopExitCode -ne 0");
     expect(uninstallCmd).toContain("copy /Y");
     expect(uninstallCmd).toContain("start \"\" /b powershell.exe");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
@@ -356,6 +384,176 @@ describe("Windows product installer package", () => {
       rmSync(temp, { recursive: true, force: true });
     }
   });
+
+  it("refuses to stop a process when the resident PID does not belong to the installation", async () => {
+    const command = findPowerShell();
+    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Refusing to stop resident PID");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-pid-owner-"));
+    const install = join(temp, "app");
+    const data = join(temp, "data");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const pidFile = join(data, "blue-tanuki.pid");
+    mkdirSync(join(install, "runtime"), { recursive: true });
+    mkdirSync(data, { recursive: true });
+    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+    writeFileSync(join(install, "runtime", "node.exe"), "not an executable\n", "utf8");
+    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+
+    const unrelated = spawn(command, ["-NoProfile", "-Command", "Start-Sleep -Seconds 60"], { stdio: "ignore" });
+    try {
+      if (!unrelated.pid) throw new Error("PowerShell test process did not start");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      writeFileSync(pidFile, `${unrelated.pid}\n`, "ascii");
+      const result = runPowerShellFile(command, launcher, ["stop"], temp);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(2);
+      expect(output).toContain("Refusing to stop resident PID");
+      expect(isProcessRunning(command, unrelated.pid)).toBe(true);
+      expect(readFileSync(pidFile, "ascii").trim()).toBe(String(unrelated.pid));
+    } finally {
+      if (unrelated.exitCode === null && unrelated.signalCode === null) unrelated.kill();
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the owned resident process only after matching its executable and launch arguments", async () => {
+    const command = findPowerShell();
+    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Get-ManagedProcessSnapshot $pidValue \"resident\"");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-stop-"));
+    const install = join(temp, "app");
+    const data = join(temp, "data");
+    const runtime = join(install, "runtime");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const node = join(runtime, "node.exe");
+    const entry = join(install, "apps", "gateway", "dist", "main.js");
+    const envFile = join(data, "blue-tanuki.env");
+    const pidFile = join(data, "blue-tanuki.pid");
+    mkdirSync(runtime, { recursive: true });
+    mkdirSync(join(install, "apps", "gateway", "dist"), { recursive: true });
+    mkdirSync(data, { recursive: true });
+    linkSync(process.execPath, node);
+    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+    writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
+    writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
+    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+
+    const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
+      cwd: install,
+      stdio: "ignore",
+    });
+    try {
+      if (!resident.pid) throw new Error("resident fixture process did not start");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      writeFileSync(pidFile, `${resident.pid}\n`, "ascii");
+      const result = runPowerShellFile(command, launcher, ["stop"], temp);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toContain(`resident_status=stopped pid=${resident.pid}`);
+      expect(await waitForProcessExit(resident, 3000)).toBe(true);
+      expect(existsSync(pidFile)).toBe(false);
+    } finally {
+      if (resident.exitCode === null && resident.signalCode === null) resident.kill();
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("finds and stops the owned resident process when its PID record is missing", async () => {
+    const command = findPowerShell();
+    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Get-ManagedProcessSet \"resident\"");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-unrecorded-"));
+    const install = join(temp, "app");
+    const data = join(temp, "data");
+    const runtime = join(install, "runtime");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const node = join(runtime, "node.exe");
+    const entry = join(install, "apps", "gateway", "dist", "main.js");
+    const envFile = join(data, "blue-tanuki.env");
+    const pidFile = join(data, "blue-tanuki.pid");
+    mkdirSync(runtime, { recursive: true });
+    mkdirSync(join(install, "apps", "gateway", "dist"), { recursive: true });
+    mkdirSync(data, { recursive: true });
+    linkSync(process.execPath, node);
+    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+    writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
+    writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
+    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+
+    const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
+      cwd: install,
+      stdio: "ignore",
+    });
+    try {
+      if (!resident.pid) throw new Error("resident fixture process did not start");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(existsSync(pidFile)).toBe(false);
+      const result = runPowerShellFile(command, launcher, ["stop"], temp);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toContain(`resident_status=stopped pid=${resident.pid}`);
+      expect(await waitForProcessExit(resident, 3000)).toBe(true);
+      expect(existsSync(pidFile)).toBe(false);
+    } finally {
+      if (resident.exitCode === null && resident.signalCode === null) resident.kill();
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("waits for owned watchdog exit and finds it again when its PID record is missing", async () => {
+    const command = findPowerShell();
+    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Stop-VerifiedProcess $snapshot.process \"watchdog\"");
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-watchdog-stop-"));
+    const install = join(temp, "app");
+    const data = join(temp, "data");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const pidFile = join(data, "blue-tanuki-watchdog.pid");
+    mkdirSync(join(install, "runtime"), { recursive: true });
+    mkdirSync(data, { recursive: true });
+    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+    writeFileSync(join(install, "runtime", "node.exe"), "not an executable\n", "utf8");
+    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+    writeFileSync(join(data, "blue-tanuki.env"), "WEBCHAT_PORT=8787\n", "utf8");
+
+    const watchdog = spawn(command, powerShellFileArgs(command, launcher, ["watchdog"]), { cwd: temp, stdio: "ignore" });
+    try {
+      if (!watchdog.pid) throw new Error("watchdog fixture process did not start");
+      expect(await waitForPath(pidFile, 8000)).toBe(true);
+      const result = runPowerShellFile(command, launcher, ["stop"], temp);
+      expect(result.status).toBe(0);
+      expect(await waitForProcessExit(watchdog, 3000)).toBe(true);
+      expect(existsSync(pidFile)).toBe(false);
+
+      const unrecordedWatchdog = spawn(command, powerShellFileArgs(command, launcher, ["watchdog"]), {
+        cwd: temp,
+        stdio: "ignore",
+      });
+      try {
+        expect(await waitForPath(pidFile, 8000)).toBe(true);
+        expect(unrecordedWatchdog.pid).toBeDefined();
+        rmSync(pidFile);
+        const unrecordedStop = runPowerShellFile(command, launcher, ["stop"], temp);
+        expect(unrecordedStop.status).toBe(0);
+        expect(await waitForProcessExit(unrecordedWatchdog, 3000)).toBe(true);
+        expect(existsSync(pidFile)).toBe(false);
+      } finally {
+        if (unrecordedWatchdog.exitCode === null && unrecordedWatchdog.signalCode === null) unrecordedWatchdog.kill();
+      }
+    } finally {
+      if (watchdog.exitCode === null && watchdog.signalCode === null) watchdog.kill();
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 15000);
 
   it("declares real package, verify, installer, and installed smoke scripts", () => {
     const pkg = read("package.json");
