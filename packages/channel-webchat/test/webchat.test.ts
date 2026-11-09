@@ -1034,6 +1034,9 @@ describe("WebChatChannel — Control Center shell", () => {
           owner_authentication_required: true,
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
           goal_purpose_binding_status: "current",
+          goal_purpose_relation: { status: "owner_reviewed_supports", used_for_authority: false, may_execute: false },
+          task_outcome: { status: "held", reason_code: "result_memory_receipt_unconfirmed",
+            used_for_authority: false, may_execute: false },
           status: "results_verified", step_count: 2,
           compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER"),
             shellResultObservation],
@@ -1086,6 +1089,9 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(nodes["operation-plan-state-summary"]?.className).toBe("badge good");
     const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
+    expect(rendered).toContain("委任仕事の状態");
+    expect(rendered).toContain("確認済み結果の記憶保存receiptが確認できません。");
+    expect(rendered).toContain("委任目的の達成判定や実行許可を意味しません。");
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
     expect(rendered).toContain('data-owner-authentication-required="true"');
     expect(rendered).toContain("別入口のwaitはowner tokenを再入力し");

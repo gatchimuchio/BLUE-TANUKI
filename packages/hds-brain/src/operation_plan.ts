@@ -5386,16 +5386,40 @@ export class OperationPlanLedger {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
         const recoveryHold = this.recoveryHolds.get(planIdDigest);
+        const currentStepBindings = currentRevision.plan.steps.map((step) =>
+          p.bindings.filter((entry) => entry.step_id === step.step_id).at(-1));
+        const allStepResultsVerified = currentStepBindings.length > 0 &&
+          currentStepBindings.every((binding) => binding?.status === "verified");
+        const goalPurposeBindingStatus = p.goal_purpose_binding
+          ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
+          : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const;
+        const goalPurposeRelation = this.goalPurposeRelationProjection(p);
+        const taskOutcomeReason = recoveryHold ? "recovery_hold_active" as const
+          : goalPurposeBindingStatus === "required" ? "goal_purpose_binding_required" as const
+            : goalPurposeBindingStatus === "stale" ? "goal_purpose_binding_stale" as const
+              : goalPurposeRelation.status !== "not_required" && goalPurposeRelation.status !== "owner_reviewed_supports"
+                ? "goal_purpose_relation_unconfirmed" as const
+                : currentStepBindings.some((binding) => binding &&
+                  ["outcome_unknown", "verification_failed", "provider_rejected", "invalidated"].includes(binding.status))
+                  ? "operation_result_unverified" as const
+                  : allStepResultsVerified && currentStepBindings.some((binding) => !binding?.memory_receipt)
+                    ? "result_memory_receipt_unconfirmed" as const
+                    : allStepResultsVerified ? "goal_completion_not_assessed" as const
+                      : "operation_plan_steps_pending" as const;
         return { plan_id: planIdDigest, task_identity_digest: operationPlanTaskIdentityDigest(p),
         owner_identity_digest: operationPlanDigest(p.owner),
         channel_identity_digest: operationPlanDigest(p.channel),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
         ...(p.goal_purpose_binding ? { goal_purpose_binding: structuredClone(p.goal_purpose_binding) } : {}),
-        goal_purpose_binding_status: p.goal_purpose_binding
-          ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
-          : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const,
-        goal_purpose_relation: this.goalPurposeRelationProjection(p),
+        goal_purpose_binding_status: goalPurposeBindingStatus,
+        goal_purpose_relation: goalPurposeRelation,
+        task_outcome: {
+          status: taskOutcomeReason === "operation_plan_steps_pending" ? "in_progress" as const : "held" as const,
+          reason_code: taskOutcomeReason,
+          used_for_authority: false as const,
+          may_execute: false as const,
+        },
         ...(p.compute_source_observations?.length
           ? { compute_source_observations: structuredClone(p.compute_source_observations) } : {}),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,

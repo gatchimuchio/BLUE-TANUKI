@@ -2088,6 +2088,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) + '</code><br>' +
               escapeHtml(purposeBindingStatus) + '</dd>'
             : plan.goal_purpose_binding_status === "required" ? '<dt>作業目的版</dt><dd>' + escapeHtml(purposeBindingStatus) + '</dd>' : '';
+          const taskOutcome = isObject(plan.task_outcome) ? plan.task_outcome : null;
+          const taskOutcomeStatusLabels = { in_progress: "進行中", held: "保留" };
+          const taskOutcomeReasonLabels = {
+            recovery_hold_active: "復旧後の状態確認が必要です。",
+            goal_purpose_binding_required: "委任目的の版が計画に結び付いていません。",
+            goal_purpose_binding_stale: "委任目的の版が現行か確認できません。",
+            goal_purpose_relation_unconfirmed: "計画と委任目的の関係が確認されていません。",
+            operation_result_unverified: "作用結果が未確認です。",
+            result_memory_receipt_unconfirmed: "確認済み結果の記憶保存receiptが確認できません。",
+            goal_completion_not_assessed: "step結果は検証済みですが、委任目的の達成は未判定です。",
+            operation_plan_steps_pending: "計画stepの結果を確認中です。",
+          };
+          const taskOutcomeIsSafe = taskOutcome && taskOutcome.used_for_authority === false && taskOutcome.may_execute === false &&
+            Object.prototype.hasOwnProperty.call(taskOutcomeStatusLabels, taskOutcome.status) &&
+            Object.prototype.hasOwnProperty.call(taskOutcomeReasonLabels, taskOutcome.reason_code);
+          const taskOutcomeMarkup = '<dt>委任仕事の状態</dt><dd>' + (taskOutcomeIsSafe
+            ? escapeHtml(taskOutcomeStatusLabels[taskOutcome.status]) + '・' + escapeHtml(taskOutcomeReasonLabels[taskOutcome.reason_code]) +
+              '<br><span class="muted">step結果の確認は、委任目的の達成判定や実行許可を意味しません。</span>'
+            : '状態を確認できません。委任目的は完了扱いしません。') + '</dd>';
           const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
           const purposeReviewBindingStatus = plan.goal_purpose_binding_status ?? (purposeBinding ? "current" : "not_configured");
           const purposeRelationAllowsStepReview = purposeBinding
@@ -2155,6 +2174,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
             '<dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.task_identity_digest)) + '</dd>' +
             '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
+            taskOutcomeMarkup +
             (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
               '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
             purposeBindingLabel + purposeRelationLabel +

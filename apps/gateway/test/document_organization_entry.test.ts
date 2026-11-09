@@ -781,7 +781,9 @@ describe("delegated goal purpose owner review", () => {
           ? { plan: current, step: currentStep } : null;
       }, gateway, "path-bound file.search did not reach a verified M receipt");
       expect(verified.plan).toMatchObject({ status: "results_verified",
-        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
+        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" },
+        task_outcome: { status: "held", reason_code: "goal_completion_not_assessed",
+          used_for_authority: false, may_execute: false } });
       expect(verified.step).toMatchObject({ operation: "file.search", status: "verified",
         binding: { memory_status: "receipt_confirmed" } });
 
@@ -2256,7 +2258,9 @@ describe("delegated goal purpose owner review", () => {
           ? { plan: restoredPlan, shellStep: restoredShellStep } : null;
       }, gateway, "Gateway restart did not restore the same-task test failure state");
       expect(restartedFailureState.plan).toMatchObject({ plan_id: editTestPlanId,
-        revision_digest: editTestRevision, task_identity_digest: editTestPlan.task_identity_digest });
+        revision_digest: editTestRevision, task_identity_digest: editTestPlan.task_identity_digest,
+        task_outcome: { status: "in_progress", reason_code: "operation_plan_steps_pending",
+          used_for_authority: false, may_execute: false } });
       expect(restartedFailureState.shellStep).toMatchObject({
         step_id: editTestShellStep.step_id,
         status: "verified",

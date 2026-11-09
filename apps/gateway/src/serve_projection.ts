@@ -208,6 +208,15 @@ export function projectOperationCoreExecutionHistory(
   });
 }
 
+export interface OperationPlanTaskOutcomeProjection {
+  status: "in_progress" | "held";
+  reason_code: "recovery_hold_active" | "goal_purpose_binding_required" | "goal_purpose_binding_stale" |
+    "goal_purpose_relation_unconfirmed" | "operation_result_unverified" | "result_memory_receipt_unconfirmed" |
+    "goal_completion_not_assessed" | "operation_plan_steps_pending";
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface OperationPlanStatusProjection {
   schema_version: "operation-plan.status.v1";
   evidence_source: ["INTERNAL_STATE"];
@@ -259,6 +268,7 @@ export interface OperationPlanStatusProjection {
     owner_reauthentication_binding?: { owner_identity_digest: string; channel_identity_digest: string };
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
+    task_outcome?: OperationPlanTaskOutcomeProjection;
     goal_purpose_relation?: {
       status: "not_required" | "unavailable" | "stale" | "unverified" | "conflicts" | "owner_reviewed_supports" | "owner_reviewed_unknown";
       candidate_outcome?: "supports" | "conflicts" | "unknown";
@@ -461,6 +471,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   for (const plan of inputPlans.slice(-20).reverse()) {
     const revision = numberValue(plan.revision);
     const goalPurposeBinding = plan.goal_purpose_binding;
+    const taskOutcome = plan.task_outcome;
     const goalPurposeRelation = plan.goal_purpose_relation;
     const rawComputeSourceObservations = plan.compute_source_observations;
     const computeSourceObservations: OperationPlanComputeSourceObservation[] = [];
@@ -505,10 +516,20 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (goalPurposeRelation.owner_review_status === "verified" &&
           ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
             (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
+    const taskOutcomeValid = taskOutcome === undefined || (isRecord(taskOutcome) &&
+      Object.keys(taskOutcome).length === 4 &&
+      Object.keys(taskOutcome).every((key) => ["status", "reason_code", "used_for_authority", "may_execute"].includes(key)) &&
+      ["in_progress", "held"].includes(String(taskOutcome.status)) &&
+      ["recovery_hold_active", "goal_purpose_binding_required", "goal_purpose_binding_stale",
+        "goal_purpose_relation_unconfirmed", "operation_result_unverified", "result_memory_receipt_unconfirmed",
+        "goal_completion_not_assessed", "operation_plan_steps_pending"].includes(String(taskOutcome.reason_code)) &&
+      taskOutcome.used_for_authority === false && taskOutcome.may_execute === false &&
+      ((taskOutcome.status === "in_progress" && taskOutcome.reason_code === "operation_plan_steps_pending") ||
+        (taskOutcome.status === "held" && taskOutcome.reason_code !== "operation_plan_steps_pending")));
     if (!isDigest(plan.plan_id) || (plan.task_identity_digest !== undefined && !isDigest(plan.task_identity_digest)) ||
         !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !isDigest(plan.owner_identity_digest) || !isDigest(plan.channel_identity_digest) ||
-        !goalPurposeBindingValid || !goalPurposeRelationValid ||
+        !goalPurposeBindingValid || !goalPurposeRelationValid || !taskOutcomeValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
           (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
@@ -675,6 +696,12 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       } } : {}),
       goal_purpose_binding_status: (plan.goal_purpose_binding_status ??
         (goalPurposeBinding === undefined ? "not_configured" : "current")) as "not_configured" | "required" | "current" | "stale",
+      ...(isRecord(taskOutcome) ? { task_outcome: {
+        status: taskOutcome.status as "in_progress" | "held",
+        reason_code: taskOutcome.reason_code as OperationPlanTaskOutcomeProjection["reason_code"],
+        used_for_authority: false as const,
+        may_execute: false as const,
+      } } : {}),
       ...(isRecord(goalPurposeRelation) ? { goal_purpose_relation: {
         status: goalPurposeRelation.status as "not_required" | "unavailable" | "stale" | "unverified",
         ...(goalPurposeRelation.candidate_outcome !== undefined ? { candidate_outcome: goalPurposeRelation.candidate_outcome as "supports" | "conflicts" | "unknown" } : {}),

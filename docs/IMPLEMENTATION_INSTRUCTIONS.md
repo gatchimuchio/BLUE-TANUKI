@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / Gateway再起動後も同一taskの失敗からOwner確認・回復候補へ継続
+## 直近施工BUILD_BATCH — QE_BUILD / 委任目的の未判定をHDSからGateway・Control Centerへ返す
+
+主語は、委任仕事の計画・検証結果・目的達成状態を分けてOwnerへ返すBLUE-TANUKIのHDS／Gateway／Control Center経路。HDS `OperationPlanLedger`は保存済みの現行step binding、目的版・関係、復旧hold、M receiptから`task_outcome`を投影する。未完了stepは`in_progress`、結果・目的・復旧・M receiptに未確認があれば理由付き`held`とする。すべてのstep結果とM receiptが確認されても、計画結果だけでは委任目的の達成を証明できないため`goal_completion_not_assessed`で保留し、`achieved`を発行しない。
+
+Gatewayは固定enumと`used_for_authority=false`／`may_execute=false`を検証してstatus projectionへ渡し、Control Centerは計画状態と仕事状態を分けて表示する。restart後もJ checkpointのplan／binding／receiptから保留状態を再構成する。C08.02の保留経路を限定`WIRED`とし、Jによる目標達成の肯定的評価と、その正本化・停止consumerは次のBUILD対象として残す。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。
+
+HDS、Gateway、WebChatのtypecheckとbuild、Control Center renderer 1 passed／117 skipped、隔離GatewayのBT-U-E2E-01経路1 passed／6 skipped、`git diff --check`はPASS。BT-U-E2E-01では検証済み結果・M receipt後のgoal未判定holdと、Gateway再起動後に保存済みstep bindingsから`in_progress`を再導出する状態を確認した。実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。distはこのGateway実行確認に使うactive local buildとして保持する。保護添付フォルダー、OneDrive、別repo、実ユーザーデータは変更しない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Gateway再起動後も同一taskの失敗からOwner確認・回復候補へ継続
 
 主語は、同一Workspaceで編集後test失敗を観測し、Gateway再起動をまたいで状態を復元してOwner確認・回復候補へ進むBLUE-TANUKIのGateway／HDS／WebChat経路。前の合成sliceに続き、固定隔離コマンド（`node -e "process.exitCode = 23"`）後にGatewayを停止・再起動し、同一plan ID・revision・task identityのshell summaryとM receiptが復元されること、ファイルが変更後状態のままで自動復元されないことを接続確認した。再接続後の同一path `file.search` → Ownerへの結果返却 → 同一task／目的bindingの逆編集候補 → no-store内容確認とL3承認 → 逆編集 → `file.search`までを通した。実provider呼出し・外部作用はない。
 
