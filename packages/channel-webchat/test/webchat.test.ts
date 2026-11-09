@@ -3375,6 +3375,12 @@ describe("WebChatChannel — HTTP inbound", () => {
     }, { authorization: `Bearer ${TOKEN}` });
     expect(r.status).toBe(404);
     expect(r.body).toMatchObject({ error: "runtime_intent_not_configured" });
+    const ticket = await postJson(ctx.port, "/runtime/ws-ticket", {
+      runtime_id: "blue_tanuki",
+      session_id: "session-1234-abcd",
+    }, { authorization: `Bearer ${TOKEN}` });
+    expect(ticket.status).toBe(404);
+    expect(ticket.body).toMatchObject({ error: "runtime_intent_not_configured" });
     expect(ctx.received).toHaveLength(0);
   });
 
@@ -3469,6 +3475,71 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(JSON.stringify(response.body)).not.toContain("blue_tanuki");
       expect(response.body).toMatchObject({ session_ref_digest: sessionDigest });
     } finally {
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("returns D4 Runtime output over a one-use ticket scoped to the authenticated session", async () => {
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    });
+    let ws: WebSocket | undefined;
+    try {
+      await runtimeCtx.ch.start(async (req) => {
+        runtimeCtx.received.push(req);
+      });
+
+      const sessionId = "session-runtime-reply-001";
+      const unauthorized = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki", session_id: sessionId,
+      }, { authorization: `Bearer ${TOKEN}` });
+      expect(unauthorized.status).toBe(401);
+
+      const unregistered = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "other_runtime", session_id: sessionId,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(unregistered.status).toBe(403);
+
+      const issued = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki", session_id: sessionId,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(issued.status).toBe(200);
+      const ticketBody = issued.body as { ticket: string; expires_in_sec: number; session_ref_digest: string };
+      expect(ticketBody.ticket).toMatch(/^[A-Za-z0-9_-]{40,}$/u);
+      expect(ticketBody.expires_in_sec).toBeGreaterThan(0);
+      expect(ticketBody.session_ref_digest).toMatch(/^[a-f0-9]{64}$/u);
+      expect(JSON.stringify(issued.body)).not.toContain(sessionId);
+      expect(JSON.stringify(issued.body)).not.toContain(D4_RUNTIME_TOKEN);
+
+      const sessionScope = `d4-runtime:${ticketBody.session_ref_digest}`;
+      ws = await openWsWithTicket(runtimeCtx.port, ticketBody.ticket);
+      await waitForConnectionCount(runtimeCtx.ch, sessionScope, 1);
+
+      const accepted = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki", session_id: sessionId, intent: "status request",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      const requestId = (accepted.body as { request_id: string }).request_id;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(runtimeCtx.received).toHaveLength(1);
+
+      const nextFrame = readWsMessage(ws);
+      const sent = await runtimeCtx.ch.send({
+        channel: "webchat", target: sessionScope, content: "verified reply",
+      }, {
+        command_id: "runtime-reply-command",
+        upstream_commit_hash: "runtime-reply-upstream",
+        request_id: requestId,
+      });
+      expect(sent.delivered).toBe(true);
+      expect(await nextFrame).toMatchObject({
+        kind: "channel_send",
+        command_id: "runtime-reply-command",
+        request_id: requestId,
+        content: "verified reply",
+      });
+    } finally {
+      ws?.close();
       await runtimeCtx.teardown();
     }
   });

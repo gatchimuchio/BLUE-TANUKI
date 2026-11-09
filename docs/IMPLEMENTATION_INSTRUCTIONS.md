@@ -2,7 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E04.02 署名後の同一条件file.search観測をJへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime入力と同一session応答transportのBlue側接続（限定WIRED）
+
+主語はBLUE-TANUKIのGateway/`channel-webchat` D4 Runtime Adapter、目的は認証済みRuntimeからの意図入力をHDSへ渡し、同一session宛てにHDSが許可した出力を返すこと。専用`BLUE_TANUKI_D4_RUNTIME_TOKEN`と固定runtime IDを共有する新`POST /runtime/ws-ticket`を追加した。登録runtime IDとsession参照を検証し、session参照はtoken鍵付きHMAC digestへ変換する。返すticketは既存ticket storeの期限・単回消費・user束縛を使い、WebChat一般tokenやowner/resume tokenを共有しない。新しいticket bodyはruntime/session IDだけで、意図・command・path・Approval・Permissionを含まない。
+
+D4 Runtime Adapterは同じsessionでticketを先に要求し、ticketで既存`/ws`へ接続後、既存`POST /runtime/intent`を送る。WebSocketは同じdigest scopeへ既存`channel_send`を配送し、HDSが付けたrequest IDも保持する。`202`は入力受付のみで、仕事達成や応答完了を意味しない。新しい権限経路・出力保存・再送機能は追加していない。
+
+接続状態はBlue側transportの限定`WIRED`。依存3 project buildはPASS。選択test（1件PASS、同fileの他121件skip）で未設定時のfail-closed、wrong token、未登録runtime拒否、session digest束縛、WebSocket channel_send戻りを確認した。`git diff --check`と`docs:check`は本更新後に実行する。全suite、実HDS判断→出力監査→D4 Runtime受信のGateway一気通貫、実D4 producer/receiver、workspace登録、disconnect/restart recovery、実provider/外部作用、installed製品、5OS、QE_QC／QE_QAは未実施。D03.01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。D4 Pocket repoは変更していない。
+
+**次のproducer／consumer:** D4側がBlueのsession-scoped WebSocket contractを使うproducer/receiverは未接続。D4側repo変更には別repoの限定委任が必要なため保留し、次回は現行HEADの全体接続距離から、D4変更なしで結べるBlue側consumerを再選定する。runtime/session/workspace registrationがない状態をD03.01完成と扱わない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / E04.02 署名後の同一条件file.search観測をJへ接続（限定WIRED）
 
 主語は、失敗署名を非信頼計算Cへ渡すFailureReviewと、範囲・反例・再開条件を裁定するHDS-J。署名時`evidence_log_ids`はbaselineとして保持し、新しい観測に再利用しない。CompleteHistory hash-chainが有効でbaseline全件が存在する場合のみ、その後に記録された同一の`file.search`成功を探す。対象範囲はfileに限定し、action／goal input／actor・channel patternが署名と完全一致し、read-only結果digestがある記録だけを選ぶ。選択した履歴IDはbaseline IDと異なり、履歴順もbaselineより後である。
 

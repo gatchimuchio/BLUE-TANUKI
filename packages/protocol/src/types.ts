@@ -723,6 +723,13 @@ const RegisteredRuntimeReferenceSchema = z.string()
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
 
+/** Authenticated D4 Runtime session transport reference; identifiers are context only. */
+export const RuntimeSessionInputSchema = z.object({
+  runtime_id: RegisteredRuntimeReferenceSchema,
+  session_id: RegisteredRuntimeReferenceSchema,
+}).strict();
+export type RuntimeSessionInput = z.infer<typeof RuntimeSessionInputSchema>;
+
 /** Authenticated D4 Runtime dialogue input; identifiers are context only. */
 export const RuntimeIntentInputSchema = z.object({
   runtime_id: RegisteredRuntimeReferenceSchema,

@@ -15,6 +15,7 @@ import {
   GoalCompletionRulesSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
+  RuntimeSessionInputSchema,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
   TRANSIENT_AUDIO_MAX_BYTES,
@@ -225,6 +226,7 @@ function findAotanuAssetRoot(): string {
  *   POST /ws-ticket  body:{user}  auth:Bearer  rate-limited per-user
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
+ *   POST /runtime/ws-ticket body:{runtime_id, session_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent body:{runtime_id, session_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
@@ -838,7 +840,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
-        : url.pathname === "/runtime/intent"
+        : url.pathname === "/runtime/intent" || url.pathname === "/runtime/ws-ticket"
         ? "d4_runtime"
         : url.pathname === "/inbound" || url.pathname === "/ws-ticket"
         ? "inbound"
@@ -1172,6 +1174,36 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       } finally {
         if (!imageTransferred) ownerTaskImage?.data.fill(0);
       }
+      return;
+    }
+
+    if (url.pathname === "/runtime/ws-ticket") {
+      const parsed = RuntimeSessionInputSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_runtime_session" }));
+        return;
+      }
+      const config = this.opts.d4_runtime_intent!;
+      if (parsed.data.runtime_id !== config.runtime_id) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_not_registered" }));
+        return;
+      }
+      const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
+      const sessionScope = `d4-runtime:${sessionIdDigest}`;
+      if (!this.rateLimitOr429(this.buckets.ws_ticket, D4_RUNTIME_TOKEN_ACTOR, res)) return;
+      const issued = await this.ticketStore.issue(sessionScope, this.ticketTtlMs);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(JSON.stringify({
+        ticket: issued.ticket,
+        expires_in_sec: Math.max(0, Math.floor((issued.expires_at_ms - Date.now()) / 1000)),
+        session_ref_digest: sessionIdDigest,
+      }));
       return;
     }
 

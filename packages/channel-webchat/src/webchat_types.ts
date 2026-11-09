@@ -28,9 +28,9 @@ export interface WebChatRateLimits {
 }
 
 export interface WebChatD4RuntimeIntentConfig {
-  /** Dedicated secret held by the registered D4 Runtime Adapter. */
+  /** Dedicated secret for D4 Runtime intent ingress and same-session WebSocket tickets. */
   token: string;
-  /** The single D4 Runtime ID registered for this Gateway instance. */
+  /** The single D4 Runtime ID accepted by this Gateway instance. */
   runtime_id: string;
 }
 
