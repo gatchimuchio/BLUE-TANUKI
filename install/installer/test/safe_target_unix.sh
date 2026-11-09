@@ -352,7 +352,12 @@ cp "$REPO_ROOT/install/unix/safe-target.sh" "$SETUP_PACKAGE/app/install/unix/saf
 cp "$REPO_ROOT/install/unix/product/BlueTanukiUninstall.sh" "$SETUP_PACKAGE/launcher/BlueTanukiUninstall.sh"
 cat > "$SETUP_PACKAGE/launcher/BlueTanukiLauncher.sh" <<'LAUNCHER'
 #!/usr/bin/env sh
+if [ "${1:-}" = "resident-stop" ] && [ "${BLUE_TANUKI_RECOVERY:-0}" = "1" ] && [ -n "${RECOVERY_STOP_FAILURE_FILE:-}" ] && [ -f "$RECOVERY_STOP_FAILURE_FILE" ]; then
+  echo "fixture recovery stop failure" >&2
+  exit 8
+fi
 if [ "${1:-}" = "resident-stop" ] && [ -n "${STOP_FAILURE_FILE:-}" ] && [ -f "$STOP_FAILURE_FILE" ]; then
+  [ "${BLUE_TANUKI_RECOVERY:-0}" = "1" ] && exit 0
   echo "fixture stop failure" >&2
   exit 9
 fi
@@ -442,6 +447,10 @@ if ! run_fixture_setup --no-launch --skip-doctor > "$TMP_ROOT/setup-initial.out"
 fi
 [ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 30
 [ -f "$SETUP_DATA/.blue-tanuki-owner" ] && [ -f "$SETUP_CONFIG/.blue-tanuki-owner" ] || exit 31
+mkdir -p "$SETUP_DATA/data"
+printf 'retain across interrupted updates\n' > "$SETUP_DATA/data/user.txt"
+SETUP_USER_DATA_SHA256=$(sha256_file "$SETUP_DATA/data/user.txt")
+SETUP_ENV_SHA256=$(sha256_file "$SETUP_CONFIG/blue-tanuki.env")
 
 LEGACY_HOME="$TMP_ROOT/markerless-legacy-home"
 LEGACY_INSTALL="$LEGACY_HOME/legacy-app"
@@ -564,6 +573,62 @@ grep -Fq "existing resident process could not be safely stopped" "$TMP_ROOT/setu
 [ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 72
 rm -f -- "$STOP_FAILURE_FILE"
 
+CRASH_APP_MOVE_BIN="$TMP_ROOT/crash-app-move-bin"
+mkdir -p "$CRASH_APP_MOVE_BIN"
+cat > "$CRASH_APP_MOVE_BIN/mv" <<'CRASH_APP_MOVE'
+#!/usr/bin/env sh
+case "$*" in
+  *".app.blue-tanuki-rollback-"*)
+    /usr/bin/mv "$@"
+    kill -KILL "$PPID"
+    ;;
+  *) exec /usr/bin/mv "$@" ;;
+esac
+CRASH_APP_MOVE
+chmod +x "$CRASH_APP_MOVE_BIN/mv"
+if (
+  PATH="$CRASH_APP_MOVE_BIN:$PATH" \
+  HOME="$SETUP_HOME" \
+  XDG_DATA_HOME="$SETUP_HOME/.local/share" \
+  XDG_CONFIG_HOME="$SETUP_HOME/.config" \
+  LAUNCH_AFTER_INSTALL=0 \
+  sh "$SETUP_PACKAGE/BlueTanukiSetup.sh" --install-root "$SETUP_INSTALL" --data-root "$SETUP_DATA" \
+    --config-root "$SETUP_CONFIG" --runtime-root "$SETUP_RUNTIME" --bin-root "$SETUP_BIN" --force --no-launch --skip-doctor
+) > "$TMP_ROOT/setup-crash-after-app-backup.out" 2>&1; then
+  echo "product setup survived injected termination after app backup" >&2
+  exit 77
+fi
+CRASHED_APP_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-rollback-*' -print | awk 'END { print NR + 0 }')
+[ "$CRASHED_APP_COUNT" = "1" ] || exit 78
+CRASHED_APP=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-rollback-*' -print | sed -n '1p')
+[ "$(cat "$CRASHED_APP/apps/gateway/dist/version.txt")" = "v1" ] || exit 79
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 80
+RECOVERY_STOP_FAILURE_FILE="$TMP_ROOT/recovery-stop-failure"
+export RECOVERY_STOP_FAILURE_FILE
+: > "$RECOVERY_STOP_FAILURE_FILE"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-recovery-stop-failure.out" 2>&1; then
+  echo "setup recovered interrupted update without a confirmed resident shutdown" >&2
+  exit 107
+fi
+grep -Fq "resident shutdown could not be confirmed before interrupted-update recovery" "$TMP_ROOT/setup-recovery-stop-failure.out" || exit 108
+[ ! -e "$SETUP_INSTALL" ] && [ -d "$CRASHED_APP" ] && [ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 109
+rm -f -- "$RECOVERY_STOP_FAILURE_FILE"
+: > "$STOP_FAILURE_FILE"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-recover-after-app-backup.out" 2>&1; then
+  echo "setup continued after injected post-recovery resident-stop failure" >&2
+  exit 81
+fi
+grep -Fq "restored the verified previous product after an interrupted update" "$TMP_ROOT/setup-recover-after-app-backup.out" || {
+  cat "$TMP_ROOT/setup-recover-after-app-backup.out" >&2
+  echo "setup did not recover the app-only rollback state" >&2
+  exit 82
+}
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 83
+[ ! -e "$CRASHED_APP" ] && [ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 84
+[ "$(sha256_file "$SETUP_DATA/data/user.txt")" = "$SETUP_USER_DATA_SHA256" ] || exit 85
+[ "$(sha256_file "$SETUP_CONFIG/blue-tanuki.env")" = "$SETUP_ENV_SHA256" ] || exit 86
+rm -f -- "$STOP_FAILURE_FILE"
+
 FAIL_MOVE_BIN="$TMP_ROOT/fail-move-bin"
 mkdir -p "$FAIL_MOVE_BIN"
 cat > "$FAIL_MOVE_BIN/mv" <<'MOVE'
@@ -592,6 +657,122 @@ fi
   exit 33
 }
 [ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 34
+
+CRASH_APP_STAGE_BIN="$TMP_ROOT/crash-app-stage-bin"
+mkdir -p "$CRASH_APP_STAGE_BIN"
+cat > "$CRASH_APP_STAGE_BIN/mv" <<'CRASH_APP_STAGE'
+#!/usr/bin/env sh
+case "$*" in
+  *".app.blue-tanuki-stage-"*"$CRASH_INSTALL_TARGET")
+    /usr/bin/mv "$@"
+    kill -KILL "$PPID"
+    ;;
+  *) exec /usr/bin/mv "$@" ;;
+esac
+CRASH_APP_STAGE
+chmod +x "$CRASH_APP_STAGE_BIN/mv"
+if (
+  CRASH_INSTALL_TARGET="$SETUP_INSTALL" \
+  PATH="$CRASH_APP_STAGE_BIN:$PATH" \
+  HOME="$SETUP_HOME" \
+  XDG_DATA_HOME="$SETUP_HOME/.local/share" \
+  XDG_CONFIG_HOME="$SETUP_HOME/.config" \
+  LAUNCH_AFTER_INSTALL=0 \
+  sh "$SETUP_PACKAGE/BlueTanukiSetup.sh" --install-root "$SETUP_INSTALL" --data-root "$SETUP_DATA" \
+    --config-root "$SETUP_CONFIG" --runtime-root "$SETUP_RUNTIME" --bin-root "$SETUP_BIN" --force --no-launch --skip-doctor
+) > "$TMP_ROOT/setup-crash-after-app-install.out" 2>&1; then
+  echo "product setup survived injected termination after new app install" >&2
+  exit 110
+fi
+CRASHED_APP_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-rollback-*' -print | awk 'END { print NR + 0 }')
+CRASHED_RUNTIME_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.runtime.blue-tanuki-rollback-*' -print | awk 'END { print NR + 0 }')
+[ "$CRASHED_APP_COUNT" = "1" ] && [ "$CRASHED_RUNTIME_COUNT" = "1" ] || exit 111
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v2" ] || exit 112
+[ ! -e "$SETUP_RUNTIME" ] || exit 113
+: > "$STOP_FAILURE_FILE"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-recover-after-app-install.out" 2>&1; then
+  echo "setup continued after injected post-recovery resident-stop failure" >&2
+  exit 114
+fi
+grep -Fq "restored the verified previous product after an interrupted update" "$TMP_ROOT/setup-recover-after-app-install.out" || {
+  cat "$TMP_ROOT/setup-recover-after-app-install.out" >&2
+  echo "setup did not recover an installed new app without its runtime" >&2
+  exit 115
+}
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 116
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 117
+RECOVERED_APP=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-interrupted-*' -print | sed -n '1p')
+[ "$(cat "$RECOVERED_APP/apps/gateway/dist/version.txt")" = "v2" ] || exit 118
+[ "$(sha256_file "$SETUP_DATA/data/user.txt")" = "$SETUP_USER_DATA_SHA256" ] || exit 119
+[ "$(sha256_file "$SETUP_CONFIG/blue-tanuki.env")" = "$SETUP_ENV_SHA256" ] || exit 120
+rm -f -- "$STOP_FAILURE_FILE"
+
+CRASH_RUNTIME_MOVE_BIN="$TMP_ROOT/crash-runtime-move-bin"
+mkdir -p "$CRASH_RUNTIME_MOVE_BIN"
+cat > "$CRASH_RUNTIME_MOVE_BIN/mv" <<'CRASH_RUNTIME_MOVE'
+#!/usr/bin/env sh
+case "$*" in
+  *".runtime.blue-tanuki-stage-"*)
+    /usr/bin/mv "$@"
+    kill -KILL "$PPID"
+    ;;
+  *) exec /usr/bin/mv "$@" ;;
+esac
+CRASH_RUNTIME_MOVE
+chmod +x "$CRASH_RUNTIME_MOVE_BIN/mv"
+if (
+  PATH="$CRASH_RUNTIME_MOVE_BIN:$PATH" \
+  HOME="$SETUP_HOME" \
+  XDG_DATA_HOME="$SETUP_HOME/.local/share" \
+  XDG_CONFIG_HOME="$SETUP_HOME/.config" \
+  LAUNCH_AFTER_INSTALL=0 \
+  sh "$SETUP_PACKAGE/BlueTanukiSetup.sh" --install-root "$SETUP_INSTALL" --data-root "$SETUP_DATA" \
+    --config-root "$SETUP_CONFIG" --runtime-root "$SETUP_RUNTIME" --bin-root "$SETUP_BIN" --force --no-launch --skip-doctor
+) > "$TMP_ROOT/setup-crash-after-runtime-install.out" 2>&1; then
+  echo "product setup survived injected termination after runtime install" >&2
+  exit 87
+fi
+CRASHED_APP_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-rollback-*' -print | awk 'END { print NR + 0 }')
+CRASHED_RUNTIME_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.runtime.blue-tanuki-rollback-*' -print | awk 'END { print NR + 0 }')
+[ "$CRASHED_APP_COUNT" = "1" ] && [ "$CRASHED_RUNTIME_COUNT" = "1" ] || exit 88
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v2" ] || exit 89
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 90
+[ "$(sha256_file "$SETUP_DATA/data/user.txt")" = "$SETUP_USER_DATA_SHA256" ] || exit 91
+[ "$(sha256_file "$SETUP_CONFIG/blue-tanuki.env")" = "$SETUP_ENV_SHA256" ] || exit 92
+: > "$STOP_FAILURE_FILE"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-recover-after-runtime-install.out" 2>&1; then
+  echo "setup continued after injected post-recovery resident-stop failure" >&2
+  exit 93
+fi
+grep -Fq "restored the verified previous product after an interrupted update" "$TMP_ROOT/setup-recover-after-runtime-install.out" || {
+  cat "$TMP_ROOT/setup-recover-after-runtime-install.out" >&2
+  echo "setup did not recover the app and runtime rollback state" >&2
+  exit 94
+}
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 95
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 96
+RECOVERED_APP_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-interrupted-*' -print | awk 'END { print NR + 0 }')
+RECOVERED_RUNTIME_COUNT=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.runtime.blue-tanuki-interrupted-*' -print | awk 'END { print NR + 0 }')
+[ "$RECOVERED_APP_COUNT" = "2" ] && [ "$RECOVERED_RUNTIME_COUNT" = "1" ] || exit 97
+RECOVERED_APP=$(find "$SETUP_DATA" -mindepth 1 -maxdepth 1 -type d -name '.app.blue-tanuki-interrupted-*' -print | sed -n '1p')
+[ "$(cat "$RECOVERED_APP/apps/gateway/dist/version.txt")" = "v2" ] || exit 98
+[ "$(sha256_file "$SETUP_DATA/data/user.txt")" = "$SETUP_USER_DATA_SHA256" ] || exit 99
+[ "$(sha256_file "$SETUP_CONFIG/blue-tanuki.env")" = "$SETUP_ENV_SHA256" ] || exit 100
+rm -f -- "$STOP_FAILURE_FILE"
+
+AMBIGUOUS_APP_A="$SETUP_DATA/.app.blue-tanuki-rollback-100.200"
+AMBIGUOUS_APP_B="$SETUP_DATA/.app.blue-tanuki-rollback-101.201"
+mkdir "$AMBIGUOUS_APP_A" "$AMBIGUOUS_APP_B"
+if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-ambiguous-recovery.out" 2>&1; then
+  echo "product setup accepted multiple interrupted-update candidates" >&2
+  exit 101
+fi
+grep -Fq "multiple interrupted-update app candidates exist" "$TMP_ROOT/setup-ambiguous-recovery.out" || exit 102
+[ -d "$AMBIGUOUS_APP_A" ] && [ -d "$AMBIGUOUS_APP_B" ] || exit 103
+[ "$(cat "$SETUP_INSTALL/apps/gateway/dist/version.txt")" = "v1" ] || exit 104
+[ -x "$SETUP_RUNTIME/node-v-test-linux-x64/bin/node" ] || exit 105
+[ "$(sha256_file "$SETUP_DATA/data/user.txt")" = "$SETUP_USER_DATA_SHA256" ] || exit 106
+rmdir "$AMBIGUOUS_APP_A" "$AMBIGUOUS_APP_B"
 
 if ! run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-update.out" 2>&1; then
   cat "$TMP_ROOT/setup-update.out" >&2

@@ -367,16 +367,17 @@ write_product_owner_marker() {
   mv -- "$bt_temporary" "$bt_marker"
 }
 
-assert_managed_product_install() {
-  bt_install_root=$1
-  bt_data_root=$2
-  bt_config_root=$3
-  bt_runtime_root=$4
-  bt_bin_root=$5
-  bt_platform=$6
-  bt_surface=$7
-  assert_no_symlinks_in_tree "$bt_install_root" INSTALL_ROOT
-  assert_product_owner_marker "$bt_install_root/.blue-tanuki-owner" install "$bt_install_root" "$bt_data_root" "$bt_config_root" "$bt_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
+assert_managed_product_app_identity() {
+  bt_app_root=$1
+  bt_expected_install_root=$2
+  bt_data_root=$3
+  bt_config_root=$4
+  bt_expected_runtime_root=$5
+  bt_bin_root=$6
+  bt_platform=$7
+  bt_surface=$8
+  assert_no_symlinks_in_tree "$bt_app_root" INSTALL_ROOT
+  assert_product_owner_marker "$bt_app_root/.blue-tanuki-owner" install "$bt_expected_install_root" "$bt_data_root" "$bt_config_root" "$bt_expected_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
   for bt_relative in \
     apps/gateway/dist/main.js \
     blue-tanuki-install.json \
@@ -387,11 +388,11 @@ assert_managed_product_install() {
     BlueTanuki.sh \
     install/unix/safe-target.sh
   do
-    bt_file="$bt_install_root/$bt_relative"
+    bt_file="$bt_app_root/$bt_relative"
     [ -f "$bt_file" ] && [ ! -L "$bt_file" ] || safe_target_fail "managed product install is missing a regular file: $bt_relative"
   done
-  bt_metadata="$bt_install_root/blue-tanuki-install.json"
-  bt_manifest="$bt_install_root/blue-tanuki-package-manifest.json"
+  bt_metadata="$bt_app_root/blue-tanuki-install.json"
+  bt_manifest="$bt_app_root/blue-tanuki-package-manifest.json"
   [ -f "$bt_metadata" ] && [ ! -L "$bt_metadata" ] || safe_target_fail "managed install metadata is not a regular file"
   [ "$(wc -c < "$bt_metadata" | tr -d '[:space:]')" -le 65536 ] || safe_target_fail "managed install metadata exceeds the size limit"
   [ -f "$bt_manifest" ] && [ ! -L "$bt_manifest" ] || safe_target_fail "installed package manifest is missing or not a regular file"
@@ -399,10 +400,10 @@ assert_managed_product_install() {
   grep -Fqx '  "schema_version": 3,' "$bt_metadata" || safe_target_fail "managed install metadata schema is not recognized"
   grep -Fqx '  "product_id": "blue-tanuki-product-install",' "$bt_metadata" || safe_target_fail "managed install metadata does not identify BLUE-TANUKI"
   for bt_pair in \
-    "install_root:$bt_install_root" \
+    "install_root:$bt_expected_install_root" \
     "data_root:$bt_data_root" \
     "config_root:$bt_config_root" \
-    "runtime_root:$bt_runtime_root" \
+    "runtime_root:$bt_expected_runtime_root" \
     "bin_root:$bt_bin_root" \
     "platform:$bt_platform"; do
     bt_key=${bt_pair%%:*}
@@ -417,16 +418,35 @@ assert_managed_product_install() {
   grep -Fqx '  "schema_version": 1,' "$bt_manifest" || safe_target_fail "installed package manifest schema is not recognized"
   grep -Fqx '  "name": "blue-tanuki",' "$bt_manifest" || safe_target_fail "installed package manifest does not identify BLUE-TANUKI"
   grep -Eq "^  \\\"package_type\\\": \\\"$bt_platform-(x64|arm64)-tar-installer\\\",?$" "$bt_manifest" || safe_target_fail "installed package manifest platform does not match"
+  assert_managed_product_app_inventory "$bt_app_root"
+}
+
+assert_managed_product_install() {
+  bt_install_root=$1
+  bt_data_root=$2
+  bt_config_root=$3
+  bt_runtime_root=$4
+  bt_bin_root=$5
+  bt_platform=$6
+  bt_surface=$7
+  bt_metadata_install_root=${8:-$bt_install_root}
+  bt_metadata_runtime_root=${9:-$bt_runtime_root}
+  assert_managed_product_app_identity "$bt_install_root" "$bt_metadata_install_root" "$bt_data_root" "$bt_config_root" "$bt_metadata_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
   assert_no_symlinks_in_tree "$bt_runtime_root" RUNTIME_ROOT
   bt_node_path=$(find "$bt_runtime_root" -type f -path '*/bin/node' -print -quit 2>/dev/null) || safe_target_fail "bundled runtime could not be inspected: $bt_runtime_root"
   [ -n "$bt_node_path" ] && [ -x "$bt_node_path" ] && [ ! -L "$bt_node_path" ] || safe_target_fail "managed product runtime has no regular executable node: $bt_runtime_root"
-  grep -Fqx "  \"node_exe\": \"$bt_node_path\"," "$bt_metadata" || safe_target_fail "managed install metadata does not identify its bundled Node runtime"
-  assert_managed_product_install_inventories "$bt_install_root" "$bt_runtime_root"
+  case "$bt_node_path" in
+    "$bt_runtime_root"/*) bt_node_relative=${bt_node_path#"$bt_runtime_root"/} ;;
+    *) safe_target_fail "bundled Node path is outside the runtime root: $bt_node_path" ;;
+  esac
+  bt_metadata_node_path="$bt_metadata_runtime_root/$bt_node_relative"
+  grep -Fqx "  \"node_exe\": \"$bt_metadata_node_path\"," "$bt_install_root/blue-tanuki-install.json" || safe_target_fail "managed install metadata does not identify its bundled Node runtime"
+  assert_managed_product_runtime_inventory "$bt_install_root" "$bt_runtime_root"
   if [ "$bt_config_root" = "$bt_data_root" ]; then
-    assert_product_owner_marker "$bt_data_root/.blue-tanuki-owner" shared-root "$bt_install_root" "$bt_data_root" "$bt_config_root" "$bt_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
+    assert_product_owner_marker "$bt_data_root/.blue-tanuki-owner" shared-root "$bt_metadata_install_root" "$bt_data_root" "$bt_config_root" "$bt_metadata_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
   else
-    assert_product_owner_marker "$bt_data_root/.blue-tanuki-owner" data "$bt_install_root" "$bt_data_root" "$bt_config_root" "$bt_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
-    assert_product_owner_marker "$bt_config_root/.blue-tanuki-owner" config "$bt_install_root" "$bt_data_root" "$bt_config_root" "$bt_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
+    assert_product_owner_marker "$bt_data_root/.blue-tanuki-owner" data "$bt_metadata_install_root" "$bt_data_root" "$bt_config_root" "$bt_metadata_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
+    assert_product_owner_marker "$bt_config_root/.blue-tanuki-owner" config "$bt_metadata_install_root" "$bt_data_root" "$bt_config_root" "$bt_metadata_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
   fi
 }
 

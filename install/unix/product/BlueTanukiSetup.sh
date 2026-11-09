@@ -233,7 +233,145 @@ assert_managed_external_file() {
   fi
 }
 
+INSTALL_PARENT=$(dirname -- "$INSTALL_ROOT")
+RUNTIME_PARENT=$(dirname -- "$RUNTIME_ROOT")
+INSTALL_NAME=$(basename -- "$INSTALL_ROOT")
+RUNTIME_NAME=$(basename -- "$RUNTIME_ROOT")
+
+recover_interrupted_product_update() {
+  recovery_app_name_prefix=.$INSTALL_NAME.blue-tanuki-rollback-
+  recovery_app_count=0
+  recovery_app_candidate=
+  recovery_suffix=
+  for recovery_entry in "$INSTALL_PARENT"/.*; do
+    [ -e "$recovery_entry" ] || [ -L "$recovery_entry" ] || continue
+    recovery_entry_name=$(basename -- "$recovery_entry")
+    case "$recovery_entry_name" in "$recovery_app_name_prefix"*) ;; *) continue ;; esac
+    recovery_entry_suffix=${recovery_entry_name#"$recovery_app_name_prefix"}
+    case "$recovery_entry_suffix" in *.*) ;; *) fail "an interrupted-update app path has an invalid suffix; no files were changed: $recovery_entry" ;; esac
+    recovery_timestamp=${recovery_entry_suffix%%.*}
+    recovery_pid=${recovery_entry_suffix#*.}
+    case "$recovery_timestamp" in ''|*[!0-9]*) fail "an interrupted-update app path has an invalid suffix; no files were changed: $recovery_entry" ;; esac
+    case "$recovery_pid" in ''|*[!0-9]*) fail "an interrupted-update app path has an invalid suffix; no files were changed: $recovery_entry" ;; esac
+    recovery_app_count=$((recovery_app_count + 1))
+    recovery_app_candidate=$recovery_entry
+    recovery_suffix=$recovery_entry_suffix
+  done
+  [ "$recovery_app_count" -le 1 ] || fail "multiple interrupted-update app candidates exist; no files were changed"
+
+  recovery_runtime_name_prefix=.$RUNTIME_NAME.blue-tanuki-rollback-
+  recovery_runtime_candidate=
+  recovery_runtime_count=0
+  for recovery_entry in "$RUNTIME_PARENT"/.*; do
+    [ -e "$recovery_entry" ] || [ -L "$recovery_entry" ] || continue
+    recovery_entry_name=$(basename -- "$recovery_entry")
+    case "$recovery_entry_name" in "$recovery_runtime_name_prefix"*) ;; *) continue ;; esac
+    recovery_entry_suffix=${recovery_entry_name#"$recovery_runtime_name_prefix"}
+    [ "$recovery_entry_suffix" = "$recovery_suffix" ] || fail "an unmatched interrupted-update runtime candidate exists; no files were changed: $recovery_entry"
+    recovery_runtime_count=$((recovery_runtime_count + 1))
+    recovery_runtime_candidate=$recovery_entry
+  done
+  [ "$recovery_runtime_count" -le 1 ] || fail "multiple interrupted-update runtime candidates exist; no files were changed"
+  if [ "$recovery_app_count" = "0" ]; then
+    [ "$recovery_runtime_count" = "0" ] || fail "an interrupted-update runtime candidate has no matching app candidate; all recovery paths were preserved"
+    return 0
+  fi
+
+  recovery_env_backup="$CONFIG_ROOT/.blue-tanuki.env-rollback-$recovery_suffix"
+  if [ -e "$recovery_env_backup" ] || [ -L "$recovery_env_backup" ]; then
+    fail "an interrupted update also has a config backup; no install paths were changed. Preserve and inspect: $recovery_env_backup"
+  fi
+
+  if [ "$recovery_runtime_count" = "1" ]; then
+    [ -d "$recovery_runtime_candidate" ] && [ ! -L "$recovery_runtime_candidate" ] || fail "interrupted-update runtime candidate is not a regular directory; no files were changed: $recovery_runtime_candidate"
+    recovery_runtime_source=$recovery_runtime_candidate
+  else
+    [ -d "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ] || fail "the interrupted update has no verified runtime path; no files were changed"
+    recovery_runtime_source=$RUNTIME_ROOT
+  fi
+
+  [ -d "$recovery_app_candidate" ] && [ ! -L "$recovery_app_candidate" ] || fail "interrupted-update app candidate is not a regular directory; no files were changed: $recovery_app_candidate"
+  if ! (assert_managed_product_install "$recovery_app_candidate" "$DATA_ROOT" "$CONFIG_ROOT" "$recovery_runtime_source" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE" "$INSTALL_ROOT" "$RUNTIME_ROOT") >/dev/null 2>&1; then
+    fail "interrupted-update app/runtime candidate failed ownership or inventory verification; all recovery paths were preserved"
+  fi
+
+  recovery_partial_app=0
+  recovery_quarantine_runtime=0
+  if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
+    [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] || fail "active install path is not a regular directory; no files were changed"
+    if [ "$recovery_runtime_count" = "1" ]; then
+      if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
+        if ! (assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE") >/dev/null 2>&1; then
+          fail "active app/runtime cannot be identified as a complete interrupted update; all recovery paths were preserved"
+        fi
+        recovery_quarantine_runtime=1
+      else
+        if ! (assert_managed_product_app_identity "$INSTALL_ROOT" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE") >/dev/null 2>&1; then
+          fail "active install path is not an identified managed partial update; it and rollback paths were preserved"
+        fi
+      fi
+    else
+      fail "a rollback app exists beside an active app without its matching runtime rollback; all paths were preserved"
+    fi
+    recovery_partial_app=1
+  fi
+
+  if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
+    if [ "$recovery_runtime_count" = "1" ]; then
+      if [ "$recovery_partial_app" != "1" ]; then
+        fail "active runtime cannot be paired unambiguously with the interrupted update; no files were changed"
+      fi
+    fi
+  fi
+
+  recovery_quarantine_suffix="$(date +%s).$$"
+  recovery_install_quarantine="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-interrupted-$recovery_quarantine_suffix"
+  recovery_runtime_quarantine="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-interrupted-$recovery_quarantine_suffix"
+  [ ! -e "$recovery_install_quarantine" ] && [ ! -L "$recovery_install_quarantine" ] || fail "interrupted-install recovery path already exists; no files were changed"
+  [ ! -e "$recovery_runtime_quarantine" ] && [ ! -L "$recovery_runtime_quarantine" ] || fail "interrupted-runtime recovery path already exists; no files were changed"
+
+  recovery_stop_launcher="$recovery_app_candidate/BlueTanukiLauncher.sh"
+  if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
+    recovery_stop_launcher="$INSTALL_ROOT/BlueTanukiLauncher.sh"
+  fi
+  if ! BLUE_TANUKI_RECOVERY=1 sh "$recovery_stop_launcher" resident-stop >/dev/null 2>&1; then
+    fail "resident shutdown could not be confirmed before interrupted-update recovery; all paths were preserved"
+  fi
+  if ! (assert_managed_product_install "$recovery_app_candidate" "$DATA_ROOT" "$CONFIG_ROOT" "$recovery_runtime_source" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE" "$INSTALL_ROOT" "$RUNTIME_ROOT") >/dev/null 2>&1; then
+    fail "previous app/runtime changed during resident shutdown; all recovery paths were preserved"
+  fi
+  if [ "$recovery_partial_app" = "1" ]; then
+    if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
+      if ! (assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE") >/dev/null 2>&1; then
+        fail "active app/runtime changed during resident shutdown; all recovery paths were preserved"
+      fi
+    elif ! (assert_managed_product_app_identity "$INSTALL_ROOT" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE") >/dev/null 2>&1; then
+      fail "active app changed during resident shutdown; all recovery paths were preserved"
+    fi
+  fi
+
+  if [ "$recovery_quarantine_runtime" = "1" ]; then
+    mv -- "$RUNTIME_ROOT" "$recovery_runtime_quarantine" || fail "partial runtime could not be preserved; rollback paths were retained"
+  fi
+  if [ "$recovery_partial_app" = "1" ]; then
+    mv -- "$INSTALL_ROOT" "$recovery_install_quarantine" || fail "partial install could not be preserved; rollback paths were retained"
+  fi
+  if [ "$recovery_runtime_count" = "1" ]; then
+    mv -- "$recovery_runtime_candidate" "$RUNTIME_ROOT" || fail "verified previous runtime could not be restored; recovery paths were preserved"
+  fi
+  mv -- "$recovery_app_candidate" "$INSTALL_ROOT" || fail "verified previous install could not be restored; recovery paths were preserved"
+  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  echo "warning: restored the verified previous product after an interrupted update."
+  if [ "$recovery_partial_app" = "1" ]; then
+    echo "warning: preserved the interrupted partial install for inspection: $recovery_install_quarantine"
+  fi
+  if [ "$recovery_quarantine_runtime" = "1" ]; then
+    echo "warning: preserved the interrupted partial runtime for inspection: $recovery_runtime_quarantine"
+  fi
+}
+
 INSTALL_EXISTS=0
+recover_interrupted_product_update
 if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
   [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] || fail "Install target exists but is not a regular directory: $INSTALL_ROOT"
   INSTALL_EXISTS=1
@@ -271,10 +409,6 @@ else
   assert_managed_external_file "$SURFACE_FILE" "Exec=$BIN_LAUNCHER launch" Linux_desktop_entry
 fi
 
-INSTALL_PARENT=$(dirname -- "$INSTALL_ROOT")
-RUNTIME_PARENT=$(dirname -- "$RUNTIME_ROOT")
-INSTALL_NAME=$(basename -- "$INSTALL_ROOT")
-RUNTIME_NAME=$(basename -- "$RUNTIME_ROOT")
 STAGE_SUFFIX="$(date +%s).$$"
 INSTALL_STAGE="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-stage-$STAGE_SUFFIX"
 RUNTIME_STAGE="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-stage-$STAGE_SUFFIX"

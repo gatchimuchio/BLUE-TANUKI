@@ -2,7 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
+## 直近完了BUILD_BATCH — QE_BUILD / Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
+
+Linux/macOS共通のpackaged `BlueTanukiSetup.sh`は、同一install parent内の正確なhidden rollback siblingを一意に確認し、rollback app/runtimeのowner marker・package metadata・managed file inventory・Node pathが現在の最終rootへ結び付くことを検証する。active app/runtimeがすでに新側へ切り替わっている場合は、その双方も完全なmanaged installとして検証する。複数候補、対にならないruntime候補、inventory／root不一致、曖昧なactive root、env config rollback backupの存在は全経路を保持してfail-closedする。
+
+復旧前に対象installの`resident-stop`を実行し、停止後にrollback・active inventoryを再確認する。旧appだけが退避されruntimeがactiveに残る状態、旧app/runtimeが退避され新app配置後に停止した状態、新app/runtime両方がactiveの状態から、検証済み旧版を同一rootへ戻す。現activeの検証済み部分は隠しinterrupted siblingへ保全し、削除しない。DataRoot、ConfigRoot、user data、env fileを復旧処理で上書き・削除しない。config backupを伴う中断状態は自動変更せず、保留する。
+
+WSL Ubuntu 24.04のext4一時workspaceで`safe_target_unix.sh`を実行し、Setupを実際に強制終了させるfixtureで旧app退避後、新app配置後、新runtime配置後の三つの状態から次回Setup復旧を確認した。復旧前のresident-stop拒否時は全rollback／active pathが無変更であること、user data／env hash保持、新側部分の保全、複数rollback候補の無変更拒否も確認した。対象shell `sh -n`、Windows `product_installers.test.ts` 4/4、workspace `typecheck`、15 project `build`はPASS。`docs:check`と`git diff --check`はPASS。Linux native／macOS installed製品、実機再起動・更新、全suite、QE_QC／QE_QAはNOT_RUN。この復旧実装・fixture経路のみを限定`WIRED`とし、実installed製品やOS全体へ拡張しない。
+
+次はrev4.0と現行実物から、全体の一気通貫仕事に最も不足するconsumerを再選定してQE_BUILDを続ける。実provider／live外部作用、D4-Pocket／ミニドラ別repo変更、Rust authority cutover、公開・出荷判断は保留する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
 
 Linux/macOS向けpackaged product Launcherは、PID記録の数値だけを根拠にprocessを停止しない。PID recordの通常ファイル性・単一行・数値範囲を確認し、installed Node／Gateway entry／`--serve`／同一installのenv fileでresident identityを照合する。watchdogはinstalled Launcher pathと`resident-watchdog` commandで識別する。record欠落・stale時は同一installのprocess inventoryから復元可能な一意の対象だけを選び、形式不正・複数候補・identity不明・inventory失敗はfail-closedする。SIGTERM後最大10秒待機し、再走査でresidentとwatchdogが残っていない場合に限りPID／stop recordを除去する。Setup updateとUninstallは`resident-stop`失敗時にswap／install tree削除を中断する。Uninstallの無条件autostart削除を除き、既存のownership-checked removalへ集約した。managed product runtime inventory hashがJSONの最終propertyとなる形もvalidatorが受け付ける。
 

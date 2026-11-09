@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
+### 直近完了BUILD_BATCH — Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
+
+共通packaged `BlueTanukiSetup.sh`が、同一install parentのrollback app/runtime siblingを正確に列挙し、一意性・owner marker・package metadata・managed inventory・Node path・root bindingを検証する。active new installが見つかる停止点ではactive app/runtimeも全inventoryで検証し、resident-stop後に両側を再検証する。検証済みの旧install/runtimeをactive rootへ復帰させ、active new側の検証済み部分はhidden interrupted siblingへ保全する。DataRoot・ConfigRoot・user data・env fileを削除・上書きしない。複数候補、未対runtime、曖昧・改変・symlink、env rollback backupが残る状態は自動変更せずfail-closedする。
+
+WSL Ubuntu 24.04 ext4上の隔離fixtureで、旧app退避後・新app配置後・新runtime配置後の強制プロセス終了から次回Setupの復旧を確認した。resident-stop拒否時の無変更、user data／env hash保持、新側partialの保全、複数候補の保持・拒否も検証した。対象shell `sh -n`、Windows installer test 4/4、workspace typecheck、15 project build、`docs:check`、`git diff --check`はPASS。Linux native／macOS installed product、実機再起動・更新、全suite、QE_QC／QE_QAはNOT_RUN。限定fixture経路を`WIRED`とし、実installed製品やOS全体を保証しない。
+
+### 前段完了BUILD_BATCH — Linux/macOS製品Setup・Uninstallの常駐process所有確認（限定WIRED）
 
 Linux/macOS packaged product Launcherは、数値PIDだけを停止根拠にせず、PID recordの形式とinstalled Node／Gateway entry／`--serve`／同一install env fileを照合する。watchdogはinstalled Launcher pathと専用`resident-watchdog` commandで同定する。欠落・stale recordはinventoryから一意な同一install processを復元できる場合だけ扱い、異常形式・曖昧・複数候補・inventory失敗はfail-closedする。最大10秒の停止待ちと再走査でresident／watchdogの不存在が確認できるまで、PID recordとstop markerを残す。Setup update／Uninstallは停止失敗時にswapまたはinstall tree削除を中断する。Uninstallの無条件autostart削除を除き、既存ownership-checked removalへ委ねる。runtime inventory hashをJSON最終propertyとして受け付ける。
 
