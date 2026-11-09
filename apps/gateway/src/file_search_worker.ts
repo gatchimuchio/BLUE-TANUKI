@@ -25,6 +25,13 @@ export function createFileSearchWorker(options: FileSearchWorkerOptions): FileSe
   const workerEnv: NodeJS.ProcessEnv = {};
   for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR"]) if (env[key]) workerEnv[key] = env[key];
   if (env.BLUE_TANUKI_FILE_ROOT) workerEnv.BLUE_TANUKI_FILE_ROOT = resolve(env.BLUE_TANUKI_FILE_ROOT);
+  // Keep the child file-search boundary aligned with the parent HDS store,
+  // without inheriting unrelated Gateway credentials or the full environment.
+  if (env.BLUE_TANUKI_MEMORY_FILE) {
+    workerEnv.BLUE_TANUKI_MEMORY_FILE = resolve(env.BLUE_TANUKI_MEMORY_FILE);
+  } else if (env.BLUE_TANUKI_MEMORY_DIR) {
+    workerEnv.BLUE_TANUKI_MEMORY_FILE = resolve(env.BLUE_TANUKI_MEMORY_DIR, "memory.jsonl");
+  }
   workerEnv.BLUE_TANUKI_EXECUTION_EPOCH = options.execution_epoch;
   workerEnv.BLUE_TANUKI_HOST_AUDIENCE_DIGEST = hostAudienceDigest;
   return Object.freeze({ invoke: (request: FileSearchWorkerRequest) => invoke(request, workerEnv, hostAudienceDigest) });

@@ -2,7 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F20.01 設定済みHDS記憶を通常file経路から隔離
+## 直近施工BUILD_BATCH — QE_BUILD / F20.01 隔離file-search workerへHDS記憶境界を継承
+
+主語は、親Gatewayが承認した`file.search`を実行する隔離child processと、HDSのM本体・個人化停止台帳。目的は、通常Gatewayと同じHDS記憶対象設定をchildへ渡し、worker経由で停止済みMを検索・引用する別経路を残さないこと。F20.01／BT-R-F20-02／06の次consumer sliceである。
+
+`createFileSearchWorker`はGateway全環境・credential・plugin等をchildへ渡さず、実際に選択される`BLUE_TANUKI_MEMORY_FILE`または`BLUE_TANUKI_MEMORY_DIR/memory.jsonl`だけを絶対path化して渡す。childの`file.search`は前段の通常file境界と同じM本体／`.personalization.jsonl`台帳の保護を適用する。親のtarget observationとchildのfile enumerationは同じeffective設定を使う。保護済みfile内容やpathは結果・receiptへ載せない。
+
+Gateway専用workerを通じ、`BLUE_TANUKI_MEMORY_FILE`と`BLUE_TANUKI_MEMORY_DIR`の両設定で、M本体・停止台帳の合成内容が検索結果へ漏れず、通常ファイルconsumerが使えることを最小疎通する。Gatewayとworkspace依存のtypecheck/build、worker test、`docs:check`、`git diff --check`を実施する。実served Gateway、実ユーザーデータ、全suite、他OS、QE_QC／QE_QAはこのsliceではNOT_RUN。F20.01全体へ状態を拡張しない。
+
+次は最新HEADで通常consumerを再選定する。物理消去・保存契約終了・backup処遇は引き続き保留し、rev4.0の`OD-04` ID衝突を消去許可に読み替えない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F20.01 設定済みHDS記憶を通常file経路から隔離
 
 主語は、HDSのM本体と個人化停止台帳、および利用者の一般file tool。目的は、HDSが管理する記憶の読取・編集・削除を通常のsandbox file経路から迂回できないようにし、停止台帳を越えた検索と一般file経路からの物理消去を防ぐこと。rev4.0のF20.01、BT-R-F20-02／03／04／06に沿った限定BUILD sliceである。
 

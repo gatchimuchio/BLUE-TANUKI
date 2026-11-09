@@ -41,9 +41,25 @@ function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearch
       NODE_OPTIONS: "--blue-forbidden-parent-option" } }) });
   return { authority, executor };
 }
+async function expectWorkerHdsMemoryExcluded(store: GatewayExecutionIntentStore, workspace: string,
+  memoryConfig: { BLUE_TANUKI_MEMORY_FILE: string } | { BLUE_TANUKI_MEMORY_DIR: string }, query: string,
+  privateContents: readonly string[]) {
+  const env: NodeJS.ProcessEnv = { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace, ...memoryConfig };
+  const worker = createFileSearchWorker({ execution_epoch: store.executionEpoch, env });
+  const { authority, executor } = rig(store, workspace, worker);
+  const command = source(); command.payload.arguments.query = query;
+  const approved = await approve(authority, executor, workspace, command, undefined, env);
+  const feedback = await executor.execute(approved);
+  expect(feedback.status).toBe("success");
+  expect(feedback.result).toMatchObject({ matches: [] });
+  for (const privateContent of privateContents) expect(JSON.stringify(feedback.result)).not.toContain(privateContent);
+  expect(authority.receipt(approved)?.worker_pid).toBeGreaterThan(0);
+}
 async function approve(authority: ReturnType<typeof createExecutorApprovalAuthority>, executor: Executor,
-  workspace: string, command = source(), operationPlanBindingDigest?: string) {
-  const targetVersion = await executor.inspectCommandTargetVersion(command, { BLUE_TANUKI_FILE_ROOT: workspace },
+  workspace: string, command = source(), operationPlanBindingDigest?: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  const targetVersion = await executor.inspectCommandTargetVersion(command, {
+    BLUE_TANUKI_FILE_ROOT: workspace, ...extraEnv,
+  },
     operationPlanBindingDigest);
   return authority.approve(command, proof(command), undefined, undefined, targetVersion);
 }
@@ -80,6 +96,23 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect((await executor.execute(approved)).error).toMatch(/already consumed/);
     expect(() => authority.approve(command, proof())).toThrow(/already issued/);
     expect(JSON.stringify(store.snapshot())).not.toContain(workspace);
+  }));
+
+  it("親GatewayのBLUE_TANUKI_MEMORY_FILE設定をchildへ結び、M本体と停止台帳の検索迂回を防ぐ", async () => temporary(async (store, workspace) => {
+    const memoryFile = join(workspace, "hds-memory-file.jsonl");
+    writeFileSync(memoryFile, "HDS_MEMORY_FILE_PRIVATE_SENTINEL\n");
+    writeFileSync(`${memoryFile}.personalization.jsonl`, "HDS_MEMORY_FILE_STOP_PRIVATE_SENTINEL\n");
+    await expectWorkerHdsMemoryExcluded(store, workspace, { BLUE_TANUKI_MEMORY_FILE: memoryFile }, "HDS_MEMORY_FILE",
+      ["HDS_MEMORY_FILE_PRIVATE_SENTINEL", "HDS_MEMORY_FILE_STOP_PRIVATE_SENTINEL"]);
+  }));
+
+  it("親GatewayのBLUE_TANUKI_MEMORY_DIR fallbackをchildへ結び、M本体と停止台帳の検索迂回を防ぐ", async () => temporary(async (store, workspace) => {
+    const memoryDir = join(workspace, "hds-memory-dir"); mkdirSync(memoryDir);
+    const memoryFile = join(memoryDir, "memory.jsonl");
+    writeFileSync(memoryFile, "HDS_MEMORY_DIR_PRIVATE_SENTINEL\n");
+    writeFileSync(`${memoryFile}.personalization.jsonl`, "HDS_MEMORY_DIR_STOP_PRIVATE_SENTINEL\n");
+    await expectWorkerHdsMemoryExcluded(store, workspace, { BLUE_TANUKI_MEMORY_DIR: memoryDir }, "HDS_MEMORY_DIR",
+      ["HDS_MEMORY_DIR_PRIVATE_SENTINEL", "HDS_MEMORY_DIR_STOP_PRIVATE_SENTINEL"]);
   }));
 
   it("Operation Plan source digestをtarget observationから隔離workerのresultと永続receiptまで保持する", async () => temporary(async (store, workspace, filename) => {

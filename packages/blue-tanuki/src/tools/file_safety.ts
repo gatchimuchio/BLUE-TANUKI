@@ -132,8 +132,8 @@ export async function resolveSandboxFilePath(
  * generic file search cannot bypass an M citation exclusion.
  */
 export async function isHdsMemoryArtifact(filepath: string, env: Env = process.env): Promise<boolean> {
-  const configuredFile = env.BLUE_TANUKI_MEMORY_FILE?.trim();
-  const configuredDir = env.BLUE_TANUKI_MEMORY_DIR?.trim();
+  const configuredFile = env.BLUE_TANUKI_MEMORY_FILE;
+  const configuredDir = env.BLUE_TANUKI_MEMORY_DIR;
   const memoryFile = configuredFile
     ? path.resolve(configuredFile)
     : configuredDir

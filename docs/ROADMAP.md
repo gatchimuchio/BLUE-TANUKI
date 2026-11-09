@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F20.01 設定済みHDS記憶を通常file経路から隔離（限定WIRED）
+### 直近BUILD_BATCH — F20.01 隔離file-search workerへHDS記憶境界を継承（限定WIRED）
+
+Gatewayの親工程が作るtarget observationと専用childの検索対象を同一化するため、worker環境へは実効HDS memory fileのabsolute pathだけを渡す。credentialや親の全environmentは継承しない。`BLUE_TANUKI_MEMORY_FILE`優先と`BLUE_TANUKI_MEMORY_DIR/memory.jsonl` fallbackの双方を子process疎通で通し、M本体・`.personalization.jsonl`停止台帳が検索結果に現れず、通常sandbox file検索は成功することを確認する。
+
+このchild経由のM境界sliceだけを限定`WIRED`とする。Gateway/workspace依存のbuild/typecheckと専用workerのfixture疎通を実施し、全suite・実served Gateway・実ユーザーデータ・他OS・QE_QC／QE_QAはNOT_RUN。F20.01／F20全体、製品全体の完成へ拡張しない。F20の物理消去・保存契約終了・backup処遇は未実装・未実行。
+
+### 前段完了BUILD_BATCH — F20.01 設定済みHDS記憶を通常file経路から隔離（限定WIRED）
 
 設定済み`BLUE_TANUKI_MEMORY_FILE`または`BLUE_TANUKI_MEMORY_DIR/memory.jsonl`と、その`.personalization.jsonl`台帳を通常のsandbox file経路から分離した。`file.search`の直接指定・列挙、`file.write`、`file.edit`、`file.delete`は、設定パス・canonical path・実file identity（hard linkを含む）で保護対象と一致すれば拒否する。停止済みMの直接検索迂回と、一般削除経路によるM／停止台帳の消去を防ぐ。通常ファイルの操作、HDS自身のM read/write、既存の停止台帳処理は維持する。物理消去・保存契約終了・backup/cache/remote copy/鍵処遇は未実装・未実行。`OD-04`はrev4.0本文でRust cutoverを示す一方、施工単位の旧原文詳細で物理削除の決定IDとして重複参照されるため、この変更ではIDに基づく消去許可を推測していない。
 
