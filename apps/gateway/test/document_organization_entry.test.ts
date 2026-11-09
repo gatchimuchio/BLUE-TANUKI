@@ -2220,6 +2220,52 @@ describe("delegated goal purpose owner review", () => {
         exit_code: 23, signal: null, timed_out: false, process_tree_empty: true,
       });
       expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+
+      const failedTestWebSocket = taskWebSocket;
+      if (!failedTestWebSocket) throw new Error("same-task WebSocket was unavailable before failure recovery restart");
+      taskWebSocket = undefined;
+      const failedTestWebSocketClosed = once(failedTestWebSocket, "close");
+      failedTestWebSocket.close();
+      await failedTestWebSocketClosed;
+      const gatewayBeforeFailureRestart = gateway;
+      if (!gatewayBeforeFailureRestart) throw new Error("Gateway was unavailable before failure recovery restart");
+      await stopChild(gatewayBeforeFailureRestart.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+
+      const failureRecoveryTicketResponse = await fetch(baseUrl + "/ws-ticket", {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(failureRecoveryTicketResponse.status).toBe(200);
+      const { ticket: failureRecoveryTicket } = await failureRecoveryTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(failureRecoveryTicket));
+      await once(taskWebSocket, "open");
+
+      const restartedFailureState = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const restoredPlan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === editTestPlanId);
+        const restoredSteps = Array.isArray(restoredPlan?.steps) ? restoredPlan.steps as Array<Record<string, unknown>> : [];
+        const restoredShellStep = restoredSteps.find((candidate) => candidate.step_id === editTestShellStep.step_id);
+        return restoredShellStep?.status === "verified" && typeof restoredShellStep.shell_exec_summary === "object"
+          ? { plan: restoredPlan, shellStep: restoredShellStep } : null;
+      }, gateway, "Gateway restart did not restore the same-task test failure state");
+      expect(restartedFailureState.plan).toMatchObject({ plan_id: editTestPlanId,
+        revision_digest: editTestRevision, task_identity_digest: editTestPlan.task_identity_digest });
+      expect(restartedFailureState.shellStep).toMatchObject({
+        step_id: editTestShellStep.step_id,
+        status: "verified",
+        shell_exec_summary: { exit_code: 23, signal: null, timed_out: false, process_tree_empty: true },
+        binding: { memory_status: "receipt_confirmed" },
+      });
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+
       const reviewedSearchResult = await runReviewedPlanStep(editTestPlan, editTestSearchStep, "same-path file.search reread");
       expect(reviewedSearchResult.output.length).toBeGreaterThan(0);
       expect(reviewedEditResult.output.length).toBeGreaterThan(0);

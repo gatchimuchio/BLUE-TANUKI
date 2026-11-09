@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / E2E-01 同一taskのtest失敗からOwner確認・回復候補・再読込
+## 直近施工BUILD_BATCH — QE_BUILD / Gateway再起動後も同一taskの失敗からOwner確認・回復候補へ継続
+
+主語は、同一Workspaceで編集後test失敗を観測し、Gateway再起動をまたいで状態を復元してOwner確認・回復候補へ進むBLUE-TANUKIのGateway／HDS／WebChat経路。前の合成sliceに続き、固定隔離コマンド（`node -e "process.exitCode = 23"`）後にGatewayを停止・再起動し、同一plan ID・revision・task identityのshell summaryとM receiptが復元されること、ファイルが変更後状態のままで自動復元されないことを接続確認した。再接続後の同一path `file.search` → Ownerへの結果返却 → 同一task／目的bindingの逆編集候補 → no-store内容確認とL3承認 → 逆編集 → `file.search`までを通した。実provider呼出し・外部作用はない。
+
+Control Centerの保存済みOperation Plan projectionでは、current purpose binding、成功receiptを持つ同一Workspaceの3-step plan、失敗summaryがそろう場合だけ逆編集候補ボタンを表示し、保存receiptが欠落した場合は表示しないことを確認するtestを追加した。ボタン操作はowner tokenを使った`plan:compute`候補依頼として同じplan／revision／step／目的bindingへ結び、直接編集を実行しない。
+
+Gatewayの対象隔離testは2 passed／5 skipped、WebChatの対象renderer／action testは2 passed／116 skipped。これは合成fixtureの限定接続確認で、実際の製品test suite、timeout・異常process、実provider、installed製品、他OS、QE_QC／QE_QAではない。C08.02／F01.03のこのrestart回復sliceだけを限定`WIRED`として扱い、E2E-01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。次単位はrev4.0と現物から再選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / E2E-01 同一taskのtest失敗からOwner確認・回復候補・再読込
 
 主語は、同一task内で編集後のtest失敗を観測し、Ownerの現在状態確認を経て復旧候補を再計画するBLUE-TANUKIのGateway／HDS経路。合成fixtureに限り、file.edit → 固定隔離コマンド（`node -e "process.exitCode = 23"`）→ summary-only結果 → 同一path file.search → Ownerへの結果返却 → 同一task／目的bindingの逆編集候補 → 別個のno-store内容確認とL3承認 → 逆編集 → file.searchを接続した。失敗結果はexit code等の境界付き要約に限り、stdout／stderrを含めない。失敗だけで元ファイルを自動復元せず、候補実行にもOwner承認を要求する。
 

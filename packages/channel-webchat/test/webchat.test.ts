@@ -1132,6 +1132,124 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
   });
 
+  it("shows same-workspace failed-test recovery only after the saved search receipt is current", () => {
+    const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function byId(");
+    const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function toneForBoolean(", helperStart + 1);
+    const objectHelperStart = CONTROL_CENTER_SCRIPT.indexOf("function isObject(");
+    const objectHelperEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", objectHelperStart + 1);
+    const rendererStart = CONTROL_CENTER_SCRIPT.indexOf("function operationPlanStatusTone(");
+    const rendererEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderRuntime(", rendererStart + 1);
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(objectHelperStart).toBeGreaterThanOrEqual(0);
+    expect(objectHelperEnd).toBeGreaterThan(objectHelperStart);
+    expect(rendererStart).toBeGreaterThanOrEqual(0);
+    expect(rendererEnd).toBeGreaterThan(rendererStart);
+
+    const nodes: Record<string, { textContent?: string; className?: string; innerHTML?: string }> = {
+      "operation-plan-state-summary": { textContent: "", className: "" },
+      "operation-plan-state-list": { textContent: "", className: "", innerHTML: "" },
+    };
+    const planId = "a".repeat(64);
+    const revisionDigest = "b".repeat(64);
+    const searchStepId = "c".repeat(64);
+    const observation = {
+      schema_version: "operation-plan.status.v1",
+      status: "available",
+      used_for_authority: false,
+      raw_payload_exposed: false,
+      recovery_refresh_status: "ready",
+      displayed_count: 1,
+      plan_count: 1,
+      waits: [],
+      goal_purpose_options: [],
+      plans: [{
+        plan_id: planId,
+        revision: 1,
+        revision_digest: revisionDigest,
+        task_identity_digest: "d".repeat(64),
+        owner_authentication_required: true,
+        goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "e".repeat(64) },
+        goal_purpose_binding_status: "current",
+        status: "results_verified",
+        step_count: 3,
+        steps: [
+          { step_id: "1".repeat(64), operation: "file.edit", status: "verified", binding: { memory_status: "receipt_confirmed" } },
+          { step_id: "2".repeat(64), operation: "shell.exec", status: "verified",
+            shell_exec_summary: { exit_code: 23, signal: null, timed_out: false, process_tree_empty: true },
+            binding: { memory_status: "receipt_confirmed" } },
+          { step_id: searchStepId, operation: "file.search", status: "verified",
+            binding: { command_digest: "f".repeat(64), result_digest: "9".repeat(64),
+              delivery_digest: "8".repeat(64), memory_status: "receipt_confirmed" } },
+        ],
+      }],
+    };
+    const document = { getElementById: (id: string) => nodes[id] ?? null };
+    const script = [
+      CONTROL_CENTER_SCRIPT.slice(helperStart, helperEnd),
+      CONTROL_CENTER_SCRIPT.slice(objectHelperStart, objectHelperEnd),
+      CONTROL_CENTER_SCRIPT.slice(rendererStart, rendererEnd),
+      "renderOperationPlanStatus(observation);",
+    ].join("\n");
+    new Script(script).runInNewContext({ document, observation });
+
+    const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
+    expect(rendered).toContain("失敗（終了コード23）");
+    expect(rendered).toContain('data-operation-plan-replan="true" data-recovery-edit="true"');
+    expect(rendered).toContain(`data-plan-id="${planId}"`);
+    expect(rendered).toContain(`data-step-id="${searchStepId}"`);
+    expect(rendered).toContain("候補生成は編集しません");
+    expect(rendered).toContain("別途L3 Approvalを通るまで作用しません");
+
+    const staleSearch = observation.plans[0].steps[2];
+    staleSearch.binding.memory_status = "not_recorded";
+    new Script(script).runInNewContext({ document, observation });
+    expect(nodes["operation-plan-state-list"]?.innerHTML ?? "").not.toContain('data-recovery-edit="true"');
+  });
+
+  it("binds a recovery-edit UI action to the same task, current purpose, and selected saved search", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReplan(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function invokeOperationPlanWait(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const calls: Array<{ token: string; content: string; ownerRequired: boolean; planId: string; revisionDigest: string }> = [];
+    const messages: Array<[string, string]> = [];
+    const ownerTokenInput = { value: "owner-token" };
+    const nodes = { "chat-user": { value: "fixture-owner" }, "owner-task-token": ownerTokenInput };
+    const planId = "a".repeat(64);
+    const revisionDigest = "b".repeat(64);
+    const stepId = "c".repeat(64);
+    const binding = { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "d".repeat(64) };
+    const rawBinding = JSON.stringify(binding);
+    await new Script(`
+      async function run() {
+        const state = {};
+        const byId = (id) => nodes[id];
+        const isObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+        const postOperationPlanControl = async (token, content, ownerRequired, parentPlanId, parentRevisionDigest) => {
+          calls.push({ token, content, ownerRequired, planId: parentPlanId, revisionDigest: parentRevisionDigest });
+          return { request_id: "recovery-request" };
+        };
+        const appendChat = (kind, content) => messages.push([kind, content]);
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await invokeOperationPlanReplan("${planId}", "${revisionDigest}", "${stepId}", ${JSON.stringify(rawBinding)},
+          false, true);
+      }
+      run();
+    `).runInNewContext({ calls, messages, nodes });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ token: "owner-token", ownerRequired: true, planId, revisionDigest });
+    const control = JSON.parse(calls[0]!.content.replace(/^plan:compute /, "")) as Record<string, unknown>;
+    expect(control.task).toContain("same-workspace test失敗");
+    expect(control).toMatchObject({ goal_purpose_binding: binding,
+      parent_plan: { plan_id_digest: planId, revision_digest: revisionDigest },
+      source_observation_refs: [{ plan_id_digest: planId, revision_digest: revisionDigest,
+        step_id_digest: stepId }] });
+    expect(ownerTokenInput.value).toBe("");
+    expect(messages).toContainEqual(["owner", "test失敗後の現在状態をもとに、未実行の逆編集候補を依頼しました"]);
+  });
+
   it("renders unbound Broker recovery evidence as digest-only and preserves unknown status", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function projectRecoveryUnboundExecutionEvidence");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderRecoveryInspection", start);
