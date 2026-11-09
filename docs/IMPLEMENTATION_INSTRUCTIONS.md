@@ -2,17 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E04.02 同一条件browser.read履歴をFailureReviewへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
 
-主語は、tool scopeの失敗署名を保持するFailureMemoryと、Complete History由来の後続観測をC/Jへ渡すFailureReview。目的は、失敗署名の基準履歴を独立観測として誤認せず、同じ目的・action・actor/channelで既に実行済みのread-only `browser.read`記録を、本文を漏らさない限定観測として接続すること。新しいHTTP/browser要求は起こさない。
+主語は、FailureMemoryの失敗署名とComplete Historyの後続観測をC/Jへ渡すFailureReview。目的は、署名baselineを後続観測と誤認せず、同じgoal input・action・actor/channelで既に実行済みのread-only `file.search`／`browser.read`／`gmail.read`記録だけを限定観測として接続すること。providerやbrowserへの新しい要求は起こさない。
 
-Complete Historyのhash-chainが有効で、署名のbaseline `evidence_log_ids`が全件存在し、その最後より後の成功`execution_history`に同一のtool operation・action／goal input／actor・channel patternが記録されている場合だけ候補にする。`browser.read`結果の固定schema、無資格情報のHTTP GET、非信頼本文、origin整合、redirect flag、時刻、EXTERNAL_EVIDENCE／FIXTURE分類を確認し、FailureReview用versioned projectionへrequested/final origin digest、redirect flag、evidence class、timestamp、result digestだけを渡す。完全URL、path、query、links、credential、本文は渡さない。
+Complete Historyのhash-chainが有効で、署名baselineの全IDが存在し、各baselineが同じ失敗したexecutor tool callとして署名と一致し、その最後より後に同一operation・action／goal input／actor・channel patternの成功`execution_history`がある場合だけ候補にする。`browser.read`は既存HTTP GET結果の固定schema、credential-free境界、非信頼本文、origin整合、redirect flag、時刻、EXTERNAL_EVIDENCE／FIXTURE分類を確認してdigest-only metadataを渡す。`gmail.read`は保存済みoperation/result digestだけを渡す。完全URL、path、query、links、メール内容・header・宛先・添付metadata、credentialは渡さず、新しいHTTP／Google API要求も発生させない。
 
-C/Jはこれを原因・世界状態・外部条件解消の証明や再開／実行権限に使えない。観測がなければ`unavailable`、chain不正なら`invalid`として保持する。`file.search`向け既存producerと、この`browser.read`接続sliceだけを限定`WIRED`とし、E04.02全体、FailureReviewの実往復、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。test suiteは実行しない。実browser／HTTP/provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02のowner明示規則・検証済み根拠・M receiptによる既存J達成判定は変更しない。
+C/Jはこれを原因・世界状態・providerの現在状態・外部条件解消の証明や再開／実行権限に使えない。観測がなければ`unavailable`、hash-chain不正なら`invalid`として保持する。`file.search`／`browser.read`／`gmail.read`のdigest-only接続sliceだけを限定`WIRED`とし、E04.02全体、FailureReviewの実往復、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。test suiteは実行しない。実browser／HTTP／Google provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02のowner明示規則・検証済み根拠・M receiptによる既存J達成判定は変更しない。
 
 Gateway依存7 workspace projectのbuildとtypecheck、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASSだが、既存移行負債76件の注意を継続。license監査PASS。test suiteとFailureReview実往復、実browser／HTTP/provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。
 
-**次のproducer／consumer:** 最新HEADから全体接続の次consumerを選ぶ。FailureReviewの因果束縛、別scope、実環境での独立再観測は未成立のままとする。
+**次のproducer／consumer:** 次の独立BUILD_BATCHでは最新HEADから製品全体で最も不足する実consumerを選び直す。FailureReviewは他operation／scope、因果束縛、実環境での独立再観測が未成立のまま。`gmail.read`の既存履歴投影からprovider状態を推定したり、新しいprovider要求へ拡張したりしない。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime入力と同一session応答transportのBlue側接続（限定WIRED）
 

@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-11-10 — QEB-E04.02-GMAIL-READ-FAILURE-REVIEW-OBSERVATION
+
+施工開始時local／remote `main`=`e9958c9fe8c38487ba6c0fd177e4471dda49c5c7`で一致。意味ある編集前にlocal backup branchをcurrent=`e9958c9...`／previous=`ed046001...`へCAS回転し、remote backup tagも同じ二世代へ`--force-with-lease`で更新・再照合した。local/remote backup refsは編集開始時に一致。保護された`.codex-attachments/`／`.codex-remote-attachments/`、D4 Pocket、Google資格情報、外部providerは変更・使用していない。
+
+FailureReviewの`tool` scopeで、署名action patternが`browser.read`または`gmail.read`を示す場合のみ同じoperationを探索する。全baseline entryが存在するだけでは足りず、各entryの失敗executor call、operation、tool name、input/action/context patternを署名へ照合する。後続成功もhash-chain、履歴順、operation、action／goal input／actor・channel、成功結果digestが一致する場合だけprojectionへ入れる。`gmail.read`ではoperation名とComplete History entry/result digestだけをHDS C/Jへ渡し、メール本文・header・宛先・添付metadata・credentialは含めない。新しいGoogle API要求は発行しない。HDS指示とfailure-memory規定も更新し、観測は保存済みexecutor記録に限られ、providerの現在状態、原因、条件解消、承認、再開・実行権限を証明しないと明記した。
+
+初回typecheckはprotocolの未更新`dist`を参照して一度停止。protocol build後にGateway依存7 workspace projectのtypecheckはPASS。protocol／HDS-BRAIN／Gatewayを含む7 project build、`corepack pnpm docs:check`、`git diff --check`はPASS。日本語基底監査は移行負債76件の既存注意、license監査PASS。test suiteは実行していない。Gmail API／実資格情報、LLM provider、FailureReview実往復、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。build出力はworkspace再利用物として保持し、一時ファイルは作成していない。
+
 ## 2026-11-10 — QEB-E04.02-BROWSER-READ-FAILURE-REVIEW-OBSERVATION
 
 開始時local／remote `main`=`ed0460011a5f4105ba9ae42e52582be89e3d5da2`で一致。編集前の復旧refはlocal branch／remote tagともcurrent=`ed046001...`、previous=`102f9573e2b3fd62e9de6cdd1b5cce3c8c1a62e7`。保護された`.codex-attachments/`／`.codex-remote-attachments/`は未変更。D4 Pocketはread-only照合のみで変更していない。実provider、外部作用、実browser/HTTP要求は発生させていない。

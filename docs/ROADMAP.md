@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E04.02 同一条件browser.read履歴をFailureReviewへ接続（限定WIRED）
+### 直近BUILD_BATCH — E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
 
-既存の`browser.read`成功履歴を、tool scopeのFailureReviewへdigest-only観測として接続する。Complete History hash-chainが有効で署名baseline全件があり、後続entryが同じoperation・action／goal input／actor・channelで成功し、結果digestと固定schemaのbrowser provenanceが検証できる場合だけ候補にする。HTTP要求を追加で発生させず、本文・完全URL・path・query・links・credentialをC/Jへ渡さない。projectionはrequested/final origin digest、redirect flag、evidence class、時刻、結果digestだけを含み、原因や外部条件解消の証明、再開・実行権限には使えない。
+既存の`browser.read`／`gmail.read`成功履歴とfile scopeの`file.search`履歴を、FailureReviewへdigest-only観測として接続する。Complete History hash-chainが有効で署名baseline全件が同一の失敗tool callとして照合され、後続entryが同じoperation・action／goal input／actor・channelで成功した場合だけ候補にする。`browser.read`は固定schemaのbrowser provenanceも確認する。新しいHTTP／Google API要求を起こさず、本文・完全URL・path・query・links・メール本文・header・宛先・添付metadata・credentialをC/Jへ渡さない。projectionは限定digestとbrowser origin digest／redirect flag／evidence class／時刻だけを含み、原因やproviderの現在状態、外部条件解消、再開・実行権限の証明には使えない。
 
 これはFailureReview producer/consumerの限定`WIRED` sliceであり、file.searchの既存sliceと合わせてもE04.02全体ではない。Gateway依存7 projectのbuild／typecheck、`docs:check`、`git diff --check`はPASS。日本語基底の既存移行負債76件に注意。test suite、実FailureReview往復、実browser/HTTP/provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02の明示owner規則・検証済み根拠・M receiptによる達成判定は既存実装を維持する。
 

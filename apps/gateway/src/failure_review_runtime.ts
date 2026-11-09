@@ -13,6 +13,7 @@ import {
 } from "@blue-tanuki/hds-brain";
 import {
   createGatewayInternalInboundRequest,
+  FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS,
   isGatewayInternalInboundRequest,
   type FailureReviewIndependentObservation,
   type InboundRequest,
@@ -20,6 +21,8 @@ import {
 
 const FAILURE_REVIEW_PREFIX = /^failure:review(?:\s|$)/i;
 const FAILURE_REVIEW_COMMAND = /^failure:review\s+(\S+)$/i;
+type FailureReviewReadOnlyOperation = NonNullable<FailureReviewIndependentObservation["operation"]>;
+const FAILURE_REVIEW_READ_ONLY_TOOL_OPERATION_SET = new Set<string>(FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS);
 
 /**
  * Attach a digest-only saved-failure and linked-history projection to an
@@ -86,8 +89,9 @@ export function prepareFailureReviewInbound(
 }
 
 /**
- * Find one actual, later read-only observation of the same exact file.search or
- * browser.read under the same goal and actor/channel. It can inform scope review,
+ * Find one later read-only observation of the same exact operation under the
+ * same goal and actor/channel. Gmail results are projected as digests only;
+ * this does not issue a new provider request. It can inform scope review,
  * but it is not evidence that a failure cause was resolved or authority to resume work.
  */
 function latestPostSignatureReadOnlyObservation(
@@ -95,8 +99,7 @@ function latestPostSignatureReadOnlyObservation(
   history: CompleteHistoryStore,
 ): { baselineLastIndex?: number; observation?: FailureReviewIndependentObservation } {
   const baselineIds = new Set(signature.evidence_log_ids);
-  const operation = signature.scope === "file" ? "file.search"
-    : signature.scope === "tool" ? "browser.read" : undefined;
+  const operation = failureReviewReadOnlyOperation(signature);
   if (!operation || baselineIds.size === 0 || !commandPatternsMatch(
     signature.input_pattern,
     signature.action_pattern,
@@ -105,7 +108,10 @@ function latestPostSignatureReadOnlyObservation(
 
   const entries = history.replay();
   const baselineEntries = entries.filter((entry) => baselineIds.has(entry.id));
-  if (baselineEntries.length !== baselineIds.size) return { baselineLastIndex: undefined, observation: undefined };
+  if (baselineEntries.length !== baselineIds.size || baselineEntries.some((entry) =>
+    !isSignatureBaseline(entry, signature, operation))) {
+    return { baselineLastIndex: undefined, observation: undefined };
+  }
   const baselineLastIndex = Math.max(...baselineEntries.map((entry) => entry.index));
   const laterObservation = [...entries].reverse().find((entry) =>
     isMatchingReadOnlyObservation(entry, signature, baselineIds, baselineLastIndex, operation));
@@ -157,7 +163,7 @@ function isMatchingReadOnlyObservation(
   signature: FailureSignature,
   baselineIds: ReadonlySet<string>,
   baselineLastIndex: number,
-  operation: "file.search" | "browser.read",
+  operation: FailureReviewReadOnlyOperation,
 ): boolean {
   if (entry.kind !== "execution_history" || entry.index <= baselineLastIndex ||
       baselineIds.has(entry.id) || entry.source !== "executor" || !entry.actor) return false;
@@ -181,6 +187,38 @@ function isMatchingReadOnlyObservation(
   )) return false;
   return failurePatterns.input_pattern === signature.input_pattern &&
     failurePatterns.action_pattern === signature.action_pattern &&
+    commandContextPattern({ actor: entry.actor, channel }) === signature.context_pattern;
+}
+
+function failureReviewReadOnlyOperation(signature: FailureSignature): FailureReviewReadOnlyOperation | undefined {
+  if (signature.scope === "file") return "file.search";
+  if (signature.scope !== "tool") return undefined;
+  try {
+    const pattern = asRecord(JSON.parse(signature.action_pattern) as unknown);
+    if (pattern?.pattern_version !== "failure-command-action-v1" || pattern.type !== "tool_call" ||
+        typeof pattern.operation !== "string" || !FAILURE_REVIEW_READ_ONLY_TOOL_OPERATION_SET.has(pattern.operation)) {
+      return undefined;
+    }
+    return pattern.operation as FailureReviewReadOnlyOperation;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSignatureBaseline(
+  entry: CompleteHistoryEntry,
+  signature: FailureSignature,
+  operation: FailureReviewReadOnlyOperation,
+): boolean {
+  if (entry.kind !== "execution_history" || entry.source !== "executor" || !entry.actor) return false;
+  const payload = asRecord(entry.payload);
+  const command = asRecord(payload?.command);
+  const commandPayload = asRecord(command?.payload);
+  const failurePatterns = asRecord(command?.failure_patterns);
+  const channel = payload?.origin_channel;
+  return payload?.status === "failed" && command?.type === "tool_call" && command.operation === operation &&
+    commandPayload?.tool_name === operation && failurePatterns?.input_pattern === signature.input_pattern &&
+    failurePatterns.action_pattern === signature.action_pattern && typeof channel === "string" &&
     commandContextPattern({ actor: entry.actor, channel }) === signature.context_pattern;
 }
 

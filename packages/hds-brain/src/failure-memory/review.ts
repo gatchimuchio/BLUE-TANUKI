@@ -4,6 +4,7 @@ import {
   FailureReviewLineageReferenceSchema,
   FailureReviewProjectionSchema,
   FailureLearningDevelopmentHandoffSchema,
+  FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS,
   type FailureReviewCandidate,
   type FailureReviewIndependentObservation,
   type FailureReviewLineageReference,
@@ -132,7 +133,8 @@ function failureReviewOperationMatchesScope(
   operation: FailureReviewIndependentObservation["operation"],
 ): boolean {
   return (scope === "file" && operation === "file.search") ||
-    (scope === "tool" && operation === "browser.read");
+    (scope === "tool" && operation !== undefined &&
+      (FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS as readonly string[]).includes(operation));
 }
 
 export function parseFailureReviewCandidate(value: unknown): FailureReviewCandidate | null {

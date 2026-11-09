@@ -58,9 +58,11 @@ Complete Historyの`failure_patterns`は同じhelperが作るdigest-only投影�
 
 ## E04.02：署名後のread-only独立観測
 
-FailureReviewはComplete History hash-chainが有効で、失敗署名のbaseline `evidence_log_ids`が全件存在するときだけ、その最後より後の別entryを独立観測候補として扱う。`file` scopeでは同一条件の成功`file.search`、`tool` scopeでは同一条件の成功`browser.read`に限る。action・goal input・actor/channel patternは署名と完全一致し、成功結果digestが存在しなければ候補にならない。
+FailureReviewはComplete History hash-chainが有効で、失敗署名のbaseline `evidence_log_ids`が全件存在し、各entryが署名と同一の失敗したexecutor tool callであると照合できた場合だけ、その最後より後の別entryを独立観測候補として扱う。`file` scopeでは同一条件の成功`file.search`、`tool` scopeでは署名のaction patternが許可済みread-only toolを示す場合だけ同じtoolの成功`browser.read`または`gmail.read`を候補にする。action・goal input・actor/channel patternは署名と完全一致し、成功結果digestが存在しなければ候補にならない。
 
 `browser.read`は既存execution historyに記録済みのHTTP GET結果を読むだけで、新しいnetwork requestを発生させない。`blue-tanuki.browser-observation.v1` metadata、final URL／origin一致、HTTP(S)、credentialなし、非信頼本文、origin変更flag、時刻を検証する。Complete Historyへ追加するFailureReview用recordは専用schema versionを持ち、requested/final originのSHA-256、origin変更flag、`EXTERNAL_EVIDENCE`／`FIXTURE`、観測時刻、結果digestだけを射影する。本文、完全URL、path、query、links、credentialはFailureReview projectionへ含めない。
+
+`gmail.read`も既存executor historyを参照し、新しいGoogle API要求は起こさない。署名と完全一致したoperationのentry/result digestだけをFailureReview projectionへ渡し、メール本文、header、宛先、添付metadata、credentialを含めない。これは保存済みexecutor結果の存在と履歴順だけを示し、メール内容、現在のMailbox状態、providerでの独立確認を示さない。
 
 この観測は同じ操作後の履歴を示すだけで、原因、外部条件の解消、世界状態、承認、再開・実行権限を証明しない。hash-chain不正は`invalid`、該当する後続entryがない場合は`unavailable`として保留する。対象scope／operation以外へ一般化しない。
 

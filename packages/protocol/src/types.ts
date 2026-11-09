@@ -410,6 +410,9 @@ export type SkepticalReviewRequest = z.infer<typeof SkepticalReviewRequestSchema
 
 export const FAILURE_REVIEW_LOCAL_P_VERSION = "blue-tanuki.failure-review.v1" as const;
 
+/** Exact read-only tool calls whose existing Complete History results may be projected by Gateway. */
+export const FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS = Object.freeze(["browser.read", "gmail.read"] as const);
+
 const FailureReviewSha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const FailureReviewScopeSchema = z.enum([
   "command", "tool", "file", "repo", "test", "llm_output", "workflow", "authority", "boundary",
@@ -446,9 +449,9 @@ export const FailureReviewIndependentObservationSchema = z.object({
     scope: FailureReviewScopeSchema,
     failure_type: FailureReviewTypeSchema,
   }).strict()).max(16),
-  /** Present only when the Gateway found a later exact read-only file.search or browser.read execution. */
+  /** Present only when Gateway found a later exact read-only execution in Complete History. */
   observation_kind: z.literal("post_signature_read_only").optional(),
-  operation: z.enum(["file.search", "browser.read"]).optional(),
+  operation: z.enum(["file.search", ...FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS]).optional(),
   browser_read_observation: FailureReviewBrowserReadObservationSchema.optional(),
   result_status: z.literal("success").optional(),
   entry_index: z.number().int().nonnegative().optional(),
