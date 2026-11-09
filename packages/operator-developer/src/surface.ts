@@ -54,6 +54,18 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     audit_trace: ["surface", "downstream_tool_name", "path_metadata", "approval_level"],
   },
   {
+    kind: "memory.personalization.stop",
+    label: "Stop future personalized use of an owner-selected memory reference",
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
+    preview: false,
+    disabled_by_default: false,
+    downstream_tools: ["memory.personalization.stop"],
+    capabilities: requireOperationDescriptor("memory.personalization.stop").required_capabilities,
+    audit_trace: ["surface", "downstream_tool_name", "memory_reference_digest", "final_review_result"],
+  },
+  {
     kind: "browser.snapshot",
     label: "Capture browser state through disabled-by-default preview tooling",
     approval_level: "L2_operate",
@@ -103,7 +115,10 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
   },
 ] as const;
 
-export const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = requiredCapabilitiesForSurface("developer");
+// settings:write remains an HDS operation capability for L3 review, not a plugin manifest permission.
+export const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = Object.freeze(
+  requiredCapabilitiesForSurface("developer").filter((permission) => permission !== "settings:write"),
+);
 
 export function getDeveloperOperationSpec(kind: DeveloperOperationKind): DeveloperOperationSpec {
   const spec = DEVELOPER_OPERATION_SPECS.find((operation) => operation.kind === kind);

@@ -9,6 +9,7 @@
     "fs:read",
     "tool:file.write",
     "tool:file.edit",
+    "tool:memory.personalization.stop",
     "fs:write",
     "tool:github.read",
     "tool:github.write",
@@ -30,5 +31,5 @@
     "default": "getDeveloperSurfaceSnapshot",
     "surface": "getDeveloperSurfaceSnapshot"
   },
-  "description": "Layer A Developer Operator surface. It declares only existing downstream file, shell, GitHub, and browser-preview capabilities; it does not add authority."
+  "description": "Layer A Developer Operator surface. It declares existing downstream file, memory-personalization, shell, GitHub, and browser-preview capabilities; HDS-BRAIN and the Approval Gate retain authority, and the surface does not add authority."
 }

@@ -3106,7 +3106,7 @@ async function runChannelOperatorExtensionBoundary(ctx: CheckContext): Promise<C
       name: "@blue-tanuki/operator-developer",
       label: "Developer Operator",
       surface: "developer",
-      required: ["tool:file.search", "fs:read", "tool:github.write", "tool:shell.exec", "shell:exec"],
+      required: ["tool:file.search", "fs:read", "tool:memory.personalization.stop", "tool:github.write", "tool:shell.exec", "shell:exec"],
     },
   ] as const;
 

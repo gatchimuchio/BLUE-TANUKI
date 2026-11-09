@@ -6,7 +6,7 @@ The surface snapshot also exposes `operation_core_projection`, a read-only Opera
 
 ## 1. Purpose
 
-Developer Operator is the first-party surface for code-reading, code-editing support, local file work, guarded shell execution, GitHub operations, and browser preview work under HDS-BRAIN authority.
+Developer Operator is the first-party surface for code-reading, code-editing support, local file work, owner-reviewed memory-personalization stop, guarded shell execution, GitHub operations, and browser preview work under HDS-BRAIN authority.
 
 It is a Layer A surface and does not create a developer-mode authority bypass.
 
@@ -15,6 +15,7 @@ It is a Layer A surface and does not create a developer-mode authority bypass.
 - inspect local code and docs through configured file tools
 - write or edit sandboxed local files
 - prepare shell commands for final review
+- stop future personalized use of one owner-selected memory reference through the existing HDS/M path; history remains retained
 - inspect GitHub repositories, issues, and pull requests
 - create GitHub issues/PRs/comments through final-review
 - use browser preview tools within their disabled-by-default boundary
@@ -35,6 +36,7 @@ Developer Operator may prepare process-backed work, but shell execution is repre
 Developer Operator reuses:
 
 - `file.search`, `file.write`, `file.edit`
+- `memory.personalization.stop` (existing HDS target resolver and registered built-in adapter)
 - `shell.exec`
 - `github.read`
 - `github.write`
@@ -52,6 +54,7 @@ No new raw filesystem, process, GitHub, or browser capability is introduced in P
 | github.read | L1_observe | low | read-only |
 | browser.snapshot | L2_operate | medium | preview and public-address guards apply |
 | local file write/edit in sandbox | L2_operate | medium | existing file tool boundary applies |
+| stop future personalized use of an owner-selected memory reference | L3_final_review | high | exact target/version review, recheck before effect, and HDS-BRAIN/Approval Gate remain required; history is retained |
 | shell.exec | L3_final_review | high | ShellAdapter only; final-review always required |
 | github.write | L3_final_review | high | external write |
 | browser.automation mutation/credential action | L3_final_review | high | preview remains disabled-by-default |
@@ -67,6 +70,7 @@ Developer operations must record:
 - GitHub owner/repo/resource summary
 - browser URL origin and action class
 - ApprovalLevel / ApprovalRisk / final-review result
+- memory-reference digest for the stop operation; never raw memory content
 - mutation result digest for writes
 
 ## 7. Failure Modes (owner next action)
@@ -79,6 +83,9 @@ Developer operations must record:
 - GitHub repo denied: update `BLUE_TANUKI_GITHUB_REPOS`
 - browser preview disabled: set preview env only when intended
 - browser guard denial: use an allowed public address and no credentialed profile
+- memory reference/version missing, stale, or ambiguous: keep the stop pending or cancel; do not delete the history record
+
+The plugin manifest declares the existing `tool:memory.personalization.stop` downstream tool. `settings:write` remains an HDS operation capability for L3 approval and is not declared as a plugin permission.
 
 ## 8. Layer Boundary (Layer A vs Layer B)
 
@@ -89,6 +96,7 @@ Developer Operator is Layer A. Layer B plugins may add language helpers, templat
 Developer Operator uses the shared substrate for:
 
 - file/process/external write approval mapping
+- memory-personalization stop review through the existing HDS/M path
 - capability declaration enforcement
 - audit-safe mutation summaries
 - browser preview quarantine

@@ -4,6 +4,7 @@ export type DeveloperOperationKind =
   | "file.read"
   | "file.write"
   | "file.edit"
+  | "memory.personalization.stop"
   | "github.read"
   | "github.write"
   | "browser.snapshot"

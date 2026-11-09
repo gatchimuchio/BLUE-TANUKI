@@ -30,6 +30,30 @@ describe("Developer Operator surface", () => {
     expect(getDeveloperOperationSpec("shell.exec").final_review_required).toBe(true);
   });
 
+  it("keeps memory personalization stop behind the existing HDS L3 review", () => {
+    const spec = getDeveloperOperationSpec("memory.personalization.stop");
+    const step = getDeveloperSurfaceSnapshot().operation_core_projection.steps.find(
+      (candidate) => candidate.operation === "memory.personalization.stop",
+    );
+
+    expect(spec).toMatchObject({
+      approval_level: "L3_final_review",
+      approval_risk: "high",
+      final_review_required: true,
+      preview: false,
+      disabled_by_default: false,
+    });
+    expect(spec.capabilities).toContain("tool:memory.personalization.stop");
+    expect(spec.capabilities).toContain("settings:write");
+    expect(step?.permission).toMatchObject({
+      risk: "high",
+      approval_level: "L3_final_review",
+      final_review_required: true,
+      hds_brain_authority_required: true,
+      approval_gate_required: true,
+    });
+  });
+
   it("keeps browser automation as disabled-by-default preview", () => {
     const snapshot = getDeveloperSurfaceSnapshot();
     expect(snapshot.browser_preview).toEqual({
@@ -88,11 +112,15 @@ describe("Developer Operator surface", () => {
   });
 
   it("uses only existing downstream capability names", () => {
-    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toEqual(requiredCapabilitiesForSurface("developer"));
+    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toEqual(
+      requiredCapabilitiesForSurface("developer").filter((permission) => permission !== "settings:write"),
+    );
     expect(getDeveloperSurfaceSnapshot().operations.map((operation) => operation.kind).sort()).toEqual(
       [...OPERATOR_SURFACE_OPERATION_IDS.developer].sort(),
     );
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:file.search");
+    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:memory.personalization.stop");
+    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("settings:write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:github.write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:shell.exec");
     expect(getDeveloperOperationSpec("github.read").capabilities).not.toContain("secrets:GITHUB_TOKEN");
