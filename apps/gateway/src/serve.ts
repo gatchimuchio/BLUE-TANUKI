@@ -263,6 +263,9 @@ interface PendingApproval {
   log: DecisionLog;
   origin: InboundRequest;
   evaluation: ApprovalEvaluation;
+  failure_memory_gate_digest: string;
+  failure_memory_gate_actor: string;
+  failure_memory_gate_requires_approval: boolean;
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
@@ -306,6 +309,28 @@ interface PendingApproval {
     reassesses_judgment_refs: readonly string[];
     proposal_actor: string;
   };
+}
+
+function failureMemoryGateReviewDigest(gate: {
+  decision: string;
+  matches: readonly unknown[];
+  condition_change_matches: readonly unknown[];
+  applied_signature_ids: readonly string[];
+  requires_human_review: boolean;
+  reason: string;
+  rewritten_candidate?: unknown;
+}): string {
+  return operationPlanDigest({
+    schema_version: "failure-memory-gate-review.v1",
+    decision: gate.decision,
+    match_digests: gate.matches.map((match) => operationPlanDigest(match)),
+    condition_change_match_digests: gate.condition_change_matches.map((match) => operationPlanDigest(match)),
+    applied_signature_ids: gate.applied_signature_ids,
+    requires_human_review: gate.requires_human_review,
+    reason: gate.reason,
+    rewritten_candidate_digest: gate.rewritten_candidate === undefined
+      ? null : operationPlanDigest(gate.rewritten_candidate),
+  });
 }
 
 type OperatorSnapshot = Record<string, unknown>;
@@ -1554,6 +1579,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   type ExecuteAndEchoOptions = {
     skip_approval?: boolean;
     actor?: string;
+    failure_memory_gate_digest?: string;
+    failure_memory_gate_actor?: string;
     approval_evaluation?: ApprovalEvaluation;
     command_digest?: string;
     expected_gmail_draft_provider_state_digest?: string;
@@ -1595,6 +1622,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     ephemeralContext?: InboundEphemeralContext,
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    let failureMemoryGateChangedBeforeExecution = false;
+    let failureMemoryGateChangedConditions: string[] = [];
     const driveContentRead = googleDriveContentReadRequested(cmd);
     if (driveContentRead && !isExplicitDriveOrganizationCommand(
       cmd, log, origin, hds.isOperationPlanCommand(cmd.id),
@@ -1718,15 +1747,51 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       );
       return { status: "emergency_stop_blocked" };
     }
+    const failureMemoryGateActor = opts.failure_memory_gate_actor ?? actor;
     const failureGate = failureMemory.evaluateCommandGate(cmd, {
-      actor,
+      actor: failureMemoryGateActor,
       channel: origin.channel,
       request_id: log.request_id,
       origin_user: origin.user,
     });
+    const failureGateDigest = failureMemoryGateReviewDigest(failureGate);
+    const noteFailureMemoryGateChanged = (currentGate: typeof failureGate, phase: string): void => {
+      failureMemoryGateChangedBeforeExecution = true;
+      failureMemoryGateChangedConditions = [...new Set(
+        currentGate.condition_change_matches.flatMap((match) => match.changed_conditions),
+      )].sort();
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "failure_memory_gate_changed",
+        request_id: log.request_id,
+      });
+      recordApprovalHistory("failure_memory_gate_changed", cmd, log, origin, actor, executionEvaluation, {
+        phase,
+        previous_gate_digest: opts.failure_memory_gate_digest ?? null,
+        current_gate_digest: failureMemoryGateReviewDigest(currentGate),
+        current_gate_decision: currentGate.decision,
+        current_gate_reason: currentGate.reason,
+        changed_conditions: failureMemoryGateChangedConditions,
+        fresh_request_required: true,
+        used_for_authority: false,
+        may_execute: false,
+      });
+    };
+    if (opts.skip_approval && (opts.failure_memory_gate_digest === undefined ||
+        failureGate.decision === "block" || failureGateDigest !== opts.failure_memory_gate_digest)) {
+      noteFailureMemoryGateChanged(failureGate, "approval_resume_preflight");
+      const content = `[failure-memory-reapproval-required] command_id=${cmd.id} executed=false reason=the current failure-memory gate differs from the approved review; no action was invoked. changed_conditions=${failureMemoryGateChangedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`;
+      await dispatcher.dispatch(replyPayload(origin, content), {
+        command_id: `failure-memory-reapproval-required-${cmd.id}`,
+        upstream_commit_hash: log.commit.hash,
+        request_id: log.request_id,
+      });
+      return { status: "failure_memory_gate_changed" };
+    }
     recordApprovalHistory("failure_memory_gate", cmd, log, origin, actor, null, {
       gate_decision: failureGate.decision,
       gate_reason: failureGate.reason,
+      gate_digest: failureGateDigest,
       matched_signature_ids: failureGate.applied_signature_ids,
       condition_change_matches: failureGate.condition_change_matches,
       requires_human_review: failureGate.requires_human_review,
@@ -1860,6 +1925,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         recordApprovalHistory("approval_pending", cmd, log, origin, actor, evaluation, {
           failure_memory_required: failureMemoryRequiresApproval,
           failure_memory_reason: failureMemoryRequiresApproval ? failureGate.reason : undefined,
+          failure_memory_gate_digest: failureGateDigest,
           failure_memory_condition_change_matches: failureMemoryRequiresApproval
             ? failureGate.condition_change_matches : undefined,
           approval_token_issued: Boolean(issued?.token),
@@ -1871,6 +1937,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           log,
           origin,
           evaluation,
+          failure_memory_gate_digest: failureGateDigest,
+          failure_memory_gate_actor: failureMemoryGateActor,
+          failure_memory_gate_requires_approval: failureMemoryRequiresApproval,
           approval_token: issued?.token,
           approval_token_expires_at_ms: issued?.expires_at_ms,
           ...(cronEvent ? { cron_event: cronEvent } : {}),
@@ -1882,8 +1951,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             ? { memory_judgment_reassessment_proposal: opts.memory_judgment_reassessment_proposal } : {}),
         });
         approvalAdmission.lease.release();
+        const changedConditions = [...new Set(
+          failureGate.condition_change_matches.flatMap((match) => match.changed_conditions),
+        )].sort();
         const approvalContent = failureMemoryRequiresApproval
-          ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
+          ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}${changedConditions.length > 0 ? ` failure_memory_changed_conditions=${changedConditions.join(",")}` : ""} approval_is_bound_to_this_command_and_current_gate_only=true`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
         if (!opts.quiet_approval_notice) await dispatcher.dispatch(
           replyPayload(origin, approvalContent),
@@ -2204,6 +2276,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     activeTaskExecutions.register(cmd.id, executionController);
     let executionTask: Promise<ExecuteFeedback> | undefined;
     let executionAdmissionLease: { release(): void } | undefined;
+    const recheckFailureMemoryApproval = (): void => {
+      if (!opts.skip_approval) return;
+      const currentGate = failureMemory.evaluateCommandGate(cmd, {
+        actor: failureMemoryGateActor,
+        channel: origin.channel,
+        request_id: log.request_id,
+        origin_user: origin.user,
+      });
+      if (currentGate.decision === "block" ||
+          failureMemoryGateReviewDigest(currentGate) !== opts.failure_memory_gate_digest) {
+        noteFailureMemoryGateChanged(currentGate, "immediate_pre_executor_recheck");
+        throw new Error("failure_memory_gate_changed_before_execution");
+      }
+    };
     try {
       try {
         executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
@@ -2216,11 +2302,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             : {}),
           signal: executionController.signal,
           before_execute: () => {
+            recheckFailureMemoryApproval();
             const resourceAdmission = resourceBackpressure.tryAcquireExecution();
             if (!resourceAdmission.ok) throw new Error(resourceAdmission.reason);
             executionAdmissionLease = resourceAdmission.lease;
           },
           before_tool_dispatch: () => {
+            recheckFailureMemoryApproval();
             if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
           } });
       } catch (error) {
@@ -2259,7 +2347,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (planBound) gatewayLog.info("saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
-    if (isComposioExecuteCommand(cmd)) {
+    if (isComposioExecuteCommand(cmd) && !failureMemoryGateChangedBeforeExecution) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
         {
@@ -2305,7 +2393,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       fb,
     );
     if (meaningUpdateProposalHistory) recordCompleteHistory(meaningUpdateProposalHistory);
-    if (fb.status === "failed") {
+    if (fb.status === "failed" && !failureMemoryGateChangedBeforeExecution) {
       const extracted = executionHistory
         ? extractFailureSignatures({ kind: "complete_history", entry: executionHistory })
         : extractFailureSignatures({
@@ -2405,6 +2493,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds,
       command: cmd,
       feedback: fb,
+      ...(failureMemoryGateChangedBeforeExecution ? {
+        rendered_output_override: `[failure-memory-reapproval-required] command_id=${cmd.id} executed=false reason=the current failure-memory gate changed at the executor boundary; no action was invoked. changed_conditions=${failureMemoryGateChangedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`,
+      } : {}),
       target_surface: "channel",
       request_id: log.request_id,
       development_handoff_store: developmentHandoffStore,
@@ -2885,7 +2976,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         error_kind: delivery.error_kind ?? null,
       });
     }
-    return { status: finalized.reviewed_feedback.status };
+    return { status: failureMemoryGateChangedBeforeExecution
+      ? "failure_memory_gate_changed" : finalized.reviewed_feedback.status };
   }
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
@@ -2925,6 +3017,55 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.delete(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
+    }
+    if (verdict === "approve") {
+      let currentFailureGate: ReturnType<typeof failureMemory.evaluateCommandGate> | undefined;
+      try {
+        if (typeof pending.failure_memory_gate_actor === "string") {
+          currentFailureGate = failureMemory.evaluateCommandGate(pending.command, {
+            actor: pending.failure_memory_gate_actor,
+            channel: pending.origin.channel,
+            request_id: pending.log.request_id,
+            origin_user: pending.origin.user,
+          });
+        }
+      } catch {
+        currentFailureGate = undefined;
+      }
+      const currentFailureGateDigest = currentFailureGate
+        ? failureMemoryGateReviewDigest(currentFailureGate) : undefined;
+      if (!currentFailureGate || !pending.failure_memory_gate_digest ||
+          currentFailureGate.decision === "block" ||
+          currentFailureGateDigest !== pending.failure_memory_gate_digest) {
+        resolveCronApprovalHandoff(pending, "cancelled");
+        pendingApprovals.delete(command_id);
+        hds.onCommandLifecycle(command_id, "approval_cancelled", {
+          actor: approvalActor,
+          reason: "failure_memory_gate_changed",
+          request_id: pending.log.request_id,
+        });
+        const changedConditions = currentFailureGate
+          ? [...new Set(currentFailureGate.condition_change_matches.flatMap((match) => match.changed_conditions))].sort()
+          : [];
+        recordApprovalHistory("failure_memory_reapproval_required", pending.command, pending.log, pending.origin,
+          approvalActor, pending.evaluation, {
+            previous_gate_digest: pending.failure_memory_gate_digest ?? null,
+            current_gate_digest: currentFailureGateDigest ?? null,
+            current_gate_decision: currentFailureGate?.decision ?? "unavailable",
+            current_gate_reason: currentFailureGate?.reason ?? "failure_memory_gate_unavailable",
+            changed_conditions: changedConditions,
+            fresh_request_required: true,
+            used_for_authority: false,
+            may_execute: false,
+          });
+        await dispatcher.dispatch(replyPayload(pending.origin,
+          `[failure-memory-reapproval-required] command_id=${command_id} executed=false reason=the failure-memory gate changed or could not be re-observed; no action was invoked. changed_conditions=${changedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`), {
+          command_id: `failure-memory-reapproval-required-${command_id}`,
+          upstream_commit_hash: pending.log.commit.hash,
+          request_id: pending.log.request_id,
+        });
+        return { approval: "approve", executed: false, status: "failure_memory_gate_changed", fresh_request_required: true };
+      }
     }
     const requiresToolContentReview = pending.command.type === "tool_call" && (
       pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
@@ -3090,7 +3231,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     resolveCronApprovalHandoff(pending, "consumed");
     pendingApprovals.delete(command_id);
     const rememberRequested = Boolean(ctx.approval?.remember || ctx.approval?.mode);
-    if (rememberRequested && !pending.evaluation.final_review_required) {
+    if (rememberRequested && !pending.evaluation.final_review_required &&
+        !pending.failure_memory_gate_requires_approval) {
       const grant = approval.remember(pending.evaluation, { actor: approvalActor, mode: ctx.approval?.mode, duration_ms: ctx.approval?.duration_ms, note: `remembered from approval of command_id=${command_id}` });
       hds.onAuthorityEvent("grant_created", {
         request_id: pending.log.request_id,
@@ -3109,8 +3251,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
       verdict,
       token_kind: ctx.token_kind,
-      remember_requested: rememberRequested && !pending.evaluation.final_review_required,
+      remember_requested: rememberRequested && !pending.evaluation.final_review_required &&
+        !pending.failure_memory_gate_requires_approval,
       remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
+      remember_ignored_failure_memory_review: rememberRequested && pending.failure_memory_gate_requires_approval,
+      failure_memory_gate_digest: pending.failure_memory_gate_digest,
+      failure_memory_gate_rechecked: true,
       ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
     });
     if (pending.meaning_update_proposal) {
@@ -3298,6 +3444,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
       skip_approval: true,
       actor: approvalActor,
+      failure_memory_gate_digest: pending.failure_memory_gate_digest,
+      failure_memory_gate_actor: pending.failure_memory_gate_actor,
       approval_evaluation: pending.evaluation,
       command_digest: pending.command_digest,
       ...(pending.content_review_provider_state_digest
@@ -3311,6 +3459,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ...(pending.content_review_github_target_version_digest
         ? { expected_github_write_target_version_digest: pending.content_review_github_target_version_digest } : {}),
     });
+    if (r.status === "failure_memory_gate_changed") {
+      return { approval: "approve", executed: false, status: r.status, fresh_request_required: true };
+    }
     return { approval: "approve", executed: true, status: r.status };
   }
 

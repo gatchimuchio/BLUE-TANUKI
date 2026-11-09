@@ -6,7 +6,15 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E03.03 Recoveryのtask lineage復元scopeをControl Centerへ接続（限定WIRED）
+### 直近BUILD_BATCH — E04.03 FailureMemory条件変化の再評価を承認・実行consumerへ接続（限定WIRED）
+
+FailureMemory gateの初回判定digestと元の実行主体をprocess-local pending approvalへ束縛する。Ownerの承認再開時に同じcommand／contextを再評価し、gateが変化・block・取得不能ならpendingを取消して新規要求を求める。承認後もExecutorの`before_execute`とtool dispatch直前で同じgateを再評価し、digest不一致を検出した場合は作用前に停止する。gate由来の承認から再利用可能なgrantを作らず、前のFailureMemory署名を変更・削除・置換しない。条件変化が観測された場合は承認要求にgoal／actor／channelのdigest差分次元を表示し、古い承認を再利用しない。
+
+このgateは現在のHDS ASSERTに含まれるgoal／actor／channelの条件fingerprintを再評価する。外部環境の根因が実際に解消したことを独立証明するものではない。該当する承認・executor境界のコード接続だけを限定`WIRED`とし、E04.03全体・実行時作用・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+Gateway依存7 workspace project build、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASS（既存移行負債76件の注意）、license監査はPASS。test suite、実served Gateway／owner approval往復、実FailureMemory状態変化、実外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02の達成評価については、owner明示規則のdigest・一意なstep・検証済み結果・M receiptを結んだ既存J評価を現行コードで確認し、追加の重複実装は行わない。
+
+### 前段完了BUILD_BATCH — E03.03 Recoveryのtask lineage復元scopeをControl Centerへ接続（限定WIRED）
 
 Control Centerにbackup内scope照合とは分離した復元effect scopeを追加した。Operation Planは一planまたはHDS-J task lineage、Brokerはstore全体またはtask lineage、その他のstoreは選択store全体を選ぶ。task照合projectionはbackup task identity、複数plan digest、lineage integrity／dependency状態を表示するが、復旧可否・権限・resumeを判定しない。GatewayはOperation Plan scopeとBroker task scopeをL3要求作成前に同じbackup／task scope verifierへ通し、既存の復元作用直前照合を維持する。L3承認、実行直前backup、store間非原子性、automatic resumeなしを維持する。
 
