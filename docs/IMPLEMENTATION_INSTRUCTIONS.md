@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F20.01 隔離file-search workerへHDS記憶境界を継承
+## 直近施工BUILD_BATCH — QE_BUILD / F06.01 browser観測provenanceの読取consumer接続
+
+主語は、Web観測結果をCへ返す`browser.read`と`browser.snapshot`。目的は、ページ内容を非権威の外部証拠として扱い、要求origin・最終origin・観測時刻・navigation面と、その観測面にtab/frameが存在するかを結果に残すこと。F06.01の読取側に限ったproducer接続であり、将来のeffect targetへの束縛は未成立とする。
+
+両consumerは`observation`を返し、要求／最終origin、origin変更、ISO-8601観測時刻、navigation種別、証拠源、資格情報境界、`page_content_is_untrusted=true`、`used_for_authority=false`、`may_execute=false`を含む。HTTP GETはtab/frameを`not_applicable`とし、snapshotは永続profileを持たない単一ephemeral tabのmain frameとして記録する。snapshot runnerの最終URLは結果返却前に再parseし、既存のpublic-address／allowlist境界で再照合する。ページ本文、URL由来のquery、credentialはobservation metadataへ複製しない。
+
+`browser.snapshot`の既定無効、ephemeral browser、credential再利用なし、download無効を維持する。`browser.automation`はnavigate snapshot以外のclick／form submit／download／uploadをpreview quarantineのままにし、実作用・承認境界・providerへ接続しない。observation metadataは権限・承認・effect targetを作らない。
+
+core package `typecheck`／`build`、`docs:check`、`git diff --check`はPASS。test suite、実HTTP／browser runtime、実provider、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。この読取provenance sliceだけを限定`WIRED`とし、F06.01全体、F06全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+**次のproducer／consumer:** 最新HEADで別の未接続通常consumerを再選定する。browser observationをeffect targetへ結ぶ作業は、現行J/Brokerが現位置・tab/frame/navigation・観測時刻を再照合する実consumerが特定できた時点で別sliceとして施工する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F20.01 隔離file-search workerへHDS記憶境界を継承
 
 主語は、親Gatewayが承認した`file.search`を実行する隔離child processと、HDSのM本体・個人化停止台帳。目的は、通常Gatewayと同じHDS記憶対象設定をchildへ渡し、worker経由で停止済みMを検索・引用する別経路を残さないこと。F20.01／BT-R-F20-02／06の次consumer sliceである。
 

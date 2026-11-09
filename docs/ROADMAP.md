@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F20.01 隔離file-search workerへHDS記憶境界を継承（限定WIRED）
+### 直近BUILD_BATCH — F06.01 browser観測provenanceの読取consumer接続（限定WIRED）
+
+`browser.read`と`browser.snapshot`が、ページ内容を非権威の外部証拠として扱うための観測metadataを返す。要求／最終origin、origin変更、観測時刻、navigation、証拠源、資格情報境界を記録し、HTTPのtab/frame非該当とsnapshotの一時tab／main frameを区別する。内容は`page_content_is_untrusted=true`、`used_for_authority=false`、`may_execute=false`を明示する。
+
+snapshotの最終URLも結果返却前に既存public-address／allowlist検査へ通す。既定無効、ephemeral profile、download無効、click／submit等のpreview quarantineは維持する。core typecheck／build、`docs:check`、`git diff --check`はPASS。test suite、実HTTP／browser、実provider／外部作用、他OS、QE_QC／QE_QAはNOT_RUN。これは読取provenanceの限定WIREDのみで、effect target束縛、F06.01全体、製品全体完成を示さない。
+
+### 前段完了BUILD_BATCH — F20.01 隔離file-search workerへHDS記憶境界を継承（限定WIRED）
 
 Gatewayの親工程が作るtarget observationと専用childの検索対象を同一化するため、worker環境へは実効HDS memory fileのabsolute pathだけを渡す。credentialや親の全environmentは継承しない。`BLUE_TANUKI_MEMORY_FILE`優先と`BLUE_TANUKI_MEMORY_DIR/memory.jsonl` fallbackの双方を子process疎通で通し、M本体・`.personalization.jsonl`停止台帳が検索結果に現れず、通常sandbox file検索は成功することを確認する。
 

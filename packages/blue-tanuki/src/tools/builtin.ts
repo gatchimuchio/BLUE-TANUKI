@@ -3347,11 +3347,11 @@ export async function invokeBrowserRead(
   args: Record<string, unknown>,
   opts: BrowserReadOptions = {},
 ): Promise<unknown> {
-  const url = stringArg(args, "url")!;
+  const requestedUrl = parseHttpUrl(stringArg(args, "url")!);
   const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 512_000);
   const maxChars = positiveIntArg(args, "max_chars", 8_000, 50_000);
   const fetched = (await invokeHttpFetch(
-    { url, method: "GET", max_bytes: maxBytes },
+    { url: requestedUrl.href, method: "GET", max_bytes: maxBytes },
     opts,
   )) as {
     url: string;
@@ -3364,6 +3364,7 @@ export async function invokeBrowserRead(
   if (!fetched.ok) {
     throw new Error(`browser.read returned HTTP ${fetched.status}`);
   }
+  const finalUrl = parseHttpUrl(fetched.url);
   const body = fetched.body;
   const isHtml =
     fetched.content_type === null ||
@@ -3373,13 +3374,53 @@ export async function invokeBrowserRead(
     ? htmlToText(body, maxChars)
     : truncateText(body.replace(/\s+/g, " ").trim(), maxChars);
   return {
-    url: fetched.url,
+    url: finalUrl.href,
     status: fetched.status,
     content_type: fetched.content_type,
     title: isHtml ? htmlTitle(body) : null,
     text,
-    links: isHtml ? htmlLinks(body, fetched.url, 20) : [],
+    links: isHtml ? htmlLinks(body, finalUrl.href, 20) : [],
     truncated: fetched.truncated || text.length >= maxChars,
+    observation: createBrowserObservation({
+      requestedUrl,
+      finalUrl,
+      observedAt: new Date(),
+      navigation: "http_get",
+      tabScope: "not_applicable",
+      frameScope: "not_applicable",
+      credentialContext: "no_tool_supplied_credentials",
+      evidenceSource: opts.request ? "FIXTURE" : "EXTERNAL_EVIDENCE",
+    }),
+  };
+}
+
+type BrowserObservationNavigation = "http_get" | "browser_snapshot";
+type BrowserObservationEvidenceSource = "EXTERNAL_EVIDENCE" | "FIXTURE";
+
+function createBrowserObservation(input: {
+  requestedUrl: URL;
+  finalUrl: URL;
+  observedAt: Date;
+  navigation: BrowserObservationNavigation;
+  tabScope: "not_applicable" | "single_ephemeral_tab";
+  frameScope: "not_applicable" | "main_frame";
+  credentialContext: "no_tool_supplied_credentials" | "ephemeral_no_persistent_profile";
+  evidenceSource: BrowserObservationEvidenceSource;
+}): Record<string, unknown> {
+  return {
+    schema_version: "blue-tanuki.browser-observation.v1",
+    observed_at: input.observedAt.toISOString(),
+    requested_origin: input.requestedUrl.origin,
+    final_origin: input.finalUrl.origin,
+    origin_changed: input.requestedUrl.origin !== input.finalUrl.origin,
+    navigation: input.navigation,
+    tab_scope: input.tabScope,
+    frame_scope: input.frameScope,
+    credential_context: input.credentialContext,
+    evidence_source: input.evidenceSource,
+    page_content_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
   };
 }
 
@@ -3533,6 +3574,8 @@ export async function invokeBrowserSnapshot(
     env,
     resolveHost,
   });
+  const finalUrl = parseHttpUrl(snapshot.final_url);
+  await resolvePublicTarget(finalUrl, env, resolveHost);
 
   return {
     preview: "browser.automation",
@@ -3540,10 +3583,20 @@ export async function invokeBrowserSnapshot(
     action: "snapshot",
     engine: snapshot.engine,
     url: url.href,
-    final_url: snapshot.final_url,
+    final_url: finalUrl.href,
     title: snapshot.title,
     text: truncateText(snapshot.text, maxChars),
     truncated: snapshot.truncated || snapshot.text.length > maxChars,
+    observation: createBrowserObservation({
+      requestedUrl: url,
+      finalUrl,
+      observedAt: new Date(),
+      navigation: "browser_snapshot",
+      tabScope: "single_ephemeral_tab",
+      frameScope: "main_frame",
+      credentialContext: "ephemeral_no_persistent_profile",
+      evidenceSource: opts.runner ? "FIXTURE" : "EXTERNAL_EVIDENCE",
+    }),
     sandbox: {
       persistent_profile: false,
       downloads: "disabled",
