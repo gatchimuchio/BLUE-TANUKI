@@ -12,8 +12,10 @@ import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
+  GoalCompletionRulesSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
+  type GoalCompletionRules,
   type InboundRequest,
   type ChannelSendPayload,
 } from "@blue-tanuki/protocol";
@@ -865,6 +867,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_input" }));
         return;
       }
+      const hasGoalCompletionRules = body !== null && Object.prototype.hasOwnProperty.call(body, "goal_completion_rules");
+      let goalCompletionRules: GoalCompletionRules | undefined;
+      if (hasGoalCompletionRules) {
+        try {
+          const parsedRules = GoalCompletionRulesSchema.safeParse(body?.goal_completion_rules);
+          if (!parsedRules.success) throw new Error("invalid");
+          goalCompletionRules = parsedRules.data;
+        } catch {
+          res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_completion_rules" }));
+          return;
+        }
+      }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
       const handler = this.handler;
       if (!handler) {
@@ -880,6 +895,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         goalRef,
         hasPurposeVersion,
         hasPurposeVersion ? requestedPurposeVersion : null,
+        goalCompletionRules ?? null,
       ]), "utf8").digest("hex");
       let claimedRequestId: string | undefined;
       let handlerStarted = false;
@@ -939,6 +955,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
           timestamp: Date.now(),
           session_id: `webchat-owner-task:${requestId}`,
+          ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),
           metadata: {
             reply_to: replyTo,
             "blue_tanuki.authority_context": "gateway_internal_v1",

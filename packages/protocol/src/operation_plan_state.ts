@@ -3,6 +3,7 @@ import { OperationPlanSchema, OperationJsonValueSchema, OperationTargetSchema, O
 import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
+import { GoalCompletionRulesSchema } from "./goal_completion.js";
 import { ComputeResourceUseSchema } from "./types.js";
 
 const Id = z.string().min(1).max(200);
@@ -14,6 +15,28 @@ export const OperationPlanGoalPurposeBindingSchema = z.object({
   purpose_digest: Digest,
 }).strict();
 export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
+
+export const OperationPlanGoalCompletionPolicySchema = z.object({
+  schema_version: z.literal("operation-plan-goal-completion-policy.v1"),
+  source_request_id: Id,
+  task_identity_digest: Digest,
+  task_goal_digest: Digest,
+  rules: GoalCompletionRulesSchema,
+  rules_digest: Digest,
+}).strict();
+export type OperationPlanGoalCompletionPolicy = z.infer<typeof OperationPlanGoalCompletionPolicySchema>;
+export const OperationPlanGoalCompletionAssessmentSchema = z.object({
+  schema_version: z.literal("operation-plan-goal-completion-assessment.v1"),
+  task_identity_digest: Digest,
+  revision_digest: Digest,
+  rules_digest: Digest,
+  evidence_digest: Digest,
+  rule_count: z.number().int().min(1).max(64),
+  satisfied_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  decision_scope: z.literal("stop_same_task_after_verified_goal_completion"),
+  may_execute: z.literal(false),
+}).strict();
+export type OperationPlanGoalCompletionAssessment = z.infer<typeof OperationPlanGoalCompletionAssessmentSchema>;
 /** Explicit, non-authority reference to one J/M-verified plan result. */
 const OperationPlanPlanComputeSourceObservationReferenceSchema = z.object({
   plan_id_digest: Digest,
@@ -646,6 +669,8 @@ export const OperationPlanCheckpointPlanSchema = z.object({
     /** Stable task lineage across J-authorized wait/resume plan candidates; non-authority identity only. */
     task_identity_digest: Digest.optional(),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+    goal_completion_policy: OperationPlanGoalCompletionPolicySchema.optional(),
+    goal_completion_assessment: OperationPlanGoalCompletionAssessmentSchema.optional(),
     goal_purpose_relation: OperationPlanGoalPurposeRelationRecordSchema.optional(),
     compute_source_observations: z.array(OperationPlanComputeSourceObservationSchema).max(8).optional(),
     memory_interpretation_dependencies: z.array(OperationPlanMemoryInterpretationDependencySchema).max(64).optional(),

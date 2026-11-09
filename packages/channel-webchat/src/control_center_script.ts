@@ -1138,6 +1138,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         const task = byId("owner-task-intent").value.trim();
+        const completionRulesText = byId("owner-task-completion-rules").value.trim();
+        let completionRules;
+        if (completionRulesText) {
+          try { completionRules = JSON.parse(completionRulesText); }
+          catch { throw new Error("達成規則JSONを読み取れません。形式を確認してください"); }
+        }
         const goalSelect = byId("owner-task-goal-ref");
         const goalRef = goalSelect.value;
         const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
@@ -1154,12 +1160,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const submissionId = pendingOwnerTaskSubmissionId();
         const result = await postOwnerTaskCompute(ownerToken, {
           user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
-          submission_id: submissionId
+          submission_id: submissionId,
+          ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {})
         });
         clearOwnerTaskSubmissionId();
         renderOwnerTaskStatusSubmissionIds(submissionId);
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
+        byId("owner-task-completion-rules").value = "";
         appendChat("owner", task);
         appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);
         status.textContent = result.status === "already_in_progress" || result.status === "already_accepted"
@@ -2089,7 +2097,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               escapeHtml(purposeBindingStatus) + '</dd>'
             : plan.goal_purpose_binding_status === "required" ? '<dt>作業目的版</dt><dd>' + escapeHtml(purposeBindingStatus) + '</dd>' : '';
           const taskOutcome = isObject(plan.task_outcome) ? plan.task_outcome : null;
-          const taskOutcomeStatusLabels = { in_progress: "進行中", held: "保留" };
+          const taskOutcomeStatusLabels = { in_progress: "進行中", held: "保留", achieved: "達成・同一taskを停止" };
           const taskOutcomeReasonLabels = {
             recovery_hold_active: "復旧後の状態確認が必要です。",
             goal_purpose_binding_required: "委任目的の版が計画に結び付いていません。",
@@ -2098,14 +2106,29 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             operation_result_unverified: "作用結果が未確認です。",
             result_memory_receipt_unconfirmed: "確認済み結果の記憶保存receiptが確認できません。",
             goal_completion_not_assessed: "step結果は検証済みですが、委任目的の達成は未判定です。",
+            goal_completion_rules_missing: "ownerが明示した達成規則がありません。達成扱いしません。",
+            goal_completion_rule_target_missing: "達成規則に対応する一意なoperation結果がありません。",
+            goal_completion_rule_target_ambiguous: "達成規則の対象operationが複数あり、判定を保留しました。",
+            goal_completion_result_unverified: "達成規則が参照する作用結果を検証できません。",
+            goal_completion_result_mismatch: "検証済み結果が明示達成規則を満たしません。",
+            goal_completion_memory_unverified: "達成根拠のM receiptまたは保存値を再確認できません。",
+            goal_completion_wait_pending: "このtaskはownerの返信待ちです。",
+            goal_completion_peer_execution_unresolved: "同じtaskの別実行が未解決です。",
+            goal_completion_assessment_stale: "保存済み達成判定と現在の根拠が一致しません。実行を停止しています。",
+            goal_completion_rules_satisfied: "明示達成規則と検証済み結果・M receiptが一致しました。",
             operation_plan_steps_pending: "計画stepの結果を確認中です。",
           };
+          const goalAssessment = isObject(taskOutcome?.goal_assessment) ? taskOutcome.goal_assessment : null;
           const taskOutcomeIsSafe = taskOutcome && taskOutcome.used_for_authority === false && taskOutcome.may_execute === false &&
             Object.prototype.hasOwnProperty.call(taskOutcomeStatusLabels, taskOutcome.status) &&
             Object.prototype.hasOwnProperty.call(taskOutcomeReasonLabels, taskOutcome.reason_code);
           const taskOutcomeMarkup = '<dt>委任仕事の状態</dt><dd>' + (taskOutcomeIsSafe
             ? escapeHtml(taskOutcomeStatusLabels[taskOutcome.status]) + '・' + escapeHtml(taskOutcomeReasonLabels[taskOutcome.reason_code]) +
-              '<br><span class="muted">step結果の確認は、委任目的の達成判定や実行許可を意味しません。</span>'
+              (goalAssessment && Number.isInteger(goalAssessment.rule_count) && Number.isInteger(goalAssessment.satisfied_rule_count)
+                ? '<br><span class="muted">達成規則: ' + escapeHtml(String(goalAssessment.satisfied_rule_count)) + '/' +
+                  escapeHtml(String(goalAssessment.rule_count)) + (typeof goalAssessment.evidence_digest === 'string'
+                    ? '・証拠digest ' + escapeHtml(goalAssessment.evidence_digest.slice(0, 12)) : '') + '</span>' : '') +
+              '<br><span class="muted">達成判定は同一taskの停止にのみ使い、実行許可や公開判断は作りません。</span>'
             : '状態を確認できません。委任目的は完了扱いしません。') + '</dd>';
           const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
           const purposeReviewBindingStatus = plan.goal_purpose_binding_status ?? (purposeBinding ? "current" : "not_configured");
@@ -2117,6 +2140,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             purposeRelationAllowsStepReview;
           const waitRegistrationReady = !refreshPending && !recoveryHold && reconciliationPlanReady &&
             plan.status === "results_verified" && ["not_configured", "current"].includes(purposeReviewBindingStatus) &&
+            taskOutcome?.status !== "achieved" &&
             plan.owner_authentication_required === true &&
             !isObject(plan.owner_reauthentication_binding);
           const waitRegistrationActions = waitRegistrationReady

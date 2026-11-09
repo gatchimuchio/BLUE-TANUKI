@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — 委任目的の未判定をHDSからGateway・Control Centerへ返す（限定WIRED）
+### 直近完了BUILD_BATCH — C08.02 owner明示達成規則・J/M判定・同一task停止（限定WIRED）
 
-HDS `OperationPlanLedger`から現行plan step、目的版・関係、復旧hold、M receiptを読み、`task_outcome`を非権威projectionとして返す。未完了は`in_progress`、未確認結果・目的・復旧・M receiptは理由付き`held`。全stepとreceiptが検証済みでも、目的達成を判定するJ証拠がない場合は`goal_completion_not_assessed`で保留し、完了扱いしない。Gatewayがenum・非権威flagsを検証してstatus projectionへ渡し、Control Centerが計画状態と仕事状態を分けて表示する。
+owner-token付きControl Center／WebChat経路からbounded JSON達成規則を受け取り、Protocolの外部入力境界で除外し、owner trust付きGateway内部要求にだけ保持する。Jは規則をtask identity・目的・元requestへ束縛し、child／resumeへ継承する。現行revisionの一意なoperation／target、実行結果の値、観測時刻、J検証済みstatus、M receiptと保存値が一致し、他のstep・目的・復旧・wait・並行実行条件も閉じた場合にのみ、Jがrules/evidence digest付きassessmentをcheckpointへsealする。規則なし・曖昧・不一致・根拠不在は保留する。達成seal後は同一taskのstep review／revision／wait-resume／追加computeを遮断し、再起動後も停止状態を復元する。Gateway／Control Center projectionはdigest／件数と非権威flagsだけを返す。
 
-HDS／Gateway／WebChat typecheckと対象build、renderer 1 passed／117 skipped、隔離BT-U-E2E-01 Gateway経路1 passed／6 skipped、`git diff --check`はPASS。Gateway再起動後に保存済みbindingsから`in_progress`を再導出する状態も確認した。実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。このC08.02保留経路のみ限定`WIRED`。次consumerはJによる委任目的達成の肯定判断と、その判断後に停止する経路。
+Protocol／HDS-BRAIN／Gateway／WebChat typecheckとbuild、Protocol boundary 37 passed、synthetic Gateway file.search→execution result outbox→J/M receipt→seal→HDS restart/step stop 1 passed／46 skipped、WebChat owner form／endpoint／achieved projection renderer／script tests 4 passed／115 skipped、`git diff --check`はPASS。これは一時workspace内の合成1仕事とlocal file.searchであり、実served画面からの全往復、実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。このC08.02接続のみを`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。次consumerはowner画面から実served GatewayのC/J/M経路・認証済み状態表示・達成後停止までを同一隔離runtimeで縦断し、規則欠落／不一致holdも確認する。
 
 ### 前段完了BUILD_BATCH — Gateway再起動後も同一taskのtest失敗回復をOwnerへ接続（限定WIRED）
 

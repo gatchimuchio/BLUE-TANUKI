@@ -468,6 +468,41 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("submits explicit task completion rules through the owner task form", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const submit = CONTROL_CENTER_SCRIPT.slice(start, end);
+    const rules = JSON.stringify({ schema_version: "blue-tanuki.goal-completion-rules.v1",
+      rules: [{ rule_id: "search-result", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] });
+    const nodes: Record<string, { value: string; textContent?: string; className?: string;
+      selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
+      "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Find blue." },
+      "owner-task-completion-rules": { value: rules }, "owner-task-goal-ref": {
+        value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
+      }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
+    };
+    const calls: Array<{ token: string; body: unknown }> = [];
+    const cleared: string[] = [];
+    const messages: Array<[string, string]> = [];
+    await new Script(`${submit}\nsubmitOwnerTask()`).runInNewContext({
+      byId: (id: string) => nodes[id], state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
+      pendingOwnerTaskSubmissionId: () => "submission-1", clearOwnerTaskSubmissionId: () => cleared.push("submission"),
+      renderOwnerTaskStatusSubmissionIds: (id: string) => cleared.push(id),
+      postOwnerTaskCompute: async (token: string, body: unknown) => { calls.push({ token, body });
+        return { status: "queued_for_hds_decision", request_id: "request-1" }; },
+      appendChat: (kind: string, content: string) => messages.push([kind, content]),
+    });
+    expect(calls).toEqual([{ token: "owner-token", body: {
+      user: "fixture-owner", task: "Find blue.", goal_ref: "goal_0123456789abcdef", purpose_version: 2,
+      submission_id: "submission-1", goal_completion_rules: JSON.parse(rules),
+    } }]);
+    expect(nodes["owner-task-completion-rules"]?.value).toBe("");
+    expect(cleared).toEqual(["submission", "submission-1"]);
+    expect(messages).toEqual([["owner", "Find blue."], ["accepted", "request-1"]]);
+  });
+
   it("connects main-app LLM cost and budget settings and invalidates stale readiness", async () => {
     const section = (startText: string, endText: string) => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(startText);
@@ -1035,7 +1070,10 @@ describe("WebChatChannel — Control Center shell", () => {
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
           goal_purpose_binding_status: "current",
           goal_purpose_relation: { status: "owner_reviewed_supports", used_for_authority: false, may_execute: false },
-          task_outcome: { status: "held", reason_code: "result_memory_receipt_unconfirmed",
+          task_outcome: { status: "achieved", reason_code: "goal_completion_rules_satisfied",
+            goal_assessment: { status: "rules_satisfied", reason_code: "rules_satisfied",
+              rules_digest: "0".repeat(64), rule_count: 1, satisfied_rule_count: 1, evidence_digest: "1".repeat(64),
+              used_for_authority: false, may_execute: false },
             used_for_authority: false, may_execute: false },
           status: "results_verified", step_count: 2,
           compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER"),
@@ -1045,7 +1083,8 @@ describe("WebChatChannel — Control Center shell", () => {
               binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64),
                 memory_status: "receipt_confirmed" } },
             { step_id: "1".repeat(64), operation: "file.search", status: "verified",
-              binding: { command_digest: "2".repeat(64), result_digest: "3".repeat(64), delivery_digest: "4".repeat(64) } },
+              binding: { command_digest: "2".repeat(64), result_digest: "3".repeat(64), delivery_digest: "4".repeat(64),
+                memory_status: "receipt_confirmed" } },
           ],
         },
         {
@@ -1055,6 +1094,8 @@ describe("WebChatChannel — Control Center shell", () => {
           goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
             evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
             record_digest: "5".repeat(64), used_for_authority: false, may_execute: false },
+          task_outcome: { status: "held", reason_code: "recovery_hold_active",
+            used_for_authority: false, may_execute: false },
           status: "held_residual", step_count: 1,
           compute_source_observations: [sourceObservation(nowMs - 600_001, nowMs - 1, "EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER")],
           recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral",
@@ -1090,8 +1131,11 @@ describe("WebChatChannel — Control Center shell", () => {
     const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
     expect(rendered).toContain("委任仕事の状態");
-    expect(rendered).toContain("確認済み結果の記憶保存receiptが確認できません。");
-    expect(rendered).toContain("委任目的の達成判定や実行許可を意味しません。");
+    expect(rendered).toContain("達成・同一taskを停止");
+    expect(rendered).toContain("明示達成規則と検証済み結果・M receiptが一致しました。");
+    expect(rendered).toContain("達成規則: 1/1・証拠digest 111111111111");
+    expect(rendered).toContain("達成判定は同一taskの停止にのみ使い、実行許可や公開判断は作りません。");
+    expect(rendered).toContain("復旧後の状態確認が必要です。");
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
     expect(rendered).toContain('data-owner-authentication-required="true"');
     expect(rendered).toContain("別入口のwaitはowner tokenを再入力し");
@@ -3710,12 +3754,20 @@ describe("WebChatChannel — HTTP inbound", () => {
         task: "Plan one bounded synthetic observation.",
         goal_ref: goal.goal_ref,
         submission_id: "8e396c37-7a67-470f-9d90-0054215cecb2",
+        goal_completion_rules: { schema_version: "blue-tanuki.goal-completion-rules.v1",
+          rules: [{ rule_id: "one-search", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] },
         actor: "owner",
         metadata: { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
       };
       expect((await postJson(ownerCtx.port, "/owner/task-compute", requestBody, {
         authorization: `Bearer ${TOKEN}`,
       })).status).toBe(401);
+      const invalidRules = await postJson(ownerCtx.port, "/owner/task-compute", {
+        ...requestBody, goal_completion_rules: { schema_version: "blue-tanuki.goal-completion-rules.v1", rules: [] },
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(invalidRules.status).toBe(400);
+      expect(invalidRules.body).toMatchObject({ accepted: false, error: "invalid_owner_task_completion_rules" });
+      expect(ownerCtx.received).toHaveLength(0);
       const queued = await postJson(ownerCtx.port, "/owner/task-compute", requestBody, {
         authorization: `Bearer ${OWNER_TOKEN}`,
       });
@@ -3727,6 +3779,7 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(request.user).toBe("webchat-owner-token-holder");
       expect(request.channel).toBe("webchat");
       expect(request.session_id).toMatch(/^webchat-owner-task:/);
+      expect(request.goal_completion_rules).toEqual(requestBody.goal_completion_rules);
       expect(request.metadata).toMatchObject({
         reply_to: "untrusted-reply-destination",
         "blue_tanuki.actor_kind": "owner",

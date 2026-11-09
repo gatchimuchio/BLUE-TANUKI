@@ -9,6 +9,7 @@ export * from "./execution_result_delivery.js";
 export * from "./product_scope_contract.js";
 export * from "./common_record.js";
 export * from "./goal_projection.js";
+export * from "./goal_completion.js";
 export * from "./file_search_target_version.js";
 export * from "./file_write_target_version.js";
 export * from "./file_delete_target_version.js";

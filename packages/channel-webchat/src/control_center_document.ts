@@ -166,6 +166,10 @@ ${CONTROL_CENTER_STYLE}    </style>
               </select>
             </div>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
+            <label for="owner-task-completion-rules">達成・停止の明示規則（JSON、任意）</label>
+            <textarea id="owner-task-completion-rules" rows="4" autocomplete="off"
+              placeholder='{"schema_version":"blue-tanuki.goal-completion-rules.v1","rules":[{"rule_id":"search-result","operation":"file.search","output_pointer":"/matches/0/line","expected_value":"blue"}]}'></textarea>
+            <p class="muted">空欄の場合、達成は未判定のまま保留されます。各規則は検証済み操作結果とM receiptで確認し、実行許可や公開判断は作りません。</p>
             <div class="row">
               <button id="submit-owner-task" class="primary" type="button">計画作成を依頼</button>
               <select id="owner-task-status-submission-id" aria-label="依頼状態を照会するID" hidden>

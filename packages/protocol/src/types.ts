@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { GoalCriteriaSchema } from "./goal_criteria.js";
+import { GoalCompletionRulesSchema } from "./goal_completion.js";
 
 import { OperationCoreExecutorTraceSchema, OperationCommandExecutionResultSchema, type OperationInterface } from "./operation_core.js";
 
@@ -640,6 +641,7 @@ export const InboundRequestSchema = z.object({
   // request builder. External channel payloads are stripped at normalization.
   session_id: z.string().min(1).max(200).optional(),
   goal_criteria: GoalCriteriaSchema.optional(),
+  goal_completion_rules: GoalCompletionRulesSchema.optional(),
   metadata: z.record(DangerousObjectKeySchema, JsonValueSchema.optional()).optional(),
 }).strict();
 export type InboundRequest = z.infer<typeof InboundRequestSchema>;
@@ -739,6 +741,8 @@ export function normalizeInboundRequestForAuthority(
       ? { session_id: normalizeScalar(request.session_id, "session_id") }
       : {}),
     ...(request.goal_criteria ? { goal_criteria: GoalCriteriaSchema.parse(request.goal_criteria) } : {}),
+    ...(opts.internal_authority_metadata === true && request.goal_completion_rules
+      ? { goal_completion_rules: GoalCompletionRulesSchema.parse(request.goal_completion_rules) } : {}),
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
   if (opts.internal_authority_metadata !== true) return normalized;

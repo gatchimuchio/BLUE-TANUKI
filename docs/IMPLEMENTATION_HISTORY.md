@@ -3824,3 +3824,21 @@ STATUS=`WIRED`（コード・型・build接続、runtime未確認）。F03.02／
 | test suite／Gateway process／browser／実provider・資格／Calendar変更 | NOT_RUN |
 
 STATUS=`WIRED`（既存参加者保持・L3 review／承認・read-only照合の静的接続、runtime未確認）。F03.02／F03全体、E2E-01、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。C08.03実provider、OD-03 live外部作用、P13 owner GOを保留する。
+
+## 2026-11-09 QE_BUILD — C08.02 owner明示達成規則・J/M判定・同一task停止
+
+開始local／origin `main`=`e8b95dadebb8e525f1c5305eba253b8bde54b89c`。編集前の復旧ref local branch `codex/backup-main=e8b95dadebb8e525f1c5305eba253b8bde54b89c`／`codex/backup-main-prev=6bd265c90a9ebdd3c0dd5837aa835ed5c85d5621`とremote同名tagを照合した。worktreeは`main`一つ。localに残っていた同名stale tagは`a3aaaef`／`3599f8e`で、両targetがmain祖先と確認後、expected-old付き`git update-ref -d`でlocal refのみ除去した。branch二世代とremote tag二世代は維持し、commit historyはmainから到達可能。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は変更せず、D4-Pocket等の別repo・OneDrive資料・実ユーザーデータも変更していない。
+
+owner-token付きControl Center task formにbounded JSON `goal_completion_rules`入力を追加し、WebChat `/owner/task-compute`でschema検証、idempotency digest結合、owner信頼付きinternal requestへ接続した。Protocolは外部入力境界でcompletion rulesを落とし、HDSはowner actor／trustのGateway内部要求以外から受け付けない。Jはrules・task identity・goal・source requestをcheckpointへ束縛し、child／resumeへ同じpolicyを継承する。規則ごとに現行revision内の一意なoperation／target、実結果のJSON Pointer値、verified binding／観測時刻、M receiptとM保存値を照合し、全step・目的関係・復旧・wait・並行試行が成立したときだけrules／evidence digest付き達成assessmentをsealする。達成後は同一taskのstep selection、revision、wait／resume、reflection／追加computeを遮断する。再起動後もsealを復元し、owner向けprojectionは固定状態・規則件数・digestだけを返す。ownerによる保存済み結果のread-only照会、L3・Approval・HDS authority、M非権威性は維持した。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS-BRAIN／Gateway／WebChat typecheck | PASS |
+| Protocol／HDS-BRAIN／Gateway／WebChat build | PASS |
+| `packages/protocol/test/types.test.ts` | 37 passed |
+| Gateway `operation_plan_runtime.test.ts -t "seals explicit task completion"` | 1 passed／46 skipped。合成file.search、execution outbox、J/M receipt、HDS再起動後step拒否。 |
+| WebChat focused owner form／endpoint／achieved projection renderer／script tests | 4 passed／115 skipped。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底の既存移行負債76件は注意として残る。 |
+| 実served画面E2E／実provider・外部作用／installed製品／5OS／全suite／QE_QC／QE_QA | NOT_RUN。 |
+
+実装・限定合成consumer接続をC08.02の`WIRED`とする。生成したProtocol／HDS-BRAIN／Gateway／WebChat `dist`はlocal開発consumer用として保持し、testのtemp workspaceはfinally cleanupで回収した。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOには昇格しない。次はowner画面からserved GatewayのC/J/M経路・認証済みprojection・達成後停止を同一隔離runtimeで縦断し、規則欠落／不一致も確認する。

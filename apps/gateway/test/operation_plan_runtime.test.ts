@@ -19,7 +19,7 @@ import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservation
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { planGatewayInboundBoundary } from "../src/serve.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
-import { executionAdmissionForCommand } from "../src/reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
@@ -38,10 +38,13 @@ async function allocateTestPort(): Promise<number> {
   return address.port;
 }
 
-function request(content: string, user = "fixture-owner", goal_criteria?: InboundRequest["goal_criteria"]): InboundRequest {
+function request(content: string, user = "fixture-owner", goal_criteria?: InboundRequest["goal_criteria"],
+  goal_completion_rules?: InboundRequest["goal_completion_rules"]): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
     ...(goal_criteria ? { goal_criteria } : {}),
-    metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
+    ...(goal_completion_rules ? { goal_completion_rules } : {}),
+    metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer",
+      ...(goal_completion_rules ? { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" } : {}) } });
 }
 function operationPlanRestoreCommand(): ExecuteCommand {
   return {
@@ -162,6 +165,99 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("seals explicit task completion only from verified J/M evidence and blocks further step selection after restart", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-completion-"));
+    const workspace = join(root, "workspace"); await mkdir(workspace);
+    await writeFile(join(workspace, "blue.txt"), "blue\n", "utf8");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    const resultMemoryRoot = join(privateRoot, "operation-result");
+    await mkdir(resultMemoryRoot, { recursive: true });
+    const memory = { private_state_root: privateRoot,
+      database_path: join(resultMemoryRoot, "j-control.sqlite"),
+      memory_database_path: join(resultMemoryRoot, "m-state.sqlite") };
+    let hds: HDSUpperController | undefined;
+    let executionStore: GatewayExecutionIntentStore | undefined;
+    const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
+      rules: [{ rule_id: "matching-line", operation: "file.search", target: { kind: "directory" as const, id: workspace },
+        output_pointer: "/matches/0/line", expected_value: "blue" }] };
+    try {
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      const origin = request("plan:compute find blue", "fixture-owner", undefined, rules);
+      const candidate = plan(origin.id, workspace);
+      candidate.steps = [candidate.steps[0]!];
+      const executor = rig(hds, candidate);
+      const initial = hds.decide(origin);
+      if (!initial.command) throw new Error("completion-rule plan did not reach C");
+      await executor.run(initial.command);
+      const selected = review(hds, candidate, "search");
+      if (!selected.command) throw new Error("explicitly selected search did not reach the executor");
+      const bindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+      if (!bindingDigest) throw new Error("current J plan binding was unavailable");
+      const tools = new ToolRegistry(); tools.register(fileSearchTool);
+      const targetResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools, approval_authority: createExecutorApprovalAuthority() });
+      const targetObservation = await targetResolver.inspectCommandTargetVersion(selected.command,
+        { BLUE_TANUKI_FILE_ROOT: workspace }, bindingDigest);
+      if (!targetObservation) throw new Error("file.search target resolver returned no observation");
+      const executionBinding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
+      const executionEpoch = randomUUID();
+      executionStore = new GatewayExecutionIntentStore(join(root, "execution-intents.sqlite"), executionEpoch);
+      const authority = createExecutorApprovalAuthority({ execution_store: executionStore,
+        execution_epoch: executionEpoch, require_hds_execution_binding: true });
+      const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+      const approved = authority.approve(selected.command, {
+        source: approval.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
+        approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+        operation: approval.context.operation, risk: approval.risk,
+        final_review_required: approval.final_review_required, reason: "synthetic goal completion evidence fixture",
+      }, executorCommandDigest(selected.command), executionBinding, targetObservation);
+      const admission = executionAdmissionForCommand(selected.command, authority.receipt(approved));
+      expect(hds.beginOperationPlanAttempt(selected.command, admission)).toBe(true);
+      const searchExecutor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools, approval_authority: authority,
+        file_search_worker: createFileSearchWorker({ execution_epoch: executionEpoch,
+          env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }) });
+      const feedback = await searchExecutor.execute(approved, { save_result_delivery: true });
+      expect(feedback.status).toBe("success");
+      expect(reconcileExecutionResults(hds, executionStore, executionEpoch)).toMatchObject({ adopted: 1, deferred: 0 });
+      finalizeCommandOutput({ hds, command: selected.command, feedback,
+        request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      expect(executionStore.verifyEvents()).toBe(true);
+      expect(hds.reconcileOperationPlanMemory()).toBe(true);
+
+      const achieved = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+      expect(achieved.task_outcome).toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
+        used_for_authority: false, may_execute: false,
+        goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+          used_for_authority: false, may_execute: false } });
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.task_outcome)
+        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
+          goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+            used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false });
+      expect(store.load()?.plans[0]?.goal_completion_assessment).toMatchObject({
+        decision_scope: "stop_same_task_after_verified_goal_completion", may_execute: false,
+      });
+      const stopped = review(hds, candidate, "search");
+      expect(stopped.command).toBeNull();
+      expect(stopped.log.commit.reason).toContain("plan_control_denied");
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
+        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
+
+      hds.closeOperationPlanMemory();
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
+        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
+      const afterRestart = review(hds, candidate, "search");
+      expect(afterRestart.command).toBeNull();
+      expect(afterRestart.log.commit.reason).toContain("plan_control_denied");
+    } finally {
+      hds?.closeOperationPlanMemory();
+      executionStore?.close(); store.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("HDS plan projection emits only the one-way execution ticket digest", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-execution-ticket-projection-"));
     const candidate = plan("ticket-projection", root);

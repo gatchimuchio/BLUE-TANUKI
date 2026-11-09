@@ -209,10 +209,24 @@ export function projectOperationCoreExecutionHistory(
 }
 
 export interface OperationPlanTaskOutcomeProjection {
-  status: "in_progress" | "held";
+  status: "in_progress" | "held" | "achieved";
   reason_code: "recovery_hold_active" | "goal_purpose_binding_required" | "goal_purpose_binding_stale" |
     "goal_purpose_relation_unconfirmed" | "operation_result_unverified" | "result_memory_receipt_unconfirmed" |
-    "goal_completion_not_assessed" | "operation_plan_steps_pending";
+    "goal_completion_not_assessed" | "goal_completion_rules_missing" | "goal_completion_rule_target_missing" |
+    "goal_completion_rule_target_ambiguous" | "goal_completion_result_unverified" | "goal_completion_result_mismatch" |
+    "goal_completion_memory_unverified" | "goal_completion_wait_pending" | "goal_completion_peer_execution_unresolved" |
+    "goal_completion_assessment_stale" | "goal_completion_rules_satisfied" | "operation_plan_steps_pending";
+  goal_assessment?: {
+    status: "not_configured" | "held" | "rules_satisfied";
+    reason_code: "rules_missing" | "rules_invalid" | "rule_target_missing" | "rule_target_ambiguous" |
+      "result_unverified" | "result_mismatch" | "memory_unverified" | "rules_satisfied";
+    rules_digest?: string;
+    rule_count: number;
+    satisfied_rule_count: number;
+    evidence_digest?: string;
+    used_for_authority: false;
+    may_execute: false;
+  };
   used_for_authority: false;
   may_execute: false;
 }
@@ -516,16 +530,44 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (goalPurposeRelation.owner_review_status === "verified" &&
           ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
             (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
+    const goalAssessment = isRecord(taskOutcome?.goal_assessment) ? taskOutcome.goal_assessment : undefined;
+    const goalAssessmentValid = goalAssessment === undefined || (
+      Object.keys(goalAssessment).length >= 6 && Object.keys(goalAssessment).length <= 8 &&
+      Object.keys(goalAssessment).every((key) => ["status", "reason_code", "rules_digest", "rule_count",
+        "satisfied_rule_count", "evidence_digest", "used_for_authority", "may_execute"].includes(key)) &&
+      ["not_configured", "held", "rules_satisfied"].includes(String(goalAssessment.status)) &&
+      ["rules_missing", "rules_invalid", "rule_target_missing", "rule_target_ambiguous", "result_unverified",
+        "result_mismatch", "memory_unverified", "rules_satisfied"].includes(String(goalAssessment.reason_code)) &&
+      Number.isInteger(goalAssessment.rule_count) && (goalAssessment.rule_count as number) >= 0 &&
+      (goalAssessment.rule_count as number) <= 64 && Number.isInteger(goalAssessment.satisfied_rule_count) &&
+      (goalAssessment.satisfied_rule_count as number) >= 0 &&
+      (goalAssessment.satisfied_rule_count as number) <= (goalAssessment.rule_count as number) &&
+      (goalAssessment.rules_digest === undefined || isDigest(goalAssessment.rules_digest)) &&
+      (goalAssessment.evidence_digest === undefined || isDigest(goalAssessment.evidence_digest)) &&
+      goalAssessment.used_for_authority === false && goalAssessment.may_execute === false &&
+      ((goalAssessment.status === "not_configured" && goalAssessment.reason_code === "rules_missing" &&
+        goalAssessment.rule_count === 0 && goalAssessment.satisfied_rule_count === 0) ||
+       (goalAssessment.status === "rules_satisfied" && goalAssessment.reason_code === "rules_satisfied" &&
+        goalAssessment.rule_count > 0 && goalAssessment.rule_count === goalAssessment.satisfied_rule_count &&
+        isDigest(goalAssessment.rules_digest) && isDigest(goalAssessment.evidence_digest)) ||
+       (goalAssessment.status === "held" && goalAssessment.reason_code !== "rules_missing" &&
+        goalAssessment.reason_code !== "rules_satisfied")));
     const taskOutcomeValid = taskOutcome === undefined || (isRecord(taskOutcome) &&
-      Object.keys(taskOutcome).length === 4 &&
-      Object.keys(taskOutcome).every((key) => ["status", "reason_code", "used_for_authority", "may_execute"].includes(key)) &&
-      ["in_progress", "held"].includes(String(taskOutcome.status)) &&
+      (Object.keys(taskOutcome).length === 4 || Object.keys(taskOutcome).length === 5) &&
+      Object.keys(taskOutcome).every((key) => ["status", "reason_code", "goal_assessment", "used_for_authority", "may_execute"].includes(key)) &&
+      ["in_progress", "held", "achieved"].includes(String(taskOutcome.status)) &&
       ["recovery_hold_active", "goal_purpose_binding_required", "goal_purpose_binding_stale",
         "goal_purpose_relation_unconfirmed", "operation_result_unverified", "result_memory_receipt_unconfirmed",
-        "goal_completion_not_assessed", "operation_plan_steps_pending"].includes(String(taskOutcome.reason_code)) &&
-      taskOutcome.used_for_authority === false && taskOutcome.may_execute === false &&
-      ((taskOutcome.status === "in_progress" && taskOutcome.reason_code === "operation_plan_steps_pending") ||
-        (taskOutcome.status === "held" && taskOutcome.reason_code !== "operation_plan_steps_pending")));
+        "goal_completion_not_assessed", "goal_completion_rules_missing", "goal_completion_rule_target_missing",
+        "goal_completion_rule_target_ambiguous", "goal_completion_result_unverified", "goal_completion_result_mismatch",
+        "goal_completion_memory_unverified", "goal_completion_wait_pending", "goal_completion_peer_execution_unresolved",
+        "goal_completion_assessment_stale", "goal_completion_rules_satisfied", "operation_plan_steps_pending"].includes(String(taskOutcome.reason_code)) &&
+      taskOutcome.used_for_authority === false && taskOutcome.may_execute === false && goalAssessmentValid &&
+      ((taskOutcome.status === "in_progress" && ["operation_plan_steps_pending", "goal_completion_wait_pending",
+        "goal_completion_peer_execution_unresolved"].includes(String(taskOutcome.reason_code))) ||
+       (taskOutcome.status === "achieved" && taskOutcome.reason_code === "goal_completion_rules_satisfied") ||
+       (taskOutcome.status === "held" && !["operation_plan_steps_pending", "goal_completion_wait_pending",
+        "goal_completion_peer_execution_unresolved", "goal_completion_rules_satisfied"].includes(String(taskOutcome.reason_code)))));
     if (!isDigest(plan.plan_id) || (plan.task_identity_digest !== undefined && !isDigest(plan.task_identity_digest)) ||
         !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !isDigest(plan.owner_identity_digest) || !isDigest(plan.channel_identity_digest) ||
@@ -697,8 +739,17 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       goal_purpose_binding_status: (plan.goal_purpose_binding_status ??
         (goalPurposeBinding === undefined ? "not_configured" : "current")) as "not_configured" | "required" | "current" | "stale",
       ...(isRecord(taskOutcome) ? { task_outcome: {
-        status: taskOutcome.status as "in_progress" | "held",
+        status: taskOutcome.status as "in_progress" | "held" | "achieved",
         reason_code: taskOutcome.reason_code as OperationPlanTaskOutcomeProjection["reason_code"],
+        ...(goalAssessment ? { goal_assessment: {
+          status: goalAssessment.status as NonNullable<OperationPlanTaskOutcomeProjection["goal_assessment"]>["status"],
+          reason_code: goalAssessment.reason_code as NonNullable<OperationPlanTaskOutcomeProjection["goal_assessment"]>["reason_code"],
+          ...(goalAssessment.rules_digest !== undefined ? { rules_digest: goalAssessment.rules_digest as string } : {}),
+          rule_count: goalAssessment.rule_count as number,
+          satisfied_rule_count: goalAssessment.satisfied_rule_count as number,
+          ...(goalAssessment.evidence_digest !== undefined ? { evidence_digest: goalAssessment.evidence_digest as string } : {}),
+          used_for_authority: false as const, may_execute: false as const,
+        } } : {}),
         used_for_authority: false as const,
         may_execute: false as const,
       } } : {}),

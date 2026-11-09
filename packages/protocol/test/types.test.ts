@@ -121,6 +121,29 @@ describe("InboundRequest goal criteria boundary", () => {
   });
 });
 
+describe("InboundRequest explicit completion rule boundary", () => {
+  const base = { id: "completion-rule-request", channel: "webchat", user: "owner", content: "do the work", timestamp: 1 };
+  const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1", rules: [{
+    rule_id: "one-search", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue",
+  }] };
+
+  it("keeps completion rules only when they arrive through the trusted internal request builder", () => {
+    const external = parseInboundRequestAtBoundary({ ...base, goal_completion_rules: rules });
+    expect(external.ok).toBe(true);
+    if (external.ok) {
+      expect(external.request.goal_completion_rules).toBeUndefined();
+      expect(isGatewayInternalInboundRequest(external.request)).toBe(false);
+    }
+
+    const internal = createGatewayInternalInboundRequest({ ...base, goal_completion_rules: rules,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat" } });
+    const parsedInternal = parseInboundRequestAtBoundary(internal);
+    expect(parsedInternal.ok).toBe(true);
+    if (parsedInternal.ok) expect(parsedInternal.request.goal_completion_rules).toEqual(rules);
+  });
+});
+
 describe("ExecuteFeedback skeptical review boundary", () => {
   const base = {
     command_id: "cmd-review",

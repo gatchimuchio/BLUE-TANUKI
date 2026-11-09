@@ -3,8 +3,10 @@ import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointEnvelopeSchema,
   OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
-  type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
+  type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationJsonValue, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
+  type OperationPlanGoalCompletionPolicy, OperationPlanGoalCompletionPolicySchema,
+  OperationPlanGoalCompletionAssessmentSchema,
   type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
   type OperationPlanComputeParent,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
@@ -39,6 +41,9 @@ import {
   OperationPlanComputeSourceObservationSchema,
   OperationPlanComputeSourceObservationReferenceSchema,
   OperationPlanGoalPurposeBindingSchema,
+  GoalCompletionRulesSchema,
+  type GoalCompletionRule,
+  type GoalCompletionRules,
   OperationPlanGoalPurposeRelationCandidateSchema,
   OperationPlanGoalPurposeRelationOwnerReviewSchema,
   OperationPlanGoalPurposeRelationRecordSchema,
@@ -68,6 +73,16 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+type GoalCompletionReason = "rules_missing" | "rules_invalid" | "rule_target_missing" | "rule_target_ambiguous" |
+  "result_unverified" | "result_mismatch" | "memory_unverified" | "rules_satisfied";
+interface GoalCompletionAssessment {
+  readonly status: "not_configured" | "held" | "rules_satisfied";
+  readonly reason_code: GoalCompletionReason;
+  readonly rules_digest?: string;
+  readonly rule_count: number;
+  readonly satisfied_rule_count: number;
+  readonly evidence_digest?: string;
+}
 type SameWorkspaceTestFailureEvidence = NonNullable<Extract<OperationPlanComputeSourceObservation,
   { source: "verified_file_search_result" }>["same_workspace_test_failure"]>;
 
@@ -254,11 +269,14 @@ type MemoryInterpretationReviewSnapshot = {
 export function operationPlanTaskIdentityDigest(plan: PlanState): string {
   if (plan.task_identity_digest) return plan.task_identity_digest;
   const first = plan.revisions[0]!.plan;
+  return operationPlanTaskIdentityDigestFor(plan.owner, plan.channel, plan.goal, first);
+}
+function operationPlanTaskIdentityDigestFor(owner: string, channel: string, goal: string, first: OperationPlan): string {
   return operationPlanDigest({
     schema_version: "blue-tanuki.operation-plan-task-identity.v1",
-    owner_digest: operationPlanDigest(plan.owner),
-    channel_digest: operationPlanDigest(plan.channel),
-    task_digest: operationPlanDigest(plan.goal),
+    owner_digest: operationPlanDigest(owner),
+    channel_digest: operationPlanDigest(channel),
+    task_digest: operationPlanDigest(goal),
     plan_id_digest: operationPlanDigest(first.plan_id),
     request_id_digest: operationPlanDigest(first.request_id),
   });
@@ -1331,6 +1349,43 @@ function stable(value: unknown): string {
   }
   return JSON.stringify(value) ?? "null";
 }
+function taskGoalDigest(goal: string): string {
+  return createHash("sha256").update(goal, "utf8").digest("hex");
+}
+function createGoalCompletionPolicy(input: {
+  readonly source_request_id: string;
+  readonly task_identity_digest: string;
+  readonly goal: string;
+  readonly rules: GoalCompletionRules;
+}): OperationPlanGoalCompletionPolicy {
+  const rules = GoalCompletionRulesSchema.parse(input.rules);
+  return OperationPlanGoalCompletionPolicySchema.parse({
+    schema_version: "operation-plan-goal-completion-policy.v1",
+    source_request_id: input.source_request_id,
+    task_identity_digest: input.task_identity_digest,
+    task_goal_digest: taskGoalDigest(input.goal),
+    rules,
+    rules_digest: operationPlanDigest(rules),
+  });
+}
+function jsonPointerValue(value: OperationJsonValue, pointer: string): { readonly found: boolean; readonly value?: OperationJsonValue } {
+  if (pointer === "") return { found: true, value };
+  let current: OperationJsonValue | undefined = value;
+  for (const rawSegment of pointer.slice(1).split("/")) {
+    const segment = rawSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(segment)) return { found: false };
+      const index = Number(segment);
+      if (!Number.isSafeInteger(index) || index >= current.length) return { found: false };
+      current = current[index];
+    } else if (current !== null && typeof current === "object") {
+      if (!Object.hasOwn(current, segment)) return { found: false };
+      current = current[segment];
+    } else return { found: false };
+    if (current === undefined) return { found: false };
+  }
+  return { found: true, value: current };
+}
 function googleCalendarWriteReceiptDigests(parameters: Record<string, unknown>): {
   target_identity_digest: string; request_payload_digest: string;
 } {
@@ -1525,6 +1580,7 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
   const ids = new Set<string>();
   const commands = new Set<string>();
   const tickets = new Set<string>();
+  const taskPolicyDigests = new Map<string, { rules_digest: string; source_request_id: string }>();
   for (const p of state.plans) {
     const first = p.revisions[0]!.plan;
     if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
@@ -1532,6 +1588,34 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
     if (p.request_goal_criteria && (p.request_goal_criteria.request_id !== first.request_id ||
         p.request_goal_criteria.content_sha256 !== createHash("sha256").update(p.goal, "utf8").digest("hex"))) {
       throw new Error("plan_checkpoint_goal_criteria_source_mismatch");
+    }
+    if (p.goal_completion_policy) {
+      const policy = p.goal_completion_policy;
+      const taskIdentity = operationPlanTaskIdentityDigest(p);
+      if (policy.task_identity_digest !== taskIdentity || policy.task_goal_digest !== taskGoalDigest(p.goal) ||
+          policy.rules_digest !== operationPlanDigest(policy.rules) ||
+          (policy.task_identity_digest === operationPlanTaskIdentityDigestFor(p.owner, p.channel, p.goal, first) &&
+            policy.source_request_id !== first.request_id)) {
+        throw new Error("plan_checkpoint_goal_completion_policy_mismatch");
+      }
+      const priorPolicyDigest = taskPolicyDigests.get(taskIdentity);
+      if (priorPolicyDigest !== undefined && (priorPolicyDigest.rules_digest !== policy.rules_digest ||
+          priorPolicyDigest.source_request_id !== policy.source_request_id)) {
+        throw new Error("plan_checkpoint_goal_completion_policy_conflict");
+      }
+      taskPolicyDigests.set(taskIdentity, { rules_digest: policy.rules_digest, source_request_id: policy.source_request_id });
+    }
+    if (p.goal_completion_assessment) {
+      const assessment = p.goal_completion_assessment;
+      const currentRevision = p.revisions.at(-1)!;
+      if (!p.goal_completion_policy || assessment.task_identity_digest !== operationPlanTaskIdentityDigest(p) ||
+          assessment.revision_digest !== currentRevision.digest ||
+          assessment.rules_digest !== p.goal_completion_policy.rules_digest ||
+          assessment.rule_count !== p.goal_completion_policy.rules.rules.length ||
+          assessment.rule_count === 0 || assessment.decision_scope !== "stop_same_task_after_verified_goal_completion" ||
+          assessment.may_execute !== false) {
+        throw new Error("plan_checkpoint_goal_completion_assessment_mismatch");
+      }
     }
     for (const revision of p.revisions) {
       candidatePlan(revision.plan);
@@ -2128,6 +2212,7 @@ export class OperationPlanLedger {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     if (!this.port) throw new Error("plan_wait_state_not_durable");
     const plan = this.ownedPlan(control.plan_id, caller);
+    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const current = plan.revisions.at(-1)!;
     if (control.revision_digest !== current.digest) throw new Error("plan_revision_changed");
     if (!Number.isSafeInteger(control.deadline_at_ms) || control.deadline_at_ms <= nowMs) {
@@ -2138,6 +2223,7 @@ export class OperationPlanLedger {
     }
     const planIdDigest = operationPlanDigest(current.plan.plan_id);
     const taskIdentityDigest = operationPlanTaskIdentityDigest(plan);
+    if (this.taskGoalIsAchieved(taskIdentityDigest)) throw new Error("plan_task_goal_already_achieved");
     const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
     const sessionIdDigest = operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope });
     const waitId = operationPlanDigest({ schema_version: "operation-plan-wait.v1", plan_id_digest: planIdDigest,
@@ -2184,6 +2270,7 @@ export class OperationPlanLedger {
     const sessionIdDigest = operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope });
     const matches = (this.state.waits ?? []).filter((wait) => wait.state === "waiting" &&
       nowMs < wait.deadline_at_ms &&
+      !this.taskGoalIsAchieved(wait.task_identity_digest) &&
       wait.owner_digest === ownerDigest && wait.channel_digest === channelDigest && wait.session_id_digest === sessionIdDigest &&
       wait.revision_digest === this.currentRevisionDigest(wait.plan_id_digest));
     return matches.length === 1 ? structuredClone(matches[0]!) : null;
@@ -2192,7 +2279,8 @@ export class OperationPlanLedger {
   activeWait(waitId: string): OperationPlanWaitState | null {
     if (!/^[a-f0-9]{64}$/.test(waitId)) return null;
     const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === waitId &&
-      candidate.state === "waiting" && candidate.revision_digest === this.currentRevisionDigest(candidate.plan_id_digest));
+      candidate.state === "waiting" && !this.taskGoalIsAchieved(candidate.task_identity_digest) &&
+      candidate.revision_digest === this.currentRevisionDigest(candidate.plan_id_digest));
     return wait ? structuredClone(wait) : null;
   }
 
@@ -2229,6 +2317,7 @@ export class OperationPlanLedger {
     if (!current || current.state !== "resumed" || current.resume_command_id_digest !== operationPlanDigest(commandId)) {
       throw new Error("plan_wait_compute_binding_mismatch");
     }
+    if (this.taskGoalIsAchieved(current.task_identity_digest)) throw new Error("plan_task_goal_already_achieved");
     if (computeResourceUse && computeResourceUse.request_digest !== createHash("sha256")
         .update("blue-tanuki.compute-resource-use.request.v1\0").update(commandId).digest("hex")) {
       throw new Error("plan_wait_compute_resource_binding_mismatch");
@@ -2324,6 +2413,7 @@ export class OperationPlanLedger {
     readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding;
   } {
     if (this.recoveryRefreshPending || !this.port) throw new Error("plan_wait_state_not_durable");
+    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === control.wait_id &&
       candidate.state === "resumed" && candidate.compute_outcome === "interrupted");
     if (!wait) throw new Error("plan_wait_resume_stale");
@@ -2334,6 +2424,7 @@ export class OperationPlanLedger {
         operationPlanDigest(plan.owner) !== wait.owner_digest || operationPlanDigest(plan.channel) !== wait.channel_digest) {
       throw new Error("plan_wait_resume_stale");
     }
+    if (this.taskGoalIsAchieved(wait.task_identity_digest)) throw new Error("plan_task_goal_already_achieved");
     try {
       this.ownedPlanForOwnerReauthentication(plan.revisions[0]!.plan.plan_id, control.owner_reauthentication, caller, "chat");
     } catch {
@@ -2397,6 +2488,7 @@ export class OperationPlanLedger {
     if (wait.state !== "waiting" || !plan || operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
         plan.revisions.at(-1)?.digest !== wait.revision_digest || operationPlanDigest(plan.owner) !== wait.owner_digest ||
         operationPlanDigest(plan.channel) !== wait.channel_digest || this.recoveryHolds.has(wait.plan_id_digest) ||
+        this.taskGoalIsAchieved(wait.task_identity_digest) ||
         !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return null;
     return { goal: plan.goal, owner: plan.owner, channel: plan.channel,
       ...(plan.goal_purpose_binding ? { goal_purpose_binding: structuredClone(plan.goal_purpose_binding) } : {}) };
@@ -3054,6 +3146,7 @@ export class OperationPlanLedger {
     readonly task_identity_digest: string;
     readonly goal: string;
     readonly goal_purpose_binding: OperationPlanGoalPurposeBinding;
+    readonly goal_completion_policy?: OperationPlanGoalCompletionPolicy;
     readonly memory_interpretation_dependencies: readonly OperationPlanMemoryInterpretationDependency[];
   } {
     if (this.recoveryRefreshPending || this.memoryQuiesced || !this.port || !this.memoryReady ||
@@ -3073,6 +3166,9 @@ export class OperationPlanLedger {
     if (this.recoveryHolds.has(reference.plan_id_digest)) {
       throw new Error("plan_compute_parent_recovery_hold");
     }
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(parent))) {
+      throw new Error("plan_task_goal_already_achieved");
+    }
     if ((this.state.waits ?? []).some((wait) => wait.plan_id_digest === reference.plan_id_digest && wait.state === "waiting")) {
       throw new Error("plan_compute_parent_wait_active");
     }
@@ -3080,6 +3176,7 @@ export class OperationPlanLedger {
     this.assertMemoryInterpretationDependenciesCurrent(parent);
     return { task_identity_digest: operationPlanTaskIdentityDigest(parent), goal: parent.goal,
       goal_purpose_binding: structuredClone(parent.goal_purpose_binding),
+      ...(parent.goal_completion_policy ? { goal_completion_policy: structuredClone(parent.goal_completion_policy) } : {}),
       memory_interpretation_dependencies: structuredClone(parent.memory_interpretation_dependencies ?? []) };
   }
 
@@ -3096,6 +3193,7 @@ export class OperationPlanLedger {
     const parentWaitId = origin.metadata?.["blue_tanuki.operation_core.parent_wait_id"];
     let parentTaskIdentityDigest: string | undefined;
     let retainedTaskGoal = origin.content;
+    let inheritedGoalCompletionPolicy: OperationPlanGoalCompletionPolicy | undefined;
     if (parentWaitId !== undefined) {
       if (!isGatewayInternalInboundRequest(origin) || typeof parentWaitId !== "string") {
         throw new Error("plan_wait_resume_origin_invalid");
@@ -3118,9 +3216,12 @@ export class OperationPlanLedger {
           origin.user !== parentPlan.owner || origin.channel !== parentPlan.channel) {
         throw new Error("plan_wait_resume_binding_invalid");
       }
+      if (this.taskGoalIsAchieved(parentTaskIdentityDigest)) throw new Error("plan_task_goal_already_achieved");
       const recoveryHold = this.recoveryHolds.get(parentWait.plan_id_digest);
       if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
       retainedTaskGoal = parentPlan.goal;
+      inheritedGoalCompletionPolicy = parentPlan.goal_completion_policy
+        ? structuredClone(parentPlan.goal_completion_policy) : undefined;
     }
     const rawGoalPurposeBinding = origin.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"];
     let goalPurposeBinding: OperationPlanGoalPurposeBinding | undefined;
@@ -3169,6 +3270,8 @@ export class OperationPlanLedger {
       }
       parentTaskIdentityDigest = parent.task_identity_digest;
       retainedTaskGoal = parent.goal;
+      inheritedGoalCompletionPolicy = parent.goal_completion_policy
+        ? structuredClone(parent.goal_completion_policy) : undefined;
     }
     const selectedGmailIdentityObservations = verifiedComputeSourceObservations?.filter((observation) =>
       observation.source === "owner_selected_gmail_message_identity") ?? [];
@@ -3212,9 +3315,28 @@ export class OperationPlanLedger {
       : undefined;
     const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(
       { ...origin, id: expected, content: retainedTaskGoal }, retainedTaskGoal));
+    const incomingGoalCompletionRules = origin.goal_completion_rules
+      ? GoalCompletionRulesSchema.parse(origin.goal_completion_rules) : undefined;
+    if (incomingGoalCompletionRules && (!isGatewayInternalInboundRequest(origin) ||
+        origin.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+        origin.metadata?.["blue_tanuki.trust_level"] !== "owner")) {
+      throw new Error("plan_goal_completion_rules_owner_required");
+    }
+    if (inheritedGoalCompletionPolicy && incomingGoalCompletionRules &&
+        operationPlanDigest(incomingGoalCompletionRules) !== inheritedGoalCompletionPolicy.rules_digest) {
+      throw new Error("plan_goal_completion_policy_changed");
+    }
+    const candidateTaskIdentityDigest = parentTaskIdentityDigest ??
+      operationPlanTaskIdentityDigestFor(origin.user, origin.channel, retainedTaskGoal, plan);
+    const goalCompletionPolicy = inheritedGoalCompletionPolicy ?? (incomingGoalCompletionRules
+      ? createGoalCompletionPolicy({ source_request_id: expected, task_identity_digest: candidateTaskIdentityDigest,
+        goal: retainedTaskGoal, rules: incomingGoalCompletionRules })
+      : undefined);
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: retainedTaskGoal,
-      ...(parentTaskIdentityDigest ? { task_identity_digest: parentTaskIdentityDigest } : {}),
+      ...(parentTaskIdentityDigest || goalCompletionPolicy
+        ? { task_identity_digest: goalCompletionPolicy?.task_identity_digest ?? parentTaskIdentityDigest } : {}),
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
+      ...(goalCompletionPolicy ? { goal_completion_policy: goalCompletionPolicy } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
       ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations } : {}),
       ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
@@ -3309,10 +3431,12 @@ export class OperationPlanLedger {
     const p = control.action === "review"
       ? this.ownedPlanForReview(control, caller)
       : this.ownedPlan(control.plan_id, caller);
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(p))) throw new Error("plan_task_goal_already_achieved");
     let recoveryHoldReleased = false;
     const recoveryHold = control.action === "review"
       ? this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id)) : undefined;
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(p))) throw new Error("plan_task_goal_already_achieved");
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
@@ -3778,7 +3902,9 @@ export class OperationPlanLedger {
       return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskScopeDigest);
     }
     if (this.memoryQuiesced || this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(match.p))) return false;
     if (!this.reconcileMemory()) return false;
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(match.p))) return false;
     const { p, b } = match;
     if (taskScopedPlanRestore && !this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskScopeDigest)) return false;
     // J/M evidence may change while the selected command waits at its L3 gate.
@@ -4096,6 +4222,7 @@ export class OperationPlanLedger {
         }
       }
       this.memoryReady = this.resultMemory.snapshot()?.status === "ready";
+      if (this.memoryReady) this.persistGoalCompletionAssessments();
       return this.memoryReady;
     } catch { return false; }
   }
@@ -4129,6 +4256,218 @@ export class OperationPlanLedger {
       const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(match.b).record_id);
       return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
     } catch { return false; }
+  }
+  private resultMemoryReceiptIsVerified(plan: PlanState, binding: Binding): boolean {
+    try {
+      const commit = binding.memory_commit;
+      const savedReceipt = binding.memory_receipt;
+      if (!this.resultMemory || !commit || !savedReceipt || commit.changes.length !== 1 ||
+          !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(savedReceipt, commit)) return false;
+      const current = this.resultMemory.reconcile(commit.update_id);
+      if (!current.ok || current.status !== "ready" ||
+          operationPlanDigest(current.receipt) !== operationPlanDigest(savedReceipt) ||
+          !receiptForResultCommit(current.receipt, commit)) return false;
+      const change = commit.changes[0];
+      if (!change || change.operation !== "upsert") return false;
+      const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(binding).record_id);
+      return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
+    } catch { return false; }
+  }
+  private goalCompletionRulesAssessment(plan: PlanState, revision: PlanState["revisions"][number]): GoalCompletionAssessment {
+    const policy = plan.goal_completion_policy;
+    if (!policy) return { status: "not_configured", reason_code: "rules_missing", rule_count: 0, satisfied_rule_count: 0 };
+    const taskIdentity = operationPlanTaskIdentityDigest(plan);
+    if (policy.task_identity_digest !== taskIdentity || policy.task_goal_digest !== taskGoalDigest(plan.goal) ||
+        policy.rules_digest !== operationPlanDigest(policy.rules) || policy.rules.rules.length === 0) {
+      return { status: "held", reason_code: "rules_invalid", rules_digest: policy.rules_digest,
+        rule_count: policy.rules.rules.length, satisfied_rule_count: 0 };
+    }
+    const evidence: { rule_digest: string; step_digest: string; result_digest: string;
+      memory_revision: number; memory_receipt_digest: string }[] = [];
+    for (const rule of policy.rules.rules) {
+      const candidates = revision.plan.steps.filter((step) => step.operation === rule.operation &&
+        (rule.target === undefined || operationPlanDigest(step.target) === operationPlanDigest(rule.target)));
+      if (candidates.length === 0) return { status: "held", reason_code: "rule_target_missing",
+        rules_digest: policy.rules_digest, rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      if (candidates.length !== 1) return { status: "held", reason_code: "rule_target_ambiguous",
+        rules_digest: policy.rules_digest, rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      const step = candidates[0]!;
+      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+        binding.step_id === step.step_id);
+      const binding = bindings[0];
+      if (bindings.length !== 1 || !binding || binding.operation !== step.operation ||
+          binding.step_digest !== stepDigest(step) || binding.status !== "verified" ||
+          !binding.result_digest || binding.result_observed_at_ms === undefined) {
+        return { status: "held", reason_code: "result_unverified", rules_digest: policy.rules_digest,
+          rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      }
+      if (!this.resultMemoryReceiptIsVerified(plan, binding) || !binding.memory_receipt) {
+        return { status: "held", reason_code: "memory_unverified", rules_digest: policy.rules_digest,
+          rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      }
+      const results = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
+        result.request_id === revision.plan.request_id && result.step_id === step.step_id &&
+        result.operation === step.operation && result.status === "succeeded");
+      let output: OperationJsonValue | undefined;
+      let resultDigest: string | undefined;
+      let observedAtMs = binding.result_observed_at_ms;
+      if (step.operation === "github.write" && results.length === 0 && binding.github_write_result) {
+        const parsed = OperationJsonValueSchema.safeParse(binding.github_write_result);
+        if (parsed.success) {
+          output = parsed.data;
+          resultDigest = operationPlanDigest(binding.github_write_result);
+        }
+      } else if (results.length === 1 && results[0]!.observed_at_ms === binding.result_observed_at_ms &&
+          operationPlanDigest(results[0]!.target) === operationPlanDigest(step.target)) {
+        const parsed = OperationJsonValueSchema.safeParse(results[0]!.output);
+        if (parsed.success) {
+          output = parsed.data;
+          resultDigest = operationPlanDigest(results[0]);
+          observedAtMs = results[0]!.observed_at_ms;
+        }
+      }
+      if (output === undefined || !resultDigest || observedAtMs > this.nowMs()) {
+        return { status: "held", reason_code: "result_unverified", rules_digest: policy.rules_digest,
+          rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      }
+      const actual = jsonPointerValue(output, rule.output_pointer);
+      if (!actual.found || operationPlanDigest(actual.value) !== operationPlanDigest(rule.expected_value)) {
+        return { status: "held", reason_code: "result_mismatch", rules_digest: policy.rules_digest,
+          rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      }
+      evidence.push({ rule_digest: operationPlanDigest(rule), step_digest: stepDigest(step), result_digest: resultDigest,
+        memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest });
+    }
+    return { status: "rules_satisfied", reason_code: "rules_satisfied", rules_digest: policy.rules_digest,
+      rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length,
+      evidence_digest: operationPlanDigest({ schema_version: "operation-plan-goal-completion-evidence.v1",
+        task_identity_digest: taskIdentity, revision_digest: revision.digest, rules_digest: policy.rules_digest, evidence }) };
+  }
+  private currentRevisionBindingsVerified(plan: PlanState): boolean {
+    const revision = plan.revisions.at(-1)!;
+    return revision.plan.steps.length > 0 && revision.plan.steps.every((step) => {
+      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+        binding.step_id === step.step_id);
+      const binding = bindings[0];
+      return bindings.length === 1 && !!binding && binding.status === "verified" &&
+        binding.operation === step.operation && binding.step_digest === stepDigest(step) &&
+        this.resultMemoryReceiptIsVerified(plan, binding);
+    });
+  }
+  private taskHasPendingWait(taskIdentityDigest: string): boolean {
+    return (this.state.waits ?? []).some((wait) => wait.task_identity_digest === taskIdentityDigest &&
+      (wait.state === "waiting" || (wait.state === "resumed" &&
+        ["not_started", "pending", "interrupted", "not_recorded"].includes(wait.compute_outcome ?? "not_recorded"))));
+  }
+  private taskHasUnresolvedAttempt(taskIdentityDigest: string): boolean {
+    return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&
+      plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown"].includes(binding.status)));
+  }
+  private taskHasCompletionSeal(taskIdentityDigest: string): boolean {
+    return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&
+      plan.goal_completion_assessment !== undefined);
+  }
+  private taskGoalIsAchieved(taskIdentityDigest: string): boolean {
+    return this.taskHasCompletionSeal(taskIdentityDigest);
+  }
+  private completionAssessmentIsCurrent(plan: PlanState, assessment: GoalCompletionAssessment): boolean {
+    const saved = plan.goal_completion_assessment;
+    const revision = plan.revisions.at(-1)!;
+    return !!saved && assessment.status === "rules_satisfied" && !!assessment.evidence_digest &&
+      saved.task_identity_digest === operationPlanTaskIdentityDigest(plan) && saved.revision_digest === revision.digest &&
+      saved.rules_digest === assessment.rules_digest && saved.evidence_digest === assessment.evidence_digest &&
+      saved.rule_count === assessment.rule_count && saved.rule_count === assessment.satisfied_rule_count &&
+      !this.recoveryHolds.has(operationPlanDigest(revision.plan.plan_id)) &&
+      !this.taskHasPendingWait(saved.task_identity_digest) && !this.taskHasUnresolvedAttempt(saved.task_identity_digest) &&
+      this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) && this.goalPurposeRelationIssue(plan) === undefined;
+  }
+  private persistGoalCompletionAssessments(): void {
+    if (!this.resultMemory || !this.memoryReady || this.recoveryRefreshPending) return;
+    for (const plan of [...this.state.plans]) {
+      if (plan.goal_completion_assessment || this.recoveryHolds.has(operationPlanDigest(plan.revisions[0]!.plan.plan_id))) continue;
+      const revision = plan.revisions.at(-1)!;
+      const taskIdentity = operationPlanTaskIdentityDigest(plan);
+      if (this.taskHasPendingWait(taskIdentity) || this.taskHasUnresolvedAttempt(taskIdentity) ||
+          !this.currentRevisionBindingsVerified(plan) || !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+          this.goalPurposeRelationIssue(plan) !== undefined ||
+          revision.plan.steps.some((step) => this.requestGoalCriteriaIssue(plan, step) !== undefined)) continue;
+      const assessment = this.goalCompletionRulesAssessment(plan, revision);
+      if (assessment.status !== "rules_satisfied" || !assessment.evidence_digest || !assessment.rules_digest ||
+          assessment.rule_count === 0 || assessment.rule_count !== assessment.satisfied_rule_count || !plan.goal_completion_policy) continue;
+      const policy = OperationPlanGoalCompletionPolicySchema.parse(plan.goal_completion_policy);
+      const record = {
+        schema_version: "operation-plan-goal-completion-assessment.v1" as const,
+        task_identity_digest: taskIdentity,
+        revision_digest: revision.digest,
+        rules_digest: policy.rules_digest,
+        evidence_digest: assessment.evidence_digest,
+        rule_count: assessment.rule_count,
+        satisfied_at_ms: this.nowMs(),
+        decision_scope: "stop_same_task_after_verified_goal_completion" as const,
+        may_execute: false as const,
+      };
+      const parsed = OperationPlanGoalCompletionAssessmentSchema.parse(record);
+      const planId = revision.plan.plan_id;
+      this.change((state) => {
+        const target = state.plans.find((candidate) => candidate.revisions[0]!.plan.plan_id === planId);
+        if (!target || target.revisions.at(-1)?.digest !== revision.digest || target.goal_completion_assessment) return;
+        target.goal_completion_assessment = parsed;
+      });
+    }
+  }
+  private taskOutcomeFor(plan: PlanState): {
+    readonly status: "in_progress" | "held" | "achieved";
+    readonly reason_code: "recovery_hold_active" | "goal_purpose_binding_required" | "goal_purpose_binding_stale" |
+      "goal_purpose_relation_unconfirmed" | "operation_result_unverified" | "result_memory_receipt_unconfirmed" |
+      "goal_completion_not_assessed" | "goal_completion_rules_missing" | "goal_completion_rule_target_missing" |
+      "goal_completion_rule_target_ambiguous" | "goal_completion_result_unverified" |
+      "goal_completion_result_mismatch" | "goal_completion_memory_unverified" | "goal_completion_wait_pending" |
+      "goal_completion_peer_execution_unresolved" | "goal_completion_assessment_stale" |
+      "goal_completion_rules_satisfied" | "operation_plan_steps_pending";
+    readonly goal_assessment: GoalCompletionAssessment;
+  } {
+    const revision = plan.revisions.at(-1)!;
+    const taskIdentity = operationPlanTaskIdentityDigest(plan);
+    const recoveryHold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
+    const currentBindings = revision.plan.steps.map((step) => plan.bindings.filter((binding) =>
+      binding.revision_digest === revision.digest && binding.step_id === step.step_id).at(-1));
+    const allResultsVerified = currentBindings.length > 0 && currentBindings.every((binding) => binding?.status === "verified");
+    const hasUnverifiedResult = currentBindings.some((binding) => binding &&
+      ["outcome_unknown", "verification_failed", "provider_rejected", "invalidated"].includes(binding.status));
+    const goalPurposeBindingStatus = plan.goal_purpose_binding
+      ? this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ? "current" as const : "stale" as const
+      : this.goalGovernanceReader?.()?.used_for_authority === false ? "required" as const : "not_configured" as const;
+    const goalPurposeRelation = this.goalPurposeRelationProjection(plan);
+    const assessment = this.goalCompletionRulesAssessment(plan, revision);
+    const missingReceipt = currentBindings.some((binding) => binding?.status === "verified" && !binding.memory_receipt);
+    const unverifiedMemory = allResultsVerified && !missingReceipt && !this.currentRevisionBindingsVerified(plan);
+    const savedAssessment = plan.goal_completion_assessment;
+    const sealStale = !!savedAssessment && !this.completionAssessmentIsCurrent(plan, assessment);
+    const taskOutcomeReason = recoveryHold ? "recovery_hold_active" as const
+      : goalPurposeBindingStatus === "required" ? "goal_purpose_binding_required" as const
+        : goalPurposeBindingStatus === "stale" ? "goal_purpose_binding_stale" as const
+          : goalPurposeRelation.status !== "not_required" && goalPurposeRelation.status !== "owner_reviewed_supports"
+            ? "goal_purpose_relation_unconfirmed" as const
+            : hasUnverifiedResult ? "operation_result_unverified" as const
+              : !allResultsVerified ? "operation_plan_steps_pending" as const
+                : missingReceipt ? "result_memory_receipt_unconfirmed" as const
+                  : unverifiedMemory ? "goal_completion_memory_unverified" as const
+                    : this.taskHasPendingWait(taskIdentity) ? "goal_completion_wait_pending" as const
+                      : this.taskHasUnresolvedAttempt(taskIdentity) ? "goal_completion_peer_execution_unresolved" as const
+                        : sealStale ? "goal_completion_assessment_stale" as const
+                          : savedAssessment && this.completionAssessmentIsCurrent(plan, assessment)
+                            ? "goal_completion_rules_satisfied" as const
+                            : assessment.reason_code === "rules_missing" ? "goal_completion_rules_missing" as const
+                              : assessment.reason_code === "rule_target_missing" ? "goal_completion_rule_target_missing" as const
+                                : assessment.reason_code === "rule_target_ambiguous" ? "goal_completion_rule_target_ambiguous" as const
+                                  : assessment.reason_code === "result_unverified" ? "goal_completion_result_unverified" as const
+                                    : assessment.reason_code === "result_mismatch" ? "goal_completion_result_mismatch" as const
+                                      : assessment.reason_code === "memory_unverified" ? "goal_completion_memory_unverified" as const
+                                        : "goal_completion_not_assessed" as const;
+    const status = taskOutcomeReason === "operation_plan_steps_pending" || taskOutcomeReason === "goal_completion_wait_pending" ||
+      taskOutcomeReason === "goal_completion_peer_execution_unresolved" ? "in_progress" as const
+      : taskOutcomeReason === "goal_completion_rules_satisfied" ? "achieved" as const : "held" as const;
+    return { status, reason_code: taskOutcomeReason, goal_assessment: assessment };
   }
   /** Read only the owner's current, M-receipted result summary; this never reruns the action or grants authority. */
   inspectSavedResultForReturn(control: OperationPlanResultReturnControl, caller: InboundRequest): OperationPlanSavedResultReturnProjection {
@@ -5058,6 +5397,7 @@ export class OperationPlanLedger {
     if (this.recoveryRefreshPending || !this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
         this.resultMemory.snapshot()?.status !== "ready") throw new Error("plan_reflection_memory_unavailable");
     const p = this.ownedPlan(control.plan_id, caller);
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(p))) throw new Error("plan_task_goal_already_achieved");
     const current = p.revisions.at(-1)!;
     if (current.digest !== control.revision_digest) throw new Error("plan_revision_changed");
     const ids = new Set<string>();
@@ -5386,26 +5726,11 @@ export class OperationPlanLedger {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
         const recoveryHold = this.recoveryHolds.get(planIdDigest);
-        const currentStepBindings = currentRevision.plan.steps.map((step) =>
-          p.bindings.filter((entry) => entry.step_id === step.step_id).at(-1));
-        const allStepResultsVerified = currentStepBindings.length > 0 &&
-          currentStepBindings.every((binding) => binding?.status === "verified");
         const goalPurposeBindingStatus = p.goal_purpose_binding
           ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
           : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const;
         const goalPurposeRelation = this.goalPurposeRelationProjection(p);
-        const taskOutcomeReason = recoveryHold ? "recovery_hold_active" as const
-          : goalPurposeBindingStatus === "required" ? "goal_purpose_binding_required" as const
-            : goalPurposeBindingStatus === "stale" ? "goal_purpose_binding_stale" as const
-              : goalPurposeRelation.status !== "not_required" && goalPurposeRelation.status !== "owner_reviewed_supports"
-                ? "goal_purpose_relation_unconfirmed" as const
-                : currentStepBindings.some((binding) => binding &&
-                  ["outcome_unknown", "verification_failed", "provider_rejected", "invalidated"].includes(binding.status))
-                  ? "operation_result_unverified" as const
-                  : allStepResultsVerified && currentStepBindings.some((binding) => !binding?.memory_receipt)
-                    ? "result_memory_receipt_unconfirmed" as const
-                    : allStepResultsVerified ? "goal_completion_not_assessed" as const
-                      : "operation_plan_steps_pending" as const;
+        const taskOutcome = this.taskOutcomeFor(p);
         return { plan_id: planIdDigest, task_identity_digest: operationPlanTaskIdentityDigest(p),
         owner_identity_digest: operationPlanDigest(p.owner),
         channel_identity_digest: operationPlanDigest(p.channel),
@@ -5415,8 +5740,9 @@ export class OperationPlanLedger {
         goal_purpose_binding_status: goalPurposeBindingStatus,
         goal_purpose_relation: goalPurposeRelation,
         task_outcome: {
-          status: taskOutcomeReason === "operation_plan_steps_pending" ? "in_progress" as const : "held" as const,
-          reason_code: taskOutcomeReason,
+          status: taskOutcome.status,
+          reason_code: taskOutcome.reason_code,
+          goal_assessment: { ...taskOutcome.goal_assessment, used_for_authority: false as const, may_execute: false as const },
           used_for_authority: false as const,
           may_execute: false as const,
         },
@@ -5424,10 +5750,12 @@ export class OperationPlanLedger {
           ? { compute_source_observations: structuredClone(p.compute_source_observations) } : {}),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
           recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
-        status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
+        status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.revision_digest === currentRevision.digest &&
+          b.step_id === s.step_id && b.status === "verified"))
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
-          const binding = p.bindings.filter((entry) => entry.step_id === step.step_id).at(-1);
+          const binding = p.bindings.filter((entry) => entry.revision_digest === currentRevision.digest &&
+            entry.step_id === step.step_id).at(-1);
           const stepResults = p.results.filter((entry) => entry.step_id === step.step_id && entry.operation === step.operation);
           const shellExecSummary = stepResults.length === 1
             ? summaryOnlyShellExecResult(step, stepResults[0]!.output) : undefined;
@@ -5604,6 +5932,7 @@ export class OperationPlanLedger {
       operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === parsed.plan_id_digest);
     if (matches.length !== 1) throw new Error("plan_goal_purpose_relation_unavailable");
     const p = matches[0]!;
+    if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(p))) throw new Error("plan_task_goal_already_achieved");
     if (p.bindings.some((binding) => this.activePlanAttempts.has(binding.command_id))) {
       throw new Error("plan_recovery_refresh_hold");
     }
