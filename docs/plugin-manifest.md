@@ -93,6 +93,7 @@ Declaration of expected runtime side effects. The format is `<scope>:<target>`. 
 | `github:issue.write`     | GitHub issue create/update capability.                      |
 | `github:pr.write`        | GitHub pull request create capability.                      |
 | `github:comment.write`   | GitHub issue/PR comment create capability.                  |
+| `github:code.write`      | Reviewed new-file commit to an existing non-default branch. |
 | `google:gmail.read`      | Gmail read-only summary capability.                         |
 | `google:calendar.read`   | Google Calendar read-only summary capability.               |
 | `google:drive.read`      | Google Drive read-only metadata/search capability.          |

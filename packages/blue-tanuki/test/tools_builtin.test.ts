@@ -31,6 +31,8 @@ import {
   inspectGitHubPullRequestCommentCreateContentReview,
   inspectGitHubPullRequestCreateTargetVersion,
   inspectGitHubPullRequestCreateContentReview,
+  inspectGitHubCodePushTargetVersion,
+  inspectGitHubCodePushContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -97,6 +99,7 @@ describe("built-in tools", () => {
       "fs:read",
       "fs:write",
       "github:comment.write",
+      "github:code.write",
       "github:issue.write",
       "github:pr.write",
       "google:calendar.read",
@@ -3137,6 +3140,111 @@ describe("built-in tools", () => {
     },
     20_000,
   );
+
+  it("github.write code.push binds one new file and commits only at the exact reviewed branch head", async () => {
+    const args = { operation: "code.push", owner: "gatchimuchio", repo: "blue-tanuki",
+      branch: "feature/code-push", expected_head_sha: "a".repeat(40), path: "docs/new-note.txt",
+      content: "reviewed file\n", commit_message: "Add reviewed note" };
+    const commandDigest = "c".repeat(64);
+    const planDigest = "d".repeat(64);
+    const nextCommit = "b".repeat(40);
+    let mutationSent = false;
+    let mutations = 0;
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/branches/feature/code-push") {
+        return githubReadJson({ name: "feature/code-push", commit: { sha: mutationSent ? nextCommit : args.expected_head_sha } });
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/contents/docs/new-note.txt?ref=feature%2Fcode-push") {
+        return { status: 404, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Not Found" }),
+          truncated: false, rate_limit_remaining: "60" };
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") {
+        return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
+      }
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const request: NonNullable<GitHubWriteOptions["request"]> = async (target) => {
+      mutations += 1;
+      seen.push({ method: target.method, path: target.path, body: target.body ?? {} });
+      mutationSent = true;
+      const envelope = target.body;
+      const variables = envelope.variables as { input: Record<string, unknown> };
+      const input = variables.input;
+      expect(input.expectedHeadOid).toBe(args.expected_head_sha);
+      expect(input.branch).toEqual({ repositoryNameWithOwner: "gatchimuchio/blue-tanuki",
+        branchName: "feature/code-push" });
+      expect(input.fileChanges).toEqual({ additions: [{ path: args.path,
+        contents: Buffer.from(args.content, "utf8").toString("base64") }] });
+      expect(input.message).toEqual({ headline: args.commit_message });
+      return { status: 200, ok: true, content_type: "application/json", truncated: false,
+        rate_limit_remaining: "59", request_id: "CODE-PUSH-REQ", body: JSON.stringify({
+          data: { createCommitOnBranch: { commit: { oid: nextCommit, parents: { nodes: [{ oid: args.expected_head_sha }] } },
+            ref: { name: "refs/heads/feature/code-push", target: { oid: nextCommit } } } },
+        }) };
+    };
+    const options = fakeGitHubWrite(request, undefined, read_request);
+    const target = await inspectGitHubCodePushTargetVersion(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest });
+    const review = await inspectGitHubCodePushContentReview(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest });
+    expect(review).toMatchObject({ kind: "github_code_push", operation: "github.write.code.push",
+      branch: args.branch, expected_head_sha: args.expected_head_sha, path: args.path, content: args.content,
+      content_sha256: createHash("sha256").update(args.content, "utf8").digest("hex"),
+      publication_effect: "visible_to_repository_audience", branch_update_is_conditional: true,
+      notification_effect: "github_api_may_trigger_notifications", used_for_authority: false, may_execute: false });
+    const result = await invokeGitHubWrite(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest, expected_target_version_observation: target });
+    expect(result).toMatchObject({ operation: "code.push", method: "POST", path: "/graphql", status: 200,
+      mutation_status: "provider_accepted", result: { branch: args.branch, commit_sha: nextCommit,
+        parent_sha: args.expected_head_sha, path: args.path } });
+    expect(mutations).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: "POST", path: "/graphql" });
+    expect(JSON.stringify(result)).not.toContain(args.content);
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write code.push refuses default branches, existing files, and a stale expected HEAD before mutation", async () => {
+    const baseArgs = { operation: "code.push", owner: "gatchimuchio", repo: "blue-tanuki",
+      branch: "feature/code-push", expected_head_sha: "a".repeat(40), path: "docs/new-note.txt",
+      content: "reviewed file\n", commit_message: "Add reviewed note" };
+    let branchReads = 0;
+    let writes = 0;
+    let existingFile = true;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path.includes("/branches/")) {
+        branchReads += 1;
+        const sha = branchReads > 1 ? "b".repeat(40) : baseArgs.expected_head_sha;
+        const branch = target.path.slice(target.path.lastIndexOf("/branches/") + "/branches/".length);
+        return githubReadJson({ name: branch, commit: { sha } });
+      }
+      if (target.path.includes("/contents/")) return existingFile
+        ? { status: 200, ok: true, content_type: "application/json", body: JSON.stringify({ name: "new-note.txt" }),
+            truncated: false, rate_limit_remaining: "60" }
+        : { status: 404, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Not Found" }),
+            truncated: false, rate_limit_remaining: "60" };
+      return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, default_branch: "main", private: false });
+    };
+    const options = fakeGitHubWrite(async () => { writes += 1; throw new Error("mutation must not be sent"); },
+      undefined, read_request);
+    await expect(inspectGitHubCodePushTargetVersion({ ...baseArgs, branch: "main" }, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/non-default branch/);
+    await expect(inspectGitHubCodePushTargetVersion(baseArgs, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/only creates a file that is absent/);
+    existingFile = false;
+    branchReads = 0;
+    const target = await inspectGitHubCodePushTargetVersion(baseArgs, { ...options, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64) });
+    await expect(invokeGitHubWrite(baseArgs, { ...options, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64), expected_target_version_observation: target }))
+      .rejects.toThrow(/expected branch HEAD is stale.*mutation_sent=false/);
+    expect(writes).toBe(0);
+  });
 });
 
 function shellTestEnv(root: string, additional: Record<string, string> = {}): Record<string, string> {

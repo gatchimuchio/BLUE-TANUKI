@@ -147,6 +147,7 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
       "github:issue.write",
       "github:pr.write",
       "github:comment.write",
+      "github:code.write",
     ],
     15_000,
   ),

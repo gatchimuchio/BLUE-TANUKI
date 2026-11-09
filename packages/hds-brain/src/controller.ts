@@ -61,6 +61,8 @@ import {
   githubPullRequestCommentCreateRequestPayloadDigest,
   githubPullRequestCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest,
+  githubCodePushTargetIdentityDigest,
+  githubCodePushRequestPayloadDigest,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
@@ -3852,7 +3854,7 @@ ${planControl.question}`,
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
           (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.comment.create" &&
-            operation !== "pr.create" && operation !== "pr.comment.create")) {
+            operation !== "pr.create" && operation !== "pr.comment.create" && operation !== "code.push")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
       }
       const observation = GitHubWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
@@ -3951,6 +3953,39 @@ ${planControl.question}`,
             canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
             pull_request_number: observation.pull_request_number });
         }
+      } else if (operation === "code.push") {
+        const branch = optionalText("branch");
+        const expectedHeadSha = optionalText("expected_head_sha");
+        const path = optionalText("path");
+        const commitMessage = optionalText("commit_message");
+        const content = args.content;
+        const branchSegments = branch?.split("/") ?? [];
+        const safeBranch = Boolean(branch && branch.length <= 255 && branch === branch.trim() && branch !== "@" &&
+          !branch.startsWith("/") && !branch.endsWith("/") && !branch.includes("//") && !branch.includes("..") &&
+          !branch.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(branch) && !branch.endsWith(".") &&
+          branchSegments.every((segment) => segment && !segment.startsWith(".") && !segment.endsWith(".") &&
+            !segment.endsWith(".lock")));
+        const safePath = Boolean(path && path.length <= 4_096 && !path.startsWith("/") && !path.includes("\\") &&
+          !/[\u0000-\u001f\u007f]/.test(path) && path.split("/").every((segment) => segment && segment !== "." &&
+            segment !== ".." && segment.toLowerCase() !== ".git"));
+        const safeContent = typeof content === "string" && content.length > 0 && !content.includes("\u0000") &&
+          Buffer.byteLength(content, "utf8") <= 65_536 && Buffer.from(content, "utf8").toString("utf8") === content;
+        const safeMessage = Boolean(commitMessage && commitMessage.length <= 256 && commitMessage === commitMessage.trim() &&
+          !/[\u0000-\u001f\u007f]/.test(commitMessage));
+        if (!safeBranch || !safePath || !safeContent || !safeMessage || !expectedHeadSha ||
+            !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "branch", "expected_head_sha",
+              "path", "content", "commit_message", "max_bytes"].includes(key)) ||
+            observation.operation !== "code.push" || observation.branch !== branch ||
+            observation.branch === observation.default_branch || observation.expected_head_sha !== expectedHeadSha ||
+            observation.path !== path) {
+          throw new Error("HDS github.write code.push parameters or observed non-default branch are invalid");
+        }
+        requestPayloadDigest = githubCodePushRequestPayloadDigest({ owner, repo, branch: branch!,
+          expected_head_sha: expectedHeadSha, path: path!, content: content as string, commit_message: commitMessage! });
+        targetIdentityDigest = githubCodePushTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, default_branch: observation.default_branch,
+          branch: branch!, expected_head_sha: expectedHeadSha, path: path! });
       } else {
         const title = optionalText("title");
         const body = optionalText("body");

@@ -82,12 +82,22 @@ export const GitHubPullRequestCreateTargetVersionObservationSchema = GitHubWrite
   maintainer_can_modify: z.boolean().nullable(),
 }).strict();
 
+/** One reviewed, create-only file commit to an existing non-default branch. */
+export const GitHubCodePushTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("code.push"),
+  default_branch: z.string().min(1).max(255),
+  branch: z.string().min(1).max(255),
+  expected_head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  path: z.string().min(1).max(4096),
+}).strict();
+
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
+  GitHubCodePushTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
   if (value.operation === "pr.create") {
     const sameRepository = value.head_repository_id === value.repository_id &&
@@ -98,6 +108,20 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
         (!sameRepository && !value.head_repository_is_fork)) {
       context.addIssue({ code: z.ZodIssueCode.custom,
         message: "pull request head repository must be the base repository or a fork in the same GitHub network" });
+    }
+    return;
+  }
+  if (value.operation === "code.push") {
+    const branchSegments = value.branch.split("/");
+    if (value.branch === value.default_branch || value.branch !== value.branch.trim() || value.branch === "@" ||
+        value.branch.startsWith("/") || value.branch.endsWith("/") || value.branch.includes("//") ||
+        value.branch.includes("..") || value.branch.includes("@{") || /[\u0000-\u0020\u007f~^:?*\\\[]/.test(value.branch) ||
+        value.branch.endsWith(".") || branchSegments.some((segment) => !segment || segment.startsWith(".") ||
+          segment.endsWith(".") || segment.endsWith(".lock")) || value.path.startsWith("/") || value.path.includes("\\") ||
+        /[\u0000-\u001f\u007f]/.test(value.path) ||
+        value.path.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) {
+      context.addIssue({ code: z.ZodIssueCode.custom,
+        message: "code push must create one safe file on an existing non-default branch" });
     }
     return;
   }
@@ -125,6 +149,7 @@ export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIss
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
+export type GitHubCodePushTargetVersionObservation = z.infer<typeof GitHubCodePushTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
   repository_id: number;
@@ -365,6 +390,47 @@ export function githubPullRequestCreateRequestPayloadDigest(input: {
     input.base_ref,
     input.draft,
     input.maintainer_can_modify ?? null,
+  ]), "utf8").digest("hex");
+}
+
+export function githubCodePushTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  default_branch: string;
+  branch: string;
+  expected_head_sha: string;
+  path: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-code-push-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.default_branch,
+    input.branch,
+    input.expected_head_sha,
+    input.path,
+  ]), "utf8").digest("hex");
+}
+
+export function githubCodePushRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  branch: string;
+  expected_head_sha: string;
+  path: string;
+  content: string;
+  commit_message: string;
+}): string {
+  const contentDigest = createHash("sha256").update(input.content, "utf8").digest("hex");
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-code-push-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.branch,
+    input.expected_head_sha,
+    input.path,
+    contentDigest,
+    input.commit_message,
   ]), "utf8").digest("hex");
 }
 

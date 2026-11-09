@@ -6061,7 +6061,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const validRef = function (value) {
             return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
               value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
-              !value.includes("..") && !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) &&
+              !value.includes("..") && !value.includes("@{") && !/[\\u0000-\\u0020\\u007f~^:?*\\\[]/.test(value) &&
               !value.endsWith(".") && value.split("/").every(function (segment) {
                 return segment.length > 0 && segment !== "." && segment !== ".." &&
                   !segment.startsWith(".") && !segment.endsWith(".lock") && !segment.endsWith(".");
@@ -6150,6 +6150,92 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "GitHub pull requestの公開先・branch・本文を再確認";
+          return;
+        }
+        if (review.kind === "github_code_push") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          const validRef = function (value) {
+            return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
+              value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
+              !value.includes("..") && !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) &&
+              !value.endsWith(".") && value.split("/").every(function (segment) {
+                return segment.length > 0 && !segment.startsWith(".") && !segment.endsWith(".") && !segment.endsWith(".lock");
+              });
+          };
+          const validPath = typeof review.path === "string" && review.path.length > 0 && review.path.length <= 4096 &&
+            !review.path.startsWith("/") && !review.path.includes("\\\\") && !/[\\u0000-\\u001f\\u007f]/.test(review.path) &&
+            review.path.split("/").every(function (segment) {
+              return segment.length > 0 && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git";
+            });
+          const contentBytes = typeof review.content === "string" ? new TextEncoder().encode(review.content).byteLength : -1;
+          if (review.command_id !== commandId || review.operation !== "github.write.code.push" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false || review.branch_update_is_conditional !== true ||
+              review.publication_effect !== "visible_to_repository_audience" ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.content_sha256) ||
+              !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              !validRef(review.default_branch) || !validRef(review.branch) || review.branch === review.default_branch ||
+              !isCommitSha(review.expected_head_sha) || !validPath || contentBytes < 1 || contentBytes > 65536 ||
+              review.content.indexOf("\\u0000") >= 0 || typeof review.commit_message !== "string" ||
+              review.commit_message.length < 1 || review.commit_message.length > 256 ||
+              review.commit_message !== review.commit_message.trim() || /[\\u0000-\\u001f\\u007f]/.test(review.commit_message)) {
+            throw new Error("GitHub code pushの公開先・branch・新規ファイル内容がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub branchへの新規ファイル追加（外部公開作用）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name + " (ID " + review.repository_id + ")"],
+            ["可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["対象branch", review.branch],
+            ["承認時HEAD", review.expected_head_sha],
+            ["default branch", review.default_branch],
+            ["追加先", review.path],
+            ["内容サイズ", String(contentBytes) + " UTF-8 bytes"],
+            ["内容SHA-256", review.content_sha256],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+            ["HEAD競合", "GitHub側のexpectedHeadOid一致条件でのみbranchを更新します。承認後にHEADが変われば拒否されます。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const messageHeading = document.createElement("strong");
+          messageHeading.textContent = "commit message";
+          const message = document.createElement("pre");
+          message.textContent = review.commit_message;
+          view.append(messageHeading, message);
+          const contentHeading = document.createElement("strong");
+          contentHeading.textContent = "追加するファイル内容（未信頼テキスト）";
+          const content = document.createElement("pre");
+          content.textContent = review.content;
+          view.append(contentHeading, content);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "追加のみの単一ファイル操作です。既存ファイル、default branch、HEADが観測と異なる場合は作用しません。承認後のrepository設定再読取は非原子的です。結果不明の場合は自動再送せず、GitHub上のbranchを確認してOwnerが次の判断を行います。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub追加先branch・commit message・ファイル内容を再確認";
           return;
         }
         if (review.kind === "google_drive_file_create") {

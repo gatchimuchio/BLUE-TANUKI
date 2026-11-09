@@ -76,7 +76,8 @@
     "email:send",
     "github:issue.write",
     "github:pr.write",
-    "github:comment.write"
+    "github:comment.write",
+    "github:code.write"
   ],
   "description": "BLUE-TANUKI executor: provider-neutral LLM backend registry, permission-gated tool registry, OutboundDispatcher integration, SessionStore (memory + json file). Network/secrets permissions apply only when a non-stub LLM or network tool is configured; fs permissions apply only when sessions or fs tools are allowed."
 }

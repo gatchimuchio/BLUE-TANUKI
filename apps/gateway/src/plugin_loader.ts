@@ -100,6 +100,7 @@ const BUILTIN_TOOL_PERMISSIONS = [
   "github:issue.write",
   "github:pr.write",
   "github:comment.write",
+  "github:code.write",
   "shell:exec",
 ] as const;
 

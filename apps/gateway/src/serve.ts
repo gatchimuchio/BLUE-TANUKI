@@ -2902,7 +2902,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       (pending.command.payload.tool_name === "google.drive.write" &&
         ["file.create", "file.update", "permissions.create", "file.trash"].includes(String(pending.command.payload.arguments.operation))) ||
       (pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create"].includes(String(pending.command.payload.arguments.operation)))
+        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(pending.command.payload.arguments.operation)))
     );
     if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) || requiresToolContentReview)) {
@@ -4569,7 +4569,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create"].includes(String(pending.command.payload.arguments.operation)) &&
+        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(pending.command.payload.arguments.operation)) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       try {
@@ -4579,7 +4579,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ? "github_issue_update" : pending.command.payload.arguments.operation === "issue.comment.create"
             ? "github_issue_comment_create" : pending.command.payload.arguments.operation === "pr.comment.create"
               ? "github_pull_request_comment_create" : pending.command.payload.arguments.operation === "pr.create"
-                ? "github_pull_request_create" : "github_issue_create";
+              ? "github_pull_request_create" : pending.command.payload.arguments.operation === "code.push"
+                ? "github_code_push" : "github_issue_create";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
             snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
@@ -4730,7 +4731,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create"].includes(String(pending.command.payload.arguments.operation))) {
+        ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(pending.command.payload.arguments.operation))) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
       if (!content_review_digest || !pending.content_review_digest ||
@@ -4743,7 +4744,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ? "github_issue_update" : pending.command.payload.arguments.operation === "issue.comment.create"
             ? "github_issue_comment_create" : pending.command.payload.arguments.operation === "pr.comment.create"
               ? "github_pull_request_comment_create" : pending.command.payload.arguments.operation === "pr.create"
-                ? "github_pull_request_create" : "github_issue_create";
+                ? "github_pull_request_create" : pending.command.payload.arguments.operation === "code.push"
+                  ? "github_code_push" : "github_issue_create";
         return current && "kind" in current && current.kind === expectedKind &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
@@ -4871,7 +4873,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
             (p.command.payload.tool_name === "github.write" &&
-              ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create"].includes(String(p.command.payload.arguments.operation))) ||
+              ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&
               ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))))) ||
         Boolean(p.goal_purpose_proposal) ||

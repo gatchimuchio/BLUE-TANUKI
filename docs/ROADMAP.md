@@ -6,7 +6,15 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — 親planのM解釈依存を子planへ継承（限定WIRED）
+### 直近完了BUILD_BATCH — F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
+
+既存`github.write`を、non-default branch上の単一新規UTF-8 file（65,536 bytes以下）に限る`code.push`へ接続した。target branchの現在HEAD・既定branch・repository identity・file不存在を観測し、L3 no-store reviewにbranch／expected HEAD／path／commit message／正確な本文・サイズ・digest・可視性と通知可能性を固定する。作用前に再観測し、GitHub GraphQL `createCommitOnBranch`へ`expectedHeadOid`と一件の`FileAddition`を送る。結果はparent・ref・commit SHAとbranch再読取で照合し、明示拒否・結果不明・受理を区別してJ/MとOwner照会へつなぐ。失敗後に自動再送しない。Control Centerは本文を未信頼text nodeとして表示する。専用`github:code.write` capabilityを追加した。
+
+`corepack pnpm typecheck`／全workspace build（15 projects）／`git diff --check`はPASS。5ファイルの選択合成testは8 passed／309 skipped。Gateway `--serve` process、実GitHub／credential／外部作用、owner browser、全suite、他OS、QE_QC／QE_QAはNOT_RUN。実GitHubへは送信していない。このcode.push経路だけを限定`WIRED`とし、F05.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、公開／出荷GOへ拡張しない。
+
+次はrev4.0と最新実物から、一気通貫の仕事経路に最も不足する次consumerを選び、QE_BUILDを続ける。実provider送信、live外部作用、別repo編集、Rust authority cutover、公開・出荷判断は保留する。
+
+### 前段完了BUILD_BATCH — 親planのM解釈依存を子planへ継承（限定WIRED）
 
 親OperationPlanの現行性確認からJ/M memory interpretation dependencyを返し、`plan:compute`のC入力・候補保持まで継承する。source citationと親由来依存の統合は同一judgmentの一致を検査し、重複・競合・上限超過・再評価要求・現在性不明を拒否する。Mは非権威のまま。対象test 4件、protocol build、HDS-BRAIN typecheck／build、`hds:standalone`がPASS。Gateway親→子plan runtime経路、全workspace suite、実provider／外部作用、5OS、QE_QC／QE_QAは未確認。C04.03／D01.03のコード接続だけを限定`WIRED`とする。
 

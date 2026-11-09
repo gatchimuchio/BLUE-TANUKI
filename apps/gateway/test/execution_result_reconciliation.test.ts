@@ -17,6 +17,7 @@ import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDig
   githubIssueCommentCreateRequestPayloadDigest, githubIssueCommentCreateTargetIdentityDigest,
   githubPullRequestCommentCreateRequestPayloadDigest, githubPullRequestCommentCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest, githubPullRequestCreateTargetIdentityDigest,
+  githubCodePushRequestPayloadDigest, githubCodePushTargetIdentityDigest,
   GitHubWriteTargetVersionObservationSchema, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -155,7 +156,7 @@ function fileEditCandidate(id: string): OperationPlan {
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
-type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create";
+type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push";
 type GitHubWriteCase = { operation: GitHubWriteOperation; comment_kind?: "pull_request_review_inline"; inline_range?: boolean };
 const GITHUB_PR_HEAD_REPOSITORY = "fixture-contributor/synthetic-repo";
 const githubWriteCases: readonly GitHubWriteCase[] = [
@@ -163,6 +164,7 @@ const githubWriteCases: readonly GitHubWriteCase[] = [
   { operation: "issue.update" },
   { operation: "issue.comment.create" },
   { operation: "pr.create" },
+  { operation: "code.push" },
   { operation: "pr.comment.create" },
   { operation: "pr.comment.create", comment_kind: "pull_request_review_inline" },
   { operation: "pr.comment.create", comment_kind: "pull_request_review_inline", inline_range: true },
@@ -274,6 +276,30 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
         : { id: 42_447, body: comment, issue_url: `https://api.github.com/repos/${owner}/${repo}/issues/${number}` },
       accepted_result: { id: 42_447 },
       private_values: [comment, "synthetic pull request target title", ...(inline ? ["old synthetic diff value", "new synthetic diff value"] : [])] };
+  }
+  if (operation === "code.push") {
+    const branch = "feature/synthetic-code-push";
+    const expectedHeadSha = "e".repeat(40);
+    const filePath = "docs/synthetic-note.txt";
+    const content = "synthetic code push content never retained in M\n";
+    const commitMessage = "Add synthetic note";
+    const commitSha = "f".repeat(40);
+    const contentSha256 = createHash("sha256").update(content, "utf8").digest("hex");
+    return { operation, step_id: "write-code-push",
+      parameters: { operation, owner, repo, branch, expected_head_sha: expectedHeadSha, path: filePath,
+        content, commit_message: commitMessage },
+      target_identity_digest: githubCodePushTargetIdentityDigest({ repository_id: repositoryId,
+        canonical_full_name: canonicalFullName, default_branch: "main", branch,
+        expected_head_sha: expectedHeadSha, path: filePath }),
+      request_payload_digest: githubCodePushRequestPayloadDigest({ owner, repo, branch,
+        expected_head_sha: expectedHeadSha, path: filePath, content, commit_message: commitMessage }),
+      target_fields: { default_branch: "main", branch, expected_head_sha: expectedHeadSha, path: filePath },
+      method: "POST", path: "/graphql", accepted_status: 200,
+      accepted_provider_response: { commit_sha: commitSha, parent_sha: expectedHeadSha,
+        path: filePath, content_sha256: contentSha256 },
+      accepted_result: { branch, commit_sha: commitSha, parent_sha: expectedHeadSha,
+        path: filePath, content_sha256: contentSha256 },
+      private_values: [content, commitMessage] };
   }
   const prTitle = "synthetic pull request title";
   const prBody = "synthetic pull request body never retained in M";

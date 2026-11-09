@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / 親planのM解釈依存を子planへ継承（限定WIRED）
+## 直近完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
+
+### 現在の施工状態 — 2026-11-09
+
+`github.write code.push`を、既存のOperation Plan、HDS J target/payload照合、L3 no-store content review、Approval／Broker／Executor、結果receipt、J/M保存、Ownerの`plan:result`へ接続した。作用はallowlist内repositoryの既存non-default branchに対する単一の新規UTF-8 file追加（65,536 bytes以下）に限定する。安全な相対path、観測したbranch HEAD、content／commit messageを同じcommand・Operation Plan binding・digestへ結合し、default branch、既存file、別HEAD、余分な引数は拒否する。Control Centerはrepository可視性、target branch・HEAD、path、正確なfile内容、byte数とdigest、通知可能性、結果不明時に自動再送しないことを示し、内容はHTMLで解釈せずtext nodeへ表示する。
+
+作用はGitHub GraphQL `createCommitOnBranch`の`expectedHeadOid`と単一`FileAddition`を使う。承認後にtargetを再観測し、provider側HEAD条件が不一致ならbranchを更新しない。受理応答はcommit親・更新ref・commit SHA・内容digestを照合し、さらにbranch HEADを再読取する。送信後に結果を確定できない場合は`outcome_unknown`として保持し、自動retryしない。明示的provider拒否は別receiptとしてJ/Mへ保存する。専用`github:code.write` capabilityをprotocol、HDS process、plugin loader／manifestへ追加した。
+
+`corepack pnpm typecheck`と全workspace build（15 projects）はPASS。5ファイルのcode.push選択testは8 passed／309 skippedで、built-inの新規file・stale/default/existing拒否、Executor no-store review、Operation Plan結果照合、Gateway内結果調停を通る受理／明示拒否／結果不明、WebChatの未信頼テキスト表示を確認した。`git diff --check`もPASS。現GitHub API／credential、Gateway `--serve` process、owner browser操作、他OS、全workspace suite、QE_QC／QE_QAはNOT_RUN。実provider用のテスト資格情報や外部作用は使っていない。
+
+この`code.push`接続sliceだけを限定`WIRED`とする。F05.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開／出荷GOへ拡張しない。次はrev4.0と最新実物から、全体の一気通貫接続に最も近づく未接続producer／consumerを選ぶ。実provider送信、live外部作用、別repo編集、Rust authority cutover、公開・出荷判断は保留する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / 親planのM解釈依存を子planへ継承（限定WIRED）
 
 ### 現在の施工状態 — 2026-11-09
 

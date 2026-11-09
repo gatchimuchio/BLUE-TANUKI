@@ -498,6 +498,7 @@ describe("HDSUpperController.decide()", () => {
         "github:issue.write",
         "github:pr.write",
         "github:comment.write",
+        "github:code.write",
       ],
       timeout_ms: 15_000,
     });

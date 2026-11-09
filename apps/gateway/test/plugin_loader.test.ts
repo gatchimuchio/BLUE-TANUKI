@@ -129,6 +129,7 @@ describe("plugin loader", () => {
         "github:issue.write",
         "github:pr.write",
         "github:comment.write",
+        "github:code.write",
         "shell:exec",
       ],
       module: `

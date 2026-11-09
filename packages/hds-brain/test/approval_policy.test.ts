@@ -350,6 +350,7 @@ describe("approval policy", () => {
         "github:issue.write",
         "github:pr.write",
         "github:comment.write",
+        "github:code.write",
       ],
     );
     const grant = buildApprovalGrant({

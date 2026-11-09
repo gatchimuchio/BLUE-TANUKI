@@ -250,6 +250,7 @@ function executionPolicy(process_kind: ProcessKind): HDSProcessDefinition["execu
         "github:issue.write",
         "github:pr.write",
         "github:comment.write",
+        "github:code.write",
         "shell:exec",
       ],
       timeout_ms: 15_000,

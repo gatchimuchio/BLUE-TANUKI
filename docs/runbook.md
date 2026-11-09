@@ -278,7 +278,7 @@ Built-in tool capabilities:
 | `http.fetch`  | `tool:http.fetch`, `network:http`     |
 | `web.search` | `tool:web.search`, `network:http`     |
 | `github.read` | `tool:github.read`, `network:github.com` |
-| `github.write` | `tool:github.write`, `network:github.com`, `secrets:GITHUB_TOKEN`, `github:issue.write`, `github:pr.write`, `github:comment.write` |
+| `github.write` | `tool:github.write`, `network:github.com`, `secrets:GITHUB_TOKEN`, `github:issue.write`, `github:pr.write`, `github:comment.write`, `github:code.write` |
 | `gmail.read` | `tool:gmail.read`, `network:googleapis.com`, `secrets:GMAIL_ACCESS_TOKEN`, `secrets:GOOGLE_ACCESS_TOKEN`, `google:gmail.read` |
 | `google.calendar.read` | `tool:google.calendar.read`, `network:googleapis.com`, `secrets:GOOGLE_CALENDAR_ACCESS_TOKEN`, `secrets:GOOGLE_ACCESS_TOKEN`, `google:calendar.read` |
 | `google.drive.read` | `tool:google.drive.read`, `network:googleapis.com`, `secrets:GOOGLE_DRIVE_ACCESS_TOKEN`, `secrets:GOOGLE_ACCESS_TOKEN`, `google:drive.read` |

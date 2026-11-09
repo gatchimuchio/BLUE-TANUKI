@@ -9,7 +9,8 @@ import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion,
   inspectGitHubPullRequestCommentCreateContentReview, inspectGitHubPullRequestCommentCreateTargetVersion,
-  inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion } from "../src/tools/builtin.js";
+  inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion,
+  inspectGitHubCodePushContentReview, inspectGitHubCodePushTargetVersion } from "../src/tools/builtin.js";
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id: "synthetic-command", type: "tool_call",
@@ -36,7 +37,7 @@ describe("承認内容からExecutorへの固定", () => {
       id: "synthetic-github-comment",
       type: "tool_call",
       payload: { tool_name: "github.write", arguments: args },
-      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:issue.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:issue.write", "github:code.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
       upstream_decision: { frame_goal: "選択Issueに合成コメントを作る", model_abstraction: "fixture",
         commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
     };
@@ -87,7 +88,7 @@ describe("承認内容からExecutorへの固定", () => {
       id: "synthetic-github-pr-comment",
       type: "tool_call",
       payload: { tool_name: "github.write", arguments: args },
-      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "github:code.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
       upstream_decision: { frame_goal: "選択PRのタイムラインに合成コメントを作る", model_abstraction: "fixture",
         commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
     };
@@ -143,7 +144,7 @@ describe("承認内容からExecutorへの固定", () => {
       id: "synthetic-github-pr-inline-comment",
       type: "tool_call",
       payload: { tool_name: "github.write", arguments: args },
-      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:comment.write", "github:code.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
       upstream_decision: { frame_goal: "選択PRの合成差分行をレビューする", model_abstraction: "fixture",
         commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
     };
@@ -208,7 +209,7 @@ describe("承認内容からExecutorへの固定", () => {
       id: "synthetic-github-pr-create",
       type: "tool_call",
       payload: { tool_name: "github.write", arguments: args },
-      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:pr.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:pr.write", "github:code.write", "network:github.com", "secrets:GITHUB_TOKEN"] },
       upstream_decision: { frame_goal: "同一repoの合成branchからPR候補を作る", model_abstraction: "fixture",
         commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
     };
@@ -263,6 +264,60 @@ describe("承認内容からExecutorへの固定", () => {
         used_for_authority: false,
         may_execute: false,
       });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("github.write code.pushを新規ファイル内容・expected HEAD付きno-store reviewへ結ぶ", async () => {
+    const args = { operation: "code.push", owner: "gatchimuchio", repo: "blue-tanuki",
+      branch: "feature/code-push", expected_head_sha: "a".repeat(40), path: "docs/new-note.txt",
+      content: "合成ファイル\n", commit_message: "Add synthetic note" };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-code-push",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:code.write",
+        "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "非default branchへ合成の新規ファイルを条件付き追加する",
+        model_abstraction: "fixture", commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "f".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const read_request = async (target: { path: string }) => {
+      if (target.path.includes("/contents/")) {
+        return { status: 404, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Not Found" }),
+          truncated: false, rate_limit_remaining: "60" };
+      }
+      if (target.path.includes("/branches/")) {
+        return { status: 200, ok: true, content_type: "application/json",
+          body: JSON.stringify({ name: "feature/code-push", commit: { sha: args.expected_head_sha } }),
+          truncated: false, rate_limit_remaining: "60" };
+      }
+      return { status: 200, ok: true, content_type: "application/json",
+        body: JSON.stringify({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, default_branch: "main", private: false }),
+        truncated: false, rate_limit_remaining: "60" };
+    };
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubCodePushTargetVersion(args, options);
+    const expectedReview = await inspectGitHubCodePushContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({ kind: "github_code_push", command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest, branch: args.branch,
+        expected_head_sha: args.expected_head_sha, path: args.path, content: args.content,
+        commit_message: args.commit_message, branch_update_is_conditional: true,
+        used_for_authority: false, may_execute: false });
     } finally {
       vi.restoreAllMocks();
     }

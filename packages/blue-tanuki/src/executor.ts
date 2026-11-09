@@ -69,7 +69,7 @@ import {
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubIssueCommentCreateTargetVersion,
-  assertGitHubPullRequestCommentCreateTargetVersion, assertGitHubPullRequestCreateTargetVersion,
+  assertGitHubPullRequestCommentCreateTargetVersion, assertGitHubPullRequestCreateTargetVersion, assertGitHubCodePushTargetVersion,
   brokerFileResourceLockDigest, fileDeleteTool, fileEditTool,
   fileSearchTool, fileWriteTool, gmailWriteTool, googleCalendarWriteTool, googleDriveWriteTool, githubWriteTool,
   shellExecTool } from "./tools/builtin.js";
@@ -307,7 +307,9 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments` }
         : inlinePullRequestComment && validCommentNumber
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments` }
-        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls` } : undefined;
+        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls` }
+          : operation === "code.push" && target.operation === "code.push"
+            ? { method: "POST", path: "/graphql" } : undefined;
   const expectedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
     "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
     "mutation_status", "result_digest", "retry_permitted", "next_action", "provider_data_is_untrusted",
@@ -356,7 +358,9 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
         : inlinePullRequestComment && validCommentNumber
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments`, status: 201 }
-        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 } : undefined;
+        : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 }
+          : operation === "code.push" && target.operation === "code.push"
+            ? { method: "POST", path: "/graphql", status: 200 } : undefined;
   const acceptedKeys = ["schema_version", "operation", "api_host", "repo", "repository_id", "target_identity_digest",
     "request_payload_digest", "command_digest", "operation_plan_binding_digest", "method", "path", "status",
     "mutation_status", "content_type", "truncated", "rate_limit_remaining", "github_request_id", "result_digest",
@@ -389,6 +393,16 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
   }
   if (operation === "issue.comment.create" || operation === "pr.comment.create") {
     return Object.keys(summary).join(",") === "id" && Number.isSafeInteger(summary.id) && (summary.id as number) > 0;
+  }
+  if (operation === "code.push" && target.operation === "code.push") {
+    const content = args.content;
+    const contentDigest = typeof content === "string" ? createHash("sha256").update(content, "utf8").digest("hex") : null;
+    return Object.keys(summary).sort().join(",") === "branch,commit_sha,content_sha256,parent_sha,path" &&
+      summary.branch === target.branch && summary.branch === args.branch &&
+      summary.parent_sha === target.expected_head_sha &&
+      summary.path === target.path && summary.path === args.path &&
+      typeof summary.commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.commit_sha) &&
+      summary.content_sha256 === contentDigest;
   }
   const expectedDraft = args.draft ?? false;
   const expectedHeadRepository = typeof args.head_repository === "string"
@@ -581,7 +595,8 @@ function approveCommandForExecution(
       if (!hds_binding?.operation_plan_binding_digest || observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
           (args.operation !== "issue.create" && args.operation !== "issue.update" &&
-            args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create")) {
+            args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create" &&
+            args.operation !== "code.push")) {
         throw new Error("Executor approval rejected: github.write target version does not match command or Operation Plan");
       }
       if (args.operation === "issue.create") {
@@ -595,6 +610,9 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "pr.comment.create") {
         assertGitHubPullRequestCommentCreateTargetVersion(args, observation, operationPlanDigest(snapshot),
+          hds_binding.operation_plan_binding_digest);
+      } else if (args.operation === "code.push") {
+        assertGitHubCodePushTargetVersion(args, observation, operationPlanDigest(snapshot),
           hds_binding.operation_plan_binding_digest);
       } else {
         assertGitHubIssueCommentCreateTargetVersion(args, observation, operationPlanDigest(snapshot),
@@ -619,7 +637,8 @@ function approveCommandForExecution(
       ((snapshot.payload.arguments.operation !== "issue.create" && snapshot.payload.arguments.operation !== "issue.update" &&
         snapshot.payload.arguments.operation !== "issue.comment.create" &&
         snapshot.payload.arguments.operation !== "pr.comment.create" &&
-        snapshot.payload.arguments.operation !== "pr.create") ||
+        snapshot.payload.arguments.operation !== "pr.create" &&
+        snapshot.payload.arguments.operation !== "code.push") ||
         !hds_binding?.operation_plan_binding_digest ||
         target_version_observation?.schema_version !== "blue-tanuki.github-write-target-version.v1" ||
         target_version_observation.operation !== snapshot.payload.arguments.operation)) {
@@ -793,7 +812,8 @@ export class Executor {
     if (command.payload.tool_name === "github.write") {
       const operation = command.payload.arguments.operation;
       if (!operationPlanBindingDigest || (operation !== "issue.create" && operation !== "issue.update" &&
-          operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create")) {
+          operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create" &&
+          operation !== "code.push")) {
         throw new Error("github.write target version resolver requires a supported selected Operation Plan binding");
       }
       const tool = this.deps.tools.get("github.write");
@@ -818,6 +838,9 @@ export class Executor {
       }
       if (operation === "pr.create") {
         return Object.freeze(assertGitHubPullRequestCreateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
+      }
+      if (operation === "code.push") {
+        return Object.freeze(assertGitHubCodePushTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
       }
       return Object.freeze(assertGitHubIssueCreateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
     }
@@ -1027,7 +1050,8 @@ export class Executor {
           (command.payload.arguments.operation !== "issue.create" && command.payload.arguments.operation !== "issue.update" &&
             command.payload.arguments.operation !== "issue.comment.create" &&
             command.payload.arguments.operation !== "pr.comment.create" &&
-            command.payload.arguments.operation !== "pr.create")) {
+            command.payload.arguments.operation !== "pr.create" &&
+            command.payload.arguments.operation !== "code.push")) {
         throw new Error("github.write content review requires a supported Operation Plan binding");
       }
       const tool = this.deps.tools.get("github.write");
@@ -1046,7 +1070,7 @@ export class Executor {
       });
       const githubReview = review as Extract<ToolContentReview, {
         kind: "github_issue_create" | "github_issue_update" | "github_issue_comment_create" |
-          "github_pull_request_comment_create" | "github_pull_request_create"
+          "github_pull_request_comment_create" | "github_pull_request_create" | "github_code_push"
       }>;
       const { review_digest, ...reviewBase } = githubReview;
       const expectedTargetVersionDigest = createHash("sha256").update(
@@ -1156,6 +1180,25 @@ export class Executor {
             githubReview.publication_effect !== "visible_to_repository_audience" ||
             githubReview.creation_is_reversible !== false) {
           throw new Error("github.write pr.create content review returned evidence for another command, target, or plan source");
+        }
+        return githubReview;
+      }
+      if (githubReview.kind === "github_code_push") {
+        const codePushObservation = observation.operation === "code.push" ? observation : undefined;
+        const content = typeof args.content === "string" ? args.content : "";
+        const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
+        if (!codePushObservation || command.payload.arguments.operation !== "code.push" ||
+            githubReview.operation !== "github.write.code.push" || commonMismatch ||
+            githubReview.default_branch !== codePushObservation.default_branch ||
+            githubReview.branch !== codePushObservation.branch || githubReview.branch !== args.branch ||
+            githubReview.branch === githubReview.default_branch ||
+            githubReview.expected_head_sha !== codePushObservation.expected_head_sha ||
+            githubReview.path !== codePushObservation.path || githubReview.path !== args.path ||
+            githubReview.content !== content || githubReview.content_sha256 !== contentDigest ||
+            githubReview.commit_message !== args.commit_message ||
+            githubReview.branch_update_is_conditional !== true ||
+            githubReview.publication_effect !== "visible_to_repository_audience") {
+          throw new Error("github.write code.push content review returned evidence for another command, target, or plan source");
         }
         return githubReview;
       }

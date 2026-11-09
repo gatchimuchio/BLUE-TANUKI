@@ -169,6 +169,35 @@ export interface GitHubPullRequestCreateContentReview {
   may_execute: false;
 }
 
+/** No-store review of one exact new file pushed to an existing non-default branch. */
+export interface GitHubCodePushContentReview {
+  kind: "github_code_push";
+  operation: "github.write.code.push";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  default_branch: string;
+  branch: string;
+  expected_head_sha: string;
+  path: string;
+  content: string;
+  content_sha256: string;
+  commit_message: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "visible_to_repository_audience";
+  branch_update_is_conditional: true;
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {
   account_email: string;
@@ -496,6 +525,7 @@ export type ToolContentReview = GmailDraftContentReview | GmailWriteContentRevie
   GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubIssueCommentCreateContentReview |
   GitHubPullRequestCommentCreateContentReview |
   GitHubPullRequestCreateContentReview |
+  GitHubCodePushContentReview |
   GoogleDrivePermissionCreateContentReview | GoogleDriveFileTrashContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */
