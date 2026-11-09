@@ -29,6 +29,7 @@ export function createFailureReviewProjection(
   independentObservations: readonly FailureReviewIndependentObservation[] = [],
   independentObservationSourceStatus: FailureReviewProjection["independent_observation_source_status"] = "unavailable",
   priorLearningLineages: readonly FailureReviewLineageReference[] = [],
+  baselineEvidenceLastIndex?: number,
 ): FailureReviewProjection {
   const causeCandidates = [...new Set(signature.cause_candidates ?? [])];
   const unknowns = [...new Set((signature.unknowns ?? []).filter((item) => SAFE_UNKNOWNS.has(item)))];
@@ -36,8 +37,22 @@ export function createFailureReviewProjection(
   const allowedEvidenceIds = new Set(evidenceLogIdDigests);
   const parsedObservations = independentObservations.map((observation) =>
     FailureReviewIndependentObservationSchema.parse(observation));
-  if (parsedObservations.some((observation) => !allowedEvidenceIds.has(observation.entry_id_digest))) {
-    throw new Error("failure review observation is not bound to signature evidence");
+  if (parsedObservations.some((observation) =>
+    signature.scope !== "file" || allowedEvidenceIds.has(observation.entry_id_digest) ||
+    observation.observation_kind !== "post_signature_read_only" ||
+    observation.operation !== "file.search" || observation.result_status !== "success" ||
+    observation.entry_index === undefined || baselineEvidenceLastIndex === undefined ||
+    observation.entry_index <= baselineEvidenceLastIndex ||
+    observation.action_pattern_digest !== sha256Hex(signature.action_pattern) ||
+    observation.input_pattern_digest !== sha256Hex(signature.input_pattern) ||
+    observation.context_pattern_digest !== sha256Hex(signature.context_pattern) ||
+    observation.observed_at_ms === undefined || observation.result_digest === undefined)) {
+    throw new Error("failure review observation is not an independent post-signature read-only observation");
+  }
+  if ((independentObservationSourceStatus === "verified" &&
+      (evidenceLogIdDigests.length === 0 || baselineEvidenceLastIndex === undefined || parsedObservations.length === 0)) ||
+      (independentObservationSourceStatus !== "verified" && parsedObservations.length > 0)) {
+    throw new Error("failure review observation source status does not match its evidence");
   }
   const signatureDigest = failureSignatureDigest(signature);
   const preStateDigest = failureSignaturePreStateDigest(signature);
@@ -56,6 +71,7 @@ export function createFailureReviewProjection(
       last_observed_at: signature.last_seen_at ?? "unavailable",
     },
     evidence_log_id_digests: evidenceLogIdDigests,
+    ...(baselineEvidenceLastIndex !== undefined ? { baseline_evidence_last_index: baselineEvidenceLastIndex } : {}),
     prior_learning_lineages: parsedLineages,
     independent_observation_source_status: independentObservationSourceStatus,
     independent_observations: parsedObservations,
@@ -332,7 +348,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
   return JSON.stringify({
     schema_version: "blue-tanuki.failure-review-result.v1",
     review: trace,
-    review_basis: "failure categories and digests only; no raw goal, action, context, or result was provided to C",
+    review_basis: "failure categories, digests, and at most a later exact read-only file.search execution record; no raw goal, action, context, or result was provided to C",
     candidate_proposals: candidate ? {
       cause_hypotheses: candidate.cause_hypotheses,
       alternative_hypotheses: candidate.alternative_hypotheses,
@@ -347,7 +363,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
       disposition: trace.scope_disposition,
       count: trace.independent_observation_count,
       digest: trace.independent_observation_digest,
-      basis: "linked Complete History entry digests and failure classifications only",
+      basis: "a later exact-goal, exact-action, exact-actor/channel read-only file.search success recorded in a verified Complete History chain; observation only, not cause proof or permission",
     },
     review_targets: {
       counterexamples: trace.counterexample_review_target_status,
@@ -408,14 +424,21 @@ function assessIndependentObservations(projection: FailureReviewProjection): {
   const observations = projection.independent_observations;
   const ids = observations.map((observation) => observation.entry_id_digest);
   const uniqueIds = new Set(ids);
-  const expected = new Set(projection.evidence_log_id_digests);
+  const baselineIds = new Set(projection.evidence_log_id_digests);
   const recordsMatch = observations.every((observation) =>
-    expected.has(observation.entry_id_digest) &&
-    observation.observed_failures.length === 1 &&
-    observation.observed_failures[0]?.scope === projection.scope &&
-    observation.observed_failures[0]?.failure_type === projection.failure_type);
+    projection.scope === "file" && !baselineIds.has(observation.entry_id_digest) &&
+    observation.observed_failures.length === 0 &&
+    observation.observation_kind === "post_signature_read_only" &&
+    observation.operation === "file.search" &&
+    observation.result_status === "success" &&
+    observation.entry_index !== undefined && projection.baseline_evidence_last_index !== undefined &&
+    observation.entry_index > projection.baseline_evidence_last_index &&
+    observation.action_pattern_digest === projection.action_pattern_digest &&
+    observation.input_pattern_digest === projection.input_pattern_digest &&
+    observation.context_pattern_digest === projection.context_pattern_digest &&
+    observation.observed_at_ms !== undefined && observation.result_digest !== undefined);
   const bound = projection.independent_observation_source_status === "verified" &&
-    expected.size > 0 && observations.length === expected.size &&
+    baselineIds.size > 0 && projection.baseline_evidence_last_index !== undefined && observations.length > 0 &&
     uniqueIds.size === observations.length && recordsMatch;
   return {
     bound,

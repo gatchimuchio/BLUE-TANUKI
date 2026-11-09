@@ -61,7 +61,7 @@ describe("prepareFailureReviewInbound", () => {
     expect(result.metadata?.["blue_tanuki.failure_review.signature_id"]).not.toBe(earlier.id);
   });
 
-  it("binds a digest-only independent observation from the referenced verified history entry", () => {
+  it("does not relabel the signature baseline as an independent observation", () => {
     const history = new CompleteHistoryStore();
     const entry = history.append({
       kind: "execution_history",
@@ -98,14 +98,9 @@ describe("prepareFailureReviewInbound", () => {
       }>;
     };
 
-    expect(projection.independent_observation_source_status).toBe("verified");
+    expect(projection.independent_observation_source_status).toBe("unavailable");
     expect(projection.evidence_log_id_digests).toHaveLength(1);
-    expect(projection.independent_observations).toHaveLength(1);
-    expect(projection.independent_observations[0]).toMatchObject({
-      entry_hash: entry.entry_hash,
-      payload_digest: entry.payload_digest,
-      observed_failures: [{ scope: signature.scope, failure_type: signature.failure_type }],
-    });
+    expect(projection.independent_observations).toHaveLength(0);
     expect(JSON.stringify(projection)).not.toContain("PRIVATE_FAILURE_REVIEW_ERROR");
     expect(JSON.stringify(projection)).not.toContain("private-request");
 
@@ -113,7 +108,7 @@ describe("prepareFailureReviewInbound", () => {
     const { command } = hds.decide(result);
     expect(command?.type).toBe("llm_call");
     if (!command || command.type !== "llm_call") return;
-    expect(command.payload.compute_context?.data_exposure.input_sources).toContain(
+    expect(command.payload.compute_context?.data_exposure.input_sources).not.toContain(
       "complete_history_digest_observations",
     );
     const candidate = {
@@ -145,16 +140,16 @@ describe("prepareFailureReviewInbound", () => {
       resume_conditions_adopted_as_permissions: boolean;
     };
     expect(reviewedContent.review).toMatchObject({
-      scope_disposition: "bound_to_independent_observation",
-      counterexample_review_target_status: "retained_for_future_observation",
-      resume_condition_review_target_status: "retained_for_future_observation",
+      scope_disposition: "held_for_independent_observation",
+      counterexample_review_target_status: "held_for_scope",
+      resume_condition_review_target_status: "held_for_scope",
       cause_adoption: "not_adopted",
       may_execute: false,
       used_for_authority: false,
     });
     expect(reviewedContent.review_targets).toEqual({
-      counterexamples: "retained_for_future_observation",
-      resume_conditions: "retained_for_future_observation",
+      counterexamples: "held_for_scope",
+      resume_conditions: "held_for_scope",
     });
     expect(reviewedContent.counterexamples_adopted_as_facts).toBe(false);
     expect(reviewedContent.resume_conditions_adopted_as_permissions).toBe(false);

@@ -2,13 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E04.02 FailureReviewのbaseline証拠を独立観測から分離（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / E04.02 署名後の同一条件file.search観測をJへ接続（限定WIRED）
 
-主語は、FailureMemoryの元署名根拠をCへ渡すFailureReviewと、候補の範囲・反例・再開条件を裁定するHDS-J。署名作成時の`evidence_log_ids`はbaseline根拠であり、CompleteHistoryのhash-chainを再検証しても、新しい独立観測や外部条件の解消証拠にはならない。Gatewayはこの履歴を`independent_observations`へ再投入せず、chainが不正なら`invalid`、独立観測producerがない現状は`unavailable`として渡す。Jはscope・反例・再開条件を保留し、原因候補の採用・権限化・実行を行わない。
+主語は、失敗署名を非信頼計算Cへ渡すFailureReviewと、範囲・反例・再開条件を裁定するHDS-J。署名時`evidence_log_ids`はbaselineとして保持し、新しい観測に再利用しない。CompleteHistory hash-chainが有効でbaseline全件が存在する場合のみ、その後に記録された同一の`file.search`成功を探す。対象範囲はfileに限定し、action／goal input／actor・channel patternが署名と完全一致し、read-only結果digestがある記録だけを選ぶ。選択した履歴IDはbaseline IDと異なり、履歴順もbaselineより後である。
 
-Gateway依存7 workspace project build、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASS（既存移行負債76件の注意）。test suite、実FailureReview UI往復、別producerからの外部条件再観測、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。この証拠分類補正だけを限定`WIRED`とし、E04.02／E04.03全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+JとCへ渡す観測は操作名・結果状態・各digest・記録時刻等だけで、検索本文やpathは渡さない。これは同じ読取操作の後続記録であり、原因の証明、外部条件の解消、再開許可ではない。該当観測がなければ`unavailable`、chain不正なら`invalid`。Jはscope候補のみを限定観測へ束縛でき、原因を採用せず、反例・再開条件を将来観測へ保持し、作用しない。他scope／他read-only操作のproducerと因果束縛は未接続であり、E04.02全体の成立を意味しない。
 
-**次のproducer／consumer:** 署名作成後の外部条件を独立に観測してJへ返す、実際のread-only producerとその対象・因果束縛を再選定する。資格・危険な再実行・別repo変更はこの単位で追加しない。
+Gateway依存7 workspace project buildはPASS。`docs:check`／`git diff --check`は本更新後に実行する。test suiteは実行しない。実FailureReview UI往復、外部条件の解消証明、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このsliceだけを限定`WIRED`とし、E04.02／E04.03全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。C08.02の達成基準はowner回答の明示規則と検証済み根拠に結び付く既存J評価を再確認し、重複実装しなかった。
+
+**次のproducer／consumer:** 現行HEADから全体の最も欠けた実consumerを再選定する。FailureReviewはfile.search以外のsourceを`unavailable`のまま保ち、対象と因果を安全に束縛できる既存read-only producerが見つかるまで拡張しない。実資格・危険な再実行・別repo変更は含めない。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / E04.03 FailureMemoryの条件再評価を承認・実行consumerへ接続（限定WIRED）
 

@@ -173,9 +173,9 @@ describe("FailureMemoryStore", () => {
 });
 
 describe("FailureReview independent observation binding", () => {
-  it("binds only scope review to complete-history evidence and keeps cause unadopted", () => {
+  it("binds scope review only to a later exact read-only file observation", () => {
     const signature = new FailureMemoryStore().addSignature({
-      scope: "repo",
+      scope: "file",
       failure_type: "logic_drift",
       input_pattern: "input",
       action_pattern: "action",
@@ -184,12 +184,21 @@ describe("FailureReview independent observation binding", () => {
     });
     const projection = createFailureReviewProjection(signature, [{
       source: "complete_history",
-      entry_id_digest: sha256Hex("history-entry-1"),
+      entry_id_digest: sha256Hex("history-entry-2"),
       entry_hash: "e".repeat(64),
       payload_digest: "f".repeat(64),
       entry_kind: "execution_history",
-      observed_failures: [{ scope: "repo", failure_type: "logic_drift" }],
-    }], "verified");
+      observed_failures: [],
+      observation_kind: "post_signature_read_only",
+      operation: "file.search",
+      result_status: "success",
+      entry_index: 11,
+      observed_at_ms: 11,
+      action_pattern_digest: sha256Hex(signature.action_pattern),
+      input_pattern_digest: sha256Hex(signature.input_pattern),
+      context_pattern_digest: sha256Hex(signature.context_pattern),
+      result_digest: sha256Hex("read-only-result"),
+    }], "verified", [], 10);
     const candidate = {
       schema_version: "blue-tanuki.failure-review-candidate.v1",
       signature_id: projection.signature_id,
@@ -218,7 +227,7 @@ describe("FailureReview independent observation binding", () => {
     });
   });
 
-  it("holds scope review when linked history observations are missing", () => {
+  it("holds scope review when independent observations are unavailable", () => {
     const signature = new FailureMemoryStore().addSignature({
       scope: "repo",
       failure_type: "logic_drift",
@@ -227,7 +236,7 @@ describe("FailureReview independent observation binding", () => {
       context_pattern: "context",
       evidence_log_ids: ["history-entry-1"],
     });
-    const projection = createFailureReviewProjection(signature, [], "verified");
+    const projection = createFailureReviewProjection(signature, [], "unavailable");
     const candidate = {
       schema_version: "blue-tanuki.failure-review-candidate.v1",
       signature_id: projection.signature_id,

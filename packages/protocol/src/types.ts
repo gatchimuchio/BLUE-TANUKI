@@ -420,7 +420,7 @@ const FailureReviewTypeSchema = z.enum([
   "repeated_manual_correction",
 ]);
 
-/** A digest-only Complete History observation linked to a saved failure signature. */
+/** A digest-only, later read-only Complete History observation for a saved failure signature. */
 export const FailureReviewIndependentObservationSchema = z.object({
   source: z.literal("complete_history"),
   entry_id_digest: FailureReviewSha256Schema,
@@ -433,6 +433,16 @@ export const FailureReviewIndependentObservationSchema = z.object({
     scope: FailureReviewScopeSchema,
     failure_type: FailureReviewTypeSchema,
   }).strict()).max(16),
+  /** Present only when the Gateway found a later exact read-only file.search execution. */
+  observation_kind: z.literal("post_signature_read_only").optional(),
+  operation: z.literal("file.search").optional(),
+  result_status: z.literal("success").optional(),
+  entry_index: z.number().int().nonnegative().optional(),
+  observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  action_pattern_digest: FailureReviewSha256Schema.optional(),
+  input_pattern_digest: FailureReviewSha256Schema.optional(),
+  context_pattern_digest: FailureReviewSha256Schema.optional(),
+  result_digest: FailureReviewSha256Schema.optional(),
 }).strict();
 export type FailureReviewIndependentObservation = z.infer<typeof FailureReviewIndependentObservationSchema>;
 
@@ -514,6 +524,7 @@ export const FailureReviewProjectionSchema = z.object({
     last_observed_at: z.string().min(1).max(64),
   }).strict(),
   evidence_log_id_digests: z.array(FailureReviewSha256Schema).max(256),
+  baseline_evidence_last_index: z.number().int().nonnegative().optional(),
   prior_learning_lineages: z.array(FailureReviewLineageReferenceSchema).max(32),
   independent_observation_source_status: z.enum(["verified", "unavailable", "invalid"]),
   independent_observations: z.array(FailureReviewIndependentObservationSchema).max(256),
