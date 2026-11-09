@@ -6,6 +6,7 @@ import {
   type PeriodicVerificationReport,
   type PeriodicVerificationTrigger,
 } from "@blue-tanuki/hds-brain";
+import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 
 export interface FailureMemoryVerifyOptions {
   env?: NodeJS.ProcessEnv;
@@ -45,9 +46,6 @@ export function formatFailureMemoryVerifyText(report: PeriodicVerificationReport
 }
 
 function failureMemoryStoreFromEnv(env: NodeJS.ProcessEnv): FailureMemoryStore {
-  const file = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
-  const dir = env.BLUE_TANUKI_FAILURE_MEMORY_DIR;
-  if (file) return new FailureMemoryStore({ filepath: path.resolve(file) });
-  if (dir) return new FailureMemoryStore({ filepath: path.join(path.resolve(dir), "failure-memory.json") });
-  return new FailureMemoryStore();
+  const filepath = resolveFailureMemoryFilePath(env);
+  return filepath ? new FailureMemoryStore({ filepath }) : new FailureMemoryStore();
 }

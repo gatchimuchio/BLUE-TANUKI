@@ -365,6 +365,12 @@ async function ensureRuntimeDirs(config: BlueTanukiSetupConfig): Promise<void> {
   await fs.mkdir(config.paths.file_root, { recursive: true });
   await fs.mkdir(config.paths.session_dir, { recursive: true });
   await fs.mkdir(config.paths.audit_dir, { recursive: true });
+  await fs.mkdir(
+    config.paths.failure_memory_file
+      ? path.dirname(path.resolve(config.paths.failure_memory_file))
+      : config.paths.failure_memory_dir,
+    { recursive: true },
+  );
 }
 
 function protectSetupLlmApiKey(

@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
+### 直近BUILD_BATCH — E05.01 Setup管理FailureMemory・開発引継ぎの再起動永続化（限定WIRED）
+
+Setupの`<base-dir>/failure-memory`をGateway FailureMemoryへ接続し、既存FILE/DIR優先と旧`SESSION_DIR`環境からの互換fallbackを一元解決する。FailureMemory verify CLI、DevelopmentHandoff、runtime health、Recovery snapshotも同じ実効pathを使う。handoffは`BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE`の明示時を除きFailureMemoryと同じdirectoryへ保存する。legacy session data rootからの合成restartでFailureMemory signatureとhandoffを再読込できることを確認した。保存は状態保持の接続であり、学習の妥当性・改善・汎化、HDS-Jの採否・権限を成立扱いしない。
+
+Setup／設定round-trip／restart／Recoveryの対象test 7件PASS（46件skip）、Gateway依存7 project build PASS、`docs:check`／`git diff --check` PASS。日本語基底監査PASS（移行負債76件の注意）、license PASS。全suite、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。E05.01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+### 前段完了BUILD_BATCH — E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
 
 既存のOperation Plan memory interpretation dependencyを、実行元digest→検証済み行為→M receiptの非権威projectionへ接続した。現revisionのsource digest一致、唯一のverified binding、実結果または`github.write` accepted summary、delivery/result digest、result-memory commit／receipt、保存M値が揃う場合だけ`action_observed`とdigest/countを返す。依存なしは`not_referenced`、証拠不足・不一致は`unconfirmed`。Gatewayがshapeと固定状態をfail-closedで検査し、Control Centerは三状態を表示する。妥当性・改善・汎化は未評価のまま表示し、学習成立・因果・権限を主張しない。
 

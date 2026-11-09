@@ -29,6 +29,7 @@ describe("setup_config", () => {
     expect(env.LLM_BACKEND).toBe("stub");
     expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
     expect(env.BLUE_TANUKI_FILE_ROOT).toBe(path.resolve("local-data", "files"));
+    expect(env.BLUE_TANUKI_FAILURE_MEMORY_DIR).toBe(path.resolve("local-data", "failure-memory"));
     expect(env.BLUE_TANUKI_SHELL_ROOT).toBeUndefined();
     expect(env.WEBCHAT_TOKEN).toBe(config.webchat.token);
     expect(env.BLUE_TANUKI_OWNER_TOKEN).toBe(config.webchat.owner_token);
@@ -216,10 +217,29 @@ describe("setup_config", () => {
       BLUE_TANUKI_FILE_ROOT: "sandbox",
       BLUE_TANUKI_SESSION_DIR: "sessions",
       BLUE_TANUKI_AUDIT_DIR: "audit",
+      BLUE_TANUKI_FAILURE_MEMORY_DIR: "failure-memory-data",
     });
     expect(config.llm.provider).toBe("openai-compatible");
     expect(config.llm.model).toBe("model-a");
     expect(config.settings.token).toBe("settings-token-123456");
+    expect(config.paths.failure_memory_dir).toBe("failure-memory-data");
+  });
+
+  it("preserves explicit failure-memory file precedence and derives a managed path for legacy setup env", () => {
+    const explicitFile = setupConfigFromEnv({
+      BLUE_TANUKI_FAILURE_MEMORY_FILE: path.join("data", "custom-failure-memory.json"),
+      BLUE_TANUKI_FAILURE_MEMORY_DIR: path.join("data", "ignored-failure-memory-dir"),
+    });
+    const explicitEnv = setupConfigToEnv(explicitFile);
+    expect(explicitEnv.BLUE_TANUKI_FAILURE_MEMORY_FILE)
+      .toBe(path.resolve("data", "custom-failure-memory.json"));
+    expect(explicitEnv.BLUE_TANUKI_FAILURE_MEMORY_DIR).toBeUndefined();
+    expect(renderSetupEnvFile(explicitFile)).toContain("BLUE_TANUKI_FAILURE_MEMORY_FILE=");
+
+    const legacy = setupConfigFromEnv({ BLUE_TANUKI_SESSION_DIR: path.join("data", "sessions") });
+    const legacyDir = path.join(path.resolve("data", "sessions"), "failure-memory");
+    expect(legacy.paths.failure_memory_dir).toBe(legacyDir);
+    expect(setupConfigToEnv(legacy).BLUE_TANUKI_FAILURE_MEMORY_DIR).toBe(legacyDir);
   });
 
   it("builds OpenRouter and Composio setup config from runtime env", () => {

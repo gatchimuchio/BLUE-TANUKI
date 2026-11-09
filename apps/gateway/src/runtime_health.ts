@@ -2,6 +2,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { HDSBrainHealthOptions, RuntimePathCheck } from "@blue-tanuki/hds-brain";
 import { AUDIT_FILENAME } from "./audit_config.js";
+import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 
 type Env = Record<string, string | undefined>;
 export type RuntimeHealthProbeMode = "read_only" | "repair_capable";
@@ -18,6 +19,7 @@ export async function probeGatewaySelfHealth(
 
   const storagePaths = [
     memoryFileFromEnv(env),
+    resolveFailureMemoryFilePath(env),
   ].filter((item): item is string => Boolean(item));
 
   const required_directories = await Promise.all(

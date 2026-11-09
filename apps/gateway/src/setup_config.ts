@@ -45,6 +45,8 @@ export interface SetupPathConfig {
   shell_root?: string;
   session_dir: string;
   audit_dir: string;
+  failure_memory_dir: string;
+  failure_memory_file?: string;
 }
 
 export interface BlueTanukiSetupConfig {
@@ -196,6 +198,7 @@ export function createDefaultSetupConfig(
       file_root: path.join(base, "files"),
       session_dir: path.join(base, "sessions"),
       audit_dir: path.join(base, "audit"),
+      failure_memory_dir: path.join(base, "failure-memory"),
     },
     settings: {
       token: generateSetupToken(tokenBytes),
@@ -222,6 +225,7 @@ export function validateSetupConfig(
   config.composio ??= { dry_run: true, live_execution: false };
   config.composio.dry_run = config.composio.dry_run !== false;
   config.composio.live_execution = config.composio.live_execution === true;
+  config.paths.failure_memory_dir ??= path.join(path.resolve(config.paths.session_dir), "failure-memory");
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
   validateOptionalPositiveInt(config.llm.timeout_ms, "llm.timeout_ms");
@@ -334,6 +338,10 @@ export function validateSetupConfig(
   }
   validatePath(config.paths.session_dir, "paths.session_dir");
   validatePath(config.paths.audit_dir, "paths.audit_dir");
+  validatePath(config.paths.failure_memory_dir, "paths.failure_memory_dir");
+  if (config.paths.failure_memory_file !== undefined) {
+    validatePath(config.paths.failure_memory_file, "paths.failure_memory_file");
+  }
   validateToken(config.settings.token, "settings.token");
   if (
     config.settings.token === config.webchat.token ||
@@ -415,6 +423,11 @@ export function setupConfigFromEnv(
     env.BLUE_TANUKI_SESSION_DIR ?? config.paths.session_dir;
   config.paths.audit_dir =
     env.BLUE_TANUKI_AUDIT_DIR ?? config.paths.audit_dir;
+  config.paths.failure_memory_file = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
+  config.paths.failure_memory_dir = env.BLUE_TANUKI_FAILURE_MEMORY_DIR ??
+    (config.paths.failure_memory_file
+      ? config.paths.failure_memory_dir
+      : path.join(path.resolve(config.paths.session_dir), "failure-memory"));
   config.settings.token =
     env.BLUE_TANUKI_SETTINGS_TOKEN ?? config.settings.token;
   config.composio.api_key = env.COMPOSIO_API_KEY;
@@ -457,6 +470,11 @@ export function setupConfigToEnv(
   };
   if (config.paths.shell_root?.trim()) {
     env.BLUE_TANUKI_SHELL_ROOT = path.resolve(config.paths.shell_root);
+  }
+  if (config.paths.failure_memory_file?.trim()) {
+    env.BLUE_TANUKI_FAILURE_MEMORY_FILE = path.resolve(config.paths.failure_memory_file);
+  } else {
+    env.BLUE_TANUKI_FAILURE_MEMORY_DIR = path.resolve(config.paths.failure_memory_dir);
   }
 
   if (config.llm.provider === "stub") {
@@ -596,6 +614,8 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_SHELL_ROOT",
     "BLUE_TANUKI_SESSION_DIR",
     "BLUE_TANUKI_AUDIT_DIR",
+    "BLUE_TANUKI_FAILURE_MEMORY_FILE",
+    "BLUE_TANUKI_FAILURE_MEMORY_DIR",
     "COMPOSIO_API_KEY",
     "COMPOSIO_ALLOWED_TOOLKITS",
     "COMPOSIO_ALLOWED_ACTIONS",

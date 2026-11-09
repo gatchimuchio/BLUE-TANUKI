@@ -10,6 +10,7 @@ import {
   failureReviewProjectionDigest,
 } from "@blue-tanuki/hds-brain";
 import { DevelopmentHandoffStore, developmentHandoffStoreFromEnvironment } from "../src/development_handoff_store.js";
+import { buildFailureMemoryStore } from "../src/runtime.js";
 
 function createHandoff() {
   const failureMemory = new FailureMemoryStore();
@@ -105,6 +106,36 @@ describe("DevelopmentHandoffStore", () => {
       expect(readFileSync(join(dir, "development-handoffs.json"), "utf8")).toContain(
         "blue-tanuki.development-handoff-store.v1",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps legacy Setup session data persistent across runtime restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "development-handoff-legacy-session-"));
+    const env = { BLUE_TANUKI_SESSION_DIR: join(dir, "sessions") };
+    try {
+      const firstMemory = buildFailureMemoryStore(env);
+      const signature = firstMemory.addSignature({
+        scope: "repo",
+        failure_type: "logic_drift",
+        input_pattern: "synthetic input",
+        action_pattern: "synthetic action",
+        context_pattern: "synthetic context",
+      });
+      expect(buildFailureMemoryStore(env).list()).toEqual([signature]);
+
+      const handoff = createHandoff();
+      expect(developmentHandoffStoreFromEnvironment(env).receive(handoff)).toEqual({ status: "stored" });
+      expect(developmentHandoffStoreFromEnvironment(env).snapshot()).toMatchObject({
+        status: "persistent",
+        count: 1,
+        items: [handoff],
+      });
+      expect(readFileSync(join(dir, "sessions", "failure-memory", "failure-memory.json"), "utf8"))
+        .toContain(signature.id);
+      expect(readFileSync(join(dir, "sessions", "failure-memory", "development-handoffs.json"), "utf8"))
+        .toContain("blue-tanuki.development-handoff-store.v1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

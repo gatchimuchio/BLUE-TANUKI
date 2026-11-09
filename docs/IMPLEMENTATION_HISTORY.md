@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-10 — QEB-E05.01-FAILURE-MEMORY-SETUP-RESTART-PERSISTENCE
+
+開始時local／`origin/main`／GitHub `main`=`633af7fcba726a6e00c05f4388247d20462089cd`。編集前復旧refはCAS回転済みでlocal branch／remote tagともcurrent=`633af7fcba726a6e00c05f4388247d20462089cd`、previous=`73f2608e1347c7df4d4c3ed60563a9fa9a5c8d9f`。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`は保護し未変更。
+
+Gateway Setupが`<base-dir>/failure-memory`を既定保存先としてenvに出し、Runtime FailureMemory、`--failure-memory-verify`、DevelopmentHandoff、runtime health、Recovery snapshotで共通の実効pathを利用するよう接続した。明示FILEはDIRより優先する。既存Setup envにFailureMemory pathがなくsession directoryだけがある場合は、そのsession data root内`failure-memory/`へfallbackする。path指定がないdeveloper-only環境はmemory-onlyのまま。DevelopmentHandoffは`BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE`の明示時を除いてFailureMemory fileと同じdirectoryに置く。HDS-J権限・Approval・外部作用・学習採否には変更なし。
+
+Setup、設定round-trip、Recovery、legacy session pathからのsynthetic restartでFailureMemory signatureとDevelopmentHandoffを再読込する選択test 7件PASS（46件skip）。`failure_memory_verify.test.ts` 1件PASS。Gateway依存7 workspace build PASS。`docs:check`／`git diff --check` PASS。日本語基底監査PASS（76件の既存移行負債に注意）、license PASS。初回Gateway buildはresolver引数のoptional型が不足して一度失敗したが、型を修正後同一buildを再実行しPASS。
+
+owner回答に合わせ、達成判定は明示規則と検証済み結果・M receiptを要求する現行C08.02実装を再確認し、この単位では重複変更しなかった。学習妥当性・改善・汎化・外部teacher寄与、実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAは未実施。限定`WIRED`はSetup pathから保存・再起動後読込・health／Recovery表示まで。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。build outputsは再利用物として保持し、合成testの一時rootはtestが除去。
+
+---
+
 ## 2026-11-10 — QEB-E04.02-GMAIL-READ-FAILURE-REVIEW-OBSERVATION
 
 施工開始時local／remote `main`=`e9958c9fe8c38487ba6c0fd177e4471dda49c5c7`で一致。意味ある編集前にlocal backup branchをcurrent=`e9958c9...`／previous=`ed046001...`へCAS回転し、remote backup tagも同じ二世代へ`--force-with-lease`で更新・再照合した。local/remote backup refsは編集開始時に一致。保護された`.codex-attachments/`／`.codex-remote-attachments/`、D4 Pocket、Google資格情報、外部providerは変更・使用していない。

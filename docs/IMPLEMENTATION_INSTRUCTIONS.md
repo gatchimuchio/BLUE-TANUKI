@@ -2,7 +2,21 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / E05.01 Setup管理FailureMemory・開発引継ぎの再起動永続化（限定WIRED）
+
+主語はHDSのFailureMemoryと、FailureMemoryから独立した開発レビュー引継ぎinbox。目的はSetupが管理する保存先をGateway runtime、検証CLI、復旧診断へ同じ規則で接続し、process再起動後も失敗署名・学習lineage・未審査handoffを復元すること。FailureMemoryがHDS-Jの採否や権限を代替する変更ではない。
+
+Setupは`<base-dir>/failure-memory`を`BLUE_TANUKI_FAILURE_MEMORY_DIR`として生成し、directoryを作成する。既存の`BLUE_TANUKI_FAILURE_MEMORY_FILE`を指定した環境ではFILEを優先する。旧Setup envにFILE/DIRがなく`BLUE_TANUKI_SESSION_DIR`だけがある場合は`<session-dir>/failure-memory`へ保存し、セッションdata rootの管理・復旧範囲に留める。明示pathがないdeveloper-only環境は引き続きmemory-only。Runtime、`--failure-memory-verify`、DevelopmentHandoff、runtime health、Recovery snapshotは共通path resolverを使い、`BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE`の明示時を除いてhandoffは実効FailureMemory fileと同じdirectoryへ置く。
+
+`corepack pnpm exec vitest run apps/gateway/test/setup.test.ts apps/gateway/test/setup_config.test.ts apps/gateway/test/development_handoff_store.test.ts apps/gateway/test/recovery_surface.test.ts -t "writes an env file and runtime directories|creates a safe offline default config|builds setup config from runtime env|preserves explicit failure-memory|keeps legacy Setup session data|reports the effective failure-memory path|reports env backup inventory" --maxWorkers=1 --minWorkers=1`はPASS（7件、46件skip）。legacy `SESSION_DIR`からFailureMemory signatureとDevelopmentHandoffを再生成storeへ再読込する合成restart経路を確認した。`corepack pnpm --filter @blue-tanuki/gateway... build`はPASS（7 workspace projects）。初回buildはoptional environment型の不足で失敗したため修正し、同じbuildを再実行してPASS。
+
+`corepack pnpm docs:check`と`git diff --check`はPASS。日本語基底監査PASS（既存移行負債76件の注意継続）、license監査PASS。
+
+学習妥当性・改善・汎化・外部teacher寄与は未評価。実provider、外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。限定`WIRED`はSetup設定→FailureMemory／Handoff保存→restart後読込→health／Recovery path表示まで。E05.01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、Jによる学習候補採用、release／owner GOへ拡張しない。
+
+開始local `main`／`origin/main`／GitHub `main`=`633af7fcba726a6e00c05f4388247d20462089cd`。編集前復旧refはCAS回転済みでlocal branch／remote tagともcurrent=`633af7fcba726a6e00c05f4388247d20462089cd`／previous=`73f2608e1347c7df4d4c3ed60563a9fa9a5c8d9f`。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。現unitの次consumerは最新mainとrev4.0から再選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
 
 主語は、Operation Planが保持するM解釈依存と、その依存digestを実行元へ束縛した後続step。目的は、同じplan revisionで結果検証とM receipt確認まで成立した行為の有無だけをOwner Taskへ表示し、妥当性・改善・汎化・学習成立を未評価のまま区別すること。
 

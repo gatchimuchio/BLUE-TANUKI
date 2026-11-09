@@ -84,9 +84,12 @@ describe("setup CLI", () => {
       const raw = await fs.readFile(output, "utf8");
       expect(raw).toContain("LLM_BACKEND=stub");
       expect(raw).toContain("WEBCHAT_TOKEN=");
+      expect(raw).toContain("BLUE_TANUKI_FAILURE_MEMORY_DIR=");
+      expect(result.config.paths.failure_memory_dir).toBe(path.join(dir, "data", "failure-memory"));
       await expect(fs.stat(path.join(dir, "data", "files"))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, "data", "sessions"))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, "data", "audit"))).resolves.toBeTruthy();
+      await expect(fs.stat(path.join(dir, "data", "failure-memory"))).resolves.toBeTruthy();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

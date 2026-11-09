@@ -50,6 +50,7 @@ import { reconcileStartupExecutionState } from "./reconcile_execution_results.js
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
+import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -71,16 +72,13 @@ export function buildHDSMemoryStore(env: NodeJS.ProcessEnv = process.env): LongT
 }
 
 /**
- * Build the HDS failure-memory store from explicit env configuration.
+ * Build the HDS failure-memory store from explicit or Setup-managed paths.
  * Failure memory is a deterministic pre-execution control asset; it does not
  * let complete history or LLM proposals become authority.
  */
 export function buildFailureMemoryStore(env: NodeJS.ProcessEnv = process.env): FailureMemoryStore {
-  const file = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
-  const dir = env.BLUE_TANUKI_FAILURE_MEMORY_DIR;
-  if (file) return new FailureMemoryStore({ filepath: path.resolve(file) });
-  if (dir) return new FailureMemoryStore({ filepath: path.join(path.resolve(dir), "failure-memory.json") });
-  return new FailureMemoryStore();
+  const filepath = resolveFailureMemoryFilePath(env);
+  return filepath ? new FailureMemoryStore({ filepath }) : new FailureMemoryStore();
 }
 
 export function buildSessionStore(

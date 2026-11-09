@@ -30,6 +30,7 @@ import {
   type RecoverySelectedStoreLedgerStatus,
 } from "./recovery_inspection.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -651,6 +652,11 @@ async function recoveryBackupInventory(env: NodeJS.ProcessEnv): Promise<Recovery
 }
 
 function sourceSpecs(env: NodeJS.ProcessEnv): RecoverySourceSpec[] {
+  const failureMemoryEnvKey = env.BLUE_TANUKI_FAILURE_MEMORY_FILE?.trim()
+    ? "BLUE_TANUKI_FAILURE_MEMORY_FILE"
+    : env.BLUE_TANUKI_FAILURE_MEMORY_DIR?.trim()
+      ? "BLUE_TANUKI_FAILURE_MEMORY_DIR"
+      : "BLUE_TANUKI_SESSION_DIR";
   return [
     {
       key: "env_file",
@@ -684,8 +690,8 @@ function sourceSpecs(env: NodeJS.ProcessEnv): RecoverySourceSpec[] {
     },
     {
       key: "failure_memory_file",
-      env_key: "BLUE_TANUKI_FAILURE_MEMORY_FILE",
-      source_path: env.BLUE_TANUKI_FAILURE_MEMORY_FILE,
+      env_key: failureMemoryEnvKey,
+      source_path: resolveFailureMemoryFilePath(env),
       backup_required: true,
     },
     {
@@ -757,6 +763,7 @@ function configuredRuntimeTargets(env: NodeJS.ProcessEnv): Map<string, string> {
 }
 
 function managedRuntimeRoots(env: NodeJS.ProcessEnv): string[] {
+  const failureMemoryFile = resolveFailureMemoryFilePath(env);
   const roots = [
     env.BLUE_TANUKI_FILE_ROOT,
     env.BLUE_TANUKI_ENV_FILE ? path.dirname(env.BLUE_TANUKI_ENV_FILE) : undefined,
@@ -766,6 +773,7 @@ function managedRuntimeRoots(env: NodeJS.ProcessEnv): string[] {
     env.BLUE_TANUKI_MEMORY_FILE ? path.dirname(env.BLUE_TANUKI_MEMORY_FILE) : undefined,
     env.BLUE_TANUKI_FAILURE_MEMORY_DIR,
     env.BLUE_TANUKI_FAILURE_MEMORY_FILE ? path.dirname(env.BLUE_TANUKI_FAILURE_MEMORY_FILE) : undefined,
+    failureMemoryFile ? path.dirname(failureMemoryFile) : undefined,
     env.BLUE_TANUKI_SCHEDULES_DIR,
     env.BLUE_TANUKI_LOG_DIR,
     env.BLUE_TANUKI_APPROVALS_FILE ? path.dirname(env.BLUE_TANUKI_APPROVALS_FILE) : undefined,
@@ -2534,6 +2542,7 @@ export async function buildRecoverySnapshot(
   env: NodeJS.ProcessEnv = process.env,
   postActionObservation: RecoveryPostActionObservation = noRecoveryActionObservation("no_record"),
 ): Promise<RecoverySnapshot> {
+  const failureMemoryFile = resolveFailureMemoryFilePath(env);
   const schedulesDir = env.BLUE_TANUKI_SCHEDULES_DIR ??
     (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
   const backups = await recoveryBackupInventory(env);
@@ -2553,8 +2562,8 @@ export async function buildRecoverySnapshot(
       audit_dir: await pathStatus(env.BLUE_TANUKI_AUDIT_DIR, true),
       memory_file: await pathStatus(env.BLUE_TANUKI_MEMORY_FILE, true),
       memory_dir: await pathStatus(env.BLUE_TANUKI_MEMORY_DIR, true),
-      failure_memory_file: await pathStatus(env.BLUE_TANUKI_FAILURE_MEMORY_FILE, true),
-      failure_memory_dir: await pathStatus(env.BLUE_TANUKI_FAILURE_MEMORY_DIR, true),
+      failure_memory_file: await pathStatus(failureMemoryFile, true),
+      failure_memory_dir: await pathStatus(failureMemoryFile ? path.dirname(failureMemoryFile) : undefined, true),
       schedules_dir: await pathStatus(schedulesDir, true),
       log_dir: await pathStatus(env.BLUE_TANUKI_LOG_DIR, true),
     },

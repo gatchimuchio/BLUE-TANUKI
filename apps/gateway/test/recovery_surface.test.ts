@@ -388,6 +388,12 @@ describe("buildRecoverySnapshot", () => {
         exists: true,
         kind: "file",
       });
+      expect(snapshot.runtime_paths.failure_memory_file).toMatchObject({
+        configured: true,
+        path: path.join(failureMemoryDir, "failure-memory.json"),
+        exists: false,
+        kind: "missing",
+      });
       expect(snapshot.restore).toMatchObject({
         execution_available: false,
         restore_review_request_available: false,
@@ -410,6 +416,30 @@ describe("buildRecoverySnapshot", () => {
         used_for_authority: false,
       });
       expect(snapshot.evidence_source).toEqual(["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the effective failure-memory path for legacy Setup environments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-legacy-memory-"));
+    const sessionDir = path.join(root, "sessions");
+    try {
+      await mkdir(sessionDir);
+      const snapshot = await buildRecoverySnapshot({ BLUE_TANUKI_SESSION_DIR: sessionDir });
+      const failureMemoryDir = path.join(sessionDir, "failure-memory");
+      expect(snapshot.runtime_paths.failure_memory_file).toMatchObject({
+        configured: true,
+        path: path.join(failureMemoryDir, "failure-memory.json"),
+        exists: false,
+        kind: "missing",
+      });
+      expect(snapshot.runtime_paths.failure_memory_dir).toMatchObject({
+        configured: true,
+        path: failureMemoryDir,
+        exists: false,
+        kind: "missing",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

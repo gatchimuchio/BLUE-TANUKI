@@ -5,6 +5,7 @@ import {
   type FailureLearningDevelopmentHandoff,
 } from "@blue-tanuki/protocol";
 import { sha256Hex, stableJson } from "@blue-tanuki/hds-brain";
+import { resolveDevelopmentHandoffFilePath } from "./failure_memory_paths.js";
 
 const STORE_SCHEMA_VERSION = "blue-tanuki.development-handoff-store.v1";
 const MAX_HANDOFFS = 256;
@@ -78,16 +79,8 @@ export class DevelopmentHandoffStore {
 export function developmentHandoffStoreFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): DevelopmentHandoffStore {
-  const explicitFile = env.BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE;
-  if (explicitFile) return new DevelopmentHandoffStore(path.resolve(explicitFile));
-
-  const failureFile = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
-  if (failureFile) return new DevelopmentHandoffStore(path.join(path.dirname(path.resolve(failureFile)), "development-handoffs.json"));
-
-  const failureDir = env.BLUE_TANUKI_FAILURE_MEMORY_DIR;
-  if (failureDir) return new DevelopmentHandoffStore(path.join(path.resolve(failureDir), "development-handoffs.json"));
-
-  return new DevelopmentHandoffStore();
+  const filepath = resolveDevelopmentHandoffFilePath(env);
+  return new DevelopmentHandoffStore(filepath);
 }
 
 function parseStoreSnapshot(value: unknown): StoreState {
