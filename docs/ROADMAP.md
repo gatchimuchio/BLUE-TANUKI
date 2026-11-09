@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
+### 直近BUILD_BATCH — C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
+
+HDS-Jは既にownerの明示達成規則、検証済みstep結果、M receiptを照合し、達成後に同一taskの計画継続を停止する。今回、その状態をControl CenterのOwner Task送信結果相関へ接続した。依頼ID digestで一意なplanを照合し、`achieved`は`goal_completion_rules_satisfied`、規則／証拠digest、`results_verified`、全step verified、M receipt確認が揃う場合だけ表示する。保留・進行中は別表示し、欠落・不整合は未確認とする。表示は実行権限、別task許可、公開／出荷判断を作らない。
+
+WebChat相関の選択test 1件PASS（他122件skip）、channel-webchat依存3 project build PASS、`docs:check` PASS、日本語基底移行負債76件の注意継続、license PASS、`git diff --check` PASS。全workspace検査、実served owner task全往復、実provider／外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02判定の重複実装や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`への昇格はない。
+
+### 前段完了BUILD_BATCH — E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
 
 既存の`browser.read`／`gmail.read`成功履歴とfile scopeの`file.search`履歴を、FailureReviewへdigest-only観測として接続する。Complete History hash-chainが有効で署名baseline全件が同一の失敗tool callとして照合され、後続entryが同じoperation・action／goal input／actor・channelで成功した場合だけ候補にする。`browser.read`は固定schemaのbrowser provenanceも確認する。新しいHTTP／Google API要求を起こさず、本文・完全URL・path・query・links・メール本文・header・宛先・添付metadata・credentialをC/Jへ渡さない。projectionは限定digestとbrowser origin digest／redirect flag／evidence class／時刻だけを含み、原因やproviderの現在状態、外部条件解消、再開・実行権限の証明には使えない。
 

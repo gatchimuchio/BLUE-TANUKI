@@ -1196,9 +1196,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return withExecutionEvidence("一致planの状態projectionが不正なため、対応を確定できません。");
           }
           const planState = plan.status === "results_verified" ? "全stepの結果検証済み表示" : "step審査待ち";
+          const outcome = isObject(plan.task_outcome) ? plan.task_outcome : null;
+          const outcomeSummary = ownerTaskCompletionSummary(plan, outcome);
           return withExecutionEvidence("Runtime snapshotで同じ依頼IDの計画 " + shortDigest(plan.plan_id) + " を確認（revision " + String(plan.revision) + "、" +
             planState + "）。" + ownerTaskPlanLineageEvidenceSummary(plan, projection, runtimeSnapshot.execution_receipts) +
-            "受付状態とは別で、仕事全体の完了を意味しません。");
+            " " + outcomeSummary);
         }
         const displayed = Number.isSafeInteger(projection.displayed_count) ? projection.displayed_count : null;
         const total = Number.isSafeInteger(projection.plan_count) ? projection.plan_count : null;
@@ -1206,6 +1208,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return withExecutionEvidence(limited
           ? "一致planを表示範囲内で確認できません（" + String(displayed) + "/" + String(total) + "件を表示）。依頼結果は未確定です。"
           : "このRuntime snapshot内に一致planはありません。受付記録だけでは仕事の未作成・完了・失敗を判定できません。");
+      }
+
+      function ownerTaskCompletionSummary(plan, outcome) {
+        const unknown = "委任仕事の達成状態は未確認です。受付やstep状態を達成へ読み替えていません。";
+        if (!outcome || outcome.used_for_authority !== false || outcome.may_execute !== false) return unknown;
+        if (outcome.status === "achieved") {
+          const assessment = isObject(outcome.goal_assessment) ? outcome.goal_assessment : null;
+          const steps = Array.isArray(plan.steps) ? plan.steps : [];
+          const stepEvidenceVerified = Number.isSafeInteger(plan.step_count) && plan.step_count > 0 &&
+            steps.length === plan.step_count && steps.every(function (step) {
+              const binding = isObject(step?.binding) ? step.binding : null;
+              return isObject(step) && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id) &&
+                step.status === "verified" && binding && binding.memory_status === "receipt_confirmed" &&
+                /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
+                /^[a-f0-9]{64}$/.test(binding.result_digest || "") &&
+                /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
+            });
+          const assessmentVerified = assessment && assessment.status === "rules_satisfied" &&
+            assessment.reason_code === "rules_satisfied" && Number.isSafeInteger(assessment.rule_count) &&
+            assessment.rule_count > 0 && assessment.satisfied_rule_count === assessment.rule_count &&
+            /^[a-f0-9]{64}$/.test(assessment.rules_digest || "") &&
+            /^[a-f0-9]{64}$/.test(assessment.evidence_digest || "") &&
+            assessment.used_for_authority === false && assessment.may_execute === false;
+          if (outcome.reason_code !== "goal_completion_rules_satisfied" || plan.status !== "results_verified" ||
+              !/^[a-f0-9]{64}$/.test(plan.revision_digest || "") || !/^[a-f0-9]{64}$/.test(plan.task_identity_digest || "") ||
+              !stepEvidenceVerified || !assessmentVerified) {
+            return "委任仕事の達成状態projectionが不整合のため未確認です。";
+          }
+          return "委任仕事: 達成（owner明示規則 " + String(assessment.satisfied_rule_count) + "/" +
+            String(assessment.rule_count) + "、検証済み結果・M receiptを照合。証拠digest " +
+            assessment.evidence_digest.slice(0, 12) + "）。同一taskは停止済みです。これは実行権限や公開／出荷判断を作りません。";
+        }
+        if (outcome.status === "held") return "委任仕事: 保留（達成は確立していません）。";
+        if (outcome.status === "in_progress") return "委任仕事: 進行中（達成は確立していません）。";
+        return unknown;
       }
 
       async function submitOwnerTask() {

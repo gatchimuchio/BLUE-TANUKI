@@ -2,7 +2,21 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
+
+主語はOwner Task送信後に同じrequest IDへ対応するOperation Plan結果相関。目的は、HDS-Jがowner明示規則・検証済みstep結果・M receiptに基づいて同一taskを達成後停止した状態を、送信結果表示にも結び付けること。C08.02のJ評価ロジックは変更しない。
+
+Control Centerはrequest ID digestで一意なplanを特定する。達成を表示するには、HDS-Jの`goal_completion_rules_satisfied`、`rules_satisfied` assessment、規則／証拠digest、`results_verified`、全stepのverified statusとreceipt-confirmed M bindingを照合する。保留・進行中は別状態で示し、projection欠落・重複・不正・不整合は未確認のまま保持する。達成表示は同一task停止の状態参照であり、実行権限・別taskへの許可・公開／出荷判断を生成しない。
+
+`corepack pnpm exec vitest run packages/channel-webchat/test/webchat.test.ts -t "correlates owner task status" --maxWorkers=1 --minWorkers=1`はPASS（1件、同fileの他122件をskip）。`corepack pnpm --filter @blue-tanuki/channel-webchat... build`はPASS（protocol／channel-base／channel-webchatの3 project）。`corepack pnpm docs:check`と`git diff --check`はPASS。日本語基底監査はPASS、既存移行負債76件の注意が継続。license監査PASS。
+
+owner taskの実served往復、全suite、全workspace build／typecheck、実provider／外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このControl Center相関表示だけを限定`WIRED`とし、C08.02全体または製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+開始mainはlocal／remote一致`c941c9e8de645294dbd69538a9b856755aa6912e`。編集前復旧refはlocal branch／remote tagともcurrent=`c941c9e8de645294dbd69538a9b856755aa6912e`、previous=`8b2ae4dd1cb2ef51d02da4f0cb78a1dba74a19d8`へCAS回転済み。`.codex-attachments/`と`.codex-remote-attachments/`は保護し未変更。fetch／commit時に古いworktree metadata削除のACL拒否が出た場合、そのpathを変更・迂回しない。
+
+**次のproducer／consumer:** 次の独立BUILD_BATCHでは最新mainとrev4.0から、C08.02の既存J判定や本UI表示を重複せず、製品全体で最も不足する実consumerを再選定する。D4 Pocket等の別repo変更、実provider、外部作用、公開／出荷判断は引き続き別許可・後段判定のまま。
+
+## 前段完了BUILD_BATCH — QE_BUILD / E04.02 同一条件read-only履歴をFailureReviewへ接続（限定WIRED）
 
 主語は、FailureMemoryの失敗署名とComplete Historyの後続観測をC/Jへ渡すFailureReview。目的は、署名baselineを後続観測と誤認せず、同じgoal input・action・actor/channelで既に実行済みのread-only `file.search`／`browser.read`／`gmail.read`記録だけを限定観測として接続すること。providerやbrowserへの新しい要求は起こさない。
 

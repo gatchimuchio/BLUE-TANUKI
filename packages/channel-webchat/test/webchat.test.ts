@@ -639,7 +639,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(api.settingsPayload().llm).toMatchObject({ provider_cost_profiles_json: "", compute_budget_policy_json: "" });
   });
 
-  it("correlates owner task status with its same-task plan lineage and projected M receipts", async () => {
+  it("correlates owner task status with same-task completion and projected M receipts", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskExecutionEvidenceSummary(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function submitOwnerTask(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
@@ -706,6 +706,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(text).toContain("intent_committed 1");
     expect(text).toContain("receipt_confirmed 1、memory_commit_pending 1");
     expect(text).toContain("stepは2/3件の表示範囲");
+    expect(text).toContain("委任仕事の達成状態は未確認です");
+    expect(text).not.toContain("同一taskは停止済みです");
     expect(text).not.toContain(taskIdentityDigest);
     expect(text).not.toContain("3".repeat(64));
     expect(text).not.toContain("5".repeat(64));
@@ -751,6 +753,49 @@ describe("WebChatChannel — Control Center shell", () => {
           ? value.slice(0, 12) : "未記録" }) as string;
     expect(unboundText).toContain("同一taskの計画系譜とM receipt状態は未確認です");
     expect(unboundText).not.toContain("receipt_confirmed 1");
+
+    const outcomePlan = {
+      ...plan,
+      revision_digest: "f".repeat(64),
+      status: "results_verified",
+      step_count: 1,
+      steps: [{ step_id: "d".repeat(64), operation: "file.write", status: "verified",
+        binding: { command_digest: "5".repeat(64), result_digest: "6".repeat(64),
+          delivery_digest: "7".repeat(64), memory_status: "receipt_confirmed" } }],
+      task_outcome: { status: "achieved", reason_code: "goal_completion_rules_satisfied",
+        goal_assessment: { status: "rules_satisfied", reason_code: "rules_satisfied", rules_digest: "8".repeat(64),
+          rule_count: 1, satisfied_rule_count: 1, evidence_digest: "9".repeat(64),
+          used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false },
+    };
+    const outcomeSnapshot = {
+      ...runtimeSnapshot,
+      execution_receipts: { used_for_authority: false, execution_eligible: false, records: [] },
+      operation_plan_status: { ...runtimeSnapshot.operation_plan_status, plan_count: 1, displayed_count: 1, plans: [outcomePlan] },
+    };
+    const evaluateOutcome = (snapshot: unknown) => new Script(`${helper}\nownerTaskRuntimeCorrelation(requestId, runtimeSnapshot)`)
+      .runInNewContext({ requestId, runtimeSnapshot: snapshot, crypto: webcrypto, TextEncoder: globalThis.TextEncoder,
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        shortDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+          ? value.slice(0, 12) : "未記録" }) as string;
+    const achievedText = await evaluateOutcome(outcomeSnapshot);
+    expect(achievedText).toContain("委任仕事: 達成（owner明示規則 1/1、検証済み結果・M receiptを照合。");
+    expect(achievedText).toContain("同一taskは停止済みです。");
+    expect(achievedText).toContain("公開／出荷判断を作りません。");
+    expect(achievedText).not.toContain("9".repeat(64));
+
+    const heldText = await evaluateOutcome({ ...outcomeSnapshot,
+      operation_plan_status: { ...outcomeSnapshot.operation_plan_status, plans: [{ ...outcomePlan,
+        task_outcome: { status: "held", reason_code: "goal_completion_rules_missing",
+          used_for_authority: false, may_execute: false } }] } });
+    expect(heldText).toContain("委任仕事: 保留（達成は確立していません）。");
+    expect(heldText).not.toContain("同一taskは停止済みです。");
+
+    const mismatchedOutcomeText = await evaluateOutcome({ ...outcomeSnapshot,
+      operation_plan_status: { ...outcomeSnapshot.operation_plan_status, plans: [{ ...outcomePlan,
+        task_outcome: { ...outcomePlan.task_outcome, goal_assessment: {
+          ...outcomePlan.task_outcome.goal_assessment, satisfied_rule_count: 0 } } }] } });
+    expect(mismatchedOutcomeText).toContain("達成状態projectionが不整合のため未確認です。");
+    expect(mismatchedOutcomeText).not.toContain("同一taskは停止済みです。");
   });
 
   it("sends explicit digest-bound plan step review through the existing Developer invoke path", async () => {
