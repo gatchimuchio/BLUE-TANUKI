@@ -103,11 +103,13 @@ import {
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
+  detectTransientAudioFormat,
   isGatewayInternalInboundRequest,
   MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   meaningUpdateProposalAuditProjection,
   parseInboundRequestAtBoundary,
   normalizeInboundRequestForAuthority,
+  TRANSIENT_AUDIO_MAX_BYTES,
   TRANSIENT_IMAGE_MAX_BYTES,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
@@ -676,6 +678,7 @@ export function selectGatewayInboundEphemeralContext(
     return ephemeralContext;
   }
   const image = ephemeralContext.ephemeral_images.length === 1 ? ephemeralContext.ephemeral_images[0] : undefined;
+  const audio = ephemeralContext.ephemeral_audio?.length === 1 ? ephemeralContext.ephemeral_audio[0] : undefined;
   const ownerTaskImage = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
     request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
     request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
@@ -683,7 +686,18 @@ export function selectGatewayInboundEphemeralContext(
     (image.media_type === "image/jpeg" || image.media_type === "image/png") &&
     image.data instanceof Uint8Array && image.data.byteLength > 0 &&
     image.data.byteLength <= TRANSIENT_IMAGE_MAX_BYTES;
-  return ownerTaskImage ? ephemeralContext : undefined;
+  const ownerAudioTranscription = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
+    request.user === "webchat-owner-token-holder" &&
+    request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+    request.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+    request.metadata?.["blue_tanuki.process_kind"] === "chat" &&
+    request.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
+    request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core" &&
+    request.metadata?.["blue_tanuki.operation_core.used_for_authority"] === false &&
+    ephemeralContext.ephemeral_images.length === 0 && audio !== undefined &&
+    audio.data instanceof Uint8Array && audio.data.byteLength > 0 &&
+    audio.data.byteLength <= TRANSIENT_AUDIO_MAX_BYTES && detectTransientAudioFormat(audio.data) === audio.format;
+  return ownerTaskImage || ownerAudioTranscription ? ephemeralContext : undefined;
 }
 
 export function buildObservationAcquisitionRecord(

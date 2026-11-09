@@ -796,6 +796,69 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return result;
       }
 
+      async function postOwnerAudioTranscription(token, user, audioInput) {
+        let serializedBody = JSON.stringify({ user: user, audio_input: audioInput });
+        let responsePromise;
+        try {
+          responsePromise = fetch("/owner/audio-transcribe", {
+            method: "POST",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+            body: serializedBody
+          });
+        } finally {
+          serializedBody = "";
+          if (audioInput && typeof audioInput.data_base64 === "string") audioInput.data_base64 = "";
+        }
+        const response = await responsePromise;
+        let result = null;
+        try { result = await response.json(); } catch { /* use fixed failures below */ }
+        if (!response.ok || !result || result.accepted !== true || typeof result.request_id !== "string") {
+          if (response.status === 413) throw new Error("音声は20 MiB以下にしてください");
+          if (response.status === 401) throw new Error("owner tokenを確認してください");
+          throw new Error("音声文字起こしを受け付けられませんでした。形式・サイズ・HDS状態を確認してください。");
+        }
+        return result;
+      }
+
+      async function submitOwnerAudioTranscription() {
+        const ownerTokenInput = byId("owner-task-token");
+        const ownerToken = ownerTokenInput.value.trim();
+        const audioInput = byId("owner-audio-transcription-file");
+        const audioFile = audioInput.files && audioInput.files.length === 1 ? audioInput.files[0] : null;
+        if (audioInput.files && audioInput.files.length > 1) throw new Error("音声ファイルは1件だけ選択してください");
+        if (!audioFile) throw new Error("文字起こしする音声ファイルを選択してください");
+        if (!Number.isSafeInteger(audioFile.size) || audioFile.size < 1 || audioFile.size > 20 * 1024 * 1024) {
+          throw new Error("音声は1 byte以上、20 MiB以下にしてください");
+        }
+        if (!ownerToken) throw new Error("owner tokenを入力してください");
+        if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+          throw new Error("文字起こし結果を受け取るため、WebChatへ接続してから依頼してください");
+        }
+        const status = byId("owner-audio-transcription-status");
+        const bytes = new Uint8Array(await audioFile.arrayBuffer());
+        let audioPayload;
+        try {
+          let dataBase64 = "";
+          for (let offset = 0; offset < bytes.length; offset += 0x6000) {
+            const binaryChunk = String.fromCharCode.apply(null, Array.from(bytes.subarray(offset, offset + 0x6000)));
+            dataBase64 += btoa(binaryChunk);
+          }
+          audioPayload = { data_base64: dataBase64 };
+        } finally {
+          bytes.fill(0);
+        }
+        const replyTo = byId("chat-user").value.trim() || "owner";
+        status.textContent = "owner認証済みの文字起こし依頼をHDSへ送信しています";
+        status.className = "badge warn";
+        const result = await postOwnerAudioTranscription(ownerToken, replyTo, audioPayload);
+        audioInput.value = "";
+        ownerTokenInput.value = "";
+        appendChat("owner", "音声文字起こし候補を依頼しました。話者確認・承認・計画作成は行っていません。");
+        appendChat("accepted", result.request_id, result.request_id);
+        status.textContent = "HDSへ依頼済み。候補は未確認で、計画や承認には使っていません";
+        status.className = "badge good";
+      }
+
       async function checkOwnerTaskSubmissionStatus() {
         const ownerTokenInput = byId("owner-task-token");
         const button = byId("check-owner-task-status");
@@ -7205,6 +7268,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const status = byId("owner-task-status");
           status.textContent = error.message || "仕事を送信できませんでした";
           status.className = error.message && error.message.includes("委任目的") ? "badge warn" : "badge bad";
+          byId("owner-task-token").value = "";
+        });
+      });
+      byId("owner-audio-transcription-submit").addEventListener("click", function () {
+        submitOwnerAudioTranscription().catch(function (error) {
+          const status = byId("owner-audio-transcription-status");
+          status.textContent = error.message || "音声文字起こしを依頼できませんでした";
+          status.className = "badge bad";
           byId("owner-task-token").value = "";
         });
       });

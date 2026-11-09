@@ -510,6 +510,50 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages).toEqual([["owner", "Find blue."], ["accepted", "request-1"]]);
   });
 
+  it("sends audio for owner-reviewed transcription separately from task planning", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOwnerAudioTranscription(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function checkOwnerTaskSubmissionStatus(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const script = CONTROL_CENTER_SCRIPT.slice(start, end);
+    const sourceBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53]);
+    let returnedBuffer: Uint8Array | undefined;
+    const nodes: Record<string, { value: string; textContent?: string; className?: string;
+      files?: readonly { type: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }[] }> = {
+      "owner-task-token": { value: "owner-token" },
+      "owner-audio-transcription-file": { value: "fixture.ogg", files: [{ type: "audio/ogg", size: sourceBytes.length,
+        arrayBuffer: async () => {
+          returnedBuffer = sourceBytes.slice();
+          return returnedBuffer.buffer as ArrayBuffer;
+        } }] },
+      "owner-audio-transcription-status": { value: "", textContent: "", className: "" },
+      "chat-user": { value: "fixture-owner" },
+    };
+    const calls: Array<{ path: string; body: unknown }> = [];
+    const messages: Array<[string, string]> = [];
+    await new Script(`${script}\nsubmitOwnerAudioTranscription()`).runInNewContext({
+      byId: (id: string) => nodes[id],
+      state: { chatSocket: { readyState: 1 } },
+      WebSocket: { OPEN: 1 },
+      btoa: (value: string) => Buffer.from(value, "binary").toString("base64"),
+      authHeaders: () => ({ authorization: "Bearer owner-token" }),
+      fetch: async (path: string, init: { body: string }) => {
+        calls.push({ path, body: JSON.parse(init.body) as unknown });
+        return { ok: true, status: 202, json: async () => ({ accepted: true, request_id: "audio-request-1" }) };
+      },
+      appendChat: (kind: string, content: string) => messages.push([kind, content]),
+    });
+    expect(calls).toEqual([{ path: "/owner/audio-transcribe", body: {
+      user: "fixture-owner", audio_input: { data_base64: Buffer.from(sourceBytes).toString("base64") },
+    } }]);
+    expect(Object.keys(calls[0]!.body as Record<string, unknown>).sort()).toEqual(["audio_input", "user"]);
+    expect(nodes["owner-task-token"]?.value).toBe("");
+    expect(nodes["owner-audio-transcription-file"]?.value).toBe("");
+    expect(nodes["owner-audio-transcription-status"]?.textContent).toContain("未確認");
+    expect(returnedBuffer && [...returnedBuffer]).toEqual([0, 0, 0, 0]);
+    expect(messages[0]?.[1]).toContain("計画作成は行っていません");
+  });
+
   it("connects main-app LLM cost and budget settings and invalidates stale readiness", async () => {
     const section = (startText: string, endText: string) => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(startText);
@@ -3837,6 +3881,63 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(stale.status).toBe(409);
       expect(stale.body).toMatchObject({ accepted: false, status: "submission_id_reused_with_different_input" });
       expect(ownerCtx.received).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("routes one owner audio file to HDS as a bounded transient transcription request", async () => {
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN });
+    const audioBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x01]);
+    let receivedContext: InboundEphemeralContext | undefined;
+    let receivedBuffer: Uint8Array | undefined;
+    const receivedBytes: number[] = [];
+    try {
+      await ownerCtx.ch.start(async (request, context) => {
+        ownerCtx.received.push(request);
+        receivedContext = context;
+        receivedBuffer = context?.ephemeral_audio?.[0]?.data;
+        if (receivedBuffer) receivedBytes.push(...receivedBuffer);
+      });
+      const body = { user: "fixture-owner", audio_input: { data_base64: Buffer.from(audioBytes).toString("base64") } };
+      expect((await postJson(ownerCtx.port, "/owner/audio-transcribe", body, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      expect((await postJson(ownerCtx.port, "/owner/audio-transcribe", {
+        ...body, actor: "owner",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
+      expect((await postJson(ownerCtx.port, "/owner/audio-transcribe", {
+        user: body.user, audio_input: { data_base64: Buffer.from("not audio").toString("base64") },
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
+      expect(ownerCtx.received).toHaveLength(0);
+
+      const accepted = await postJson(ownerCtx.port, "/owner/audio-transcribe", body, {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      });
+      expect(accepted.status).toBe(202);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      expect(accepted.body).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect(ownerCtx.received).toHaveLength(1);
+      const request = ownerCtx.received[0]!;
+      expect(isGatewayInternalInboundRequest(request)).toBe(true);
+      expect(request.channel).toBe("webchat");
+      expect(request.user).toBe("webchat-owner-token-holder");
+      expect(request.content).toContain("話者の本人確認・承認・権限の証拠にはしません");
+      expect(request.content).not.toContain("not audio");
+      expect(JSON.stringify(request)).not.toContain(body.audio_input.data_base64);
+      expect(request.metadata).toMatchObject({
+        reply_to: "fixture-owner",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operation_core.projection_id": "owner-audio-transcription:operation-core",
+        "blue_tanuki.operation_core.used_for_authority": false,
+      });
+      expect(receivedContext?.request_id).toBe(request.id);
+      expect(receivedContext?.ephemeral_images).toEqual([]);
+      expect(receivedContext?.ephemeral_audio?.[0]?.format).toBe("ogg");
+      expect(receivedBytes).toEqual([...audioBytes]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(receivedBuffer && [...receivedBuffer]).toEqual(new Array(audioBytes.byteLength).fill(0));
     } finally {
       await ownerCtx.teardown();
     }

@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { detectTransientImageMediaType, TRANSIENT_IMAGE_MAX_BYTES } from "@blue-tanuki/protocol";
+import {
+  detectTransientAudioFormat,
+  detectTransientImageMediaType,
+  transientAudioMimeMatches,
+  TRANSIENT_AUDIO_MAX_BYTES,
+  TRANSIENT_IMAGE_MAX_BYTES,
+} from "@blue-tanuki/protocol";
 import type { ChannelSendPayload, InboundRequest, TransientAudioInput, TransientImageInput } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundEphemeralContext, InboundHandler, OutboundChannel, SendContext, SendMeta, SendResult } from "@blue-tanuki/channel-base";
 
@@ -87,7 +93,7 @@ interface NormalizedTelegramInbound {
 
 const MAX_TELEGRAM_TEXT_ATTACHMENT_BYTES = 64 * 1024;
 const MAX_TELEGRAM_IMAGE_BYTES = TRANSIENT_IMAGE_MAX_BYTES;
-const MAX_TELEGRAM_AUDIO_BYTES = 20 * 1024 * 1024;
+const MAX_TELEGRAM_AUDIO_BYTES = TRANSIENT_AUDIO_MAX_BYTES;
 
 interface SentRecord {
   payload: ChannelSendPayload;
@@ -515,8 +521,8 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
     const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_AUDIO_BYTES);
     if (downloaded.status !== "read") return downloaded;
-    const format = detectTelegramAudioFormat(downloaded.bytes);
-    if (!format || !telegramAudioMimeMatches(attachment.mime_type, format)) {
+    const format = detectTransientAudioFormat(downloaded.bytes);
+    if (!format || !transientAudioMimeMatches(attachment.mime_type, format)) {
       downloaded.bytes.fill(0);
       return { status: format ? "invalid_content" : "unsupported_type" };
     }
@@ -674,38 +680,6 @@ function isSafeTelegramFilePath(filePath: string): boolean {
 
 function isSupportedImageMimeType(value: string | undefined): value is TransientImageInput["media_type"] {
   return value === "image/jpeg" || value === "image/png";
-}
-
-function detectTelegramAudioFormat(bytes: Uint8Array): TransientAudioInput["format"] | null {
-  if (bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) return "flac";
-  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) return "wav";
-  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) return "ogg";
-  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
-  if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
-    const brand = String.fromCharCode(...bytes.subarray(8, 12));
-    return brand.startsWith("M4A") ? "m4a" : "mp4";
-  }
-  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return "mp3";
-  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0 && (bytes[1]! & 0x06) !== 0) return "mp3";
-  return null;
-}
-
-function telegramAudioMimeMatches(value: string | undefined, format: TransientAudioInput["format"]): boolean {
-  if (value === undefined) return true;
-  const mime = value.split(";")[0]?.trim().toLowerCase();
-  const allowed: Readonly<Record<TransientAudioInput["format"], readonly string[]>> = {
-    flac: ["audio/flac", "audio/x-flac"],
-    mp3: ["audio/mpeg", "audio/mp3", "audio/x-mpeg"],
-    mp4: ["audio/mp4", "video/mp4"],
-    m4a: ["audio/mp4", "audio/x-m4a"],
-    mpeg: ["audio/mpeg"],
-    mpga: ["audio/mpeg", "audio/mpga"],
-    ogg: ["audio/ogg", "application/ogg", "audio/opus"],
-    wav: ["audio/wav", "audio/x-wav", "audio/wave"],
-    webm: ["audio/webm", "video/webm"],
-  };
-  return mime !== undefined && (allowed[format]?.includes(mime) ?? false);
 }
 
 function telegramAttachmentTextContext(content: string): string {

@@ -1620,10 +1620,13 @@ ${planControl.question}`,
     const frameRequest = selectedGitHubWrite
       ? requestWithNormalizedContent(req, "[operation_plan_github_write_content_redacted]")
       : authorityReq;
-    // Gateway marks only a request already matched to one volatile Telegram audio input.
+    // Gateway marks only a request already matched to one volatile Telegram or explicit owner WebChat audio input.
     // The transcription consumer does not use retrieved memory, so do not create citation
     // candidates that its transcript-only response cannot meaningfully cite.
-    const transientAudioTranscript = isGatewayInternalTransientAudioRequest(raw) && req.channel === "telegram";
+    const transientAudioTranscript = isGatewayInternalTransientAudioRequest(raw) &&
+      (req.channel === "telegram" || (req.channel === "webchat" && isGatewayInternalInboundRequest(req) &&
+        req.user === "webchat-owner-token-holder" &&
+        req.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core"));
     const decisionTraceInput = isolatedContextReason
       ? {
           ...input,

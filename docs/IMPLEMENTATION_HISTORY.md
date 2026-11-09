@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-09 — QEB-F16.02-WEBCHAT-OWNER-AUDIO-TRANSCRIPTION
+
+開始時local／remote `main`=`53e6fd9a1ce2b789cfd1897224cbcb991f97ae15`。編集前に二世代復旧refをCASでlocal branch／remote tagともcurrent=`53e6fd9...`、previous=`a718318...`へ回転・照合。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`、D4 Pocket、OneDrive資料、実provider資格情報、外部作用は変更していない。
+
+WebChat owner専用音声文字起こし入口を作り、20 MiB以下のcanonical Base64・形式署名を検証した原音声を一要求の`ephemeral_audio`としてHDS/J／既存Cへ接続した。音声hash・format・byte lengthのみを非権威参照で保持し、raw bytesはrequest本文／metadata／history／Mへ入れずRouter終了時にzero化。話者音声からowner identity／approval／action permissionを生成しない。C文字起こしは計画JSONの代替ではないため、ownerが候補を確認し、計画へ使用する場合は明示入力する二段階にした。Telegram audio signature／MIME判定をProtocolへ集約した。
+
+Gateway依存7 project build PASS。WebChat audio/UI targeted tests 3 PASS、Protocol audio provenance test 1 PASS、実HTTP WebChat→Gateway boundary→HDS/J→fixture C→output audit縦断test PASS、既存Telegram voice transcription test PASS。並列実行時に既存WebChat owner-task testが5秒上限を一度超えたが、単独再実行は4.69秒でPASS。full suite、実provider／credential／費用、外部作用、browser、5OS、QE_QC／QE_QAはNOT_RUN。`WIRED`はWebChat owner audio transcription sliceのみで、製品全体完成、owner GO、P13 release/publicは未成立。次はF16.03のBLUE側native mobile input/Device Link境界を最新HEADから再判定し、D4変更は別repo権限外として保持する。
+
+---
+
 ## 2026-11-09 — QEB-C08.02-WAIT-RULE-RESUME-REFERENCE
 
 開始local／remote `main`=`6558c1b2cd9e3ac5dbb72229289b1fb89e9783cb`。編集前の復旧点はlocal branch／remote tag current=`6558c1b...`、previous=`0a1d6c383504764b50e7d81cbee66f543b1b38a5`で一致。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`、別repo、OneDrive Graph、実provider、外部作用は変更していない。

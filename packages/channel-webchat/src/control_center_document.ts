@@ -169,6 +169,13 @@ ${CONTROL_CENTER_STYLE}    </style>
             <label for="owner-task-image">画像を添付（JPEG/PNG、1枚、最大5 MiB、一時入力）</label>
             <input id="owner-task-image" type="file" accept="image/jpeg,image/png" />
             <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。</p>
+            <label for="owner-audio-transcription-file">音声を文字起こし（対応音声、1件、最大20 MiB、一時入力）</label>
+            <input id="owner-audio-transcription-file" type="file" accept="audio/flac,audio/x-flac,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,video/mp4,audio/ogg,application/ogg,audio/opus,audio/wav,audio/x-wav,audio/wave,audio/webm,video/webm,.flac,.mp3,.mpeg,.mpga,.mp4,.m4a,.ogg,.oga,.wav,.webm" />
+            <p class="muted">音声は一回のC文字起こし候補にだけ使います。話者の本人確認・承認には使いません。候補と確度の有無を確認し、計画に使う場合はownerが内容を明示して計画欄へ入力してください。</p>
+            <div class="row">
+              <button id="owner-audio-transcription-submit" type="button">音声文字起こしを依頼</button>
+              <span id="owner-audio-transcription-status" class="badge warn" aria-live="polite">未送信</span>
+            </div>
             <label for="owner-task-completion-rules">達成・停止の明示規則（JSON、任意）</label>
             <textarea id="owner-task-completion-rules" rows="4" autocomplete="off"
               placeholder='{"schema_version":"blue-tanuki.goal-completion-rules.v1","rules":[{"rule_id":"search-result","operation":"file.search","output_pointer":"/matches/0/line","expected_value":"blue"}]}'></textarea>

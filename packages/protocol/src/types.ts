@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { GoalCriteriaSchema } from "./goal_criteria.js";
 import { GoalCompletionRulesSchema } from "./goal_completion.js";
 
@@ -672,6 +673,40 @@ export interface TransientAudioInput {
   readonly data: Uint8Array;
 }
 
+export const TRANSIENT_AUDIO_MAX_BYTES = 20 * 1024 * 1024;
+
+export function detectTransientAudioFormat(bytes: Uint8Array): TransientAudioInput["format"] | null {
+  if (bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) return "flac";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) return "wav";
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) return "ogg";
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
+  if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = String.fromCharCode(...bytes.subarray(8, 12));
+    return brand.startsWith("M4A") ? "m4a" : "mp4";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return "mp3";
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0 && (bytes[1]! & 0x06) !== 0) return "mp3";
+  return null;
+}
+
+export function transientAudioMimeMatches(value: string | undefined, format: TransientAudioInput["format"]): boolean {
+  if (value === undefined) return true;
+  const mime = value.split(";")[0]?.trim().toLowerCase();
+  const allowed: Readonly<Record<TransientAudioInput["format"], readonly string[]>> = {
+    flac: ["audio/flac", "audio/x-flac"],
+    mp3: ["audio/mpeg", "audio/mp3", "audio/x-mpeg"],
+    mp4: ["audio/mp4", "video/mp4"],
+    m4a: ["audio/mp4", "audio/x-m4a"],
+    mpeg: ["audio/mpeg"],
+    mpga: ["audio/mpeg", "audio/mpga"],
+    ogg: ["audio/ogg", "application/ogg", "audio/opus"],
+    wav: ["audio/wav", "audio/x-wav", "audio/wave"],
+    webm: ["audio/webm", "video/webm"],
+  };
+  return mime !== undefined && (allowed[format]?.includes(mime) ?? false);
+}
+
 const RegisteredRuntimeReferenceSchema = z.string()
   .min(1)
   .max(128)
@@ -786,17 +821,31 @@ export function createGatewayInternalTransientAudioRequest(
 ): InboundRequest {
   const audio = context.ephemeral_audio;
   const input = audio?.length === 1 ? audio[0] : undefined;
-  if (request.channel !== "telegram" || context.request_id !== request.id ||
+  const telegramInput = request.channel === "telegram";
+  const ownerWebChatInput = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
+    request.user === "webchat-owner-token-holder" &&
+    request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+    request.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+    request.metadata?.["blue_tanuki.process_kind"] === "chat" &&
+    request.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
+    request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core" &&
+    request.metadata?.["blue_tanuki.operation_core.used_for_authority"] === false;
+  if ((!telegramInput && !ownerWebChatInput) || context.request_id !== request.id ||
       context.ephemeral_images.length !== 0 || !input ||
-      !["flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"].includes(input.format) ||
-      !(input.data instanceof Uint8Array) || input.data.byteLength === 0) {
-    throw new Error("transient audio request is not bound to one validated Telegram input");
+      !(input.data instanceof Uint8Array) || input.data.byteLength === 0 ||
+      input.data.byteLength > TRANSIENT_AUDIO_MAX_BYTES || detectTransientAudioFormat(input.data) !== input.format) {
+    throw new Error("transient audio request is not bound to one validated Telegram or owner WebChat input");
   }
   const internal = createGatewayInternalInboundRequest({
     ...request,
     metadata: {
       ...(request.metadata ?? {}),
       "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.transient_audio.input_sha256": createHash("sha256").update(input.data).digest("hex"),
+      "blue_tanuki.transient_audio.format": input.format,
+      "blue_tanuki.transient_audio.byte_length": input.data.byteLength,
+      "blue_tanuki.transient_audio.reference_is_ephemeral": true,
+      "blue_tanuki.transient_audio.used_for_authority": false,
     },
   });
   GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS.add(internal);

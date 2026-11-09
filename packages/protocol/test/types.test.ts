@@ -1201,7 +1201,7 @@ describe("InboundRequest boundary", () => {
     const request = createGatewayInternalTransientAudioRequest({
       ...requestInput,
     }, { request_id: "req-transient-audio", ephemeral_images: [],
-      ephemeral_audio: [{ format: "ogg", data: new Uint8Array([1]) }] });
+      ephemeral_audio: [{ format: "ogg", data: new Uint8Array([0x4f, 0x67, 0x67, 0x53]) }] });
     const parsedInternal = parseInboundRequestAtBoundary(request);
     const parsedExternal = parseInboundRequestAtBoundary({
       id: "req-external-audio-shaped",
@@ -1224,7 +1224,58 @@ describe("InboundRequest boundary", () => {
       expect(parsedExternal.request.metadata).toBeUndefined();
     }
     expect(() => createGatewayInternalTransientAudioRequest(requestInput,
-      { request_id: "another-request", ephemeral_images: [], ephemeral_audio: [{ format: "ogg", data: new Uint8Array([1]) }] }))
-      .toThrow("transient audio request is not bound to one validated Telegram input");
+      { request_id: "another-request", ephemeral_images: [], ephemeral_audio: [{ format: "ogg", data: new Uint8Array([0x4f, 0x67, 0x67, 0x53]) }] }))
+      .toThrow("transient audio request is not bound to one validated Telegram or owner WebChat input");
+  });
+
+  it("binds owner WebChat transcription to a single validated audio input without granting authority", () => {
+    const bytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53]);
+    const input = createGatewayInternalInboundRequest({
+      id: "owner-audio-transcription-fixture",
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content: "音声文字起こし候補を取得してください。",
+      timestamp: 1,
+      metadata: {
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.projection_id": "owner-audio-transcription:operation-core",
+        "blue_tanuki.operation_core.used_for_authority": false,
+      },
+    });
+    const request = createGatewayInternalTransientAudioRequest(input, {
+      request_id: input.id,
+      ephemeral_images: [],
+      ephemeral_audio: [{ format: "ogg", data: bytes }],
+    });
+    expect(isGatewayInternalTransientAudioRequest(request)).toBe(true);
+    expect(request.metadata).toMatchObject({
+      "blue_tanuki.transient_audio.input_sha256": expect.stringMatching(/^[a-f0-9]{64}$/),
+      "blue_tanuki.transient_audio.format": "ogg",
+      "blue_tanuki.transient_audio.byte_length": bytes.byteLength,
+      "blue_tanuki.transient_audio.reference_is_ephemeral": true,
+      "blue_tanuki.transient_audio.used_for_authority": false,
+    });
+    expect(request.metadata?.["blue_tanuki.transient_audio.input_sha256"]).not.toBe(Buffer.from(bytes).toString("base64"));
+    expect(() => createGatewayInternalTransientAudioRequest(createGatewayInternalInboundRequest({
+      id: "owner-audio-task-plan-fixture",
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content: "plan:compute {}",
+      timestamp: 1,
+      metadata: {
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+        "blue_tanuki.operation_core.used_for_authority": false,
+      },
+    }), { request_id: "owner-audio-task-plan-fixture", ephemeral_images: [],
+      ephemeral_audio: [{ format: "ogg", data: bytes }] })).toThrow(
+        "transient audio request is not bound to one validated Telegram or owner WebChat input",
+      );
   });
 });

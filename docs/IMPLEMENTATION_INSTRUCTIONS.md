@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F16.01 WebChat owner画像入力→既存Gateway C（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / F16.02 WebChat owner音声→HDS/J・既存C文字起こし（限定WIRED）
+
+主語は、ownerのWebChat音声依頼を一時入力としてHDS/J判断と既存C文字起こし経路へ渡し、話者音声を本人確認・承認・権限へ昇格させないBLUE-TANUKI。Control Centerに独立した「音声文字起こしを依頼」を追加した。専用owner tokenで`POST /owner/audio-transcribe`を呼び、20 MiB以下のcanonical Base64から形式署名を検査したFLAC/MP3/MP4/M4A/OGG/WAV/WebMだけを1件受け付ける。画像添付／計画作成とは別要求で、音声文字起こしCの戻り値を計画JSONとして誤用しない。ownerは返却された文字起こし候補と不確実性を確認し、計画へ使う場合は計画欄へ明示入力する。
+
+実装経路：Control Center音声選択→owner専用HTTP入口→検証済み一時`ephemeral_audio`→Gatewayのrequest ID／専用projection／actor／operation-core照合→request-bound audio marker→HDS/J→既存`llm_call` Executor/C→既存出力監査・返信。raw audio bytesはInboundRequest本文・metadata・history・Mへ入れず、Router handler終了後にzero化する。HDS内部requestへaudio SHA-256・format・byte lengthを非権威の一時参照として束ね、`used_for_authority=false`を維持する。文字起こしC経路は既存どおり確度未報告を明示し、音声だけで承認・作用を行う経路は追加しない。Telegramと共有するsignature／MIME判定および20 MiB上限をProtocolへ集約した。
+
+`corepack pnpm --filter @blue-tanuki/gateway... build`は対象7 workspace projectとGatewayでPASS。`webchat.test.ts -t "owner task form|audio for owner-reviewed transcription|owner audio file to HDS"`は3 passed／118 skipped（owner token拒否、余分なauthority風field拒否、不正signature拒否、音声request context、handler後のzero化、ブラウザー送信bodyからのtask／approval分離）。`telegram_attachment_ingress.test.ts -t "owner WebChat audio transcription through HDS|Telegram voice through HDS"`は2 passed／3 skipped。HTTP実WebChat音声入口からGateway境界選別・request-bound HDS/J・fixture C・出力監査まで一回を縦断し、transcript uncertainty・memory retrieval抑止・owner voice非権威を確認した。`packages/protocol/test/types.test.ts -t "binds owner WebChat transcription"`は1 passed／37 skipped。最終`git diff --check`はPASS。
+
+この証拠は合成OGG fixture・fixture Cでの限定`WIRED`。実provider／credential／費用、Control Center実ブラウザー、file以外の形式全種、異常網羅、再起動耐久、全suite、5OS、QE_QC／QE_QAはNOT_RUN。QE_BUILDとP13 `PENDING_OWNER_GO`を維持し、外部作用・公開・owner GOを成立させない。F16.02のこのWebChat owner transcription sliceだけを`WIRED`とする。
+
+**次のproducer／consumer:** rev4.0と最新HEADからF16.03のBLUE側native音声入力・Device Link境界を再照合する。D4 Pocket自体の変更は別repo権限範囲外のため行わず、D4のmobile契約は読取参照に限る。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F16.01 WebChat owner画像入力→既存Gateway C（限定WIRED）
 
 主語は、ownerがWebChatで委任した仕事へ画像原媒体を一時添付し、既存Gateway/HDS/C経路へrequest-boundで渡すBLUE-TANUKI。owner認証済み`POST /owner/task-compute`にJPEG/PNGを1枚・最大5 MiBで追加した。厳密なBase64、サイズ、画像署名を確認し、submission identityにはmedia type・長さ・SHA-256を束ねる。同じsubmission IDで画像を変えた再送は競合として拒否する。画像bytesをInboundRequest本文・metadata・history・Mへ入れず、handlerの完了または未引渡し時にゼロ化する。通常WebChat inbound、owner以外、外部metadata由来のowner風入力はGateway側で選択しない。既存LLM registryが選択provider/modelのimage capabilityを確認し、未設定ならC要求を明示拒否する。
 
