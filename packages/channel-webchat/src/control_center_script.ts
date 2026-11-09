@@ -2023,6 +2023,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             /^[a-f0-9]{64}$/.test(observation.step_id_digest || "") &&
             observation.plan_binding_status === "verified" && observation.plan_validation_status === "matched";
           if (!planBindingSafe) return "照合不能な記録（Jはstep選択と実行を拒否）";
+          if (observation.source === "verified_browser_read_result" && observation.operation === "browser.read" &&
+              typeof observation.requested_origin === "string" && typeof observation.final_origin === "string" &&
+              observation.navigation === "http_get" && observation.credential_context === "no_tool_supplied_credentials" &&
+              ["EXTERNAL_EVIDENCE", "FIXTURE"].includes(observation.evidence_source) &&
+              Number.isSafeInteger(observation.page_text_excerpt_chars) &&
+              /^[a-f0-9]{64}$/.test(observation.page_text_sha256 || "") &&
+              Number.isSafeInteger(observation.expires_at_ms) &&
+              observation.expires_at_ms === observation.observed_at_ms + 600000 &&
+              observation.page_content_is_untrusted === true) {
+            const nowMs = Date.now();
+            const current = observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+            return "browser.read：" + escapeHtml(observation.requested_origin) + " → " + escapeHtml(observation.final_origin) +
+              " · " + observation.evidence_source + " · excerpt " + observation.page_text_excerpt_chars + "文字 · SHA-256 " +
+              shortDigest(observation.page_text_sha256) + "（" + (current ? "期限内" : "期限切れ・Jは候補選択と実行を拒否") +
+              "、HTTP読取本文は非信頼入力・本文/URLはsnapshotへ非公開）";
+          }
           if (observation.source === "verified_file_search_result" && observation.operation === "file.search" &&
               Number.isSafeInteger(observation.expires_at_ms) && observation.expires_at_ms === observation.observed_at_ms + 600000 &&
               Number.isSafeInteger(observation.match_count) && observation.match_count >= 0 &&
@@ -2351,7 +2367,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 : '';
               const replanSourceReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
                 plan.owner_authentication_required === true && purposeBinding && purposeReviewBindingStatus === "current" &&
-                ["file.write", "file.edit", "file.delete", "file.search"].includes(step.operation) &&
+                ["file.write", "file.edit", "file.delete", "file.search", "browser.read"].includes(step.operation) &&
                 step.status === "verified" && binding.memory_status === "receipt_confirmed" &&
                 /^[a-f0-9]{64}$/.test(binding.command_digest || "") && /^[a-f0-9]{64}$/.test(binding.result_digest || "") &&
                 /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
@@ -2393,9 +2409,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) +
                   '" data-owner-selected-file-state="' + String(ownerSelectedFileStateReady) + '">' +
-                  (ownerSelectedFileStateReady ? '現在状態を明示選択して候補を再計算' : '検証済み結果から同一taskを再計画') + '</button>' +
+                  (ownerSelectedFileStateReady ? '現在状態を明示選択して候補を再計算' :
+                    step.operation === "browser.read" ? 'このHTTP読取本文を明示選択して候補を再計画' : '検証済み結果から同一taskを再計画') + '</button>' +
                   '<p class="muted">' + (ownerSelectedFileStateReady
                     ? 'Gatewayの永続実行receiptをJのcommand／epoch／taskへ再照合し、digest-onlyの現在状態をownerがC候補の文脈として選びます。元のfile.writeは結果不明のままです。次候補は未実行で、選択後もJのstep審査と必要なowner Approval／Broker判定が必要です。'
+                    : step.operation === "browser.read"
+                      ? 'HTTP読取の本文は外部の非信頼入力です。ownerがこのボタンを押した場合だけ、最大8000文字の抜粋が次のC候補計算へ渡ります。URL path/query、links、credentialは渡さず、snapshotには本文を表示しません。候補は未実行で、browser mutationはこの経路で有効化されません。'
                     : '現在のM receiptを持つ結果だけを参照します。次候補は未実行で、実行には新しいJ step審査とowner Approval／Broker判定が必要です。') + '</p>' +
                   explicitFileEditGroup
                 : '';

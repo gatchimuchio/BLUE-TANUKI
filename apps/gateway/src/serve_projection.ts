@@ -37,6 +37,9 @@ export function metadataKeys(meta: Record<string, unknown> | undefined): string[
 
 const WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST = operationPlanDigest("webchat-owner-token-holder");
 const WEBCHAT_CHANNEL_IDENTITY_DIGEST = operationPlanDigest("webchat");
+type OperationPlanComputeSourceObservationProjection =
+  | Exclude<OperationPlanComputeSourceObservation, { source: "verified_browser_read_result" }>
+  | Omit<Extract<OperationPlanComputeSourceObservation, { source: "verified_browser_read_result" }>, "page_text_excerpt">;
 
 export function hdsDecisionHistoryPayload(
   log: DecisionLog,
@@ -296,7 +299,7 @@ export interface OperationPlanStatusProjection {
       used_for_authority: false;
       may_execute: false;
     };
-    compute_source_observations?: OperationPlanComputeSourceObservation[];
+    compute_source_observations?: OperationPlanComputeSourceObservationProjection[];
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     recovery_hold_scope_relation?: "requested" | "collateral" | "unknown";
     step_count: number;
@@ -488,7 +491,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const taskOutcome = plan.task_outcome;
     const goalPurposeRelation = plan.goal_purpose_relation;
     const rawComputeSourceObservations = plan.compute_source_observations;
-    const computeSourceObservations: OperationPlanComputeSourceObservation[] = [];
+    const computeSourceObservations: OperationPlanComputeSourceObservationProjection[] = [];
     if (rawComputeSourceObservations !== undefined) {
       if (!Array.isArray(rawComputeSourceObservations) || rawComputeSourceObservations.length > 8) {
         return invalidOperationPlanStatusProjection();
@@ -496,7 +499,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       for (const observation of rawComputeSourceObservations) {
         const parsed = OperationPlanComputeSourceObservationSchema.safeParse(observation);
         if (!parsed.success) return invalidOperationPlanStatusProjection();
-        computeSourceObservations.push(parsed.data);
+        if (parsed.data.source === "verified_browser_read_result") {
+          const summary = Object.fromEntries(Object.entries(parsed.data)
+            .filter(([key]) => key !== "page_text_excerpt")) as OperationPlanComputeSourceObservationProjection;
+          computeSourceObservations.push(summary);
+        } else {
+          computeSourceObservations.push(parsed.data);
+        }
       }
     }
     const goalPurposeBindingValid = goalPurposeBinding === undefined || (isRecord(goalPurposeBinding) &&

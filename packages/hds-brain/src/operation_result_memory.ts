@@ -8,6 +8,111 @@ import {
 type Plan = OperationPlanCheckpoint["plans"][number];
 type Binding = Plan["bindings"][number];
 type ShellExecObservation = NonNullable<OperationPlanCheckpoint["shell_exec_result_observations"]>[number];
+const BROWSER_READ_CONTEXT_MAX_CHARS = 8_000;
+
+interface BrowserReadResultObservation {
+  readonly schema_version: "browser-read-result-observation.v1";
+  readonly record_type: "browser_read_observation";
+  readonly plan_id_digest: string;
+  readonly plan_revision_digest: string;
+  readonly step_id_digest: string;
+  readonly step_digest: string;
+  readonly operation: "browser.read";
+  readonly command_digest: string;
+  readonly delivery_digest: string;
+  readonly result_digest: string;
+  readonly requested_origin: string;
+  readonly final_origin: string;
+  readonly navigation: "http_get";
+  readonly tab_scope: "not_applicable";
+  readonly frame_scope: "not_applicable";
+  readonly credential_context: "no_tool_supplied_credentials";
+  readonly evidence_source: "EXTERNAL_EVIDENCE" | "FIXTURE";
+  readonly observed_at_ms: number;
+  readonly page_text_excerpt: string;
+  readonly page_text_excerpt_chars: number;
+  readonly page_text_sha256: string;
+  readonly page_text_excerpt_sha256: string;
+  readonly source_truncated: boolean;
+  readonly page_content_is_untrusted: true;
+  readonly adoption_status: "observation_only";
+  readonly used_as_world_truth: false;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export function browserReadResultObservation(
+  p: Plan,
+  b: Binding,
+  result: Plan["results"][number],
+): BrowserReadResultObservation {
+  if (!b.delivery_digest || !b.result_digest) throw new Error("plan_memory_browser_read_binding_invalid");
+  const output = result.output;
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    throw new Error("plan_memory_browser_read_result_invalid");
+  }
+  const value = output as Record<string, unknown>;
+  const observation = value.observation;
+  if (!observation || typeof observation !== "object" || Array.isArray(observation)) {
+    throw new Error("plan_memory_browser_read_observation_invalid");
+  }
+  const metadata = observation as Record<string, unknown>;
+  if (typeof value.text !== "string" || value.text.length > 50_000 || typeof value.url !== "string" ||
+      typeof value.truncated !== "boolean" || metadata.schema_version !== "blue-tanuki.browser-observation.v1" ||
+      metadata.navigation !== "http_get" || metadata.tab_scope !== "not_applicable" ||
+      metadata.frame_scope !== "not_applicable" || metadata.credential_context !== "no_tool_supplied_credentials" ||
+      (metadata.evidence_source !== "EXTERNAL_EVIDENCE" && metadata.evidence_source !== "FIXTURE") ||
+      metadata.page_content_is_untrusted !== true || metadata.used_for_authority !== false || metadata.may_execute !== false ||
+      typeof metadata.observed_at !== "string" || typeof metadata.requested_origin !== "string" ||
+      typeof metadata.final_origin !== "string") {
+    throw new Error("plan_memory_browser_read_observation_invalid");
+  }
+  const observedAtMs = Date.parse(metadata.observed_at);
+  const requestedOrigin = new URL(metadata.requested_origin);
+  const finalOrigin = new URL(metadata.final_origin);
+  const finalUrl = new URL(value.url);
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || new Date(observedAtMs).toISOString() !== metadata.observed_at ||
+      result.observed_at_ms < observedAtMs ||
+      requestedOrigin.origin !== metadata.requested_origin || finalOrigin.origin !== metadata.final_origin ||
+      !["http:", "https:"].includes(requestedOrigin.protocol) || !["http:", "https:"].includes(finalUrl.protocol) ||
+      finalUrl.origin !== finalOrigin.origin || finalUrl.username || finalUrl.password) {
+    throw new Error("plan_memory_browser_read_origin_or_time_invalid");
+  }
+  const text = value.text;
+  const evidenceSource = metadata.evidence_source as "EXTERNAL_EVIDENCE" | "FIXTURE";
+  const excerpt = text.slice(0, BROWSER_READ_CONTEXT_MAX_CHARS);
+  const sha256 = (input: string) => createHash("sha256").update(input, "utf8").digest("hex");
+  return {
+    schema_version: "browser-read-result-observation.v1",
+    record_type: "browser_read_observation",
+    plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+    plan_revision_digest: b.revision_digest,
+    step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+    step_digest: b.step_digest,
+    operation: "browser.read",
+    command_digest: b.command_digest,
+    delivery_digest: b.delivery_digest,
+    result_digest: b.result_digest,
+    requested_origin: requestedOrigin.origin,
+    final_origin: finalOrigin.origin,
+    navigation: "http_get",
+    tab_scope: "not_applicable",
+    frame_scope: "not_applicable",
+    credential_context: "no_tool_supplied_credentials",
+    evidence_source: evidenceSource,
+    observed_at_ms: observedAtMs,
+    page_text_excerpt: excerpt,
+    page_text_excerpt_chars: excerpt.length,
+    page_text_sha256: sha256(text),
+    page_text_excerpt_sha256: sha256(excerpt),
+    source_truncated: value.truncated || text.length > BROWSER_READ_CONTEXT_MAX_CHARS,
+    page_content_is_untrusted: true,
+    adoption_status: "observation_only",
+    used_as_world_truth: false,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
 
 /** 実作用の結果記録はMを非権威に保ち、記録だけで権限や成功判定を発行しない。 */
 export function resultMemoryEligible(b: Binding): boolean {
@@ -20,7 +125,7 @@ export function resultMemoryEligible(b: Binding): boolean {
     return (b.status === "outcome_unknown" || b.status === "verification_failed") && !b.github_write_result;
   }
   if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
-    b.operation === "file.delete" || b.operation === "file.edit";
+    b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read";
   return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
 }
 
@@ -81,6 +186,10 @@ export function resultObservation(p: Plan, b: Binding) {
       adoption_status: "observation_only", used_as_world_truth: false,
       used_for_authority: false, may_execute: false,
     };
+  }
+  if (b.operation === "browser.read") {
+    if (!result) throw new Error("plan_memory_observation_not_eligible");
+    return browserReadResultObservation(p, b, result);
   }
   if (b.operation !== "file.search") throw new Error("plan_memory_observation_not_eligible");
   return {

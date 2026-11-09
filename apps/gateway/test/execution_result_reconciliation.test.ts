@@ -904,7 +904,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
         "blue_tanuki.operation_core.request_id": destinationRequestId } });
     const compute = c.hds.decide(computeRequest);
     if (compute.command?.type !== "llm_call") throw new Error(`selected edit observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v8");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v9");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
@@ -997,7 +997,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const compute = c.hds.decide(computeRequest);
     if (compute.command?.type !== "llm_call") throw new Error(`selected shell observation was not routed to C: ${compute.log.commit.reason}`);
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v8");
+      .toBe("blue-tanuki.plan-compute-source-observations.v9");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
@@ -1201,7 +1201,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v8");
+      .toBe("blue-tanuki.plan-compute-source-observations.v9");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
     expect(serializedInput).toContain("verified_file_delete_result");
     expect(serializedInput).toContain("reported_success");
@@ -1280,7 +1280,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       throw new Error(`selected search observation was not routed to C: reason=${compute.log.commit.reason}; ` +
         `freshness=${freshness}; age_ms=${ageMs}; remaining_ms=${remainingMs}; output=${outputShape}`);
     }
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v8");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v9");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>

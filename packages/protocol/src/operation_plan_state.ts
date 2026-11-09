@@ -132,6 +132,23 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
       if (!timedOut && !nonzeroExit) context.addIssue({ code: "custom", message: "not_a_verified_failed_test" });
     }).optional(),
   }).strict(),
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
+    source: z.literal("verified_browser_read_result"), operation: z.literal("browser.read"),
+    requested_origin: z.string().regex(/^https?:\/\/[^/?#]+$/).max(512),
+    final_origin: z.string().regex(/^https?:\/\/[^/?#]+$/).max(512),
+    navigation: z.literal("http_get"),
+    tab_scope: z.literal("not_applicable"),
+    frame_scope: z.literal("not_applicable"),
+    credential_context: z.literal("no_tool_supplied_credentials"),
+    evidence_source: z.enum(["EXTERNAL_EVIDENCE", "FIXTURE"]),
+    page_text_excerpt: z.string().max(8_000),
+    page_text_excerpt_chars: z.number().int().nonnegative().max(8_000),
+    page_text_sha256: Digest,
+    page_text_excerpt_sha256: Digest,
+    source_truncated: z.boolean(),
+    expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    page_content_is_untrusted: z.literal(true),
+  }).strict(),
   z.object({
     schema_version: z.literal("operation-plan-compute-source-observation.v1"),
     source: z.literal("owner_selected_local_file_state"),
@@ -226,7 +243,13 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     result_digest: Digest, execution_status: z.literal("succeeded"),
     execution_boundary: z.literal("tool_adapter"), action_outcome: z.literal("reported_success"),
   }).strict(),
-]);
+]).superRefine((observation, context) => {
+  if (observation.source === "verified_browser_read_result" &&
+      (observation.expires_at_ms !== observation.observed_at_ms + 600_000 ||
+       observation.page_text_excerpt_chars !== observation.page_text_excerpt.length)) {
+    context.addIssue({ code: "custom", message: "browser_read_source_observation_integrity_mismatch" });
+  }
+});
 export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
 
 /** J-source-matched, digest-only shell result; no command or process output is retained. */
@@ -266,11 +289,11 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 });
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v8";
+  "blue-tanuki.plan-compute-source-observations.v9";
 export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v2";
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations-memory-citation.v1";
+  "blue-tanuki.plan-compute-source-observations-memory-citation.v2";
 /** Parent identity for an explicit result-backed continuation; it grants no authority. */
 export const OperationPlanComputeParentSchema = z.object({
   plan_id_digest: Digest,

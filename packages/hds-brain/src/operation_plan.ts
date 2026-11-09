@@ -64,7 +64,7 @@ import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 import type { GoalEvaluationRulesReference } from "./goal_projection.js";
-import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit,
+import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, browserReadResultObservation, verifyResultMemoryCommit, receiptForResultCommit,
   buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
   verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
 import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, receiptMemoryObservation,
@@ -5352,7 +5352,8 @@ export class OperationPlanLedger {
         }));
         continue;
       }
-      if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.edit" && operation !== "file.search") ||
+      if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.edit" &&
+          operation !== "file.search" && operation !== "browser.read") ||
           binding.operation !== operation || binding.status !== "verified" ||
           binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
           !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
@@ -5404,6 +5405,45 @@ export class OperationPlanLedger {
             operation === "file.delete" ? "verified_file_delete_result" : "verified_file_edit_result",
           operation,
         }));
+      } else if (operation === "browser.read") {
+        if (caller.metadata?.["blue_tanuki.trust_level"] !== "owner") {
+          throw new Error("plan_compute_browser_read_owner_required");
+        }
+        const browserRecord = browserReadResultObservation(plan, binding, result);
+        if (operationPlanDigest(stored.value) !== operationPlanDigest(browserRecord) ||
+            browserRecord.record_type !== "browser_read_observation" || browserRecord.operation !== "browser.read" ||
+            typeof browserRecord.requested_origin !== "string" || typeof browserRecord.final_origin !== "string" ||
+            typeof browserRecord.page_text_excerpt !== "string" || typeof browserRecord.page_text_sha256 !== "string" ||
+            typeof browserRecord.page_text_excerpt_sha256 !== "string" || typeof browserRecord.observed_at_ms !== "number" ||
+            typeof browserRecord.page_text_excerpt_chars !== "number" ||
+            (browserRecord.evidence_source !== "EXTERNAL_EVIDENCE" && browserRecord.evidence_source !== "FIXTURE")) {
+          throw new Error("plan_compute_browser_read_result_record_mismatch");
+        }
+        const excerptDigest = createHash("sha256").update(browserRecord.page_text_excerpt, "utf8").digest("hex");
+        const expiresAtMs = browserRecord.observed_at_ms + 600_000;
+        if (browserRecord.page_text_excerpt_sha256 !== excerptDigest || inspectedAtMs >= expiresAtMs) {
+          throw new Error("plan_compute_source_observation_expired_or_invalid");
+        }
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          ...common,
+          source: "verified_browser_read_result",
+          operation,
+          observed_at_ms: browserRecord.observed_at_ms,
+          requested_origin: browserRecord.requested_origin,
+          final_origin: browserRecord.final_origin,
+          navigation: browserRecord.navigation,
+          tab_scope: browserRecord.tab_scope,
+          frame_scope: browserRecord.frame_scope,
+          credential_context: browserRecord.credential_context,
+          evidence_source: browserRecord.evidence_source,
+          page_text_excerpt: browserRecord.page_text_excerpt,
+          page_text_excerpt_chars: browserRecord.page_text_excerpt_chars,
+          page_text_sha256: browserRecord.page_text_sha256,
+          page_text_excerpt_sha256: browserRecord.page_text_excerpt_sha256,
+          source_truncated: browserRecord.source_truncated,
+          expires_at_ms: expiresAtMs,
+          page_content_is_untrusted: true,
+        }));
       } else {
         const output = result.output;
         if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray(output.matches) ||
@@ -5422,7 +5462,8 @@ export class OperationPlanLedger {
     if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
       throw new Error("plan_compute_source_observation_stale");
     }
-    if (observations.some((observation) => observation.source === "verified_file_search_result" &&
+    if (observations.some((observation) => (observation.source === "verified_file_search_result" ||
+        observation.source === "verified_browser_read_result") &&
         this.nowMs() >= observation.expires_at_ms)) throw new Error("plan_compute_source_observation_expired");
     return observations;
   }
@@ -6045,6 +6086,12 @@ export class OperationPlanLedger {
         return observation.operation === "file.search" &&
           observation.expires_at_ms === observation.observed_at_ms + 600_000 &&
           observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+      }
+      if (observation.source === "verified_browser_read_result") {
+        return observation.operation === "browser.read" && observation.page_content_is_untrusted === true &&
+          observation.expires_at_ms === observation.observed_at_ms + 600_000 &&
+          observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms &&
+          observation.page_text_excerpt_sha256 === createHash("sha256").update(observation.page_text_excerpt, "utf8").digest("hex");
       }
       if (observation.source === "owner_selected_local_file_state") {
         return this.ownerSelectedLocalFileStateIsCurrent(p, observation, nowMs, seen);

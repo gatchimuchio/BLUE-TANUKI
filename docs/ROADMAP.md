@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F06.01 browser観測provenanceの読取consumer接続（限定WIRED）
+### 直近BUILD_BATCH — F06.02 検証済みbrowser.read結果を同一taskの次回C計算へ接続（限定WIRED）
+
+Ownerが明示選択した同一taskの検証済み`browser.read`結果を、J/M receipt・現行plan binding・record内容・excerpt digest・10分期限で再照合後、Cの次回計画候補だけへ渡す。最大8,000文字の非信頼excerptはsystem指示と分けたuser-role data messageへ置き、Owner依頼より前に配置する。子C delegationは無効。完全URL/path/query、links、credential、raw本文はruntime snapshotへ公開しない。Control Centerはorigin・digest・文字数・期限のみを表示し、このC計算からのmeaning-update提案を無効にする。
+
+Workspace `typecheck`、15 project `build`、`docs:check`、`git diff --check`はPASS。日本語基底監査は移行負債76件の注意を継続する。test suite、実browser/HTTP、実provider、owner UI全往復、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。これは同一task browser-read context経路のみの限定WIREDであり、browser mutationや製品全体の完成を示さない。
+
+### 前段完了BUILD_BATCH — F06.01 browser観測provenanceの読取consumer接続（限定WIRED）
 
 `browser.read`と`browser.snapshot`が、ページ内容を非権威の外部証拠として扱うための観測metadataを返す。要求／最終origin、origin変更、観測時刻、navigation、証拠源、資格情報境界を記録し、HTTPのtab/frame非該当とsnapshotの一時tab／main frameを区別する。内容は`page_content_is_untrusted=true`、`used_for_authority=false`、`may_execute=false`を明示する。
 

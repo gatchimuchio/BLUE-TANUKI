@@ -2,7 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F06.01 browser観測provenanceの読取consumer接続
+## 前段完了BUILD_BATCH — QE_BUILD / F06.02 browser.read結果を同一taskの次回C計算へ接続
+
+主語は、ownerが明示選択した検証済み`browser.read`結果と、その同一taskの次回計画候補を作るC。目的は、Jの現行plan／revision／step bindingとMの保存record／receiptを再照合したHTTP読取結果だけを、次の候補計算のcontextへ渡すこと。`browser.snapshot`、browser mutation、実provider試験は含めない。
+
+検証済み結果を非権威のM observationへ保存し、Cへ渡す本文は先頭最大8,000文字のexcerptに限定する。excerpt本文はsystem instructionから分離したuser-role data messageにし、元Owner依頼より前に置く。system instructionは本文を非信頼データとして指定し、その内部の指示・役割・権限主張へ追従しないよう明示する。この入力を含む計算では子Cへのdelegationを無効にする。origin・観測時刻・証拠源・excerpt/full-text digest・切詰め・10分期限を維持する。完全URL/path/query、links、credential、raw本文をruntime snapshotへ出さず、Control Centerではoriginとdigest等の要約だけを表示する。Owner trust、M receipt、保存値、excerpt digest、期限のどれかが欠ければJは保留する。このC計算結果からのmeaning-update候補は受け付けない。
+
+Workspace `typecheck`、15 project `build`、`docs:check`、`git diff --check`はPASS。日本語基底監査は移行負債76件の注意を継続。test suite、実ブラウザー／HTTP、実provider、外部作用、owner UI全往復、他OS、QE_QC／QE_QAはNOT_RUN。この同一taskのbrowser-read context経路だけを限定`WIRED`とし、F06.02全体や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+**次のproducer／consumer:** 次の独立単位開始時に最新HEADとrev4.0正本から通常利用consumerの未接続箇所を再選定する。browser観測をeffect targetへ束縛するconsumerはまだ特定できていないため、推測実装しない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F06.01 browser観測provenanceの読取consumer接続
 
 主語は、Web観測結果をCへ返す`browser.read`と`browser.snapshot`。目的は、ページ内容を非権威の外部証拠として扱い、要求origin・最終origin・観測時刻・navigation面と、その観測面にtab/frameが存在するかを結果に残すこと。F06.01の読取側に限ったproducer接続であり、将来のeffect targetへの束縛は未成立とする。
 
@@ -12,7 +22,7 @@
 
 core package `typecheck`／`build`、`docs:check`、`git diff --check`はPASS。test suite、実HTTP／browser runtime、実provider、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。この読取provenance sliceだけを限定`WIRED`とし、F06.01全体、F06全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
 
-**次のproducer／consumer:** 最新HEADで別の未接続通常consumerを再選定する。browser observationをeffect targetへ結ぶ作業は、現行J/Brokerが現位置・tab/frame/navigation・観測時刻を再照合する実consumerが特定できた時点で別sliceとして施工する。
+**次のproducer／consumer:** F06.02で同一task候補計算へ接続済み。effect targetへの束縛は、現行J/Brokerが現位置・tab/frame/navigation・観測時刻を再照合する実consumerが特定できた時点で別sliceとして施工する。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / F20.01 隔離file-search workerへHDS記憶境界を継承
 
