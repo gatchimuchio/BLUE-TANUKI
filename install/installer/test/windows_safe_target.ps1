@@ -106,6 +106,32 @@ try {
   $userData = Join-Path $productData "owner-data.txt"
   Set-Content -LiteralPath $userData -Value "preserve through ordinary uninstall" -Encoding UTF8
 
+  $rollbackOne = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N"))
+  $rollbackTwo = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N"))
+  Copy-Item -LiteralPath $productInstall -Destination $rollbackOne -Recurse
+  Copy-Item -LiteralPath $productInstall -Destination $rollbackTwo -Recurse
+  Remove-Item -LiteralPath $productInstall -Recurse -Force
+  $recoveryRejected = $false
+  try {
+    [void](Restore-InterruptedWindowsProductUpdate -InstallRoot $productInstall -DataRoot $productData)
+  } catch {
+    $recoveryRejected = $_.Exception.Message -match 'Multiple interrupted product-update rollback candidates'
+  }
+  if (-not $recoveryRejected -or (Test-Path -LiteralPath $productInstall) -or
+      -not (Test-Path -LiteralPath $rollbackOne -PathType Container) -or
+      -not (Test-Path -LiteralPath $rollbackTwo -PathType Container) -or
+      (Get-Content -LiteralPath $userData -Raw).Trim() -ne 'preserve through ordinary uninstall') {
+    throw 'Ambiguous interrupted-update recovery moved a candidate or changed user data.'
+  }
+  Remove-Item -LiteralPath $rollbackTwo -Recurse -Force
+  $recovered = Restore-InterruptedWindowsProductUpdate -InstallRoot $productInstall -DataRoot $productData
+  if (-not $recovered -or -not (Test-Path -LiteralPath $productInstall -PathType Container) -or
+      (Test-Path -LiteralPath $rollbackOne) -or
+      (Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData) -ne 'managed-v3' -or
+      (Get-Content -LiteralPath $userData -Raw).Trim() -ne 'preserve through ordinary uninstall') {
+    throw 'A single verified interrupted-update rollback candidate was not restored safely.'
+  }
+
   $managed = Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData
   if ($managed -ne "managed-v3") { throw "managed Windows product install classification was unexpected: $managed" }
   $managedData = Assert-ManagedWindowsProductData -DataRoot $productData -InstallRoot $productInstall

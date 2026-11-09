@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
+### 直近完了BUILD_BATCH — G02.03 Windows更新中断からの所有済みinstall復旧（限定WIRED）
+
+Windows製品Setupは、active install rootが無い場合に限り、同一parent内の正確なGUID形式rollback候補を確認する。候補の一意性、managed metadata、package manifest、全file inventory、data-root binding、reparse不在を照合し、一件だけ一致すれば同じparentへ復旧して再検査後にpackaged updateを続行する。複数・不正・未所有候補は保持してfail-closedする。既存install、DataRoot、user dataはこの復旧sliceでは変更しない。
+
+Windows隔離PowerShell fixtureの2 testとinstaller packageの14 testはPASS。実ユーザーprofile、registry／Start Menu、実package更新／削除、installed runtime、他OS、全suite、QE_QC／QE_QAはNOT_RUN。G02.03の復旧sliceだけを`WIRED`とし、Windows lifecycle全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。復旧処理はinstall treeだけを戻し、DataRootとuser dataは触れない。検証後、Setupは既存の通常update transactionを続ける。次はrev4.0と現物から一気通貫の仕事経路に不足するconsumerを再選定する。
+
+### 前段完了BUILD_BATCH — F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
 
 既存`github.write`を、non-default branch上の単一新規UTF-8 file（65,536 bytes以下）に限る`code.push`へ接続した。target branchの現在HEAD・既定branch・repository identity・file不存在を観測し、L3 no-store reviewにbranch／expected HEAD／path／commit message／正確な本文・サイズ・digest・可視性と通知可能性を固定する。作用前に再観測し、GitHub GraphQL `createCommitOnBranch`へ`expectedHeadOid`と一件の`FileAddition`を送る。結果はparent・ref・commit SHAとbranch再読取で照合し、明示拒否・結果不明・受理を区別してJ/MとOwner照会へつなぐ。失敗後に自動再送しない。Control Centerは本文を未信頼text nodeとして表示する。専用`github:code.write` capabilityを追加した。
 

@@ -313,6 +313,76 @@ function Assert-ManagedWindowsProductInstall {
   return 'managed-v3'
 }
 
+function Restore-InterruptedWindowsProductUpdate {
+  param(
+    [Parameter(Mandatory = $true)][string]$InstallRoot,
+    [Parameter(Mandatory = $true)][string]$DataRoot
+  )
+
+  $install = Resolve-SafeDirectoryTarget -Path $InstallRoot -Label 'ProductInstallRoot'
+  $data = Resolve-SafeDirectoryTarget -Path $DataRoot -Label 'ProductDataRoot'
+  $parent = Resolve-SafeDirectoryTarget -Path (Split-Path -Parent $install) -Label 'ProductInstallParent'
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) { return $false }
+
+  $installName = Split-Path -Leaf $install
+  $siblings = @(Get-ChildItem -Force -LiteralPath $parent -ErrorAction Stop)
+  $activeEntries = @($siblings | Where-Object {
+    [string]::Equals([string]$_.Name, $installName, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  if ($activeEntries.Count -gt 1) {
+    throw 'Multiple filesystem entries match the product install root; no recovery was attempted.'
+  }
+  if ($activeEntries.Count -eq 1) {
+    $activeEntry = $activeEntries[0]
+    if (-not $activeEntry.PSIsContainer -or
+        ($activeEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'Product install root is occupied by a non-regular entry; no recovery was attempted.'
+    }
+    return $false
+  }
+
+  $candidatePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) +
+    '\.blue-tanuki-rollback-[0-9a-f]{32}$'
+  $candidates = @($siblings | Where-Object {
+    [System.Text.RegularExpressions.Regex]::IsMatch(
+      [string]$_.Name,
+      $candidatePattern,
+      [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+  })
+  if ($candidates.Count -eq 0) { return $false }
+  if ($candidates.Count -ne 1) {
+    throw 'Multiple interrupted product-update rollback candidates exist; no files were moved.'
+  }
+
+  $candidate = $candidates[0]
+  if (-not $candidate.PSIsContainer -or
+      ($candidate.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Interrupted product-update rollback candidate is not a regular directory; no files were moved.'
+  }
+  $candidatePath = Resolve-SafeDirectoryTarget -Path $candidate.FullName -Label 'ProductUpdateRollbackCandidate'
+  if (-not [string]::Equals(
+      (Split-Path -Parent $candidatePath), $parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Interrupted product-update rollback candidate is not a direct child of the install parent.'
+  }
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $candidatePath -DataRoot $data -MetadataInstallRoot $install)
+  } catch {
+    throw "Interrupted product-update rollback candidate is not a verified managed install; it was preserved. $($_.Exception.Message)"
+  }
+
+  if (Test-Path -LiteralPath $install) {
+    throw 'Product install root appeared during interrupted-update recovery; no candidate was moved.'
+  }
+  [System.IO.Directory]::Move($candidatePath, $install)
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $install -DataRoot $data -MetadataInstallRoot $install)
+  } catch {
+    throw "Restored product install could not be reverified; it remains at the requested install root for inspection. $($_.Exception.Message)"
+  }
+  return $true
+}
+
 function Assert-ManagedWindowsProductData {
   param(
     [Parameter(Mandatory = $true)][string]$DataRoot,

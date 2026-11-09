@@ -366,6 +366,13 @@ try {
   $envFile = Join-Path $dataRootResolved "blue-tanuki.env"
   $dataDir = Join-Path $dataRootResolved "data"
   $logDir = Join-Path $dataRootResolved "logs"
+  try {
+    if (Restore-InterruptedWindowsProductUpdate -InstallRoot $installRootResolved -DataRoot $dataRootResolved) {
+      Write-Warning "Restored one verified previous BLUE-TANUKI install after an interrupted update. Setup will continue using the packaged version."
+    }
+  } catch {
+    Fail "Refusing to continue because interrupted-update recovery was ambiguous or could not be verified. Existing paths were preserved. $($_.Exception.Message)"
+  }
   $existingProductInstall = Test-Path -LiteralPath $installRootResolved -PathType Container
   if (Test-Path -LiteralPath $installRootResolved) {
     if (-not $existingProductInstall) { Fail "Install target exists but is not a directory. No files were changed: $installRootResolved" }

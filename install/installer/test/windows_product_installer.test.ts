@@ -67,8 +67,12 @@ describe("Windows product installer package", () => {
 
   it("uses bundled runtime and gives source-tree mislaunch guidance", () => {
     const setup = read("install/windows/product/BlueTanukiSetup.ps1");
+    const recoveryCall = setup.indexOf("Restore-InterruptedWindowsProductUpdate -InstallRoot");
+    const installPresenceCheck = setup.indexOf("$existingProductInstall = Test-Path -LiteralPath $installRootResolved");
     expect(setup).toContain("Expand-BundledNode");
     expect(setup).toContain("Find-NodeExe");
+    expect(recoveryCall).toBeGreaterThanOrEqual(0);
+    expect(installPresenceCheck).toBeGreaterThan(recoveryCall);
     expect(setup).toContain("Start Menu");
     expect(setup).toContain("Register-Uninstaller");
     expect(setup).toContain("Autostart: not enabled by installer");

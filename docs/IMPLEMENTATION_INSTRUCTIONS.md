@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
+## 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows更新中断からの所有済みinstall復旧（限定WIRED）
+
+Windows製品Setupでinstall rootが見つからない場合、同じinstall parent直下にある、現install名とGUID形式が一致するrollback候補だけを調査する。現在のinstallが存在する場合は介入しない。候補が複数、非directory／reparse、metadata・package manifest・managed-file inventory・data rootの照合不一致なら、既存候補を保持してSetupを停止する。候補が一件で所有と全inventoryを確認できたときだけ同じparent内でactive installへ戻し、戻した後もinventoryを再検査してから通常のpackaged updateを続ける。DataRootは変更・削除せず、候補cleanupや自動再送をしない。
+
+Windows隔離fixtureで「複数候補はすべて保持して停止」「単一の正当候補は復旧し、DataRootのuser dataを保持」を確認した。`windows_safe_target.test.ts` 2件と`windows_product_installer.test.ts` 14件は計16件PASS。実ユーザーのInstallRoot、registry、Start Menu、実package更新／削除、installed runtime、他OS、全suite、QE_QC／QE_QAはNOT_RUN。この復旧sliceだけを限定`WIRED`とし、G02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+次はrev4.0と最新実物から、一気通貫の仕事経路に最も不足するconsumerを選びQE_BUILDを継続する。製品更新・削除の実機QA、実provider／live外部作用、別repo編集、Rust authority cutover、公開／出荷判断は行わない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの単一新規ファイルcode.push（限定WIRED）
 
 ### 現在の施工状態 — 2026-11-09
 
