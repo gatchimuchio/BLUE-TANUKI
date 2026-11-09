@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — C08.02 owner規則のGoalProjection→J/M digest結合（限定WIRED）
+### 直近BUILD_BATCH — C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
+
+wait返信・期限到達・中断復旧の再開時に、検証済みJ wait contextから同一taskの達成規則digest・件数・元request参照だけをGoalProjectionへ渡す。規則本文は渡さず、返信／metadataによる規則差し替えを受け付けない。policyのtask identity・goal digest・規則digestが不整合ならwait再開を保留する。GoalProjectionは非権威の`identifying`状態を保ち、J達成条件は検証済み実行結果とM receiptのまま。
+
+HDS-BRAIN build、Gateway typecheck、`operation_plan_runtime.test.ts`のwait返信／期限／復旧を通す2ケース（46件skip）、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査はPASSで既存移行負債76件の注意を表示した。full suite、実provider／live外部作用、Control Center browser、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このwait再開sliceだけを`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+### 前段完了BUILD_BATCH — C08.02 owner規則のGoalProjection→J/M digest結合（限定WIRED）
 
 内部認証されたowner規則をGoalProjectionへ本文なしの`referenced`（digest・件数・source ref）として投影し、規則digestをJのOperationPlan policyと共通化した。projectionは引き続き`identifying`で、execution authorityや達成判定を持たない。外部metadataは規則参照を発行できない。J/M側は既存どおり各規則を検証済み結果とM receiptで満たした場合のみ達成する。
 

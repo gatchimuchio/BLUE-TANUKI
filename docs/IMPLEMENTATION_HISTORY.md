@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-09 — QEB-C08.02-WAIT-RULE-RESUME-REFERENCE
+
+開始local／remote `main`=`6558c1b2cd9e3ac5dbb72229289b1fb89e9783cb`。編集前の復旧点はlocal branch／remote tag current=`6558c1b...`、previous=`0a1d6c383504764b50e7d81cbee66f543b1b38a5`で一致。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`、別repo、OneDrive Graph、実provider、外部作用は変更していない。
+
+永続waitの正規owner返信・期限再開と、中断waitのowner再認証後復旧でGoalProjectionに保存済み達成規則のdigest・件数・元request参照を継承した。J台帳からtask identity／task goal digest／規則digestを検査し、参照しか返さず本文を複製しない。欠落時は従来どおりunknown、保存policyの形状・同一性不整合は再開保留。返信リクエストが異なるowner規則を持つ場合も、内部再構成でその入力を落とし、保存済み規則の参照を維持する。J/M達成条件、Approval／Broker、外部作用、authority境界に変更なし。
+
+HDS-BRAIN buildとGateway typecheckはPASS。`apps/gateway/test/operation_plan_runtime.test.ts`の返信・期限・復旧を通す2ケースはPASS（46件skip）。`pnpm docs:check`と`git diff --check`はPASS。日本語基底監査はPASSで既存移行負債76件の注意を表示した。対象は合成plan／一時SQLiteのみ。full suite、実provider／外部作用、Control Center browser、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。STATUS=`WIRED`（wait再開から同一達成規則参照への接続）。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。次単位はrev4.0と最新HEADから再選定する。
+
+---
+
 ## 2026-11-09 — QEB-C08.02-GOAL-PROJECTION-RULE-DIGEST
 
 開始local／remote `main`=`0a1d6c383504764b50e7d81cbee66f543b1b38a5`。編集前の二世代復旧refはlocal branch／remote tagともcurrent=`0a1d6c3...`、previous=`d77b312668c34baac1db4e6d651e4105422cbc92`。保護されたuntracked `.codex-attachments/`／`.codex-remote-attachments/`は変更していない。別repo、OneDrive Graph、実provider、外部作用は対象外。

@@ -63,6 +63,7 @@ import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
+import type { GoalEvaluationRulesReference } from "./goal_projection.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit,
   buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
   verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
@@ -2412,6 +2413,7 @@ export class OperationPlanLedger {
     readonly task_identity_digest: string;
     readonly goal: string;
     readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding;
+    readonly goal_completion_rules_reference?: Omit<GoalEvaluationRulesReference, "status">;
   } {
     if (this.recoveryRefreshPending || !this.port) throw new Error("plan_wait_state_not_durable");
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
@@ -2433,7 +2435,10 @@ export class OperationPlanLedger {
     }
     const recoveryHold = this.recoveryHolds.get(wait.plan_id_digest);
     if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
+    const goalCompletionRulesReference = this.goalCompletionRulesReferenceForPlan(plan, wait.task_identity_digest);
+    if (goalCompletionRulesReference === null) throw new Error("plan_wait_resume_stale");
     return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal,
+      ...(goalCompletionRulesReference ? { goal_completion_rules_reference: goalCompletionRulesReference } : {}),
       ...(plan.goal_purpose_binding ? { goal_purpose_binding: structuredClone(plan.goal_purpose_binding) } : {}) };
   }
 
@@ -2484,14 +2489,18 @@ export class OperationPlanLedger {
   }
 
   waitContext(wait: OperationPlanWaitState): { readonly goal: string; readonly owner: string; readonly channel: string;
-    readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding } | null {
+    readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding;
+    readonly goal_completion_rules_reference?: Omit<GoalEvaluationRulesReference, "status"> } | null {
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     if (wait.state !== "waiting" || !plan || operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
         plan.revisions.at(-1)?.digest !== wait.revision_digest || operationPlanDigest(plan.owner) !== wait.owner_digest ||
         operationPlanDigest(plan.channel) !== wait.channel_digest || this.recoveryHolds.has(wait.plan_id_digest) ||
         this.taskGoalIsAchieved(wait.task_identity_digest) ||
         !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return null;
+    const goalCompletionRulesReference = this.goalCompletionRulesReferenceForPlan(plan, wait.task_identity_digest);
+    if (goalCompletionRulesReference === null) return null;
     return { goal: plan.goal, owner: plan.owner, channel: plan.channel,
+      ...(goalCompletionRulesReference ? { goal_completion_rules_reference: goalCompletionRulesReference } : {}),
       ...(plan.goal_purpose_binding ? { goal_purpose_binding: structuredClone(plan.goal_purpose_binding) } : {}) };
   }
 
@@ -2518,6 +2527,19 @@ export class OperationPlanLedger {
   private currentRevisionDigest(planIdDigest: string): string | null {
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === planIdDigest);
     return plan?.revisions.at(-1)?.digest ?? null;
+  }
+
+  private goalCompletionRulesReferenceForPlan(plan: PlanState, taskIdentityDigest: string):
+    Omit<GoalEvaluationRulesReference, "status"> | undefined | null {
+    const policy = plan.goal_completion_policy;
+    if (!policy) return undefined;
+    let checked: OperationPlanGoalCompletionPolicy;
+    try { checked = OperationPlanGoalCompletionPolicySchema.parse(policy); } catch { return null; }
+    if (checked.task_identity_digest !== taskIdentityDigest || checked.task_goal_digest !== taskGoalDigest(plan.goal) ||
+        checked.rules_digest !== goalCompletionRulesDigest(checked.rules)) {
+      return null;
+    }
+    return { rules_digest: checked.rules_digest, rule_count: checked.rules.rules.length, source_ref: checked.source_request_id };
   }
 
   /** Persist a non-authority hold before restoring either J or M as a whole store. */

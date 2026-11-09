@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / C08.02 owner評価規則をGoalProjectionとJ/M判定へ同一digestで結合（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
+
+主語は、ownerが委任した同一仕事の達成規則をwait後の返信・期限再開・中断復旧後も保持し、Cの再計算とJ/M達成判定が同じ規則集合を参照するBLUE-TANUKIのHDS-BRAIN経路。wait台帳から、task identity・goal digest・規則digestを再検証したうえで、規則digest・件数・元request参照だけをGoalProjectionへ渡す。規則本文は再投影しない。返信／metadataで差し替えた規則は使わず、保存規則が欠落または不整合なら再開を保留する。GoalProjectionは非権威の`identifying`状態を保ち、達成には従来どおり明示規則、検証済みoperation result、検証済みM receiptを要する。
+
+HDS-BRAIN buildとGateway typecheckはPASS。`apps/gateway/test/operation_plan_runtime.test.ts`のwait返信／期限再開／中断復旧を通す2ケースはPASS（46件skip）。合成planと一時SQLiteだけを使い、返信中の規則差し替えが保存済み規則digestを変更しないことも確認した。`pnpm docs:check`と`git diff --check`はPASS。日本語基底監査はPASSで既存移行負債76件の注意を表示した。full suite、実provider／live外部作用、Control Center browser、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このC08.02 wait再開sliceのみを`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+**次のproducer／consumer:** rev4.0と最新HEADを再照合し、実provider・公開作用・全体QC／QAに依存しない次の未接続consumerを選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / C08.02 owner評価規則をGoalProjectionとJ/M判定へ同一digestで結合（限定WIRED）
 
 主語は、ownerが委任した仕事の達成規則を非権威のGoalProjectionから現行J/M判定まで同一性を保って結ぶBLUE-TANUKIのHDS-BRAIN経路。内部認証されたowner規則だけを`evaluation_rules.status=referenced`としてdigest・件数・request参照で投影する。規則本文／期待値はGoalProjectionへ複製せず、projection IDは規則digestへ束縛する。その他のgoal要素が未確定なのでprojectionは`identifying`のままとし、権限や達成判定を付与しない。外部入力のowner風metadataと規則は参照生成に使わない。
 

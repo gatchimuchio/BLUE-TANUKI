@@ -2590,9 +2590,20 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const databasePath = join(root, "state.sqlite");
     const goal = "Wait for the owner reply before generating the next plan candidate";
     const seed = plan(randomUUID(), "synthetic-root");
+    const completionRules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
+      rules: [{ rule_id: "verified-search-line", operation: "file.search", output_pointer: "/matches/0/line",
+        expected_value: "owner-verified-result" }] };
+    const taskIdentityDigest = operationPlanDigest({ schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+      owner_digest: operationPlanDigest("fixture-owner"), channel_digest: operationPlanDigest("webchat"),
+      task_digest: operationPlanDigest(goal), plan_id_digest: operationPlanDigest(seed.plan_id),
+      request_id_digest: operationPlanDigest(seed.request_id) });
+    const completionPolicy = { schema_version: "operation-plan-goal-completion-policy.v1" as const,
+      source_request_id: seed.request_id, task_identity_digest: taskIdentityDigest,
+      task_goal_digest: createHash("sha256").update(goal, "utf8").digest("hex"), rules: completionRules,
+      rules_digest: goalCompletionRulesDigest(completionRules) };
     const seedCheckpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
-      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal, goal_completion_policy: completionPolicy,
         revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
     });
     let store = new OperationPlanStateStore(databasePath);
@@ -2619,11 +2630,16 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       store = new OperationPlanStateStore(databasePath);
       hds = new HDSUpperController({ operation_plan_state: store });
 
-      const reply = request("The owner supplied the awaited synthetic detail");
+      const replacementRules = { ...completionRules, rules: [{ ...completionRules.rules[0]!,
+        expected_value: "reply-must-not-replace-stored-policy" }] };
+      const reply = request("The owner supplied the awaited synthetic detail", "fixture-owner", undefined, replacementRules);
       const resumed = hds.decide(reply);
       expect(resumed.command?.type).toBe("llm_call");
       expect(resumed.command?.type === "llm_call" && resumed.command.payload.compute_context?.local_p_version)
         .toBe("blue-tanuki.plan-compute-agent-delegation.v1");
+      expect(resumed.log.frame.goal_projection.evaluation_rules).toEqual({ status: "referenced",
+        rules_digest: completionPolicy.rules_digest, rule_count: 1, source_ref: seed.request_id });
+      expect(JSON.stringify(resumed.log.frame.goal_projection)).not.toContain("reply-must-not-replace-stored-policy");
       expect(hds.listOperationPlanWaits()[0]).toMatchObject({ state: "resumed", wake_reason: "reply" });
 
       const next = plan(reply.id, "synthetic-root");
@@ -2659,6 +2675,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       try {
         deadlineResume = hds.decide(duplicateDeadline);
         expect(deadlineResume.command?.type).toBe("llm_call");
+        expect(deadlineResume.log.frame.goal_projection.evaluation_rules).toEqual({ status: "referenced",
+          rules_digest: completionPolicy.rules_digest, rule_count: 1, source_ref: seed.request_id });
         expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
           .toMatchObject({ state: "resumed", wake_reason: "deadline" });
         hds.onFeedback({ command_id: deadlineResume.command!.id, status: "failed",
@@ -2702,9 +2720,20 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const databasePath = join(root, "state.sqlite");
     const goal = "Wait for an owner reply and compute a candidate without granting authority";
     const seed = plan(randomUUID(), "synthetic-root");
+    const completionRules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
+      rules: [{ rule_id: "verified-search-line", operation: "file.search", output_pointer: "/matches/0/line",
+        expected_value: "owner-verified-result" }] };
+    const taskIdentityDigest = operationPlanDigest({ schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+      owner_digest: operationPlanDigest("fixture-owner"), channel_digest: operationPlanDigest("webchat"),
+      task_digest: operationPlanDigest(goal), plan_id_digest: operationPlanDigest(seed.plan_id),
+      request_id_digest: operationPlanDigest(seed.request_id) });
+    const completionPolicy = { schema_version: "operation-plan-goal-completion-policy.v1" as const,
+      source_request_id: seed.request_id, task_identity_digest: taskIdentityDigest,
+      task_goal_digest: createHash("sha256").update(goal, "utf8").digest("hex"), rules: completionRules,
+      rules_digest: goalCompletionRulesDigest(completionRules) };
     const seedCheckpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
-      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal, goal_completion_policy: completionPolicy,
         revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
     });
     let store = new OperationPlanStateStore(databasePath);
@@ -2743,9 +2772,14 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(newReply);
       expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
         .toMatchObject({ compute_outcome: "interrupted" });
-      const resumeRequest = request(resumeControl);
+      const replacementRules = { ...completionRules, rules: [{ ...completionRules.rules[0]!,
+        expected_value: "recovery-reply-must-not-replace-stored-policy" }] };
+      const resumeRequest = request(resumeControl, "fixture-owner", undefined, replacementRules);
       const resumed = hds.decide(resumeRequest);
       expect(resumed.command?.type).toBe("llm_call");
+      expect(resumed.log.frame.goal_projection.evaluation_rules).toEqual({ status: "referenced",
+        rules_digest: completionPolicy.rules_digest, rule_count: 1, source_ref: seed.request_id });
+      expect(JSON.stringify(resumed.log.frame.goal_projection)).not.toContain("recovery-reply-must-not-replace-stored-policy");
       expect(JSON.stringify(resumed.command?.payload)).toContain(newReply);
       expect(JSON.stringify(resumed.command?.payload)).not.toContain(previousReply);
       expect(store.load()?.waits?.find((entry) => entry.wait_id === wait.wait_id))

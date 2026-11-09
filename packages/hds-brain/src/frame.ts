@@ -19,6 +19,7 @@ import { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 import { projectRequestGoalCriteria } from "./candidate_criteria.js";
 import {
   createUnidentifiedGoalProjection,
+  type GoalEvaluationRulesReference,
   type GoalProjectionSourceKind,
 } from "./goal_projection.js";
 import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
@@ -46,6 +47,8 @@ export interface FrameConfig {
   /** Raw accepted content is hashed for the immutable reference and is not copied into the projection. */
   original_content?: string;
   original_reference_kind?: GoalProjectionSourceKind;
+  /** Digest-only completion-rule reference from a validated, durable J wait context. */
+  resume_goal_completion_rules_reference?: Omit<GoalEvaluationRulesReference, "status">;
   /** Validated controller configuration; never sourced from inbound metadata or used as authority. */
   goal_relation_tree?: ReadonlyGoalRelationTreeView;
   /** Version history for the HDS audit frame; the projection itself is not a downstream authority input. */
@@ -87,7 +90,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
   const operation_core = resolveOperationCore(req, operator_surface);
   const problem_definition_id =
     config?.resolve?.(req) ?? config?.default_policy.problem_definition_id ?? "default_v1";
-  const completionRulesReference = ownerGoalCompletionRulesReference(req);
+  const completionRulesReference = config?.resume_goal_completion_rules_reference ?? ownerGoalCompletionRulesReference(req);
 
   return {
     actor,
