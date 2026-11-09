@@ -2,6 +2,18 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
+## 現行BUILD_BATCH — QE_BUILD / E03.03 Recoveryのtask lineage復元scopeをControl Centerへ接続（限定WIRED）
+
+主語は、BLUE-TANUKI全体の仕事状態を保全し、破損範囲だけを確認済み復元点から隔離回復するRecovery経路。Control Centerに復元effect scopeを追加し、Operation Planは一planまたはHDS-J task lineage、Brokerは全storeまたはtask lineage、その他のstoreは選択store全体を明示させる。backup内照合projectionはtask identity digest、複数plan digest、lineage integrity／dependencyを非権威表示し、復旧可能性・許可・resumeを判断しない。
+
+GatewayはOperation PlanとBroker task scopeの双方で、同じbackup/task verifierによる事前照合をL3要求作成前に行う。実復元時の既存再照合、L3、実行直前backup、store間非原子性、automatic resumeなしを維持する。Broker task mergeは対象taskの不足receiptのみを加え、現在履歴・無関係taskを維持する。
+
+Gateway依存7 workspace project build、WebChat build、生成Control Center script構文解析、`git diff --check`はPASS。test suite、served Gateway owner L3全往復、実backup／復元、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このコード接続sliceだけを`WIRED`とし、E03.03全体および製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+Commit/push: `da2749d92d599ff12bbca5cd33e9596a32ec8ee0`。開始前復旧二世代はlocal branch／remote tagとも`58d4f1ca07df84dae1a8839fd0fbffb1b1f953fc`、`188b42c12d1c1842481a4a07a120617b91dd77ae`。作業後local／remote main一致。`.codex-attachments/`と`.codex-remote-attachments/`は保護し未変更。commit時にGitが旧worktree metadataへの削除権限拒否を報告したがcommit/pushは成功し、pathは触れていない。
+
+**次のproducer／consumer:** 次の独立BUILD_BATCH開始時に現行HEAD・rev4.0から全体の最も欠けている実consumerを再選定し、機能IDの順番だけで選ばない。
+
 ## 前段完了BUILD_BATCH — QE_BUILD / F06.02 browser.read結果を同一taskの次回C計算へ接続
 
 主語は、ownerが明示選択した検証済み`browser.read`結果と、その同一taskの次回計画候補を作るC。目的は、Jの現行plan／revision／step bindingとMの保存record／receiptを再照合したHTTP読取結果だけを、次の候補計算のcontextへ渡すこと。`browser.snapshot`、browser mutation、実provider試験は含めない。
