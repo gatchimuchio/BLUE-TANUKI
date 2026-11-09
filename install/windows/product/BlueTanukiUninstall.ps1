@@ -122,7 +122,7 @@ function Assert-InstallHelper($InstallRootResolved) {
   return $helperPath
 }
 
-function Remove-Target($Target, $Label) {
+function Remove-Target($Target, $Label, $ProductDataInstallRoot = $null) {
   if (-not (Test-Path -LiteralPath $Target)) {
     if (-not $Quiet) { Write-Host "Skip missing ${Label}: $Target" }
     return
@@ -131,8 +131,14 @@ function Remove-Target($Target, $Label) {
     Write-Host "Would remove ${Label}: $Target"
     return
   }
-  try { Assert-NoReparsePointsInTree -Path $Target -Label $Label } catch {
-    Fail "Refusing recursive removal of ${Label}. $($_.Exception.Message)"
+  if ($ProductDataInstallRoot) {
+    try { [void](Assert-ManagedWindowsProductData -DataRoot $Target -InstallRoot $ProductDataInstallRoot) } catch {
+      Fail "Refusing to remove user data because its ownership and structure could not be verified. The app has already been removed; user data is retained. $($_.Exception.Message)"
+    }
+  } else {
+    try { Assert-NoReparsePointsInTree -Path $Target -Label $Label } catch {
+      Fail "Refusing recursive removal of ${Label}. $($_.Exception.Message)"
+    }
   }
   Remove-Item -LiteralPath $Target -Recurse -Force
   if (-not $Quiet) { Write-Host "Removed ${Label}: $Target" }
@@ -281,7 +287,7 @@ Remove-ManagedShortcuts $installRootResolved
 Remove-ManagedUninstallRegistration $installRootResolved
 
 if ($PurgeData) {
-  Remove-Target $dataRootResolved 'user data'
+  Remove-Target $dataRootResolved 'user data' $installRootResolved
   if (-not $Quiet) { Write-Host 'BLUE-TANUKI uninstalled with data purge.' }
 } elseif (-not $Quiet) {
   Write-Host "BLUE-TANUKI app removed. User data retained at: $dataRootResolved"

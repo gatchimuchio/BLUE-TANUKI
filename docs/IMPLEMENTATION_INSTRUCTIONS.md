@@ -2,7 +2,13 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / Windows UninstallのDataRoot所有を削除直前に再確認
+
+`-PurgeData`の開始時検証後、installed app・ショートカット・uninstall登録を除去してからユーザーDataRootを削除する直前に、DataRootのowner markerと再parse点を含む構造をもう一度検証する。検証を`Remove-Target`の削除経路へ束縛したため、対象が差し替わった場合はユーザーデータの再帰削除を拒否する。拒否時点ではapp側の除去が済んでいる可能性をエラー文に明示し、DataRootは保持する。通常Uninstallのユーザーデータ保持と他のmanaged target処理は変えない。
+
+PowerShell parser、`corepack pnpm docs:check`、`git diff --check`はPASS。test／installed Uninstall／DataRoot変更競合の実行はNOT_RUN。この経路の静的接続だけを実装済みとし、Windows lifecycleやSetup→Uninstall全体の実動作へ拡張しない。D4-Pocketは読取専用で契約を確認し、同repo・実ユーザーデータ・実製品へ変更なし。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
 
 主語は、既存Windows製品を更新するSetupと、稼働中の製品・共有データを保護する導線。`BlueTanukiLauncher.ps1 stop`の失敗または非0終了をSetupが警告だけで無視していた欠陥を修正した。Setupは停止結果を確認し、停止不成立なら既存installのswap、共有DataRoot／設定へのSetup処理、installed doctor起動へ進まない。対象installを停止した後もmanaged inventoryを再検査してから共有データと更新処理へ進む。
 
