@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / E04.03 FailureMemoryの条件再評価を承認・実行consumerへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / E04.02 FailureReviewのbaseline証拠を独立観測から分離（限定WIRED）
+
+主語は、FailureMemoryの元署名根拠をCへ渡すFailureReviewと、候補の範囲・反例・再開条件を裁定するHDS-J。署名作成時の`evidence_log_ids`はbaseline根拠であり、CompleteHistoryのhash-chainを再検証しても、新しい独立観測や外部条件の解消証拠にはならない。Gatewayはこの履歴を`independent_observations`へ再投入せず、chainが不正なら`invalid`、独立観測producerがない現状は`unavailable`として渡す。Jはscope・反例・再開条件を保留し、原因候補の採用・権限化・実行を行わない。
+
+Gateway依存7 workspace project build、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASS（既存移行負債76件の注意）。test suite、実FailureReview UI往復、別producerからの外部条件再観測、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。この証拠分類補正だけを限定`WIRED`とし、E04.02／E04.03全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+**次のproducer／consumer:** 署名作成後の外部条件を独立に観測してJへ返す、実際のread-only producerとその対象・因果束縛を再選定する。資格・危険な再実行・別repo変更はこの単位で追加しない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / E04.03 FailureMemoryの条件再評価を承認・実行consumerへ接続（限定WIRED）
 
 主語は、条件変化後の同一commandを再監査するFailureMemory gateと、Owner承認後のGateway Executor。初回gate判定digestと元の実行主体をprocess-local pending approvalへ束縛する。Owner承認再開時に同じcommand／contextを再評価し、gateが変化・block・取得不能なら承認を取消して新規要求を求める。承認後もExecutorの`before_execute`およびtool dispatch直前で再評価し、digest不一致なら作用前に停止する。FailureMemory gate由来の承認から再利用可能なgrantを作らず、旧署名を変更・削除しない。承認要求にはgoal／actor／channelの観測差分次元を示す。
 

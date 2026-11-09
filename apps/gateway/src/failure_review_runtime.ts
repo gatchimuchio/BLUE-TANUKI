@@ -1,18 +1,15 @@
 import {
   CompleteHistoryStore,
   createFailureReviewProjection,
-  extractFailureSignatures,
   failureLearningLineageReference,
   failureSignatureDigest,
   resolveActor,
-  sha256Hex,
   type FailureMemoryStore,
 } from "@blue-tanuki/hds-brain";
 import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
   type InboundRequest,
-  type FailureReviewIndependentObservation,
 } from "@blue-tanuki/protocol";
 
 const FAILURE_REVIEW_PREFIX = /^failure:review(?:\s|$)/i;
@@ -47,18 +44,19 @@ export function prepareFailureReviewInbound(
 
   try {
     const chainValid = completeHistory?.verify() ?? false;
-    const independentObservations = chainValid
-      ? linkedIndependentObservations(signature.evidence_log_ids, completeHistory!)
-      : [];
     const signatureDigest = failureSignatureDigest(signature);
     const priorLearningLineages = store.listLearningLineageForSignature(signature.id)
       .filter((record) => record.signature_digest === signatureDigest)
       .slice(-32)
       .map(failureLearningLineageReference);
+    // These IDs are the baseline evidence from which the failure signature was built.
+    // Re-reading them verifies the history chain, but does not create a new independent
+    // observation of a changed external condition. No separate observation producer is
+    // connected yet, so J must keep scope, counterexamples, and resume conditions held.
     const projection = createFailureReviewProjection(
       signature,
-      independentObservations,
-      chainValid ? "verified" : completeHistory ? "invalid" : "unavailable",
+      [],
+      completeHistory && !chainValid ? "invalid" : "unavailable",
       priorLearningLineages,
     );
     return createGatewayInternalInboundRequest({
@@ -76,25 +74,6 @@ export function prepareFailureReviewInbound(
     // see the explicit control command without a projection and fail closed.
     return input;
   }
-}
-
-function linkedIndependentObservations(
-  evidenceLogIds: readonly string[],
-  completeHistory: CompleteHistoryStore,
-): FailureReviewIndependentObservation[] {
-  const evidence = new Set(evidenceLogIds);
-  if (evidence.size === 0) return [];
-  return completeHistory.all()
-    .filter((entry) => evidence.has(entry.id))
-    .map((entry) => ({
-      source: "complete_history" as const,
-      entry_id_digest: sha256Hex(entry.id),
-      entry_hash: entry.entry_hash,
-      payload_digest: entry.payload_digest,
-      entry_kind: entry.kind,
-      observed_failures: extractFailureSignatures({ kind: "complete_history", entry })
-        .map(({ scope, failure_type }) => ({ scope, failure_type })),
-    }));
 }
 
 function latestFailureSignature(store: FailureMemoryStore) {

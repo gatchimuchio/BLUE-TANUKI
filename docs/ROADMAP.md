@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E04.03 FailureMemory条件変化の再評価を承認・実行consumerへ接続（限定WIRED）
+### 直近BUILD_BATCH — E04.02 FailureReviewのbaseline証拠を独立観測から分離（限定WIRED）
+
+FailureMemoryの`evidence_log_ids`は署名作成時のbaseline根拠であり、同じCompleteHistory entryを再読しただけでは独立観測にならないことを確認した。Gatewayは元根拠を独立観測欄へ再投入せず、hash-chain不正時は`invalid`、別producerがない場合は`unavailable`としてHDS-Jへ渡す。Jはscope・反例・再開条件を保留し、原因候補を採用・権限化しない。
+
+Gateway依存7 workspace project build、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASS（既存移行負債76件の注意）。test suite、実FailureReview往復、外部条件の独立再観測producer、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。この証拠分類補正だけを限定`WIRED`とする。E04.02／E04.03全体および製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+### 前段BUILD_BATCH — E04.03 FailureMemory条件変化の再評価を承認・実行consumerへ接続（限定WIRED）
 
 FailureMemory gateの初回判定digestと元の実行主体をprocess-local pending approvalへ束縛する。Ownerの承認再開時に同じcommand／contextを再評価し、gateが変化・block・取得不能ならpendingを取消して新規要求を求める。承認後もExecutorの`before_execute`とtool dispatch直前で同じgateを再評価し、digest不一致を検出した場合は作用前に停止する。gate由来の承認から再利用可能なgrantを作らず、前のFailureMemory署名を変更・削除・置換しない。条件変化が観測された場合は承認要求にgoal／actor／channelのdigest差分次元を表示し、古い承認を再利用しない。
 
