@@ -1234,6 +1234,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
       const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
       const sessionScope = `d4-runtime:${sessionIdDigest}`;
+      if (this.connectionCount(sessionScope) === 0) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({
+          accepted: false,
+          status: "not_dispatched",
+          error: "runtime_response_channel_not_connected",
+        }));
+        return;
+      }
       const inboundReq = createGatewayInternalInboundRequest({
         id: randomUUID(),
         channel: "webchat",

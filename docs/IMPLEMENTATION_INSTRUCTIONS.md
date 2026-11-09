@@ -6,9 +6,9 @@
 
 主語はBLUE-TANUKIのGateway/`channel-webchat` D4 Runtime Adapter、目的は認証済みRuntimeからの意図入力をHDSへ渡し、同一session宛てにHDSが許可した出力を返すこと。専用`BLUE_TANUKI_D4_RUNTIME_TOKEN`と固定runtime IDを共有する新`POST /runtime/ws-ticket`を追加した。登録runtime IDとsession参照を検証し、session参照はtoken鍵付きHMAC digestへ変換する。返すticketは既存ticket storeの期限・単回消費・user束縛を使い、WebChat一般tokenやowner/resume tokenを共有しない。新しいticket bodyはruntime/session IDだけで、意図・command・path・Approval・Permissionを含まない。
 
-D4 Runtime Adapterは同じsessionでticketを先に要求し、ticketで既存`/ws`へ接続後、既存`POST /runtime/intent`を送る。WebSocketは同じdigest scopeへ既存`channel_send`を配送し、HDSが付けたrequest IDも保持する。`202`は入力受付のみで、仕事達成や応答完了を意味しない。新しい権限経路・出力保存・再送機能は追加していない。
+D4 Runtime Adapterは同じsessionでticketを先に要求し、ticketで既存`/ws`へ接続後、既存`POST /runtime/intent`を送る。対応するsession WebSocket接続がない場合は`409 not_dispatched`を返し、handler／HDSへ仕事を渡さない。WebSocketは同じdigest scopeへ既存`channel_send`を配送し、HDSが付けたrequest IDも保持する。`202`は入力受付のみで、仕事達成や応答完了を意味しない。新しい権限経路・出力保存・再送機能は追加していない。
 
-接続状態はBlue側transportの限定`WIRED`。依存3 project buildはPASS。選択test（1件PASS、同fileの他121件skip）で未設定時のfail-closed、wrong token、未登録runtime拒否、session digest束縛、WebSocket channel_send戻りを確認した。`git diff --check`はPASS、`docs:check`はPASS（日本語基底の既存移行負債76件に注意、license PASS）。全suite、実HDS判断→出力監査→D4 Runtime受信のGateway一気通貫、実D4 producer/receiver、workspace登録、disconnect/restart recovery、実provider/外部作用、installed製品、5OS、QE_QC／QE_QAは未実施。D03.01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。D4 Pocket repoは変更していない。
+接続状態はBlue側transportの限定`WIRED`。依存3 project buildはPASS。選択testは3件PASS（同fileの他120件skip）で、応答接続なしの未dispatch、未設定時のfail-closed、wrong token、未登録runtime拒否、session digest束縛、接続時のWebSocket channel_send戻りを確認した。`git diff --check`はPASS、`docs:check`はPASS（日本語基底の既存移行負債76件に注意、license PASS）。全suite、実HDS判断→出力監査→D4 Runtime受信のGateway一気通貫、実D4 producer/receiver、workspace登録、disconnect/restart recovery、実provider/外部作用、installed製品、5OS、QE_QC／QE_QAは未実施。D03.01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。D4 Pocket repoは変更していない。
 
 **次のproducer／consumer:** D4側がBlueのsession-scoped WebSocket contractを使うproducer/receiverは未接続。D4側repo変更には別repoの限定委任が必要なため保留し、次回は現行HEADの全体接続距離から、D4変更なしで結べるBlue側consumerを再選定する。runtime/session/workspace registrationがない状態をD03.01完成と扱わない。
 

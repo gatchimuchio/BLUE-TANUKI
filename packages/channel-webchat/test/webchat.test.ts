@@ -3424,10 +3424,18 @@ describe("WebChatChannel — HTTP inbound", () => {
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
     });
+    let ws: WebSocket | undefined;
     try {
       await runtimeCtx.ch.start(async (req) => {
         runtimeCtx.received.push(req);
       });
+      const ticketResponse = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(ticketResponse.status).toBe(200);
+      const ticketBody = ticketResponse.body as { ticket: string; session_ref_digest: string };
+      ws = await openWsWithTicket(runtimeCtx.port, ticketBody.ticket);
       const response = await postJson(runtimeCtx.port, "/runtime/intent", {
         runtime_id: "blue_tanuki",
         session_id: "session-1234-abcd",
@@ -3474,6 +3482,33 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(Object.values(received.metadata ?? {})).not.toContain("blue_tanuki");
       expect(JSON.stringify(response.body)).not.toContain("blue_tanuki");
       expect(response.body).toMatchObject({ session_ref_digest: sessionDigest });
+    } finally {
+      ws?.close();
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("does not dispatch D4 Runtime intent without a connected response session", async () => {
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    });
+    try {
+      await runtimeCtx.ch.start(async (req) => {
+        runtimeCtx.received.push(req);
+      });
+      const response = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-without-response",
+        intent: "do not start without a return path",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        accepted: false,
+        status: "not_dispatched",
+        error: "runtime_response_channel_not_connected",
+      });
+      expect(runtimeCtx.received).toHaveLength(0);
+      expect(JSON.stringify(response.body)).not.toContain("session-without-response");
     } finally {
       await runtimeCtx.teardown();
     }
