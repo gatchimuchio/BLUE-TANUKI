@@ -79,6 +79,7 @@ export async function resolveFileSearchRoot(
 export async function resolveSandboxFilePath(
   pathArg: string,
   sandboxRoot: string,
+  env: Env = process.env,
 ): Promise<{ filepath: string; relative_path: string }> {
   const lexical = path.isAbsolute(pathArg)
     ? path.resolve(pathArg)
@@ -88,6 +89,7 @@ export async function resolveSandboxFilePath(
   }
   const rel = path.relative(sandboxRoot, lexical);
   assertNotSecretLike(rel, displayPath(rel || "."));
+  await assertNotHdsMemoryArtifact(lexical, env);
 
   const parent = path.dirname(lexical);
   const realParent = await fs.realpath(parent);
@@ -115,6 +117,7 @@ export async function resolveSandboxFilePath(
     if (!pathInside(sandboxRoot, real)) {
       throw new Error("file path escapes BLUE_TANUKI_FILE_ROOT via symlink");
     }
+    await assertNotHdsMemoryArtifact(real, env);
   }
 
   return {
@@ -123,9 +126,48 @@ export async function resolveSandboxFilePath(
   };
 }
 
+/**
+ * HDS M is read and changed through its governed store, never as an ordinary
+ * sandbox file. This also protects the append-only personalization ledger so
+ * generic file search cannot bypass an M citation exclusion.
+ */
+export async function isHdsMemoryArtifact(filepath: string, env: Env = process.env): Promise<boolean> {
+  const configuredFile = env.BLUE_TANUKI_MEMORY_FILE?.trim();
+  const configuredDir = env.BLUE_TANUKI_MEMORY_DIR?.trim();
+  const memoryFile = configuredFile
+    ? path.resolve(configuredFile)
+    : configuredDir
+      ? path.join(path.resolve(configuredDir), "memory.jsonl")
+      : undefined;
+  if (!memoryFile) return false;
+
+  const protectedFiles = [memoryFile, `${memoryFile}.personalization.jsonl`];
+  const targetPaths = await canonicalPathCandidates(filepath);
+  const protectedPaths = new Set<string>();
+  for (const protectedFile of protectedFiles) {
+    for (const candidate of await canonicalPathCandidates(protectedFile)) protectedPaths.add(pathKey(candidate));
+  }
+  if ([...targetPaths].some((candidate) => protectedPaths.has(pathKey(candidate)))) return true;
+
+  const targetIdentity = await fileIdentity(filepath);
+  if (!targetIdentity) return false;
+  for (const protectedFile of protectedFiles) {
+    const protectedIdentity = await fileIdentity(protectedFile);
+    if (protectedIdentity && protectedIdentity === targetIdentity) return true;
+  }
+  return false;
+}
+
+export async function assertNotHdsMemoryArtifact(filepath: string, env: Env = process.env): Promise<void> {
+  if (await isHdsMemoryArtifact(filepath, env)) {
+    throw new Error("file operation denied HDS memory storage");
+  }
+}
+
 export async function* walkFiles(
   root: string,
   sandboxRoot: string,
+  env: Env = process.env,
 ): AsyncGenerator<string> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   for (const entry of entries) {
@@ -133,11 +175,13 @@ export async function* walkFiles(
       continue;
     }
     const full = path.join(root, entry.name);
+    if (await isHdsMemoryArtifact(full, env)) continue;
     const rel = path.relative(sandboxRoot, full);
     if (isSecretLikeRelativePath(rel)) {
       continue;
     }
     const real = await fs.realpath(full);
+    if (await isHdsMemoryArtifact(real, env)) continue;
     if (isPrivateStatePath(real) || isSecretLikeRelativePath(path.relative(sandboxRoot, real))) continue;
     if (!pathInside(sandboxRoot, real)) {
       throw new Error(
@@ -145,11 +189,42 @@ export async function* walkFiles(
       );
     }
     if (entry.isDirectory()) {
-      yield* walkFiles(real, sandboxRoot);
+      yield* walkFiles(real, sandboxRoot, env);
     } else if (entry.isFile()) {
       yield real;
     }
   }
+}
+
+async function canonicalPathCandidates(filepath: string): Promise<Set<string>> {
+  const absolute = path.resolve(filepath);
+  const candidates = new Set<string>([absolute]);
+  try {
+    candidates.add(await fs.realpath(absolute));
+  } catch {
+    try {
+      candidates.add(path.join(await fs.realpath(path.dirname(absolute)), path.basename(absolute)));
+    } catch {
+      // Keep the lexical path. If its parent is inaccessible, the protected
+      // target itself cannot be opened through the ordinary sandbox path.
+    }
+  }
+  return candidates;
+}
+
+async function fileIdentity(filepath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(filepath, { bigint: true });
+    if (!stat.isFile()) return null;
+    return `${stat.dev.toString()}:${stat.ino.toString()}`;
+  } catch {
+    return null;
+  }
+}
+
+function pathKey(filepath: string): string {
+  const absolute = path.resolve(filepath);
+  return process.platform === "win32" ? absolute.toLocaleLowerCase("en-US") : absolute;
 }
 
 function pathInside(parent: string, child: string): boolean {

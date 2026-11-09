@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続
+## 直近施工BUILD_BATCH — QE_BUILD / F20.01 設定済みHDS記憶を通常file経路から隔離
+
+主語は、HDSのM本体と個人化停止台帳、および利用者の一般file tool。目的は、HDSが管理する記憶の読取・編集・削除を通常のsandbox file経路から迂回できないようにし、停止台帳を越えた検索と一般file経路からの物理消去を防ぐこと。rev4.0のF20.01、BT-R-F20-02／03／04／06に沿った限定BUILD sliceである。
+
+`buildHDSMemoryStore`と同じ優先順位で、`BLUE_TANUKI_MEMORY_FILE`または`BLUE_TANUKI_MEMORY_DIR/memory.jsonl`を実M本体として識別し、その`.personalization.jsonl`追記台帳も保護する。`file.search`の直接指定・列挙から両方を除外し、`file.write`／`file.edit`／`file.delete`の対象解決でも拒否する。設定パスと実ファイルidentity（hard linkを含む）を照合し、外部保存場所へのsandbox内hard linkも迂回にならない。未構成のin-memory storeには存在しないファイル保護を適用しない。通常ファイルの検索・編集能力は維持する。
+
+この変更は個人化停止のHDS trace経路、J／Approval／Brokerの権限を置換せず、M本体・停止履歴を変更しない。物理消去、保存契約終了、backup/cache/remote copy/鍵の処遇は実装・実行していない。rev4.0本文では`OD-04`がRust single-writer cutoverを指す一方、F20.01の旧`原文詳細`は削除決定を同じIDで参照しており、IDが衝突する。今回の安全な通常file隔離はその解釈に依存しない。物理消去の判断には使わない。
+
+core package `typecheck`／`build`はPASS。設定済みM・停止台帳・sandbox内hard linkを使うbuilt-in file path test 1件はPASS（`tools_builtin.test.ts`の他99件はskip）。実served Gateway、実ユーザーデータ、他OS、全suite、QE_QC／QE_QAはNOT_RUN。この一般file隔離sliceだけを`WIRED`とし、F20.01／F20全体や製品全体の完成へ拡張しない。
+
+次は最新HEADから次の通常consumerを再選定する。F20の物理消去・保存契約終了・backup処遇はID衝突を含む判断が明確化するまで起動しない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続
 
 主語は、BLUE-TANUKIのHDSが保持する一件のM記録と、その後続引用・個人化consumer。目的は、ownerが明示した正確な`F:`参照について将来の記憶引用と個人化利用を停止し、履歴記録を残したまま有効な参照版・検索scopeを失効すること。rev4.0のF20.02とBT-R-F20-02／06／07に沿い、物理削除・保存契約終了は別作用として行わない。
 

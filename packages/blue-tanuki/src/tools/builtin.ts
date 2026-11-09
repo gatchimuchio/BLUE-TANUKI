@@ -73,6 +73,7 @@ import {
   composioSearchTool,
 } from "./composio.js";
 import {
+  isHdsMemoryArtifact,
   resolveFileSearchRoot,
   resolveSandboxFilePath,
   sandboxRootFromEnv,
@@ -3620,9 +3621,10 @@ async function readExactFileSearchTarget(
   filePath: string,
   root: string,
   sandboxRoot: string,
+  env: Record<string, string | undefined>,
 ): Promise<ExactFileSearchTarget> {
   assertExactFileSearchPath(filePath);
-  const resolved = await resolveSandboxFilePath(filePath, sandboxRoot);
+  const resolved = await resolveSandboxFilePath(filePath, sandboxRoot, env);
   let canonicalPath: string;
   try { canonicalPath = await fs.realpath(resolved.filepath); }
   catch { throw new Error("file.search exact target is unavailable"); }
@@ -3724,13 +3726,14 @@ export async function invokeFileSearch(
     }
   };
   if (requestedFilePath !== undefined) {
-    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot);
+    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot, env);
     visited = 1;
     appendFileSearchVersionEntry(targetVersionHasher, root, target.filepath, target.data);
     appendMatches(target.relative_path, target.data, query.length === 0 ? startLine : 1);
   } else {
-    for await (const file of walkFiles(root, sandboxRoot)) {
+    for await (const file of walkFiles(root, sandboxRoot, env)) {
       if (visited >= 1_000) break;
+      if (await isHdsMemoryArtifact(file, env)) continue;
       visited += 1;
       const data = await fs.readFile(file);
       appendFileSearchVersionEntry(targetVersionHasher, root, file, data);
@@ -3771,12 +3774,13 @@ export async function inspectFileSearchTargetVersion(
   const hasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
   let filesExamined = 0;
   if (requestedFilePath !== undefined) {
-    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot);
+    const target = await readExactFileSearchTarget(requestedFilePath, root, sandboxRoot, env);
     appendFileSearchVersionEntry(hasher, root, target.filepath, target.data);
     filesExamined = 1;
   } else {
-    for await (const file of walkFiles(root, sandboxRoot)) {
+    for await (const file of walkFiles(root, sandboxRoot, env)) {
       if (filesExamined >= 1_000) break;
+      if (await isHdsMemoryArtifact(file, env)) continue;
       const data = await fs.readFile(file);
       appendFileSearchVersionEntry(hasher, root, file, data);
       filesExamined += 1;
@@ -3853,7 +3857,7 @@ export async function invokeFileWrite(
     ({ sandbox_root: sandboxRoot, filepath, relative_path } = resolved);
   } else {
     sandboxRoot = await sandboxRootFromEnv(env);
-    const resolved = await resolveSandboxFilePath(stringArg(args, "path")!, sandboxRoot);
+    const resolved = await resolveSandboxFilePath(stringArg(args, "path")!, sandboxRoot, env);
     ({ filepath, relative_path } = resolved);
   }
 
@@ -3896,7 +3900,7 @@ async function resolveFileWriteTargetVersion(
   assertPlannedFileWritePath(pathArg);
   const env = opts.env ?? process.env;
   const sandboxRoot = await sandboxRootFromEnv(env);
-  const { filepath: resolvedPath, relative_path } = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const { filepath: resolvedPath, relative_path } = await resolveSandboxFilePath(pathArg, sandboxRoot, env);
   const realParent = await fs.realpath(path.dirname(resolvedPath));
   const filepath = path.join(realParent, path.basename(resolvedPath));
   const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
@@ -3962,7 +3966,7 @@ export async function inspectFileWriteOutcomeState(
   const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
   if (Buffer.byteLength(content, "utf8") > maxBytes) throw new Error("file.write plan payload exceeds max_bytes");
   const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
-  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot, opts.env ?? process.env);
   const realParent = await fs.realpath(path.dirname(resolved.filepath));
   if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.write outcome parent escapes BLUE_TANUKI_FILE_ROOT");
   const filepath = path.join(realParent, path.basename(resolved.filepath));
@@ -4042,7 +4046,7 @@ async function resolveFileDeleteTargetVersion(
   assertPlannedFileDeletePath(pathArg);
   const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
   const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
-  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot, opts.env ?? process.env);
   const realParent = await fs.realpath(path.dirname(resolved.filepath));
   if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.delete parent escapes BLUE_TANUKI_FILE_ROOT");
   const filepath = path.join(realParent, path.basename(resolved.filepath));
@@ -4208,7 +4212,7 @@ export async function brokerFileResourceLockDigest(
 
   try {
     const sandboxRoot = await sandboxRootFromEnv(env);
-    const candidate = await resolveSandboxFilePath(pathArg, sandboxRoot);
+    const candidate = await resolveSandboxFilePath(pathArg, sandboxRoot, env);
     const realParent = await fs.realpath(path.dirname(candidate.filepath));
     if (!isPathWithin(sandboxRoot, realParent)) throw new Error("outside sandbox");
     const lexicalTarget = path.join(realParent, path.basename(candidate.filepath));
@@ -4306,7 +4310,7 @@ async function resolveFileEditTargetVersion(
   const expectedReplacements = positiveIntArg(args, "expected_replacements", 1, 100);
   const maxBytes = positiveIntArg(args, "max_bytes", 512_000, 1_000_000);
   const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
-  const requested = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const requested = await resolveSandboxFilePath(pathArg, sandboxRoot, opts.env ?? process.env);
   const realParent = await fs.realpath(path.dirname(requested.filepath));
   if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.edit parent escapes BLUE_TANUKI_FILE_ROOT");
   const filepath = path.join(realParent, path.basename(requested.filepath));

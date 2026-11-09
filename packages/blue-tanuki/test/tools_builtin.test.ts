@@ -432,6 +432,65 @@ describe("built-in tools", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 
+  it("通常file経路は設定済みHDS記憶と個人化停止台帳を検索・編集・削除できない", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-hds-memory-file-boundary-"));
+    const sandbox = path.join(parent, "sandbox");
+    const memoryDir = path.join(parent, "memory");
+    const memoryFile = path.join(memoryDir, "memory.jsonl");
+    const personalizationFile = `${memoryFile}.personalization.jsonl`;
+    const binding = "a".repeat(64);
+    const command = "b".repeat(64);
+    const env = { BLUE_TANUKI_FILE_ROOT: sandbox, BLUE_TANUKI_MEMORY_DIR: memoryDir };
+    try {
+      await fs.mkdir(sandbox);
+      await fs.mkdir(memoryDir);
+      await fs.writeFile(memoryFile, "HDS_MEMORY_PRIVATE_SENTINEL\n", "utf8");
+      await fs.writeFile(personalizationFile, "HDS_STOP_LEDGER_PRIVATE_SENTINEL\n", "utf8");
+      await fs.writeFile(path.join(sandbox, "safe.txt"), "unrelated ordinary file\n", "utf8");
+      await fs.link(memoryFile, path.join(sandbox, "memory-alias.jsonl"));
+      await fs.link(personalizationFile, path.join(sandbox, "stop-ledger-alias.jsonl"));
+      await fs.mkdir(path.join(sandbox, "nested"));
+      await fs.link(memoryFile, path.join(sandbox, "nested", "nested-memory-alias.jsonl"));
+
+      const search = await invokeFileSearch({ root: ".", query: "PRIVATE_SENTINEL" }, { env }) as {
+        matches: Array<{ path: string; line: string }>;
+      };
+      expect(search.matches).toEqual([]);
+      const ordinarySearch = await invokeFileSearch({ root: ".", query: "ordinary" }, { env }) as {
+        matches: Array<{ path: string; line: string }>;
+      };
+      expect(ordinarySearch.matches.map((match) => match.path)).toEqual(["safe.txt"]);
+      await expect(invokeFileSearch({ root: ".", file_path: "memory-alias.jsonl", query: "", max_results: 5 }, { env }))
+        .rejects.toThrow(/HDS memory storage/);
+      await expect(invokeFileSearch({ root: ".", file_path: "nested/nested-memory-alias.jsonl", query: "", max_results: 5 }, { env }))
+        .rejects.toThrow(/HDS memory storage/);
+      await expect(invokeFileSearch({ root: ".", file_path: "stop-ledger-alias.jsonl", query: "", max_results: 5 }, { env }))
+        .rejects.toThrow(/HDS memory storage/);
+
+      await expect(invokeFileWrite({ path: "memory-alias.jsonl", content: "replacement", mode: "overwrite" }, { env }))
+        .rejects.toThrow(/HDS memory storage/);
+      await expect(inspectFileEditTargetVersion({ path: "memory-alias.jsonl", search: "PRIVATE", replace: "changed",
+        expected_replacements: 1 }, { env, operation_plan_binding_digest: binding, command_digest: command }))
+        .rejects.toThrow(/HDS memory storage/);
+      await expect(inspectFileDeleteTargetVersion({ path: "memory-alias.jsonl", max_bytes: 1024 }, {
+        env, operation_plan_binding_digest: binding, command_digest: command,
+      })).rejects.toThrow(/HDS memory storage/);
+      await expect(inspectFileDeleteTargetVersion({ path: "stop-ledger-alias.jsonl", max_bytes: 1024 }, {
+        env, operation_plan_binding_digest: binding, command_digest: command,
+      })).rejects.toThrow(/HDS memory storage/);
+
+      const absentMemoryEnv = { BLUE_TANUKI_FILE_ROOT: sandbox, BLUE_TANUKI_MEMORY_FILE: path.join(sandbox, "not-created.jsonl") };
+      await expect(invokeFileWrite({ path: "not-created.jsonl", content: "must not seed M", mode: "create" }, {
+        env: absentMemoryEnv,
+      })).rejects.toThrow(/HDS memory storage/);
+      expect(await fs.readFile(memoryFile, "utf8")).toBe("HDS_MEMORY_PRIVATE_SENTINEL\n");
+      expect(await fs.readFile(personalizationFile, "utf8")).toBe("HDS_STOP_LEDGER_PRIVATE_SENTINEL\n");
+      await expect(fs.stat(path.join(sandbox, "not-created.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("file.write fails closed for accidental overwrite, sandbox escape, and secret-like paths", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
     const sandbox = path.join(parent, "sandbox");

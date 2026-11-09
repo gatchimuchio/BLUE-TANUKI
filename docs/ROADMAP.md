@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続（限定WIRED）
+### 直近BUILD_BATCH — F20.01 設定済みHDS記憶を通常file経路から隔離（限定WIRED）
+
+設定済み`BLUE_TANUKI_MEMORY_FILE`または`BLUE_TANUKI_MEMORY_DIR/memory.jsonl`と、その`.personalization.jsonl`台帳を通常のsandbox file経路から分離した。`file.search`の直接指定・列挙、`file.write`、`file.edit`、`file.delete`は、設定パス・canonical path・実file identity（hard linkを含む）で保護対象と一致すれば拒否する。停止済みMの直接検索迂回と、一般削除経路によるM／停止台帳の消去を防ぐ。通常ファイルの操作、HDS自身のM read/write、既存の停止台帳処理は維持する。物理消去・保存契約終了・backup/cache/remote copy/鍵処遇は未実装・未実行。`OD-04`はrev4.0本文でRust cutoverを示す一方、施工単位の旧原文詳細で物理削除の決定IDとして重複参照されるため、この変更ではIDに基づく消去許可を推測していない。
+
+core typecheck/buildとsandbox内hard linkを含むbuilt-in境界検査1件はPASS（同file testの他99件はskip）。実served Gateway、全suite、他OS、QE_QC／QE_QAはNOT_RUN。このfile経路保護sliceだけを限定`WIRED`とし、F20全体や製品全体の完成へ拡張しない。
+
+### 前段完了BUILD_BATCH — F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続（限定WIRED）
 
 ownerが明示した一件のM記録に対し、`memory.personalization.stop`をCの計画候補→Jの正確なtarget/revision照合→登録済みExecutor adapter→settings.write／high／L3 no-store確認→作用直前の再照合→停止台帳追記→後続HDS memory trace除外へ接続した。M履歴は保持し、該当する既存参照版を失効し、停止台帳revisionを次回検索scopeへ反映する。不正な台帳はfail-closed。物理削除・保存契約終了はこの作用に含めない。
 
