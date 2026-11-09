@@ -165,7 +165,10 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
-  it("seals explicit task completion only from verified J/M evidence and blocks further step selection after restart", async () => {
+  it.each([
+    { label: "matching rule", expectedLine: "blue", expectedStatus: "achieved" as const },
+    { label: "mismatching rule", expectedLine: "not-blue", expectedStatus: "held" as const },
+  ])("assesses explicit completion from verified J/M evidence ($label)", async ({ expectedLine, expectedStatus }) => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-completion-"));
     const workspace = join(root, "workspace"); await mkdir(workspace);
     await writeFile(join(workspace, "blue.txt"), "blue\n", "utf8");
@@ -181,7 +184,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     let executionStore: GatewayExecutionIntentStore | undefined;
     const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
       rules: [{ rule_id: "matching-line", operation: "file.search", target: { kind: "directory" as const, id: workspace },
-        output_pointer: "/matches/0/line", expected_value: "blue" }] };
+        output_pointer: "/matches/0/line", expected_value: expectedLine }] };
     try {
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
       const origin = request("plan:compute find blue", "fixture-owner", undefined, rules);
@@ -227,31 +230,41 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(executionStore.verifyEvents()).toBe(true);
       expect(hds.reconcileOperationPlanMemory()).toBe(true);
 
-      const achieved = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
-      expect(achieved.task_outcome).toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
-        used_for_authority: false, may_execute: false,
-        goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
-          used_for_authority: false, may_execute: false } });
-      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.task_outcome)
-        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
+      const assessed = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+      if (expectedStatus === "achieved") {
+        expect(assessed.task_outcome).toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
+          used_for_authority: false, may_execute: false,
           goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
-            used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false });
-      expect(store.load()?.plans[0]?.goal_completion_assessment).toMatchObject({
-        decision_scope: "stop_same_task_after_verified_goal_completion", may_execute: false,
-      });
-      const stopped = review(hds, candidate, "search");
-      expect(stopped.command).toBeNull();
-      expect(stopped.log.commit.reason).toContain("plan_control_denied");
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
-        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
+            used_for_authority: false, may_execute: false } });
+        expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.task_outcome)
+          .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
+            goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+              used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false });
+        expect(store.load()?.plans[0]?.goal_completion_assessment).toMatchObject({
+          decision_scope: "stop_same_task_after_verified_goal_completion", may_execute: false,
+        });
+        const stopped = review(hds, candidate, "search");
+        expect(stopped.command).toBeNull();
+        expect(stopped.log.commit.reason).toContain("plan_control_denied");
+        expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
+          .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
+      } else {
+        expect(assessed.task_outcome).toMatchObject({ status: "held", reason_code: "goal_completion_result_mismatch",
+          goal_assessment: { status: "held", reason_code: "result_mismatch", rule_count: 1, satisfied_rule_count: 0 },
+          used_for_authority: false, may_execute: false });
+        expect(store.load()?.plans[0]?.goal_completion_assessment).toBeUndefined();
+      }
 
       hds.closeOperationPlanMemory();
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
-        .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
-      const afterRestart = review(hds, candidate, "search");
-      expect(afterRestart.command).toBeNull();
-      expect(afterRestart.log.commit.reason).toContain("plan_control_denied");
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome).toMatchObject(expectedStatus === "achieved"
+        ? { status: "achieved", reason_code: "goal_completion_rules_satisfied" }
+        : { status: "held", reason_code: "goal_completion_result_mismatch" });
+      if (expectedStatus === "achieved") {
+        const afterRestart = review(hds, candidate, "search");
+        expect(afterRestart.command).toBeNull();
+        expect(afterRestart.log.commit.reason).toContain("plan_control_denied");
+      }
     } finally {
       hds?.closeOperationPlanMemory();
       executionStore?.close(); store.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });

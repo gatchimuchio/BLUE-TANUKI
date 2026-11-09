@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-09 — QEB-C08.02-SERVED-GOAL-COMPLETION
+
+開始local／remote `main`=`d77b312668c34baac1db4e6d651e4105422cbc92`。編集前の二世代復旧refはlocal branch／remote tagともcurrent=`d77b312...`、previous=`e8b95dadebb8e525f1c5305eba253b8bde54b89c`。作業worktreeは`main`だけ。`.codex-attachments/`と`.codex-remote-attachments/`はowner資料の保護領域として無変更。Graph／OneDrive操作、別repo作業、実ユーザーデータ変更はなし。`.git/worktrees/blue-tanuki-health-2026-11-07-windows`に残るinaccessible worktree metadataはpermission deniedのため保持し、ACLやforceで整理していない。
+
+owner-token付き`/owner/task-compute`の明示`goal_completion_rules`を、隔離Windows Gateway processの実served経路からsynthetic `file.search`・HDS J／M receiptへ通すGateway testを追加した。規則欠落時はverified結果とM receiptが存在しても`goal_completion_rules_missing`で保留し、一致規則ではreceipt後に達成projectionを出し、Gateway再起動後もtask identityと達成状態を復元する。別HDS runtime caseでは誤一致値が`goal_completion_result_mismatch`で保留し、sealを作らず再起動後も保留する。達成ケースは同じstepのreviewが再起動後に拒否されることも直接HDS testで確認する。実provider・live外部作用・Control Center browser全往復・installed製品を使っていない。
+
+`document_organization_entry.test.ts`選択ケース1 passed／6 skipped、`operation_plan_runtime.test.ts`選択2 cases passed／46 skipped、`pnpm docs:check`と`git diff --check`はPASS。文書検査は日本語基底の既存移行負債76件を注意表示した。full suite、全workspace typecheck/build、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。product sourceは変更せず、test-owned temporary rootはfinally cleanup済み。テスト結果からC08.02のowner input→served J/M status restorationだけを限定`WIRED`とする。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、公開・出荷判断へ拡張しない。
+
+---
+
 ## 2026-11-02 — QEB-F04.01-DRIVE-TRANSIENT-ORGANIZER
 
 開始local／remote `main`=`2fb98b8d73107c26a8a785e74f144dbe6e102f89`。編集前の二世代復旧refはcurrent=`2fb98b8...`／previous=`4ecaace...`（local branch／remote tag）。単一`main` worktreeを確認し、保護対象untracked `.codex-remote-attachments/`と別repo作業は変更していない。現行rev3.0 pin・三文書・manifest、適用AGENTS、active F04.01指示を再確認した。

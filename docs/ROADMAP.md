@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — C08.02 owner明示達成規則・J/M判定・同一task停止（限定WIRED）
+### 直近完了BUILD_BATCH — C08.02 owner規則からserved GatewayのJ/M達成状態復元まで（限定WIRED）
 
-owner-token付きControl Center／WebChat経路からbounded JSON達成規則を受け取り、Protocolの外部入力境界で除外し、owner trust付きGateway内部要求にだけ保持する。Jは規則をtask identity・目的・元requestへ束縛し、child／resumeへ継承する。現行revisionの一意なoperation／target、実行結果の値、観測時刻、J検証済みstatus、M receiptと保存値が一致し、他のstep・目的・復旧・wait・並行実行条件も閉じた場合にのみ、Jがrules/evidence digest付きassessmentをcheckpointへsealする。規則なし・曖昧・不一致・根拠不在は保留する。達成seal後は同一taskのstep review／revision／wait-resume／追加computeを遮断し、再起動後も停止状態を復元する。Gateway／Control Center projectionはdigest／件数と非権威flagsだけを返す。
+owner-token付き`/owner/task-compute`からbounded JSON達成規則を受け取り、実served Gateway processのHDS C/J/M経路へ接続した。規則欠落ではverified file.search結果とM receiptがあっても保留し、合致する規則ではJが規則digest／根拠digestを持つ達成sealを作成する。別のHDS runtime caseでは期待値不一致を保留し、達成sealを作らない。owner trustなしの入力、曖昧対象、未検証結果、M receipt／保存値不一致は達成条件にしない。外部channelは規則欄を保持せず、規則は権限を付与しない。
 
-Protocol／HDS-BRAIN／Gateway／WebChat typecheckとbuild、Protocol boundary 37 passed、synthetic Gateway file.search→execution result outbox→J/M receipt→seal→HDS restart/step stop 1 passed／46 skipped、WebChat owner form／endpoint／achieved projection renderer／script tests 4 passed／115 skipped、`git diff --check`はPASS。これは一時workspace内の合成1仕事とlocal file.searchであり、実served画面からの全往復、実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。このC08.02接続のみを`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。次consumerはowner画面から実served GatewayのC/J/M経路・認証済み状態表示・達成後停止までを同一隔離runtimeで縦断し、規則欠落／不一致holdも確認する。
+served Gateway testでは認証済み`/runtime/snapshot`からachieved projectionを確認し、Gateway再起動後もtask identityと達成状態が復元されることを検証した。直接HDS runtime testで、再起動後の同一step reviewが拒否されることを確認した。`document_organization_entry.test.ts` 1 passed／6 skipped、`operation_plan_runtime.test.ts` 2 passed／46 skipped、`pnpm docs:check`と`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。隔離synthetic backendと一時file rootに限る。Control Center browser全往復、実provider／外部作用、installed製品、5OS、full suite、QE_QC／QE_QAはNOT_RUN。このC08.02 sliceだけを`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。次はrev4.0と現行HEADから、実providerや公開作用に依存しないQE_BUILD consumerを選定する。
 
 ### 前段完了BUILD_BATCH — Gateway再起動後も同一taskのtest失敗回復をOwnerへ接続（限定WIRED）
 

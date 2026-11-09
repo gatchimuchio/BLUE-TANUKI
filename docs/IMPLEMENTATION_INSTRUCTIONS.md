@@ -2,15 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / C08.02 owner明示達成規則からJ/M達成判定・同一task停止まで接続（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / C08.02 served Gatewayのowner規則入力→J/M達成判定・再起動後状態（限定WIRED）
 
-主語は、ownerが委任した一つの仕事を明示規則と検証済み根拠で評価し、達成後に同一taskの追加計算・step選択を停止するBLUE-TANUKIのHDS J／Gateway／WebChat経路。owner-token付きControl Center入力は任意の`goal_completion_rules` JSONを送る。空欄、欠落、曖昧な対象、結果不一致、未検証結果、M receipt／保存値不一致は達成にしない。外部channel境界ではこの内部規則欄を保持せず、HDSはowner trustを持つGateway内部要求からのみ規則を受け入れる。Cが規則を生成・変更する経路は持たない。
+主語は、ownerが委任した仕事を明示規則と検証済み根拠で評価し、達成または保留を認証済み状態として表示するBLUE-TANUKIの実served Gateway／HDS J／M経路。隔離Gateway processのowner-token付き`/owner/task-compute`へJSON規則を入力し、synthetic `file.search`を既存executor・J/Mへ通した。規則欠落では検索結果とreceiptがあっても`goal_completion_rules_missing`で保留し、規則一致では全stepの検証とM receipt後に`goal_completion_rules_satisfied`で達成した。HDS runtimeの独立runtime testでは誤った期待値を`goal_completion_result_mismatch`として保留し、sealを作らず再起動後も保留する。
 
-Jはtask identity・目的・元requestに規則とdigestを束縛し、child／resumeへ同じ規則を継承する。各規則は現行revision内の一意なoperation／任意target、検証済み結果のJSON Pointer値、結果観測時刻、M receipt、M保存値を照合する。全stepのreceipt、目的版・関係、復旧状態、wait／並行試行も成立した場合だけJが規則digestと証拠digestを持つ達成sealを永続化する。sealは同一taskのstep選択・改訂・wait／resume・追加computeを拒否し、再起動後も維持する。保存済み結果のowner読取はread-only経路として残る。Gateway／Control Centerへ出すのは固定状態、規則数、digest、`used_for_authority=false`／`may_execute=false`だけで、実行許可や公開判断は作らない。
+Gatewayのserved integrationでは、達成状態を認証済み`/runtime/snapshot` projectionから観測し、Gateway再起動後も同じtask identity・達成状態が復元されることを確認した。直接HDS testでは再起動後の同一step reviewが拒否される。規則はexecution permissionではなく、出荷・owner GOも生成しない。served testは一時file rootとsynthetic backendに限り、Control Center browser全往復や外部providerは使っていない。
 
-Protocol／HDS-BRAIN／Gateway／WebChat typecheckとbuild、Protocol境界test 37 passed、Gatewayの合成`file.search`→execution outbox→J/M receipt→達成seal→HDS再起動後step拒否test 1 passed／46 skipped、WebChat owner form／endpoint／達成projection renderer／Control Center script test 4 passed／115 skipped、`git diff --check`はPASS。検証は一つのtemp workspaceにある合成`blue.txt`とlocal file.searchだけで、実provider／live外部作用、実served Gatewayからの画面全往復、installed製品、5OS、full suite、QE_QC／QE_QAはNOT_RUN。このC08.02達成・停止経路だけを限定`WIRED`とする。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。保護添付、OneDrive、別repo、実ユーザーデータは変更していない。
+`document_organization_entry.test.ts`選択Gateway process test 1 passed／6 skipped、`operation_plan_runtime.test.ts`選択HDS runtime test 2 passed／46 skipped、`pnpm docs:check`と`git diff --check`はPASS（日本語基底の既存移行負債76件の注意あり）。full suite、実provider／live外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このC08.02 owner input→J/M判定・認証状態復元sliceだけを限定`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。保護添付は変更していない。OneDriveへのGraph登録・dehydrate・回収操作は行っていない。一時test workspaceはfinally cleanup済み。
 
-**次のproducer／consumer:** owner画面の明示規則受付から実served GatewayのHDS C/J/M経路、認証済み状態表示、達成後停止までを同一隔離runtimeで縦断し、欠落／不一致規則の保留も確認する。実provider／外部作用と出荷判断は引き続き対象外。
+**次のproducer／consumer:** rev4.0と現行HEADからQE_BUILDの次の未接続実consumerを選び、同じ有限単位で接続する。実provider検証、live外部作用、全suiteの品質改善、QE_QC／QE_QA、公開・出荷判断は対象に含めない。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / Gateway再起動後も同一taskの失敗からOwner確認・回復候補へ継続
 

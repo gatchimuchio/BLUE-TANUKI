@@ -782,7 +782,7 @@ describe("delegated goal purpose owner review", () => {
       }, gateway, "path-bound file.search did not reach a verified M receipt");
       expect(verified.plan).toMatchObject({ status: "results_verified",
         goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" },
-        task_outcome: { status: "held", reason_code: "goal_completion_not_assessed",
+        task_outcome: { status: "held", reason_code: "goal_completion_rules_missing",
           used_for_authority: false, may_execute: false } });
       expect(verified.step).toMatchObject({ operation: "file.search", status: "verified",
         binding: { memory_status: "receipt_confirmed" } });
@@ -803,6 +803,108 @@ describe("delegated goal purpose owner review", () => {
       expect(resultReply).toContain("指定対象marker");
       expect(resultReply).not.toContain("other/decoy.txt");
       expect(resultReply).not.toContain(fileRoot);
+
+      const matchingRules = {
+        schema_version: "blue-tanuki.goal-completion-rules.v1",
+        rules: [{ rule_id: "search-line-must-match", operation: "file.search",
+          target: { kind: "directory", id: fileRoot }, output_pointer: "/matches/0/line",
+          expected_value: targetContent.trim() }],
+      };
+      const matchingTaskReplyStart = webchatContents.length;
+      const matchingTaskResponse = await fetch(baseUrl + "/owner/task-compute", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task, goal_ref: goalRef, purpose_version: 2,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000807",
+          goal_completion_rules: matchingRules,
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(matchingTaskResponse.status).toBe(202);
+      await waitFor(() => webchatContents.length > matchingTaskReplyStart ? webchatContents.length : null, gateway,
+        "matching-rule owner task did not return a WebChat frame", 15_000);
+      const matchingPlan = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id !== planId &&
+          Array.isArray(candidate.steps) &&
+          (candidate.steps as Array<Record<string, unknown>>).some((candidateStep) =>
+            candidateStep.operation === "file.search" &&
+            (candidateStep.status === "not_selected" || candidateStep.status === "awaiting_review"))) ?? null;
+      }, gateway, "matching-rule owner task did not reach its file.search plan");
+      const matchingPlanId = String(matchingPlan.plan_id);
+      const matchingRevision = String(matchingPlan.revision_digest);
+      const matchingStep = (matchingPlan.steps as Array<Record<string, unknown>>)
+        .find((candidate) => candidate.operation === "file.search");
+      const matchingRelationResponse = await fetch(baseUrl + "/owner/goal-purpose-relation-review", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: matchingPlanId, revision_digest: matchingRevision, outcome: "supports" }),
+      });
+      expect(matchingRelationResponse.status).toBe(202);
+      const matchingRelation = await matchingRelationResponse.json() as { command_id?: string };
+      const matchingPending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === matchingRelation.command_id);
+      expect(matchingPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true });
+      const matchingRelationContentResponse = await fetchResume(
+        baseUrl + "/approval/" + encodeURIComponent(String(matchingRelation.command_id)) + "/content",
+        { method: "POST", headers: { authorization: "Bearer " + resumeToken } },
+      );
+      expect(matchingRelationContentResponse.status).toBe(200);
+      const matchingRelationContent = await matchingRelationContentResponse.json() as Record<string, unknown>;
+      const matchingRelationApproval = await postApproval(String(matchingRelation.command_id),
+        matchingPending?.approval_token, matchingRelationContent.command_digest);
+      expect(matchingRelationApproval.status).toBe(200);
+
+      const matchingReviewResponse = await fetch(baseUrl + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: matchingPlanId, revision_digest: matchingRevision,
+          content: "plan:review " + JSON.stringify({ plan_id: matchingPlanId, revision_digest: matchingRevision,
+            step_id: matchingStep?.step_id, goal_purpose_binding: matchingPlan.goal_purpose_binding }) }),
+      });
+      expect(matchingReviewResponse.status).toBe(202);
+      let matchingLastState: unknown;
+      const matchingVerifiedPlan = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const current = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === matchingPlanId);
+        const step = (current?.steps as Array<Record<string, unknown>> | undefined)
+          ?.find((candidate) => candidate.step_id === matchingStep?.step_id);
+        matchingLastState = current ? { status: current.status, task_outcome: current.task_outcome,
+          goal_purpose_relation: current.goal_purpose_relation, step } : null;
+        return current?.status === "results_verified" && step?.status === "verified" &&
+          (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed" ? current : null;
+      }, gateway, "matching-rule search did not reach a verified M receipt").catch((error: unknown) => {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; latest_plan=${JSON.stringify(matchingLastState)}`);
+      });
+      expect(matchingVerifiedPlan).toMatchObject({ status: "results_verified",
+        task_outcome: { status: "achieved", reason_code: "goal_completion_rules_satisfied",
+          goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+            used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false } });
+
+      const previousTaskWebSocket = taskWebSocket;
+      taskWebSocket = undefined;
+      previousTaskWebSocket.close();
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const restoredAchievement = await waitFor(async () => {
+        const response = await fetch(baseUrl + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === matchingPlanId &&
+          (candidate.task_outcome as Record<string, unknown> | undefined)?.status === "achieved") ?? null;
+      }, gateway, "Gateway restart did not restore the achieved same-task stop state");
+      expect(restoredAchievement).toMatchObject({ task_identity_digest: matchingVerifiedPlan.task_identity_digest,
+        task_outcome: { status: "achieved", reason_code: "goal_completion_rules_satisfied" } });
       expect(readFileSync(targetPath, "utf8")).toBe(targetContent);
       expect(readFileSync(decoyPath, "utf8")).toBe(decoyContent);
     } finally {
