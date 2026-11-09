@@ -4504,6 +4504,66 @@ export class OperationPlanLedger {
       : taskOutcomeReason === "goal_completion_rules_satisfied" ? "achieved" as const : "held" as const;
     return { status, reason_code: taskOutcomeReason, goal_assessment: assessment };
   }
+  /** Digest-only observation that a memory interpretation dependency reached a verified action and its M receipt. */
+  private memoryInterpretationFollowUpFor(plan: PlanState) {
+    const dependencies = plan.memory_interpretation_dependencies ?? [];
+    const dependencyDigest = dependencies.length > 0 ? operationPlanDigest(dependencies) : undefined;
+    const base = {
+      dependency_count: dependencies.length,
+      ...(dependencyDigest ? { dependency_digest: dependencyDigest } : {}),
+      action_count: 0,
+      validity_status: "not_assessed" as const,
+      improvement_status: "not_measured" as const,
+      generalization_status: "not_assessed" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    if (dependencies.length === 0) return { ...base, status: "not_referenced" as const };
+
+    const revision = plan.revisions.at(-1);
+    const planId = revision?.plan.plan_id;
+    if (!revision || !planId || !this.resultMemory || !this.port || !this.memoryReady ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest ||
+        this.recoveryHolds.has(operationPlanDigest(plan.revisions[0]!.plan.plan_id))) {
+      return { ...base, status: "unconfirmed" as const };
+    }
+
+    const actions: { step_digest: string; source_digest: string; delivery_digest: string;
+      result_digest: string; memory_receipt_digest: string }[] = [];
+    for (const step of revision.plan.steps) {
+      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+        binding.step_id === step.step_id);
+      const binding = bindings.at(-1);
+      if (bindings.length !== 1 || !binding || binding.status !== "verified" ||
+          binding.operation !== step.operation || binding.step_digest !== stepDigest(step) ||
+          !binding.execution_admission || !binding.operation_plan_binding_digest ||
+          !binding.delivery_digest || !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
+          !resultMemoryEligible(binding)) continue;
+      try {
+        const sourceDigest = operationPlanExecutionSourceDigest(plan, binding, step);
+        const results = plan.results.filter((result) => result.plan_id === planId &&
+          result.request_id === revision.plan.request_id && result.step_id === step.step_id &&
+          result.operation === step.operation && result.status === "succeeded");
+        const resultVerified = step.operation === "github.write"
+          ? results.length === 0 && binding.github_write_result?.mutation_status === "provider_accepted"
+          : results.length === 1;
+        if (binding.operation_plan_binding_digest !== sourceDigest || !resultVerified ||
+            !verifyResultMemoryCommit(plan, binding) ||
+            !receiptForResultCommit(binding.memory_receipt, binding.memory_commit) ||
+            !this.resultMemoryReceiptConfirmed(binding.command_id)) continue;
+        actions.push({ step_digest: binding.step_digest, source_digest: sourceDigest,
+          delivery_digest: binding.delivery_digest, result_digest: binding.result_digest,
+          memory_receipt_digest: binding.memory_receipt.receipt_digest });
+      } catch {
+        // Any stale or malformed binding keeps the summary unconfirmed.
+      }
+    }
+    if (actions.length === 0) return { ...base, status: "unconfirmed" as const };
+    const evidenceDigest = operationPlanDigest({ schema_version: "blue-tanuki.memory-interpretation-follow-up.v1",
+      dependency_digest: dependencyDigest, revision_digest: revision.digest, actions });
+    return { ...base, status: "action_observed" as const, action_count: actions.length,
+      evidence_digest: evidenceDigest };
+  }
   /** Read only the owner's current, M-receipted result summary; this never reruns the action or grants authority. */
   inspectSavedResultForReturn(control: OperationPlanResultReturnControl, caller: InboundRequest): OperationPlanSavedResultReturnProjection {
     if (this.recoveryRefreshPending) {
@@ -5807,6 +5867,7 @@ export class OperationPlanLedger {
           : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const;
         const goalPurposeRelation = this.goalPurposeRelationProjection(p);
         const taskOutcome = this.taskOutcomeFor(p);
+        const memoryInterpretationFollowUp = this.memoryInterpretationFollowUpFor(p);
         return { plan_id: planIdDigest, task_identity_digest: operationPlanTaskIdentityDigest(p),
         owner_identity_digest: operationPlanDigest(p.owner),
         channel_identity_digest: operationPlanDigest(p.channel),
@@ -5822,6 +5883,7 @@ export class OperationPlanLedger {
           used_for_authority: false as const,
           may_execute: false as const,
         },
+        memory_interpretation_follow_up: memoryInterpretationFollowUp,
         ...(p.compute_source_observations?.length
           ? { compute_source_observations: structuredClone(p.compute_source_observations) } : {}),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,

@@ -2281,6 +2281,35 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     ? '・証拠digest ' + escapeHtml(goalAssessment.evidence_digest.slice(0, 12)) : '') + '</span>' : '') +
               '<br><span class="muted">達成判定は同一taskの停止にのみ使い、実行許可や公開判断は作りません。</span>'
             : '状態を確認できません。委任目的は完了扱いしません。') + '</dd>';
+          const memoryFollowUp = isObject(plan.memory_interpretation_follow_up) ? plan.memory_interpretation_follow_up : null;
+          const memoryFollowUpStatusLabels = {
+            not_referenced: "この計画にM解釈依存は記録されていません。",
+            unconfirmed: "依存は記録されていますが、後続行為と結果・M receiptを確認できません。",
+            action_observed: "依存digestを束縛した後続行為と検証済み結果・M receiptを確認しました。",
+          };
+          const memoryFollowUpIsSafe = memoryFollowUp && memoryFollowUp.used_for_authority === false &&
+            memoryFollowUp.may_execute === false && Object.prototype.hasOwnProperty.call(memoryFollowUpStatusLabels, memoryFollowUp.status) &&
+            Number.isInteger(memoryFollowUp.dependency_count) && memoryFollowUp.dependency_count >= 0 &&
+            Number.isInteger(memoryFollowUp.action_count) && memoryFollowUp.action_count >= 0 &&
+            (memoryFollowUp.dependency_digest === undefined || /^[a-f0-9]{64}$/.test(memoryFollowUp.dependency_digest)) &&
+            (memoryFollowUp.evidence_digest === undefined || /^[a-f0-9]{64}$/.test(memoryFollowUp.evidence_digest)) &&
+            memoryFollowUp.validity_status === "not_assessed" && memoryFollowUp.improvement_status === "not_measured" &&
+            memoryFollowUp.generalization_status === "not_assessed" &&
+            ((memoryFollowUp.status === "not_referenced" && memoryFollowUp.dependency_count === 0 && memoryFollowUp.action_count === 0) ||
+             (memoryFollowUp.status === "unconfirmed" && memoryFollowUp.dependency_count > 0 && memoryFollowUp.action_count === 0 &&
+              /^[a-f0-9]{64}$/.test(memoryFollowUp.dependency_digest || "") && memoryFollowUp.evidence_digest === undefined) ||
+             (memoryFollowUp.status === "action_observed" && memoryFollowUp.dependency_count > 0 && memoryFollowUp.action_count > 0 &&
+              /^[a-f0-9]{64}$/.test(memoryFollowUp.dependency_digest || "") &&
+              /^[a-f0-9]{64}$/.test(memoryFollowUp.evidence_digest || "")));
+          const memoryFollowUpMarkup = '<dt>記憶解釈の後続行為</dt><dd>' + (memoryFollowUpIsSafe
+            ? escapeHtml(memoryFollowUpStatusLabels[memoryFollowUp.status]) +
+              (memoryFollowUp.status === "action_observed"
+                ? '<br><span class="muted">確認行為数 ' + escapeHtml(String(memoryFollowUp.action_count)) + '・証拠digest ' +
+                  escapeHtml(memoryFollowUp.evidence_digest.slice(0, 12)) + '</span>' :
+                memoryFollowUp.dependency_digest
+                  ? '<br><span class="muted">依存digest ' + escapeHtml(memoryFollowUp.dependency_digest.slice(0, 12)) + '</span>' : '') +
+              '<br><span class="muted">妥当性は未評価、改善は未測定、汎化は未評価です。この状態は権限や学習成立の判定ではありません。</span>'
+            : '未確認です。後続行為、妥当性、改善、汎化を成立扱いしません。') + '</dd>';
           const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
           const purposeReviewBindingStatus = plan.goal_purpose_binding_status ?? (purposeBinding ? "current" : "not_configured");
           const purposeRelationAllowsStepReview = purposeBinding
@@ -2349,7 +2378,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
             '<dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.task_identity_digest)) + '</dd>' +
             '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
-            taskOutcomeMarkup +
+            taskOutcomeMarkup + memoryFollowUpMarkup +
             (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
               '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
             purposeBindingLabel + purposeRelationLabel +

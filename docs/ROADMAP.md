@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
+### 直近BUILD_BATCH — E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
+
+既存のOperation Plan memory interpretation dependencyを、実行元digest→検証済み行為→M receiptの非権威projectionへ接続した。現revisionのsource digest一致、唯一のverified binding、実結果または`github.write` accepted summary、delivery/result digest、result-memory commit／receipt、保存M値が揃う場合だけ`action_observed`とdigest/countを返す。依存なしは`not_referenced`、証拠不足・不一致は`unconfirmed`。Gatewayがshapeと固定状態をfail-closedで検査し、Control Centerは三状態を表示する。妥当性・改善・汎化は未評価のまま表示し、学習成立・因果・権限を主張しない。
+
+限定検査：HDSの合成行為＋J/M receipt遷移、Gateway projection、Control Center表示の各test PASS（3件、同file内130件skip）。HDS依存buildとGateway依存7 project build PASS。`docs:check`／`git diff --check` PASS、日本語基底監査PASS（既存移行負債76件の注意）、license PASS。実Gateway往復、実provider／外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。E05.01のこのslice以外、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`への拡張はない。
+
+### 前段完了BUILD_BATCH — C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
 
 HDS-Jは既にownerの明示達成規則、検証済みstep結果、M receiptを照合し、達成後に同一taskの計画継続を停止する。今回、その状態をControl CenterのOwner Task送信結果相関へ接続した。依頼ID digestで一意なplanを照合し、`achieved`は`goal_completion_rules_satisfied`、規則／証拠digest、`results_verified`、全step verified、M receipt確認が揃う場合だけ表示する。保留・進行中は別表示し、欠落・不整合は未確認とする。表示は実行権限、別task許可、公開／出荷判断を作らない。
 

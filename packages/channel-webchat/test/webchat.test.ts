@@ -1171,6 +1171,10 @@ describe("WebChatChannel — Control Center shell", () => {
               rules_digest: "0".repeat(64), rule_count: 1, satisfied_rule_count: 1, evidence_digest: "1".repeat(64),
               used_for_authority: false, may_execute: false },
             used_for_authority: false, may_execute: false },
+          memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
+            dependency_digest: "a".repeat(64), action_count: 1, evidence_digest: "b".repeat(64),
+            validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+            used_for_authority: false, may_execute: false },
           status: "results_verified", step_count: 2,
           compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER"),
             shellResultObservation],
@@ -1231,6 +1235,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("明示達成規則と検証済み結果・M receiptが一致しました。");
     expect(rendered).toContain("達成規則: 1/1・証拠digest 111111111111");
     expect(rendered).toContain("達成判定は同一taskの停止にのみ使い、実行許可や公開判断は作りません。");
+    expect(rendered).toContain("記憶解釈の後続行為");
+    expect(rendered).toContain("依存digestを束縛した後続行為と検証済み結果・M receiptを確認しました。");
+    expect(rendered).toContain("確認行為数 1・証拠digest bbbbbbbbbbbb");
+    expect(rendered).toContain("妥当性は未評価、改善は未測定、汎化は未評価です。");
     expect(rendered).toContain("復旧後の状態確認が必要です。");
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
     expect(rendered).toContain('data-owner-authentication-required="true"');
@@ -1247,7 +1255,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
     expect(rendered).toContain('data-operation-plan-wait-reply="true"');
-    expect(rendered.match(/data-operation-plan-wait="true"/g)).toHaveLength(1);
+    expect(rendered.match(/data-operation-plan-wait="true"/g) ?? []).toHaveLength(0);
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");
     expect(rendered).not.toContain("PRIVATE WAIT GOAL MUST NOT RENDER");
     expect(rendered).toContain('<span class="badge review">held_residual</span>');
@@ -1266,7 +1274,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("一致候補 2件、訪問 7件、検索完全性=unknown");
     expect(rendered).toContain("shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）");
     expect(rendered.match(/data-operation-plan-review="true"/g)).toHaveLength(1);
-    expect(rendered.match(/data-operation-plan-result="true"/g)).toHaveLength(1);
+    expect(rendered.match(/data-operation-plan-result="true"/g)).toHaveLength(2);
     expect(rendered).toContain("保存済み検索結果／限定previewを読む");
     expect(rendered).toContain("J/M receipt確認済みの保存結果を表示します。指定条件によっては指定開始行から最大5行のfile.read previewを返します。");
     expect(rendered).toContain('data-plan-id="' + "e".repeat(64) + '" data-revision-digest="' + "f".repeat(64) + '"');

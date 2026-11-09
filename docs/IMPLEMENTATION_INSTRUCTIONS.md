@@ -2,7 +2,21 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / E05.01 M解釈依存の後続行為・結果receiptをOwner Taskへ接続（限定WIRED）
+
+主語は、Operation Planが保持するM解釈依存と、その依存digestを実行元へ束縛した後続step。目的は、同じplan revisionで結果検証とM receipt確認まで成立した行為の有無だけをOwner Taskへ表示し、妥当性・改善・汎化・学習成立を未評価のまま区別すること。
+
+HDS-Jは計画の依存件数／digestを保持し、各選択行為の`operation_plan_binding_digest`を現行依存群から再計算して一致を確認する。`action_observed`は、現revisionの一意なbinding、検証済み結果（`github.write`はprovider acceptedの保存summary）、実行admission・delivery/result digest、依存を含むsource digest、result-memory commit、receipt、保存済みM値がすべて再照合できる場合だけ返す。証拠不足・複数binding・古いrevision・receipt不一致は`unconfirmed`。依存がない場合は`not_referenced`。各状態はdigest/countのみで、権限・実行可否を持たない。妥当性`not_assessed`、改善`not_measured`、汎化`not_assessed`を固定し、後続行為の観測を因果成立や学習成功へ読み替えない。
+
+Gatewayはprojectionのstatus、digest、件数、固定非権威flagを検証し、Control Centerは行為観測／未確認／依存なしを区別して表示する。個別M record ID、citation judgment、結果本文、候補意味は表示しない。C08.03実provider、別repo、外部作用、公開・出荷判断には触れない。
+
+`corepack pnpm exec vitest run packages/hds-brain/test/operation_plan_interpretation_reassessment.test.ts apps/gateway/test/serve_projection.test.ts packages/channel-webchat/test/webchat.test.ts -t "memory interpretation follow-up|projects versioned J plan and outcome-unknown state|renders a verified result plan beside a held residual plan" --maxWorkers=1 --minWorkers=1`はPASS（3件、同file内の他130件skip）。`corepack pnpm --filter @blue-tanuki/hds-brain... build`はPASS。`corepack pnpm --filter @blue-tanuki/gateway... build`はPASS（依存7 workspace project。channel-webchatも含む）。`corepack pnpm docs:check`と`git diff --check`はPASS。日本語基底監査PASS（既存移行負債76件の注意継続）、license監査PASS。
+
+限定`WIRED`はE05.01のこの依存→後続行為→検証済み結果／M receipt表示sliceだけ。C/J/Mを通る製品仕事全体、E05.01全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、妥当性・改善・汎化、QE_QC／QE_QAを成立扱いしない。実Gateway owner往復、実provider、外部作用、installed製品、5OS、全suite、QE_QC／QE_QAはNOT_RUN。
+
+開始時local `main`／`origin/main`／GitHub `main`は`73f2608e1347c7df4d4c3ed60563a9fa9a5c8d9f`。編集前復旧refはlocal branch／remote tagともcurrent=`73f2608e1347c7df4d4c3ed60563a9fa9a5c8d9f`、previous=`c941c9e8de645294dbd69538a9b856755aa6912e`。添付2領域は保護し未変更。`git fetch origin main`は既存worktree metadataの削除ACL拒否で終了したが、直接の`git ls-remote`でremote mainが同じSHAと確認済み。該当metadata pathには触れていない。次のproducer／consumerは、最新版rev4.0と現物から製品全体の依存順で再選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / C08.02 J達成状態をOwner Task結果相関へ接続（限定WIRED）
 
 主語はOwner Task送信後に同じrequest IDへ対応するOperation Plan結果相関。目的は、HDS-Jがowner明示規則・検証済みstep結果・M receiptに基づいて同一taskを達成後停止した状態を、送信結果表示にも結び付けること。C08.02のJ評価ロジックは変更しない。
 

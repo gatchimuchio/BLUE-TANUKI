@@ -234,6 +234,19 @@ export interface OperationPlanTaskOutcomeProjection {
   may_execute: false;
 }
 
+export interface OperationPlanMemoryInterpretationFollowUpProjection {
+  status: "not_referenced" | "unconfirmed" | "action_observed";
+  dependency_count: number;
+  dependency_digest?: string;
+  action_count: number;
+  evidence_digest?: string;
+  validity_status: "not_assessed";
+  improvement_status: "not_measured";
+  generalization_status: "not_assessed";
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface OperationPlanStatusProjection {
   schema_version: "operation-plan.status.v1";
   evidence_source: ["INTERNAL_STATE"];
@@ -286,6 +299,7 @@ export interface OperationPlanStatusProjection {
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
     task_outcome?: OperationPlanTaskOutcomeProjection;
+    memory_interpretation_follow_up?: OperationPlanMemoryInterpretationFollowUpProjection;
     goal_purpose_relation?: {
       status: "not_required" | "unavailable" | "stale" | "unverified" | "conflicts" | "owner_reviewed_supports" | "owner_reviewed_unknown";
       candidate_outcome?: "supports" | "conflicts" | "unknown";
@@ -489,6 +503,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const revision = numberValue(plan.revision);
     const goalPurposeBinding = plan.goal_purpose_binding;
     const taskOutcome = plan.task_outcome;
+    const memoryInterpretationFollowUp = plan.memory_interpretation_follow_up;
     const goalPurposeRelation = plan.goal_purpose_relation;
     const rawComputeSourceObservations = plan.compute_source_observations;
     const computeSourceObservations: OperationPlanComputeSourceObservationProjection[] = [];
@@ -577,10 +592,39 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
        (taskOutcome.status === "achieved" && taskOutcome.reason_code === "goal_completion_rules_satisfied") ||
        (taskOutcome.status === "held" && !["operation_plan_steps_pending", "goal_completion_wait_pending",
         "goal_completion_peer_execution_unresolved", "goal_completion_rules_satisfied"].includes(String(taskOutcome.reason_code)))));
+    const memoryInterpretationFollowUpValid = memoryInterpretationFollowUp === undefined ||
+      (isRecord(memoryInterpretationFollowUp) &&
+        Object.keys(memoryInterpretationFollowUp).every((key) => ["status", "dependency_count", "dependency_digest",
+          "action_count", "evidence_digest", "validity_status", "improvement_status", "generalization_status",
+          "used_for_authority", "may_execute"].includes(key)) &&
+        ["status", "dependency_count", "action_count", "validity_status", "improvement_status",
+          "generalization_status", "used_for_authority", "may_execute"].every((key) => Object.hasOwn(memoryInterpretationFollowUp, key)) &&
+        ["not_referenced", "unconfirmed", "action_observed"].includes(String(memoryInterpretationFollowUp.status)) &&
+        typeof memoryInterpretationFollowUp.dependency_count === "number" &&
+        Number.isInteger(memoryInterpretationFollowUp.dependency_count) &&
+        memoryInterpretationFollowUp.dependency_count >= 0 && memoryInterpretationFollowUp.dependency_count <= 64 &&
+        typeof memoryInterpretationFollowUp.action_count === "number" &&
+        Number.isInteger(memoryInterpretationFollowUp.action_count) &&
+        memoryInterpretationFollowUp.action_count >= 0 && memoryInterpretationFollowUp.action_count <= 100 &&
+        (memoryInterpretationFollowUp.dependency_digest === undefined || isDigest(memoryInterpretationFollowUp.dependency_digest)) &&
+        (memoryInterpretationFollowUp.evidence_digest === undefined || isDigest(memoryInterpretationFollowUp.evidence_digest)) &&
+        memoryInterpretationFollowUp.validity_status === "not_assessed" &&
+        memoryInterpretationFollowUp.improvement_status === "not_measured" &&
+        memoryInterpretationFollowUp.generalization_status === "not_assessed" &&
+        memoryInterpretationFollowUp.used_for_authority === false && memoryInterpretationFollowUp.may_execute === false &&
+        ((memoryInterpretationFollowUp.status === "not_referenced" &&
+          memoryInterpretationFollowUp.dependency_count === 0 && memoryInterpretationFollowUp.action_count === 0 &&
+          memoryInterpretationFollowUp.dependency_digest === undefined && memoryInterpretationFollowUp.evidence_digest === undefined) ||
+         (memoryInterpretationFollowUp.status === "unconfirmed" &&
+          memoryInterpretationFollowUp.dependency_count > 0 && isDigest(memoryInterpretationFollowUp.dependency_digest) &&
+          memoryInterpretationFollowUp.action_count === 0 && memoryInterpretationFollowUp.evidence_digest === undefined) ||
+         (memoryInterpretationFollowUp.status === "action_observed" &&
+          memoryInterpretationFollowUp.dependency_count > 0 && isDigest(memoryInterpretationFollowUp.dependency_digest) &&
+          memoryInterpretationFollowUp.action_count > 0 && isDigest(memoryInterpretationFollowUp.evidence_digest))));
     if (!isDigest(plan.plan_id) || (plan.task_identity_digest !== undefined && !isDigest(plan.task_identity_digest)) ||
         !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !isDigest(plan.owner_identity_digest) || !isDigest(plan.channel_identity_digest) ||
-        !goalPurposeBindingValid || !goalPurposeRelationValid || !taskOutcomeValid ||
+        !goalPurposeBindingValid || !goalPurposeRelationValid || !taskOutcomeValid || !memoryInterpretationFollowUpValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
           (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
@@ -759,6 +803,20 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           ...(goalAssessment.evidence_digest !== undefined ? { evidence_digest: goalAssessment.evidence_digest as string } : {}),
           used_for_authority: false as const, may_execute: false as const,
         } } : {}),
+        used_for_authority: false as const,
+        may_execute: false as const,
+      } } : {}),
+      ...(isRecord(memoryInterpretationFollowUp) ? { memory_interpretation_follow_up: {
+        status: memoryInterpretationFollowUp.status as OperationPlanMemoryInterpretationFollowUpProjection["status"],
+        dependency_count: memoryInterpretationFollowUp.dependency_count as number,
+        ...(memoryInterpretationFollowUp.dependency_digest !== undefined
+          ? { dependency_digest: memoryInterpretationFollowUp.dependency_digest as string } : {}),
+        action_count: memoryInterpretationFollowUp.action_count as number,
+        ...(memoryInterpretationFollowUp.evidence_digest !== undefined
+          ? { evidence_digest: memoryInterpretationFollowUp.evidence_digest as string } : {}),
+        validity_status: "not_assessed" as const,
+        improvement_status: "not_measured" as const,
+        generalization_status: "not_assessed" as const,
         used_for_authority: false as const,
         may_execute: false as const,
       } } : {}),

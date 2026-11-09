@@ -399,13 +399,20 @@ describe("Operation Core execution projection", () => {
       schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
       plans: [{ plan_id: "a".repeat(64), owner_identity_digest: "7".repeat(64),
         channel_identity_digest: operationPlanDigest("webchat"), revision: 2, revision_digest: "b".repeat(64), status: "awaiting_step_review",
+        memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
+          dependency_digest: "0".repeat(64), action_count: 1, evidence_digest: "1".repeat(64),
+          validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+          used_for_authority: false, may_execute: false },
         steps: [{ step_id: "c".repeat(64), definition_digest: "d".repeat(64), operation: "gmail.write",
           status: "outcome_unknown", external_receipt_observation: "matched", external_receipt: {
             source: "local_inspection", match_count: 1, evidence_digest: "e".repeat(64), receipt_digest: "f".repeat(64),
             observed_at_ms: 1_800_000_000_000, used_for_authority: false, raw_receipt_exposed: false,
           } }], bindings: [] }],
     });
-    expect(observed).toMatchObject({ status: "available", used_for_authority: false, plans: [{ owner_authentication_required: false, steps: [{
+    expect(observed).toMatchObject({ status: "available", used_for_authority: false, plans: [{ owner_authentication_required: false,
+      memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1, dependency_digest: "0".repeat(64),
+        action_count: 1, evidence_digest: "1".repeat(64), validity_status: "not_assessed", improvement_status: "not_measured",
+        generalization_status: "not_assessed", used_for_authority: false, may_execute: false }, steps: [{
       status: "outcome_unknown", external_receipt_observation: "matched", external_receipt: {
         source: "local_inspection", match_count: 1, evidence_digest: "e".repeat(64), receipt_digest: "f".repeat(64),
       },
@@ -444,6 +451,13 @@ describe("Operation Core execution projection", () => {
     expect(projectOperationPlanStatus({ schema_version: "operation-plan-projection.v1", used_for_authority: false,
       raw_payload_exposed: false, plans: [{ plan_id: "a".repeat(64), revision: 1, revision_digest: "b".repeat(64),
         status: "awaiting_step_review", recovery_hold_scope_relation: "requested", steps: [], bindings: [] }] }))
+      .toMatchObject({ status: "unavailable", plans: [] });
+    expect(projectOperationPlanStatus({ schema_version: "operation-plan-projection.v1", used_for_authority: false,
+      raw_payload_exposed: false, plans: [{ plan_id: "a".repeat(64), revision: 1, revision_digest: "b".repeat(64),
+        status: "awaiting_step_review", memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
+          dependency_digest: "0".repeat(64), action_count: 1, evidence_digest: "1".repeat(64),
+          validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+          used_for_authority: true, may_execute: false }, steps: [], bindings: [] }] }))
       .toMatchObject({ status: "unavailable", plans: [] });
   });
 });
