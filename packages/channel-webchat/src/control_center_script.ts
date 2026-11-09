@@ -5165,6 +5165,49 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
+        if (review.kind === "memory_personalization_stop") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "memory.personalization.stop" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.historical_record_retained !== true || review.physical_deletion !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.exclusion_revision_digest) ||
+              typeof review.reference !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(review.reference) ||
+              !isDigest(review.entry_hash)) {
+            throw new Error("記憶の利用停止確認がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "今後の記憶引用と個人化利用を停止する記憶";
+          view.appendChild(heading);
+          [
+            ["対象F参照", review.reference],
+            ["M記録hash", review.entry_hash],
+            ["現在の停止設定版digest", review.exclusion_revision_digest],
+            ["対象版digest", review.target_version_digest],
+            ["Operation Plan束縛digest", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "履歴のM記録は保持します。今後の記憶引用と個人化利用を停止し、物理削除は行いません。承認直前と作用直前に対象と停止設定版を再照合し、変化があれば停止します。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | target review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "停止対象を再確認";
+          return;
+        }
         if (review.kind === "file_delete_target") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "file.delete" ||

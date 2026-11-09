@@ -644,6 +644,24 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
   may_execute: false;
 }
 
+export interface WebChatMemoryPersonalizationStopContentReview {
+  kind: "memory_personalization_stop";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  operation: "memory.personalization.stop";
+  reference: string;
+  entry_hash: string;
+  exclusion_revision_digest: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  historical_record_retained: true;
+  physical_deletion: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubIssueCreateContentReview {
   kind: "github_issue_create";
   command_id: string;
@@ -829,6 +847,7 @@ export interface WebChatGitHubCodePushContentReview {
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
+  WebChatMemoryPersonalizationStopContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |

@@ -11,6 +11,7 @@ import {
   Executor,
   LLMComputeAdapter,
   ToolRegistry,
+  createMemoryPersonalizationStopTool,
   MemorySessionStore,
   JsonFileSessionStore,
   createExecutorApprovalAuthority,
@@ -156,9 +157,10 @@ async function runCliWithExecutionStore(
   plugins.enforceAuditConfig(process.env);
 
   ownerLease.assertActive();
+  const memoryStore = buildHDSMemoryStore(process.env);
   const hds = new HDSUpperController({
     audit: buildAuditLog(),
-    memory: buildHDSMemoryStore(process.env),
+    memory: memoryStore,
     llm_route: buildLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
   });
@@ -190,6 +192,7 @@ async function runCliWithExecutionStore(
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
 
   const tools = new ToolRegistry();
+  tools.register(createMemoryPersonalizationStopTool(memoryStore));
   plugins.registerTools(tools);
   const runtimeSchedules = await RuntimeScheduleManager.open({ env: process.env });
   for (const tool of runtimeSchedules.tools()) tools.register(tool);

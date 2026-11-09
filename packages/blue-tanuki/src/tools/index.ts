@@ -8,6 +8,7 @@ export {
   type FileEditDiffContentReview,
   type ToolContentReview,
 } from "./registry.js";
+export { createMemoryPersonalizationStopTool, isMemoryPersonalizationStopTool } from "./memory_personalization.js";
 export {
   composioAllowedToolkits,
   composioAllowedActions,

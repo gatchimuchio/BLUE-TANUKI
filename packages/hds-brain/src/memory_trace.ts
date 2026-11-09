@@ -21,6 +21,8 @@ export interface MemoryReaderPort {
   findByRequestId?: (request_id: string) => unknown | null;
   findByTag?: (tag: string, limit?: number) => readonly unknown[];
   verify?: () => boolean;
+  personalizationExclusionState?: () => { readonly status: "verified" | "invalid"; readonly revision_digest: string };
+  isPersonalizationExcluded?: (request_id: string, entry_hash: string) => boolean;
 }
 
 export function buildMemoryTrace(
@@ -29,13 +31,14 @@ export function buildMemoryTrace(
   reader?: MemoryReaderPort,
 ): MemoryTrace {
   const policy = process.memory_policy;
+  const exclusionState = readPersonalizationExclusionState(reader);
   const source_integrity_verified = Boolean(
     policy.enabled &&
     policy.allowed_sources.includes("hds_ltm") &&
     reader &&
-    readerIntegrityVerified(reader),
+    readerIntegrityVerified(reader) && exclusionState.status === "verified",
   );
-  const search_plan = createSearchPlan(req, process, source_integrity_verified);
+  const search_plan = createSearchPlan(req, process, source_integrity_verified, exclusionState.revision_digest);
   if (!source_integrity_verified || !reader) {
     return emptyTrace(policy, process.process_id, search_plan);
   }
@@ -46,6 +49,7 @@ export function buildMemoryTrace(
 
   const add = (entry: MemoryEntry, reason: MemoryHit["reason"], matched_on?: string): void => {
     if (hits.length >= policy.max_hits) return;
+    if (reader.isPersonalizationExcluded?.(entry.request_id, entry.entry_hash)) return;
     if (seen.has(entry.entry_hash)) return;
     seen.add(entry.entry_hash);
     hits.push({
@@ -139,6 +143,7 @@ function createSearchPlan(
   req: InboundRequest,
   process: HDSProcessDefinition,
   source_integrity_verified: boolean,
+  personalizationExclusionRevisionDigest: string,
 ): MemorySearchPlan {
   const policy = process.memory_policy;
   const explicit_references_requested = exactKeys(req).length > 0;
@@ -153,6 +158,7 @@ function createSearchPlan(
     process_id: process.process_id,
     policy_id: policy.policy_id,
     query_digest,
+    personalization_exclusion_revision_digest: personalizationExclusionRevisionDigest,
   }));
   const plan_id = digest(JSON.stringify({
     purpose,
@@ -165,6 +171,7 @@ function createSearchPlan(
     retrieval_modes,
     max_hits: Math.max(0, policy.max_hits),
     source_integrity_verified,
+    personalization_exclusion_revision_digest: personalizationExclusionRevisionDigest,
   }));
   return {
     plan_id,
@@ -180,6 +187,21 @@ function createSearchPlan(
     source_integrity_verified,
     used_for_authority: false,
   };
+}
+
+function readPersonalizationExclusionState(reader: MemoryReaderPort | undefined): {
+  readonly status: "verified" | "invalid";
+  readonly revision_digest: string;
+} {
+  if (!reader?.personalizationExclusionState) return { status: "verified", revision_digest: "none" };
+  try {
+    const state = reader.personalizationExclusionState();
+    return /^[a-f0-9]{64}$/.test(state.revision_digest)
+      ? { status: state.status, revision_digest: state.revision_digest }
+      : { status: "invalid", revision_digest: "invalid" };
+  } catch {
+    return { status: "invalid", revision_digest: "invalid" };
+  }
 }
 
 function summaryProjectionSource(entry: MemoryEntry): MemoryHit["summary_projection"] {

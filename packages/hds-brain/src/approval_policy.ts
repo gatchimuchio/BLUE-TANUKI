@@ -455,6 +455,13 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         ...(sourceObservationDigest !== undefined ? { source_observation_digest: sourceObservationDigest } : {}),
       }) };
     }
+    if (command.payload.tool_name === "memory.personalization.stop") {
+      const reference = typeof args.reference === "string" && /^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.reference)
+        ? args.reference : "invalid-reference";
+      const entry_hash = typeof args.entry_hash === "string" && /^[a-f0-9]{64}$/.test(args.entry_hash)
+        ? args.entry_hash : "invalid-entry-hash";
+      return { target_scope: "task_type", target: `memory.personalization.stop:${reference}:${entry_hash}` };
+    }
     if (command.payload.tool_name === "memory.citation.reassess") {
       const fields = ["citation_request_id", "citation_command_id", "target_record_id", "target_version",
         "interpretation_id", "judgment_ref", "citation_audit_digest"] as const;

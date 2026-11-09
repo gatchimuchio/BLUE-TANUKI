@@ -33,6 +33,7 @@ import {
   Executor,
   LLMComputeAdapter,
   ToolRegistry,
+  createMemoryPersonalizationStopTool,
   createExecutorApprovalAuthority,
   captureExecutorCommandForApproval,
   executorCommandDigest,
@@ -126,6 +127,7 @@ import type {
   WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
+  WebChatMemoryPersonalizationStopContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
@@ -267,6 +269,7 @@ interface PendingApproval {
   content_review_provider_state_digest?: string;
   content_review_file_edit_target_version_digest?: string;
   content_review_file_delete_target_version_digest?: string;
+  content_review_memory_personalization_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
@@ -823,7 +826,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   gatewayLog.info("LLM config", describeLLMConfig());
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
 
+  const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
+  tools.register(createMemoryPersonalizationStopTool(memoryStore));
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
   let gatewayShuttingDown = false;
@@ -975,7 +980,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     operation_plan_broker_restore_dependency_evidence: startupBrokerRestoreDependencyEvidence,
     operation_plan_broker_restore_dependency_verifier: verifyRecoveryDependenciesForFreshReview,
     audit: buildAuditLog(),
-    memory: buildHDSMemoryStore(process.env),
+    memory: memoryStore,
     llm_route: buildLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     self_health: runtimeSelfHealth,
@@ -2923,6 +2928,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     const requiresToolContentReview = pending.command.type === "tool_call" && (
       pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
+      pending.command.payload.tool_name === "memory.personalization.stop" ||
       (pending.command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
       (pending.command.payload.tool_name === "google.drive.write" &&
@@ -4531,6 +4537,39 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "memory_personalization_stop" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review: WebChatMemoryPersonalizationStopContentReview = {
+          kind: "memory_personalization_stop",
+          command_id,
+          command_digest: pending.command_digest,
+          review_digest: snapshot.review_digest,
+          operation: "memory.personalization.stop",
+          reference: snapshot.reference,
+          entry_hash: snapshot.entry_hash,
+          exclusion_revision_digest: snapshot.exclusion_revision_digest,
+          request_payload_digest: snapshot.request_payload_digest,
+          target_version_digest: snapshot.target_version_digest,
+          operation_plan_binding_digest: snapshot.operation_plan_binding_digest,
+          historical_record_retained: true,
+          physical_deletion: false,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_memory_personalization_target_version_digest: review.target_version_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -4723,6 +4762,25 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (pending.memory_judgment_reassessment_proposal) {
       return validateMemoryJudgmentReassessmentContentReview(pending, content_review_digest);
     }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_memory_personalization_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        return current && "kind" in current && current.kind === "memory_personalization_stop" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_memory_personalization_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete") {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -4898,6 +4956,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
+            p.command.payload.tool_name === "memory.personalization.stop" ||
             (p.command.payload.tool_name === "github.write" &&
               ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&

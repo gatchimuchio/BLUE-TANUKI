@@ -9,10 +9,11 @@ import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDige
   goalCompletionRulesDigest, type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool, LLMComputeAdapter,
-  LLMRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "@blue-tanuki/core";
+  LLMRegistry, createMemoryPersonalizationStopTool, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegram";
 import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
+  MemoryPersonalizationTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   OperationPlanCheckpointEnvelopeSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
@@ -2480,6 +2481,89 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.getAudit().verify()).toBe(true);
     } finally {
       hds.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("J計画のmemory.personalization.stopはL3対象確認後に記憶参照を失効させる", async () => {
+    const entryHash = "a".repeat(64);
+    const initialRevision = "b".repeat(64);
+    const result = { status: "excluded", entry_hash: entryHash, exclusion_digest: "c".repeat(64),
+      exclusion_revision_digest: "d".repeat(64), historical_record_retained: true, physical_deletion: false,
+      used_for_authority: false, may_execute: false } as const;
+    let targetAvailable = true;
+    const store = {
+      inspectPersonalizationTarget(requestId: string, entry_hash: string) {
+        expect(requestId).toBe("memory-17");
+        expect(entry_hash).toBe(entryHash);
+        return { status: targetAvailable ? "available" as const : "already_excluded" as const,
+          entry_hash: targetAvailable ? entryHash : null,
+          exclusion_revision_digest: targetAvailable ? initialRevision : result.exclusion_revision_digest };
+      },
+      stopPersonalizationUse(input: Record<string, unknown>) {
+        expect(input).toMatchObject({ request_id: "memory-17", expected_entry_hash: entryHash,
+          expected_exclusion_revision_digest: initialRevision });
+        targetAvailable = false;
+        return result;
+      },
+    };
+    const tool = createMemoryPersonalizationStopTool(store);
+    const hds = new HDSUpperController();
+    try {
+      const origin = request("plan:compute stop future personalization use for F:memory-17");
+      const target = { kind: "settings" as const, id: "memory.personalization", scope: "F:memory-17" };
+      const candidate: OperationPlan = {
+        version: "operation-core.v1", plan_id: `memory-stop-plan-${origin.id}`, request_id: origin.id,
+        state: "planned", steps: [{ step_id: "stop-personalization", operation: "memory.personalization.stop", target,
+          state: "planned", effects: ["settings_change", "write"],
+          permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+            hds_brain_authority_required: true, approval_gate_required: true },
+          adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+          parameters: { reference: "F:memory-17", entry_hash: entryHash },
+          preparation: { depends_on: [], bindings: [], preconditions: [],
+            validation: [{ check_id: "stop-use-confirmed", method: "result_equals", target, expected: result }],
+            compensation: { available: false, reason: "A renewed preference requires a separate owner-reviewed operation." } } }],
+        rollback: { available: false },
+        raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+        planner_output_used_for_authority: false, hds_brain_authority_required: true,
+      };
+      await rig(hds, candidate).run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "stop-personalization");
+      if (selected.command?.type !== "tool_call" || selected.command.payload.tool_name !== "memory.personalization.stop") {
+        throw new Error("bounded memory.personalization.stop plan was not connected");
+      }
+      const planBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+      if (!planBindingDigest) throw new Error("selected memory personalization plan source was unavailable");
+      const tools = new ToolRegistry(); tools.register(tool);
+      const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+      const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools, approval_authority: authority });
+      const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(
+        await executor.inspectCommandTargetVersion(selected.command, undefined, planBindingDigest));
+      const contentReview = await executor.inspectCommandContentReview(selected.command, undefined, planBindingDigest);
+      expect(contentReview).toMatchObject({ kind: "memory_personalization_stop", reference: "F:memory-17", entry_hash: entryHash,
+        exclusion_revision_digest: initialRevision, historical_record_retained: true, physical_deletion: false,
+        used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(contentReview)).not.toContain("private-memory-body");
+      const binding = hds.createExecutionAuthorityBinding(selected.command, observation);
+      expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(observation));
+      expect(hds.beginOperationPlanAttempt(selected.command)).toBe(true);
+      const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+      expect(approval).toMatchObject({ decision: "ask", risk: "high", approval_level: "L3_final_review", final_review_required: true });
+      const proof = { source: "human_final_review" as const, decision: "approve" as const, approved_by: "fixture-owner",
+        approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+        operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+        reason: "synthetic exact-record personalization-stop review" };
+      const approved = authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, observation);
+      const feedback = await executor.execute(approved);
+      expect(feedback.status).toBe("success");
+      expect(feedback.result).toEqual(result);
+      finalizeCommandOutput({ hds, command: selected.command, feedback,
+        request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("verified");
+      expect(hds.getAudit().verify()).toBe(true);
+      expect(targetAvailable).toBe(false);
+    } finally {
+      hds.close();
     }
   });
 

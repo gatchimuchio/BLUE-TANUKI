@@ -21,6 +21,8 @@ import {
   GoogleDrivePermissionCreateTargetVersionObservationSchema,
   GoogleDriveTrashTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
+  MemoryPersonalizationTargetVersionObservationSchema,
+  memoryPersonalizationTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
@@ -76,6 +78,7 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
+import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -619,6 +622,18 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "memory.personalization.stop") {
+      const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      if (!hds_binding?.operation_plan_binding_digest || typeof args.reference !== "string" ||
+          typeof args.entry_hash !== "string" || Object.keys(args).sort().join(",") !== "entry_hash,reference" ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.entry_hash !== args.entry_hash ||
+          observation.target_identity_digest !== memoryPersonalizationTargetIdentityDigest(args.reference, args.entry_hash)) {
+        throw new Error("Executor approval rejected: memory.personalization.stop target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else {
       throw new Error("Executor approval rejected: target version evidence is unsupported for this tool command");
     }
@@ -683,6 +698,11 @@ function approveCommandForExecution(
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "shell.exec" &&
       target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
     throw new Error("Executor approval rejected: shell.exec requires Broker target version evidence");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "memory.personalization.stop" &&
+      (!hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.memory-personalization-target-version.v1")) {
+    throw new Error("Executor approval rejected: memory.personalization.stop requires an Operation Plan-bound target version observation");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
@@ -843,6 +863,31 @@ export class Executor {
         return Object.freeze(assertGitHubCodePushTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
       }
       return Object.freeze(assertGitHubIssueCreateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
+    }
+    if (command.payload.tool_name === "memory.personalization.stop") {
+      if (!operationPlanBindingDigest) {
+        throw new Error("memory.personalization.stop target version resolver requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("memory.personalization.stop");
+      if (!tool || !isMemoryPersonalizationStopTool(tool) || !tool.inspect_target_version) {
+        throw new Error("memory.personalization.stop target version resolver requires the registered built-in adapter");
+      }
+      const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      const args = command.payload.arguments;
+      if (typeof args.reference !== "string" || typeof args.entry_hash !== "string" ||
+          Object.keys(args).sort().join(",") !== "entry_hash,reference" ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          observation.entry_hash !== args.entry_hash ||
+          observation.target_identity_digest !== memoryPersonalizationTargetIdentityDigest(args.reference, args.entry_hash)) {
+        throw new Error("memory.personalization.stop target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
     }
     if (command.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
@@ -1024,6 +1069,43 @@ export class Executor {
     env?: Readonly<Record<string, string | undefined>>,
     operationPlanBindingDigest?: string): Promise<ToolContentReview | undefined> {
     if (command.type !== "tool_call") return undefined;
+    if (command.payload.tool_name === "memory.personalization.stop") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("memory.personalization.stop content review requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("memory.personalization.stop");
+      if (!tool || !isMemoryPersonalizationStopTool(tool) || !tool.inspect_content_review) {
+        throw new Error("memory.personalization.stop content review requires the registered built-in adapter");
+      }
+      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest);
+      if (!observation || observation.schema_version !== "blue-tanuki.memory-personalization-target-version.v1") {
+        throw new Error("memory.personalization.stop content review could not obtain verified target evidence");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      if (!("kind" in review) || review.kind !== "memory_personalization_stop") {
+        throw new Error("memory.personalization.stop content review returned an unsupported projection");
+      }
+      const { review_digest, ...reviewBase } = review;
+      const args = command.payload.arguments;
+      const requestDigest = typeof args.reference === "string" && typeof args.entry_hash === "string"
+        ? operationPlanDigest({ schema_version: "blue-tanuki.memory-personalization-request.v1",
+          reference: args.reference, entry_hash: args.entry_hash }) : "invalid";
+      if (typeof args.reference !== "string" || typeof args.entry_hash !== "string" ||
+          Object.keys(args).sort().join(",") !== "entry_hash,reference" ||
+          review.operation !== "memory.personalization.stop" || review.reference !== args.reference ||
+          review.entry_hash !== args.entry_hash || review.exclusion_revision_digest !== observation.exclusion_revision_digest ||
+          review.request_payload_digest !== requestDigest || review.target_version_digest !== operationPlanDigest(observation) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.command_digest !== operationPlanDigest(command) || review.historical_record_retained !== true ||
+          review.physical_deletion !== false || review.used_for_authority !== false || review.may_execute !== false ||
+          !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("memory.personalization.stop content review returned evidence for another command or target");
+      }
+      return review;
+    }
     if (command.payload.tool_name === "file.edit") {
       if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
         throw new Error("file.edit content review requires a selected Operation Plan binding");

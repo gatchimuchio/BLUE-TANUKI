@@ -20,6 +20,7 @@ export {
   type WebChatOwnerTaskSubmissionStore,
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
+  type WebChatMemoryPersonalizationStopContentReview,
   type WebChatGoalPurposeRelationContentReview,
   type WebChatApprovalGrantItem,
   type WebChatApprovalHistoryItem,

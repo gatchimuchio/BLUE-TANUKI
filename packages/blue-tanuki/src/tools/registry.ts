@@ -6,6 +6,7 @@ import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation
   type GoogleDrivePermissionCreateTargetVersionObservation,
   type GoogleDriveTrashTargetVersionObservation,
   type GitHubWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
@@ -13,7 +14,7 @@ export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation 
   GmailWriteTargetVersionObservation | GoogleCalendarWriteTargetVersionObservation |
   GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
   GoogleDrivePermissionCreateTargetVersionObservation | GoogleDriveTrashTargetVersionObservation |
-  GitHubWriteTargetVersionObservation;
+  GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation;
 
 /** No-store projection of one exact, plan-bound GitHub issue.create payload. */
 export interface GitHubIssueCreateContentReview {
@@ -353,6 +354,24 @@ export interface GoogleCalendarEventDeleteContentReview {
   may_execute: false;
 }
 
+/** Digest-only no-store review for excluding one exact M record from future personalization. */
+export interface MemoryPersonalizationStopContentReview {
+  kind: "memory_personalization_stop";
+  operation: "memory.personalization.stop";
+  reference: string;
+  entry_hash: string;
+  exclusion_revision_digest: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  historical_record_retained: true;
+  physical_deletion: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** No-store view of retained attendees, new invitees, and all guests receiving Calendar update notices. */
 export interface GoogleCalendarEventInviteContentReview {
   kind: "google_calendar_event_invite";
@@ -520,6 +539,7 @@ export interface GoogleDriveFileTrashContentReview {
 }
 
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
+  MemoryPersonalizationStopContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
   GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubIssueCommentCreateContentReview |

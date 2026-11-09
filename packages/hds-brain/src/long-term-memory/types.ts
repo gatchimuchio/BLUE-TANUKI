@@ -67,6 +67,32 @@ export interface MemoryStoreOptions {
   max_entries?: number;
 }
 
+/** Append-only preference event that stops future memory citation and personalization use without deleting M history. */
+export interface PersonalizationExclusionEvent {
+  readonly index: number;
+  readonly request_id: string;
+  readonly entry_hash: string;
+  readonly command_digest: string;
+  readonly operation_plan_binding_digest: string;
+  readonly timestamp_ms: number;
+  readonly prev_hash: string;
+  readonly event_hash: string;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export interface PersonalizationExclusionState {
+  readonly status: "verified" | "invalid";
+  readonly revision_digest: string;
+  readonly event_count: number | null;
+}
+
+export interface PersonalizationTargetSnapshot {
+  readonly status: "available" | "already_excluded" | "unavailable";
+  readonly entry_hash: string | null;
+  readonly exclusion_revision_digest: string;
+}
+
 /** Digest-only view of the current M store generation for restart reconciliation. */
 export interface MemoryStoreStateVersion {
   readonly schema_version: "blue-tanuki.memory-state-version.v1";

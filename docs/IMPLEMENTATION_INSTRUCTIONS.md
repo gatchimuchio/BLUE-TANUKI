@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / Windows Setup・Launcher・UninstallでExecutionPolicy保護を尊重
+## 直近施工BUILD_BATCH — QE_BUILD / F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続
+
+主語は、BLUE-TANUKIのHDSが保持する一件のM記録と、その後続引用・個人化consumer。目的は、ownerが明示した正確な`F:`参照について将来の記憶引用と個人化利用を停止し、履歴記録を残したまま有効な参照版・検索scopeを失効すること。rev4.0のF20.02とBT-R-F20-02／06／07に沿い、物理削除・保存契約終了は別作用として行わない。
+
+接続は、CのOperationPlan候補→Jの`memory.personalization.stop` target resolver→対象M版・停止台帳revisionの観測→Executorの登録済み組み込みadapter→settings.write／high／L3 no-store owner review→Gatewayの直前再照合→digest-only hash-chain停止台帳追記→次回HDS memory traceの除外まで。参照IDとentry hashは完全一致し、台帳revision・command・Operation Plan bindingが変われば停止する。M本体は保持し、停止済み記録の`currentReferenceVersions`は`version=null`、有効台帳revisionを検索scopeへ束縛する。不正・不整合台帳では参照をfail-closedにし、履歴内容を台帳へ複製しない。Cへ許可・承認・権限を渡さず、D4／MINIDORA、provider、実ユーザーデータ、公開・出荷には作用しない。
+
+最初のHDS疎通はOperationPlanの対象resolver未登録でFAILとなった。現物で接続欠落を確認し、記録参照・hash・scope・high/L3を固定するresolverとC向け候補契約を追加。同一疎通の再実行でPASSした。合成HDS→J計画→Executor経路でdigest-only review、作用結果・監査を確認。`packages/hds-brain/test/long_term_memory.test.ts` 21/21、`packages/blue-tanuki/test/memory_personalization_tool.test.ts` 2/2、`apps/gateway/test/operation_plan_runtime.test.ts -t "memory.personalization.stop"` 1/1はPASS。`pnpm typecheck`、15 workspaceの`pnpm build`、`pnpm docs:check`、`git diff --check`はPASS。実served GatewayのHTTP承認UI、実ブラウザー、実provider、外部作用、installed製品、5OS、full suite、QE_QC／QE_QAはNOT_RUN。これはこの記憶停止sliceのみの`WIRED`であり、F20全体や製品全体の完成を意味しない。
+
+開始時のlocal main／remote mainは`3c3afbb6a6726d0f1f0f3c308d6507a33262fbe1`。local recovery branch `codex/backup-main=3c3afbb6...`／`codex/backup-main-prev=bfbdc006...`、remote recovery tagも同じ2世代。保護添付は変更していない。`git fetch`はGit管理下の旧worktree候補`blue-tanuki-health-2026-11-07-windows`へのアクセス拒否を出したため触らず保持し、`git ls-remote`でremote main SHAを独立照合した。
+
+**次のproducer／consumer:** 現行HEADから、破壊的OD-04や実provider・別repoに依存しない、未接続の実consumerを再選定する。F20.03の物理削除・backup処遇はowner決定と別作用境界を保ち、今回の停止台帳へ混ぜない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Launcher・UninstallでExecutionPolicy保護を尊重
 
 主語は、Windows上でBLUE-TANUKIを導入・起動・停止・更新・削除する製品および開発用entrypoint。対象はrev4.0のG02.01〜G02.03、とくにBT-R-G02-05（署名状態を偽らずOS保護を自動無効化しない）に関係するWindows呼出し経路。製品・開発用PowerShell子プロセス、cmd、生成ショートカット、Run登録、単体Setup wrapperから`ExecutionPolicy Bypass`を除き、現在の有効なOSポリシーに従わせる。SetupとUninstallは既存resident停止失敗時に更新／削除へ進まず、開発用Uninstallも停止・自動起動無効化の双方を確認してからアプリを除去する。
 

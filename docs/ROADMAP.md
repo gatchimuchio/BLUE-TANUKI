@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
+### 直近BUILD_BATCH — F20.02 記憶引用・個人化利用の停止をHDS/M経路へ接続（限定WIRED）
+
+ownerが明示した一件のM記録に対し、`memory.personalization.stop`をCの計画候補→Jの正確なtarget/revision照合→登録済みExecutor adapter→settings.write／high／L3 no-store確認→作用直前の再照合→停止台帳追記→後続HDS memory trace除外へ接続した。M履歴は保持し、該当する既存参照版を失効し、停止台帳revisionを次回検索scopeへ反映する。不正な台帳はfail-closed。物理削除・保存契約終了はこの作用に含めない。
+
+最初の疎通は対象resolver未登録でFAILとなり、接続を追加して同じ疎通を再実行した結果PASS。`pnpm typecheck`、15 workspace `pnpm build`、LongTermMemoryStore 21件、built-in tool 2件、HDS→Executor OperationPlan疎通1件、`pnpm docs:check`、`git diff --check`はPASS。合成L3 reviewと監査を確認。実served Gateway HTTP承認、実ブラウザー／provider、外部作用、installed製品、5OS、full suite、QE_QC／QE_QAはNOT_RUN。F20.02の限定`WIRED`だけを記録し、F20全体／製品全体の完成へ拡張しない。Git fetch時の旧worktree候補へのアクセス拒否は保持・未処置、GitHub mainは読取専用`ls-remote`で開始SHA一致を確認。
+
+### 前段完了BUILD_BATCH — C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
 
 wait返信・期限到達・中断復旧の再開時に、検証済みJ wait contextから同一taskの達成規則digest・件数・元request参照だけをGoalProjectionへ渡す。規則本文は渡さず、返信／metadataによる規則差し替えを受け付けない。policyのtask identity・goal digest・規則digestが不整合ならwait再開を保留する。GoalProjectionは非権威の`identifying`状態を保ち、J達成条件は検証済み実行結果とM receiptのまま。
 

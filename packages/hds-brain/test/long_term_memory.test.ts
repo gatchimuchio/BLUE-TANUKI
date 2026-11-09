@@ -3,7 +3,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Decision } from "@blue-tanuki/protocol";
+import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { DecisionLog } from "../src/types.js";
+import { buildMemoryTrace } from "../src/memory_trace.js";
+import { resolveActor, resolveProcess } from "../src/process.js";
 import {
   decodeMemoryEntry,
   encodeMemoryEntry,
@@ -249,6 +252,60 @@ describe("LongTermMemoryStore JSONL persistence", () => {
     parsed0.goal = "tampered";
     writeFileSync(filepath, [JSON.stringify(parsed0), lines[1]].join("\n") + "\n");
 
+    expect(() => new LongTermMemoryStore({ filepath })).toThrow(/chain verification failed/);
+  });
+
+  it("retains one exact M record while stopping future personalization and invalidating its reference", () => {
+    const store = new LongTermMemoryStore({ filepath });
+    const entry = store.capture(makeLog("memory-personalization-private-marker"));
+    if (!entry) throw new Error("fixture memory record was not captured");
+    const request: InboundRequest = { id: "personalization-query", channel: "webchat", user: "fixture-owner",
+      content: `Please use F:${entry.request_id}`, timestamp: 10 };
+    const process = resolveProcess(request, resolveActor(request));
+    const before = buildMemoryTrace(request, process, store);
+    expect(before.hits.map((hit) => hit.memory_id)).toContain(entry.request_id);
+
+    const exclusion = store.personalizationExclusionState();
+    const stopped = store.stopPersonalizationUse({ request_id: entry.request_id, expected_entry_hash: entry.entry_hash,
+      expected_exclusion_revision_digest: exclusion.revision_digest, command_digest: "a".repeat(64),
+      operation_plan_binding_digest: "b".repeat(64), timestamp_ms: 20 });
+    const after = buildMemoryTrace(request, process, store);
+    expect(stopped).toMatchObject({ status: "excluded", entry_hash: entry.entry_hash,
+      historical_record_retained: true, physical_deletion: false, used_for_authority: false, may_execute: false });
+    expect(after.hits.map((hit) => hit.memory_id)).not.toContain(entry.request_id);
+    expect(after.search_plan?.application_scope_id).not.toBe(before.search_plan?.application_scope_id);
+    expect(store.all().map((record) => record.request_id)).toContain(entry.request_id);
+    expect(store.currentReferenceVersions([entry.request_id])).toMatchObject({
+      status: "verified", records: [{ request_id: entry.request_id, version: null }],
+    });
+
+    const exclusionRaw = readFileSync(`${filepath}.personalization.jsonl`, "utf8");
+    expect(exclusionRaw).toContain(entry.entry_hash);
+    expect(exclusionRaw).not.toContain(entry.goal);
+    expect(exclusionRaw).not.toContain(entry.abstraction);
+    const reloaded = new LongTermMemoryStore({ filepath });
+    expect(reloaded.verify()).toBe(true);
+    expect(reloaded.recent(1)[0]?.request_id).toBe(entry.request_id);
+    expect(reloaded.currentReferenceVersions([entry.request_id]).records[0]?.version).toBeNull();
+  });
+
+  it("rejects a stale exclusion revision and a modified preference ledger", () => {
+    const store = new LongTermMemoryStore({ filepath });
+    const first = store.capture(makeLog("personalization-stale-one"));
+    const second = store.capture(makeLog("personalization-stale-two"));
+    if (!first || !second) throw new Error("fixture memory records were not captured");
+    const initial = store.personalizationExclusionState();
+    store.stopPersonalizationUse({ request_id: first.request_id, expected_entry_hash: first.entry_hash,
+      expected_exclusion_revision_digest: initial.revision_digest, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64), timestamp_ms: 30 });
+    expect(() => store.stopPersonalizationUse({ request_id: second.request_id, expected_entry_hash: second.entry_hash,
+      expected_exclusion_revision_digest: initial.revision_digest, command_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64), timestamp_ms: 31 })).toThrow(/stale_or_unverified/);
+
+    const sidecarPath = `${filepath}.personalization.jsonl`;
+    const event = JSON.parse(readFileSync(sidecarPath, "utf8").trim()) as { timestamp_ms: number };
+    event.timestamp_ms += 1;
+    writeFileSync(sidecarPath, `${JSON.stringify(event)}\n`);
     expect(() => new LongTermMemoryStore({ filepath })).toThrow(/chain verification failed/);
   });
 });
