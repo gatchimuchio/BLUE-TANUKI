@@ -3376,13 +3376,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         next_action: "Gatewayの実consumerを静止・排出し、復元後に再起動・再観測する境界が未接続です。安全な静止を確認できる復元経路が実装されるまで、このstoreの復元要求は作成されません。",
       };
     }
-    const planScopeInspection = toolName === "recovery.restore" && arguments_.store_key === "operation_plans"
+    const planScopeStoreKey = arguments_.store_key === "broker" ? "broker" : "operation_plans";
+    const planScopeInspection = toolName === "recovery.restore" &&
+      (arguments_.store_key === "operation_plans" ||
+        (arguments_.store_key === "broker" && arguments_.scope_kind === "task_identity"))
       ? arguments_.scope_kind === "task_identity"
-        ? await inspectRecoveryTaskRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
+        ? await inspectRecoveryTaskRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!, planScopeStoreKey)
         : await inspectRecoveryPlanRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
       : null;
     const planScopeVerified = planScopeInspection && (arguments_.scope_kind === "task_identity"
-      ? isVerifiedRecoveryTaskRestoreScope(planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!)
+      ? isVerifiedRecoveryTaskRestoreScope(planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!, planScopeStoreKey)
       : isVerifiedRecoveryPlanRestoreScope(planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!));
     if (planScopeInspection && !planScopeVerified) {
       return {
@@ -3393,7 +3396,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         scope_applicability: planScopeInspection,
         used_for_authority: false,
         may_execute: false,
-        next_action: "指定backupとOperation Plan digestの読み取り照合を確認してから、必要ならowner L3レビューを申請してください。復元要求は作成されていません。",
+        next_action: "指定backup・store・scope digestの読み取り照合を確認してください。復元要求は作成されていません。",
       };
     }
     const origin: InboundRequest = {

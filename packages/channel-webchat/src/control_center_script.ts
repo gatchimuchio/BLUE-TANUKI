@@ -4497,16 +4497,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const snapshotStatuses = ["verified", "captured_unverified", "snapshot_failed", "not_present", "unknown"];
         const dependencyStatuses = ["residuals_present", "unobserved", "no_residual_recorded", "not_mapped", "unknown"];
         const rawStatus = recoveryInspectionEnum(source.status, ["matched", "unverified"]);
-        const scopeKind = source.scope_kind === null ? null : recoveryInspectionEnum(source.scope_kind, ["request_scope", "operation_plan"]);
+        const scopeKind = source.scope_kind === null ? null : recoveryInspectionEnum(source.scope_kind, ["request_scope", "operation_plan", "task_identity"]);
         const scopeDigest = digest(source.scope_digest);
         const backupDigest = digest(source.backup_id_digest);
         const planDigest = digest(source.matched_plan_id_digest);
+        const backupTaskIdentityDigest = digest(source.backup_task_identity_digest);
         const reason = source.reason === null ? null : recoveryInspectionEnum(source.reason, reasons);
         const matchedPlanCount = count(source.matched_plan_scope_count);
+        const backupTaskLineagePlanCount = count(source.backup_task_lineage_plan_scope_count);
         const storeCount = count(source.store_candidate_count);
         const verifiedStoreCount = count(source.verified_store_candidate_count);
+        const backupTaskLineageIntegrity = recoveryInspectionEnum(source.backup_task_lineage_integrity,
+          ["verified", "residuals_present", "unverified", "unknown"]);
+        const backupTaskLineageDependencyStatus = recoveryInspectionEnum(source.backup_task_lineage_dependency_status,
+          ["observed", "residuals_present", "unobserved", "unknown"]);
         const dependencyScopeStatus = recoveryInspectionEnum(source.dependency_scope_status,
           ["observed", "residuals_present", "unobserved", "unknown"]);
+        const readPlanDigests = function (value) {
+          if (!Array.isArray(value) || value.length > 64) return null;
+          const rows = value.map(digest);
+          return rows.every(Boolean) && new Set(rows).size === rows.length ? rows : null;
+        };
+        const matchedPlanDigests = readPlanDigests(source.matched_plan_id_digests);
         const readCategories = function (value) {
           if (!Array.isArray(value) || value.length > categories.length) return null;
           const rows = value.map(function (item) { return recoveryInspectionEnum(item, categories); });
@@ -4518,7 +4530,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           rawStatus !== null && (source.reason === null || reason !== null) &&
           (source.scope_kind === null || scopeKind !== null) && (source.scope_digest === null || scopeDigest !== null) &&
           (source.backup_id_digest === null || backupDigest !== null) && (source.matched_plan_id_digest === null || planDigest !== null) &&
-          matchedPlanCount !== undefined && storeCount !== undefined && verifiedStoreCount !== undefined &&
+          (source.backup_task_identity_digest === null || backupTaskIdentityDigest !== null) &&
+          matchedPlanCount !== undefined && backupTaskLineagePlanCount !== undefined && storeCount !== undefined && verifiedStoreCount !== undefined &&
+          backupTaskLineageIntegrity !== null && backupTaskLineageDependencyStatus !== null && matchedPlanDigests !== null &&
           dependencyScopeStatus !== null && residualDependencies !== null && unobservedDependencies !== null &&
           (source.cross_store_atomic === false || source.cross_store_atomic === null);
         if (source.used_for_authority !== false || source.may_execute !== false || source.external_backup_restore_point !== "not_examined") valid = false;
@@ -4539,11 +4553,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               dependency_status: dependencyStatus, related_dependencies: related });
           }
         }
-        if (rawStatus === "matched" && (reason !== null || !scopeKind || !scopeDigest || !backupDigest || !planDigest ||
-            matchedPlanCount !== 1 || storeCount === null || storeCount < 1 || storeCount > 5 ||
+        const taskLineageScope = scopeKind === "task_identity";
+        const planScopeBindingValid = taskLineageScope
+          ? planDigest === null && matchedPlanCount !== null && matchedPlanCount > 0 &&
+            matchedPlanDigests.length === matchedPlanCount && backupTaskIdentityDigest === scopeDigest &&
+            backupTaskLineagePlanCount === matchedPlanCount && backupTaskLineageIntegrity === "verified" &&
+            backupTaskLineageDependencyStatus !== "unknown" && dependencyScopeStatus === backupTaskLineageDependencyStatus
+          : Boolean(planDigest && matchedPlanCount === 1 && matchedPlanDigests.length === 1 && matchedPlanDigests[0] === planDigest);
+        if (rawStatus === "matched" && (reason !== null || !scopeKind || !scopeDigest || !backupDigest || !planScopeBindingValid ||
+            storeCount === null || storeCount < 1 || storeCount > 5 ||
             verifiedStoreCount !== storeCount || storeRows.length !== storeCount || !dependencyScopeStatus ||
+            dependencyScopeStatus === "unknown" || source.cross_store_atomic !== false ||
             storeRows.some(function (row) { return row.snapshot_status !== "verified" ||
-              ["unobserved", "not_mapped", "unknown"].includes(row.dependency_status); }))) valid = false;
+              ["not_mapped", "unknown"].includes(row.dependency_status) ||
+              (!taskLineageScope && row.dependency_status === "unobserved"); }))) valid = false;
         const status = valid ? rawStatus : "invalid_report";
         const projection = valid ? {
           schema_version: 1,
@@ -4555,7 +4578,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           scope_digest: scopeDigest,
           backup_id_digest: backupDigest,
           matched_plan_id_digest: planDigest,
+          matched_plan_id_digests: matchedPlanDigests,
           matched_plan_scope_count: matchedPlanCount,
+          backup_task_identity_digest: backupTaskIdentityDigest,
+          backup_task_lineage_plan_scope_count: backupTaskLineagePlanCount,
+          backup_task_lineage_integrity: backupTaskLineageIntegrity,
+          backup_task_lineage_dependency_status: backupTaskLineageDependencyStatus,
           store_candidate_count: storeCount,
           verified_store_candidate_count: verifiedStoreCount,
           dependency_scope_status: dependencyScopeStatus,
@@ -4576,7 +4604,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           scope_digest: null,
           backup_id_digest: null,
           matched_plan_id_digest: null,
+          matched_plan_id_digests: [],
           matched_plan_scope_count: null,
+          backup_task_identity_digest: null,
+          backup_task_lineage_plan_scope_count: null,
+          backup_task_lineage_integrity: "unknown",
+          backup_task_lineage_dependency_status: "unknown",
           store_candidate_count: null,
           verified_store_candidate_count: null,
           dependency_scope_status: "unknown",
@@ -4588,12 +4621,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           used_for_authority: false,
           may_execute: false
         };
-        setText("recovery-scope-applicability-status", status === "matched" ? "照合成立（復旧可否は未判定）" : "未確認");
+        setText("recovery-scope-applicability-status", status === "matched"
+          ? taskLineageScope ? "task lineage照合成立（復旧可否は未判定）" : "照合成立（復旧可否は未判定）"
+          : "未確認");
         byId("recovery-scope-applicability-status").className = "badge " + (status === "matched" ? "review" : "warn");
         const rowsText = storeRows.map(function (row) {
           return row.store_key + " / snapshot=" + row.snapshot_status + " / dependency=" + row.dependency_status +
             (row.related_dependencies.length ? " (" + row.related_dependencies.join(",") + ")" : "");
         });
+        if (status === "matched" && taskLineageScope) {
+          rowsText.push("task_identity=" + scopeDigest + " / plans=" + matchedPlanDigests.length +
+            " / integrity=" + backupTaskLineageIntegrity + " / lineage_dependencies=" + backupTaskLineageDependencyStatus);
+          rowsText.push("plan_id_digests=" + matchedPlanDigests.join(","));
+        }
         setText("recovery-scope-applicability-json", compactJson(projection) +
           (rowsText.length ? "\\n" + rowsText.join("\\n") : ""));
       }
@@ -4824,23 +4864,38 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-action-status", "select one verified store");
           return;
         }
-        const scopeKind = byId("recovery-scope-kind").value;
-        const scopeDigest = byId("recovery-scope-digest").value.trim();
+        const scopeKind = byId("recovery-restore-scope-kind").value;
+        const scopeDigest = byId("recovery-restore-scope-digest").value.trim();
+        const scopedRestore = scopeKind === "operation_plan" || scopeKind === "task_identity";
         if (storeKey === "operation_plans" &&
-            (scopeKind !== "operation_plan" || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
-          setText("recovery-action-status", "Operation Plan digestを指定してください");
+            (!scopedRestore || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
+          setText("recovery-action-status", "Operation Plan digestまたはtask identity digestを指定してください");
+          return;
+        }
+        if (storeKey === "broker" && scopeKind !== "whole_store" &&
+            (scopeKind !== "task_identity" || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
+          setText("recovery-action-status", "Broker全体またはtask identity digestを指定してください");
+          return;
+        }
+        if (!["operation_plans", "broker"].includes(storeKey) && scopeKind !== "whole_store") {
+          setText("recovery-action-status", "このstoreでは全体scopeだけ指定できます");
           return;
         }
         const backupId = byId("recovery-backup-id").value.trim();
         const backupLabel = backupId || "latest backup";
-        const scopePrompt = storeKey === "operation_plans"
-          ? " Plan digest " + scopeDigest.toLowerCase() + " is bound to review; the effect replaces the entire selected Operation Plan store."
-          : "";
-        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? Only this store will be selected; no change runs until approval and a pre-action backup." + scopePrompt)) return;
+        const scopeDescription = scopeKind === "operation_plan"
+          ? " Only the bound Operation Plan scope will be merged; unrelated plans are preserved."
+          : scopeKind === "task_identity" && storeKey === "operation_plans"
+            ? " Only the matching HDS-J task lineage will be merged; unrelated plans are preserved."
+            : scopeKind === "task_identity" && storeKey === "broker"
+              ? " Only missing Broker receipts for the matching HDS-J task lineage will be appended; current and unrelated history is preserved."
+              : " The entire selected store is in scope.";
+        const scopeIdentityPrompt = scopedRestore ? " Bound scope digest: " + scopeDigest.toLowerCase() + "." : "";
+        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? No change runs before approval and a pre-action backup." + scopeDescription + scopeIdentityPrompt + " Cross-store atomicity and automatic resume are not implied.")) return;
         const body = { confirm: "RESTORE", store_key: storeKey };
         if (backupId) body.backup_id = backupId;
-        if (storeKey === "operation_plans") {
-          body.scope_kind = "operation_plan";
+        if (scopedRestore && (storeKey === "operation_plans" || (storeKey === "broker" && scopeKind === "task_identity"))) {
+          body.scope_kind = scopeKind;
           body.scope_digest = scopeDigest.toLowerCase();
         }
         await runRecoveryAction("/recovery/restore", body);

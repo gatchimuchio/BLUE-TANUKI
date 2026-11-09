@@ -6,6 +6,12 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近BUILD_BATCH — E03.03 Recoveryのtask lineage復元scopeをControl Centerへ接続（限定WIRED）
+
+Control Centerにbackup内scope照合とは分離した復元effect scopeを追加した。Operation Planは一planまたはHDS-J task lineage、Brokerはstore全体またはtask lineage、その他のstoreは選択store全体を選ぶ。task照合projectionはbackup task identity、複数plan digest、lineage integrity／dependency状態を表示するが、復旧可否・権限・resumeを判定しない。GatewayはOperation Plan scopeとBroker task scopeをL3要求作成前に同じbackup／task scope verifierへ通し、既存の復元作用直前照合を維持する。L3承認、実行直前backup、store間非原子性、automatic resumeなしを維持する。
+
+Gateway依存7 workspace projectのbuild、WebChat build、生成Control Center scriptの構文解析、`git diff --check`はPASS。test suite、served Gatewayでのowner L3全往復、実backup／復元、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このControl Center→Gateway接続のコード経路だけを限定`WIRED`とし、E03.03全体または製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
 ### 直近BUILD_BATCH — F06.02 検証済みbrowser.read結果を同一taskの次回C計算へ接続（限定WIRED）
 
 Ownerが明示選択した同一taskの検証済み`browser.read`結果を、J/M receipt・現行plan binding・record内容・excerpt digest・10分期限で再照合後、Cの次回計画候補だけへ渡す。最大8,000文字の非信頼excerptはsystem指示と分けたuser-role data messageへ置き、Owner依頼より前に配置する。子C delegationは無効。完全URL/path/query、links、credential、raw本文はruntime snapshotへ公開しない。Control Centerはorigin・digest・文字数・期限のみを表示し、このC計算からのmeaning-update提案を無効にする。

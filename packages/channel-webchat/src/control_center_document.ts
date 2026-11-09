@@ -509,6 +509,13 @@ ${CONTROL_CENTER_STYLE}    </style>
               <option value="operation_plans">Operation Plan ledger</option>
               <option value="cron_events">Cron event ledger</option>
             </select></label>
+            <label>Restore effect scope<select id="recovery-restore-scope-kind">
+              <option value="">Select scope</option>
+              <option value="whole_store">Entire selected store</option>
+              <option value="operation_plan">One Operation Plan</option>
+              <option value="task_identity">One HDS-J task lineage</option>
+            </select></label>
+            <label>Restore scope digest<input id="recovery-restore-scope-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
             <button id="restore-recovery-store" type="button" disabled>Request selected-store restore review</button>
           </div>
           <p id="recovery-action-guard">Recovery changes require owner L3 review. Backup and read-only inspection remain available.</p>
@@ -549,7 +556,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreは実行直前のbackupを作成し、L3審査後に指定store全体を適用します。Operation Plan台帳は指定plan digestをL3対象に結び、直前に同じbackup scopeを再照合します。J／M／Broker／Cron台帳は現在のGateway consumerを静止・排出する経路がないため、consumer quiescenceが実装されるまでL3要求作成前に拒否します。snapshot間の原子的同時点、仕事単位の復旧点、自動resumeは成立しません。</p>
+          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreは実行直前のbackupとowner L3審査を要します。Operation Plan台帳は一つのplanまたはtask lineage、Broker台帳はtask lineageまたはstore全体を対象にできます。その他のstoreは選択store全体が対象です。plan/task scoped操作は選択範囲をmergeし、同じstore内の無関係なplan／receiptを維持します。scopeとsnapshotが一致しない場合は拒否します。store間の原子的同時点、自動resume、復旧可否の自動判定は成立しません。</p>
           <h3>台帳別snapshot検査</h3>
           <div class="status-grid" aria-label="台帳別SQLite snapshot status">
             <div class="metric"><span>J制御台帳</span><span id="recovery-backup-store-j_control">未確認</span></div>
@@ -566,10 +573,10 @@ ${CONTROL_CENTER_STYLE}    </style>
           <pre id="recovery-backup-plan-dependencies">未確認</pre>
           <pre id="recovery-backup-inspection-json">未確認</pre>
           <h3>指定scopeとbackup store候補の照合</h3>
-          <p class="muted">ownerが指定したscope digest・検証対象backup・canonical store候補をread-onlyで照合します。照合成立はscopeと保存物のdigest／依存記録の一致だけを示し、破損の確定、復旧可能性、独立restore point、復元・repair・resume・権限を示しません。曖昧・未検証・未接続は未確認として扱います。</p>
+          <p class="muted">ownerが指定したrequest scope、Operation Plan、またはHDS-J task identity digestと、検証対象backup・canonical store候補をread-onlyで照合します。task lineageはbackup内で複数planを含む場合があります。この照合は指定backup内の依存状態を示し、現在の破損確定、復旧可能性、store間の独立restore point、復元・repair・resume・権限を示しません。曖昧・未検証・未接続は未確認として扱います。</p>
           <div class="status-grid">
             <label>backup ID digest<input id="recovery-scope-backup-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
-            <label>scope identity<select id="recovery-scope-kind"><option value="request_scope">request scope digest</option><option value="operation_plan">Operation Plan digest</option></select></label>
+            <label>scope identity<select id="recovery-scope-kind"><option value="request_scope">request scope digest</option><option value="operation_plan">Operation Plan digest</option><option value="task_identity">HDS-J task identity digest</option></select></label>
             <label>scope digest<input id="recovery-scope-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
           </div>
           <div class="status-grid" aria-label="scope applicability store candidates">
