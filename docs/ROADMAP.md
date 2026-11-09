@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — D03.01 D4 Runtimeのsession-scoped intent／response transport（限定WIRED）
+### 直近BUILD_BATCH — E04.02 同一条件browser.read履歴をFailureReviewへ接続（限定WIRED）
+
+既存の`browser.read`成功履歴を、tool scopeのFailureReviewへdigest-only観測として接続する。Complete History hash-chainが有効で署名baseline全件があり、後続entryが同じoperation・action／goal input／actor・channelで成功し、結果digestと固定schemaのbrowser provenanceが検証できる場合だけ候補にする。HTTP要求を追加で発生させず、本文・完全URL・path・query・links・credentialをC/Jへ渡さない。projectionはrequested/final origin digest、redirect flag、evidence class、時刻、結果digestだけを含み、原因や外部条件解消の証明、再開・実行権限には使えない。
+
+これはFailureReview producer/consumerの限定`WIRED` sliceであり、file.searchの既存sliceと合わせてもE04.02全体ではない。Gateway依存7 projectのbuild／typecheck、`docs:check`、`git diff --check`はPASS。日本語基底の既存移行負債76件に注意。test suite、実FailureReview往復、実browser/HTTP/provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02の明示owner規則・検証済み根拠・M receiptによる達成判定は既存実装を維持する。
+
+### 前段完了BUILD_BATCH — D03.01 D4 Runtimeのsession-scoped intent／response transport（限定WIRED）
 
 Blue Gatewayの専用Runtime credentialで、登録済みruntime IDとsession参照を検証し、sessionをHMAC digest scopeへ変換して単回WebSocket ticketを発行する。ticketで同じsession scopeへ接続した場合だけintentをHDSへ渡し、HDSの既存`channel_send`を同じscopeへ返す。応答経路が未接続なら`409 not_dispatched`でHDS handlerを呼ばない。HTTP `202`は入力受付だけを示す。
 
@@ -26,7 +32,7 @@ Control Centerにbackup内scope照合とは分離した復元effect scopeを追�
 
 Gateway依存7 workspace projectのbuild、WebChat build、生成Control Center scriptの構文解析、`git diff --check`はPASS。test suite、served Gatewayでのowner L3全往復、実backup／復元、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このControl Center→Gateway接続のコード経路だけを限定`WIRED`とし、E03.03全体または製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
 
-### 直近BUILD_BATCH — F06.02 検証済みbrowser.read結果を同一taskの次回C計算へ接続（限定WIRED）
+### 前段完了BUILD_BATCH — F06.02 検証済みbrowser.read結果を同一taskの次回C計算へ接続（限定WIRED）
 
 Ownerが明示選択した同一taskの検証済み`browser.read`結果を、J/M receipt・現行plan binding・record内容・excerpt digest・10分期限で再照合後、Cの次回計画候補だけへ渡す。最大8,000文字の非信頼excerptはsystem指示と分けたuser-role data messageへ置き、Owner依頼より前に配置する。子C delegationは無効。完全URL/path/query、links、credential、raw本文はruntime snapshotへ公開しない。Control Centerはorigin・digest・文字数・期限のみを表示し、このC計算からのmeaning-update提案を無効にする。
 

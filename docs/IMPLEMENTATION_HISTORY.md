@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-11-10 — QEB-E04.02-BROWSER-READ-FAILURE-REVIEW-OBSERVATION
+
+開始時local／remote `main`=`ed0460011a5f4105ba9ae42e52582be89e3d5da2`で一致。編集前の復旧refはlocal branch／remote tagともcurrent=`ed046001...`、previous=`102f9573e2b3fd62e9de6cdd1b5cce3c8c1a62e7`。保護された`.codex-attachments/`／`.codex-remote-attachments/`は未変更。D4 Pocketはread-only照合のみで変更していない。実provider、外部作用、実browser/HTTP要求は発生させていない。
+
+同じtool scopeの失敗署名に対し、hash-chain検証、全baseline ID存在、baseline最終indexより後、正確なoperation/action/goal input/actor/channel、成功結果digestを満たす既存`browser.read` execution historyをFailureReviewの独立後続観測へ接続した。新しいHTTP requestは起こさない。結果内のbrowser provenance schema、要求／最終origin、origin変更flag、HTTP(S)、時刻、credential-free、非信頼本文、証拠分類を検査し、専用versioned history projectionにはorigin digest、redirect flag、`EXTERNAL_EVIDENCE`／`FIXTURE`、時刻、result digestだけを保持する。本文・完全URL・path・query・links・credentialはC/J投影へ渡さない。chain不正は`invalid`、後続一致がない場合は`unavailable`。原因、外部条件の解消、世界状態、承認、再開・実行権限の証明にはしない。
+
+Gateway依存7 workspace project build／typecheck、`docs:check`、`git diff --check`はPASS。日本語基底監査は既存移行負債76件の注意あり、license監査PASS。test suite、FailureReview実往復、実browser／HTTP、実provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。生成build出力はworkspace再利用用に保持し、temp assetは作成していない。
+
 ## 2026-11-09 — QEB-F16.02-WEBCHAT-OWNER-AUDIO-TRANSCRIPTION
 
 開始時local／remote `main`=`53e6fd9a1ce2b789cfd1897224cbcb991f97ae15`。編集前に二世代復旧refをCASでlocal branch／remote tagともcurrent=`53e6fd9...`、previous=`a718318...`へ回転・照合。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`、D4 Pocket、OneDrive資料、実provider資格情報、外部作用は変更していない。

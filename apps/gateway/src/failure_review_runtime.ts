@@ -56,7 +56,7 @@ export function prepareFailureReviewInbound(
       .slice(-32)
       .map(failureLearningLineageReference);
     const independentReadOnlyEvidence = completeHistory && chainValid
-      ? latestPostSignatureFileSearchObservation(signature, completeHistory)
+      ? latestPostSignatureReadOnlyObservation(signature, completeHistory)
       : { baselineLastIndex: undefined, observation: undefined };
     const sourceStatus = !completeHistory || !chainValid
       ? completeHistory && !chainValid ? "invalid" : "unavailable"
@@ -86,16 +86,18 @@ export function prepareFailureReviewInbound(
 }
 
 /**
- * Find one actual, later read-only observation of the same exact file.search
- * under the same goal and actor/channel. It can inform scope review, but it is
- * not evidence that a failure cause was resolved or authority to resume work.
+ * Find one actual, later read-only observation of the same exact file.search or
+ * browser.read under the same goal and actor/channel. It can inform scope review,
+ * but it is not evidence that a failure cause was resolved or authority to resume work.
  */
-function latestPostSignatureFileSearchObservation(
+function latestPostSignatureReadOnlyObservation(
   signature: FailureSignature,
   history: CompleteHistoryStore,
 ): { baselineLastIndex?: number; observation?: FailureReviewIndependentObservation } {
   const baselineIds = new Set(signature.evidence_log_ids);
-  if (signature.scope !== "file" || baselineIds.size === 0 || !commandPatternsMatch(
+  const operation = signature.scope === "file" ? "file.search"
+    : signature.scope === "tool" ? "browser.read" : undefined;
+  if (!operation || baselineIds.size === 0 || !commandPatternsMatch(
     signature.input_pattern,
     signature.action_pattern,
     signature.context_pattern,
@@ -106,10 +108,13 @@ function latestPostSignatureFileSearchObservation(
   if (baselineEntries.length !== baselineIds.size) return { baselineLastIndex: undefined, observation: undefined };
   const baselineLastIndex = Math.max(...baselineEntries.map((entry) => entry.index));
   const laterObservation = [...entries].reverse().find((entry) =>
-    isMatchingFileSearchObservation(entry, signature, baselineIds, baselineLastIndex));
+    isMatchingReadOnlyObservation(entry, signature, baselineIds, baselineLastIndex, operation));
   if (!laterObservation) return { baselineLastIndex, observation: undefined };
 
   const payload = asRecord(laterObservation.payload)!;
+  const browserReadObservation = operation === "browser.read"
+    ? asRecord(payload.browser_read_observation)!
+    : undefined;
   return {
     baselineLastIndex,
     observation: {
@@ -120,10 +125,25 @@ function latestPostSignatureFileSearchObservation(
       entry_kind: laterObservation.kind,
       observed_failures: [],
       observation_kind: "post_signature_read_only",
-      operation: "file.search",
+      operation,
+      ...(browserReadObservation ? {
+        browser_read_observation: {
+          schema_version: "blue-tanuki.failure-review.browser-read-history.v1",
+          requested_origin_digest: String(browserReadObservation.requested_origin_digest),
+          final_origin_digest: String(browserReadObservation.final_origin_digest),
+          origin_changed: browserReadObservation.origin_changed as boolean,
+          evidence_source: browserReadObservation.evidence_source as "EXTERNAL_EVIDENCE" | "FIXTURE",
+          navigation: "http_get",
+          credential_context: "no_tool_supplied_credentials",
+          page_content_is_untrusted: true,
+          used_for_authority: false,
+          may_execute: false,
+        },
+      } : {}),
       result_status: "success",
       entry_index: laterObservation.index,
-      observed_at_ms: laterObservation.timestamp,
+      observed_at_ms: browserReadObservation
+        ? Number(browserReadObservation.observed_at_ms) : laterObservation.timestamp,
       action_pattern_digest: sha256Hex(signature.action_pattern),
       input_pattern_digest: sha256Hex(signature.input_pattern),
       context_pattern_digest: sha256Hex(signature.context_pattern),
@@ -132,11 +152,12 @@ function latestPostSignatureFileSearchObservation(
   };
 }
 
-function isMatchingFileSearchObservation(
+function isMatchingReadOnlyObservation(
   entry: CompleteHistoryEntry,
   signature: FailureSignature,
   baselineIds: ReadonlySet<string>,
   baselineLastIndex: number,
+  operation: "file.search" | "browser.read",
 ): boolean {
   if (entry.kind !== "execution_history" || entry.index <= baselineLastIndex ||
       baselineIds.has(entry.id) || entry.source !== "executor" || !entry.actor) return false;
@@ -144,13 +165,15 @@ function isMatchingFileSearchObservation(
   const command = asRecord(payload?.command);
   const commandPayload = asRecord(command?.payload);
   const failurePatterns = asRecord(command?.failure_patterns);
+  const browserReadObservation = asRecord(payload?.browser_read_observation);
   const channel = payload?.origin_channel;
   if (payload?.status !== "success" || payload.result_present !== true ||
       typeof payload.result_digest !== "string" || !/^[a-f0-9]{64}$/i.test(payload.result_digest) ||
-      command?.type !== "tool_call" || command.operation !== "file.search" ||
-      commandPayload?.tool_name !== "file.search" ||
+      command?.type !== "tool_call" || command.operation !== operation ||
+      commandPayload?.tool_name !== operation ||
       typeof failurePatterns?.input_pattern !== "string" || typeof failurePatterns.action_pattern !== "string" ||
       typeof channel !== "string") return false;
+  if (operation === "browser.read" && !isBoundBrowserReadHistoryObservation(browserReadObservation, entry.timestamp)) return false;
   if (!commandPatternsMatch(
     failurePatterns.input_pattern,
     failurePatterns.action_pattern,
@@ -159,6 +182,25 @@ function isMatchingFileSearchObservation(
   return failurePatterns.input_pattern === signature.input_pattern &&
     failurePatterns.action_pattern === signature.action_pattern &&
     commandContextPattern({ actor: entry.actor, channel }) === signature.context_pattern;
+}
+
+function isBoundBrowserReadHistoryObservation(
+  value: Record<string, unknown> | null,
+  entryTimestamp: number,
+): value is Record<string, unknown> {
+  return Boolean(value &&
+    value.schema_version === "blue-tanuki.failure-review.browser-read-history.v1" &&
+    /^[a-f0-9]{64}$/i.test(String(value.requested_origin_digest)) &&
+    /^[a-f0-9]{64}$/i.test(String(value.final_origin_digest)) &&
+    typeof value.origin_changed === "boolean" &&
+    (value.evidence_source === "EXTERNAL_EVIDENCE" || value.evidence_source === "FIXTURE") &&
+    value.navigation === "http_get" &&
+    value.credential_context === "no_tool_supplied_credentials" &&
+    value.page_content_is_untrusted === true &&
+    value.used_for_authority === false &&
+    value.may_execute === false &&
+    Number.isSafeInteger(value.observed_at_ms) && (value.observed_at_ms as number) >= 0 &&
+    (value.observed_at_ms as number) <= entryTimestamp);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -38,9 +38,10 @@ export function createFailureReviewProjection(
   const parsedObservations = independentObservations.map((observation) =>
     FailureReviewIndependentObservationSchema.parse(observation));
   if (parsedObservations.some((observation) =>
-    signature.scope !== "file" || allowedEvidenceIds.has(observation.entry_id_digest) ||
+    !failureReviewOperationMatchesScope(signature.scope, observation.operation) ||
+    allowedEvidenceIds.has(observation.entry_id_digest) ||
     observation.observation_kind !== "post_signature_read_only" ||
-    observation.operation !== "file.search" || observation.result_status !== "success" ||
+    observation.result_status !== "success" ||
     observation.entry_index === undefined || baselineEvidenceLastIndex === undefined ||
     observation.entry_index <= baselineEvidenceLastIndex ||
     observation.action_pattern_digest !== sha256Hex(signature.action_pattern) ||
@@ -124,6 +125,14 @@ export function failureSignaturePreStateDigest(signature: FailureSignature): str
 
 export function failureReviewProjectionDigest(projection: FailureReviewProjection): string {
   return sha256Hex(stableJson(projection));
+}
+
+function failureReviewOperationMatchesScope(
+  scope: FailureReviewProjection["scope"],
+  operation: FailureReviewIndependentObservation["operation"],
+): boolean {
+  return (scope === "file" && operation === "file.search") ||
+    (scope === "tool" && operation === "browser.read");
 }
 
 export function parseFailureReviewCandidate(value: unknown): FailureReviewCandidate | null {
@@ -348,7 +357,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
   return JSON.stringify({
     schema_version: "blue-tanuki.failure-review-result.v1",
     review: trace,
-    review_basis: "failure categories, digests, and at most a later exact read-only file.search execution record; no raw goal, action, context, or result was provided to C",
+    review_basis: "failure categories, digests, and at most a later exact read-only file.search or credential-free browser.read execution record; no raw goal, action, context, page content, or result was provided to C",
     candidate_proposals: candidate ? {
       cause_hypotheses: candidate.cause_hypotheses,
       alternative_hypotheses: candidate.alternative_hypotheses,
@@ -363,7 +372,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
       disposition: trace.scope_disposition,
       count: trace.independent_observation_count,
       digest: trace.independent_observation_digest,
-      basis: "a later exact-goal, exact-action, exact-actor/channel read-only file.search success recorded in a verified Complete History chain; observation only, not cause proof or permission",
+      basis: "a later exact-goal, exact-action, exact-actor/channel file.search or credential-free browser.read success in verified Complete History; browser.read carries only origin digests, redirect status, and evidence class. Observation only, not cause proof, condition-resolution proof, or permission",
     },
     review_targets: {
       counterexamples: trace.counterexample_review_target_status,
@@ -426,10 +435,10 @@ function assessIndependentObservations(projection: FailureReviewProjection): {
   const uniqueIds = new Set(ids);
   const baselineIds = new Set(projection.evidence_log_id_digests);
   const recordsMatch = observations.every((observation) =>
-    projection.scope === "file" && !baselineIds.has(observation.entry_id_digest) &&
+    failureReviewOperationMatchesScope(projection.scope, observation.operation) &&
+    !baselineIds.has(observation.entry_id_digest) &&
     observation.observed_failures.length === 0 &&
     observation.observation_kind === "post_signature_read_only" &&
-    observation.operation === "file.search" &&
     observation.result_status === "success" &&
     observation.entry_index !== undefined && projection.baseline_evidence_last_index !== undefined &&
     observation.entry_index > projection.baseline_evidence_last_index &&

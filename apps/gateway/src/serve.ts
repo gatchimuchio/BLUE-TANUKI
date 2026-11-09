@@ -618,6 +618,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function failureReviewBrowserReadHistoryEvidence(result: unknown, recordedAtMs: number): Record<string, unknown> | undefined {
+  const output = isRecord(result) ? result : null;
+  const observation = isRecord(output?.observation) ? output.observation : null;
+  if (!output || !observation || typeof output.url !== "string" || typeof output.text !== "string" ||
+      output.text.length > 50_000 || typeof output.truncated !== "boolean" ||
+      observation.schema_version !== "blue-tanuki.browser-observation.v1" ||
+      observation.navigation !== "http_get" || observation.tab_scope !== "not_applicable" ||
+      observation.frame_scope !== "not_applicable" ||
+      observation.credential_context !== "no_tool_supplied_credentials" ||
+      (observation.evidence_source !== "EXTERNAL_EVIDENCE" && observation.evidence_source !== "FIXTURE") ||
+      observation.page_content_is_untrusted !== true || observation.used_for_authority !== false ||
+      observation.may_execute !== false || typeof observation.observed_at !== "string" ||
+      typeof observation.requested_origin !== "string" || typeof observation.final_origin !== "string" ||
+      typeof observation.origin_changed !== "boolean") return undefined;
+
+  try {
+    const observedAtMs = Date.parse(observation.observed_at);
+    const requestedOrigin = new URL(observation.requested_origin);
+    const finalOrigin = new URL(observation.final_origin);
+    const finalUrl = new URL(output.url);
+    const originsChanged = requestedOrigin.origin !== finalOrigin.origin;
+    if (!Number.isSafeInteger(observedAtMs) || observedAtMs < 0 ||
+        new Date(observedAtMs).toISOString() !== observation.observed_at || observedAtMs > recordedAtMs ||
+        requestedOrigin.origin !== observation.requested_origin || finalOrigin.origin !== observation.final_origin ||
+        !["http:", "https:"].includes(requestedOrigin.protocol) ||
+        !["http:", "https:"].includes(finalUrl.protocol) || finalUrl.origin !== finalOrigin.origin ||
+        finalUrl.username || finalUrl.password || observation.origin_changed !== originsChanged) return undefined;
+    const digestOrigin = (origin: string) => createHash("sha256").update(origin, "utf8").digest("hex");
+    return {
+      schema_version: "blue-tanuki.failure-review.browser-read-history.v1",
+      requested_origin_digest: digestOrigin(requestedOrigin.origin),
+      final_origin_digest: digestOrigin(finalOrigin.origin),
+      origin_changed: originsChanged,
+      evidence_source: observation.evidence_source,
+      observed_at_ms: observedAtMs,
+      navigation: "http_get",
+      credential_context: "no_tool_supplied_credentials",
+      page_content_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function googleDriveContentReadRequested(command: ExecuteCommand): boolean {
   if (command.type !== "tool_call" || command.payload.tool_name !== "google.drive.read") return false;
   const value = command.payload.arguments.include_content;
@@ -1496,11 +1542,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     feedback: ExecuteFeedback,
     receipt: ExecutionIntentReceipt | null,
   ): CompleteHistoryEntry | null {
+    const recordedAtMs = Date.now();
     const recoveryStoreRestore = feedback.status === "success" && isRecoveryMutationCommand(cmd)
       ? recoveryStoreRestoreHistoryEvidence(feedback.result)
       : undefined;
     const recoveryStoreRestoreAttempt = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
       ? recoveryStoreRestoreAttemptHistoryEvidence(cmd)
+      : undefined;
+    const browserReadObservation = feedback.status === "success" && cmd.type === "tool_call" &&
+      cmd.payload.tool_name === "browser.read"
+      ? failureReviewBrowserReadHistoryEvidence(feedback.result, recordedAtMs)
       : undefined;
     const entry = recordCompleteHistory({
       kind: "execution_history",
@@ -1508,7 +1559,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       command_id: cmd.id,
       actor,
       source: "executor",
-      timestamp: Date.now(),
+      timestamp: recordedAtMs,
       payload: {
         command: commandHistoryDescriptor(cmd),
         origin_channel: origin.channel,
@@ -1517,6 +1568,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         result_digest: feedback.result === undefined ? undefined : digestValue(feedback.result),
         ...(recoveryStoreRestore ? { recovery_store_restore: recoveryStoreRestore } : {}),
         ...(recoveryStoreRestoreAttempt ? { recovery_store_restore_attempt: recoveryStoreRestoreAttempt } : {}),
+        ...(browserReadObservation ? { browser_read_observation: browserReadObservation } : {}),
         error: feedback.error,
         metrics: feedback.metrics,
         operation_core: feedback.operation_core,

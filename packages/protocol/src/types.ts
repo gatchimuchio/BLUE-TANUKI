@@ -420,6 +420,19 @@ const FailureReviewTypeSchema = z.enum([
   "repeated_manual_correction",
 ]);
 
+const FailureReviewBrowserReadObservationSchema = z.object({
+  schema_version: z.literal("blue-tanuki.failure-review.browser-read-history.v1"),
+  requested_origin_digest: FailureReviewSha256Schema,
+  final_origin_digest: FailureReviewSha256Schema,
+  origin_changed: z.boolean(),
+  evidence_source: z.enum(["EXTERNAL_EVIDENCE", "FIXTURE"]),
+  navigation: z.literal("http_get"),
+  credential_context: z.literal("no_tool_supplied_credentials"),
+  page_content_is_untrusted: z.literal(true),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+
 /** A digest-only, later read-only Complete History observation for a saved failure signature. */
 export const FailureReviewIndependentObservationSchema = z.object({
   source: z.literal("complete_history"),
@@ -433,9 +446,10 @@ export const FailureReviewIndependentObservationSchema = z.object({
     scope: FailureReviewScopeSchema,
     failure_type: FailureReviewTypeSchema,
   }).strict()).max(16),
-  /** Present only when the Gateway found a later exact read-only file.search execution. */
+  /** Present only when the Gateway found a later exact read-only file.search or browser.read execution. */
   observation_kind: z.literal("post_signature_read_only").optional(),
-  operation: z.literal("file.search").optional(),
+  operation: z.enum(["file.search", "browser.read"]).optional(),
+  browser_read_observation: FailureReviewBrowserReadObservationSchema.optional(),
   result_status: z.literal("success").optional(),
   entry_index: z.number().int().nonnegative().optional(),
   observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
@@ -443,7 +457,14 @@ export const FailureReviewIndependentObservationSchema = z.object({
   input_pattern_digest: FailureReviewSha256Schema.optional(),
   context_pattern_digest: FailureReviewSha256Schema.optional(),
   result_digest: FailureReviewSha256Schema.optional(),
-}).strict();
+}).strict().superRefine((observation, context) => {
+  if (observation.operation === "browser.read" && !observation.browser_read_observation) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "browser.read observation metadata is required" });
+  }
+  if (observation.operation !== "browser.read" && observation.browser_read_observation !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "browser.read metadata cannot accompany another operation" });
+  }
+});
 export type FailureReviewIndependentObservation = z.infer<typeof FailureReviewIndependentObservationSchema>;
 
 /** A retained, non-authoritative reference to an earlier C derivation. */
