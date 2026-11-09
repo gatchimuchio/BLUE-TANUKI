@@ -21,6 +21,8 @@ export {
   SYNTHETIC_FILE_WRITE_PLAN_BACKEND,
   SYNTHETIC_FILE_WRITE_PLAN_TASK,
   SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX,
+  SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX,
+  SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK,
   SyntheticFileWritePlanBackend,
 } from "./synthetic_file_write_plan.js";
 export { AnthropicBackend } from "./anthropic.js";

@@ -9,8 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX,
-  SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
+import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK,
+  SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -576,7 +576,7 @@ describe("delegated goal purpose owner review", () => {
     }
   }, 90_000);
 
-  it("BT-U-E2E-01: routes an owner path-bound file.search through the verified receipt", async () => {
+  it("BT-U-E2E-01: routes verified file.search and same-task failed-test recovery through the owner", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-file-search-path-"));
     const auditDir = join(tempRoot, "audit");
     const historyFile = join(tempRoot, "complete-history.jsonl");
@@ -1971,7 +1971,7 @@ describe("delegated goal purpose owner review", () => {
       const reviewedEditPath = "reviewed-edit.txt";
       const reviewedEditFile = join(fileRoot, reviewedEditPath);
       writeFileSync(reviewedEditFile, "before text\n", "utf8");
-      const editTestTask = SYNTHETIC_FILE_EDIT_VERIFY_TASK_PREFIX + JSON.stringify({
+      const editTestTask = SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX + JSON.stringify({
         "相対パス": reviewedEditPath,
         "置換前": "before",
         "置換後": "after",
@@ -1995,8 +1995,8 @@ describe("delegated goal purpose owner review", () => {
         const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
         return body.operation_plan_status?.plans?.find((plan) => plan.task_identity_digest !== writePlan.task_identity_digest &&
           Array.isArray(plan.steps) && JSON.stringify((plan.steps as Array<Record<string, unknown>>)
-          .map((step) => step.operation)) === JSON.stringify(["file.edit", "file.search"])) ?? null;
-      }, gateway, `same-task file.edit -> file.search plan was not connected; ` +
+          .map((step) => step.operation)) === JSON.stringify(["file.edit", "shell.exec", "file.search"])) ?? null;
+      }, gateway, `same-task file.edit -> isolated test -> file.search plan was not connected; ` +
         `task_reply=${editTestTaskOutput.slice(0, 600)}; provider_calls=${providerCalls}; planner_prompts=${plannerPrompts.length}`);
       expect(editTestPlan).toMatchObject({ owner_authentication_required: true,
         goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
@@ -2007,8 +2007,14 @@ describe("delegated goal purpose owner review", () => {
       };
       const editTestSteps = editTestPlan.steps as Array<Record<string, unknown>>;
       const editTestEditStep = editTestSteps[0]!;
-      const editTestSearchStep = editTestSteps[1]!;
-      expect(editTestSteps.map((step) => step.operation)).toEqual(["file.edit", "file.search"]);
+      const editTestShellStep = editTestSteps[1]!;
+      const editTestSearchStep = editTestSteps[2]!;
+      expect(editTestSteps.map((step) => step.operation)).toEqual(["file.edit", "shell.exec", "file.search"]);
+      expect(editTestShellStep.parameters).toMatchObject({ cmd: "node", cwd: ".", timeout_ms: 15_000,
+        same_workspace_as_file_root: true, summary_only: true });
+      expect(editTestShellStep.parameters).toMatchObject({ args: ["-e", "process.exitCode = 23"] });
+      expect(editTestShellStep.permission).toMatchObject({ risk: "high", approval_level: "L3_final_review",
+        final_review_required: true, hds_brain_authority_required: true, approval_gate_required: true });
       expect(editTestSearchStep.operation).toBe("file.search");
 
       const editTestRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
@@ -2035,27 +2041,32 @@ describe("delegated goal purpose owner review", () => {
       );
       expect(editTestRelationApprovalResponse.status).toBe(200);
 
-      const runReviewedPlanStep = async (step: Record<string, unknown>, label: string, expectEditDiff = false) => {
+      const runReviewedPlanStep = async (plan: Record<string, unknown>, step: Record<string, unknown>, label: string,
+        expectedEditDiff?: { before: string; after: string }) => {
+        const planId = String(plan.plan_id);
+        const revisionDigest = String(plan.revision_digest);
+        const goalPurposeBinding = plan.goal_purpose_binding as Record<string, unknown>;
+        const l3ReviewRequired = (step.permission as Record<string, unknown> | undefined)?.final_review_required === true;
         let resolveOwnerRequestId!: (requestId: string) => void;
         const ownerRequestId = new Promise<string>((resolve) => { resolveOwnerRequestId = resolve; });
         let releaseOwnerReplyDeadline!: () => void;
-        const ownerReplyDeadline = step.operation === "file.edit"
+        const ownerReplyDeadline = l3ReviewRequired
           ? new Promise<void>((resolve) => { releaseOwnerReplyDeadline = resolve; }) : undefined;
         const ownerReply = waitForWebChatSend(taskWebSocket, label, ownerRequestId, ownerReplyDeadline);
         void ownerReply.catch(() => undefined);
         const reviewResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
           method: "POST",
           headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
-          body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
-            content: "plan:review " + JSON.stringify({ plan_id: editTestPlanId, revision_digest: editTestRevision,
-              step_id: step.step_id, goal_purpose_binding: editTestBinding }) }),
+          body: JSON.stringify({ user: "c0802-owner", plan_id: planId, revision_digest: revisionDigest,
+            content: "plan:review " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest,
+              step_id: step.step_id, goal_purpose_binding: goalPurposeBinding }) }),
         });
         expect(reviewResponse.status).toBe(202);
         const reviewReceipt = await reviewResponse.json() as { request_id?: unknown };
         if (typeof reviewReceipt.request_id !== "string") throw new Error("owner review response omitted its request identity");
         resolveOwnerRequestId(reviewReceipt.request_id);
         let approvalResult: Record<string, unknown> | undefined;
-        if (step.operation === "file.edit") {
+        if (l3ReviewRequired) {
           try {
             const pending = await waitFor(async () => {
               const queue = await loadQueue();
@@ -2063,21 +2074,20 @@ describe("delegated goal purpose owner review", () => {
                 (item.operation === step.operation || item.operation.endsWith(`.${String(step.operation)}`)) &&
                 item.final_review_required) ?? null;
             }, gateway, `${String(step.operation)} did not reach the owner Approval Gate`);
+            expect(pending.content_review_required).toBe(true);
             let contentReviewDigest: unknown;
-            if (pending.content_review_required) {
-              const contentResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
-                encodeURIComponent(String(pending.command_id)) + "/content", {
-                method: "POST", headers: { authorization: "Bearer " + resumeToken },
-              });
-              expect(contentResponse.status).toBe(200);
-              const content = await contentResponse.json() as Record<string, unknown>;
-              if (expectEditDiff) {
-                expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
-                expect(String(content.diff)).toContain("-before");
-                expect(String(content.diff)).toContain("+after");
-              }
-              contentReviewDigest = content.review_digest;
+            const contentResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
+              encodeURIComponent(String(pending.command_id)) + "/content", {
+              method: "POST", headers: { authorization: "Bearer " + resumeToken },
+            });
+            expect(contentResponse.status).toBe(200);
+            const content = await contentResponse.json() as Record<string, unknown>;
+            if (expectedEditDiff) {
+              expect(content).toMatchObject({ kind: "file_edit_diff", operation: "file.edit", path: reviewedEditPath });
+              expect(String(content.diff)).toContain(`-${expectedEditDiff.before}`);
+              expect(String(content.diff)).toContain(`+${expectedEditDiff.after}`);
             }
+            contentReviewDigest = content.command_digest ?? content.review_digest;
             const approvalResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/approval/" +
               encodeURIComponent(String(pending.command_id)), {
               method: "POST", headers: { authorization: "Bearer " + resumeToken, "content-type": "application/json" },
@@ -2152,7 +2162,7 @@ describe("delegated goal purpose owner review", () => {
               operation_plan_status?: { status?: string; plans?: Array<Record<string, unknown>> };
               execution_receipts?: { records?: Array<Record<string, unknown>> };
             } : undefined;
-            const current = snapshot?.operation_plan_status?.plans?.find((plan) => plan.plan_id === editTestPlanId);
+            const current = snapshot?.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
             planStatus = String(current?.status ?? snapshot?.operation_plan_status?.status ?? "missing");
             steps = Array.isArray(current?.steps) ? (current.steps as Array<Record<string, unknown>>).map((currentStep) => ({
               operation: currentStep.operation,
@@ -2190,21 +2200,90 @@ describe("delegated goal purpose owner review", () => {
           });
           if (!response.ok) return null;
           const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
-          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === editTestPlanId);
+          const plan = body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
           const current = (plan?.steps as Array<Record<string, unknown>> | undefined)?.find((candidate) =>
             candidate.step_id === step.step_id);
           return current?.status === "verified" && plan ? plan : null;
         }, gateway, `${String(step.operation)} did not reach its verified result consumer`);
-        expect(completedPlan.task_identity_digest).toBe(editTestPlan.task_identity_digest);
-        return { output, approvalResult };
+        expect(completedPlan.task_identity_digest).toBe(plan.task_identity_digest);
+        return { output, approvalResult, completedPlan };
       };
 
-      const reviewedEditResult = await runReviewedPlanStep(editTestEditStep, "owner-reviewed file.edit", true);
+      const reviewedEditResult = await runReviewedPlanStep(editTestPlan, editTestEditStep, "owner-reviewed file.edit",
+        { before: "before", after: "after" });
       expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
-      const reviewedSearchResult = await runReviewedPlanStep(editTestSearchStep, "same-path file.search reread");
+      const failedTestResult = await runReviewedPlanStep(editTestPlan, editTestShellStep, "owner-reviewed failing shell test");
+      expect(failedTestResult.approvalResult).toBeDefined();
+      const failedShellStepSnapshot = (failedTestResult.completedPlan.steps as Array<Record<string, unknown>>)
+        .find((step) => step.operation === "shell.exec");
+      expect(failedShellStepSnapshot?.shell_exec_summary).toEqual({
+        exit_code: 23, signal: null, timed_out: false, process_tree_empty: true,
+      });
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      const reviewedSearchResult = await runReviewedPlanStep(editTestPlan, editTestSearchStep, "same-path file.search reread");
       expect(reviewedSearchResult.output.length).toBeGreaterThan(0);
       expect(reviewedEditResult.output.length).toBeGreaterThan(0);
       expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
+
+      const ownerObservedFailedStateReply = waitForWebChatSend(taskWebSocket, "owner receives the post-failure file.search result");
+      const ownerObservedFailedStateResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
+          content: "plan:result " + JSON.stringify({ plan_id: editTestPlanId, revision_digest: editTestRevision,
+            step_id: editTestSearchStep.step_id }) }),
+      });
+      expect(ownerObservedFailedStateResponse.status).toBe(202);
+      const ownerObservedFailedStateOutput = await ownerObservedFailedStateReply;
+      expect(ownerObservedFailedStateOutput).toContain("after text");
+      expect(ownerObservedFailedStateOutput).toContain("検索完全性は不明です");
+
+      const recoveryReplanReply = waitForWebChatSend(taskWebSocket, "same-workspace failed test recovery candidate");
+      const recoveryReplanControl = {
+        task: SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK,
+        goal_purpose_binding: editTestBinding,
+        parent_plan: { plan_id_digest: editTestPlanId, revision_digest: editTestRevision },
+        source_observation_refs: [{ plan_id_digest: editTestPlanId, revision_digest: editTestRevision,
+          step_id_digest: operationPlanDigest(String(editTestSearchStep.step_id)) }],
+      };
+      const recoveryReplanResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
+        method: "POST",
+        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: editTestPlanId, revision_digest: editTestRevision,
+          content: "plan:compute " + JSON.stringify(recoveryReplanControl) }),
+      });
+      expect(recoveryReplanResponse.status).toBe(202);
+      expect((await recoveryReplanReply).length).toBeGreaterThan(0);
+      const recoveryPlan = await waitFor(async () => {
+        const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return body.operation_plan_status?.plans?.find((candidate) => candidate.plan_id !== editTestPlanId &&
+          candidate.task_identity_digest === editTestPlan.task_identity_digest && Array.isArray(candidate.steps) &&
+          JSON.stringify((candidate.steps as Array<Record<string, unknown>>).map((candidateStep) => candidateStep.operation)) ===
+            JSON.stringify(["file.edit", "file.search"])) ?? null;
+      }, gateway, "same-task failed test observation did not reach the inverse-edit candidate consumer");
+      expect(recoveryPlan.goal_purpose_binding).toEqual(editTestPlan.goal_purpose_binding);
+      const failureObservation = (recoveryPlan.compute_source_observations as Array<Record<string, unknown>>)
+        .find((observation) => observation.source === "verified_file_search_result");
+      expect(failureObservation).toMatchObject({ used_as_world_truth: false, used_for_authority: false, may_execute: false,
+        same_workspace_test_failure: { exit_code: 23, signal: null, timed_out: false, process_tree_empty: true } });
+      expect(JSON.stringify(failureObservation)).not.toContain("stdout");
+      expect(JSON.stringify(failureObservation)).not.toContain("stderr");
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("after text\n");
+      const recoverySteps = recoveryPlan.steps as Array<Record<string, unknown>>;
+      const recoveryEditStep = recoverySteps[0]!;
+      const recoverySearchStep = recoverySteps[1]!;
+      const recoveryEditResult = await runReviewedPlanStep(recoveryPlan, recoveryEditStep, "owner-reviewed inverse file.edit",
+        { before: "after", after: "before" });
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("before text\n");
+      const recoverySearchResult = await runReviewedPlanStep(recoveryPlan, recoverySearchStep, "same-path recovery verification");
+      expect(recoverySearchResult.output.length).toBeGreaterThan(0);
+      expect(recoveryEditResult.output.length).toBeGreaterThan(0);
+      expect(readFileSync(reviewedEditFile, "utf8")).toBe("before text\n");
       expect(providerCalls).toBe(providerCallsBeforeSyntheticTask);
       rmSync(reviewedEditFile);
 

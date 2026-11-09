@@ -2,7 +2,13 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / Windows UninstallのDataRoot所有を削除直前に再確認
+## 直近施工BUILD_BATCH — QE_BUILD / E2E-01 同一taskのtest失敗からOwner確認・回復候補・再読込
+
+主語は、同一task内で編集後のtest失敗を観測し、Ownerの現在状態確認を経て復旧候補を再計画するBLUE-TANUKIのGateway／HDS経路。合成fixtureに限り、file.edit → 固定隔離コマンド（`node -e "process.exitCode = 23"`）→ summary-only結果 → 同一path file.search → Ownerへの結果返却 → 同一task／目的bindingの逆編集候補 → 別個のno-store内容確認とL3承認 → 逆編集 → file.searchを接続した。失敗結果はexit code等の境界付き要約に限り、stdout／stderrを含めない。失敗だけで元ファイルを自動復元せず、候補実行にもOwner承認を要求する。
+
+対象Gateway test 1 passed／6 skipped、`pnpm --filter @blue-tanuki/core typecheck`、`pnpm --filter @blue-tanuki/core build`、`pnpm docs:check`、`git diff --check`はPASS。実際の製品test suite、timeout／異常process、実provider、外部作用、installed製品、OS別QAはNOT_RUN。この合成sliceだけを限定`WIRED`とし、E2E-01全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。次単位はrev4.0と最新実物から次consumerを再選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Windows UninstallのDataRoot所有を削除直前に再確認
 
 `-PurgeData`の開始時検証後、installed app・ショートカット・uninstall登録を除去してからユーザーDataRootを削除する直前に、DataRootのowner markerと再parse点を含む構造をもう一度検証する。検証を`Remove-Target`の削除経路へ束縛したため、対象が差し替わった場合はユーザーデータの再帰削除を拒否する。拒否時点ではapp側の除去が済んでいる可能性をエラー文に明示し、DataRootは保持する。通常Uninstallのユーザーデータ保持と他のmanaged target処理は変えない。
 

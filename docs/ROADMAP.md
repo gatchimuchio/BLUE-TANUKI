@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — Windows UninstallのDataRoot所有を削除直前に再確認（限定コード接続）
+### 直近完了BUILD_BATCH — E2E-01 同一taskのtest失敗からOwner確認・回復候補・再読込（限定WIRED）
+
+隔離Gatewayで、同一sandbox内のfile.edit後に固定コマンドがexit 23を返す合成taskを通した。summary-onlyの結果と同一pathのfile.searchをM経由の非権威観測としてOwnerへ返し、その観測から同じtask／目的bindingの逆編集候補を作成する。逆編集は別のno-store内容確認とL3承認の後にだけ実行し、再度file.searchで確認する。対象Gateway test 1 passed／6 skipped、core typecheck／build、`git diff --check`はPASS。実際の製品test suite実行、timeout／異常process系、実provider、installed製品、5OS、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAはNOT_RUN。この合成回復sliceだけを限定`WIRED`とし、E2E-01全体や製品全体の成立へ拡張しない。test sandboxはfinallyで回収し残存なし。core build出力は次の施工に必要なため保持する。
+
+### 前段完了BUILD_BATCH — Windows UninstallのDataRoot所有を削除直前に再確認（限定コード接続）
 
 `-PurgeData`は開始時だけでなく、installed app・ショートカット・Uninstall登録を削除した後、DataRootの再帰削除直前にも所有マーカーとパス構造を再検証する。再検証に失敗した場合はDataRootを保持して終了し、app側はすでに除去されている可能性を報告する。PowerShell parser、`docs:check`、`git diff --check`はPASS。test、installed Uninstall、DataRoot差替え時の動作はNOT_RUN。この削除境界だけをコード接続済みとし、Windows lifecycleや製品全体の成立へ拡張しない。
 
