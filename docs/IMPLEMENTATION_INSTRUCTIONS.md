@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F16.02 WebChat owner音声→HDS/J・既存C文字起こし（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / Windows Setup・Launcher・UninstallでExecutionPolicy保護を尊重
+
+主語は、Windows上でBLUE-TANUKIを導入・起動・停止・更新・削除する製品および開発用entrypoint。対象はrev4.0のG02.01〜G02.03、とくにBT-R-G02-05（署名状態を偽らずOS保護を自動無効化しない）に関係するWindows呼出し経路。製品・開発用PowerShell子プロセス、cmd、生成ショートカット、Run登録、単体Setup wrapperから`ExecutionPolicy Bypass`を除き、現在の有効なOSポリシーに従わせる。SetupとUninstallは既存resident停止失敗時に更新／削除へ進まず、開発用Uninstallも停止・自動起動無効化の双方を確認してからアプリを除去する。
+
+製品Uninstall cmdはtempへ複製したscriptを同期実行し、PowerShellの終了コードとstatus fileの`exit_code=0`を両方確認してから完了を返す。起動失敗・非0・完了記録欠落は成功扱いせず、状態確認前の再試行を促さない。Launcherはwatchdog子processが750ms後も動作していることを確認してからPIDを記録し、失敗時にはGatewayがwatchdogなしで残る可能性と確認方法を伝える。署名・証明書発行、Windows execution policyの変更、実機Setup／Uninstall、実ユーザーデータのPurgeは行っていない。
+
+変更対象：`INSTALL_WINDOWS.cmd`、`install/resident/blue-tanuki-resident.ps1`、`install/windows/install.ps1`、`install/windows/uninstall.ps1`、`install/windows/product/`の起動・Setup・Uninstall入口、`scripts/package_product_installers.ts`、対応するWindows installer試験。
+
+PowerShell parserは変更対象7 scriptでPASS。`install/installer/test/windows_product_installer.test.ts`は19/19 PASS（Windows process ownership、Setup停止拒否、Uninstall ownershipを含む隔離fixture）。製品source／package generatorのExecutionPolicy Bypass scanと`git diff --check`はPASS。これはコード接続と隔離fixtureの限定`WIRED`であり、downloaded package、clean-user install、実Setup→Uninstall、実行ポリシー拒否下の実機挙動、実データPurge、5OS、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを証明しない。外部作用、OneDrive操作、D4／MINIDORA変更なし。開始HEAD=`bfbdc00645dd3ec0b6ebe9150b050d86199cfe1b`。
+
+**次のproducer／consumer:** 最新HEADとrev4.0から、Blue repo内で一仕事の到達距離を縮める次の未接続consumerを再選定する。別repo変更が必要なF16.03 mobile native producerは限定委任なしに編集せず、C08.03実provider試験とP13公開・出荷判断も保留する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F16.02 WebChat owner音声→HDS/J・既存C文字起こし（限定WIRED）
 
 主語は、ownerのWebChat音声依頼を一時入力としてHDS/J判断と既存C文字起こし経路へ渡し、話者音声を本人確認・承認・権限へ昇格させないBLUE-TANUKI。Control Centerに独立した「音声文字起こしを依頼」を追加した。専用owner tokenで`POST /owner/audio-transcribe`を呼び、20 MiB以下のcanonical Base64から形式署名を検査したFLAC/MP3/MP4/M4A/OGG/WAV/WebMだけを1件受け付ける。画像添付／計画作成とは別要求で、音声文字起こしCの戻り値を計画JSONとして誤用しない。ownerは返却された文字起こし候補と不確実性を確認し、計画へ使う場合は計画欄へ明示入力する。
 

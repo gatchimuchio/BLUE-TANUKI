@@ -501,13 +501,29 @@ function Start-Watchdog($SafeMode = $false) {
   }
   $watchdogArgs = @(
     "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
     "-File",
     (Quote-Arg $PSCommandPath),
     $watchdogCommand
   )
   $process = Start-Process -FilePath "powershell.exe" -ArgumentList $watchdogArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $watchdogLog -RedirectStandardError $watchdogErrLog -PassThru
+  $watchdogStillRunning = $false
+  try {
+    $watchdogStillRunning = -not $process.WaitForExit(750)
+    $process.Refresh()
+    $watchdogStillRunning = $watchdogStillRunning -and -not $process.HasExited
+  } catch {
+    try {
+      $process.Refresh()
+      $watchdogStillRunning = -not $process.HasExited
+    } catch {
+      $watchdogStillRunning = $false
+    }
+  }
+  if (-not $watchdogStillRunning) {
+    $exitCode = "unknown"
+    try { $exitCode = [string]$process.ExitCode } catch { }
+    Fail "Watchdog exited before becoming active (exit code $exitCode). The Gateway may still be running without automatic recovery; inspect status before retrying. The existing PowerShell execution policy was not overridden; review $watchdogErrLog."
+  }
   Set-Content -LiteralPath $watchdogPidFile -Value $process.Id -Encoding ASCII
   Write-Host "watchdog_status=started pid=$($process.Id)"
 }
@@ -674,7 +690,7 @@ function Open-Logs {
 
 function Enable-Autostart {
   New-Item -Path $runKey -Force | Out-Null
-  $value = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" resident-start"
+  $value = "powershell.exe -NoProfile -File `"$PSCommandPath`" resident-start"
   New-ItemProperty -Path $runKey -Name $runName -Value $value -PropertyType String -Force | Out-Null
   Write-Host "autostart_status=enabled"
   Write-Host "autostart_entry=HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"

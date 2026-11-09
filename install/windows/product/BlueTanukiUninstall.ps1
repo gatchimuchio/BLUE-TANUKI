@@ -267,7 +267,7 @@ if (Test-Path -LiteralPath $launcher -PathType Leaf) {
     $stopExitCode = $null
     $stopFailure = $null
     try {
-      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher stop | Out-Null
+      & powershell.exe -NoProfile -File $launcher stop | Out-Null
       $stopExitCode = $LASTEXITCODE
     } catch {
       $stopFailure = $_.Exception.Message

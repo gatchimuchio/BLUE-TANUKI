@@ -210,31 +210,35 @@ apply to normal packaged installer users.
 Run from an extracted release bundle:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
+powershell -NoProfile -File .\install\windows\install.ps1
 ```
 
 Optional:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1 -Force
-powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1 -Force -ResetConfig
-powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1 -SkipDoctor
-powershell -ExecutionPolicy Bypass -File .\install\windows\uninstall.ps1
-powershell -ExecutionPolicy Bypass -File .\install\windows\uninstall.ps1 -Purge
-powershell -ExecutionPolicy Bypass -File .\install\windows\uninstall.ps1 -DryRun
+powershell -NoProfile -File .\install\windows\install.ps1 -Force
+powershell -NoProfile -File .\install\windows\install.ps1 -Force -ResetConfig
+powershell -NoProfile -File .\install\windows\install.ps1 -SkipDoctor
+powershell -NoProfile -File .\install\windows\uninstall.ps1
+powershell -NoProfile -File .\install\windows\uninstall.ps1 -Purge
+powershell -NoProfile -File .\install\windows\uninstall.ps1 -DryRun
 ```
+
+These commands respect the effective Windows PowerShell execution policy. If it
+blocks a script, stop; do not override the policy with `Bypass` or change the
+machine or user policy for this installer.
 
 The installer creates launchers under `%APPDATA%\BlueTanuki\bin`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" start
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" doctor
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" settings
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" env
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-start
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-status
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-stop
-powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-autostart-enable
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" start
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" doctor
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" settings
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" env
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-start
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-status
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-stop
+powershell -NoProfile -File "$env:APPDATA\BlueTanuki\bin\blue-tanuki.ps1" resident-autostart-enable
 ```
 
 ## macOS

@@ -89,8 +89,16 @@ if (Test-Path -LiteralPath $residentScript) {
     try { [void](Assert-ManagedWindowsDevelopmentInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved -AllowLegacy) } catch {
       Fail "Refusing to run the development resident helper because the installed inventory changed. No files were removed. $($_.Exception.Message)"
     }
-    & powershell -ExecutionPolicy Bypass -File $residentScript -Command "resident-stop" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
-    & powershell -ExecutionPolicy Bypass -File $residentScript -Command "resident-autostart-disable" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
+    & powershell -NoProfile -File $residentScript -Command "resident-stop" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
+    $stopExitCode = $LASTEXITCODE
+    if ($stopExitCode -ne 0) {
+      Fail "Refusing to uninstall because resident shutdown was not confirmed. The development install and data root were preserved. exit_code=$stopExitCode"
+    }
+    & powershell -NoProfile -File $residentScript -Command "resident-autostart-disable" -InstallRoot $installRootResolved -EnvFile (Join-Path $dataRootResolved "blue-tanuki.env") -DataRoot $dataRootResolved -Launcher $launcher
+    $autostartExitCode = $LASTEXITCODE
+    if ($autostartExitCode -ne 0) {
+      Fail "Refusing to uninstall because resident autostart could not be disabled. The development install and data root were preserved. exit_code=$autostartExitCode"
+    }
   }
 }
 

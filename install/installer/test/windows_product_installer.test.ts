@@ -24,7 +24,7 @@ function findPowerShell(): string | undefined {
 function powerShellFileArgs(command: string, file: string, args: readonly string[]): string[] {
   const base = command.toLowerCase();
   if (base.endsWith("powershell.exe")) {
-    return ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file, ...args];
+    return ["-NoProfile", "-File", file, ...args];
   }
   return ["-NoProfile", "-File", file, ...args];
 }
@@ -287,8 +287,10 @@ describe("Windows product installer package", () => {
 
   it("exposes launcher lifecycle, doctor, logs, and uninstall without authority shortcuts", () => {
     const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
+    const setup = read("install/windows/product/BlueTanukiSetup.ps1");
     const uninstall = read("install/windows/product/BlueTanukiUninstall.ps1");
     const uninstallCmd = read("install/windows/product/UninstallBlueTanuki.cmd");
+    const developmentUninstall = read("install/windows/uninstall.ps1");
     expect(launcher).toContain("Start-Resident");
     expect(launcher).toContain("Run-Doctor");
     expect(launcher).toContain("Get-ControlCenterUrl");
@@ -313,11 +315,50 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("shutdown was not confirmed");
     expect(uninstall).toContain("$stopFailure -or $stopExitCode -ne 0");
     expect(uninstallCmd).toContain("copy /Y");
-    expect(uninstallCmd).toContain("start \"\" /b powershell.exe");
+    expect(uninstallCmd).toContain('powershell.exe -NoProfile -File "%BT_UNINSTALL_TEMP%" %*');
+    expect(uninstallCmd).not.toContain('start "" /b powershell.exe');
+    expect(uninstallCmd).toContain('findstr /x /c:"exit_code=0"');
+    expect(uninstallCmd).toContain("uninstall_unknown");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_SAFE_TARGET");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_STATUS_FILE");
     expect(uninstallCmd).toContain("exit /b 0");
+    expect(uninstall).not.toMatch(/-ExecutionPolicy\s+Bypass/i);
+    expect(setup).not.toMatch(/-ExecutionPolicy\s+Bypass/i);
+    expect(launcher).not.toMatch(/(?:-ExecutionPolicy\s+Bypass|["']-ExecutionPolicy["']\s*,\s*["']Bypass["'])/i);
+    expect(developmentUninstall).toContain("$stopExitCode = $LASTEXITCODE");
+    expect(developmentUninstall).toContain("$autostartExitCode = $LASTEXITCODE");
+    expect(developmentUninstall).toContain("Refusing to uninstall because resident shutdown was not confirmed");
+    expect(developmentUninstall).toContain("Refusing to uninstall because resident autostart could not be disabled");
+    const devStop = developmentUninstall.indexOf('& powershell -NoProfile -File $residentScript -Command "resident-stop"');
+    const devStopGuard = developmentUninstall.indexOf("if ($stopExitCode -ne 0)", devStop);
+    const devAutostartDisable = developmentUninstall.indexOf('& powershell -NoProfile -File $residentScript -Command "resident-autostart-disable"');
+    const devAutostartGuard = developmentUninstall.indexOf("if ($autostartExitCode -ne 0)", devAutostartDisable);
+    const devRemove = developmentUninstall.indexOf('Remove-Target $installRootResolved "app"');
+    expect(devStop).toBeGreaterThanOrEqual(0);
+    expect(devStopGuard).toBeGreaterThan(devStop);
+    expect(devAutostartDisable).toBeGreaterThan(devStopGuard);
+    expect(devAutostartGuard).toBeGreaterThan(devAutostartDisable);
+    expect(devRemove).toBeGreaterThan(devAutostartGuard);
+    expect(launcher).toContain("$process.WaitForExit(750)");
+    expect(launcher).toContain("without automatic recovery");
+    for (const rel of [
+      "install/windows/product/BlueTanuki.cmd",
+      "install/windows/product/BlueTanukiDoctor.cmd",
+      "install/windows/product/BlueTanukiLogs.cmd",
+      "install/windows/product/BlueTanukiRestart.cmd",
+      "install/windows/product/BlueTanukiSafeMode.cmd",
+      "install/windows/product/BlueTanukiSetup.cmd",
+      "install/windows/product/BlueTanukiStop.cmd",
+      "install/resident/blue-tanuki-resident.ps1",
+      "INSTALL_WINDOWS.cmd",
+      "INSTALL_WINDOWS.ps1",
+      "install/windows/install.ps1",
+      "install/windows/uninstall.ps1",
+      "scripts/package_product_installers.ts",
+    ]) {
+      expect(read(rel), rel).not.toMatch(/(?:-ExecutionPolicy\s+Bypass|["']-ExecutionPolicy["']\s*,\s*["']Bypass["'])/i);
+    }
   });
 
   it("stops before shared-data setup and refuses an update when resident shutdown fails", () => {

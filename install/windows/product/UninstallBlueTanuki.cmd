@@ -31,13 +31,31 @@ if errorlevel 1 (
   if not "%BLUE_TANUKI_NO_PAUSE%"=="1" pause
   exit /b 1
 )
-start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BT_UNINSTALL_TEMP%" %*
-if errorlevel 1 (
-  echo.
-  echo BLUE-TANUKI uninstall failed. Could not start staged uninstall script.
-  if not "%BLUE_TANUKI_NO_PAUSE%"=="1" pause
-  exit /b 1
-)
-echo BLUE-TANUKI uninstall started.
+powershell.exe -NoProfile -File "%BT_UNINSTALL_TEMP%" %*
+set "BT_CODE=%ERRORLEVEL%"
+if not "%BT_CODE%"=="0" goto uninstall_failed
+if not exist "%BLUE_TANUKI_UNINSTALL_STATUS_FILE%" goto uninstall_unknown
+findstr /x /c:"exit_code=0" "%BLUE_TANUKI_UNINSTALL_STATUS_FILE%" >nul
+if errorlevel 1 goto uninstall_failed
+echo BLUE-TANUKI uninstall completed.
 echo status_file=%BLUE_TANUKI_UNINSTALL_STATUS_FILE%
+del /Q "%BT_UNINSTALL_TEMP%" "%BT_UNINSTALL_HELPER_TEMP%" >nul 2>nul
 exit /b 0
+
+:uninstall_failed
+if "%BT_CODE%"=="0" set "BT_CODE=1"
+echo.
+echo BLUE-TANUKI uninstall did not complete successfully. Check the output and status file before retrying.
+echo status_file=%BLUE_TANUKI_UNINSTALL_STATUS_FILE%
+del /Q "%BT_UNINSTALL_TEMP%" "%BT_UNINSTALL_HELPER_TEMP%" >nul 2>nul
+if not "%BLUE_TANUKI_NO_PAUSE%"=="1" pause
+exit /b %BT_CODE%
+
+:uninstall_unknown
+set "BT_CODE=1"
+echo.
+echo BLUE-TANUKI uninstall returned without a successful completion record. Treat the result as unknown and inspect before retrying.
+echo status_file=%BLUE_TANUKI_UNINSTALL_STATUS_FILE%
+del /Q "%BT_UNINSTALL_TEMP%" "%BT_UNINSTALL_HELPER_TEMP%" >nul 2>nul
+if not "%BLUE_TANUKI_NO_PAUSE%"=="1" pause
+exit /b 1

@@ -128,7 +128,7 @@ function Show-ResidentLogs {
 
 function Enable-Autostart {
   New-Item -Path $runKey -Force | Out-Null
-  $value = "powershell -ExecutionPolicy Bypass -File `"$launcherResolved`" resident-start"
+  $value = "powershell -NoProfile -File `"$launcherResolved`" resident-start"
   New-ItemProperty -Path $runKey -Name $runName -Value $value -PropertyType String -Force | Out-Null
   Write-Host "autostart_status=enabled"
   Write-Host "autostart_entry=HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"

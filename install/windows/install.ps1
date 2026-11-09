@@ -232,7 +232,7 @@ Set-Location "$installRootResolved"
 `$residentScript = Join-Path "$installRootResolved" "install\resident\blue-tanuki-resident.ps1"
 function Invoke-ResidentCommand {
   param([string]`$ResidentCommand)
-  & powershell -ExecutionPolicy Bypass -File `$residentScript -Command `$ResidentCommand -InstallRoot "$installRootResolved" -EnvFile "$envFile" -DataRoot "$dataRootResolved" -Launcher "$launcher" @RemainingArgs
+  & powershell -NoProfile -File `$residentScript -Command `$ResidentCommand -InstallRoot "$installRootResolved" -EnvFile "$envFile" -DataRoot "$dataRootResolved" -Launcher "$launcher" @RemainingArgs
   exit `$LASTEXITCODE
 }
 `$cmd = `$Command.ToLowerInvariant()
@@ -304,7 +304,7 @@ switch (`$cmd) {
 
 @"
 @echo off
-powershell -ExecutionPolicy Bypass -File "$launcher" %*
+powershell -NoProfile -File "$launcher" %*
 "@ | Set-Content -LiteralPath $cmdLauncher -Encoding ASCII
 
 Write-DevelopmentDataMarker
@@ -314,7 +314,7 @@ Write-Host "BLUE-TANUKI installed."
 Write-Host "Launcher: $launcher"
 Write-Host "Env file:  $envFile"
 Write-Host "Settings:  http://127.0.0.1:8787/settings"
-Write-Host "Run:       powershell -ExecutionPolicy Bypass -File `"$launcher`" start"
-Write-Host "Doctor:    powershell -ExecutionPolicy Bypass -File `"$launcher`" doctor"
-Write-Host "Settings:  powershell -ExecutionPolicy Bypass -File `"$launcher`" settings"
-Write-Host "Reset cfg: powershell -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Force -ResetConfig"
+Write-Host "Run:       powershell -NoProfile -File `"$launcher`" start"
+Write-Host "Doctor:    powershell -NoProfile -File `"$launcher`" doctor"
+Write-Host "Settings:  powershell -NoProfile -File `"$launcher`" settings"
+Write-Host "Reset cfg: powershell -NoProfile -File `"$PSCommandPath`" -Force -ResetConfig"

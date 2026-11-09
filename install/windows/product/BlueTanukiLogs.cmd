@@ -1,3 +1,3 @@
 @echo off
 setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0BlueTanukiLauncher.ps1" logs %*
+powershell.exe -NoProfile -File "%~dp0BlueTanukiLauncher.ps1" logs %*
