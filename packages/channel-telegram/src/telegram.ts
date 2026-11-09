@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { detectTransientImageMediaType, TRANSIENT_IMAGE_MAX_BYTES } from "@blue-tanuki/protocol";
 import type { ChannelSendPayload, InboundRequest, TransientAudioInput, TransientImageInput } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundEphemeralContext, InboundHandler, OutboundChannel, SendContext, SendMeta, SendResult } from "@blue-tanuki/channel-base";
 
@@ -85,7 +86,7 @@ interface NormalizedTelegramInbound {
 }
 
 const MAX_TELEGRAM_TEXT_ATTACHMENT_BYTES = 64 * 1024;
-const MAX_TELEGRAM_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TELEGRAM_IMAGE_BYTES = TRANSIENT_IMAGE_MAX_BYTES;
 const MAX_TELEGRAM_AUDIO_BYTES = 20 * 1024 * 1024;
 
 interface SentRecord {
@@ -468,7 +469,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
     const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_IMAGE_BYTES);
     if (downloaded.status !== "read") return downloaded;
-    const mediaType = detectImageMediaType(downloaded.bytes);
+    const mediaType = detectTransientImageMediaType(downloaded.bytes);
     if (!mediaType || (declaredMime !== undefined && declaredMime !== mediaType)) {
       downloaded.bytes.fill(0);
       return { status: "invalid_content" };
@@ -673,15 +674,6 @@ function isSafeTelegramFilePath(filePath: string): boolean {
 
 function isSupportedImageMimeType(value: string | undefined): value is TransientImageInput["media_type"] {
   return value === "image/jpeg" || value === "image/png";
-}
-
-function detectImageMediaType(bytes: Uint8Array): TransientImageInput["media_type"] | null {
-  if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.byteLength >= signature.length && signature.every((value, index) => bytes[index] === value)) {
-    return "image/png";
-  }
-  return null;
 }
 
 function detectTelegramAudioFormat(bytes: Uint8Array): TransientAudioInput["format"] | null {

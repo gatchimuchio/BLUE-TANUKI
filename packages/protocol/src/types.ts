@@ -655,6 +655,17 @@ export interface TransientImageInput {
   readonly data: Uint8Array;
 }
 
+export const TRANSIENT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export function detectTransientImageMediaType(bytes: Uint8Array): TransientImageInput["media_type"] | null {
+  if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  return bytes.byteLength >= pngSignature.length &&
+    pngSignature.every((value, index) => bytes[index] === value)
+    ? "image/png"
+    : null;
+}
+
 /** In-process audio bytes used only for one downstream transcription call. */
 export interface TransientAudioInput {
   readonly format: "flac" | "mp3" | "mp4" | "mpeg" | "mpga" | "m4a" | "ogg" | "wav" | "webm";

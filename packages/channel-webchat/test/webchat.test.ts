@@ -8,7 +8,7 @@ import {
   parseInboundRequestAtBoundary,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
-import type { SendMeta } from "@blue-tanuki/channel-base";
+import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
 import { CONTROL_CENTER_SCRIPT } from "../src/control_center_script.js";
 import {
   WebChatChannel,
@@ -468,7 +468,7 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
-  it("submits explicit task completion rules through the owner task form", async () => {
+  it("submits explicit task completion rules and one ephemeral image through the owner task form", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
@@ -476,9 +476,13 @@ describe("WebChatChannel — Control Center shell", () => {
     const submit = CONTROL_CENTER_SCRIPT.slice(start, end);
     const rules = JSON.stringify({ schema_version: "blue-tanuki.goal-completion-rules.v1",
       rules: [{ rule_id: "search-result", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] });
+    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const nodes: Record<string, { value: string; textContent?: string; className?: string;
+      files?: readonly { type: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }[];
       selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
       "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Find blue." },
+      "owner-task-image": { value: "fixture.png", files: [{ type: "image/png", size: imageBytes.byteLength,
+        arrayBuffer: async () => imageBytes.slice().buffer as ArrayBuffer }] },
       "owner-task-completion-rules": { value: rules }, "owner-task-goal-ref": {
         value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
       }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
@@ -488,6 +492,7 @@ describe("WebChatChannel — Control Center shell", () => {
     const messages: Array<[string, string]> = [];
     await new Script(`${submit}\nsubmitOwnerTask()`).runInNewContext({
       byId: (id: string) => nodes[id], state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
+      btoa: (value: string) => Buffer.from(value, "binary").toString("base64"),
       pendingOwnerTaskSubmissionId: () => "submission-1", clearOwnerTaskSubmissionId: () => cleared.push("submission"),
       renderOwnerTaskStatusSubmissionIds: (id: string) => cleared.push(id),
       postOwnerTaskCompute: async (token: string, body: unknown) => { calls.push({ token, body });
@@ -497,8 +502,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(calls).toEqual([{ token: "owner-token", body: {
       user: "fixture-owner", task: "Find blue.", goal_ref: "goal_0123456789abcdef", purpose_version: 2,
       submission_id: "submission-1", goal_completion_rules: JSON.parse(rules),
+      image_input: { media_type: "image/png", data_base64: Buffer.from(imageBytes).toString("base64") },
     } }]);
     expect(nodes["owner-task-completion-rules"]?.value).toBe("");
+    expect(nodes["owner-task-image"]?.value).toBe("");
     expect(cleared).toEqual(["submission", "submission-1"]);
     expect(messages).toEqual([["owner", "Find blue."], ["accepted", "request-1"]]);
   });
@@ -3726,6 +3733,11 @@ describe("WebChatChannel — HTTP inbound", () => {
     const goal = { goal_ref: `goal_${"a".repeat(16)}`, purpose_version: 2,
       purpose_preview: "Read-only maintenance", purpose_digest: "b".repeat(64) };
     const observedActors: string[] = [];
+    const expectedImageBytes = new Uint8Array(1024 * 1024 + 1);
+    expectedImageBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let receivedImageBuffer: Uint8Array | undefined;
+    let observedImageBytes: Uint8Array | undefined;
+    let observedContext: InboundEphemeralContext | undefined;
     const ownerCtx = await setup({
       owner_token: OWNER_TOKEN,
       onOwnerTaskGoalOptions: async ({ actor }) => {
@@ -3734,7 +3746,12 @@ describe("WebChatChannel — HTTP inbound", () => {
       },
     });
     try {
-      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      await ownerCtx.ch.start(async (request, context) => {
+        ownerCtx.received.push(request);
+        observedContext = context;
+        receivedImageBuffer = context?.ephemeral_images[0]?.data;
+        observedImageBytes = receivedImageBuffer ? Uint8Array.from(receivedImageBuffer) : undefined;
+      });
       const publicGoals = await getRaw(ownerCtx.port, "/owner/task-goals", {
         authorization: `Bearer ${OWNER_TOKEN}`,
       });
@@ -3756,6 +3773,7 @@ describe("WebChatChannel — HTTP inbound", () => {
         submission_id: "8e396c37-7a67-470f-9d90-0054215cecb2",
         goal_completion_rules: { schema_version: "blue-tanuki.goal-completion-rules.v1",
           rules: [{ rule_id: "one-search", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] },
+        image_input: { media_type: "image/png", data_base64: Buffer.from(expectedImageBytes).toString("base64") },
         actor: "owner",
         metadata: { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
       };
@@ -3789,6 +3807,10 @@ describe("WebChatChannel — HTTP inbound", () => {
         "blue_tanuki.operation_core.planner_output_used_for_authority": false,
       });
       expect(request.content.startsWith("plan:compute ")).toBe(true);
+      expect(observedContext?.request_id).toBe(request.id);
+      expect(observedImageBytes && [...observedImageBytes]).toEqual([...expectedImageBytes]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(receivedImageBuffer && [...receivedImageBuffer]).toEqual(new Array(expectedImageBytes.byteLength).fill(0));
       expect(JSON.parse(request.content.slice("plan:compute ".length))).toEqual({
         task: requestBody.task,
         goal_purpose_binding: { goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
@@ -3799,10 +3821,21 @@ describe("WebChatChannel — HTTP inbound", () => {
         "webchat-owner-token-holder",
       ]);
 
+      const invalidImage = await postJson(ownerCtx.port, "/owner/task-compute", {
+        ...requestBody,
+        submission_id: "4ba70878-91ad-40d4-9bf1-277f207accbc",
+        image_input: { media_type: "image/png", data_base64: Buffer.from("not an image").toString("base64") },
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(invalidImage.status).toBe(400);
+      expect(invalidImage.body).toMatchObject({ accepted: false, error: "invalid_owner_task_image" });
+      expect(ownerCtx.received).toHaveLength(1);
+
       const stale = await postJson(ownerCtx.port, "/owner/task-compute", {
-        ...requestBody, goal_ref: `goal_${"c".repeat(16)}`,
+        ...requestBody,
+        image_input: { media_type: "image/png", data_base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]).toString("base64") },
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(stale.status).toBe(409);
+      expect(stale.body).toMatchObject({ accepted: false, status: "submission_id_reused_with_different_input" });
       expect(ownerCtx.received).toHaveLength(1);
     } finally {
       await ownerCtx.teardown();

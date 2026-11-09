@@ -15,13 +15,17 @@ import {
   GoalCompletionRulesSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
+  detectTransientImageMediaType,
+  TRANSIENT_IMAGE_MAX_BYTES,
   type GoalCompletionRules,
   type InboundRequest,
+  type TransientImageInput,
   type ChannelSendPayload,
 } from "@blue-tanuki/protocol";
 import {
   TokenBucket,
   type InboundChannel,
+  type InboundEphemeralContext,
   type InboundHandler,
   type OutboundChannel,
   type SendContext,
@@ -92,10 +96,40 @@ const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
+const MAX_OWNER_TASK_JSON_BYTES = Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4 + 256 * 1024;
 
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
+
+type OwnerTaskImageReadResult =
+  | { readonly ok: true; readonly image?: TransientImageInput }
+  | { readonly ok: false };
+
+function readOwnerTaskImage(value: unknown): OwnerTaskImageReadResult {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "media_type" && key !== "data_base64") ||
+      (record.media_type !== "image/jpeg" && record.media_type !== "image/png") ||
+      typeof record.data_base64 !== "string") return { ok: false };
+  const encoded = record.data_base64;
+  const maxEncodedBytes = Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4;
+  if (encoded.length === 0 || encoded.length > maxEncodedBytes || encoded.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+    return { ok: false };
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const expectedByteLength = (encoded.length / 4) * 3 - padding;
+  if (expectedByteLength < 1 || expectedByteLength > TRANSIENT_IMAGE_MAX_BYTES) return { ok: false };
+  const data = Buffer.from(encoded, "base64");
+  if (data.byteLength !== expectedByteLength || data.toString("base64") !== encoded ||
+      detectTransientImageMediaType(data) !== record.media_type) {
+    data.fill(0);
+    return { ok: false };
+  }
+  return { ok: true, image: { media_type: record.media_type, data } };
+}
 
 function ownerOperationPlanControlAction(content: string): {
   readonly action: "review" | "result" | "resume_wait" | "wait";
@@ -802,7 +836,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
-    const body = await readJson(req);
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, url.pathname === "/owner/task-compute" ? MAX_OWNER_TASK_JSON_BYTES : undefined);
+    } catch (error) {
+      if (error instanceof Error && error.message === "body_too_large") {
+        res.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "request_body_too_large" }));
+        return;
+      }
+      throw error;
+    }
 
     if (url.pathname === "/owner/task-submission-status") {
       if (req.method !== "POST") {
@@ -887,6 +931,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
         return;
       }
+      const imageRead = readOwnerTaskImage(body?.image_input);
+      if (!imageRead.ok) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_image" }));
+        return;
+      }
+      const ownerTaskImage = imageRead.image;
+      if (body) delete body.image_input;
       const requestId = randomUUID();
       const payloadDigest = createHash("sha256").update(JSON.stringify([
         "webchat-owner-task-payload.v1",
@@ -896,9 +948,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         hasPurposeVersion,
         hasPurposeVersion ? requestedPurposeVersion : null,
         goalCompletionRules ?? null,
+        ownerTaskImage ? {
+          media_type: ownerTaskImage.media_type,
+          byte_length: ownerTaskImage.data.byteLength,
+          digest: createHash("sha256").update(ownerTaskImage.data).digest("hex"),
+        } : null,
       ]), "utf8").digest("hex");
       let claimedRequestId: string | undefined;
       let handlerStarted = false;
+      let imageTransferred = false;
       try {
         const claim = submissionStore.claim({
           submission_id: submissionId,
@@ -973,7 +1031,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           },
         });
         handlerStarted = true;
-        void Promise.resolve().then(() => handler(inboundReq)).then(() => {
+        const ephemeralContext: InboundEphemeralContext | undefined = ownerTaskImage
+          ? { request_id: requestId, ephemeral_images: [ownerTaskImage] }
+          : undefined;
+        imageTransferred = ownerTaskImage !== undefined;
+        void Promise.resolve().then(() => handler(inboundReq, ephemeralContext)).then(() => {
           submissionStore.markHandlerReturned(requestId);
         }).catch(() => {
           try { submissionStore.markOutcomeUnknown(requestId); } catch { /* keep replay blocked if state is unavailable */ }
@@ -981,6 +1043,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           // eslint-disable-next-line no-console
           console.error("[webchat] owner task handler error");
           this.notifyOwnerTaskProcessingFailure(replyTo, requestId);
+        }).finally(() => {
+          ownerTaskImage?.data.fill(0);
         });
         res.writeHead(202, {
           "content-type": "application/json",
@@ -999,6 +1063,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, status: handlerStarted
           ? "owner_task_submission_outcome_unknown" : "owner_task_submission_not_dispatched",
         error: "owner_task_compute_unavailable" }));
+      } finally {
+        if (!imageTransferred) ownerTaskImage?.data.fill(0);
       }
       return;
     }

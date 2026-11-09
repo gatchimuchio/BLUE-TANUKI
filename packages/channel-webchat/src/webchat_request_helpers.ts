@@ -107,13 +107,17 @@ export function readWebhookContent(body: Record<string, unknown> | null): string
 
 export async function readJson(
   req: IncomingMessage,
+  maxBytes = 1024 * 1024,
 ): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const c of req) {
-    chunks.push(c as Buffer);
-    if (chunks.reduce((n, b) => n + b.length, 0) > 1024 * 1024) {
+    const chunk = c as Buffer;
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
       throw new Error("body_too_large");
     }
+    chunks.push(chunk);
   }
   if (chunks.length === 0) return null;
   const text = Buffer.concat(chunks).toString("utf8");

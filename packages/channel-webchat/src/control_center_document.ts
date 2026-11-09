@@ -166,6 +166,9 @@ ${CONTROL_CENTER_STYLE}    </style>
               </select>
             </div>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
+            <label for="owner-task-image">画像を添付（JPEG/PNG、1枚、最大5 MiB、一時入力）</label>
+            <input id="owner-task-image" type="file" accept="image/jpeg,image/png" />
+            <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。</p>
             <label for="owner-task-completion-rules">達成・停止の明示規則（JSON、任意）</label>
             <textarea id="owner-task-completion-rules" rows="4" autocomplete="off"
               placeholder='{"schema_version":"blue-tanuki.goal-completion-rules.v1","rules":[{"rule_id":"search-result","operation":"file.search","output_pointer":"/matches/0/line","expected_value":"blue"}]}'></textarea>

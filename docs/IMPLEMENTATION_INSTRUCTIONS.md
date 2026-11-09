@@ -2,7 +2,19 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / F16.01 WebChat owner画像入力→既存Gateway C（限定WIRED）
+
+主語は、ownerがWebChatで委任した仕事へ画像原媒体を一時添付し、既存Gateway/HDS/C経路へrequest-boundで渡すBLUE-TANUKI。owner認証済み`POST /owner/task-compute`にJPEG/PNGを1枚・最大5 MiBで追加した。厳密なBase64、サイズ、画像署名を確認し、submission identityにはmedia type・長さ・SHA-256を束ねる。同じsubmission IDで画像を変えた再送は競合として拒否する。画像bytesをInboundRequest本文・metadata・history・Mへ入れず、handlerの完了または未引渡し時にゼロ化する。通常WebChat inbound、owner以外、外部metadata由来のowner風入力はGateway側で選択しない。既存LLM registryが選択provider/modelのimage capabilityを確認し、未設定ならC要求を明示拒否する。
+
+実装経路：Control Center file input→owner専用HTTP入口→検証済み一時image context→Gatewayの内部owner-task識別・request ID照合→既存`llm_call` Executor/C。画像の生bytesは不揮発領域へ書き込まない。Telegramと共通のJPEG/PNG署名判定・5 MiB上限をProtocolへ集約した。
+
+`corepack pnpm --filter @blue-tanuki/gateway... build`は対象7 workspace projectとGatewayでPASS。`webchat.test.ts -t "owner task form|routes explicit task intent"`は2 passed／117 skipped（owner認証、1 MiB超画像body、異署名拒否、same-ID画像変更拒否、handler後のzero化を含む）。`telegram_attachment_ingress.test.ts`は4 passed（外部owner風metadata拒否、既存Cへ画像bytes到達を含む）。`git diff --check` PASS。これらは合成画像・fixture Cでの限定WIRED確認。Control Center browser、実provider／model、全suite、全OS、実物QC／QAはNOT_RUN。`webchat.test.ts`全体の一度目実行は117 passed／2 failed。一つは新規画像受渡し確認でNode Bufferの共有viewをcopyと誤認した試験コード不備であり、独立copyへ修正後に該当2件を再実行してPASS。もう一つは変更範囲外のplan待機カード描画assertion（line 1161、検索結果null）で、未調査・基準状態との差未確定として保持する。修正後の全file再実行は行っていない。
+
+F16.01のこのWebChat owner入力sliceだけを`WIRED`とする。画像入力全体、F16全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、provider/runtime success、5OS、owner GOは未成立。
+
+**次のproducer／consumer:** rev4.0と最新HEADを再照合し、端から端までの距離・未接続依存・危険度・既存資産・実行可能性で次の実consumerを選ぶ。実provider、外部作用、全体QC／QA、D4 Pocket等の別repo変更は引き続き対象外。
+
+## 前段完了BUILD_BATCH — QE_BUILD / C08.02 wait再開へ保存済みowner達成規則の参照を継承（限定WIRED）
 
 主語は、ownerが委任した同一仕事の達成規則をwait後の返信・期限再開・中断復旧後も保持し、Cの再計算とJ/M達成判定が同じ規則集合を参照するBLUE-TANUKIのHDS-BRAIN経路。wait台帳から、task identity・goal digest・規則digestを再検証したうえで、規則digest・件数・元request参照だけをGoalProjectionへ渡す。規則本文は再投影しない。返信／metadataで差し替えた規則は使わず、保存規則が欠落または不整合なら再開を保留する。GoalProjectionは非権威の`identifying`状態を保ち、達成には従来どおり明示規則、検証済みoperation result、検証済みM receiptを要する。
 

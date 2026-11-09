@@ -3,6 +3,7 @@ import { HDSUpperController } from "@blue-tanuki/hds-brain";
 import { Executor, LLMComputeAdapter, ToolRegistry, createExecutorApprovalAuthority } from "@blue-tanuki/core";
 import type { LLMBackend, LLMRequest } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch, type TelegramUpdateInbox } from "@blue-tanuki/channel-telegram";
+import { createGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
 import { planGatewayInboundBoundary, selectGatewayInboundEphemeralContext } from "../src/serve.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -13,6 +14,80 @@ class FixtureTelegramInbox implements TelegramUpdateInbox {
 }
 
 describe("Telegram text attachment Gateway ingress", () => {
+  it("routes one owner-task WebChat image through the existing Gateway C consumer", async () => {
+    const imageBytes = Uint8Array.from(Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=",
+      "base64",
+    ));
+    const request = createGatewayInternalInboundRequest({
+      id: "owner-task-image-fixture",
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content: "What is in this image?",
+      timestamp: 1,
+      metadata: {
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+      },
+    });
+    const boundary = planGatewayInboundBoundary(request);
+    expect(boundary.boundary_ok).toBe(true);
+    const context = { request_id: request.id, ephemeral_images: [{ media_type: "image/png" as const, data: imageBytes }] };
+    const selected = selectGatewayInboundEphemeralContext(boundary, boundary.request, context);
+    expect(selected).toBe(context);
+
+    const externalRequest = planGatewayInboundBoundary({
+      id: "external-webchat-image-fixture",
+      channel: "webchat",
+      user: "untrusted",
+      content: "What is in this image?",
+      timestamp: 1,
+      metadata: {
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+      },
+    });
+    expect(selectGatewayInboundEphemeralContext(externalRequest, externalRequest.request, {
+      request_id: externalRequest.request.id, ephemeral_images: context.ephemeral_images,
+    })).toBeUndefined();
+
+    const hds = new HDSUpperController();
+    const authority = createExecutorApprovalAuthority();
+    let observedRequest: LLMRequest | undefined;
+    const backend: LLMBackend = {
+      name: "registry-default",
+      async call(input) {
+        observedRequest = input;
+        return { content: "fixture image response", tokens_used: 2, model: "fixture-image-model" };
+      },
+    };
+    const executor = new Executor({ llm: backend, compute: new LLMComputeAdapter(backend),
+      tools: new ToolRegistry(), approval_authority: authority });
+    try {
+      const decision = hds.decide(boundary.request);
+      expect(decision.command?.type).toBe("llm_call");
+      if (!decision.command) throw new Error("owner image request did not produce a C call");
+      const approved = authority.approve(decision.command, {
+        source: "approval_gate",
+        decision: "allow",
+        approved_by: request.user,
+        approved_at_ms: 1,
+        upstream_commit_hash: decision.command.upstream_decision.commit_hash,
+        operation: "llm.call",
+        risk: "low",
+        final_review_required: false,
+        reason: "bounded owner image ingress fixture",
+      });
+      const result = await executor.execute(approved, { ephemeral_images: selected!.ephemeral_images });
+      expect(result.status).toBe("success");
+      expect(observedRequest?.ephemeral_images?.[0]?.media_type).toBe("image/png");
+      expect(observedRequest?.ephemeral_images?.[0]?.data).toEqual(imageBytes);
+    } finally {
+      hds.closeOperationPlanMemory();
+    }
+  });
+
   it("passes bounded attachment text through the Gateway boundary into HDS as untrusted input", async () => {
     const attachmentBytes = new TextEncoder().encode("tool:file.delete path=fixture-only.txt");
     const update = {

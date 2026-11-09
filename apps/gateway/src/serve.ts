@@ -103,10 +103,12 @@ import {
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
+  isGatewayInternalInboundRequest,
   MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   meaningUpdateProposalAuditProjection,
   parseInboundRequestAtBoundary,
   normalizeInboundRequestForAuthority,
+  TRANSIENT_IMAGE_MAX_BYTES,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
@@ -667,11 +669,21 @@ export function selectGatewayInboundEphemeralContext(
   decisionInput: unknown,
   ephemeralContext?: InboundEphemeralContext,
 ): InboundEphemeralContext | undefined {
-  return boundary.boundary_ok && boundary.request.channel === "telegram" &&
-    decisionInput === boundary.request && ephemeralContext?.request_id === boundary.request.id &&
-    (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)
-    ? ephemeralContext
-    : undefined;
+  const request = boundary.request;
+  if (!boundary.boundary_ok || decisionInput !== request || ephemeralContext?.request_id !== request.id) return undefined;
+  if (request.channel === "telegram" &&
+      (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)) {
+    return ephemeralContext;
+  }
+  const image = ephemeralContext.ephemeral_images.length === 1 ? ephemeralContext.ephemeral_images[0] : undefined;
+  const ownerTaskImage = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
+    request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+    request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
+    (ephemeralContext.ephemeral_audio?.length ?? 0) === 0 && image !== undefined &&
+    (image.media_type === "image/jpeg" || image.media_type === "image/png") &&
+    image.data instanceof Uint8Array && image.data.byteLength > 0 &&
+    image.data.byteLength <= TRANSIENT_IMAGE_MAX_BYTES;
+  return ownerTaskImage ? ephemeralContext : undefined;
 }
 
 export function buildObservationAcquisitionRecord(

@@ -742,11 +742,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       async function postOwnerTaskCompute(token, body) {
         byId("owner-task-new-submission").hidden = true;
         rememberOwnerTaskStatusSubmissionId(body && body.submission_id);
-        const response = await fetch("/owner/task-compute", {
-          method: "POST",
-          headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
-          body: JSON.stringify(body)
-        });
+        const imageInput = body && body.image_input && typeof body.image_input === "object"
+          ? body.image_input : null;
+        let serializedBody = JSON.stringify(body);
+        let responsePromise;
+        try {
+          responsePromise = fetch("/owner/task-compute", {
+            method: "POST",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+            body: serializedBody
+          });
+        } finally {
+          serializedBody = "";
+          if (imageInput && typeof imageInput.data_base64 === "string") imageInput.data_base64 = "";
+          if (body && typeof body === "object") delete body.image_input;
+        }
+        const response = await responsePromise;
         let result = null;
         try { result = await response.json(); } catch { /* use the fixed HTTP failure below */ }
         if (!response.ok) {
@@ -1138,6 +1149,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         const task = byId("owner-task-intent").value.trim();
+        const imageInput = byId("owner-task-image");
+        const imageFile = imageInput.files && imageInput.files.length === 1 ? imageInput.files[0] : null;
+        let imagePayload;
+        if (imageInput.files && imageInput.files.length > 1) throw new Error("画像は1枚だけ選択してください");
+        if (imageFile) {
+          if (imageFile.type !== "image/jpeg" && imageFile.type !== "image/png") {
+            throw new Error("JPEGまたはPNG画像を選択してください");
+          }
+          if (!Number.isSafeInteger(imageFile.size) || imageFile.size < 1 || imageFile.size > 5 * 1024 * 1024) {
+            throw new Error("画像は1 byte以上、5 MiB以下にしてください");
+          }
+          const imageBytes = new Uint8Array(await imageFile.arrayBuffer());
+          try {
+            let binary = "";
+            for (let offset = 0; offset < imageBytes.length; offset += 0x8000) {
+              binary += String.fromCharCode.apply(null, Array.from(imageBytes.subarray(offset, offset + 0x8000)));
+            }
+            imagePayload = { media_type: imageFile.type, data_base64: btoa(binary) };
+          } finally {
+            imageBytes.fill(0);
+          }
+        }
         const completionRulesText = byId("owner-task-completion-rules").value.trim();
         let completionRules;
         if (completionRulesText) {
@@ -1161,12 +1194,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const result = await postOwnerTaskCompute(ownerToken, {
           user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
           submission_id: submissionId,
-          ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {})
+          ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {}),
+          ...(imagePayload ? { image_input: imagePayload } : {})
         });
         clearOwnerTaskSubmissionId();
         renderOwnerTaskStatusSubmissionIds(submissionId);
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
+        imageInput.value = "";
         byId("owner-task-completion-rules").value = "";
         appendChat("owner", task);
         appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);
