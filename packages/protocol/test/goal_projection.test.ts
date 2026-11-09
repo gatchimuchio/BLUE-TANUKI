@@ -26,6 +26,24 @@ describe("GoalProjectionSchema", () => {
     expect(GoalProjectionSchema.safeParse(unidentified).success).toBe(true);
   });
 
+  it("accepts referenced rule identity while keeping the goal identifying", () => {
+    const referenced = {
+      ...unidentified,
+      evaluation_rules: { status: "referenced", rules_digest: "c".repeat(64), rule_count: 1, source_ref: "request-1" },
+    };
+    expect(GoalProjectionSchema.safeParse(referenced).success).toBe(true);
+
+    const falselyReady = {
+      ...referenced,
+      state: "ready",
+      necessity: { status: "identified", value: "必要性", source_ref: "request-1" },
+      target_state: { status: "identified", subject: "対象", condition: "条件", scope: "範囲", source_ref: "request-1" },
+      validity_period: { status: "identified", starts_at: 0, source_ref: "request-1" },
+      authority: { status: "identified", delegator_ref: "owner", scope_ref: "task", source_ref: "request-1" },
+    };
+    expect(GoalProjectionSchema.safeParse(falselyReady).success).toBe(false);
+  });
+
   it("BT-U-C02.01-N rejects fabricated completeness and value-bearing unknown fields", () => {
     const withValue = {
       ...unidentified,

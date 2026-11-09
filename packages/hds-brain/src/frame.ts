@@ -21,6 +21,7 @@ import {
   createUnidentifiedGoalProjection,
   type GoalProjectionSourceKind,
 } from "./goal_projection.js";
+import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 import type { ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
@@ -86,6 +87,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
   const operation_core = resolveOperationCore(req, operator_surface);
   const problem_definition_id =
     config?.resolve?.(req) ?? config?.default_policy.problem_definition_id ?? "default_v1";
+  const completionRulesReference = ownerGoalCompletionRulesReference(req);
 
   return {
     actor,
@@ -97,6 +99,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
       request_id: req.id,
       original_content: originalContent,
       ...(config?.original_reference_kind ? { source_kind: config.original_reference_kind } : {}),
+      ...(completionRulesReference ? { evaluation_rules_reference: completionRulesReference } : {}),
     }),
     candidate_goal_criteria: projectRequestGoalCriteria(req, originalContent),
     ...(config?.goal_relation_tree ? { goal_relation_tree: config.goal_relation_tree } : {}),
@@ -125,6 +128,21 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
       ],
     },
     problem_definition_id,
+  };
+}
+
+function ownerGoalCompletionRulesReference(req: InboundRequest): {
+  rules_digest: string;
+  rule_count: number;
+  source_ref: string;
+} | undefined {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) || metadata["blue_tanuki.actor_kind"] !== "owner" ||
+      metadata["blue_tanuki.trust_level"] !== "owner" || !req.goal_completion_rules) return undefined;
+  return {
+    rules_digest: goalCompletionRulesDigest(req.goal_completion_rules),
+    rule_count: req.goal_completion_rules.rules.length,
+    source_ref: req.id,
   };
 }
 

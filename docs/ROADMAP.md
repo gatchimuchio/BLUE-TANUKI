@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — C08.02 owner規則からserved GatewayのJ/M達成状態復元まで（限定WIRED）
+### 直近BUILD_BATCH — C08.02 owner規則のGoalProjection→J/M digest結合（限定WIRED）
+
+内部認証されたowner規則をGoalProjectionへ本文なしの`referenced`（digest・件数・source ref）として投影し、規則digestをJのOperationPlan policyと共通化した。projectionは引き続き`identifying`で、execution authorityや達成判定を持たない。外部metadataは規則参照を発行できない。J/M側は既存どおり各規則を検証済み結果とM receiptで満たした場合のみ達成する。
+
+protocol／HDS projection test 9件とGateway OperationPlan test 2件（46件skip）、protocol／HDS typecheck・build、Gateway typecheck、`docs:check`、`git diff --check`はPASS。日本語基底監査はPASSで、既存移行負債76件の注意を表示した。実provider／live外部作用、Control Center browser、installed製品、5OS、全suite、QE_QC／QE_QAはこのsliceではNOT_RUN。GoalProjection digest参照接続だけを`WIRED`とし、製品全体の完成状態へ拡張しない。
+
+### 前段完了BUILD_BATCH — C08.02 owner規則からserved GatewayのJ/M達成状態復元まで（限定WIRED）
 
 owner-token付き`/owner/task-compute`からbounded JSON達成規則を受け取り、実served Gateway processのHDS C/J/M経路へ接続した。規則欠落ではverified file.search結果とM receiptがあっても保留し、合致する規則ではJが規則digest／根拠digestを持つ達成sealを作成する。別のHDS runtime caseでは期待値不一致を保留し、達成sealを作らない。owner trustなしの入力、曖昧対象、未検証結果、M receipt／保存値不一致は達成条件にしない。外部channelは規則欄を保持せず、規則は権限を付与しない。
 

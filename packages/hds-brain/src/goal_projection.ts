@@ -13,16 +13,20 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 
 export type ReadonlyGoalProjection = DeepReadonly<GoalProjection>;
 export type GoalProjectionSourceKind = GoalProjection["original_request_ref"]["source_kind"];
+export type GoalEvaluationRulesReference = Extract<GoalProjection["evaluation_rules"], { status: "referenced" }>;
 
 /** 原文は保持せず、受入済み入力への参照とdigestから未同定射影を作る。 */
 export function createUnidentifiedGoalProjection(input: {
   request_id: string;
   original_content: string;
   source_kind?: GoalProjectionSourceKind;
+  evaluation_rules_reference?: Omit<GoalEvaluationRulesReference, "status">;
 }): ReadonlyGoalProjection {
   const content_sha256 = createHash("sha256").update(input.original_content, "utf8").digest("hex");
+  const projectionIdentity = `${GOAL_PROJECTION_SCHEMA_VERSION}|${input.request_id}|${content_sha256}` +
+    (input.evaluation_rules_reference ? `|evaluation_rules:${input.evaluation_rules_reference.rules_digest}` : "");
   const projection_id = createHash("sha256")
-    .update(`${GOAL_PROJECTION_SCHEMA_VERSION}|${input.request_id}|${content_sha256}`, "utf8")
+    .update(projectionIdentity, "utf8")
     .digest("hex");
 
   const parsed = GoalProjectionSchema.parse({
@@ -37,7 +41,9 @@ export function createUnidentifiedGoalProjection(input: {
     },
     necessity: { status: "unknown" },
     target_state: { status: "unknown" },
-    evaluation_rules: { status: "unknown" },
+    evaluation_rules: input.evaluation_rules_reference
+      ? { status: "referenced", ...input.evaluation_rules_reference }
+      : { status: "unknown" },
     validity_period: { status: "unknown" },
     authority: { status: "unknown" },
   });

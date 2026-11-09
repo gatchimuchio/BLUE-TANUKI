@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
-  type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
+  goalCompletionRulesDigest, type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool, LLMComputeAdapter,
   LLMRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "@blue-tanuki/core";
@@ -185,6 +185,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
       rules: [{ rule_id: "matching-line", operation: "file.search", target: { kind: "directory" as const, id: workspace },
         output_pointer: "/matches/0/line", expected_value: expectedLine }] };
+    const rulesDigest = goalCompletionRulesDigest(rules);
+    expect(rulesDigest).toBe(operationPlanDigest(rules));
     try {
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
       const origin = request("plan:compute find blue", "fixture-owner", undefined, rules);
@@ -193,6 +195,9 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const executor = rig(hds, candidate);
       const initial = hds.decide(origin);
       if (!initial.command) throw new Error("completion-rule plan did not reach C");
+      expect(initial.log.frame.goal_projection.evaluation_rules).toMatchObject({
+        status: "referenced", rules_digest: rulesDigest, rule_count: 1, source_ref: origin.id,
+      });
       await executor.run(initial.command);
       const selected = review(hds, candidate, "search");
       if (!selected.command) throw new Error("explicitly selected search did not reach the executor");
@@ -231,6 +236,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.reconcileOperationPlanMemory()).toBe(true);
 
       const assessed = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+      expect(store.load()?.plans[0]?.goal_completion_policy?.rules_digest).toBe(rulesDigest);
       if (expectedStatus === "achieved") {
         expect(assessed.task_outcome).toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
           used_for_authority: false, may_execute: false,

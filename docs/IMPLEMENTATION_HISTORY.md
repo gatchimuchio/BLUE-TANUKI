@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-09 — QEB-C08.02-GOAL-PROJECTION-RULE-DIGEST
+
+開始local／remote `main`=`0a1d6c383504764b50e7d81cbee66f543b1b38a5`。編集前の二世代復旧refはlocal branch／remote tagともcurrent=`0a1d6c3...`、previous=`d77b312668c34baac1db4e6d651e4105422cbc92`。保護されたuntracked `.codex-attachments/`／`.codex-remote-attachments/`は変更していない。別repo、OneDrive Graph、実provider、外部作用は対象外。
+
+owner規則を受けたGoalProjectionのevaluation rulesへ`referenced` variantを追加し、rules digest・件数・入力request参照のみを保持した。projection IDへrules digestを束縛し、規則のない既存projection IDは従来式を維持する。参照生成はGateway内部brandとowner actor/trustに限り、owner風metadataを持つ外部入力では規則欄が除去されunknownのまま。projectionは`identifying`のままであり、規則本文／期待値、execution権限、J採否、達成状態を保持しない。
+
+`goalCompletionRulesDigest`をJ policyとGoalProjectionで共有した。Gateway OperationPlanの合成達成・不一致testで、既存`operationPlanDigest`との一致、GoalProjectionとJ policy間のrules digest一致を確認した。達成側のJ評価は既存どおり検証済みoperation resultと各M receiptを要求し、欠落・不一致は保留する。
+
+protocol typecheck／build、HDS-BRAIN typecheck／build、Gateway typecheckはPASS。Protocol GoalProjection test 4 passed、HDS GoalProjection test 5 passed、Gateway `operation_plan_runtime.test.ts`選択2 passed／46 skipped。`pnpm docs:check`と`git diff --check`はPASS。日本語基底監査はPASSで、既存移行負債76件の注意を表示した。test-owned一時workspaceはfinallyでcleanup済み。build済みProtocol／HDS `dist`はworkspace再利用用生成物として保持。実served process、Control Center browser、実provider、外部作用、installed製品、5OS、full suite、QE_QC／QE_QAはNOT_RUN。
+
+---
+
 ## 2026-11-09 — QEB-C08.02-SERVED-GOAL-COMPLETION
 
 開始local／remote `main`=`d77b312668c34baac1db4e6d651e4105422cbc92`。編集前の二世代復旧refはlocal branch／remote tagともcurrent=`d77b312...`、previous=`e8b95dadebb8e525f1c5305eba253b8bde54b89c`。作業worktreeは`main`だけ。`.codex-attachments/`と`.codex-remote-attachments/`はowner資料の保護領域として無変更。Graph／OneDrive操作、別repo作業、実ユーザーデータ変更はなし。`.git/worktrees/blue-tanuki-health-2026-11-07-windows`に残るinaccessible worktree metadataはpermission deniedのため保持し、ACLやforceで整理していない。

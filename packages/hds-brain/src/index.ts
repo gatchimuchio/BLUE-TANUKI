@@ -36,6 +36,7 @@ export {
   type GoalProjectionSourceKind,
   type ReadonlyGoalProjection,
 } from "./goal_projection.js";
+export { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 export {
   buildGoalRelationTreeView,
   restoreGoalRelationGraphFromTreeView,

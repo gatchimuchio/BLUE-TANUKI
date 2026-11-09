@@ -62,6 +62,7 @@ import {
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue, projectRequestGoalCriteria } from "./candidate_criteria.js";
+import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit,
   buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
   verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
@@ -1365,7 +1366,7 @@ function createGoalCompletionPolicy(input: {
     task_identity_digest: input.task_identity_digest,
     task_goal_digest: taskGoalDigest(input.goal),
     rules,
-    rules_digest: operationPlanDigest(rules),
+    rules_digest: goalCompletionRulesDigest(rules),
   });
 }
 function jsonPointerValue(value: OperationJsonValue, pointer: string): { readonly found: boolean; readonly value?: OperationJsonValue } {

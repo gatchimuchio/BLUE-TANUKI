@@ -28,6 +28,12 @@ export const GoalTargetStateSchema = z.discriminatedUnion("status", [
 export const GoalEvaluationRulesSchema = z.discriminatedUnion("status", [
   UnknownValueSchema,
   z.object({
+    status: z.literal("referenced"),
+    rules_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    rule_count: z.number().int().min(1).max(64),
+    source_ref: ReferenceSchema,
+  }).strict(),
+  z.object({
     status: z.literal("identified"),
     rules: z.array(z.string().trim().min(1).max(1024)).min(1).max(32),
     source_ref: ReferenceSchema,

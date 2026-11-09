@@ -2,7 +2,17 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / C08.02 served Gatewayのowner規則入力→J/M達成判定・再起動後状態（限定WIRED）
+## 直近施工BUILD_BATCH — QE_BUILD / C08.02 owner評価規則をGoalProjectionとJ/M判定へ同一digestで結合（限定WIRED）
+
+主語は、ownerが委任した仕事の達成規則を非権威のGoalProjectionから現行J/M判定まで同一性を保って結ぶBLUE-TANUKIのHDS-BRAIN経路。内部認証されたowner規則だけを`evaluation_rules.status=referenced`としてdigest・件数・request参照で投影する。規則本文／期待値はGoalProjectionへ複製せず、projection IDは規則digestへ束縛する。その他のgoal要素が未確定なのでprojectionは`identifying`のままとし、権限や達成判定を付与しない。外部入力のowner風metadataと規則は参照生成に使わない。
+
+JのOperationPlan policyは同じcanonical digestを使う。達成には各明示規則に一意に対応するstep、検証済みoperation result、検証済みM receiptが必要であり、欠落・曖昧・未検証・不一致は保留、達成後は同一taskを停止する既存動作を維持する。protocol／HDS projection testは4／5件PASS、Gateway `operation_plan_runtime.test.ts`の達成・不一致2件PASS（同file 46件skip）。protocolとHDS-BRAINのtypecheck／build、Gateway typecheck、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査はPASSで、既存移行負債76件の注意を表示した。
+
+これは評価規則のdigest参照sliceだけの限定`WIRED`である。Gateway served process全体、Control Center browser全往復、実provider／live外部作用、installed製品、5OS、full suite、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、owner GOはこの差分では確認・成立していない。
+
+**次のproducer／consumer:** rev4.0と最新HEADから、実provider・公開作用・全体QC／QAに依存しない次の未接続consumerを選定する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / C08.02 served Gatewayのowner規則入力→J/M達成判定・再起動後状態（限定WIRED）
 
 主語は、ownerが委任した仕事を明示規則と検証済み根拠で評価し、達成または保留を認証済み状態として表示するBLUE-TANUKIの実served Gateway／HDS J／M経路。隔離Gateway processのowner-token付き`/owner/task-compute`へJSON規則を入力し、synthetic `file.search`を既存executor・J/Mへ通した。規則欠落では検索結果とreceiptがあっても`goal_completion_rules_missing`で保留し、規則一致では全stepの検証とM receipt後に`goal_completion_rules_satisfied`で達成した。HDS runtimeの独立runtime testでは誤った期待値を`goal_completion_result_mismatch`として保留し、sealを作らず再起動後も保留する。
 
