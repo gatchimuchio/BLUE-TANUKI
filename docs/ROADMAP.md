@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
+### 直近完了BUILD_BATCH — Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
+
+Windows product Setupが既存Launcherの停止失敗を無視して更新を続行し得る欠陥を修正した。非0／例外時は既存installのswap、DataRoot／config Setup、installed doctorより前に停止する。停止後はmanaged inventoryを再照合してから共有状態へ進む。停止をexit 23にした隔離fixtureで既存launcher保持と拒否を確認。対象test 1 passed／18 skipped、workspace typecheck、PowerShell parser、15 workspace build、`docs:check`、`git diff --check`はPASS。実installed Setup／Uninstall・registry／Start Menu・実ユーザーデータ・5OS・全suite・QE_QC／QE_QAはNOT_RUN。このWindows停止失敗境界だけを`WIRED`とし、製品全体の完成やSetup／Uninstall実物の安全確認へ拡張しない。
+
+### 前段完了BUILD_BATCH — Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
 
 共通packaged `BlueTanukiSetup.sh`が、同一install parentのrollback app/runtime siblingを正確に列挙し、一意性・owner marker・package metadata・managed inventory・Node path・root bindingを検証する。active new installが見つかる停止点ではactive app/runtimeも全inventoryで検証し、resident-stop後に両側を再検証する。検証済みの旧install/runtimeをactive rootへ復帰させ、active new側の検証済み部分はhidden interrupted siblingへ保全する。DataRoot・ConfigRoot・user data・env fileを削除・上書きしない。複数候補、未対runtime、曖昧・改変・symlink、env rollback backupが残る状態は自動変更せずfail-closedする。
 
@@ -18,7 +22,7 @@ Linux/macOS packaged product Launcherは、数値PIDだけを停止根拠にせ�
 
 WSL Ubuntu 24.04の隔離process fixture（install path内の複数連続空白を含む）と対象shell構文検査、Windows上の対象test 4/4、workspace typecheck、build 15 projects、`docs:check`、`git diff --check`はPASS。実macOS、実installed Setup／Uninstall、実製品更新・削除、全suite、QE_QC／QE_QAはNOT_RUN。このUnix packaged product-pathだけを限定`WIRED`とし、OS全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
 
-### 直近完了BUILD_BATCH — G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
+### 前段完了BUILD_BATCH — G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
 
 Windows製品LauncherがPID fileだけを根拠に他processを停止しないよう、bundled `node.exe`／installed `BlueTanukiLauncher.ps1`とlaunch arguments／Gateway entry／DataRoot env fileを照合する。PID recordが欠落・staleなら同一installのprocess inventoryを調べ、一件だけ一致すれば記録を復旧または停止する。record不正・判別不能・複数candidateはfail-closedする。所有確認したprocessだけを停止し、最大10秒のexit確認と残存processなしを確認後にrecordを消す。Uninstallも停止が確認できない限りinstall treeの削除へ進まない。既存のuser data保持／明示purge境界は維持する。
 

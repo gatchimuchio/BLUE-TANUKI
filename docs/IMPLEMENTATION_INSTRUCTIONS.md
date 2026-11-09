@@ -2,7 +2,15 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
+## 直近完了BUILD_BATCH — QE_BUILD / Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
+
+主語は、既存Windows製品を更新するSetupと、稼働中の製品・共有データを保護する導線。`BlueTanukiLauncher.ps1 stop`の失敗または非0終了をSetupが警告だけで無視していた欠陥を修正した。Setupは停止結果を確認し、停止不成立なら既存installのswap、共有DataRoot／設定へのSetup処理、installed doctor起動へ進まない。対象installを停止した後もmanaged inventoryを再検査してから共有データと更新処理へ進む。
+
+Windows隔離fixtureでLauncher stopをexit 23にし、Setupの停止関数が拒否して後続へ進まないこと、既存fixture launcherが不変であることを確認した。呼出し順もDataRoot作成とconfig Setupより前であることを確認。対象Vitest 1 passed／18 skipped、workspace typecheck、`BlueTanukiSetup.ps1` PowerShell parser、15 workspace build、`docs:check`、`git diff --check`はPASS。全suite、実installed Setup／Uninstall、registry／Start Menu、実package更新、実ユーザーDataRoot、5OS runtime、QE_QC／QE_QAはNOT_RUN。Setupの停止失敗境界だけを限定`WIRED`とし、Windows lifecycle全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
+生成したfake install／launcher／harnessはtestのfinally cleanupで回収。ignored workspace build出力は次の開発用として保持。保護された添付領域、D4-Pocket／ミニドラrepo、実ユーザーデータ、OneDrive資料には変更なし。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Unix packaged Setupの更新中断後再起動復旧（限定WIRED）
 
 Linux/macOS共通のpackaged `BlueTanukiSetup.sh`は、同一install parent内の正確なhidden rollback siblingを一意に確認し、rollback app/runtimeのowner marker・package metadata・managed file inventory・Node pathが現在の最終rootへ結び付くことを検証する。active app/runtimeがすでに新側へ切り替わっている場合は、その双方も完全なmanaged installとして検証する。複数候補、対にならないruntime候補、inventory／root不一致、曖昧なactive root、env config rollback backupの存在は全経路を保持してfail-closedする。
 
@@ -20,7 +28,7 @@ Linux/macOS向けpackaged product Launcherは、PID記録の数値だけを根�
 
 次はrev4.0と最新実物から全体の一気通貫仕事に最も不足する実consumerを再選定してQE_BUILDを続ける。実provider／live外部作用、D4-Pocket／ミニドラ別repo編集、Rust authority cutover、公開／出荷判断は保留する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
+## 前段完了BUILD_BATCH — QE_BUILD / G02.02・G02.03 Windows常駐process所有確認と削除停止境界（限定WIRED）
 
 Windows製品LauncherはPIDファイルの番号だけで停止対象を決めず、実processの実行ファイル、command line、bundled Nodeまたはinstalled Launcher、Gateway entry、`--serve`、同じDataRootのenv fileを照合する。PID recordが欠落・staleの場合はprocess inventoryから同一installのcandidateを探し、一件だけidentityが一致したときだけ記録を復旧または停止する。recordの読取・形式不正、複数candidate、identity不一致・取得不能では重複起動も停止もfail-closedする。Watchdogもinstalled Launcherを`watchdog` modeで実行するPowerShell processであることを確認する。所有確認したprocessだけを停止し、10秒以内の終了と残存processなしを確認してからPID recordを消す。終了未確認・停止失敗ではrecordを保持する。UninstallはLauncher stopが0を返さない場合にinstall treeの削除を中断し、installed filesとuser dataが未削除である旨を返す。既存のDataRoot保持／明示purge契約は変更していない。
 

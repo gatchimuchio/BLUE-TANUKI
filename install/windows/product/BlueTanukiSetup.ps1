@@ -89,10 +89,17 @@ function Find-NodeExe($Root) {
 function Stop-ExistingResident($Root) {
   $launcher = Join-Path $Root "BlueTanukiLauncher.ps1"
   if (Test-Path -LiteralPath $launcher) {
+    $stopExitCode = $null
+    $stopFailure = $null
     try {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher stop | Out-Null
+      $stopExitCode = $LASTEXITCODE
     } catch {
-      Write-Warning "existing resident stop failed; continuing install: $($_.Exception.Message)"
+      $stopFailure = $_.Exception.Message
+    }
+    if ($stopFailure -or $stopExitCode -ne 0) {
+      $reason = if ($stopFailure) { $stopFailure } else { "launcher stop returned exit code $stopExitCode" }
+      Fail "Refusing to continue setup because resident shutdown was not confirmed. No update swap or configuration reset was started. $reason"
     }
   }
 }
@@ -409,6 +416,12 @@ try {
   [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved -MetadataInstallRoot $installRootResolved)
   Assert-NoReparsePointsInTree -Path $stageRoot -Label 'StagedProductInstall'
 
+  if ($existingProductInstall) {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+    Stop-ExistingResident $installRootResolved
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+  }
+
   New-Item -ItemType Directory -Force -Path $dataRootResolved, $dataDir, $logDir | Out-Null
   if ($ResetConfig -and (Test-Path -LiteralPath $envFile -PathType Leaf)) {
     $envBackup = Join-Path $dataRootResolved ('.blue-tanuki-env-rollback-' + $suffix)
@@ -418,10 +431,6 @@ try {
   Invoke-BundledSetup $nodeExe $stageRoot $envFile $dataDir
   if (-not $SkipDoctor) { Invoke-PostInstallDoctor $nodeExe $stageRoot $envFile $logDir }
 
-  if ($existingProductInstall) {
-    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
-    Stop-ExistingResident $installRootResolved
-  }
   if ($existingProductInstall) {
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
     Assert-NoReparsePointsInTree -Path $installRootResolved -Label 'ExistingProductInstall'

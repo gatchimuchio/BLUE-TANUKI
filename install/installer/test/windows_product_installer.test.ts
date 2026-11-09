@@ -320,6 +320,56 @@ describe("Windows product installer package", () => {
     expect(uninstallCmd).toContain("exit /b 0");
   });
 
+  it("stops before shared-data setup and refuses an update when resident shutdown fails", () => {
+    const setup = read("install/windows/product/BlueTanukiSetup.ps1");
+    const stopFunctionStart = setup.indexOf("function Stop-ExistingResident($Root) {");
+    const stopFunctionEnd = setup.indexOf("\n}\n", stopFunctionStart) + 2;
+    const stopCall = setup.indexOf("Stop-ExistingResident $installRootResolved");
+    const dataPreparation = setup.indexOf("New-Item -ItemType Directory -Force -Path $dataRootResolved, $dataDir, $logDir");
+    const bundledSetup = setup.indexOf("Invoke-BundledSetup $nodeExe $stageRoot $envFile $dataDir");
+    expect(stopFunctionStart).toBeGreaterThanOrEqual(0);
+    expect(stopFunctionEnd).toBeGreaterThan(stopFunctionStart);
+    expect(stopCall).toBeGreaterThanOrEqual(0);
+    expect(stopCall).toBeLessThan(dataPreparation);
+    expect(stopCall).toBeLessThan(bundledSetup);
+    const stopFunction = setup.slice(stopFunctionStart, stopFunctionEnd);
+    expect(stopFunction).toContain("$stopExitCode = $LASTEXITCODE");
+    expect(stopFunction).toContain("resident shutdown was not confirmed");
+    expect(stopFunction).not.toContain("continuing install");
+
+    const command = findPowerShell();
+    if (!command) return;
+
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-setup-stop-failure-"));
+    const install = join(temp, "install");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const harness = join(temp, "stop-existing-resident.test.ps1");
+    try {
+      mkdirSync(install, { recursive: true });
+      writeFileSync(launcher, "# isolated stop-failure fixture\n", "utf8");
+      const installLiteral = install.replace(/'/gu, "''");
+      writeFileSync(harness, [
+        "$ErrorActionPreference = 'Stop'",
+        "function Fail($Message) { throw [System.InvalidOperationException]::new([string]$Message) }",
+        "function powershell.exe { $global:LASTEXITCODE = 23 }",
+        stopFunction,
+        `try { Stop-ExistingResident '${installLiteral}'; exit 90 } catch {`,
+        "  if ($_.Exception.Message -notmatch 'resident shutdown was not confirmed') { Write-Error $_; exit 91 }",
+        "  Write-Output 'setup_stop_failure=refused'",
+        "  exit 0",
+        "}",
+      ].join("\n"), "utf8");
+
+      const result = runPowerShellFile(command, harness, [], temp);
+      expect(result.status).toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("setup_stop_failure=refused");
+      expect(existsSync(launcher)).toBe(true);
+      expect(readFileSync(launcher, "utf8")).toBe("# isolated stop-failure fixture\n");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when a Windows product uninstall target has no ownership marker", () => {
     const command = findPowerShell();
     if (!command) {
