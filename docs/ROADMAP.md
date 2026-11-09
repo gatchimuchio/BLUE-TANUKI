@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
+### 直近完了BUILD_BATCH — Windows UninstallのDataRoot所有を削除直前に再確認（限定コード接続）
+
+`-PurgeData`は開始時だけでなく、installed app・ショートカット・Uninstall登録を削除した後、DataRootの再帰削除直前にも所有マーカーとパス構造を再検証する。再検証に失敗した場合はDataRootを保持して終了し、app側はすでに除去されている可能性を報告する。PowerShell parser、`docs:check`、`git diff --check`はPASS。test、installed Uninstall、DataRoot差替え時の動作はNOT_RUN。この削除境界だけをコード接続済みとし、Windows lifecycleや製品全体の成立へ拡張しない。
+
+### 前段完了BUILD_BATCH — Windows製品Setupの常駐停止失敗をfail-closed化（限定WIRED）
 
 Windows product Setupが既存Launcherの停止失敗を無視して更新を続行し得る欠陥を修正した。非0／例外時は既存installのswap、DataRoot／config Setup、installed doctorより前に停止する。停止後はmanaged inventoryを再照合してから共有状態へ進む。停止をexit 23にした隔離fixtureで既存launcher保持と拒否を確認。対象test 1 passed／18 skipped、workspace typecheck、PowerShell parser、15 workspace build、`docs:check`、`git diff --check`はPASS。実installed Setup／Uninstall・registry／Start Menu・実ユーザーデータ・5OS・全suite・QE_QC／QE_QAはNOT_RUN。このWindows停止失敗境界だけを`WIRED`とし、製品全体の完成やSetup／Uninstall実物の安全確認へ拡張しない。
 
