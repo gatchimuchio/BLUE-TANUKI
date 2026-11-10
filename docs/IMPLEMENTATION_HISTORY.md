@@ -4001,3 +4001,9 @@ Gateway served integration 1件とWebChatのpreview／MIME結合test 2件、Gate
 | test／Cron runtime／provider実呼出し／全OS／外部作用／QE_QC／QE_QA | NOT_RUN。testは追加・実行なし。 |
 
 local recovery branch／remote tagはcurrent=`9f3e69c36821dd15e7703f2056786414618b5e99`／previous=`fd832757f361ee4be43078b793c4034ab7eb2240`で一致。`git fetch`は成功したが、旧stale worktree metadataのACL拒否は迂回せず保持した。添付未追跡directory二件も変更していない。生成一時資産なし。
+
+## 2026-11-10 QE_BUILD — G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛（source-level WIRED）
+
+Setupのstage inventory格納先とmetadataに記録する最終install pathを分離し、stage検査でmetadata path不一致になり得る欠陥を修正。Launcherは同梱safety helper、schema／product ID、install path一致、DataRoot ownership markerを検証し、失敗時に既定APPDATAへfallbackしない。通常起動はbounded markerのみを読み、Uninstall側の全tree/reparse検査を維持する。既存Windows runtime test fixtureを正式metadata／marker契約へ更新した。
+
+PowerShell 5.1 parser、既存fixtureのTypeScript AST構文解析、`docs:check`、最終`git diff --check`はPASS。test suite、実Setup／Launcher、Uninstall／Purge、update／rollback、clean WindowsでのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。編集前復旧refはlocal branch／remote tagともcurrent=`f9e00b2e80b8cb369e3ce24c1f8d3218df82cbc7`／previous=`9f3e69c36821dd15e7703f2056786414618b5e99`で一致。fetchはmainを取得した後、古いworktree metadataの削除をACL拒否され、worktree一覧はmainのみ。stale metadataは保留。実ユーザーデータ・registry・shortcut・外部作用なし。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。

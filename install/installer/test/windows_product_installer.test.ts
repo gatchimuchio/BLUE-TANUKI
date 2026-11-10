@@ -10,6 +10,24 @@ function read(rel: string): string {
   return readFileSync(join(root, rel), "utf8");
 }
 
+function writeProductOwnershipFixture(install: string, data: string): void {
+  const guard = join(install, "install", "windows", "safe-target.ps1");
+  mkdirSync(join(install, "install", "windows"), { recursive: true });
+  writeFileSync(guard, read("install/windows/safe-target.ps1"), "utf8");
+  writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({
+    schema_version: 3,
+    product_id: "blue-tanuki-product-install",
+    install_root: install,
+    data_root: data,
+  }), "utf8");
+  writeFileSync(join(data, "blue-tanuki-product-data.json"), JSON.stringify({
+    schema_version: 1,
+    product_id: "blue-tanuki-product-data",
+    install_root: install,
+    data_root: data,
+  }), "utf8");
+}
+
 function findPowerShell(): string | undefined {
   const candidates = process.platform === "win32" ? ["powershell.exe", "pwsh"] : ["pwsh"];
   for (const command of candidates) {
@@ -491,7 +509,7 @@ describe("Windows product installer package", () => {
     mkdirSync(data, { recursive: true });
     writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
     writeFileSync(join(install, "runtime", "node.exe"), "not an executable\n", "utf8");
-    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+    writeProductOwnershipFixture(install, data);
 
     const unrelated = spawn(command, ["-NoProfile", "-Command", "Start-Sleep -Seconds 60"], { stdio: "ignore" });
     try {
@@ -532,7 +550,7 @@ describe("Windows product installer package", () => {
     writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
     writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
     writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
-    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+    writeProductOwnershipFixture(install, data);
 
     const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
       cwd: install,
@@ -576,7 +594,7 @@ describe("Windows product installer package", () => {
     writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
     writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
     writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
-    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+    writeProductOwnershipFixture(install, data);
 
     const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
       cwd: install,
@@ -613,7 +631,7 @@ describe("Windows product installer package", () => {
     mkdirSync(data, { recursive: true });
     writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
     writeFileSync(join(install, "runtime", "node.exe"), "not an executable\n", "utf8");
-    writeFileSync(join(install, "blue-tanuki-install.json"), JSON.stringify({ data_root: data }), "utf8");
+    writeProductOwnershipFixture(install, data);
     writeFileSync(join(data, "blue-tanuki.env"), "WEBCHAT_PORT=8787\n", "utf8");
 
     const watchdog = spawn(command, powerShellFileArgs(command, launcher, ["watchdog"]), { cwd: temp, stdio: "ignore" });

@@ -2,18 +2,18 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / E01.01 Cron予定発火のdurable claimと未接続時fail-closed
+## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
 
-主語はCronSchedulerChannelが処理する予定eventとdynamic content provider／J ingress。目的は、eventを安定したschedule-version digestで永続claimしてからproviderを呼び、duplicate／stale／未解決eventのprovider再呼出しとJ再投入を抑止すること。永続storeが未接続の経路もprovider／Jへ進めない。event IDはsourceと予定時刻から作り、cursorは配送・再実行抑止だけを担う。
+主語はWindows製品Setupが生成するinstall metadata／DataRoot markerと、それを使う製品Launcher。目的は、Setupが選んだ最終install pathとDataRootだけを後続runtimeが引き継ぎ、欠落・破損・別製品・別pathのmetadataから既定DataRootへ黙って切り替わらないこと。製品全体の導入・更新・Uninstall成立やWindows E2Eの完了を主張しない。
 
-`task.payload_hash`を予定eventのcursor digestとしてclaimする。`event_store`未接続では`durable_store_unavailable`として停止し、最終発火時刻も更新しない。accepted時だけcontent providerを呼び、解決後のcontent hashは既存どおりJ/runtime metadataへ渡す。claim失敗ではprovider、J、Brokerを呼ばない。handler／process異常は`outcome_unknown`で保持し、ownerがHDS経由で明示するno-replay dispositionなしに後続eventを通さない。Approval、Authority、M receipt、外部作用の採否・成功はこの変更範囲に含めない。
+Setupはstage inventoryの格納先とmetadataに記録する最終install pathを分離した。Launcherは同梱`safe-target.ps1`、schema／product ID、実install path一致、`Assert-SafeInstallTargets`、DataRoot ownership markerを確認してからruntimeへ進む。検証できない場合はfail-closedし、APPDATA既定値へfallbackしない。通常起動時はbounded markerとroot identityを確認し、Uninstall側の既存全tree保護検査を弱めない。既存Windows実行fixtureはこの同一install/DataRoot契約に合わせたが、testは実行していない。
 
-Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。docs、日本語基底監査、license gateがPASSし、日本語基底の移行負債76件は既存注意として維持した。testは追加・実行していない。Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。実provider、外部作用、実ユーザーデータ、別repoは対象外。
+PowerShell構文解析、`git diff --check`、`docs:check`の結果をこのBUILD_BATCH内で記録する。test suite、実package Setup、installed Launcher、通常Uninstall／明示Purge、rollback、registry／shortcut、clean WindowsでのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。実ユーザーデータ、registry、shortcut、外部作用は操作しない。
 
-UNIT_ID: E01.01 Cron durable scheduled occurrence claim ordering
-STATUS: WIRED（durable claim後だけprovider／J ingress。store未接続はfail-closed。runtime未確認）
-NEXT_REQUIRED_CONSUMER: 現行sourceにはCron request digest→OperationPlan→Broker admission／receipt→J/M結果のread-only correlationがある。Cron ledgerはsourceごとの現在cursorだけを保持するため、次eventでcursorが進んだ後も同じtaskの結果・復旧根拠を追えるproducer／consumerを接続する。retentionや再実行方針を推測で拡張せず、outcome_unknownを自動再実行しない。
-SAFETY_STATUS: duplicate／stale／未解決eventおよびdurable store未接続時はproviderとJへ進まない。event cursor／`handler_returned`を承認・作用成功・達成の証拠にしない。
+UNIT_ID: G02.03 Windows product setup/runtime DataRoot ownership binding
+STATUS: WIRED（Setup stage metadata→最終install path、Launcher→同metadata／DataRoot marker consumer。source接続のみ、runtime未確認）
+NEXT_REQUIRED_CONSUMER: clean Windowsのpackaged install→Launcher起動→update／rollback→通常Uninstall保持／owner明示Purgeの各状態を同じDataRootで観測し、失敗時の設定・秘密・履歴保持を確認する。Node/Git/pnpmなしの導入条件も個別に確認する。
+SAFETY_STATUS: install metadata／helper／DataRoot markerの欠落、不一致、reparse、上限超過では起動しない。既定DataRootへ切り替えない。通常Uninstallのデータ保持と明示Purge境界は変更しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
 

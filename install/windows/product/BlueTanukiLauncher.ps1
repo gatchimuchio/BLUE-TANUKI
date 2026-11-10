@@ -15,22 +15,39 @@ function Fail($Message) {
 
 $installRoot = Split-Path -Parent $PSCommandPath
 $installMetadataPath = Join-Path $installRoot "blue-tanuki-install.json"
+$installGuardPath = Join-Path $installRoot "install\windows\safe-target.ps1"
+if (-not (Test-Path -LiteralPath $installGuardPath -PathType Leaf)) {
+  Fail "Product path safety guard is missing; runtime was not started: $installGuardPath"
+}
+$installGuardItem = Get-Item -Force -LiteralPath $installGuardPath
+if (($installGuardItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $installGuardItem.Length -gt 262144) {
+  Fail "Product path safety guard is not a bounded regular file; runtime was not started: $installGuardPath"
+}
+try { . $installGuardPath } catch {
+  Fail "Product path safety guard could not be loaded; runtime was not started. $($_.Exception.Message)"
+}
 
 function Resolve-DataRoot {
-  if (Test-Path -LiteralPath $installMetadataPath) {
-    try {
-      $metadata = Get-Content -LiteralPath $installMetadataPath -Raw | ConvertFrom-Json
-      if ($metadata.PSObject.Properties.Name -contains "data_root") {
-        $value = [string]$metadata.data_root
-        if ($value) {
-          return [System.IO.Path]::GetFullPath($value)
-        }
-      }
-    } catch {
-      Write-Warning "install metadata could not be read; falling back to default data root: $($_.Exception.Message)"
-    }
+  if (-not (Test-Path -LiteralPath $installMetadataPath -PathType Leaf)) {
+    Fail "Product install metadata is missing; the runtime will not select a fallback data root: $installMetadataPath"
   }
-  return [System.IO.Path]::GetFullPath("$env:APPDATA\BlueTanuki")
+  $metadataItem = Get-Item -Force -LiteralPath $installMetadataPath
+  if (($metadataItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $metadataItem.Length -gt 65536) {
+    Fail "Product install metadata is not a bounded regular file; runtime was not started: $installMetadataPath"
+  }
+  try {
+    $metadata = Get-Content -LiteralPath $installMetadataPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $metadata -or $metadata.schema_version -ne 3 -or $metadata.product_id -ne "blue-tanuki-product-install" -or
+        [string]::IsNullOrWhiteSpace([string]$metadata.install_root) -or
+        [string]::IsNullOrWhiteSpace([string]$metadata.data_root) -or
+        -not [string]::Equals((Get-InstallPathIdentity ([string]$metadata.install_root)), (Get-InstallPathIdentity $installRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Product install metadata does not identify this installation and its data root."
+    }
+    $targets = Assert-SafeInstallTargets -InstallRoot $installRoot -DataRoot ([string]$metadata.data_root) -SourceRoot $null
+    return Assert-ManagedWindowsProductDataMarker -DataRoot $targets.DataRoot -InstallRoot $targets.InstallRoot
+  } catch {
+    Fail "Product DataRoot could not be verified; runtime was not started and no default was substituted. $($_.Exception.Message)"
+  }
 }
 
 $dataRoot = Resolve-DataRoot

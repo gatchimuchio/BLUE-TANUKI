@@ -269,8 +269,8 @@ function Register-Uninstaller($InstallRootResolved, $DataRootResolved, $Version)
   New-ItemProperty -Path $key -Name "BlueTanukiDataRoot" -Value $DataRootResolved -PropertyType String -Force | Out-Null
 }
 
-function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version, $PackageManifestSha256) {
-  $managedFilesSha256 = Write-ManagedTreeInventory -Root $InstallRootResolved `
+function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootResolved, $Version, $PackageManifestSha256) {
+  $managedFilesSha256 = Write-ManagedTreeInventory -Root $InventoryRoot `
     -MetadataFileName 'blue-tanuki-install.json' -InventoryFileName 'blue-tanuki-managed-files.json' `
     -ProductId 'blue-tanuki-product-install'
   $metadata = [ordered]@{
@@ -282,7 +282,7 @@ function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version
     package_manifest_sha256 = $PackageManifestSha256
     managed_files_sha256 = $managedFilesSha256
   }
-  $metadataPath = Join-Path $InstallRootResolved "blue-tanuki-install.json"
+  $metadataPath = Join-Path $InventoryRoot "blue-tanuki-install.json"
   $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 }
 
@@ -413,7 +413,7 @@ try {
   Expand-BundledNode $packageRoot $stageRoot
   Copy-DirectoryContents $sourceLaunchers $stageRoot
   Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $stageRoot 'blue-tanuki-package-manifest.json')
-  Write-InstallMetadata $stageRoot $dataRootResolved $version $manifestSha256
+  Write-InstallMetadata $stageRoot $installRootResolved $dataRootResolved $version $manifestSha256
   [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved -MetadataInstallRoot $installRootResolved)
   Assert-NoReparsePointsInTree -Path $stageRoot -Label 'StagedProductInstall'
 

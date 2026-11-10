@@ -406,17 +406,18 @@ function Restore-InterruptedWindowsProductUpdate {
   return $true
 }
 
-function Assert-ManagedWindowsProductData {
+function Assert-ManagedWindowsProductDataMarker {
   param(
     [Parameter(Mandatory = $true)][string]$DataRoot,
-    [Parameter(Mandatory = $true)][string]$InstallRoot
+    [Parameter(Mandatory = $true)][string]$InstallRoot,
+    [switch]$VerifyTree
   )
   $data = Resolve-SafeDirectoryTarget -Path $DataRoot -Label 'ProductDataRoot'
   $install = Resolve-SafeDirectoryTarget -Path $InstallRoot -Label 'ProductInstallRoot'
   if (-not (Test-Path -LiteralPath $data -PathType Container)) {
     throw "Product data root is missing: $data"
   }
-  Assert-NoReparsePointsInTree -Path $data -Label 'ProductDataRoot'
+  if ($VerifyTree) { Assert-NoReparsePointsInTree -Path $data -Label 'ProductDataRoot' }
   $markerPath = Join-Path $data 'blue-tanuki-product-data.json'
   if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
     throw "Product data ownership marker is missing: $markerPath"
@@ -433,6 +434,15 @@ function Assert-ManagedWindowsProductData {
       -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $install), [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Product data ownership marker does not match the requested install and data roots.'
   }
+  return $data
+}
+
+function Assert-ManagedWindowsProductData {
+  param(
+    [Parameter(Mandatory = $true)][string]$DataRoot,
+    [Parameter(Mandatory = $true)][string]$InstallRoot
+  )
+  [void](Assert-ManagedWindowsProductDataMarker -DataRoot $DataRoot -InstallRoot $InstallRoot -VerifyTree)
   return 'managed-v1'
 }
 
