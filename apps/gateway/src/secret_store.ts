@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import * as path from "node:path";
+import { windowsSystemChildEnvironment } from "./child_process_environment.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -157,15 +158,6 @@ function powershellCommand(): string {
   return process.env.BLUE_TANUKI_POWERSHELL ?? "powershell.exe";
 }
 
-function powershellDpapiEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  // pwsh-launched automation can pass a PSModulePath that breaks Windows PowerShell module loading.
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() === "psmodulepath") delete env[key];
-  }
-  return env;
-}
-
 function dpapiScript(commands: readonly string[]): string {
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -184,7 +176,7 @@ function protectWithDpapi(plaintext: string): string {
     powershellCommand(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: powershellDpapiEnv(),
+      env: windowsSystemChildEnvironment(),
       input: plaintext,
       encoding: "utf8",
       windowsHide: true,
@@ -211,7 +203,7 @@ function unprotectWithDpapi(protectedValue: string): string {
     powershellCommand(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: powershellDpapiEnv(),
+      env: windowsSystemChildEnvironment(),
       input: protectedValue,
       encoding: "utf8",
       windowsHide: true,

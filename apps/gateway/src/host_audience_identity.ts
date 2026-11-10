@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import {
+  macOsHostIdentityChildEnvironment,
+  windowsSystemChildEnvironment,
+} from "./child_process_environment.js";
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const MACHINE_GUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -42,7 +46,13 @@ function readHostIdentifier(platform: NodeJS.Platform): string {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
     const result = spawnSync(join(systemRoot, "System32", "reg.exe"), [
       "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid",
-    ], { encoding: "utf8", timeout: 5_000, windowsHide: true, maxBuffer: 64 * 1024 });
+    ], {
+      env: windowsSystemChildEnvironment(),
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+    });
     if (result.status !== 0 || result.error) throw new Error("gateway_host_audience_identity_unavailable");
     const match = /^\s*MachineGuid\s+REG_SZ\s+([a-f0-9-]+)\s*$/im.exec(result.stdout);
     if (!match) throw new Error("gateway_host_audience_identity_unavailable");
@@ -51,7 +61,11 @@ function readHostIdentifier(platform: NodeJS.Platform): string {
 
   if (platform === "darwin") {
     const result = spawnSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {
-      encoding: "utf8", timeout: 5_000, windowsHide: true, maxBuffer: 256 * 1024,
+      env: macOsHostIdentityChildEnvironment(),
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 256 * 1024,
     });
     if (result.status !== 0 || result.error) throw new Error("gateway_host_audience_identity_unavailable");
     const match = /^\s*"IOPlatformUUID"\s*=\s*"([a-f0-9-]+)"\s*$/im.exec(result.stdout);
