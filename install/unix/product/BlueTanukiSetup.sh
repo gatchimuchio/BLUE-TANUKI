@@ -651,6 +651,7 @@ NODE_EXE_FINAL="$RUNTIME_ROOT/$NODE_TOP_DIRECTORY/bin/node"
 {
   printf 'INSTALL_ROOT=%s\n' "$(quote_sh "$INSTALL_ROOT")"
   printf 'DATA_ROOT=%s\n' "$(quote_sh "$DATA_ROOT")"
+  printf 'STATE_ROOT=%s\n' "$(quote_sh "$DATA_ROOT/data")"
   printf 'CONFIG_ROOT=%s\n' "$(quote_sh "$CONFIG_ROOT")"
   printf 'RUNTIME_ROOT=%s\n' "$(quote_sh "$RUNTIME_ROOT")"
   printf 'BIN_ROOT=%s\n' "$(quote_sh "$BIN_ROOT")"

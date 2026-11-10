@@ -4071,3 +4071,21 @@ local recovery branch／remote tagはcurrent=`9f3e69c36821dd15e7703f205678641461
 Setupのstage inventory格納先とmetadataに記録する最終install pathを分離し、stage検査でmetadata path不一致になり得る欠陥を修正。Launcherは同梱safety helper、schema／product ID、install path一致、DataRoot ownership markerを検証し、失敗時に既定APPDATAへfallbackしない。通常起動はbounded markerのみを読み、Uninstall側の全tree/reparse検査を維持する。既存Windows runtime test fixtureを正式metadata／marker契約へ更新した。
 
 PowerShell 5.1 parser、既存fixtureのTypeScript AST構文解析、`docs:check`、最終`git diff --check`はPASS。test suite、実Setup／Launcher、Uninstall／Purge、update／rollback、clean WindowsでのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。編集前復旧refはlocal branch／remote tagともcurrent=`f9e00b2e80b8cb369e3ce24c1f8d3218df82cbc7`／previous=`9f3e69c36821dd15e7703f2056786414618b5e99`で一致。fetchはmainを取得した後、古いworktree metadataの削除をACL拒否され、worktree一覧はmainのみ。stale metadataは保留。実ユーザーデータ・registry・shortcut・外部作用なし。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
+
+## 2026-11-11 QE_BUILD — G03.03 Linux installed lifecycle・retained-state ownership
+
+開始時local／`main`／`origin/main`=`628d50783f723c718146dc22988cdbbb31b5ea62`。rev4.0の現行pin・三点正本・適用規定と前回からの同一G03.03作業状態を再照合した。local recovery branch／remote tagはcurrent=`628d50783f723c718146dc22988cdbbb31b5ea62`、previous=`819f7bcaa64b29999a4ca6e8734552324ce69dff`。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は未追跡のまま維持。`git fetch`後の古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadata削除はACL拒否のため変更せず保留し、worktree一覧に稼働中の別worktreeはない。
+
+Setup configが`state_root`を保存し、schema-v1 legacy configではsession directoryの親から推定する。Linux Setupが`DATA_ROOT/data`をenvへ書き、Launcherは保持済みDataRoot内のstate rootを束縛確認して`BLUE_TANUKI_STATE_ROOT`をexportする。RuntimeScheduleManager、runtime health、recovery snapshot／factory resetが共通のschedule path resolverを使い、明示schedule pathを保ち、既定schedule状態をretained state rootへ置く。初回installed smokeでInstallRoot内に空の`.blue-tanuki/schedules`が作られるのを発見し、runtime health consumerにも同じresolverを接続して是正した。Node 22.14では未定義の`DatabaseSync.isTransaction`をlease喪失として扱っていた実導入阻害も、明示`false`のみtransaction中とすることで修正した。
+
+Linux autostart Setup／Launcher／Uninstallは共通exact-content ownership guardを維持し、未所有・変更済み・symlink・非regular fileを保護する。通常Uninstallは隔離された製品root配下のsentinel、env、owner-state DBを保持し、reinstall後も保持を確認する。明示Purgeは当該smokeの隔離rootだけを削除した。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| Gateway project build | PASS：`corepack pnpm --filter @blue-tanuki/gateway build`。 |
+| lifecycle対象test | PASS：Vitest 5 files／59 tests（schedule、health、recovery、Setup config、owner lease）。Cron lane testへ専用durable event storeを与え、recovery fixtureへ期待されるFailureMemory fileを追加。 |
+| product installer／package validation／docs | PASS：product installer 5 tests、`validate:packaging`、`docs:check`、`git diff --check`。日本語基底移行負債76件は既存注意。 |
+| Linux installed package＋smoke | PASS：WSL Ubuntu 24.04 ext4。frozen dependency install、workspace build、Linux package generation、2,653-entry verification、Setup／Launch／GUI／first message／Repair／autostart／port conflict／Approval／audit normal+tampers／crash recovery／safe mode／state-root isolation／normal Uninstall retention／reinstall／explicit Purge。unsigned local-only package SHA-256=`91049331b4f85ae1459024a7303ed0cd7a9dedbd12a565f5c7e13c68fb1e392b`。 |
+| native Linux・複数distribution・実reboot・update失敗rollback・system service／Secret Service・全suite・5OS・QE_QC／QE_QA | NOT_RUN。WSL installed BUILDであり対象distribution QAではない。 |
+
+smokeの一時archive／product rootは除去済み。追跡したouter WSL workspace `/tmp/blue-tanuki-linux-installed-path-final.K6PxA4` とinner smoke rootは終了確認時に既に存在せず、該当製品processも残っていない。Windows PCやOneDriveの資料、ユーザーデータ、別repo、provider、外部作用には触れていない。local ignored build outputは再生成可能な開発成果として保持。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、G03.03全体、Linux native QA、QE_QC／QE_QA、release／公開／owner GOは未成立。

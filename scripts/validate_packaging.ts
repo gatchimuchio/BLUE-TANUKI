@@ -428,6 +428,9 @@ function main(): void {
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "approval_flow_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "crash_recovery_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "safe_mode_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "runtime_state_root_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "normal_uninstall_retention_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "reinstall_after_retention_result=pass");
 
   const macInstall = read("install/macos/install.sh");
   requireIncludes("install/macos/install.sh", macInstall, "Node.js 22.14.0");

@@ -1192,11 +1192,14 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
     log.includes("audit_tamper_result=pass") &&
     log.includes("crash_recovery_result=pass") &&
     log.includes("safe_mode_result=pass") &&
+    log.includes("runtime_state_root_result=pass") &&
+    log.includes("normal_uninstall_retention_result=pass") &&
+    log.includes("reinstall_after_retention_result=pass") &&
     log.includes("uninstall_result=pass");
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/uninstall`
+      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/runtime-state-root/normal-uninstall-retention/reinstall/purge`
       : `${platform} installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1215,6 +1218,9 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
       audit_tamper_result: log.includes("audit_tamper_result=pass"),
       crash_recovery_result: log.includes("crash_recovery_result=pass"),
       safe_mode_result: log.includes("safe_mode_result=pass"),
+      runtime_state_root_result: log.includes("runtime_state_root_result=pass"),
+      normal_uninstall_retention_result: log.includes("normal_uninstall_retention_result=pass"),
+      reinstall_after_retention_result: log.includes("reinstall_after_retention_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };

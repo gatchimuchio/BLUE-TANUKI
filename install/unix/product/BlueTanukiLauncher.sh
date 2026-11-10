@@ -29,6 +29,12 @@ fail() {
   exit 2
 }
 
+STATE_ROOT="${STATE_ROOT:-$DATA_ROOT/data}"
+[ "$STATE_ROOT" = "$DATA_ROOT/data" ] ||
+  fail "installed runtime state root does not match its retained data root"
+BLUE_TANUKI_STATE_ROOT="$STATE_ROOT"
+export BLUE_TANUKI_STATE_ROOT
+
 load_autostart_guard() {
   SAFE_TARGET_LIB="$SCRIPT_DIR/install/unix/safe-target.sh"
   if [ ! -f "$SAFE_TARGET_LIB" ] || [ -L "$SAFE_TARGET_LIB" ]; then

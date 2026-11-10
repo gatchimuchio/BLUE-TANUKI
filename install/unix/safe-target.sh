@@ -178,44 +178,91 @@ managed_tree_inventory() {
   bt_inventory_name=$3
   bt_tree_list_temp=$(mktemp "${TMPDIR:-/tmp}/blue-tanuki-inventory.XXXXXX") ||
     safe_target_fail "managed file inventory could not allocate a temporary file"
-  if ! (
-    cd "$bt_inventory_root" || exit 1
-    find . -mindepth 1 -exec sh -c '
-      metadata_name=$1
-      inventory_name=$2
-      shift 2
-      for entry do
-        relative=${entry#./}
-        [ "$relative" = "$metadata_name" ] && continue
-        [ "$relative" = "$inventory_name" ] && continue
-        if [ -L "$entry" ]; then
-          echo "error: managed tree contains a symlink: $relative" >&2
-          exit 1
-        elif [ -d "$entry" ]; then
-          kind=directory
-          size=0
-          digest=-
-        elif [ -f "$entry" ]; then
-          kind=file
-          size=$(wc -c < "$entry" | tr -d "[:space:]") || exit 1
-          if command -v sha256sum >/dev/null 2>&1; then
-            digest=$(sha256sum < "$entry" 2>/dev/null | cut -c1-64)
-          else
-            digest=$(shasum -a 256 < "$entry" 2>/dev/null | cut -c1-64) || exit 1
-          fi
-          [ "${#digest}" -eq 64 ] || exit 1
-        else
-          echo "error: managed tree contains an unsupported filesystem entry: $relative" >&2
-          exit 1
-        fi
-        path_hex=$(printf "%s" "$relative" | od -An -v -tx1 | tr -d "[:space:]") || exit 1
-        printf "%s|%s|%s|%s\\n" "$kind" "$size" "$digest" "$path_hex"
-      done
-    ' blue-tanuki-inventory "$bt_metadata_name" "$bt_inventory_name" {} +
-  ) > "$bt_tree_list_temp"; then
+  bt_inventory_chunk_dir=$(mktemp -d "${TMPDIR:-/tmp}/blue-tanuki-inventory.XXXXXX") || {
     rm -f -- "$bt_tree_list_temp"
+    safe_target_fail "managed file inventory could not allocate a temporary directory"
+  }
+  bt_inventory_paths_temp=
+  bt_inventory_worker='
+    metadata_name=$1
+    inventory_name=$2
+    chunk_dir=$3
+    shift 3
+    chunk_file=$(mktemp "$chunk_dir/chunk.XXXXXX") || exit 1
+    for entry do
+      relative=${entry#./}
+      [ "$relative" = "$metadata_name" ] && continue
+      [ "$relative" = "$inventory_name" ] && continue
+      if [ -L "$entry" ]; then
+        echo "error: managed tree contains a symlink: $relative" >&2
+        exit 1
+      elif [ -d "$entry" ]; then
+        kind=directory
+        size=0
+        digest=-
+      elif [ -f "$entry" ]; then
+        kind=file
+        size=$(wc -c < "$entry" | tr -d "[:space:]") || exit 1
+        if command -v sha256sum >/dev/null 2>&1; then
+          digest=$(sha256sum < "$entry" 2>/dev/null | cut -c1-64)
+        else
+          digest=$(shasum -a 256 < "$entry" 2>/dev/null | cut -c1-64) || exit 1
+        fi
+        [ "${#digest}" -eq 64 ] || exit 1
+      else
+        echo "error: managed tree contains an unsupported filesystem entry: $relative" >&2
+        exit 1
+      fi
+      path_hex=$(printf "%s" "$relative" | od -An -v -tx1 | tr -d "[:space:]") || exit 1
+      printf "%s|%s|%s|%s\\n" "$kind" "$size" "$digest" "$path_hex" >> "$chunk_file" || exit 1
+    done
+  '
+  bt_inventory_parallel=0
+  if xargs -0 -P 2 -n 1 true </dev/null >/dev/null 2>&1; then
+    bt_inventory_parallel=1
+    bt_inventory_paths_temp=$(mktemp "${TMPDIR:-/tmp}/blue-tanuki-inventory-paths.XXXXXX") || {
+      rm -f -- "$bt_tree_list_temp"
+      rm -rf -- "$bt_inventory_chunk_dir"
+      safe_target_fail "managed file inventory paths could not allocate a temporary file"
+    }
+  fi
+
+  if [ "$bt_inventory_parallel" = "1" ]; then
+    if ! (
+      cd "$bt_inventory_root" || exit 1
+      find . -mindepth 1 -print0 > "$bt_inventory_paths_temp" || exit 1
+      xargs -0 -P 4 -n 64 sh -c "$bt_inventory_worker" blue-tanuki-inventory \
+        "$bt_metadata_name" "$bt_inventory_name" "$bt_inventory_chunk_dir" < "$bt_inventory_paths_temp"
+    ); then
+      rm -f -- "$bt_tree_list_temp" "$bt_inventory_paths_temp"
+      rm -rf -- "$bt_inventory_chunk_dir"
+      safe_target_fail "managed tree could not be fully inspected: $bt_inventory_root"
+    fi
+    rm -f -- "$bt_inventory_paths_temp"
+  elif ! (
+    cd "$bt_inventory_root" || exit 1
+    find . -mindepth 1 -exec sh -c "$bt_inventory_worker" blue-tanuki-inventory \
+      "$bt_metadata_name" "$bt_inventory_name" "$bt_inventory_chunk_dir" {} +
+  ); then
+    rm -f -- "$bt_tree_list_temp"
+    rm -rf -- "$bt_inventory_chunk_dir"
     safe_target_fail "managed tree could not be fully inspected: $bt_inventory_root"
   fi
+
+  set -- "$bt_inventory_chunk_dir"/chunk.*
+  if [ -f "$1" ] && [ ! -L "$1" ]; then
+    if ! cat "$@" > "$bt_tree_list_temp"; then
+      rm -f -- "$bt_tree_list_temp"
+      rm -rf -- "$bt_inventory_chunk_dir"
+      safe_target_fail "managed tree inventory chunks could not be combined"
+    fi
+  else
+    : > "$bt_tree_list_temp" || {
+      rm -rf -- "$bt_inventory_chunk_dir"
+      safe_target_fail "managed tree inventory could not be initialized"
+    }
+  fi
+  rm -rf -- "$bt_inventory_chunk_dir"
   LC_ALL=C sort "$bt_tree_list_temp"
   bt_inventory_status=$?
   rm -f -- "$bt_tree_list_temp"

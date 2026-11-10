@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { HDSBrainHealthOptions, RuntimePathCheck } from "@blue-tanuki/hds-brain";
 import { AUDIT_FILENAME } from "./audit_config.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
+import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
 
 type Env = Record<string, string | undefined>;
 export type RuntimeHealthProbeMode = "read_only" | "repair_capable";
@@ -14,7 +15,7 @@ export async function probeGatewaySelfHealth(
   const mode = opts.mode ?? "repair_capable";
   const requiredDirectories = [
     env.BLUE_TANUKI_SESSION_DIR,
-    env.BLUE_TANUKI_SCHEDULES_DIR ?? ".blue-tanuki/schedules",
+    resolveRuntimeSchedulesDirectory(env),
   ].filter((item): item is string => Boolean(item && item.trim().length > 0));
 
   const storagePaths = [

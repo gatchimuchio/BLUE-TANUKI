@@ -31,6 +31,7 @@ import {
 } from "./recovery_inspection.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
+import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -703,8 +704,7 @@ function sourceSpecs(env: NodeJS.ProcessEnv): RecoverySourceSpec[] {
     {
       key: "schedules_dir",
       env_key: "BLUE_TANUKI_SCHEDULES_DIR",
-      source_path: env.BLUE_TANUKI_SCHEDULES_DIR ??
-        (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined),
+      source_path: resolveRuntimeSchedulesDirectory(env),
       backup_required: true,
     },
     {
@@ -2543,8 +2543,7 @@ export async function buildRecoverySnapshot(
   postActionObservation: RecoveryPostActionObservation = noRecoveryActionObservation("no_record"),
 ): Promise<RecoverySnapshot> {
   const failureMemoryFile = resolveFailureMemoryFilePath(env);
-  const schedulesDir = env.BLUE_TANUKI_SCHEDULES_DIR ??
-    (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
+  const schedulesDir = resolveRuntimeSchedulesDirectory(env);
   const backups = await recoveryBackupInventory(env);
   const envFile = await envBackups(env.BLUE_TANUKI_ENV_FILE);
   const { command_id_digest: _commandIdDigest, restored_state_digest: _restoredStateDigest,
@@ -2889,8 +2888,7 @@ export async function factoryResetRecovery(
     env.BLUE_TANUKI_MEMORY_DIR,
     env.BLUE_TANUKI_FAILURE_MEMORY_FILE,
     env.BLUE_TANUKI_FAILURE_MEMORY_DIR,
-    env.BLUE_TANUKI_SCHEDULES_DIR ??
-      (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined),
+    resolveRuntimeSchedulesDirectory(env),
     env.BLUE_TANUKI_LOG_DIR,
   ]
     .filter((value): value is string => Boolean(value))

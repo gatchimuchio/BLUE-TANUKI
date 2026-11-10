@@ -41,6 +41,7 @@ export interface SetupWebChatConfig {
 }
 
 export interface SetupPathConfig {
+  state_root: string;
   file_root: string;
   shell_root?: string;
   session_dir: string;
@@ -196,6 +197,7 @@ export function createDefaultSetupConfig(
       maintenance_token: generateSetupToken(tokenBytes),
     },
     paths: {
+      state_root: base,
       file_root: path.join(base, "files"),
       session_dir: path.join(base, "sessions"),
       audit_dir: path.join(base, "audit"),
@@ -226,6 +228,8 @@ export function validateSetupConfig(
   config.composio ??= { dry_run: true, live_execution: false };
   config.composio.dry_run = config.composio.dry_run !== false;
   config.composio.live_execution = config.composio.live_execution === true;
+  // Legacy schema-v1 setup files did not persist a dedicated runtime state root.
+  config.paths.state_root ??= path.resolve(config.paths.session_dir, "..");
   config.paths.failure_memory_dir ??= path.join(path.resolve(config.paths.session_dir), "failure-memory");
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
@@ -333,6 +337,7 @@ export function validateSetupConfig(
     throw new Error("webchat.maintenance_token must differ from WebChat tokens");
   }
 
+  validatePath(config.paths.state_root, "paths.state_root");
   validatePath(config.paths.file_root, "paths.file_root");
   if (config.paths.shell_root !== undefined && config.paths.shell_root.trim().length > 0) {
     validatePath(config.paths.shell_root, "paths.shell_root");
@@ -422,6 +427,7 @@ export function setupConfigFromEnv(
   config.paths.shell_root = env.BLUE_TANUKI_SHELL_ROOT;
   config.paths.session_dir =
     env.BLUE_TANUKI_SESSION_DIR ?? config.paths.session_dir;
+  config.paths.state_root = env.BLUE_TANUKI_STATE_ROOT ?? path.resolve(config.paths.session_dir, "..");
   config.paths.audit_dir =
     env.BLUE_TANUKI_AUDIT_DIR ?? config.paths.audit_dir;
   config.paths.failure_memory_file = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
@@ -464,6 +470,7 @@ export function setupConfigToEnv(
     BLUE_TANUKI_OWNER_TOKEN: config.webchat.owner_token,
     BLUE_TANUKI_MAINTENANCE_TOKEN: config.webchat.maintenance_token,
     BLUE_TANUKI_SETTINGS_TOKEN: config.settings.token,
+    BLUE_TANUKI_STATE_ROOT: path.resolve(config.paths.state_root),
     BLUE_TANUKI_FILE_ROOT: path.resolve(config.paths.file_root),
     BLUE_TANUKI_SESSION_DIR: path.resolve(config.paths.session_dir),
     BLUE_TANUKI_AUDIT_DIR: path.resolve(config.paths.audit_dir),
@@ -614,6 +621,7 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_OWNER_TOKEN",
     "BLUE_TANUKI_MAINTENANCE_TOKEN",
     "BLUE_TANUKI_SETTINGS_TOKEN",
+    "BLUE_TANUKI_STATE_ROOT",
     "BLUE_TANUKI_FILE_ROOT",
     "BLUE_TANUKI_SHELL_ROOT",
     "BLUE_TANUKI_SESSION_DIR",

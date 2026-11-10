@@ -366,6 +366,7 @@ async function ensureWritableTarget(outputPath: string, force: boolean): Promise
 }
 
 async function ensureRuntimeDirs(config: BlueTanukiSetupConfig): Promise<void> {
+  await fs.mkdir(config.paths.state_root, { recursive: true });
   await fs.mkdir(config.paths.file_root, { recursive: true });
   await fs.mkdir(config.paths.session_dir, { recursive: true });
   await fs.mkdir(config.paths.audit_dir, { recursive: true });

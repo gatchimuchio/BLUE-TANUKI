@@ -18,6 +18,7 @@ type UnixPlatform = "linux" | "macos";
 type UnixArch = "x64" | "arm64";
 
 const COMMAND_TIMEOUT_MS = 120_000;
+const INSTALLER_TRANSACTION_TIMEOUT_MS = 600_000;
 const GATEWAY_READY_TIMEOUT_MS = 30_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
@@ -314,6 +315,25 @@ function readPidFile(file: string): number | undefined {
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
+function listDirectoryTreeForSmoke(root: string, limit = 80): string[] {
+  const result: string[] = [];
+  const pending = [{ directory: root, relative: "" }];
+  while (pending.length > 0 && result.length < limit) {
+    const current = pending.pop();
+    if (!current) break;
+    for (const entry of readdirSync(current.directory, { withFileTypes: true })) {
+      const relative = path.join(current.relative, entry.name);
+      result.push(entry.isDirectory() ? `${relative}/` : relative);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        pending.push({ directory: path.join(current.directory, entry.name), relative });
+      }
+      if (result.length >= limit) break;
+    }
+  }
+  if (pending.length > 0) result.push("…");
+  return result.sort();
+}
+
 async function waitForPidChange(file: string, previousPid: number, timeoutMs: number): Promise<number | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -498,7 +518,7 @@ async function main(): Promise<void> {
       "--bin-root",
       binRoot,
       "--no-launch",
-    ], packageDir, "installer setup", 180_000, env);
+    ], packageDir, "installer setup", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     console.log("installer_archive_setup_result=pass");
 
     const launcher = path.join(installRoot, "BlueTanukiLauncher.sh");
@@ -516,9 +536,14 @@ async function main(): Promise<void> {
       runtimeRoot,
       "--bin-root",
       binRoot,
+      "--force",
       "--no-launch",
-    ], packageDir, "installer repair install", 180_000, env);
+    ], packageDir, "installer repair install", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     const installedEnv = parseEnvFile(envFile);
+    const expectedStateRoot = path.join(dataRoot, "data");
+    if (installedEnv.BLUE_TANUKI_STATE_ROOT !== expectedStateRoot) {
+      throw new Error("installed environment state root does not match retained data root");
+    }
     assertEnvValuesRetained(envBeforeRepair, installedEnv, [
       "WEBCHAT_TOKEN",
       "WEBCHAT_RESUME_TOKEN",
@@ -565,6 +590,18 @@ async function main(): Promise<void> {
     stopped = false;
     const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
     if (!healthReady) throw new Error("installed gateway healthz did not become ready");
+    const installerMetadata = readFileSync(path.join(installRoot, "blue-tanuki-install.env"), "utf8");
+    if (!installerMetadata.split(/\r?\n/u).includes(`STATE_ROOT='${expectedStateRoot}'`)) {
+      throw new Error("launcher metadata state root does not match retained data root");
+    }
+    if (platform === "linux") {
+      const gatewayPid = readPidFile(path.join(dataRoot, "blue-tanuki.pid"));
+      if (!gatewayPid) throw new Error("installed Gateway PID is unavailable for state-root environment check");
+      const processEnvironment = readFileSync(`/proc/${gatewayPid}/environ`, "utf8").split("\0");
+      if (!processEnvironment.includes(`BLUE_TANUKI_STATE_ROOT=${expectedStateRoot}`)) {
+        throw new Error("installed Gateway process did not inherit the retained data state root");
+      }
+    }
     console.log("launch_result=pass");
 
     const guiResponse = await fetchWithTimeout(`http://127.0.0.1:${port}/app`, undefined, FETCH_TIMEOUT_MS, "app GET");
@@ -592,6 +629,22 @@ async function main(): Promise<void> {
       throw new Error(`first message smoke failed hello=${firstMessage.hello} channel_send=${firstMessage.channelSend}`);
     }
     console.log("first_message_result=pass");
+
+    const runtimeOwnerState = path.join(
+      dataRoot,
+      "data",
+      "private-state",
+      "gateway-runtime",
+      "owner-state.sqlite",
+    );
+    if (!existsSync(runtimeOwnerState)) {
+      throw new Error("installed runtime owner state was not created under the retained data root");
+    }
+    const leakedStateRoot = path.join(installRoot, ".blue-tanuki");
+    if (existsSync(leakedStateRoot)) {
+      const leakedEntries = listDirectoryTreeForSmoke(leakedStateRoot);
+      throw new Error(`installed runtime state leaked into the managed install root: ${leakedEntries.join(",")}`);
+    }
 
     const resumeToken = installedEnv.WEBCHAT_RESUME_TOKEN;
     if (!resumeToken) throw new Error("WEBCHAT_RESUME_TOKEN missing from installed env file");
@@ -674,9 +727,62 @@ async function main(): Promise<void> {
     run("sh", [launcher, "stop"], installRoot, "launcher safe mode stop", 60_000, env);
     stopped = true;
 
-    run("sh", [path.join(installRoot, "BlueTanukiUninstall.sh"), "--purge", "--quiet"], work, "installer uninstall", 120_000, env);
+    const safeModeStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
+    if (!safeModeStoppedReady) throw new Error("installed gateway healthz stayed reachable after safe mode stop");
+
+    const retainedUserFile = path.join(dataRoot, "data", "g03-retention-sentinel.txt");
+    const retainedUserData = "G03.03 isolated user data survives normal uninstall\n";
+    run("mkdir", ["-p", path.dirname(retainedUserFile)], work, "create isolated retained data", 10_000, env);
+    writeFileSync(retainedUserFile, retainedUserData, "utf8");
+    const envBeforeUninstall = parseEnvFile(envFile);
+    const uninstaller = path.join(installRoot, "BlueTanukiUninstall.sh");
+    run("sh", [uninstaller, "--quiet"], work, "installer normal uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("install root still exists after normal uninstall");
+    if (!(await waitForAbsent(runtimeRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("runtime root still exists after normal uninstall");
+    if (!(await waitForAbsent(path.join(binRoot, "blue-tanuki"), UNINSTALL_TIMEOUT_MS))) {
+      throw new Error("managed launcher still exists after normal uninstall");
+    }
+    if (readFileSync(retainedUserFile, "utf8") !== retainedUserData) {
+      throw new Error("normal uninstall changed or removed isolated user data");
+    }
+    if (!existsSync(runtimeOwnerState)) {
+      throw new Error("normal uninstall changed or removed runtime owner state under the retained data root");
+    }
+    if (JSON.stringify(parseEnvFile(envFile)) !== JSON.stringify(envBeforeUninstall)) {
+      throw new Error("normal uninstall changed or removed the isolated env file");
+    }
+    console.log("normal_uninstall_retention_result=pass");
+
+    run("sh", [
+      setup,
+      "--install-root",
+      installRoot,
+      "--data-root",
+      dataRoot,
+      "--config-root",
+      configRoot,
+      "--runtime-root",
+      runtimeRoot,
+      "--bin-root",
+      binRoot,
+      "--no-launch",
+    ], packageDir, "installer reinstall after retained uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    if (readFileSync(retainedUserFile, "utf8") !== retainedUserData) {
+      throw new Error("reinstall after normal uninstall changed or removed isolated user data");
+    }
+    assertEnvValuesRetained(envBeforeUninstall, parseEnvFile(envFile), [
+      "WEBCHAT_TOKEN",
+      "WEBCHAT_RESUME_TOKEN",
+      "BLUE_TANUKI_MAINTENANCE_TOKEN",
+      "BLUE_TANUKI_SETTINGS_TOKEN",
+    ]);
+    console.log("reinstall_after_retention_result=pass");
+
+    run("sh", [path.join(installRoot, "BlueTanukiUninstall.sh"), "--purge", "--quiet"], work, "installer purge uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("install root still exists after uninstall");
+    if (!(await waitForAbsent(runtimeRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("runtime root still exists after purge uninstall");
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("data root still exists after purge uninstall");
+    if (!(await waitForAbsent(configRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("config root still exists after purge uninstall");
 
     console.log(INSTALLED_SMOKE_MARKERS[platform]);
     console.log("installer_archive_setup_result=pass");
@@ -691,6 +797,9 @@ async function main(): Promise<void> {
     console.log("audit_tamper_result=pass");
     console.log("crash_recovery_result=pass");
     console.log("safe_mode_result=pass");
+    console.log("runtime_state_root_result=pass");
+    console.log("normal_uninstall_retention_result=pass");
+    console.log("reinstall_after_retention_result=pass");
     console.log("uninstall_result=pass");
   } finally {
     const launcher = path.join(installRoot, "BlueTanukiLauncher.sh");

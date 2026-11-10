@@ -6,9 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G03.03 Linux autostart ownership guard（限定consumer）
+### 直近BUILD_BATCH — G03.03 Linux installed lifecycle・retained-state ownership（限定consumer）
 
-Linux製品Launcherのenable／disable／statusとUninstallを、共通のexact-content ownership判定へ接続した。既存の同じ`Exec`行だけを持つ設定、変更済み設定、symlink／非regular fileは保持し、空き時だけLinux autostartをnoclobberで作成する。Linux default disabled、macOS／Windows経路は維持。WSL Ubuntu 24.04で変更shell構文とfocused autostart fixture、`safe_target_unix.sh`全fixture（`unix_target_guard=pass`）を確認した。native Linux installed製品、実データのrollback／purge、全suite、5OS、QE_QC／QE_QAは未確認。G03.03のupdate・recovery・data retention全体は未成立で、次consumerとして継続する。
+Setupが保存する`state_root`をLinux product envへ渡し、Launcherが保持中DataRoot内のrootとして検証して`BLUE_TANUKI_STATE_ROOT`をexportする。旧schema-v1設定はsession directoryの親をstate rootへ互換推定する。schedule store、runtime health、recovery snapshot／factory resetは同一resolverを使用し、明示schedule directoryを維持しつつ既定状態をstate root配下へ置く。Node 22.14の未定義`DatabaseSync.isTransaction`をowner lease喪失と誤認した実導入時のruntime欠陥も是正した。通常Uninstallではsentinel／env／owner-state DBを保持し、再Setup後の保持、隔離rootへの明示Purgeを確認した。Linux autostartのexact-content ownership guardも共通Setup／Launcher／Uninstall consumerで維持する。
+
+Gateway lifecycle focused tests 5 files／59 tests、Gateway build、product installer 5 tests、`validate:packaging`、`docs:check`、`git diff --check`はPASS。WSL Ubuntu 24.04 ext4でfrozen install、build、Linux package生成・2,653 entry検証、installed Setup／Launch／first message／Repair／autostart／Approval／audit／crash recovery／safe mode／state-root隔離／通常Uninstall保持／reinstall／明示Purgeを通した。artifact SHA-256=`91049331b4f85ae1459024a7303ed0cd7a9dedbd12a565f5c7e13c68fb1e392b`。これは限定WSL BUILDでありnative Linux QAではない。複数distribution、実reboot、update失敗rollback、system service／Secret Service、全suite、5OS、QE_QC／QE_QAは未確認。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はLinux update失敗時の復旧・再起動後の状態継続・rollback／残留process consumerへ進む。
 
 ### 前段完了BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
 

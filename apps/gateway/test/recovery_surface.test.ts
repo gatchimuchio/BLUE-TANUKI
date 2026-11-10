@@ -332,6 +332,27 @@ describe("legacy canonical snapshot inspection", () => {
 });
 
 describe("buildRecoverySnapshot", () => {
+  it("resolves the default schedule recovery path beneath runtime state root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-schedules-"));
+    try {
+      const stateRoot = path.join(root, "runtime-state");
+      const schedulesDir = path.join(stateRoot, "schedules");
+      await mkdir(schedulesDir, { recursive: true });
+
+      const snapshot = await buildRecoverySnapshot({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+
+      expect(snapshot.runtime_paths.schedules_dir).toMatchObject({
+        configured: true,
+        path: schedulesDir,
+        exists: true,
+        kind: "directory",
+        backup_required: true,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports env backup inventory and recovery control boundaries without exposing env contents", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-"));
     try {
@@ -470,6 +491,7 @@ describe("buildRecoverySnapshot", () => {
       await writeFile(path.join(auditDir, "audit.jsonl"), "{}\n", "utf8");
       await writeFile(sessionFile, "session-before\n", "utf8");
       await writeFile(memoryFile, "memory-before\n", "utf8");
+      await writeFile(path.join(failureMemoryDir, "failure-memory.json"), "{\"records\":[]}\n", "utf8");
       await writeFile(path.join(failureMemoryDir, "failure.jsonl"), "failure-before\n", "utf8");
       await writeFile(path.join(schedulesDir, "jobs.json"), "[]\n", "utf8");
       await writeFile(path.join(logsDir, "gateway.log"), "log-before\n", "utf8");

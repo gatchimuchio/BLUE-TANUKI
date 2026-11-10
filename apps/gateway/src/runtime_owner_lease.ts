@@ -78,7 +78,10 @@ export class GatewayRuntimeOwnerLease {
   }
 
   assertActive(): void {
-    if (this.closed || !this.lockDb.isTransaction) throw new Error("gateway_runtime_owner_lease_lost");
+    // DatabaseSync.isTransaction was added in Node 22.16. The bundled
+    // Node 22.14 baseline has no such property; this private connection is
+    // otherwise held for the lease lifetime and is never committed here.
+    if (this.closed || this.lockDb.isTransaction === false) throw new Error("gateway_runtime_owner_lease_lost");
     try {
       const row = this.stateDb.prepare(
         "SELECT generation, execution_epoch, host_audience_digest FROM gateway_owner_state WHERE singleton=1",

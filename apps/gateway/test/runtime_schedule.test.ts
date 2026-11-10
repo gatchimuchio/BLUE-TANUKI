@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { evaluateApproval } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { cronPayloadHash, CronSchedulerChannel } from "../src/cron_channel.js";
+import { GatewayCronEventStore } from "../src/cron_event_store.js";
 import {
   RuntimeScheduleManager,
   runtimeScheduleMutationCommand,
@@ -59,6 +60,29 @@ function evaluation(cmd: ExecuteCommand) {
 }
 
 describe("RuntimeScheduleManager", () => {
+  it("stores schedules beneath the configured runtime state root by default", async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-state-root-"));
+    try {
+      const m = await RuntimeScheduleManager.open({
+        env: { BLUE_TANUKI_STATE_ROOT: stateRoot },
+        now: () => 100,
+      });
+      const cmd = command("schedule.create", {
+        id: "state-root-default",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic schedule content",
+        interval_ms: 120000,
+      });
+      expect(m.preparePending(cmd, evaluation(cmd), { request_id: "req-state-root", actor: "alice" }).ok).toBe(true);
+      await approve(m, cmd);
+
+      expect(existsSync(join(stateRoot, "schedules", "runtime-schedules.json"))).toBe(true);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("creates a pending schedule only after approval and never exposes content in snapshots", async () => {
     const lifecycle: unknown[] = [];
     const m = await manager({ lifecycle });
@@ -396,7 +420,9 @@ describe("RuntimeScheduleManager", () => {
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
     const received: unknown[] = [];
     const m = await manager();
-    const cron = new CronSchedulerChannel({ tasks: [], log: () => undefined });
+    const root = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-cron-lane-"));
+    const eventStore = new GatewayCronEventStore(join(root, "cron-events.sqlite"));
+    const cron = new CronSchedulerChannel({ tasks: [], event_store: eventStore, log: () => undefined });
     m.attachScheduler(cron);
     await cron.start(async (req) => {
       received.push(req);
@@ -425,6 +451,8 @@ describe("RuntimeScheduleManager", () => {
       });
     } finally {
       await cron.stop();
+      eventStore.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

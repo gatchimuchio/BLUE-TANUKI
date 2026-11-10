@@ -75,4 +75,15 @@ describe("downloadable product installer packages", () => {
     expect(uninstall).not.toMatch(/resident-stop[^\n]*\|\|\s*true/);
     expect(uninstall).not.toContain("resident-autostart-disable");
   });
+
+  it("keeps Unix runtime state under the retained data root", () => {
+    const setup = read("install/unix/product/BlueTanukiSetup.sh");
+    const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
+
+    expect(setup).toContain('printf \'STATE_ROOT=%s\\n\' "$(quote_sh "$DATA_ROOT/data")"');
+    expect(launcher).toContain('STATE_ROOT="${STATE_ROOT:-$DATA_ROOT/data}"');
+    expect(launcher).toContain('[ "$STATE_ROOT" = "$DATA_ROOT/data" ]');
+    expect(launcher).toContain('BLUE_TANUKI_STATE_ROOT="$STATE_ROOT"');
+    expect(launcher).toContain("export BLUE_TANUKI_STATE_ROOT");
+  });
 });

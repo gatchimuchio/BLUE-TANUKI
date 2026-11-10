@@ -28,6 +28,7 @@ describe("setup_config", () => {
     const env = setupConfigToEnv(config);
     expect(env.LLM_BACKEND).toBe("stub");
     expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
+    expect(env.BLUE_TANUKI_STATE_ROOT).toBe(path.resolve("local-data"));
     expect(env.BLUE_TANUKI_FILE_ROOT).toBe(path.resolve("local-data", "files"));
     expect(env.BLUE_TANUKI_FAILURE_MEMORY_DIR).toBe(path.resolve("local-data", "failure-memory"));
     expect(env.BLUE_TANUKI_SHELL_ROOT).toBeUndefined();
@@ -214,6 +215,7 @@ describe("setup_config", () => {
       WEBCHAT_TOKEN: "webchat-token-123456",
       WEBCHAT_RESUME_TOKEN: "resume-token-123456",
       BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+      BLUE_TANUKI_STATE_ROOT: "runtime-state",
       BLUE_TANUKI_FILE_ROOT: "sandbox",
       BLUE_TANUKI_SESSION_DIR: "sessions",
       BLUE_TANUKI_AUDIT_DIR: "audit",
@@ -222,6 +224,8 @@ describe("setup_config", () => {
     expect(config.llm.provider).toBe("openai-compatible");
     expect(config.llm.model).toBe("model-a");
     expect(config.settings.token).toBe("settings-token-123456");
+    expect(config.paths.state_root).toBe("runtime-state");
+    expect(setupConfigToEnv(config).BLUE_TANUKI_STATE_ROOT).toBe(path.resolve("runtime-state"));
     expect(config.paths.failure_memory_dir).toBe("failure-memory-data");
   });
 
@@ -237,6 +241,7 @@ describe("setup_config", () => {
     expect(renderSetupEnvFile(explicitFile)).toContain("BLUE_TANUKI_FAILURE_MEMORY_FILE=");
 
     const legacy = setupConfigFromEnv({ BLUE_TANUKI_SESSION_DIR: path.join("data", "sessions") });
+    expect(legacy.paths.state_root).toBe(path.resolve("data"));
     const legacyDir = path.join(path.resolve("data", "sessions"), "failure-memory");
     expect(legacy.paths.failure_memory_dir).toBe(legacyDir);
     expect(setupConfigToEnv(legacy).BLUE_TANUKI_FAILURE_MEMORY_DIR).toBe(legacyDir);

@@ -11,6 +11,7 @@ import {
   type CronSchedulerChannel,
   type CronTaskOptions,
 } from "./cron_channel.js";
+import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
 
 type Env = Record<string, string | undefined>;
 type RuntimeScheduleOperation = "create" | "update" | "delete";
@@ -118,7 +119,7 @@ export class RuntimeScheduleManager {
 
   static async open(opts: RuntimeScheduleManagerOptions = {}): Promise<RuntimeScheduleManager> {
     const env = opts.env ?? process.env;
-    const dir = path.resolve(env.BLUE_TANUKI_SCHEDULES_DIR ?? ".blue-tanuki/schedules");
+    const dir = resolveRuntimeSchedulesDirectory(env);
     const file = path.join(dir, "runtime-schedules.json");
     const approvalTimeoutMs = positiveEnvInt(env.BLUE_TANUKI_SCHEDULE_APPROVAL_TIMEOUT_MS, 86_400_000);
     const schedules = await readSchedulesFile(file);
