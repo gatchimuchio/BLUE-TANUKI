@@ -8,6 +8,8 @@
 
 Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreference = Stop`によりSetupを中断しないよう、JSON stdoutとstderr logを分離してNode終了コードで判定する。Launcher Doctorにも同じstderr境界を適用した。installed smokeは一意の隔離profile／DataRoot、system-only child PATH、レジストリ事前確認、実行中Gateway PIDの事前検査を使う。実行中の不明Gatewayを停止・更新・削除しない。
 
+ACTIONS_SCOPE: ローカルWindowsではPID `17528`と保留中test installを安全に解除できないため、現行`main` SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→Windows package生成／verify→既存`smoke:windows-installed`を補助実行する。workflowは`contents: read`のみ、secret／artifact uploadなし。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
+
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | Windows package生成／verifier | PASS：2,544 entries、artifact SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`。 |
@@ -22,7 +24,7 @@ Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreferenc
 
 UNIT_ID: G02.01／G02.02 Windows package install-to-first-message consumer
 STATUS: BUILD_GAP（package→初回Setup→Doctorは接続・実行。clean環境非依存、Launcher／first message、後片付けは未成立）
-NEXT_REQUIRED_CONSUMER: 既存Gatewayが稼働していないWindows検証環境で、保留中のsmoke installを正規Uninstallし、system-only PATHでSetup／Repair→Launcher start→health→合成WebChat first message→stop／Uninstallを再実行する。
+NEXT_REQUIRED_CONSUMER: workflow_dispatchで現行main上のWindows package build／verify／installed smokeを実行し、Setup／Repair→Launcher start→health→合成WebChat first message→stop／Uninstallを一気通貫で観測する。ローカルの保留installはPID `17528`が存在しない時だけ正規Uninstallし、別に後片付けを確認する。
 SAFETY_STATUS: active processのDataRootが不明な場合は停止・更新・削除しない。現在のsmoke installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`に残し、別processによる削除を保留する。
 LOCAL_ASSET_STATUS: `%LOCALAPPDATA%\Codex\BLUE-TANUKI-smoke\windows-installed-p1o6Yy`は隔離package／Setup stageの生成物（10,143 files／186,848,072 bytes）で、資格情報形式・DataRoot・registry/process参照がないことを確認してWindowsゴミ箱へ移動済み。元path消失・ゴミ箱収容を確認。current artifact `release/windows/codex-8fcd06c9-r2`は保持。OneDrive同期領域内のpackage/probe生成物は同領域の保護により保持し、片付け扱いにしない。
 CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始HEAD=`8fcd06c9b9567e55ad96c4bbab00d122859a4eb5`。保護添付2領域は変更せず、別repo／provider／外部業務作用／公開は対象外。

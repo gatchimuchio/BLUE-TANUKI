@@ -8,7 +8,7 @@
 
 ### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-Windows artifact（2,544 entries、SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`）の検証、PowerShell 5.1 parser、Doctor stderr分離、対象static test 1件はPASS。実package初回Setupは隔離rootへPASSしたが、Repairで既存Gateway PID `17528`のDataRootを確認できずSetupがfail-closedした。停止・更新・削除は行われず、Launch／first message／Uninstallの確認はNOT_RUN。smokeの新しい事前検査は同PIDを確認してSetup前に中止する。test用installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`へ保留。clean Windows profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。次はGateway停止済みの隔離Windows環境で保留installを正規Uninstallし、system-only PATHでSetupからfirst messageまでつなぐ。
+Windows artifact（2,544 entries、SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`）の検証、PowerShell 5.1 parser、Doctor stderr分離、対象static test 1件はPASS。実package初回Setupは隔離rootへPASSしたが、Repairで既存Gateway PID `17528`のDataRootを確認できずSetupがfail-closedした。停止・更新・削除は行われず、Launch／first message／Uninstallの確認はNOT_RUN。smokeの新しい事前検査は同PIDを確認してSetup前に中止する。test用installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`へ保留。次consumerのBUILD疎通には、現行main SHAを固定する`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→package verify→隔離installed smokeを行う。workflowはread-only token scopeとし、secret・artifact upload・release作用を持たない。これはWindows Server runner上の限定consumer evidenceであり、Windows Desktop QAを代替しない。local PID `17528`と保留rootの安全確認・正規Uninstallは別に残す。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
