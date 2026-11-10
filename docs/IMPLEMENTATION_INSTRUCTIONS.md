@@ -10,11 +10,13 @@ Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreferenc
 
 Launcherのprocess inventoryは、相対`apps/gateway/dist/main.js --serve`という文字列だけで別processを自install所有と誤認しないよう修正した。実際のNode process名を確認し、相対entryは自installのbundled Node imageまたは一致する`--env-file`に束縛する。絶対entry・同一runtimeなのにDataRoot不明・process image不明は引き続きfail-closedとする。現PID `17528`はworking directoryがrepo root、実行Nodeが別install配下、state/session rootがsmoke DataRoot外、`--env-file`なしと観測した。process自体は変更していない。
 
-ACTIONS_SCOPE: 現行`main` SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→Windows package生成／verify→既存`smoke:windows-installed`を補助実行する。workflowは`contents: read`のみ、secret／artifact uploadなし。今回、GitHub CLIには認証sessionがなく、GitHub connectorにもdispatch操作がないことを確認した。Computer Useは現在URLを確実に特定できず停止し、runは作成されていない。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
+ACTIONS_SCOPE: `workflow_dispatch`専用のWindows 2022 hosted runnerを使用する。workflowは`contents: read`のみで、secret／artifact uploadはない。run `42917086029`はmain SHA `937ea684b4788cadbc53deaeb5aff10ab93d1c18`で実行し、checkout／main ref照合／frozen dependency installはPASS、workspace buildはFAILした。原因はWindows isolationの`rust-toolchain.toml`でversionとhost target tupleを`channel`へ連結していたこと。package生成／verify／installed smokeはskip。channelを`1.95.0`へ修正し、手元Windowsのcore buildと全workspace `pnpm build`はPASS。修正版commit上で同workflowを再実行し、package生成／verify／installed smokeの結果を記録する。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| Windows package生成／verifier | PASS：2,544 entries、artifact SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`。 |
+| 前commitのWindows package生成／verifier | PASS：2,544 entries、artifact SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`。修正版commitの再生成ではない。 |
+| Windows 2022 hosted workspace build（run `42917086029`、SHA `937ea684`） | FAIL：frozen installまでPASS。`packages/blue-tanuki/native/windows-isolation/rust-toolchain.toml`の不正なchannel形式でcore build失敗。package生成／verify／installed smokeはSKIP。 |
+| Rust toolchain修正後のWindows local core build／workspace build | PASS：`pnpm --filter @blue-tanuki/core build`、`pnpm build`。hosted修正版runはGitHubへ反映後に実行する。 |
 | Setup／Launcher PowerShell 5.1 parser、Doctor stderr分離のsynthetic capture | PASS。 |
 | `windows_product_installer.test.ts`のLauncher／Doctor／smoke契約test | PASS：1件、18件skip。 |
 | relative Gateway process ownership focused test | PASS：1件、19件skip。別Nodeの相対entryと非Node command-line文字列を無視し、同一runtimeでDataRoot不明／絶対install entryの候補は保留する。これはisolated fixture上のコード確認で、installed smoke証拠ではない。 |
@@ -22,15 +24,15 @@ ACTIONS_SCOPE: 現行`main` SHA固定の`workflow_dispatch`専用Windows 2022 ho
 | 実Windows package Setup初回導入 | PASS：隔離install／DataRootへ導入し、Doctor JSONとstderr logを記録。ホスト自体はclean profileではなくNode／pnpm等を含むため、開発tool非依存証明ではない。 |
 | Repair／Launcher start／WebChat first message／Uninstall smoke | NOT_RUN：前回のinstalled runではPID `17528`の曖昧なprocess分類によりfail-closedした。今回その誤分類を修正してfixture testをPASSしたが、更新済みpackageでのinstalled再実行はまだ行っていない。 |
 | smoke active-Gateway／registry preflight | BLOCKED：PID `17528`はrepo rootからの相対Gateway process、state/session rootは別の一時領域と確認した。現在のHKCU uninstall registrationは保留中smoke installを指すため、新規隔離smokeはclean registry条件を満たさない。どちらも停止・削除・上書きせず保持。 |
-| `docs:check`、`git diff --check` | PASS。日本語基底の移行負債76件は既存注意。 |
+| `docs:check`、`git diff --check` | PASS：docs check／日本語基底監査／license gate、`git diff --check`。日本語基底の移行負債76件は既存注意。 |
 | clean Windows user／OS、5OS、QE_QC／QE_QA | 未実施または未成立。 |
 
 UNIT_ID: G02.01／G02.02 Windows package install-to-first-message consumer
 STATUS: BUILD_GAP（package→初回Setup→Doctorは接続・実行。clean環境非依存、Launcher／first message、後片付けは未成立）
-NEXT_REQUIRED_CONSUMER: workflow_dispatchで現行main上のWindows package build／verify／installed smokeを実行し、Setup／Repair→Launcher start→health→合成WebChat first message→stop／Uninstallを一気通貫で観測する。ローカルの保留installはPID `17528`が存在しない時だけ正規Uninstallし、別に後片付けを確認する。
+NEXT_REQUIRED_CONSUMER: 修正後main SHAでworkflow_dispatchのWindows package build／verify／installed smokeを実行する。ローカルの保留installはPID `17528`が存在しない時だけ正規Uninstallし、別に後片付けを確認する。
 SAFETY_STATUS: active processのDataRootが不明な場合は停止・更新・削除しない。現在のsmoke installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`に残し、別processによる削除を保留する。
 LOCAL_ASSET_STATUS: `%LOCALAPPDATA%\Codex\BLUE-TANUKI-smoke\windows-installed-p1o6Yy`は隔離package／Setup stageの生成物（10,143 files／186,848,072 bytes）で、資格情報形式・DataRoot・registry/process参照がないことを確認してWindowsゴミ箱へ移動済み。元path消失・ゴミ箱収容を確認。current artifact `release/windows/codex-8fcd06c9-r2`は保持。OneDrive同期領域内のpackage/probe生成物は同領域の保護により保持し、片付け扱いにしない。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始HEAD=`8fcd06c9b9567e55ad96c4bbab00d122859a4eb5`。保護添付2領域は変更せず、別repo／provider／外部業務作用／公開は対象外。
+CURRENT_HEAD_AND_DIRTY_OWNER: Rust toolchain修正単位の開始HEAD=`937ea684b4788cadbc53deaeb5aff10ab93d1c18`。今回のtracked差分はtoolchain pin／READMEと本作業の状態・履歴記録のみ。生成された`native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe`と`dist/native/blue-tanuki-windows-isolation.exe`（各286,720 bytes）はOneDrive同期workspace内のbuild outputとして保持し、回収対象にしない。保護添付2領域は変更せず、別repo／provider／外部業務作用／公開は対象外。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 

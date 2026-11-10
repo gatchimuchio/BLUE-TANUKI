@@ -12,7 +12,9 @@
 
 今回、PID `17528`はrepo rootをworking directoryとし、smoke installとは別のNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。Launcherのprocess inventoryが相対Gateway引数だけで別processを自installと誤認する欠陥を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。PIDやtest dataは停止・更新・削除していない。
 
-更新済みpackageのinstalled Repair／Launcher start／health／合成WebChat first message／stop／UninstallはNOT_RUN。現在のHKCU uninstall registrationは保留中smoke installを指すため、新規isolated smokeはclean registry条件を満たさず、状態を変えず保持した。GitHub CLIには認証sessionがなく、接続済みGitHub toolにもdispatch操作がない。Computer Useは現在URLを特定できず停止し、workflow runは作成されていない。次consumerは現行main SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→package verify→isolated installed smokeを通すこと。workflowはread-only token scope、secret／artifact uploadなしとし、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
+手動Windows 2022 run `42917086029`はmain SHA `937ea684b4788cadbc53deaeb5aff10ab93d1c18`をcheckoutし、ref照合とfrozen dependency installまでPASSしたが、workspace buildでFAILした。`rust-toolchain.toml`のchannelにversionとhost tupleを連結したためで、Windows isolationのRust buildがtoolchain名を拒否し、package生成／verify／installed smokeはSKIPだった。channelを`1.95.0`へ修正し、ローカルWindowsのcore buildと全workspace `pnpm build`はPASS。修正版SHAでのhosted runを次consumerとして残す。
+
+修正版packageのhosted再build後に行うinstalled Repair／Launcher start／health／合成WebChat first message／stop／UninstallはNOT_RUN。現在のHKCU uninstall registrationは保留中smoke installを指すため、local isolated smokeはclean registry条件を満たさず、状態を変えず保持した。次consumerは修正版をpush後、現行main SHA固定の同じ`workflow_dispatch`でworkspace build→package verify→isolated installed smokeを通すこと。workflowはread-only token scope、secret／artifact uploadなしとし、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
