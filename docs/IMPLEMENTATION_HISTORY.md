@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-11-10 — QEB-F17.02-WEBCHAT-CANVAS-INTENT-REFERENCE
+
+開始時local／`origin/main`／GitHub `main`=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。編集前復旧ref local branch／remote tag current=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`、previous=`c11443bb36a9410c20e2ab1a5e357a3c4e72946d`。main worktreeのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持し未変更。
+
+WebChat Control Centerのisolated Canvas previewに、元assistant返信から計算したMIME、SHA-256、返信内viewer version `1`、source request IDを親画面で表示するconsumerを追加した。SHA-256はWebCryptoでUTF-8元返信本文から計算し、Node WebCrypto testで独立比較。由来request IDが欠落／不正またはhash計算できない場合は表示のみで操作意図を準備できない。version `1`はこのWebChat返信内の表示版で、生成元のversionを意味しない。
+
+Canvas内のscript/buttonからactionを受け取る機能は付けず、owner用の別textareaへ希望操作を入力する。親画面の「owner task欄へ意図を準備」はHTTP送信せず、artifact referenceとowner文を`blue-tanuki.canvas-operation-intent.v1` taskへ包んで既存Tasksフォームへ移し、Tasks画面へ遷移する。Tasks欄に未送信draftがある場合は上書きせずに止める。ownerが委任目的・owner token・taskを再確認して明示送信した時だけ既存owner-authenticated `/owner/task-compute`経由でGateway内部`plan:compute` requestへ入る。referenceはtask文の非権威contextであり、HDS authority、Approval、Broker、外部作用の境界を変更しない。成果物本文そのものはtaskへ転載しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Canvas owner intent／artifact reference／同一SHA比較／準備時に未送信 | PASS：新規UI test 1件。 |
+| Sandbox viewerとControl Center script構文 | PASS：選択test 1件。 |
+| Canvas reference→owner-authenticated Gateway endpoint→synthetic internal handler | PASS：専用HTTP test 1件。task、現在purpose binding、non-authority flagsを確認。実HDS-J runtimeではない。 |
+| `corepack pnpm --filter @blue-tanuki/channel-webchat... build` | PASS：protocol／channel-base／channel-webchatの3 project。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS。日本語基底監査には既存migration debt 76件の注意。license PASS。 |
+| 実browser、実HDS-J runtime、Broker action、provider／外部作用、full suite、5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+既存1 MiB owner-image HTTP testは単独5.20秒でPASS。一度、他の選択testと同時実行中に後続invalid-image要求のsocket closeを観測したが、単独再実行では再現せず根因未確認。F17.02専用の小さいsynthetic HTTP testはPASS。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やF17.03往復へ拡張しない。
+
+生成資産分類：追跡変更は同BUILD_BATCHのcommit／mainへ記録。`packages/protocol/dist`、`packages/channel-base/dist`、`packages/channel-webchat/dist`は再生成可能なローカルbuild出力として保持。test入力はmemory内のみでworkspace／一時cloneは作成せず。protected attachment directoriesは保持。D4 Pocket／MINIDORA／他repo、実provider、外部作用、OneDrive保管・容量回収は対象外。
+
+---
+
 ## 2026-11-10 — QEB-F17.01-WEBCHAT-CANVAS-ISOLATED-PREVIEW
 
 開始local／remote main=c11443bb36a9410c20e2ab1a5e357a3c4e72946d。開始復旧ref local branch／remote tag current=c11443bb36a9410c20e2ab1a5e357a3c4e72946d、previous=9d2b3b4581bd8c521c124015ff74277e80f38bec。main worktreeのみ。保護.codex-attachments／.codex-remote-attachmentsと未checkout branchは保持。

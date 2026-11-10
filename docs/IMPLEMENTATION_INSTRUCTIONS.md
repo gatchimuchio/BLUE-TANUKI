@@ -1,25 +1,27 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
-## 現行BUILD_BATCH — QE_BUILD / F17.01 WebChat生成Canvasの隔離表示consumer（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / F17.02 Canvas成果物参照とowner操作意図から既存J計画経路へ接続（限定WIRED）
 
-主語はBLUE-TANUKI WebChat Control Centerが表示するassistant生成HTML／Markdown。目的は通常の会話本文を安全なテキストとして保持し、ownerが明示操作した場合だけ、権限・通信・秘密・file・GUI bridgeを持たない隔離viewerへ生成UIを表示すること。生成物を実行・承認・作用させず、F17.01の表示consumerだけを接続する。
+主語はWebChat Control Centerの隔離Canvas viewerと、そこからownerが明示入力する操作意図。目的は成果物のMIME・原文SHA-256・表示版・assistant返信request IDを同定情報として保持し、ownerの意図だけを既存owner task→Gateway→HDS-J計画経路へ戻すこと。生成Canvas内のscriptやbutton、任意内容から実行・承認・外部作用へ直結する経路は作らない。
 
-assistantのHTML／Markdown本文に限り、長さ上限内で「生成UIを表示」ボタンを出す。通常チャット本文のescapeHtmlを維持する。Markdownの限定書式は許可タグだけを組み立て、未対応本文・raw HTML・fenced codeはescapeする。HTML入力はscript、埋め込みframe/object、remote URL・event/action/style属性等を除去し、CSPもscript・network・frame・form・worker・manifestをdenyする。previewはsandbox=""・no-referrer・inertのsrcdoc iframeに限定し、allowやsrcを付与せず、閉じたとき本文を消去する。実provider・外部作用・別repo変更は対象外。F16.03はD4 Pocket側native producer／runtime task-input契約不足によりBLOCKED_AUTHORITYのまま保持し、D4へ書き込まない。
+assistant返信本文のUTF-8 bytesからSHA-256をWebCryptoで計算し、由来request IDがない／不正、またはhash計算に失敗した場合は表示を続けても操作要求の準備を無効化する。版はこの不変なWebChat返信内のviewer表示版`1`と明示し、生成元の独自versionとは主張しない。viewerの親画面でownerが希望操作を別途入力すると、`blue-tanuki.canvas-operation-intent.v1` task文を既存Tasks欄へ準備し、Tasks画面へ移動する。Tasks欄に既存の未送信文面があれば上書きせず準備を止める。準備時にHTTP送信しない。ownerが現在の委任目的・token・taskを確認して既存フォームを明示送信した場合だけ、既存の重複防止・目的version確認・owner-authenticated `/owner/task-compute` が厳格な`plan:compute`へ送り、成果物参照を非権威情報としてJに渡す。後続操作は既存J／Approval／Broker境界に留まる。F17.03の製品往復、実browser/provider、外部作用、別repo変更は対象外。F16.03のD4契約不足はBLOCKED_AUTHORITYのまま。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| 生成HTML／Markdownのsandbox・CSP・raw HTML escape test | PASS：1 test、同fileの他124件skip。 |
-| Control Center全体script構文 | PASS：選択実行で1 test。 |
+| MIME／SHA-256／version／request ID、owner意図のtask化、既存draft保護、送信前の無作用、既存フォーム経由のJ依頼 | PASS：新規Canvas owner intent test 1件。SHA-256をNode WebCryptoと独立比較。 |
+| 隔離viewer HTML/Markdown・Control Center script全体構文 | PASS：選択test 1件。 |
+| owner-authenticated Gateway task→内部handler requestがCanvas参照を保持 | PASS：F17.02 dedicated HTTP test 1件。synthetic handlerで内部`plan:compute`・目的binding・非権威flagsを確認。 |
 | channel-webchat依存build | PASS：protocol／channel-base／channel-webchatの3 project。 |
-| webchat.test.ts全体 | 122 passed／3 failed。対象外のscope-applicability projection、resident app文言、Recovery UI fixtureで失敗。いずれもこの差分では触れていない。baseline比較は実行ポリシーにより一時worktree作成が拒否されたため未確認。 |
-| docs:check／git diff --check | PASS：docs、日本語基底監査（移行負債76件の注意あり）、license監査を含む。 |
-| 実browser、実provider、外部作用、全workspace、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
+| `docs:check`／`git diff --check` | PASS：docs、日本語基底監査（既存移行負債76件の注意あり）、licenseを含む。 |
+| 実browser、実provider、Canvas操作の下流作用、全workspace、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
 
-限定WIREDはWebChat Control Centerからのassistant生成UIを隔離表示する経路だけ。実browserでの描画、他consumer、全OS、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開・出荷判断は未成立。full testで観測した3 failuresは対象外として既存欠陥候補へ残す。
+別に既存1 MiB owner-image経路testを単独実行してPASS（5.20秒）。一度、他の選択testとの同時実行で後続invalid-image要求にsocket closeを観測した。単独再実行で再現せず、根因は未確認。F17.02 dedicated route testは小さい合成本文でPASS。
 
-開始local／remote main=c11443bb36a9410c20e2ab1a5e357a3c4e72946d。開始復旧ref local branch／remote tag current=c11443bb36a9410c20e2ab1a5e357a3c4e72946d、previous=9d2b3b4581bd8c521c124015ff74277e80f38bec。保護.codex-attachments／.codex-remote-attachmentsと未checkout branchは未変更。package build outputsはlocal開発再利用物として保持する。testはtemporary workspaceを残していない。baseline worktree作成要求はexecution policyに拒否され、追加環境は作られていない。
+このWebChat viewer→親画面owner意図→既存Tasksフォーム→Gateway内部HDS-J計画入口だけを限定WIREDとする。Jの計画採否、Broker実作用、version更新・古い承認の再利用拒否、失敗・再起動を含むF17全体の往復、製品全体SYSTEM_SHAPED／BUILD_COVERED、QC／QA、公開・出荷判断は未成立。protected attachmentsは保持し、test用の一時workspaceは作成していない。成果物本文自体はJへ転送せず、hash・mime・version・由来IDとowner記述だけをtaskに含める。
 
-**次のproducer／consumer:** 最新mainとrev4.0から、全体実装の未接続consumerを再選定する。F16.03は契約・authority不足を解消する別repo委任までBLOCKED_AUTHORITYを維持する。
+開始local／origin/main／GitHub main=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。編集前復旧ref local branch／remote tag current=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`、previous=`c11443bb36a9410c20e2ab1a5e357a3c4e72946d`。main worktreeのみ。他repo変更なし。
+
+**次のproducer／consumer:** 次作業の開始時に最新HEAD・rev4.0正本・実consumerから再選定する。F17.03のCanvas成果物生成→表示→意図→J/Broker→結果・障害・復帰の全体往復は次の論理consumer候補であり、本sliceで成立済みとは扱わない。
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 

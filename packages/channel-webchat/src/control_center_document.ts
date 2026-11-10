@@ -823,9 +823,27 @@ ${CONTROL_CENTER_STYLE}    </style>
         </div>
         <button id="canvas-preview-close" type="button">閉じる</button>
       </div>
+      <section class="canvas-preview-metadata" aria-labelledby="canvas-preview-metadata-title">
+        <h3 id="canvas-preview-metadata-title">表示成果物の識別情報</h3>
+        <dl>
+          <div><dt>MIME</dt><dd id="canvas-preview-mime">未計算</dd></div>
+          <div><dt>SHA-256</dt><dd id="canvas-preview-sha256">未計算</dd></div>
+          <div><dt>版</dt><dd id="canvas-preview-version">未計算</dd></div>
+          <div><dt>由来</dt><dd id="canvas-preview-source">未計算</dd></div>
+        </dl>
+        <p id="canvas-preview-metadata-status" class="muted" aria-live="polite">未計算</p>
+      </section>
       <div class="canvas-preview-frame-shell">
         <iframe id="canvas-preview-frame" class="canvas-preview-frame" title="隔離された生成UIプレビュー" sandbox="" referrerpolicy="no-referrer" tabindex="-1"></iframe>
       </div>
+      <section class="canvas-preview-operation" aria-labelledby="canvas-preview-operation-title">
+        <h3 id="canvas-preview-operation-title">操作意図をJへ渡す</h3>
+        <p class="muted">Canvas内の操作は無効です。ここにowner自身が希望する操作を書き、既存のTasksフォームで目的と依頼内容を確認して明示送信します。成果物参照は同定用であり、権限・承認・作用を与えません。</p>
+        <label for="canvas-preview-action-intent">この表示物について希望する操作</label>
+        <textarea id="canvas-preview-action-intent" rows="3" maxlength="15000" autocomplete="off" placeholder="例: 表示された表の数値を要約する計画を作って"></textarea>
+        <button id="canvas-preview-prepare-intent" type="button" disabled>owner task欄へ意図を準備</button>
+        <p id="canvas-preview-action-status" class="muted" aria-live="polite">SHA-256と由来を確認するまで準備できません。</p>
+      </section>
     </dialog>
 
     <script>

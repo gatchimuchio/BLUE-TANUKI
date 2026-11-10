@@ -470,6 +470,7 @@ describe("WebChatChannel — construction", () => {
 
 describe("WebChatChannel — Control Center shell", () => {
   it("renders generated HTML and Markdown only in a sandboxed, network-denied display frame", () => {
+    expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
     const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function isCanvasPreviewContent(");
     const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("function bindCanvasPreviewDialog(", helperStart);
     expect(helperStart).toBeGreaterThanOrEqual(0);
@@ -514,6 +515,95 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(shell).toContain('title="隔離された生成UIプレビュー" sandbox=""');
     expect(CONTROL_CENTER_SCRIPT).toContain('role === "assistant" && bubble && isCanvasPreviewContent(text)');
     expect(CONTROL_CENTER_SCRIPT).toContain("escapeHtml(text)");
+  });
+
+  it("binds Canvas owner intent to source MIME, content digest, version, and the existing J task path", async () => {
+    const artifactHelpersStart = CONTROL_CENTER_SCRIPT.indexOf("function canvasArtifactMime(");
+    const artifactHelpersEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function buildCanvasPreviewDocument(", artifactHelpersStart + 1);
+    const prepareStart = CONTROL_CENTER_SCRIPT.indexOf("function prepareCanvasOperationIntent(");
+    const prepareEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function setChatStatus(", prepareStart + 1);
+    const submitStart = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
+    const submitEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", submitStart + 1);
+    expect(artifactHelpersStart).toBeGreaterThanOrEqual(0);
+    expect(artifactHelpersEnd).toBeGreaterThan(artifactHelpersStart);
+    expect(prepareStart).toBeGreaterThanOrEqual(0);
+    expect(prepareEnd).toBeGreaterThan(prepareStart);
+    expect(submitStart).toBeGreaterThanOrEqual(0);
+    expect(submitEnd).toBeGreaterThan(submitStart);
+
+    const artifactHelpers = CONTROL_CENTER_SCRIPT.slice(artifactHelpersStart, artifactHelpersEnd);
+    const reference = await new Script(`${artifactHelpers}\n` +
+      `createCanvasArtifactReference("<main>chart</main>", "assistant-request-1")`)
+      .runInNewContext({ crypto: webcrypto, TextEncoder }) as Promise<Record<string, unknown>>;
+    expect(reference).toMatchObject({ schema_version: "blue-tanuki.canvas-artifact-reference.v1",
+      mime: "text/html", sha256: createHash("sha256").update("<main>chart</main>", "utf8").digest("hex"),
+      version: 1, source: { surface: "webchat-assistant-reply", request_id: "assistant-request-1" },
+      used_for_authority: false });
+
+    const nodes: Record<string, { value: string; textContent?: string; className?: string; open?: boolean;
+      close?: () => void; focus?: () => void; files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
+      "canvas-preview-action-intent": { value: "表示された表の数値を要約する計画を作って" },
+      "owner-task-intent": { value: "", focus() {} },
+      "canvas-preview-dialog": { value: "", close() { this.open = false; } },
+      "owner-task-token": { value: "owner-token" }, "owner-task-image": { value: "", files: [] },
+      "owner-task-completion-rules": { value: "" }, "owner-task-goal-ref": {
+        value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
+      }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
+    };
+    const calls: Array<{ token: string; body: Record<string, unknown> }> = [];
+    const messages: Array<[string, string]> = [];
+    let activeScreen = "conversation";
+    const harness = new Script(`
+      ${artifactHelpers}
+      ${CONTROL_CENTER_SCRIPT.slice(prepareStart, prepareEnd)}
+      ${CONTROL_CENTER_SCRIPT.slice(submitStart, submitEnd)}
+      (async function () {
+        nodes["owner-task-intent"].value = "既存の未送信draft";
+        let blockedExistingDraft = false;
+        try { prepareCanvasOperationIntent(); } catch { blockedExistingDraft = true; }
+        const existingDraftPreserved = nodes["owner-task-intent"].value === "既存の未送信draft";
+        nodes["owner-task-intent"].value = "";
+        prepareCanvasOperationIntent();
+        const preparedTask = nodes["owner-task-intent"].value;
+        const preparedStatus = String(nodes["owner-task-status"].textContent || "");
+        const callsAfterPreparation = calls.length;
+        await submitOwnerTask();
+        return { preparedTask, callsAfterPreparation, blockedExistingDraft, existingDraftPreserved, preparedStatus };
+      })()
+    `);
+    const result = await harness.runInNewContext({
+      nodes,
+      calls,
+      state: { canvasArtifactReference: reference, chatSocket: { readyState: 1 } },
+      byId: (id: string) => nodes[id],
+      setActiveScreen: (screen: string) => { activeScreen = screen; },
+      appendChat: (kind: string, content: string) => messages.push([kind, content]),
+      WebSocket: { OPEN: 1 },
+      pendingOwnerTaskSubmissionId: () => "submission-1",
+      clearOwnerTaskSubmissionId() {},
+      renderOwnerTaskStatusSubmissionIds() {},
+      postOwnerTaskCompute: async (token: string, body: Record<string, unknown>) => {
+        calls.push({ token, body });
+        return { status: "queued_for_hds_decision", request_id: "j-request-1" };
+      },
+    }) as { preparedTask: string; callsAfterPreparation: number; blockedExistingDraft: boolean;
+      existingDraftPreserved: boolean; preparedStatus: string };
+    const preparedTask = result.preparedTask;
+    expect(result.callsAfterPreparation).toBe(0);
+    expect(result.blockedExistingDraft).toBe(true);
+    expect(result.existingDraftPreserved).toBe(true);
+    expect(result.preparedStatus).toContain("未送信です");
+    expect(activeScreen).toBe("tasks");
+    expect(nodes["canvas-preview-dialog"]?.open).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ token: "owner-token", body: {
+      task: preparedTask, goal_ref: "goal_0123456789abcdef", purpose_version: 2, submission_id: "submission-1",
+    } });
+    const taskPayload = JSON.parse(preparedTask.slice(preparedTask.indexOf("\n") + 1)) as Record<string, unknown>;
+    expect(taskPayload).toMatchObject({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
+      owner_intent: "表示された表の数値を要約する計画を作って",
+      artifact_reference: reference, artifact_reference_used_for_authority: false });
+    expect(messages).toContainEqual(["status", expect.stringContaining("まだGateway／Jへ送信していません")]);
   });
 
   it("submits explicit task completion rules and one ephemeral image through the owner task form", async () => {
@@ -4088,6 +4178,45 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(stale.status).toBe(409);
       expect(stale.body).toMatchObject({ accepted: false, status: "submission_id_reused_with_different_input" });
       expect(ownerCtx.received).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("preserves a Canvas artifact reference in an owner-authenticated HDS/J task request", async () => {
+    const goal = { goal_ref: `goal_${"c".repeat(16)}`, purpose_version: 3,
+      purpose_preview: "Use a displayed artifact as non-authority context", purpose_digest: "d".repeat(64) };
+    const artifactReference = { schema_version: "blue-tanuki.canvas-artifact-reference.v1",
+      mime: "text/markdown", sha256: "e".repeat(64), version: 1,
+      source: { surface: "webchat-assistant-reply", request_id: "assistant-request-2" }, used_for_authority: false };
+    const task = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n" +
+      JSON.stringify({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
+        owner_intent: "Summarize the displayed table.", artifact_reference: artifactReference,
+        artifact_reference_used_for_authority: false });
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN,
+      onOwnerTaskGoalOptions: async () => [goal] });
+    try {
+      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      const response = await postJson(ownerCtx.port, "/owner/task-compute", {
+        user: "fixture-owner", task, goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+        submission_id: "15c7d4f6-2c7a-4aa8-9150-2837e777a132",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(response.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(ownerCtx.received).toHaveLength(1);
+      const request = ownerCtx.received[0]!;
+      expect(isGatewayInternalInboundRequest(request)).toBe(true);
+      expect(JSON.parse(request.content.slice("plan:compute ".length))).toEqual({
+        task,
+        goal_purpose_binding: { goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+          purpose_digest: goal.purpose_digest },
+      });
+      expect(request.content).toContain(artifactReference.sha256);
+      expect(request.metadata).toMatchObject({
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+        "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+      });
     } finally {
       await ownerCtx.teardown();
     }

@@ -804,7 +804,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         max-width: 1000px;
         max-height: 92dvh;
         padding: 0;
-        overflow: hidden;
+        overflow: auto;
         border: 1px solid var(--line-strong);
         border-radius: 12px;
         background: var(--surface-strong);
@@ -836,7 +836,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .canvas-preview-frame-shell {
-        max-height: 74dvh;
+        max-height: 48dvh;
         overflow: auto;
         overscroll-behavior: contain;
         background: #ffffff;
@@ -848,6 +848,48 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-height: 0;
         border: 0;
         background: #ffffff;
+      }
+
+      .canvas-preview-metadata,
+      .canvas-preview-operation {
+        display: grid;
+        gap: 8px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .canvas-preview-metadata h3,
+      .canvas-preview-operation h3 {
+        margin: 0;
+      }
+
+      .canvas-preview-metadata dl {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px 16px;
+        margin: 0;
+      }
+
+      .canvas-preview-metadata dl > div {
+        min-width: 0;
+      }
+
+      .canvas-preview-metadata dt {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .canvas-preview-metadata dd {
+        margin: 2px 0 0;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
+
+      .canvas-preview-operation textarea {
+        width: 100%;
+        min-height: 72px;
       }
 
       .chat-composer {
