@@ -1,0 +1,154 @@
+name: Linux installed package BUILD smoke
+run-name: Linux installed package BUILD smoke on ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-installed-package-build-smoke
+  cancel-in-progress: false
+
+jobs:
+  linux-installed-package-build-smoke:
+    name: Build and start the installed Linux consumer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+          rustup default 1.95.0
+          rustc --version
+
+      - name: Install locked workspace dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.12.0 --activate
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Build and verify Linux installer
+        run: |
+          pnpm package:linux
+          pnpm package:linux:verify
+
+      - name: Install and start the isolated packaged consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          printf 'runner_kernel=%s\n' "$(uname -r)"
+          printf 'runner_libc=%s\n' "$(getconf GNU_LIBC_VERSION)"
+          printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+
+          artifact=release/linux/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz
+          test -f "$artifact"
+          sha256sum "$artifact"
+
+          work_root="$(mktemp -d /tmp/blue-tanuki-g0301-linux.XXXXXX)"
+          launcher="$work_root/install/BlueTanukiLauncher.sh"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            set +e
+            if [[ -x "$launcher" ]]; then
+              HOME="$work_root/home" XDG_CONFIG_HOME="$work_root/xdg-config" XDG_DATA_HOME="$work_root/xdg-data" XDG_STATE_HOME="$work_root/xdg-state" XDG_RUNTIME_DIR="$work_root/xdg-runtime" TMPDIR="$work_root/tmp" "$launcher" resident-stop >/dev/null 2>&1
+            fi
+            case "$work_root" in
+              /tmp/blue-tanuki-g0301-linux.*) rm -rf -- "$work_root" ;;
+              *) printf 'refusing cleanup outside isolated temp root: %s\n' "$work_root" >&2; status=1 ;;
+            esac
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          home_root="$work_root/home"
+          config_root="$work_root/config"
+          data_root="$work_root/data"
+          install_root="$work_root/install"
+          runtime_root="$work_root/runtime"
+          bin_root="$work_root/bin"
+          unpack_root="$work_root/unpacked"
+          mkdir -p "$home_root" "$config_root" "$data_root" "$runtime_root" "$bin_root" "$unpack_root" \
+            "$work_root/xdg-config" "$work_root/xdg-data" "$work_root/xdg-state" "$work_root/xdg-runtime" "$work_root/tmp"
+          chmod 700 "$work_root/xdg-runtime" "$work_root/tmp"
+          export HOME="$home_root" XDG_CONFIG_HOME="$work_root/xdg-config" XDG_DATA_HOME="$work_root/xdg-data" \
+            XDG_STATE_HOME="$work_root/xdg-state" XDG_RUNTIME_DIR="$work_root/xdg-runtime" TMPDIR="$work_root/tmp"
+
+          tar -xzf "$artifact" -C "$unpack_root"
+          setup="$(find "$unpack_root" -type f -name BlueTanukiSetup.sh -print -quit)"
+          test -n "$setup"
+          test -x "$setup"
+          "$setup" \
+            --install-root "$install_root" \
+            --data-root "$data_root" \
+            --config-root "$config_root" \
+            --runtime-root "$runtime_root" \
+            --bin-root "$bin_root" \
+            --no-launch \
+            --skip-doctor
+
+          env_file="$config_root/blue-tanuki.env"
+          test -f "$env_file"
+          test "$(stat -c '%a' "$env_file")" = 600
+          "$launcher" resident-autostart-status | grep -Fq 'autostart_status=disabled'
+
+          node_exe="$(find "$runtime_root" -type f -name node -perm -u+x -print -quit)"
+          test -n "$node_exe"
+          "$node_exe" --version
+
+          port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          python3 - "$env_file" "$port" <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          port = sys.argv[2]
+          lines = path.read_text(encoding="utf-8").splitlines()
+          matches = [i for i, line in enumerate(lines) if line.startswith("WEBCHAT_PORT=")]
+          if len(matches) != 1:
+              raise SystemExit("isolated env file must contain exactly one WEBCHAT_PORT")
+          lines[matches[0]] = f"WEBCHAT_PORT={port}"
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          os.chmod(path, 0o600)
+          PY
+
+          "$launcher" resident-start
+          health_code=000
+          for attempt in {1..60}; do
+            health_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 "http://127.0.0.1:$port/healthz" || true)"
+            if [[ "$health_code" = 200 ]]; then break; fi
+            sleep 0.5
+          done
+          test "$health_code" = 200
+          app_code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://127.0.0.1:$port/app")"
+          test "$app_code" = 200
+          printf 'installed_bundled_runtime=pass\nhealthz_http=%s\napp_http=%s\n' "$health_code" "$app_code"
+
+          "$launcher" resident-stop
+          stopped=false
+          for attempt in {1..20}; do
+            if ! curl --silent --output /dev/null --max-time 1 "http://127.0.0.1:$port/healthz"; then stopped=true; break; fi
+            sleep 0.25
+          done
+          test "$stopped" = true
+          printf 'resident_stop=pass\n'
