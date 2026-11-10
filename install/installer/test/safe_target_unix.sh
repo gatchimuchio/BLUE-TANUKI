@@ -38,6 +38,28 @@ expect_rejection() {
   fi
 }
 
+MANAGED_EXTERNAL_ROOT="$TMP_ROOT/managed-external-files"
+mkdir -p "$MANAGED_EXTERNAL_ROOT"
+MANAGED_EXTERNAL_FILE="$MANAGED_EXTERNAL_ROOT/launcher"
+write_managed_external_file "$MANAGED_EXTERNAL_FILE" fixture_launcher 700 \
+  render_managed_unix_launcher_wrapper "$TMP_ROOT/managed-launcher"
+is_managed_unix_launcher_wrapper "$MANAGED_EXTERNAL_FILE" "$TMP_ROOT/managed-launcher" || exit 116
+printf '\nuser-owned line\n' >> "$MANAGED_EXTERNAL_FILE"
+cp "$MANAGED_EXTERNAL_FILE" "$TMP_ROOT/managed-external-backup"
+if (write_managed_external_file "$MANAGED_EXTERNAL_FILE" fixture_launcher 700 \
+  render_managed_unix_launcher_wrapper "$TMP_ROOT/managed-launcher") > "$TMP_ROOT/managed-external-reject.out" 2>&1; then
+  echo "managed external writer replaced a modified target" >&2
+  exit 117
+fi
+cmp -s "$MANAGED_EXTERNAL_FILE" "$TMP_ROOT/managed-external-backup" || exit 118
+
+XML_SPECIAL_ROOT="$TMP_ROOT/Blue & Tanuki <owner> \"quotes\" 'apostrophe'"
+render_managed_macos_autostart_entry \
+  "$XML_SPECIAL_ROOT" "$XML_SPECIAL_ROOT/out&log" "$XML_SPECIAL_ROOT/err<log" > "$TMP_ROOT/macos-plist-escaped.xml"
+grep -Fq 'Blue &amp; Tanuki &lt;owner&gt; &quot;quotes&quot; &apos;apostrophe&apos;' "$TMP_ROOT/macos-plist-escaped.xml" || exit 119
+grep -Fq 'out&amp;log' "$TMP_ROOT/macos-plist-escaped.xml" || exit 120
+grep -Fq 'err&lt;log' "$TMP_ROOT/macos-plist-escaped.xml" || exit 121
+
 # root 直下の既存・未生成対象も一つの slash で表し、HOME の祖先を拒否する。
 PHYSICAL_TMP_ROOT=$(CDPATH= cd -P -- "$TMP_ROOT" && pwd -P)
 TOP_COMPONENT=${PHYSICAL_TMP_ROOT#/}
@@ -553,6 +575,36 @@ run_fixture_setup() {
       "$@"
 }
 cp "$REPO_ROOT/install/unix/product/BlueTanukiSetup.sh" "$SETUP_PACKAGE/BlueTanukiSetup.sh"
+printf '#!/usr/bin/env sh\nexec "%s/BlueTanukiLauncher.sh" "$@"\nuser-owned line\n' "$SETUP_INSTALL" > "$SETUP_BIN/blue-tanuki"
+cp "$SETUP_BIN/blue-tanuki" "$TMP_ROOT/setup-owned-wrapper-backup"
+if run_fixture_setup --no-launch --skip-doctor > "$TMP_ROOT/setup-modified-wrapper.out" 2>&1; then
+  echo "product setup replaced a user wrapper containing the expected launcher line" >&2
+  exit 110
+fi
+cmp -s "$SETUP_BIN/blue-tanuki" "$TMP_ROOT/setup-owned-wrapper-backup" || exit 111
+grep -Fq 'existing data was preserved' "$TMP_ROOT/setup-modified-wrapper.out" || exit 112
+rm -f -- "$SETUP_BIN/blue-tanuki"
+
+mkdir -p "$(dirname -- "$SETUP_SURFACE")"
+cat > "$SETUP_SURFACE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Launch BLUE-TANUKI Control Center
+Exec=$SETUP_BIN/blue-tanuki launch
+Terminal=false
+Categories=Utility;
+X-User-Owned=true
+EOF
+cp "$SETUP_SURFACE" "$TMP_ROOT/setup-owned-surface-backup"
+if run_fixture_setup --no-launch --skip-doctor > "$TMP_ROOT/setup-modified-surface.out" 2>&1; then
+  echo "product setup replaced a user desktop entry containing the expected Exec line" >&2
+  exit 113
+fi
+cmp -s "$SETUP_SURFACE" "$TMP_ROOT/setup-owned-surface-backup" || exit 114
+grep -Fq 'existing data was preserved' "$TMP_ROOT/setup-modified-surface.out" || exit 115
+rm -f -- "$SETUP_SURFACE"
+
 if ! run_fixture_setup --no-launch --skip-doctor > "$TMP_ROOT/setup-initial.out" 2>&1; then
   cat "$TMP_ROOT/setup-initial.out" >&2
   echo "isolated product setup failed" >&2
@@ -1042,5 +1094,141 @@ grep -Fq "PID record is invalid" "$TMP_ROOT/lifecycle-invalid-record.out" || {
 [ "$(cat "$LIFECYCLE_DATA/blue-tanuki.pid")" = "invalid-pid" ] || exit 90
 [ ! -e "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 91
 rm -f -- "$LIFECYCLE_DATA/blue-tanuki.pid"
+
+sed "s/^PLATFORM='linux'$/PLATFORM='macos'/" "$PRODUCT_INSTALL/blue-tanuki-install.env" > "$TMP_ROOT/product-install-macos.env"
+mv -- "$TMP_ROOT/product-install-macos.env" "$PRODUCT_INSTALL/blue-tanuki-install.env"
+cat > "$PRODUCT_INSTALL/blue-tanuki-package-manifest.json" <<'MANIFEST'
+{
+  "schema_version": 1,
+  "name": "blue-tanuki",
+  "version": "1.0.0-rc.1",
+  "package_type": "macos-arm64-tar-installer",
+  "created_at": "2026-11-11T00:00:00.000Z"
+}
+MANIFEST
+MACOS_PRODUCT_MANIFEST_SHA256=$(sha256_file "$PRODUCT_INSTALL/blue-tanuki-package-manifest.json")
+rm -f -- "$PRODUCT_INSTALL/blue-tanuki-managed-files.txt"
+PRODUCT_SURFACE="$PRODUCT_HOME/Applications/BlueTanuki.command"
+mkdir -p "$(dirname -- "$PRODUCT_SURFACE")"
+render_managed_macos_application_command "$PRODUCT_BIN/blue-tanuki" > "$PRODUCT_SURFACE"
+write_product_owner_marker "$PRODUCT_INSTALL/.blue-tanuki-owner" install "$PRODUCT_INSTALL" "$PRODUCT_DATA" "$PRODUCT_CONFIG" "$PRODUCT_RUNTIME" "$PRODUCT_BIN" macos "$PRODUCT_SURFACE"
+write_product_owner_marker "$PRODUCT_DATA/.blue-tanuki-owner" data "$PRODUCT_INSTALL" "$PRODUCT_DATA" "$PRODUCT_CONFIG" "$PRODUCT_RUNTIME" "$PRODUCT_BIN" macos "$PRODUCT_SURFACE"
+write_product_owner_marker "$PRODUCT_CONFIG/.blue-tanuki-owner" config "$PRODUCT_INSTALL" "$PRODUCT_DATA" "$PRODUCT_CONFIG" "$PRODUCT_RUNTIME" "$PRODUCT_BIN" macos "$PRODUCT_SURFACE"
+PRODUCT_INSTALL_INVENTORY=$(write_managed_tree_inventory "$PRODUCT_INSTALL" blue-tanuki-install.json blue-tanuki-managed-files.txt blue-tanuki-product-install)
+cat > "$PRODUCT_INSTALL/blue-tanuki-install.json" <<METADATA
+{
+  "schema_version": 3,
+  "product_id": "blue-tanuki-product-install",
+  "package_manifest_sha256": "$MACOS_PRODUCT_MANIFEST_SHA256",
+  "managed_install_files_sha256": "$PRODUCT_INSTALL_INVENTORY",
+  "managed_runtime_files_sha256": "$PRODUCT_RUNTIME_INVENTORY",
+  "install_root": "$PRODUCT_INSTALL",
+  "data_root": "$PRODUCT_DATA",
+  "config_root": "$PRODUCT_CONFIG",
+  "runtime_root": "$PRODUCT_RUNTIME",
+  "bin_root": "$PRODUCT_BIN",
+  "env_file": "$PRODUCT_CONFIG/blue-tanuki.env",
+  "node_exe": "$PRODUCT_RUNTIME/node-v-test/bin/node",
+  "control_center_url": "http://127.0.0.1:8787/app",
+  "platform": "macos"
+}
+METADATA
+rm -f -- "$PRODUCT_HOME/.local/share/applications/blue-tanuki.desktop"
+PRODUCT_AUTOSTART_DIR="$PRODUCT_HOME/Library/LaunchAgents"
+PRODUCT_AUTOSTART="$PRODUCT_AUTOSTART_DIR/com.blue-tanuki.gateway.plist"
+mkdir -p "$PRODUCT_AUTOSTART_DIR"
+mkdir -p "$PRODUCT_HOME/test-bin"
+cat > "$PRODUCT_HOME/test-bin/uname" <<'UNAME'
+#!/usr/bin/env sh
+if [ "${1:-}" = "-s" ]; then printf 'Darwin\n'; else exec /usr/bin/uname "$@"; fi
+UNAME
+chmod +x "$PRODUCT_HOME/test-bin/uname"
+
+cat > "$PRODUCT_AUTOSTART" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist><dict><key>ProgramArguments</key><array><string>$PRODUCT_INSTALL/BlueTanukiLauncher.sh</string></array></dict></plist>
+EOF
+cp "$PRODUCT_AUTOSTART" "$TMP_ROOT/macos-unowned-plist.backup"
+if (HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-enable) > "$TMP_ROOT/macos-unowned-enable.out" 2>&1; then
+  echo "macOS autostart enable replaced a user plist containing the launcher path" >&2
+  exit 122
+fi
+cmp -s "$PRODUCT_AUTOSTART" "$TMP_ROOT/macos-unowned-plist.backup" || exit 123
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-status > "$TMP_ROOT/macos-unowned-status.out"
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/macos-unowned-status.out" || exit 124
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/macos-unowned-disable.out"
+cmp -s "$PRODUCT_AUTOSTART" "$TMP_ROOT/macos-unowned-plist.backup" || exit 125
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/macos-unowned-disable.out" || exit 126
+if ! (
+  HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" \
+    sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/macos-unowned-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/macos-unowned-uninstall.out" >&2
+  exit 127
+fi
+grep -Fq "Preserved unrelated or modified autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/macos-unowned-uninstall.out" || exit 128
+
+rm -f -- "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-enable > "$TMP_ROOT/macos-owned-enable.out"
+is_managed_macos_autostart_entry "$PRODUCT_AUTOSTART" "$PRODUCT_INSTALL" "$PRODUCT_DATA/logs/blue-tanuki.out.log" "$PRODUCT_DATA/logs/blue-tanuki.err.log" || exit 129
+
+cp "$PRODUCT_INSTALL/blue-tanuki-install.env" "$TMP_ROOT/product-install-env.backup"
+MACOS_FOREIGN_INSTALL="$PRODUCT_HOME/foreign-app"
+sed "s|^INSTALL_ROOT=.*|INSTALL_ROOT='$MACOS_FOREIGN_INSTALL'|" "$TMP_ROOT/product-install-env.backup" > "$PRODUCT_INSTALL/blue-tanuki-install.env"
+render_managed_macos_autostart_entry "$MACOS_FOREIGN_INSTALL" \
+  "$PRODUCT_DATA/logs/blue-tanuki.out.log" "$PRODUCT_DATA/logs/blue-tanuki.err.log" > "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-status > "$TMP_ROOT/macos-mismatched-root-status.out"
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/macos-mismatched-root-status.out" || exit 143
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/macos-mismatched-root-disable.out"
+[ -f "$PRODUCT_AUTOSTART" ] || exit 144
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/macos-mismatched-root-disable.out" || exit 145
+mv -- "$TMP_ROOT/product-install-env.backup" "$PRODUCT_INSTALL/blue-tanuki-install.env"
+render_managed_macos_autostart_entry "$PRODUCT_INSTALL" \
+  "$PRODUCT_DATA/logs/blue-tanuki.out.log" "$PRODUCT_DATA/logs/blue-tanuki.err.log" > "$PRODUCT_AUTOSTART"
+
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-status > "$TMP_ROOT/macos-owned-status.out"
+grep -Fq 'autostart_status=enabled' "$TMP_ROOT/macos-owned-status.out" || exit 130
+if ! (
+  HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" \
+    sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/macos-owned-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/macos-owned-uninstall.out" >&2
+  exit 131
+fi
+grep -Fq "Would remove managed autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/macos-owned-uninstall.out" || exit 132
+printf '\n<!-- user change -->\n' >> "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/macos-modified-disable.out"
+[ -f "$PRODUCT_AUTOSTART" ] || exit 133
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/macos-modified-disable.out" || exit 134
+
+render_managed_unix_launcher_wrapper "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" > "$PRODUCT_BIN/blue-tanuki"
+printf '\nuser-owned line\n' >> "$PRODUCT_BIN/blue-tanuki"
+render_managed_macos_application_command "$PRODUCT_BIN/blue-tanuki" > "$PRODUCT_SURFACE"
+printf '\nuser-owned line\n' >> "$PRODUCT_SURFACE"
+if ! (
+  HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" \
+    sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/macos-modified-external-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/macos-modified-external-uninstall.out" >&2
+  exit 135
+fi
+grep -Fq "Preserved unrelated or modified launcher: $PRODUCT_BIN/blue-tanuki" "$TMP_ROOT/macos-modified-external-uninstall.out" || exit 136
+grep -Fq "Preserved unrelated or modified application_command: $PRODUCT_SURFACE" "$TMP_ROOT/macos-modified-external-uninstall.out" || exit 137
+grep -Fq "Preserved unrelated or modified autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/macos-modified-external-uninstall.out" || exit 138
+
+render_managed_unix_launcher_wrapper "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" > "$PRODUCT_BIN/blue-tanuki"
+render_managed_macos_application_command "$PRODUCT_BIN/blue-tanuki" > "$PRODUCT_SURFACE"
+render_managed_macos_autostart_entry "$PRODUCT_INSTALL" \
+  "$PRODUCT_DATA/logs/blue-tanuki.out.log" "$PRODUCT_DATA/logs/blue-tanuki.err.log" > "$PRODUCT_AUTOSTART"
+if ! (
+  HOME="$PRODUCT_HOME" PATH="$PRODUCT_HOME/test-bin:$PATH" \
+    sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/macos-exact-external-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/macos-exact-external-uninstall.out" >&2
+  exit 139
+fi
+grep -Fq "Would remove managed launcher: $PRODUCT_BIN/blue-tanuki" "$TMP_ROOT/macos-exact-external-uninstall.out" || exit 140
+grep -Fq "Would remove managed application_command: $PRODUCT_SURFACE" "$TMP_ROOT/macos-exact-external-uninstall.out" || exit 141
+grep -Fq "Would remove managed autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/macos-exact-external-uninstall.out" || exit 142
 
 echo "unix_target_guard=pass"

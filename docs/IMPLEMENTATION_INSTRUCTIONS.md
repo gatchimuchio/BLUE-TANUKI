@@ -2,7 +2,24 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G03.03 Linux installed lifecycle・retained-state ownership（限定consumer）
+## 現行BUILD_BATCH — QE_BUILD / S-02 Unix Setup／Launcher／Uninstall外部ファイル所有保護（限定安全修正）
+
+主語はUnix製品Setupが管理する`~/.local/bin/blue-tanuki`、macOS application command／LaunchAgent、Linux desktop entryと、それらを扱うLauncher／Uninstall。目的は、BLUE-TANUKI生成時の完全な期待bytesと一致する通常ファイルだけを生成・有効・削除対象とし、一致しない内容、対象fileのsymlink、非regular file、macOS LaunchAgentsの親directory symlinkを保持すること。public repoで確認できる契約のみを扱い、HDS権限、ユーザーデータ、他repo、3点セット、公開・出荷判断は変更しない。
+
+共通`safe-target.sh`に外部起動ファイルとmacOS LaunchAgentのrenderer／完全一致predicateを集約した。Setupは部分行一致をやめ、期待ファイル全体を照合し、同一directory stagingとno-clobber作成で既存対象を置換しない。macOS Launcherのautostart enable／status／disableとUninstallは完全一致、通常file／非symlink、正しいinstall root、LaunchAgentsの実directory parentを確認し、変更・他者所有の対象を保持する。Linux existing autostart契約は維持する。
+
+| QE_BUILDの限定確認 | 結果 |
+|---|---|
+| 5 Unix shell files `sh -n` | PASS。 |
+| `install/installer/test/safe_target_unix.sh` | PASS：`unix_target_guard=pass`。既存Linux fixtureに加え、Setupが期待行を含む変更wrapper／desktop entryを保持すること、macOS形式isolated product fixtureでLaunchAgent・application command・launcherの所有一致、変更・foreign install root保全、Uninstall dry-runを確認。 |
+| native macOS Setup／launchd／login／reboot、Linux native、全OS、全suite、QE_QC／QE_QA | NOT_RUN。WSLのmacOS形式fixtureはnative macOS挙動の証拠ではない。 |
+
+UNIT_ID: S-02 Unix product external-file ownership safety correction
+STATUS: WIRED（Setup／Launcher／Uninstallが共通のbyte-exact ownership contractをfixture経由で使う）
+NEXT_REQUIRED_CONSUMER: rev4.0のQE_BUILD順へ戻り、次の実consumerを接続する。native macOS lifecycle、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、release／owner GOは未成立。
+SAFETY_STATUS: 期待bytesと完全一致しない外部file、対象symlink、非regular file、macOS LaunchAgentsの不安全な親pathは上書き・削除しない。実ユーザー領域は変更していない。
+
+### 先行BUILD_BATCH記録 — QE_BUILD / G03.03 Linux installed lifecycle・retained-state ownership（限定consumer）
 
 主語はLinux製品Setup／Launcher／Gateway runtime／Recovery／Uninstallが共有するinstalled lifecycleと永続状態root。目的は、Setupが選んだDataRoot配下へruntime状態を一貫して置き、install directoryへの状態漏出を防ぎながら、通常Uninstallでは利用者データを保持し、明示Purgeだけを対象にすること。Linux autostartはBLUE-TANUKIが生成した完全一致設定だけを作成・削除し、同じ`Exec`行を含むだけの既存設定、変更済み設定、symlink、非regular fileを保持する。
 

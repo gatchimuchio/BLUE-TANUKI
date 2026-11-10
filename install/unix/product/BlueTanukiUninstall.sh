@@ -110,27 +110,15 @@ remove_target() {
   say "Removed $2: $target"
 }
 
-remove_file_if_owned() {
+remove_exact_managed_file() {
   owned_file=$1
-  identity_line=$2
-  identity_value=$3
-  owned_label=$4
+  owned_label=$2
+  owned_predicate=$3
+  shift 3
   if [ ! -e "$owned_file" ] && [ ! -L "$owned_file" ]; then return; fi
-  if [ ! -f "$owned_file" ] || [ -L "$owned_file" ]; then
-    say "Preserved $owned_label because it is not a regular file: $owned_file"
+  if ! "$owned_predicate" "$owned_file" "$@"; then
+    say "Preserved unrelated or modified $owned_label: $owned_file"
     return
-  fi
-  if [ -n "$identity_line" ]; then
-    grep -Fqx "$identity_line" "$owned_file" || {
-      say "Preserved unrelated $owned_label: $owned_file"
-      return
-    }
-  fi
-  if [ -n "$identity_value" ]; then
-    grep -Fq "$identity_value" "$owned_file" || {
-      say "Preserved unrelated $owned_label: $owned_file"
-      return
-    }
   fi
   if [ "$DRY_RUN" = "1" ]; then
     say "Would remove managed $owned_label: $owned_file"
@@ -167,13 +155,21 @@ if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
   fi
 fi
 
-remove_file_if_owned "$BIN_LAUNCHER" "exec \"$LAUNCHER\" \"\$@\"" "" launcher
+remove_exact_managed_file "$BIN_LAUNCHER" launcher is_managed_unix_launcher_wrapper "$LAUNCHER"
 if [ "$PLATFORM" = macos ]; then
-  remove_file_if_owned "$SURFACE_FILE" "exec \"$BIN_LAUNCHER\" launch" "" application_command
+  remove_exact_managed_file "$SURFACE_FILE" application_command is_managed_macos_application_command "$BIN_LAUNCHER"
   macos_autostart="$HOME/Library/LaunchAgents/com.blue-tanuki.gateway.plist"
-  remove_file_if_owned "$macos_autostart" "<string>$INSTALL_ROOT/BlueTanukiLauncher.sh</string>" "" autostart_entry
+  macos_launch_agents="$HOME/Library/LaunchAgents"
+  if [ -L "$HOME" ] || [ -L "$HOME/Library" ] || [ -L "$macos_launch_agents" ] ||
+    { [ -e "$HOME/Library" ] && [ ! -d "$HOME/Library" ]; } ||
+    { [ -e "$macos_launch_agents" ] && [ ! -d "$macos_launch_agents" ]; }; then
+    say "Preserved autostart_entry because its parent path is not a regular directory: $macos_autostart"
+  else
+    remove_exact_managed_file "$macos_autostart" autostart_entry is_managed_macos_autostart_entry \
+      "$INSTALL_ROOT" "$DATA_ROOT/logs/blue-tanuki.out.log" "$DATA_ROOT/logs/blue-tanuki.err.log"
+  fi
 else
-  remove_file_if_owned "$SURFACE_FILE" "Exec=$BIN_LAUNCHER launch" "" desktop_launcher
+  remove_exact_managed_file "$SURFACE_FILE" desktop_launcher is_managed_linux_desktop_entry "$BIN_LAUNCHER"
   linux_autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/blue-tanuki.desktop"
   remove_linux_autostart_if_owned "$linux_autostart"
 fi

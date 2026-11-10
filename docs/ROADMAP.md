@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G03.03 Linux installed lifecycle・retained-state ownership（限定consumer）
+### 直近BUILD_BATCH — S-02 Unix外部ファイル所有保護の限定安全修正
+
+Unix製品Setup／Launcher／Uninstallは、user-bin launcher、macOS application command／LaunchAgent、Linux desktop entryを生成物全体のbyte一致で判定する。Setupは一致するregular fileだけを採用し、不在時のno-clobber作成を行う。macOS LauncherとUninstallは実install root・親directory・非symlink条件を含めて照合し、変更済み・他者所有の対象を保持する。WSL Ubuntu 24.04 ext4の全Unix safety fixtureはPASS。native macOS／launchd／login／reboot、Linux native、5OS全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。これは局所安全修正であり工程全体の完了を示さない。
+
+### 先行BUILD_BATCH記録 — G03.03 Linux installed lifecycle・retained-state ownership（限定consumer）
 
 Setupが保存する`state_root`をLinux product envへ渡し、Launcherが保持中DataRoot内のrootとして検証して`BLUE_TANUKI_STATE_ROOT`をexportする。旧schema-v1設定はsession directoryの親をstate rootへ互換推定する。schedule store、runtime health、recovery snapshot／factory resetは同一resolverを使用し、明示schedule directoryを維持しつつ既定状態をstate root配下へ置く。Node 22.14の未定義`DatabaseSync.isTransaction`をowner lease喪失と誤認した実導入時のruntime欠陥も是正した。通常Uninstallではsentinel／env／owner-state DBを保持し、再Setup後の保持、隔離rootへの明示Purgeを確認した。Linux autostartのexact-content ownership guardも共通Setup／Launcher／Uninstall consumerで維持する。
 

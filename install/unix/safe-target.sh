@@ -3,6 +3,172 @@ safe_target_fail() {
   exit 1
 }
 
+assert_absolute_single_line_path() {
+  bt_path_label=$1
+  bt_path_value=$2
+  case "$bt_path_value" in
+    /*) ;;
+    *) safe_target_fail "$bt_path_label must be absolute" ;;
+  esac
+  bt_path_cr=$(printf '\r')
+  case "$bt_path_value" in
+    *'
+'*|*"$bt_path_cr"*) safe_target_fail "$bt_path_label contains a line break" ;;
+  esac
+}
+
+xml_escape_text() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\\&apos;/g"
+}
+
+render_managed_unix_launcher_wrapper() {
+  bt_wrapper_launcher=$1
+  assert_absolute_single_line_path "launcher path" "$bt_wrapper_launcher"
+  cat <<EOF
+#!/usr/bin/env sh
+exec "$bt_wrapper_launcher" "\$@"
+EOF
+}
+
+is_managed_unix_launcher_wrapper() {
+  bt_wrapper_file=$1
+  bt_wrapper_launcher=$2
+  [ -f "$bt_wrapper_file" ] && [ ! -L "$bt_wrapper_file" ] || return 1
+  render_managed_unix_launcher_wrapper "$bt_wrapper_launcher" | cmp -s "$bt_wrapper_file" -
+}
+
+render_managed_macos_application_command() {
+  bt_application_launcher=$1
+  assert_absolute_single_line_path "macOS application launcher path" "$bt_application_launcher"
+  cat <<EOF
+#!/usr/bin/env sh
+exec "$bt_application_launcher" launch
+EOF
+}
+
+is_managed_macos_application_command() {
+  bt_application_file=$1
+  bt_application_launcher=$2
+  [ -f "$bt_application_file" ] && [ ! -L "$bt_application_file" ] || return 1
+  render_managed_macos_application_command "$bt_application_launcher" | cmp -s "$bt_application_file" -
+}
+
+render_managed_linux_desktop_entry() {
+  bt_desktop_launcher=$1
+  assert_absolute_single_line_path "Linux desktop launcher path" "$bt_desktop_launcher"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Launch BLUE-TANUKI Control Center
+Exec=$bt_desktop_launcher launch
+Terminal=false
+Categories=Utility;
+EOF
+}
+
+is_managed_linux_desktop_entry() {
+  bt_desktop_file=$1
+  bt_desktop_launcher=$2
+  [ -f "$bt_desktop_file" ] && [ ! -L "$bt_desktop_file" ] || return 1
+  render_managed_linux_desktop_entry "$bt_desktop_launcher" | cmp -s "$bt_desktop_file" -
+}
+
+render_managed_macos_autostart_entry() {
+  bt_autostart_install_root=$1
+  bt_autostart_stdout_log=$2
+  bt_autostart_stderr_log=$3
+  assert_absolute_single_line_path "macOS autostart install root" "$bt_autostart_install_root"
+  assert_absolute_single_line_path "macOS autostart stdout log" "$bt_autostart_stdout_log"
+  assert_absolute_single_line_path "macOS autostart stderr log" "$bt_autostart_stderr_log"
+  bt_autostart_install_xml=$(xml_escape_text "$bt_autostart_install_root/BlueTanukiLauncher.sh") ||
+    safe_target_fail "macOS autostart launcher path could not be encoded"
+  bt_autostart_stdout_xml=$(xml_escape_text "$bt_autostart_stdout_log") ||
+    safe_target_fail "macOS autostart stdout path could not be encoded"
+  bt_autostart_stderr_xml=$(xml_escape_text "$bt_autostart_stderr_log") ||
+    safe_target_fail "macOS autostart stderr path could not be encoded"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.blue-tanuki.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$bt_autostart_install_xml</string>
+    <string>resident-start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>$bt_autostart_stdout_xml</string>
+  <key>StandardErrorPath</key>
+  <string>$bt_autostart_stderr_xml</string>
+</dict>
+</plist>
+EOF
+}
+
+is_managed_macos_autostart_entry() {
+  bt_autostart_file=$1
+  bt_autostart_install_root=$2
+  bt_autostart_stdout_log=$3
+  bt_autostart_stderr_log=$4
+  [ -f "$bt_autostart_file" ] && [ ! -L "$bt_autostart_file" ] || return 1
+  render_managed_macos_autostart_entry \
+    "$bt_autostart_install_root" "$bt_autostart_stdout_log" "$bt_autostart_stderr_log" |
+    cmp -s "$bt_autostart_file" -
+}
+
+write_managed_external_file() {
+  bt_external_target=$1
+  bt_external_label=$2
+  bt_external_mode=$3
+  bt_external_renderer=$4
+  shift 4
+  bt_external_parent=$(dirname -- "$bt_external_target")
+  [ -d "$bt_external_parent" ] && [ ! -L "$bt_external_parent" ] ||
+    safe_target_fail "$bt_external_label parent is missing or not a regular directory: $bt_external_parent"
+  if [ -e "$bt_external_target" ] || [ -L "$bt_external_target" ]; then
+    [ -f "$bt_external_target" ] && [ ! -L "$bt_external_target" ] ||
+      safe_target_fail "$bt_external_label exists and is not a regular file; it was preserved: $bt_external_target"
+    if ! "$bt_external_renderer" "$@" | cmp -s "$bt_external_target" -; then
+      safe_target_fail "$bt_external_label is not an exact managed file; it was preserved: $bt_external_target"
+    fi
+    return 0
+  fi
+  bt_external_temp=$(mktemp "$bt_external_parent/.blue-tanuki-managed.XXXXXX") ||
+    safe_target_fail "$bt_external_label could not create a same-directory staging file"
+  if ! "$bt_external_renderer" "$@" > "$bt_external_temp"; then
+    rm -f -- "$bt_external_temp"
+    safe_target_fail "$bt_external_label could not be rendered; no existing file was replaced"
+  fi
+  if ! chmod "$bt_external_mode" "$bt_external_temp"; then
+    rm -f -- "$bt_external_temp"
+    safe_target_fail "$bt_external_label permissions could not be set; no existing file was replaced"
+  fi
+  if ! "$bt_external_renderer" "$@" | cmp -s "$bt_external_temp" -; then
+    rm -f -- "$bt_external_temp"
+    safe_target_fail "$bt_external_label staging content did not match its renderer"
+  fi
+  if ! ln "$bt_external_temp" "$bt_external_target" 2>/dev/null; then
+    rm -f -- "$bt_external_temp"
+    safe_target_fail "$bt_external_label target changed or could not be created without replacement; existing content was preserved: $bt_external_target"
+  fi
+  rm -f -- "$bt_external_temp" || safe_target_fail "$bt_external_label staging link could not be removed: $bt_external_temp"
+  if ! "$bt_external_renderer" "$@" | cmp -s "$bt_external_target" -; then
+    safe_target_fail "$bt_external_label changed immediately after creation; it was preserved: $bt_external_target"
+  fi
+}
+
 render_managed_linux_autostart_entry() {
   bt_autostart_install_root=$1
   case "$bt_autostart_install_root" in

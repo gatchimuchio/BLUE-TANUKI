@@ -325,11 +325,14 @@ assert_fresh_directory() {
 
 assert_managed_external_file() {
   managed_file=$1
-  expected_line=$2
-  managed_label=$3
+  managed_label=$2
+  managed_renderer=$3
+  shift 3
   if [ -e "$managed_file" ] || [ -L "$managed_file" ]; then
     [ -f "$managed_file" ] && [ ! -L "$managed_file" ] || fail "$managed_label is not a regular file: $managed_file"
-    grep -Fqx "$expected_line" "$managed_file" || fail "$managed_label does not belong to this install: $managed_file"
+    if ! "$managed_renderer" "$@" | cmp -s "$managed_file" -; then
+      fail "$managed_label is not an exact managed file; existing data was preserved: $managed_file"
+    fi
   fi
 }
 
@@ -502,11 +505,11 @@ fi
 
 desktop_dir=$(dirname -- "$SURFACE_FILE")
 if [ "$PLATFORM" = "macos" ]; then
-  assert_managed_external_file "$BIN_LAUNCHER" "exec \"$LAUNCHER\" \"\$@\"" BIN_LAUNCHER
-  assert_managed_external_file "$SURFACE_FILE" "exec \"$BIN_LAUNCHER\" launch" macOS_application_command
+  assert_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER render_managed_unix_launcher_wrapper "$LAUNCHER"
+  assert_managed_external_file "$SURFACE_FILE" macOS_application_command render_managed_macos_application_command "$BIN_LAUNCHER"
 else
-  assert_managed_external_file "$BIN_LAUNCHER" "exec \"$LAUNCHER\" \"\$@\"" BIN_LAUNCHER
-  assert_managed_external_file "$SURFACE_FILE" "Exec=$BIN_LAUNCHER launch" Linux_desktop_entry
+  assert_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER render_managed_unix_launcher_wrapper "$LAUNCHER"
+  assert_managed_external_file "$SURFACE_FILE" Linux_desktop_entry render_managed_linux_desktop_entry "$BIN_LAUNCHER"
 fi
 
 STAGE_SUFFIX="$(date +%s).$$"
@@ -796,27 +799,11 @@ if [ -f "$ENV_FILE_STAGE" ]; then
   ENV_FILE_INSTALLED=1
 fi
 
-cat > "$BIN_LAUNCHER" <<EOF
-#!/usr/bin/env sh
-exec "$(printf '%s' "$LAUNCHER")" "\$@"
-EOF
-chmod +x "$BIN_LAUNCHER"
+write_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER 700 render_managed_unix_launcher_wrapper "$LAUNCHER"
 if [ "$PLATFORM" = "macos" ]; then
-  cat > "$SURFACE_FILE" <<EOF
-#!/usr/bin/env sh
-exec "$(printf '%s' "$BIN_LAUNCHER")" launch
-EOF
-  chmod +x "$SURFACE_FILE"
+  write_managed_external_file "$SURFACE_FILE" macOS_application_command 700 render_managed_macos_application_command "$BIN_LAUNCHER"
 else
-  cat > "$SURFACE_FILE" <<EOF
-[Desktop Entry]
-Type=Application
-Name=BLUE-TANUKI
-Comment=Launch BLUE-TANUKI Control Center
-Exec=$(printf '%s' "$BIN_LAUNCHER") launch
-Terminal=false
-Categories=Utility;
-EOF
+  write_managed_external_file "$SURFACE_FILE" Linux_desktop_entry 644 render_managed_linux_desktop_entry "$BIN_LAUNCHER"
 fi
 
 if [ "$CONFIG_ROOT" = "$DATA_ROOT" ]; then

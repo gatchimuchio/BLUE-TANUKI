@@ -444,32 +444,31 @@ resident_logs() {
 autostart_enable() {
   case "$PLATFORM" in
     macos)
+      load_autostart_guard
+      [ "$INSTALL_ROOT" = "$SCRIPT_DIR" ] || fail "launcher install root does not match its installed location"
+      [ -n "$HOME" ] && [ -d "$HOME" ] && [ ! -L "$HOME" ] ||
+        fail "macOS home directory is missing or not a regular directory; existing data was preserved"
       entry_dir="$HOME/Library/LaunchAgents"
+      if [ -e "$HOME/Library" ] || [ -L "$HOME/Library" ]; then
+        [ -d "$HOME/Library" ] && [ ! -L "$HOME/Library" ] ||
+          fail "macOS Library path is not a regular directory; existing data was preserved: $HOME/Library"
+      fi
+      if [ -e "$entry_dir" ] || [ -L "$entry_dir" ]; then
+        [ -d "$entry_dir" ] && [ ! -L "$entry_dir" ] ||
+          fail "macOS LaunchAgents path is not a regular directory; existing data was preserved: $entry_dir"
+      else
+        mkdir -p "$entry_dir"
+      fi
+      [ -d "$entry_dir" ] && [ ! -L "$entry_dir" ] ||
+        fail "macOS LaunchAgents path is not a regular directory: $entry_dir"
       entry="$entry_dir/com.blue-tanuki.gateway.plist"
-      mkdir -p "$entry_dir"
-      cat > "$entry" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.blue-tanuki.gateway</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$INSTALL_ROOT/BlueTanukiLauncher.sh</string>
-    <string>resident-start</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <false/>
-  <key>StandardOutPath</key>
-  <string>$STDOUT_LOG</string>
-  <key>StandardErrorPath</key>
-  <string>$STDERR_LOG</string>
-</dict>
-</plist>
-EOF
+      if [ -e "$entry" ] || [ -L "$entry" ]; then
+        is_managed_macos_autostart_entry "$entry" "$INSTALL_ROOT" "$STDOUT_LOG" "$STDERR_LOG" ||
+          fail "existing macOS autostart entry is not an exact managed BLUE-TANUKI entry; it was preserved: $entry"
+      else
+        write_managed_external_file "$entry" macOS_autostart_entry 600 \
+          render_managed_macos_autostart_entry "$INSTALL_ROOT" "$STDOUT_LOG" "$STDERR_LOG"
+      fi
       ;;
     linux)
       load_autostart_guard
@@ -527,8 +526,21 @@ autostart_disable() {
       return
       ;;
     macos)
-      if [ -n "$entry" ]; then rm -f -- "$entry"; fi
-      echo "autostart_status=disabled"
+      load_autostart_guard
+      if [ -n "$entry" ] && { [ -e "$entry" ] || [ -L "$entry" ]; }; then
+        if [ "$INSTALL_ROOT" = "$SCRIPT_DIR" ] &&
+          [ -d "$(dirname -- "$entry")" ] && [ ! -L "$(dirname -- "$entry")" ] &&
+          [ ! -L "$HOME" ] && [ ! -L "$HOME/Library" ] &&
+          is_managed_macos_autostart_entry "$entry" "$INSTALL_ROOT" "$STDOUT_LOG" "$STDERR_LOG"; then
+          rm -f -- "$entry"
+          echo "autostart_status=disabled"
+        else
+          echo "autostart_status=preserved"
+          echo "autostart_entry=$entry"
+        fi
+      else
+        echo "autostart_status=disabled"
+      fi
       ;;
     *)
       echo "autostart_status=disabled"
@@ -551,9 +563,20 @@ autostart_status() {
     fi
     return
   fi
-  if [ -n "$entry" ] && [ -f "$entry" ]; then
-    echo "autostart_status=enabled"
-    echo "autostart_entry=$entry"
+  if [ "$PLATFORM" = macos ]; then
+    load_autostart_guard
+    if [ -n "$entry" ] && [ "$INSTALL_ROOT" = "$SCRIPT_DIR" ] &&
+      [ -d "$(dirname -- "$entry")" ] && [ ! -L "$(dirname -- "$entry")" ] &&
+      [ ! -L "$HOME" ] && [ ! -L "$HOME/Library" ] &&
+      is_managed_macos_autostart_entry "$entry" "$INSTALL_ROOT" "$STDOUT_LOG" "$STDERR_LOG"; then
+      echo "autostart_status=enabled"
+      echo "autostart_entry=$entry"
+    elif [ -n "$entry" ] && { [ -e "$entry" ] || [ -L "$entry" ] || [ -L "$HOME" ] || [ -L "$(dirname -- "$entry")" ] || [ -L "$HOME/Library" ]; }; then
+      echo "autostart_status=preserved"
+      echo "autostart_entry=$entry"
+    else
+      echo "autostart_status=disabled"
+    fi
   else
     echo "autostart_status=disabled"
   fi
