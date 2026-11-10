@@ -107,6 +107,52 @@ fail_source_tree() {
   exit 1
 }
 
+remove_bundled_node_tool_links() {
+  runtime_root=$1
+  node_exe=$2
+  "$node_exe" -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(process.argv[1]);
+const links = new Map([
+  ["bin/npm", "../lib/node_modules/npm/bin/npm-cli.js"],
+  ["bin/npx", "../lib/node_modules/npm/bin/npx-cli.js"],
+  ["bin/corepack", "../lib/node_modules/corepack/dist/corepack.js"],
+]);
+function isWithinRoot(candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+}
+for (const [relative, expectedTarget] of links) {
+  const link = path.join(root, relative);
+  let metadata;
+  try {
+    metadata = fs.lstatSync(link);
+  } catch (error) {
+    if (error.code === "ENOENT") continue;
+    throw error;
+  }
+  if (!metadata.isSymbolicLink()) throw new Error(`unexpected bundled Node tool entry: ${relative}`);
+  if (fs.readlinkSync(link) !== expectedTarget) throw new Error(`unexpected bundled Node tool link target: ${relative}`);
+  const resolved = fs.realpathSync(link);
+  if (!isWithinRoot(resolved) || !fs.statSync(link).isFile()) {
+    throw new Error(`bundled Node tool link escapes the runtime or has no regular target: ${relative}`);
+  }
+  fs.unlinkSync(link);
+}
+' "$runtime_root"
+}
+
+directory_identity() {
+  directory_path=$1
+  [ -d "$directory_path" ] && [ ! -L "$directory_path" ] || return 1
+  identity=$(LC_ALL=C ls -di "$directory_path" 2>/dev/null | awk 'NR == 1 { print $1 }')
+  case "$identity" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$identity"
+}
+
 if [ ! -f "$PACKAGE_ROOT/safe-target.sh" ]; then
   SOURCE_GUARD=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/safe-target.sh
   [ -f "$SOURCE_GUARD" ] || fail_source_tree
@@ -479,6 +525,10 @@ PREVIOUS_APP_MOVED=0
 PREVIOUS_RUNTIME_MOVED=0
 NEW_APP_MOVED=0
 NEW_RUNTIME_MOVED=0
+INSTALL_STAGE_CREATED=0
+RUNTIME_STAGE_CREATED=0
+INSTALL_STAGE_ID=
+RUNTIME_STAGE_ID=
 ENV_FILE_BACKED_UP=0
 ENV_FILE_INSTALLED=0
 cleanup_setup() {
@@ -519,13 +569,21 @@ cleanup_setup() {
     elif [ "$ENV_FILE_INSTALLED" = "1" ] && [ -f "$ENV_FILE" ]; then
       rm -f -- "$ENV_FILE"
     fi
-    if [ -d "$INSTALL_STAGE" ] && [ -d "$RUNTIME_STAGE" ]; then
-      if (assert_managed_product_install_inventories "$INSTALL_STAGE" "$RUNTIME_STAGE"); then
+    if [ "$RUNTIME_STAGE_CREATED" = "1" ]; then
+      current_runtime_stage_id=$(directory_identity "$RUNTIME_STAGE")
+      if [ -n "$RUNTIME_STAGE_ID" ] && [ "$current_runtime_stage_id" = "$RUNTIME_STAGE_ID" ]; then
         rm -rf -- "$RUNTIME_STAGE"
-        rm -rf -- "$INSTALL_STAGE"
+      else
+        echo "error: runtime staging path identity changed or is unknown; retained: $RUNTIME_STAGE" >&2
       fi
-    elif [ -d "$INSTALL_STAGE" ] && (assert_managed_product_app_inventory "$INSTALL_STAGE"); then
-      rm -rf -- "$INSTALL_STAGE"
+    fi
+    if [ "$INSTALL_STAGE_CREATED" = "1" ]; then
+      current_install_stage_id=$(directory_identity "$INSTALL_STAGE")
+      if [ -n "$INSTALL_STAGE_ID" ] && [ "$current_install_stage_id" = "$INSTALL_STAGE_ID" ]; then
+        rm -rf -- "$INSTALL_STAGE"
+      else
+        echo "error: install staging path identity changed or is unknown; retained: $INSTALL_STAGE" >&2
+      fi
     fi
     [ ! -f "$ENV_FILE_STAGE" ] || rm -f -- "$ENV_FILE_STAGE"
     if [ "$PREVIOUS_APP_MOVED" = "1" ] || [ "$PREVIOUS_RUNTIME_MOVED" = "1" ]; then
@@ -555,7 +613,12 @@ for candidate in "$INSTALL_STAGE" "$RUNTIME_STAGE" "$ROLLBACK_INSTALL" "$ROLLBAC
   [ ! -e "$candidate" ] && [ ! -L "$candidate" ] || fail "installer staging path already exists: $candidate"
 done
 mkdir -p "$INSTALL_PARENT" "$RUNTIME_PARENT" "$DATA_ROOT" "$CONFIG_ROOT" "$BIN_ROOT" "$desktop_dir"
-mkdir "$INSTALL_STAGE" "$RUNTIME_STAGE"
+mkdir "$INSTALL_STAGE"
+INSTALL_STAGE_CREATED=1
+INSTALL_STAGE_ID=$(directory_identity "$INSTALL_STAGE") || fail "install staging directory identity could not be recorded safely"
+mkdir "$RUNTIME_STAGE"
+RUNTIME_STAGE_CREATED=1
+RUNTIME_STAGE_ID=$(directory_identity "$RUNTIME_STAGE") || fail "runtime staging directory identity could not be recorded safely"
 
 cp -R "$PACKAGE_ROOT/app/." "$INSTALL_STAGE/"
 cp "$PACKAGE_ROOT/launcher/BlueTanukiLauncher.sh" "$STAGE_LAUNCHER"
@@ -575,12 +638,14 @@ case "$runtime_archive" in
     ;;
 esac
 
-assert_no_symlinks_in_tree "$INSTALL_STAGE" staged_install
-assert_no_symlinks_in_tree "$RUNTIME_STAGE" staged_runtime
 NODE_EXE=$(find "$RUNTIME_STAGE" -type f -path "*/bin/node" | sort | sed -n '1p')
 [ -n "$NODE_EXE" ] || fail "bundled node executable not found under $RUNTIME_STAGE"
 chmod +x "$NODE_EXE" || true
 NODE_TOP_DIRECTORY=$(basename -- "$(dirname -- "$(dirname -- "$NODE_EXE")")")
+remove_bundled_node_tool_links "$RUNTIME_STAGE/$NODE_TOP_DIRECTORY" "$NODE_EXE" ||
+  fail "bundled Node tool links could not be normalized safely"
+assert_no_symlinks_in_tree "$INSTALL_STAGE" staged_install
+assert_no_symlinks_in_tree "$RUNTIME_STAGE" staged_runtime
 NODE_EXE_FINAL="$RUNTIME_ROOT/$NODE_TOP_DIRECTORY/bin/node"
 
 {
@@ -713,8 +778,12 @@ if [ "$INSTALL_EXISTS" = "1" ]; then
 fi
 mv -- "$INSTALL_STAGE" "$INSTALL_ROOT"
 NEW_APP_MOVED=1
+INSTALL_STAGE_CREATED=0
+INSTALL_STAGE_ID=
 mv -- "$RUNTIME_STAGE" "$RUNTIME_ROOT"
 NEW_RUNTIME_MOVED=1
+RUNTIME_STAGE_CREATED=0
+RUNTIME_STAGE_ID=
 assert_managed_product_install_inventories "$INSTALL_ROOT" "$RUNTIME_ROOT"
 
 if [ -f "$ENV_FILE_STAGE" ]; then

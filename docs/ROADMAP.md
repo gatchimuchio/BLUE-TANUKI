@@ -8,7 +8,9 @@
 
 ### 直近BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
 
-Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。target-aware builderがLinux専用isolation helperを含むtar installerを生成し、Linux package verifierはそれを確認する。WSL Ubuntu 24.04 ext4上で生成したpackage verifierは2649 entryを確認し、archive SHA-256 `a52ee047c620a651046af8e4a5c1f761d359561098b22125509d988ec2a231b8`、公式SHASUMS256.txtと一致するNode runtime SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`を記録した。これはartifact生成・構造確認までであり、native Linux installed runtime、distribution別通常利用、service／Secret Service動作、test suite、全OS、QE_QC／QE_QAは未確認。installed Linux成功や5OS完成を主張しない。
+Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。target-aware builderがLinux専用isolation helperを含むtar installerを生成し、Linux package verifierはそれを確認する。SetupはNode公式runtime内の既知`npm`／`npx`／`corepack` symlinkだけを安全に正規化し、ほかのsymlinkを引き続き拒否する。共通guardはLinux schema 2／x64とmacOS schema 1を区別し、部分stage cleanupをdirectory identityへ束縛した。
+
+WSL Ubuntu 24.04 ext4上で生成したpackage verifierは2649 entryを確認し、artifact SHA-256 `6e4d0f1186288022d33fe4e74a41506496d1ef0299a45a6cd56e2882b7742ed5`、size=45,949,718 bytes、source Git tree `e283f6eac81a4108c93c49872c6ee2c88c640a95`を記録した。同梱Node runtime SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式SHASUMS256.txtと一致する。隔離HOMEとNode／pnpm／Gitを除いたPATHでSetupを完了し、bundled Node v22.14.0、env file mode 600、autostart disabled、loopback `/healthz`／`/app` HTTP 200、一時resident停止とport閉鎖を確認した。これはWSL内の限定BUILD consumer evidenceで、native Linux installed QAではない。native Linux通常利用、distribution別動作、service／Secret Service、test suite、全OS、QE_QC／QE_QAは未確認。installed native Linux成功や5OS完成を主張しない。
 
 ### 前段完了BUILD_BATCH — G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
 

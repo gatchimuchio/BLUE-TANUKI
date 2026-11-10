@@ -8,11 +8,15 @@
 
 対象はvendor-supported GNU/Linux distribution、x86_64、kernel >= 4.18、glibc >= 2.28。Node.js v22.14.0公式Linux x64 runtimeの条件を根拠にし、musl／非x64を拒否する。manifest schema 2にNode runtimeと導入utility、Secret Service over current-user session D-Busが秘密永続化に必要な条件を記録する。Setupはkernel/libc/architecture/utilityを読み取り、installer manifestのpackage typeとABI項目を照合してから `mkdir`／stage作成へ進む。target-aware package builderは共通成果物とOS専用isolation helperを区別し、Linux package生成時にWindows専用exeを必須入力にしない。Linux package verifierはLinux isolation helperの同梱を要求する。
 
-Node.js v22.14.0 runtimeを含むLinux x64 installerをWSL Ubuntu 24.04のext4作業領域で生成し、package verifierが2649 entryを確認した。archive SHA-256は`a52ee047c620a651046af8e4a5c1f761d359561098b22125509d988ec2a231b8`。同梱Node runtime archive SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式`SHASUMS256.txt`と一致する。tar内のSetupとLinux isolation helperの実行bitも確認した。package source Git treeは`18a8b97497c968cf309ab11ca3fb27415202a478`。WSLでの生成・検証はLinux native installed QA evidenceではない。Node ABI基準は[Node.js v22.14.0 BUILDING.md](https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md)。distribution E2E、全suite、全OS、QE_QC／QE_QAはこのBUILD_BATCHで実施しない。
+Node.js v22.14.0 runtimeを含むLinux x64 installerをWSL Ubuntu 24.04のext4作業領域で生成し、package verifierが2649 entryを確認した。artifact SHA-256は`6e4d0f1186288022d33fe4e74a41506496d1ef0299a45a6cd56e2882b7742ed5`、size=45,949,718 bytes。source Git tree=`e283f6eac81a4108c93c49872c6ee2c88c640a95`。同梱Node runtime archive SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式`SHASUMS256.txt`と一致し、Setup／Linux isolation helperの実行bitも確認した。
+
+Setupの実導入で、同梱Nodeの公式`npm`／`npx`／`corepack` symlinkがgeneric symlink拒否に阻まれる欠陥と、Linux schema 2 package manifestを共通所有guardがschema 1として拒否する欠陥を是正した。既知の相対link targetがruntime内のregular fileへ解決する3項目だけをstageから除き、未知のsymlink拒否は維持する。共通guardはLinux x64 schema 2とmacOS schema 1を区別する。Setup途中失敗時のstage片付けは、作成directoryのidentity一致を検査してから行う。
+
+修正版artifactをWSL Ubuntu 24.04 ext4上の隔離HOMEへ導入し、`PATH`からNode／pnpm／Gitを除いた環境でSetupを完了した。同梱Node v22.14.0、env file mode 600、autostart disabledを確認し、一時`resident-start`からloopback `/healthz`と`/app`がHTTP 200、`resident-stop`後にportが閉じることを確認した。smoke専用env fileはport 18787に設定した。これはWSL内の限定BUILD疎通であり、native Linux QAではない。Secret Service、system service、distribution別通常利用、外部provider、全suite、全OS、QE_QC／QE_QAはNOT_RUN。
 
 UNIT_ID: G03.01 Linux packaged target and host ABI preflight
-STATUS: WIRED（target-aware package builder→Linux artifact→manifest／README→Setup preflight。native installed product runtime未確認）
-NEXT_REQUIRED_CONSUMER: native Linux installed package→bundled Node／Gateway entry→GUI／resident launcherの実consumer。対象distributionの実導入と通常利用を、秘密永続化時のSecret Service状態と分けて観測する。
+STATUS: WIRED（target-aware package builder→Linux artifact→Setup→bundled Node／Gateway→resident launcherをWSL隔離環境で限定疎通。native host証拠は未成立）
+NEXT_REQUIRED_CONSUMER: 対象native Linux distribution上のinstalled product通常利用・権限・service・Secret Serviceを別々に観測する。WSLの証拠をnative Linuxへ転用しない。
 SAFETY_STATUS: 非x64、kernel < 4.18、glibc < 2.28、musl／未知libc、必須installer utility欠落、manifestとruntime target不一致はfilesystem変更前に拒否。秘密保存・service・network・HDS権限はこのsliceで変更しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛

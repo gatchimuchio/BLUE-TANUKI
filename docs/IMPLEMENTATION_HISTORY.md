@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-11-10 — QEB-G03.01-LINUX-PACKAGED-INSTALL-RUNTIME-SMOKE
+
+開始時local／`origin/main`=`d6e87cd2d44235219c3c51676c0febe816525b90`。直前復旧ref local branch／remote tag current=`d6e87cd2d44235219c3c51676c0febe816525b90`、previous=`850860fc7f740d744390aed53a51ae9d6b7079a0`。protected `.codex-attachments/`／`.codex-remote-attachments/`は変更しない。
+
+G03.01 Linux packageを実際のSetup→installed runtime consumerへ接続した。Node.js v22.14.0公式archiveは`bin/npm`、`bin/npx`、`bin/corepack`の3 symlinkを含むが、Setupが展開後runtime内の全symlinkを拒否して導入不能だった。Setupはこの3相対pathの固定target、runtime root内へのrealpath containment、通常file targetを同梱Nodeで検証してから当該stage linkのみunlinkする。未知のtarget／linkやほかのsymlinkは拒否を維持する。失敗時にmetadata未作成の部分stageを掃除できず残す問題は、Setup自身が作成したstage directoryのfilesystem identityを保存し、cleanup時に同一identityかつ通常directoryの場合だけ片付ける。
+
+一回目の実導入ではさらに、Linux package manifest schema 2を`install/unix/safe-target.sh`がschema 1として拒否するproducer／consumer不一致を検出した。guardをplatform別にしLinuxはschema 2と`linux-x64-tar-installer`、macOSはschema 1とx64／arm64 package typeを照合する。macOSの既存契約をLinux schemaに拡張しない。
+
+package source tree=`e283f6eac81a4108c93c49872c6ee2c88c640a95`。WSL Ubuntu 24.04 ext4で生成したLinux x64 artifactは`/home/ohira/.cache/blue-tanuki/qe-build-artifacts/e283f6eac81a4108c93c49872c6ee2c88c640a95/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz`。SHA-256=`6e4d0f1186288022d33fe4e74a41506496d1ef0299a45a6cd56e2882b7742ed5`、size=45,949,718 bytes。verifier 2649 entries PASS。Node archive SHA-256=`69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式`SHASUMS256.txt`と一致。Setup／Linux isolation helperのtar実行bitを確認。
+
+修正版artifactを専用HOME、config/data/install/runtime/bin/TMPDIR配下へ導入。限定PATHはUbuntu utilityへのsymlinkだけを持ち、`node`／`pnpm`／`git`は不在。Setup `--no-launch --skip-doctor` PASS、bundled Node v22.14.0、env file mode 600、autostart disabledを確認した。smoke config内だけport 18787を設定し、一時resident start→loopback `/healthz` 200／`/app` 200→stop→port closedを確認した。LLM/provider、外部送信、browser起動、Secret Service、system service、native Linux hostは未実施。これはWSL内の限定BUILD疎通でありnative Linux QAではない。
+
+Windows workspace `corepack pnpm typecheck`／`corepack pnpm build`、Setup／safe-target `sh -n`、Linux package verifier、限定installed smoke、記録更新後の`docs:check`と`git diff --check`はPASS。test suiteは未実行。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、native Linux support、release／公開／owner GOは未成立。
+
+作業資産の閉包：Windows Tempの中間／最終source archive各1件（各21,729,280 bytes、計43,458,560 bytes）をWindows Recycle Binへ移動し、元path消失とRecycle Bin内の復元metadata・data pairを照合した。WSL Trashへは、停止確認済みisolated smoke root 4件（301,901,054／73,594,909／304,241,553／304,261,226 bytes）、再生成可能なLinux package stage（83,317,761 bytes）、中間artifact directory（45,951,964 bytes）の計6件・1,113,268,467 bytesを移動し、各元path消失と`.trashinfo`／Trash objectを確認した。ごみ箱移動を容量回復とは数えない。最終artifactと直前artifact、稼働中のWSL作業workspace、依存cache、Windows `dist`は保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は変更なし。
+
+作業開始時にlocalだけにあった同名stale tagは`150e57cd`／`36eefc47`を指していた。両commitが開始mainの祖先であることを確認し、expected-old付きでlocal tagのみ削除した。local復旧branchとGitHub remote復旧tagはcurrent=`d6e87cd2d44235219c3c51676c0febe816525b90`／previous=`850860fc7f740d744390aed53a51ae9d6b7079a0`で作業開始時に一致。fetchのstale worktree metadata ACL拒否は回避せず、remote状態は`ls-remote`で再照合する。
+
+---
+
 ## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-BUILDER-AND-ARTIFACT
 
 G03.01のLinux package generationを実際のconsumerへ進めた。`scripts/package_windows.ts`の共通build入力判定がWindows専用exeを全OSへ要求していたため、target別isolation helperを検査するよう修正。Unix package builderは選択targetを共通layoutへ渡し、Linux package verifierはbundled Linux isolation helperを必須entryにした。macOS packageの既存keyring target選択は維持する。

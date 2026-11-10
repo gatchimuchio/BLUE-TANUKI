@@ -415,9 +415,22 @@ assert_managed_product_app_identity() {
   [ "$(printf '%s\n' "$bt_metadata_hash" | wc -l | tr -d '[:space:]')" = 1 ] || safe_target_fail "managed install metadata package digest is missing or ambiguous"
   bt_actual_hash=$(sha256_file "$bt_manifest")
   [ "$(printf '%s' "$bt_metadata_hash" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$bt_actual_hash" | tr '[:upper:]' '[:lower:]')" ] || safe_target_fail "installed package manifest digest does not match install metadata"
-  grep -Fqx '  "schema_version": 1,' "$bt_manifest" || safe_target_fail "installed package manifest schema is not recognized"
+  case "$bt_platform" in
+    linux)
+      grep -Fqx '  "schema_version": 2,' "$bt_manifest" || safe_target_fail "installed Linux package manifest schema is not recognized"
+      grep -Fqx '  "package_type": "linux-x64-tar-installer",' "$bt_manifest" ||
+        safe_target_fail "installed Linux package type is not recognized"
+      ;;
+    macos)
+      grep -Fqx '  "schema_version": 1,' "$bt_manifest" || safe_target_fail "installed macOS package manifest schema is not recognized"
+      grep -Eq '^  "package_type": "macos-(x64|arm64)-tar-installer",?$' "$bt_manifest" ||
+        safe_target_fail "installed macOS package type is not recognized"
+      ;;
+    *)
+      safe_target_fail "installed package platform is not recognized"
+      ;;
+  esac
   grep -Fqx '  "name": "blue-tanuki",' "$bt_manifest" || safe_target_fail "installed package manifest does not identify BLUE-TANUKI"
-  grep -Eq "^  \\\"package_type\\\": \\\"$bt_platform-(x64|arm64)-tar-installer\\\",?$" "$bt_manifest" || safe_target_fail "installed package manifest platform does not match"
   assert_managed_product_app_inventory "$bt_app_root"
 }
 

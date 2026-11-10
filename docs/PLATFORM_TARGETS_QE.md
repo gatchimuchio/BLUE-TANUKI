@@ -18,7 +18,7 @@
 
 installerはNode runtimeを同梱する。導入側にはPOSIX shell／標準utility、`getconf`、`tar`、`mktemp`、`find`、`ps`、`awk`、`sha256sum`または`shasum`を要求する。Secret Service over session D-Busは秘密情報を永続化する場合の依存であり、installerの導入成功からその稼働を推定しない。配布manifestとREADMEに同じ境界を出し、対応外のarchitecture、kernel、libcではファイル変更前に停止する。
 
-manifest・preflightとx64 package builderのsource接続はQE_BUILDの一部。Linux x64 tar installerはWSL Ubuntu 24.04 ext4上で生成・構造確認済みだが、WSLはnative Linux QAの代用ではない。native Linux installed productの起動、distribution別の通常利用、Secret Service、service、更新／復旧は実行証拠が未成立。これらを後段QCで対象hostごとに確認する。
+manifest・preflightとx64 package builderのsource接続はQE_BUILDの一部。Linux x64 tar installerはWSL Ubuntu 24.04 ext4上で生成し、2649 entryの構造検証を通した。修正版Setupを隔離HOMEとNode／pnpm／GitのないPATHで実行し、同梱Node v22.14.0からinstalled Gateway／residentを一時起動してloopback `/healthz`／`/app` HTTP 200、停止後のport閉鎖を確認した。これはWSL内の限定BUILD疎通であり、WSLをnative Linux QAの代用にしない。native Linux installed product、distribution別の通常利用、実環境権限、Secret Service、system service、更新／復旧は未確認で、全体BUILD_COVERED後に対象hostごとに評価する。
 
 ## Mobileの構造と安全
 
