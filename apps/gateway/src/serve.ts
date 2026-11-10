@@ -113,6 +113,7 @@ import {
   normalizeInboundRequestForAuthority,
   TRANSIENT_AUDIO_MAX_BYTES,
   TRANSIENT_IMAGE_MAX_BYTES,
+  TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
@@ -749,11 +750,13 @@ export function selectGatewayInboundEphemeralContext(
   const request = boundary.request;
   if (!boundary.boundary_ok || decisionInput !== request || ephemeralContext?.request_id !== request.id) return undefined;
   if (request.channel === "telegram" &&
-      (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)) {
+      (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0) &&
+      ephemeralContext.ephemeral_canvas_artifact === undefined) {
     return ephemeralContext;
   }
   const image = ephemeralContext.ephemeral_images.length === 1 ? ephemeralContext.ephemeral_images[0] : undefined;
   const audio = ephemeralContext.ephemeral_audio?.length === 1 ? ephemeralContext.ephemeral_audio[0] : undefined;
+  const canvasArtifact = ephemeralContext.ephemeral_canvas_artifact;
   const ownerTaskImage = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
     request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
     request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
@@ -772,7 +775,29 @@ export function selectGatewayInboundEphemeralContext(
     ephemeralContext.ephemeral_images.length === 0 && audio !== undefined &&
     audio.data instanceof Uint8Array && audio.data.byteLength > 0 &&
     audio.data.byteLength <= TRANSIENT_AUDIO_MAX_BYTES && detectTransientAudioFormat(audio.data) === audio.format;
-  return ownerTaskImage || ownerAudioTranscription ? ephemeralContext : undefined;
+  const ownerCanvasArtifact = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
+    request.user === "webchat-owner-token-holder" &&
+    request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+    request.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+    request.metadata?.["blue_tanuki.process_kind"] === "chat" &&
+    request.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
+    request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
+    request.metadata?.["blue_tanuki.operation_core.used_for_authority"] === false &&
+    ephemeralContext.ephemeral_images.length === 0 && (ephemeralContext.ephemeral_audio?.length ?? 0) === 0 &&
+    canvasArtifact !== undefined && canvasArtifact.version === 1 &&
+    (canvasArtifact.media_type === "text/html" || canvasArtifact.media_type === "text/markdown") &&
+    typeof canvasArtifact.source_request_id === "string" && canvasArtifact.source_request_id.length > 0 &&
+    canvasArtifact.source_request_id.length <= 200 && canvasArtifact.source_request_id.trim() === canvasArtifact.source_request_id &&
+    /^[a-f0-9]{64}$/u.test(canvasArtifact.sha256) && canvasArtifact.data instanceof Uint8Array &&
+    canvasArtifact.data.byteLength > 0 && canvasArtifact.data.byteLength <= TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES &&
+    createHash("sha256").update(canvasArtifact.data).digest("hex") === canvasArtifact.sha256 &&
+    request.metadata?.["blue_tanuki.canvas_artifact.mime"] === canvasArtifact.media_type &&
+    request.metadata?.["blue_tanuki.canvas_artifact.sha256"] === canvasArtifact.sha256 &&
+    request.metadata?.["blue_tanuki.canvas_artifact.version"] === canvasArtifact.version &&
+    request.metadata?.["blue_tanuki.canvas_artifact.source_request_id"] === canvasArtifact.source_request_id &&
+    request.metadata?.["blue_tanuki.canvas_artifact.reference_is_ephemeral"] === true &&
+    request.metadata?.["blue_tanuki.canvas_artifact.used_for_authority"] === false;
+  return ownerTaskImage || ownerAudioTranscription || ownerCanvasArtifact ? ephemeralContext : undefined;
 }
 
 export function buildObservationAcquisitionRecord(
@@ -2346,10 +2371,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       try {
         executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
           ...(cmd.type === "llm_call" && ephemeralContext?.request_id === log.request_id &&
-            (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)
+            (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0 ||
+              ephemeralContext.ephemeral_canvas_artifact !== undefined)
             ? {
               ...(ephemeralContext.ephemeral_images.length > 0 ? { ephemeral_images: ephemeralContext.ephemeral_images } : {}),
               ...(ephemeralContext.ephemeral_audio?.length ? { ephemeral_audio: ephemeralContext.ephemeral_audio } : {}),
+              ...(ephemeralContext.ephemeral_canvas_artifact
+                ? { ephemeral_canvas_artifact: ephemeralContext.ephemeral_canvas_artifact } : {}),
             }
             : {}),
           signal: executionController.signal,

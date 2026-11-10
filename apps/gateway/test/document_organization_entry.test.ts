@@ -1197,6 +1197,224 @@ describe("delegated goal purpose owner review", () => {
     }
   }, 120_000);
 
+  it("routes bounded Canvas data only to parent C and verifies an owner-reviewed local file.write receipt", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-canvas-file-write-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    const fileRoot = join(auditDir, "file-root");
+    const goalRef = "goal_0000000000000046";
+    const initialPurpose = "Initial purpose digest for isolated Canvas local-write fixture.";
+    const initialPurposeDigest = createHash("sha256").update(initialPurpose, "utf8").digest("hex");
+    mkdirSync(fileRoot, { recursive: true });
+    mkdirSync(privateState, { recursive: true });
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0000000000000046",
+        initial_purpose_digest: initialPurposeDigest, initial_interpretation_digest: "e".repeat(64),
+        adopted_at: Date.now() - 10_000 }],
+      authorizations: [], events: [],
+    }), "utf8");
+
+    const gatewayPort = await reserveLoopbackPort();
+    const runtimeEnv = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
+    runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    runtimeEnv.BLUE_TANUKI_FILE_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_SHELL_ROOT = fileRoot;
+    runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+    runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
+    runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+    delete runtimeEnv.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    delete runtimeEnv.LLM_PROVIDERS_JSON;
+
+    let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
+    const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+    const loadQueue = async () => {
+      const response = await fetch(`${baseUrl}/approval`, { headers: { authorization: `Bearer ${resumeToken}` } });
+      expect(response.status).toBe(200);
+      return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+    };
+    const postApproval = (commandId: string, approvalToken: unknown, contentReviewDigest?: unknown) => fetch(
+      `${baseUrl}/approval/${encodeURIComponent(commandId)}`,
+      { method: "POST", headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: approvalToken,
+          ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}) }) },
+    );
+
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const purposeText = "Canvas由来の本文を、ownerが明示したsandbox内の単一新規ファイルへ保存する。";
+      const purposeResponse = await fetch(`${baseUrl}/owner/goal-purpose-change`, {
+        method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: purposeText }),
+      });
+      expect(purposeResponse.status).toBe(202);
+      const purposeProposal = await purposeResponse.json() as { command_id?: string };
+      const purposePending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === purposeProposal.command_id);
+      const purposeContentResponse = await fetch(
+        `${baseUrl}/approval/${encodeURIComponent(String(purposeProposal.command_id))}/content`,
+        { method: "POST", headers: { authorization: `Bearer ${resumeToken}` } },
+      );
+      expect(purposeContentResponse.status).toBe(200);
+      const purposeContent = await purposeContentResponse.json() as Record<string, unknown>;
+      expect(purposeContent).toMatchObject({ kind: "goal_purpose_change", purpose_text: purposeText,
+        used_for_authority: false });
+      const purposeApproval = await postApproval(String(purposeProposal.command_id),
+        purposePending?.approval_token, purposeContent.command_digest);
+      expect(purposeApproval.status).toBe(200);
+      expect(await purposeApproval.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
+      } });
+
+      const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(taskWebSocket, "open");
+
+      const artifactBody = "# Canvas fixture\n\nThis bounded body is passed to parent C once.\n";
+      const artifactReference = {
+        schema_version: "blue-tanuki.canvas-artifact-reference.v1",
+        mime: "text/markdown",
+        sha256: createHash("sha256").update(artifactBody, "utf8").digest("hex"),
+        version: 1,
+        source: { surface: "webchat-assistant-reply", request_id: "canvas-fixture-source-0001" },
+        used_for_authority: false,
+      } as const;
+      const task = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n" +
+        JSON.stringify({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
+          owner_intent: "Canvas本文をowner-task-note.txtへそのまま新規作成してください。",
+          artifact_reference: artifactReference, artifact_reference_used_for_authority: false });
+      const completionRules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
+        rules: [{ rule_id: "canvas-file-created", operation: "file.write",
+          target: { kind: "file" as const, id: "owner-task-note.txt" }, output_pointer: "/bytes_written",
+          expected_value: Buffer.byteLength(artifactBody, "utf8") }] };
+      const taskReply = waitForWebChatSend(taskWebSocket, "Canvas owner task compute");
+      const taskSubmission = await fetch(`${baseUrl}/owner/task-compute`, {
+        method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task, goal_ref: goalRef, purpose_version: 2,
+          submission_id: "01a119c0-5b35-4491-ae00-000000000847",
+          goal_completion_rules: completionRules,
+          canvas_artifact_input: { schema_version: "blue-tanuki.canvas-artifact-input.v1",
+            artifact_reference: artifactReference, content: artifactBody } }),
+      });
+      expect(taskSubmission.status).toBe(202);
+      expect((await taskReply).length).toBeGreaterThan(0);
+
+      const plan = await waitFor(async () => {
+        const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => Array.isArray(candidate.steps) &&
+          (candidate.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.write")) ?? null;
+      }, gateway, "bounded Canvas input did not reach the J file.write plan consumer");
+      expect(plan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const planId = String(plan.plan_id);
+      const revisionDigest = String(plan.revision_digest);
+      const goalPurposeBinding = plan.goal_purpose_binding as Record<string, unknown>;
+      const writeStep = (plan.steps as Array<Record<string, unknown>>).find((step) => step.operation === "file.write");
+      expect(plan.steps).toHaveLength(1);
+      expect(writeStep?.operation).toBe("file.write");
+
+      const relationResponse = await fetch(`${baseUrl}/owner/goal-purpose-relation-review`, {
+        method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: planId, revision_digest: revisionDigest, outcome: "supports" }),
+      });
+      expect(relationResponse.status).toBe(202);
+      const relationProposal = await relationResponse.json() as { command_id?: string };
+      const relationPending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === relationProposal.command_id);
+      expect(relationPending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        goal_purpose_relation_review: { outcome: "supports", review_status: "required", may_execute: false } });
+      const relationContentResponse = await fetch(
+        `${baseUrl}/approval/${encodeURIComponent(String(relationProposal.command_id))}/content`,
+        { method: "POST", headers: { authorization: `Bearer ${resumeToken}` } },
+      );
+      expect(relationContentResponse.status).toBe(200);
+      const relationContent = await relationContentResponse.json() as Record<string, unknown>;
+      expect(relationContent).toMatchObject({ kind: "goal_purpose_relation", task,
+        purpose_text: purposeText, candidate_outcome: "unknown", may_execute: false });
+      const relationApproval = await postApproval(String(relationProposal.command_id),
+        relationPending?.approval_token, relationContent.command_digest);
+      expect(relationApproval.status).toBe(200);
+      expect(await relationApproval.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const reviewReply = waitForWebChatSend(taskWebSocket, "Canvas file.write plan review");
+      const reviewResponse = await fetch(`${baseUrl}/owner/inbound`, {
+        method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: planId, revision_digest: revisionDigest,
+          content: "plan:review " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest,
+            step_id: writeStep?.step_id, goal_purpose_binding: goalPurposeBinding }) }),
+      });
+      expect(reviewResponse.status).toBe(202);
+      expect((await reviewReply).length).toBeGreaterThan(0);
+      const completedPlan = await waitFor(async () => {
+        const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        const current = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
+        const step = (current?.steps as Array<Record<string, unknown>> | undefined)
+          ?.find((candidate) => candidate.step_id === writeStep?.step_id);
+        return current?.status === "results_verified" && step?.status === "verified" &&
+          (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed" ? current : null;
+      }, gateway, "Canvas file.write did not produce a verified M receipt");
+      expect(completedPlan.steps).toMatchObject([expect.objectContaining({ operation: "file.write", status: "verified",
+        binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })]);
+      expect(completedPlan.task_outcome).toMatchObject({ status: "achieved",
+        reason_code: "goal_completion_rules_satisfied", used_for_authority: false, may_execute: false,
+        goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+          used_for_authority: false, may_execute: false } });
+      expect(readdirSync(fileRoot)).toEqual(["owner-task-note.txt"]);
+      expect(readFileSync(join(fileRoot, "owner-task-note.txt"), "utf8")).toBe(artifactBody);
+      const planStateDb = new DatabaseSync(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"));
+      try {
+        const persisted = planStateDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as
+          { checkpoint_json: string } | undefined;
+        if (!persisted) throw new Error("Canvas operation-plan checkpoint was not persisted");
+        expect(persisted.checkpoint_json).toContain(JSON.stringify(artifactBody));
+      } finally {
+        planStateDb.close();
+      }
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const restored = await waitFor(async () => {
+        const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
+        if (!response.ok) return null;
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId &&
+          candidate.status === "results_verified" && Array.isArray(candidate.steps) &&
+          (candidate.steps as Array<Record<string, unknown>>).some((step) => step.operation === "file.write" &&
+            step.status === "verified" &&
+            (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed")) ?? null;
+      }, gateway, "Gateway restart did not restore the Canvas file.write M receipt");
+      expect(restored).toMatchObject({ plan_id: planId, task_identity_digest: plan.task_identity_digest,
+        revision_digest: revisionDigest,
+        task_outcome: { status: "achieved", reason_code: "goal_completion_rules_satisfied",
+          goal_assessment: { status: "rules_satisfied", rule_count: 1, satisfied_rule_count: 1,
+            used_for_authority: false, may_execute: false }, used_for_authority: false, may_execute: false } });
+      expect(readFileSync(join(fileRoot, "owner-task-note.txt"), "utf8")).toBe(artifactBody);
+    } finally {
+      taskWebSocket?.close();
+      if (gateway) await stopChild(gateway.child);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("holds exact proposal text in memory, requires reviewed L3 approval, commits to J, and replays the new version", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-change-"));
     const auditDir = join(tempRoot, "audit");

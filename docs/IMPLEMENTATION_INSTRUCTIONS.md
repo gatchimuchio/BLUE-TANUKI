@@ -1,27 +1,31 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
-## 現行BUILD_BATCH — QE_BUILD / F17.02 Canvas成果物参照とowner操作意図から既存J計画経路へ接続（限定WIRED）
+この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-主語はWebChat Control Centerの隔離Canvas viewerと、そこからownerが明示入力する操作意図。目的は成果物のMIME・原文SHA-256・表示版・assistant返信request IDを同定情報として保持し、ownerの意図だけを既存owner task→Gateway→HDS-J計画経路へ戻すこと。生成Canvas内のscriptやbutton、任意内容から実行・承認・外部作用へ直結する経路は作らない。
+## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptへ接続（限定WIRED）
 
-assistant返信本文のUTF-8 bytesからSHA-256をWebCryptoで計算し、由来request IDがない／不正、またはhash計算に失敗した場合は表示を続けても操作要求の準備を無効化する。版はこの不変なWebChat返信内のviewer表示版`1`と明示し、生成元の独自versionとは主張しない。viewerの親画面でownerが希望操作を別途入力すると、`blue-tanuki.canvas-operation-intent.v1` task文を既存Tasks欄へ準備し、Tasks画面へ移動する。Tasks欄に既存の未送信文面があれば上書きせず準備を止める。準備時にHTTP送信しない。ownerが現在の委任目的・token・taskを確認して既存フォームを明示送信した場合だけ、既存の重複防止・目的version確認・owner-authenticated `/owner/task-compute` が厳格な`plan:compute`へ送り、成果物参照を非権威情報としてJに渡す。後続操作は既存J／Approval／Broker境界に留まる。F17.03の製品往復、実browser/provider、外部作用、別repo変更は対象外。F16.03のD4契約不足はBLOCKED_AUTHORITYのまま。
+主語はWebChat Control CenterのCanvas成果物と、そこからownerが明示した操作意図。目的は一致確認済みの限定本文を一回の親C計算へ渡し、提案されたsandbox内file.writeを既存J／Approval／Brokerへ接続し、検証済み結果とM receiptに基づくowner指定の達成判定まで同じtaskで通すこと。ownerは「明示規則と検証済み根拠」を選択済み。Canvas本文は権限・承認・目的変更の根拠ではなく、child候補へ本文を渡さない。
+
+Canvas source MIME／UTF-8／SHA-256／表示版／返信request IDをowner task referenceと一対一照合し、本文を最大64 KiBに制限する。owner-authenticated `/owner/task-compute`からの一致した一回入力だけをephemeral contextとして親Cへ渡し、handler終了時にbufferをzeroし、Task session historyには追加しない。Jがfile.write候補を作った場合は審査と再起動復元のため本文・保存先をローカルJ Operation Plan SQLiteへ永続保存する。Control Centerはその保持条件とprovider側retentionの適用を送信前に表示する。
+
+合成file.write計画をownerのsandbox内へ限定し、Jが委任目的との関係をowner L3 reviewへ送り、既存Operation Plan review・Approval Gate・Brokerで候補を処理する。明示規則はtarget=`owner-task-note.txt`、operation=`file.write`、検証済み出力`/bytes_written`が本文UTF-8 bytes数と一致する条件とし、Jがcurrent revisionの結果・M receipt・保存値を検証した場合だけ`achieved`へsealして停止する。規則欠落・不一致はheldのまま。これはC08.02の既存達成規則実装をCanvas経路へ使うもので、並行判定機構は作らない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| MIME／SHA-256／version／request ID、owner意図のtask化、既存draft保護、送信前の無作用、既存フォーム経由のJ依頼 | PASS：新規Canvas owner intent test 1件。SHA-256をNode WebCryptoと独立比較。 |
-| 隔離viewer HTML/Markdown・Control Center script全体構文 | PASS：選択test 1件。 |
-| owner-authenticated Gateway task→内部handler requestがCanvas参照を保持 | PASS：F17.02 dedicated HTTP test 1件。synthetic handlerで内部`plan:compute`・目的binding・非権威flagsを確認。 |
-| channel-webchat依存build | PASS：protocol／channel-base／channel-webchatの3 project。 |
-| `docs:check`／`git diff --check` | PASS：docs、日本語基底監査（既存移行負債76件の注意あり）、licenseを含む。 |
-| 実browser、実provider、Canvas操作の下流作用、全workspace、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
+| Canvas入力検査、ephemeral parent-C routing、child本文遮断、通常session履歴除外 | PASS：4 test files中6件、151件skip。 |
+| served Gateway Canvas→synthetic C→J purpose relation review／plan review→sandbox file.write→verified result／M receipt | PASS：owner-authenticated local integration 1件。 |
+| 明示file.write規則一致時のJ達成projectionと再起動復元 | PASS：同じserved integrationで1/1規則・結果bytes・M receiptを確認。C08.02の規則判定は既存targeted testで確認済み。 |
+| Canvas送信時の永続化説明とOperation Plan SQLite内の本文保持 | PASS：HTML表示testとserved checkpoint readback。 |
+| Gateway依存build／`docs:check`／`git diff --check` | PASS：7 workspace projects。docs check・日本語基底監査（移行負債76件の注意）・license・差分whitespace。 |
+| 実browser GUI、実LLM/provider、failure injection、全suite、全OS、installed製品、QE_QC／QE_QA | NOT_RUN。 |
 
-別に既存1 MiB owner-image経路testを単独実行してPASS（5.20秒）。一度、他の選択testとの同時実行で後続invalid-image要求にsocket closeを観測した。単独再実行で再現せず、根因は未確認。F17.02 dedicated route testは小さい合成本文でPASS。
+初回の永続化確認assertionはJSON文字列内の改行escapeを考慮せずFAILした。SQLite checkpoint実体に本文があることを読取観測し、JSON表現に合わせてassertionを直した後、同じCanvas testをPASSした。これはtest比較の修正で、product failureではない。
 
-このWebChat viewer→親画面owner意図→既存Tasksフォーム→Gateway内部HDS-J計画入口だけを限定WIREDとする。Jの計画採否、Broker実作用、version更新・古い承認の再利用拒否、失敗・再起動を含むF17全体の往復、製品全体SYSTEM_SHAPED／BUILD_COVERED、QC／QA、公開・出荷判断は未成立。protected attachmentsは保持し、test用の一時workspaceは作成していない。成果物本文自体はJへ転送せず、hash・mime・version・由来IDとowner記述だけをtaskに含める。
+このbounded synthetic local routeだけをF17.03の限定`WIRED`とする。Canvas生成からの実GUI往復、live provider、失敗時の復帰、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、公開・出荷判断は未成立。実LLMは呼ばず、外部作用・他repo変更なし。test sandboxはcleanup済み。`dist`は再生成可能なlocal build出力、protected attachment directoriesは保持する。
 
-開始local／origin/main／GitHub main=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。編集前復旧ref local branch／remote tag current=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`、previous=`c11443bb36a9410c20e2ab1a5e357a3c4e72946d`。main worktreeのみ。他repo変更なし。
+開始local／origin/main／GitHub main=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。開始時local recovery branchはcurrent=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／previous=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。closeout時のfetch／`ls-remote`ではremote recovery tagもこの2 SHAと一致し、更新不要。fetch中に古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`管理領域のpruneが権限拒否となった。dry-runはgitdir file欠落、`git worktree list`はmainのみを示すため、手動削除せず保留する。他repo変更なし。
 
-**次のproducer／consumer:** 次作業の開始時に最新HEAD・rev4.0正本・実consumerから再選定する。F17.03のCanvas成果物生成→表示→意図→J/Broker→結果・障害・復帰の全体往復は次の論理consumer候補であり、本sliceで成立済みとは扱わない。
+**次のproducer／consumer:** bounded Canvasの実GUI生成→表示→意図送信を、実providerに依存しない承認済みsynthetic product harnessで同一ブラウザー往復としてつなぐ。failure/recoveryは本sliceでは未実施。
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 

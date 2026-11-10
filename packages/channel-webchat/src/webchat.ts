@@ -20,10 +20,12 @@ import {
   detectTransientImageMediaType,
   TRANSIENT_AUDIO_MAX_BYTES,
   TRANSIENT_IMAGE_MAX_BYTES,
+  TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   type GoalCompletionRules,
   type InboundRequest,
   type TransientAudioInput,
   type TransientImageInput,
+  type TransientCanvasArtifactInput,
   type ChannelSendPayload,
 } from "@blue-tanuki/protocol";
 import {
@@ -135,6 +137,112 @@ function readOwnerTaskImage(value: unknown): OwnerTaskImageReadResult {
     return { ok: false };
   }
   return { ok: true, image: { media_type: record.media_type, data } };
+}
+
+interface CanvasArtifactReference {
+  readonly schema_version: "blue-tanuki.canvas-artifact-reference.v1";
+  readonly mime: "text/html" | "text/markdown";
+  readonly sha256: string;
+  readonly version: 1;
+  readonly source: {
+    readonly surface: "webchat-assistant-reply";
+    readonly request_id: string;
+  };
+  readonly used_for_authority: false;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
+function readCanvasArtifactReference(value: unknown): CanvasArtifactReference | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!hasExactKeys(record, ["schema_version", "mime", "sha256", "version", "source", "used_for_authority"]) ||
+      record.schema_version !== "blue-tanuki.canvas-artifact-reference.v1" ||
+      (record.mime !== "text/html" && record.mime !== "text/markdown") ||
+      typeof record.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.sha256) ||
+      record.version !== 1 || record.used_for_authority !== false ||
+      typeof record.source !== "object" || record.source === null || Array.isArray(record.source)) return null;
+  const source = record.source as Record<string, unknown>;
+  const requestId = source.request_id;
+  if (!hasExactKeys(source, ["surface", "request_id"]) || source.surface !== "webchat-assistant-reply" ||
+      typeof requestId !== "string" || requestId.length === 0 || requestId.length > 200 ||
+      requestId.trim() !== requestId || Array.from(requestId).some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })) return null;
+  return record as unknown as CanvasArtifactReference;
+}
+
+function sameCanvasArtifactReference(left: CanvasArtifactReference, right: CanvasArtifactReference): boolean {
+  return left.schema_version === right.schema_version && left.mime === right.mime && left.sha256 === right.sha256 &&
+    left.version === right.version && left.source.surface === right.source.surface &&
+    left.source.request_id === right.source.request_id && left.used_for_authority === right.used_for_authority;
+}
+
+const CANVAS_OPERATION_TASK_PREFIX =
+  "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n";
+
+type CanvasOperationTaskReference =
+  | { readonly kind: "none" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "valid"; readonly reference: CanvasArtifactReference };
+
+function readCanvasOperationTaskReference(task: string): CanvasOperationTaskReference {
+  if (!task.startsWith(CANVAS_OPERATION_TASK_PREFIX)) return { kind: "none" };
+  try {
+    const payload = JSON.parse(task.slice(CANVAS_OPERATION_TASK_PREFIX.length)) as unknown;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return { kind: "invalid" };
+    const record = payload as Record<string, unknown>;
+    const reference = readCanvasArtifactReference(record.artifact_reference);
+    if (!hasExactKeys(record, ["schema_version", "owner_intent", "artifact_reference",
+      "artifact_reference_used_for_authority"]) ||
+        record.schema_version !== "blue-tanuki.canvas-operation-intent.v1" ||
+        typeof record.owner_intent !== "string" || !record.owner_intent.trim() ||
+        record.owner_intent.length > 15_000 || record.artifact_reference_used_for_authority !== false || !reference) {
+      return { kind: "invalid" };
+    }
+    return { kind: "valid", reference };
+  } catch {
+    return { kind: "invalid" };
+  }
+}
+
+type OwnerTaskCanvasArtifactReadResult =
+  | { readonly ok: true; readonly artifact?: TransientCanvasArtifactInput }
+  | { readonly ok: false };
+
+function readOwnerTaskCanvasArtifact(value: unknown): OwnerTaskCanvasArtifactReadResult {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false };
+  const record = value as Record<string, unknown>;
+  if (!hasExactKeys(record, ["schema_version", "artifact_reference", "content"]) ||
+      record.schema_version !== "blue-tanuki.canvas-artifact-input.v1" || typeof record.content !== "string" ||
+      !isWellFormedUnicode(record.content)) return { ok: false };
+  const reference = readCanvasArtifactReference(record.artifact_reference);
+  if (!reference) return { ok: false };
+  const byteLength = Buffer.byteLength(record.content, "utf8");
+  if (byteLength < 1 || byteLength > TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES) return { ok: false };
+  const detectedMime = /^\s*</u.test(record.content) && !/^\s*```/u.test(record.content)
+    ? "text/html" : "text/markdown";
+  if (detectedMime !== reference.mime) return { ok: false };
+  const data = Buffer.from(record.content, "utf8");
+  if (createHash("sha256").update(data).digest("hex") !== reference.sha256) {
+    data.fill(0);
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    artifact: {
+      media_type: reference.mime,
+      source_request_id: reference.source.request_id,
+      version: reference.version,
+      sha256: reference.sha256,
+      data,
+    },
+  };
 }
 
 type OwnerAudioReadResult =
@@ -1052,7 +1160,41 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const ownerTaskImage = imageRead.image;
-      if (body) delete body.image_input;
+      const canvasArtifactRead = readOwnerTaskCanvasArtifact(body?.canvas_artifact_input);
+      if (!canvasArtifactRead.ok) {
+        ownerTaskImage?.data.fill(0);
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_canvas_artifact" }));
+        return;
+      }
+      const ownerTaskCanvasArtifact = canvasArtifactRead.artifact;
+      const canvasTaskReference = readCanvasOperationTaskReference(task);
+      const submittedCanvasArtifactReference = body?.canvas_artifact_input &&
+        typeof body.canvas_artifact_input === "object" && !Array.isArray(body.canvas_artifact_input)
+        ? readCanvasArtifactReference((body.canvas_artifact_input as Record<string, unknown>).artifact_reference)
+        : null;
+      if (canvasTaskReference.kind === "invalid" ||
+          (canvasTaskReference.kind === "valid" && (!ownerTaskCanvasArtifact ||
+            !submittedCanvasArtifactReference ||
+            !sameCanvasArtifactReference(canvasTaskReference.reference, submittedCanvasArtifactReference))) ||
+          (canvasTaskReference.kind !== "valid" && ownerTaskCanvasArtifact !== undefined)) {
+        ownerTaskImage?.data.fill(0);
+        ownerTaskCanvasArtifact?.data.fill(0);
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "canvas_artifact_input_task_mismatch" }));
+        return;
+      }
+      if (ownerTaskImage && ownerTaskCanvasArtifact) {
+        ownerTaskImage.data.fill(0);
+        ownerTaskCanvasArtifact.data.fill(0);
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "owner_task_media_combination_unsupported" }));
+        return;
+      }
+      if (body) {
+        delete body.image_input;
+        delete body.canvas_artifact_input;
+      }
       const requestId = randomUUID();
       const payloadDigest = createHash("sha256").update(JSON.stringify([
         "webchat-owner-task-payload.v1",
@@ -1067,10 +1209,18 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           byte_length: ownerTaskImage.data.byteLength,
           digest: createHash("sha256").update(ownerTaskImage.data).digest("hex"),
         } : null,
+        ownerTaskCanvasArtifact ? {
+          media_type: ownerTaskCanvasArtifact.media_type,
+          byte_length: ownerTaskCanvasArtifact.data.byteLength,
+          sha256: ownerTaskCanvasArtifact.sha256,
+          source_request_id: ownerTaskCanvasArtifact.source_request_id,
+          version: ownerTaskCanvasArtifact.version,
+        } : null,
       ]), "utf8").digest("hex");
       let claimedRequestId: string | undefined;
       let handlerStarted = false;
       let imageTransferred = false;
+      let canvasArtifactTransferred = false;
       try {
         const claim = submissionStore.claim({
           submission_id: submissionId,
@@ -1142,13 +1292,26 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.operation_core.used_for_authority": false,
             "blue_tanuki.operation_core.planner_output_used_for_authority": false,
             "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+            ...(ownerTaskCanvasArtifact ? {
+              "blue_tanuki.canvas_artifact.mime": ownerTaskCanvasArtifact.media_type,
+              "blue_tanuki.canvas_artifact.sha256": ownerTaskCanvasArtifact.sha256,
+              "blue_tanuki.canvas_artifact.version": ownerTaskCanvasArtifact.version,
+              "blue_tanuki.canvas_artifact.source_request_id": ownerTaskCanvasArtifact.source_request_id,
+              "blue_tanuki.canvas_artifact.reference_is_ephemeral": true,
+              "blue_tanuki.canvas_artifact.used_for_authority": false,
+            } : {}),
           },
         });
         handlerStarted = true;
-        const ephemeralContext: InboundEphemeralContext | undefined = ownerTaskImage
-          ? { request_id: requestId, ephemeral_images: [ownerTaskImage] }
+        const ephemeralContext: InboundEphemeralContext | undefined = ownerTaskImage || ownerTaskCanvasArtifact
+          ? {
+            request_id: requestId,
+            ephemeral_images: ownerTaskImage ? [ownerTaskImage] : [],
+            ...(ownerTaskCanvasArtifact ? { ephemeral_canvas_artifact: ownerTaskCanvasArtifact } : {}),
+          }
           : undefined;
         imageTransferred = ownerTaskImage !== undefined;
+        canvasArtifactTransferred = ownerTaskCanvasArtifact !== undefined;
         void Promise.resolve().then(() => handler(inboundReq, ephemeralContext)).then(() => {
           submissionStore.markHandlerReturned(requestId);
         }).catch(() => {
@@ -1159,6 +1322,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           this.notifyOwnerTaskProcessingFailure(replyTo, requestId);
         }).finally(() => {
           ownerTaskImage?.data.fill(0);
+          ownerTaskCanvasArtifact?.data.fill(0);
         });
         res.writeHead(202, {
           "content-type": "application/json",
@@ -1179,6 +1343,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         error: "owner_task_compute_unavailable" }));
       } finally {
         if (!imageTransferred) ownerTaskImage?.data.fill(0);
+        if (!canvasArtifactTransferred) ownerTaskCanvasArtifact?.data.fill(0);
       }
       return;
     }

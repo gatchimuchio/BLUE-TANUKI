@@ -30,7 +30,8 @@ export type ComputeInputSource =
   | "complete_history_digest_observations"
   | "session_history"
   | "user_image"
-  | "user_audio";
+  | "user_audio"
+  | "user_canvas_artifact";
 
 export interface ComputeDataExposureScope {
   input_sources: readonly ComputeInputSource[];

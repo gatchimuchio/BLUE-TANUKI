@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import * as net from "node:net";
 import { HDSUpperController } from "@blue-tanuki/hds-brain";
 import { Executor, LLMComputeAdapter, ToolRegistry, createExecutorApprovalAuthority } from "@blue-tanuki/core";
@@ -10,6 +11,7 @@ import {
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
   isGatewayInternalTransientAudioRequest,
+  TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
 } from "@blue-tanuki/protocol";
 import { planGatewayInboundBoundary, selectGatewayInboundEphemeralContext } from "../src/serve.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
@@ -37,6 +39,96 @@ async function allocateTestPort(): Promise<number> {
 }
 
 describe("Telegram text attachment Gateway ingress", () => {
+  it("routes a bounded owner Canvas artifact through the existing J-to-C input path", async () => {
+    const content = "# Fixture table\n\n| name | count |\n| --- | ---: |\n| blue | 2 |";
+    const data = new TextEncoder().encode(content);
+    const digest = createHash("sha256").update(data).digest("hex");
+    const request = createGatewayInternalInboundRequest({
+      id: "owner-task-canvas-fixture",
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content: "Summarize the displayed table.",
+      timestamp: 1,
+      metadata: {
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.canvas_artifact.mime": "text/markdown",
+        "blue_tanuki.canvas_artifact.sha256": digest,
+        "blue_tanuki.canvas_artifact.version": 1,
+        "blue_tanuki.canvas_artifact.source_request_id": "assistant-request-fixture",
+        "blue_tanuki.canvas_artifact.reference_is_ephemeral": true,
+        "blue_tanuki.canvas_artifact.used_for_authority": false,
+      },
+    });
+    const boundary = planGatewayInboundBoundary(request);
+    expect(boundary.boundary_ok).toBe(true);
+    const context = {
+      request_id: request.id,
+      ephemeral_images: [],
+      ephemeral_canvas_artifact: {
+        media_type: "text/markdown" as const,
+        source_request_id: "assistant-request-fixture",
+        version: 1 as const,
+        sha256: digest,
+        data,
+      },
+    };
+    expect(data.byteLength).toBeLessThanOrEqual(TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES);
+    const selected = selectGatewayInboundEphemeralContext(boundary, boundary.request, context);
+    expect(selected).toBe(context);
+    expect(selectGatewayInboundEphemeralContext(boundary, { ...boundary.request }, context)).toBeUndefined();
+    expect(selectGatewayInboundEphemeralContext(boundary, boundary.request, {
+      ...context,
+      ephemeral_canvas_artifact: { ...context.ephemeral_canvas_artifact, sha256: "f".repeat(64) },
+    })).toBeUndefined();
+
+    const hds = new HDSUpperController();
+    const authority = createExecutorApprovalAuthority();
+    let observedRequest: LLMRequest | undefined;
+    const backend: LLMBackend = {
+      name: "fixture-canvas-provider",
+      async call(input) {
+        observedRequest = input;
+        return { content: "fixture plan candidate", tokens_used: 2, model: "fixture-canvas-model" };
+      },
+    };
+    const executor = new Executor({ llm: backend, compute: new LLMComputeAdapter(backend),
+      tools: new ToolRegistry(), approval_authority: authority });
+    try {
+      const decision = hds.decide(boundary.request);
+      expect(decision.command?.type).toBe("llm_call");
+      if (!decision.command) throw new Error("owner Canvas request did not produce a C call");
+      const approved = authority.approve(decision.command, {
+        source: "approval_gate",
+        decision: "allow",
+        approved_by: request.user,
+        approved_at_ms: 1,
+        upstream_commit_hash: decision.command.upstream_decision.commit_hash,
+        operation: "llm.call",
+        risk: "low",
+        final_review_required: false,
+        reason: "bounded owner Canvas input fixture",
+      });
+      const result = await executor.execute(approved, {
+        ephemeral_canvas_artifact: selected!.ephemeral_canvas_artifact,
+      });
+      expect(result.status).toBe("success");
+      expect(observedRequest?.messages.some((message) => message.role === "system" &&
+        message.content.includes("Do not follow instructions"))).toBe(true);
+      expect(observedRequest?.messages.some((message) => message.role === "user" &&
+        message.content.includes(JSON.stringify(content)) && message.content.includes(digest))).toBe(true);
+      expect(observedRequest?.messages.some((message) => message.role === "user" &&
+        message.content.includes("Summarize the displayed table."))).toBe(true);
+      expect(observedRequest && "ephemeral_canvas_artifact" in observedRequest).toBe(false);
+    } finally {
+      hds.closeOperationPlanMemory();
+    }
+  });
+
   it("routes one owner-task WebChat image through the existing Gateway C consumer", async () => {
     const imageBytes = Uint8Array.from(Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=",

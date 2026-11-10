@@ -57,6 +57,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         chatReconnectTimer: null,
         canvasPreviewGeneration: 0,
         canvasArtifactReference: null,
+        canvasArtifactSource: null,
+        canvasArtifactInput: null,
+        canvasArtifactPreparedTask: null,
         runtimeSnapshotRequestId: 0,
         approvalSnapshotRequestId: 0,
         approvalTokens: Object.create(null),
@@ -558,7 +561,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         const intent = typeof ownerIntent === "string" ? ownerIntent.trim() : "";
         if (!intent || intent.length > 15000) throw new Error("canvas_owner_intent_invalid");
-        const task = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\\n" +
+        const task = CANVAS_OPERATION_TASK_PREFIX +
           JSON.stringify({
             schema_version: "blue-tanuki.canvas-operation-intent.v1",
             owner_intent: intent,
@@ -568,6 +571,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (task.length > 20000) throw new Error("canvas_owner_intent_too_large");
         return task;
       }
+
+      const CANVAS_OPERATION_TASK_PREFIX = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\\n";
 
       function buildCanvasPreviewDocument(value) {
         const source = String(value ?? "");
@@ -691,6 +696,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               message = "参照情報を含む依頼が長すぎます。操作意図を短くしてください";
             } else if (reason === "canvas_task_field_not_empty") {
               message = "Tasksの依頼欄に未送信の文面があります。内容を保管または送信してから準備してください";
+            } else if (reason === "canvas_artifact_input_unavailable") {
+              message = "成果物本文が上限を超えているか利用できません。表示版を開き直してください";
             }
             if (status) status.textContent = message;
           }
@@ -700,6 +707,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           frame.style.height = "0px";
           state.canvasPreviewGeneration += 1;
           state.canvasArtifactReference = null;
+          state.canvasArtifactSource = null;
           const prepareButton = byId("canvas-preview-prepare-intent");
           if (prepareButton) prepareButton.disabled = true;
           const actionIntent = byId("canvas-preview-action-intent");
@@ -724,6 +732,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const generation = state.canvasPreviewGeneration + 1;
         state.canvasPreviewGeneration = generation;
         state.canvasArtifactReference = null;
+        state.canvasArtifactSource = source;
+        if (state.canvasArtifactInput && typeof state.canvasArtifactInput.content === "string") {
+          state.canvasArtifactInput.content = "";
+        }
+        state.canvasArtifactInput = null;
+        state.canvasArtifactPreparedTask = null;
         prepare.disabled = true;
         setText("canvas-preview-mime", canvasArtifactMime(source));
         setText("canvas-preview-sha256", "計算中");
@@ -732,7 +746,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ? "WebChat assistant reply · request " + sourceRequestId
           : "WebChat assistant reply · request ID unavailable");
         setText("canvas-preview-metadata-status", "元の返信本文のSHA-256を計算中です");
-        setText("canvas-preview-action-status", "Canvasの表示内容から操作を実行できません。依頼はownerが別途明示送信します。");
+        setText("canvas-preview-action-status", "Taskをownerが明示送信した場合だけ本文を一回Cへ渡します。file.write候補では本文と保存先がGatewayローカルのJ Operation Plan SQLiteへ審査・再起動復元のため残ります。providerの保持条件も適用されます。成果物自体に操作・承認・作用の権限はありません。");
         const actionIntent = byId("canvas-preview-action-intent");
         if (actionIntent) actionIntent.value = "";
         frame.setAttribute("sandbox", "");
@@ -752,10 +766,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("canvas-preview-version", "1（この返信内の表示版）");
           setText("canvas-preview-source", canvasArtifactReferenceSummary(reference));
           const hasSource = Boolean(reference.source.request_id);
-          setText("canvas-preview-metadata-status", hasSource
-            ? "識別情報を計算しました。これは由来の参照で、信頼性・正確性・権限を証明しません。"
-            : "由来request IDがないため表示のみです。操作要求を準備できません。");
-          prepare.disabled = !hasSource;
+          const withinInputLimit = new TextEncoder().encode(source).byteLength <= 64 * 1024;
+          setText("canvas-preview-metadata-status", !hasSource
+            ? "由来request IDがないため表示のみです。操作要求を準備できません。"
+            : !withinInputLimit
+              ? "表示はできますが、操作入力は64 KiB以下に限られます。"
+              : "識別情報を計算しました。これは由来の参照で、信頼性・正確性・権限を証明しません。");
+          prepare.disabled = !hasSource || !withinInputLimit;
         } catch {
           if (state.canvasPreviewGeneration !== generation || !dialog.open) return;
           setText("canvas-preview-sha256", "利用できません");
@@ -771,6 +788,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!reference.source || !reference.source.request_id) throw new Error("由来request IDがない成果物は操作要求に使えません");
         if (ownerTaskInput.value.trim()) throw new Error("canvas_task_field_not_empty");
         const task = buildCanvasOperationTask(reference, actionInput.value);
+        const source = state.canvasArtifactSource;
+        if (typeof source !== "string" || new TextEncoder().encode(source).byteLength > 64 * 1024) {
+          throw new Error("canvas_artifact_input_unavailable");
+        }
+        state.canvasArtifactInput = {
+          schema_version: "blue-tanuki.canvas-artifact-input.v1",
+          artifact_reference: reference,
+          content: source
+        };
+        state.canvasArtifactPreparedTask = task;
         ownerTaskInput.value = task;
         const taskStatus = byId("owner-task-status");
         if (taskStatus) {
@@ -780,7 +807,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setActiveScreen("tasks");
         ownerTaskInput.focus();
         byId("canvas-preview-dialog").close();
-        appendChat("status", "Canvasの参照情報とownerの操作意図をTasksへ準備しました。まだGateway／Jへ送信していません。委任目的・owner tokenを確認し、owner taskフォームから明示送信してください。Canvasから直接の操作・承認・作用はありません。");
+        appendChat("status", "Canvas参照とowner意図を未送信のTaskへ準備しました。本文は明示送信で一回Cへ渡り、file.write候補では本文と保存先がローカルJ Operation Plan SQLiteへ残ります。Canvas自身から操作・承認・作用はできず、後続の作用には既存J／L3／Brokerの判断が必要です。");
       }
 
       function setChatStatus(value, tone) {
@@ -1037,6 +1064,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         rememberOwnerTaskStatusSubmissionId(body && body.submission_id);
         const imageInput = body && body.image_input && typeof body.image_input === "object"
           ? body.image_input : null;
+        const canvasArtifactInput = body && body.canvas_artifact_input && typeof body.canvas_artifact_input === "object"
+          ? body.canvas_artifact_input : null;
         let serializedBody = JSON.stringify(body);
         let responsePromise;
         try {
@@ -1048,7 +1077,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           serializedBody = "";
           if (imageInput && typeof imageInput.data_base64 === "string") imageInput.data_base64 = "";
-          if (body && typeof body === "object") delete body.image_input;
+          if (canvasArtifactInput && typeof canvasArtifactInput.content === "string") canvasArtifactInput.content = "";
+          if (body && typeof body === "object") {
+            delete body.image_input;
+            delete body.canvas_artifact_input;
+          }
+          if (state.canvasArtifactInput === canvasArtifactInput) {
+            state.canvasArtifactInput = null;
+            state.canvasArtifactPreparedTask = null;
+          }
         }
         const response = await responsePromise;
         let result = null;
@@ -1542,11 +1579,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         const task = byId("owner-task-intent").value.trim();
+        const isCanvasTask = task.startsWith(CANVAS_OPERATION_TASK_PREFIX);
+        if (state.canvasArtifactInput && state.canvasArtifactPreparedTask !== task) {
+          state.canvasArtifactInput.content = "";
+          state.canvasArtifactInput = null;
+          state.canvasArtifactPreparedTask = null;
+        }
+        const canvasArtifactInput = state.canvasArtifactPreparedTask === task ? state.canvasArtifactInput : null;
+        if (isCanvasTask && !canvasArtifactInput) {
+          throw new Error("Canvas成果物の参照と本文が一致しません。表示物から操作意図を再準備してください");
+        }
         const imageInput = byId("owner-task-image");
         const imageFile = imageInput.files && imageInput.files.length === 1 ? imageInput.files[0] : null;
         let imagePayload;
         if (imageInput.files && imageInput.files.length > 1) throw new Error("画像は1枚だけ選択してください");
         if (imageFile) {
+          if (canvasArtifactInput) throw new Error("Canvas本文と画像は同じtaskへ同時に添付できません");
           if (imageFile.type !== "image/jpeg" && imageFile.type !== "image/png") {
             throw new Error("JPEGまたはPNG画像を選択してください");
           }
@@ -1588,7 +1636,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
           submission_id: submissionId,
           ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {}),
-          ...(imagePayload ? { image_input: imagePayload } : {})
+          ...(imagePayload ? { image_input: imagePayload } : {}),
+          ...(canvasArtifactInput ? { canvas_artifact_input: canvasArtifactInput } : {})
         });
         clearOwnerTaskSubmissionId();
         renderOwnerTaskStatusSubmissionIds(submissionId);

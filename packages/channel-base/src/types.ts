@@ -3,6 +3,7 @@ import type {
   ChannelSendPayload,
   TransientImageInput,
   TransientAudioInput,
+  TransientCanvasArtifactInput,
 } from "@blue-tanuki/protocol";
 import type { ChannelDeliveryErrorKind } from "./delivery_error.js";
 
@@ -16,6 +17,7 @@ export interface InboundEphemeralContext {
   readonly request_id: string;
   readonly ephemeral_images: readonly TransientImageInput[];
   readonly ephemeral_audio?: readonly TransientAudioInput[];
+  readonly ephemeral_canvas_artifact?: TransientCanvasArtifactInput;
 }
 
 export type InboundHandler = (req: InboundRequest, context?: InboundEphemeralContext) => Promise<void>;

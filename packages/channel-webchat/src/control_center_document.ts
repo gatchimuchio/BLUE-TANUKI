@@ -839,6 +839,7 @@ ${CONTROL_CENTER_STYLE}    </style>
       <section class="canvas-preview-operation" aria-labelledby="canvas-preview-operation-title">
         <h3 id="canvas-preview-operation-title">操作意図をJへ渡す</h3>
         <p class="muted">Canvas内の操作は無効です。ここにowner自身が希望する操作を書き、既存のTasksフォームで目的と依頼内容を確認して明示送信します。成果物参照は同定用であり、権限・承認・作用を与えません。</p>
+        <p class="muted">ownerがTaskを明示送信した場合、本文（最大64 KiB）は一回Cへ送られます。Taskのsession履歴には保存しません。Jがfile.write候補を作ると、本文と保存先は審査・再起動後の復元のためGatewayローカルのJ Operation Plan SQLiteへ永続保存されます。この画面では保持期間や削除を管理しません。実providerを使う場合はprovider側の保持条件も適用されます。提案作用は既存J／Approval／Broker経路で別途判断します。</p>
         <label for="canvas-preview-action-intent">この表示物について希望する操作</label>
         <textarea id="canvas-preview-action-intent" rows="3" maxlength="15000" autocomplete="off" placeholder="例: 表示された表の数値を要約する計画を作って"></textarea>
         <button id="canvas-preview-prepare-intent" type="button" disabled>owner task欄へ意図を準備</button>

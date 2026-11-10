@@ -513,11 +513,14 @@ describe("WebChatChannel — Control Center shell", () => {
     const shell = renderControlCenterHtml();
     expect(shell).toContain('id="canvas-preview-frame" class="canvas-preview-frame"');
     expect(shell).toContain('title="隔離された生成UIプレビュー" sandbox=""');
+    expect(shell).toContain("GatewayローカルのJ Operation Plan SQLiteへ永続保存されます");
+    expect(shell).toContain("この画面では保持期間や削除を管理しません");
     expect(CONTROL_CENTER_SCRIPT).toContain('role === "assistant" && bubble && isCanvasPreviewContent(text)');
     expect(CONTROL_CENTER_SCRIPT).toContain("escapeHtml(text)");
   });
 
   it("binds Canvas owner intent to source MIME, content digest, version, and the existing J task path", async () => {
+    const artifactContent = "<main>chart</main>";
     const artifactHelpersStart = CONTROL_CENTER_SCRIPT.indexOf("function canvasArtifactMime(");
     const artifactHelpersEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function buildCanvasPreviewDocument(", artifactHelpersStart + 1);
     const prepareStart = CONTROL_CENTER_SCRIPT.indexOf("function prepareCanvasOperationIntent(");
@@ -533,7 +536,7 @@ describe("WebChatChannel — Control Center shell", () => {
 
     const artifactHelpers = CONTROL_CENTER_SCRIPT.slice(artifactHelpersStart, artifactHelpersEnd);
     const reference = await new Script(`${artifactHelpers}\n` +
-      `createCanvasArtifactReference("<main>chart</main>", "assistant-request-1")`)
+      `createCanvasArtifactReference(${JSON.stringify(artifactContent)}, "assistant-request-1")`)
       .runInNewContext({ crypto: webcrypto, TextEncoder }) as Promise<Record<string, unknown>>;
     expect(reference).toMatchObject({ schema_version: "blue-tanuki.canvas-artifact-reference.v1",
       mime: "text/html", sha256: createHash("sha256").update("<main>chart</main>", "utf8").digest("hex"),
@@ -574,7 +577,9 @@ describe("WebChatChannel — Control Center shell", () => {
     const result = await harness.runInNewContext({
       nodes,
       calls,
-      state: { canvasArtifactReference: reference, chatSocket: { readyState: 1 } },
+      TextEncoder,
+      state: { canvasArtifactReference: reference, canvasArtifactSource: artifactContent,
+        canvasArtifactInput: null, canvasArtifactPreparedTask: null, chatSocket: { readyState: 1 } },
       byId: (id: string) => nodes[id],
       setActiveScreen: (screen: string) => { activeScreen = screen; },
       appendChat: (kind: string, content: string) => messages.push([kind, content]),
@@ -598,12 +603,14 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ token: "owner-token", body: {
       task: preparedTask, goal_ref: "goal_0123456789abcdef", purpose_version: 2, submission_id: "submission-1",
+      canvas_artifact_input: { schema_version: "blue-tanuki.canvas-artifact-input.v1",
+        artifact_reference: reference, content: artifactContent },
     } });
     const taskPayload = JSON.parse(preparedTask.slice(preparedTask.indexOf("\n") + 1)) as Record<string, unknown>;
     expect(taskPayload).toMatchObject({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
       owner_intent: "表示された表の数値を要約する計画を作って",
       artifact_reference: reference, artifact_reference_used_for_authority: false });
-    expect(messages).toContainEqual(["status", expect.stringContaining("まだGateway／Jへ送信していません")]);
+    expect(messages).toContainEqual(["status", expect.stringContaining("file.write候補では本文と保存先がローカルJ Operation Plan SQLiteへ残ります")]);
   });
 
   it("submits explicit task completion rules and one ephemeral image through the owner task form", async () => {
@@ -4186,20 +4193,32 @@ describe("WebChatChannel — HTTP inbound", () => {
   it("preserves a Canvas artifact reference in an owner-authenticated HDS/J task request", async () => {
     const goal = { goal_ref: `goal_${"c".repeat(16)}`, purpose_version: 3,
       purpose_preview: "Use a displayed artifact as non-authority context", purpose_digest: "d".repeat(64) };
+    const artifactContent = "# Fixture table\n\n| name | count |\n| --- | ---: |\n| blue | 2 |";
     const artifactReference = { schema_version: "blue-tanuki.canvas-artifact-reference.v1",
-      mime: "text/markdown", sha256: "e".repeat(64), version: 1,
+      mime: "text/markdown", sha256: createHash("sha256").update(artifactContent, "utf8").digest("hex"), version: 1,
       source: { surface: "webchat-assistant-reply", request_id: "assistant-request-2" }, used_for_authority: false };
     const task = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n" +
       JSON.stringify({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
         owner_intent: "Summarize the displayed table.", artifact_reference: artifactReference,
         artifact_reference_used_for_authority: false });
+    let ingressCanvasBytes: Uint8Array | undefined;
+    let observedCanvasContent = "";
     const ownerCtx = await setup({ owner_token: OWNER_TOKEN,
       onOwnerTaskGoalOptions: async () => [goal] });
     try {
-      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      await ownerCtx.ch.start(async (request, context) => {
+        ownerCtx.received.push(request);
+        ingressCanvasBytes = context?.ephemeral_canvas_artifact?.data;
+        if (ingressCanvasBytes) observedCanvasContent = Buffer.from(ingressCanvasBytes).toString("utf8");
+      });
       const response = await postJson(ownerCtx.port, "/owner/task-compute", {
         user: "fixture-owner", task, goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
         submission_id: "15c7d4f6-2c7a-4aa8-9150-2837e777a132",
+        canvas_artifact_input: {
+          schema_version: "blue-tanuki.canvas-artifact-input.v1",
+          artifact_reference: artifactReference,
+          content: artifactContent,
+        },
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(response.status).toBe(202);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -4212,11 +4231,52 @@ describe("WebChatChannel — HTTP inbound", () => {
           purpose_digest: goal.purpose_digest },
       });
       expect(request.content).toContain(artifactReference.sha256);
+      expect(request.content).not.toContain(artifactContent);
+      expect(observedCanvasContent).toBe(artifactContent);
+      expect(ingressCanvasBytes?.every((byte) => byte === 0)).toBe(true);
       expect(request.metadata).toMatchObject({
         "blue_tanuki.operation_core.used_for_authority": false,
         "blue_tanuki.operation_core.planner_output_used_for_authority": false,
         "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+        "blue_tanuki.canvas_artifact.mime": "text/markdown",
+        "blue_tanuki.canvas_artifact.sha256": artifactReference.sha256,
+        "blue_tanuki.canvas_artifact.version": 1,
+        "blue_tanuki.canvas_artifact.reference_is_ephemeral": true,
+        "blue_tanuki.canvas_artifact.used_for_authority": false,
       });
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("rejects Canvas task input when the transient source is absent or its digest differs", async () => {
+    const goal = { goal_ref: `goal_${"d".repeat(16)}`, purpose_version: 3,
+      purpose_preview: "Use a displayed artifact as non-authority context", purpose_digest: "d".repeat(64) };
+    const content = "# Fixture canvas";
+    const makeTask = (reference: object) => "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n" +
+      JSON.stringify({ schema_version: "blue-tanuki.canvas-operation-intent.v1", owner_intent: "Inspect this artifact.",
+        artifact_reference: reference, artifact_reference_used_for_authority: false });
+    const reference = { schema_version: "blue-tanuki.canvas-artifact-reference.v1", mime: "text/markdown",
+      sha256: createHash("sha256").update(content, "utf8").digest("hex"), version: 1,
+      source: { surface: "webchat-assistant-reply", request_id: "assistant-request-negative" }, used_for_authority: false };
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN, onOwnerTaskGoalOptions: async () => [goal] });
+    try {
+      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      const absent = await postJson(ownerCtx.port, "/owner/task-compute", {
+        user: "fixture-owner", task: makeTask(reference), goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+        submission_id: "253d4e2f-ccbd-48d4-8a7f-1a1dd4bdcf70",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      const mismatchedReference = { ...reference, sha256: "f".repeat(64) };
+      const mismatch = await postJson(ownerCtx.port, "/owner/task-compute", {
+        user: "fixture-owner", task: makeTask(mismatchedReference), goal_ref: goal.goal_ref,
+        purpose_version: goal.purpose_version, submission_id: "05fcb8a5-90a6-4af1-b116-37dd0e11fcd0",
+        canvas_artifact_input: { schema_version: "blue-tanuki.canvas-artifact-input.v1",
+          artifact_reference: mismatchedReference, content },
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+
+      expect(absent.status).toBe(400);
+      expect(mismatch.status).toBe(400);
+      expect(ownerCtx.received).toHaveLength(0);
     } finally {
       await ownerCtx.teardown();
     }

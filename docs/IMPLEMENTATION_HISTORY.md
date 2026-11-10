@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-11-10 — QEB-F17.03-CANVAS-PARENT-C-J-BROKER-M-RECEIPT
+
+開始時local／`origin/main`／GitHub `main`=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。local recovery branch current／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。開始時に記録したremote recovery tagの旧値は不一致だったが、closeoutのfetch／`ls-remote`ではcurrent／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`となりlocal branchと一致したため、tag更新は行わない。fetchは古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のprune時に権限エラーを出した。dry-runはgitdir file欠落を示し、`git worktree list`にはmainのみ。管理領域は削除せず保留。保護attachmentは未変更。
+
+WebChat Control CenterのCanvas本文をowner-authenticated taskから一回限り親Cへ送る経路を追加した。MIME、UTF-8、64 KiB上限、SHA-256、表示版、source request ID、owner task referenceを照合する。Canvasはnon-authority data。Executorは本文をchild agent候補へ渡さず、Task session historyにもappendしない。handler終了後ephemeral bufferをzeroする。Jがfile.write候補を作る場合は内容と保存先がGatewayローカルのJ Operation Plan SQLiteへ審査・再起動復元用に残ることをreadbackで確認し、UIに永続化とprovider retention条件を開示した。
+
+served Gatewayのisolated integrationで、synthetic C候補→J purpose relation owner L3 review→既存plan review→file-root sandboxで単一file.write→verified result／M receipt→owner明示達成規則を通した。規則はtarget file `owner-task-note.txt`、operation `file.write`、`/bytes_written`が本文UTF-8 byte数と一致する条件。Jがachievementをsealし、Gateway restart後のOperation Plan・達成状態を復元した。この再利用はC08.02のowner rules／J/M assessment機構のみで、別判定pathを作っていない。実写込みのCanvas generation／browser操作ではない。
+
+| 必要最小確認 | 結果 |
+|---|---|
+| Canvas route／parent C／J/M／file.write integration | PASS：Gateway dedicated test 1件。synthetic provider backendとisolated temp sandbox。 |
+| Canvas UI disclosure、Executor no-history routing、Gateway ephemeral selector | PASS：4 files、6 tests、151 skipped。 |
+| `corepack pnpm --filter @blue-tanuki/gateway... build` | PASS：7 workspace projects。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS：docs、日本語基底監査（移行負債76件の注意）、license、差分whitespace。 |
+| 実ブラウザ、実LLM/provider、failure injection、全suite、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+初回のcheckpoint本文assertionはJSON内の改行escapeにより失敗した。SQLite JSONを読み、escaped artifact stringを確認するassertionへ修正後、同じintegration testがPASSした。
+
+このbounded synthetic routeだけをF17.03の限定`WIRED`とし、Canvasの実browser往復、失敗・復旧、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立とする。C08.03実provider保留、外部作用・別repo変更なし。test temp rootはcleanup済み。ignored `dist`は再生成可能なlocal build outputとして保持。次は実providerを使わないsynthetic product harnessで生成Canvas→GUI→owner送信を同一往復にし、failure/recovery consumerを進める。
+
+---
+
 ## 2026-11-10 — QEB-F17.02-WEBCHAT-CANVAS-INTENT-REFERENCE
 
 開始時local／`origin/main`／GitHub `main`=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。編集前復旧ref local branch／remote tag current=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`、previous=`c11443bb36a9410c20e2ab1a5e357a3c4e72946d`。main worktreeのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持し未変更。

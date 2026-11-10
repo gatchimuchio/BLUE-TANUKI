@@ -134,7 +134,8 @@ export const LLMFallbackAuthorizationSchema = z.object({
     "session_history",
     "user_image",
     "user_audio",
-  ])).min(1).max(5),
+    "user_canvas_artifact",
+  ])).min(1).max(6),
   required_capabilities: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
   max_total_cost: z.object({
     amount: z.number().finite().nonnegative(),
@@ -207,7 +208,8 @@ export const LLMComputeContextSchema = z.object({
       "complete_history_digest_observations",
       "user_image",
       "user_audio",
-    ])).min(1).max(4),
+      "user_canvas_artifact",
+    ])).min(1).max(5),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
   /** Non-authority correlation scope for aggregate C resource accounting. */
@@ -707,6 +709,17 @@ export interface TransientAudioInput {
   readonly format: "flac" | "mp3" | "mp4" | "mpeg" | "mpga" | "m4a" | "ogg" | "wav" | "webm";
   readonly data: Uint8Array;
 }
+
+/** One-request Canvas source data for C. It is never part of InboundRequest or persisted history. */
+export interface TransientCanvasArtifactInput {
+  readonly media_type: "text/html" | "text/markdown";
+  readonly source_request_id: string;
+  readonly version: 1;
+  readonly sha256: string;
+  readonly data: Uint8Array;
+}
+
+export const TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES = 64 * 1024;
 
 export const TRANSIENT_AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
