@@ -172,14 +172,24 @@ do
 done
 cp "$REPO_ROOT/install/unix/safe-target.sh" "$PRODUCT_INSTALL/install/unix/safe-target.sh"
 cp "$REPO_ROOT/install/unix/product/BlueTanukiUninstall.sh" "$PRODUCT_INSTALL/BlueTanukiUninstall.sh"
+cp "$REPO_ROOT/install/unix/product/BlueTanukiLauncher.sh" "$PRODUCT_INSTALL/BlueTanukiLauncher.sh"
 printf '#!/usr/bin/env sh\nexit 0\n' > "$PRODUCT_RUNTIME/node-v-test/bin/node"
 chmod +x "$PRODUCT_RUNTIME/node-v-test/bin/node"
+cat > "$PRODUCT_INSTALL/blue-tanuki-install.env" <<ENV
+INSTALL_ROOT='$PRODUCT_INSTALL'
+DATA_ROOT='$PRODUCT_DATA'
+ENV_FILE='$PRODUCT_CONFIG/blue-tanuki.env'
+NODE_EXE='$PRODUCT_RUNTIME/node-v-test/bin/node'
+CONTROL_CENTER_URL='http://127.0.0.1:8787/app'
+PLATFORM='linux'
+ENV
 cat > "$PRODUCT_INSTALL/blue-tanuki-package-manifest.json" <<'MANIFEST'
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "blue-tanuki",
   "version": "1.0.0-rc.1",
-  "package_type": "linux-x64-tar-installer"
+  "package_type": "linux-x64-tar-installer",
+  "created_at": "2026-11-10T00:00:00.000Z"
 }
 MANIFEST
 PRODUCT_MANIFEST_SHA256=$(sha256_file "$PRODUCT_INSTALL/blue-tanuki-package-manifest.json")
@@ -240,6 +250,87 @@ fi
 grep -Fq "Would remove app: $PRODUCT_INSTALL" "$TMP_ROOT/product-uninstall.out" || exit 24
 [ -f "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" ] && [ -f "$PRODUCT_RUNTIME/node-v-test/bin/node" ] || exit 25
 [ -f "$PRODUCT_DATA/.blue-tanuki-owner" ] && [ -f "$PRODUCT_CONFIG/.blue-tanuki-owner" ] || exit 26
+
+PRODUCT_AUTOSTART_DIR="$PRODUCT_HOME/.config/autostart"
+PRODUCT_AUTOSTART="$PRODUCT_AUTOSTART_DIR/blue-tanuki.desktop"
+mkdir -p "$PRODUCT_AUTOSTART_DIR"
+cat > "$PRODUCT_AUTOSTART" <<EOF
+[Desktop Entry]
+Type=Application
+Name=User-owned entry
+Exec=$PRODUCT_INSTALL/BlueTanukiLauncher.sh resident-start
+EOF
+cp "$PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-unowned.backup"
+if (
+  HOME="$PRODUCT_HOME" \
+  XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-enable
+) > "$TMP_ROOT/autostart-unowned-enable.out" 2>&1; then
+  echo "autostart enable overwrote an unrelated entry with a matching Exec line" >&2
+  exit 90
+fi
+cmp -s "$PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-unowned.backup" || exit 91
+grep -Fq "it was preserved" "$TMP_ROOT/autostart-unowned-enable.out" || exit 92
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/autostart-unowned-disable.out"
+cmp -s "$PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-unowned.backup" || exit 93
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/autostart-unowned-disable.out" || exit 94
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-status > "$TMP_ROOT/autostart-unowned-status.out"
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/autostart-unowned-status.out" || exit 95
+if ! (
+  HOME="$PRODUCT_HOME" \
+  XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/autostart-unowned-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/autostart-unowned-uninstall.out" >&2
+  exit 96
+fi
+grep -Fq "Preserved unrelated autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-unowned-uninstall.out" || exit 97
+
+rm -f -- "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-enable > "$TMP_ROOT/autostart-owned-enable.out"
+. "$REPO_ROOT/install/unix/safe-target.sh"
+is_managed_linux_autostart_entry "$PRODUCT_AUTOSTART" "$PRODUCT_INSTALL" || exit 98
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-status > "$TMP_ROOT/autostart-owned-status.out"
+grep -Fq 'autostart_status=enabled' "$TMP_ROOT/autostart-owned-status.out" || exit 99
+if ! (
+  HOME="$PRODUCT_HOME" \
+  XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/autostart-owned-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/autostart-owned-uninstall.out" >&2
+  exit 100
+fi
+grep -Fq "Would remove managed autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-owned-uninstall.out" || exit 101
+printf '\n# locally modified\n' >> "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/autostart-modified-disable.out"
+[ -f "$PRODUCT_AUTOSTART" ] || exit 102
+grep -Fq 'autostart_status=preserved' "$TMP_ROOT/autostart-modified-disable.out" || exit 103
+if ! (
+  HOME="$PRODUCT_HOME" \
+  XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run
+) > "$TMP_ROOT/autostart-modified-uninstall.out" 2>&1; then
+  cat "$TMP_ROOT/autostart-modified-uninstall.out" >&2
+  exit 104
+fi
+grep -Fq "Preserved unrelated autostart_entry: $PRODUCT_AUTOSTART" "$TMP_ROOT/autostart-modified-uninstall.out" || exit 105
+rm -f -- "$PRODUCT_AUTOSTART"
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-enable > "$TMP_ROOT/autostart-disable-enable.out"
+HOME="$PRODUCT_HOME" XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
+  sh "$PRODUCT_INSTALL/BlueTanukiLauncher.sh" autostart-disable > "$TMP_ROOT/autostart-owned-disable.out"
+[ ! -e "$PRODUCT_AUTOSTART" ] && [ ! -L "$PRODUCT_AUTOSTART" ] || exit 106
+grep -Fq 'autostart_status=disabled' "$TMP_ROOT/autostart-owned-disable.out" || exit 107
+if [ "${BLUE_TANUKI_TEST_AUTOSTART_ONLY:-0}" = 1 ]; then
+  echo "product_autostart_ownership=pass"
+  exit 0
+fi
+
 PRODUCT_OWNER_MARKER="$PRODUCT_INSTALL/.blue-tanuki-owner"
 cp "$PRODUCT_OWNER_MARKER" "$TMP_ROOT/product-owner-marker.backup"
 sed "s|^install_root=.*|install_root=$PRODUCT_HOME/mismatched-app|" "$TMP_ROOT/product-owner-marker.backup" > "$PRODUCT_OWNER_MARKER"
@@ -379,13 +470,24 @@ if [ "${1:-}" = "-e" ]; then
       "$PACKAGE_MANIFEST_SHA256_VALUE" "$INSTALL_ROOT_VALUE" "$DATA_ROOT_VALUE" "$CONFIG_ROOT_VALUE" \
       "$RUNTIME_ROOT_VALUE" "$BIN_ROOT_VALUE" "$ENV_FILE_VALUE" "$NODE_EXE_VALUE" \
       "$CONTROL_CENTER_URL_VALUE" "$PLATFORM_VALUE" > "$1"
-  else
+  elif [ -n "${INSTALL_MANAGED_FILES_SHA256_VALUE:-}" ] && [ -n "${RUNTIME_MANAGED_FILES_SHA256_VALUE:-}" ]; then
     metadata_file=$1
     metadata_tmp="$metadata_file.test-tmp.$$"
     sed 's/"schema_version": 2/"schema_version": 3/' "$metadata_file" | sed '$d' > "$metadata_tmp"
     printf '  "managed_install_files_sha256": "%s",\n  "managed_runtime_files_sha256": "%s"\n}\n' \
       "$INSTALL_MANAGED_FILES_SHA256_VALUE" "$RUNTIME_MANAGED_FILES_SHA256_VALUE" >> "$metadata_tmp"
     mv -- "$metadata_tmp" "$metadata_file"
+  else
+    case "$javascript" in
+      *'const links = new Map(['*)
+        [ -d "$1" ] || exit 42
+        exit 0
+        ;;
+      *)
+        echo "unrecognized fixture Node -e invocation" >&2
+        exit 43
+        ;;
+    esac
   fi
   exit 0
 fi

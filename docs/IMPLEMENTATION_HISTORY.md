@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-11-10 — QEB-G03.03-LINUX-AUTOSTART-OWNERSHIP
+
+開始時local／`origin/main`／GitHub `main`=`819f7bcaa64b29999a4ca6e8734552324ce69dff`。直近復旧ref current=`819f7bcaa64b29999a4ca6e8734552324ce69dff`、previous=`e642a6755f123d72ce785872f4fb8d9bcb4ef614`。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持した。別repo D4-Pocketには変更していない。
+
+Linux製品Launcherのautostart enableは既存`blue-tanuki.desktop`を無条件上書きし、disableとUninstallはBLUEの`Exec`行だけが一致すると削除していた。これは同じ起動行を参照するユーザー設定や、追加内容のある設定を破壊し得た。共有Unix guardへ、install rootを含む生成内容全体のbyte一致・通常file・非symlink判定を追加した。Launcherはentry不在時のみnoclobber作成し、既存設定は変更せず、Linux statusは`enabled`／`preserved`／`disabled`を区別する。Uninstallは同じguardで完全一致した生成entryだけを削除候補にする。guardの読込はLinux autostart操作時に限定し、通常runtime起動の依存を増やさない。macOS／WindowsとSetupのautostart default disabledは変更していない。
+
+現行Linux package manifest schema 2に対し、古いschema 1を作っていたproduct uninstall fixtureを現行schemaへ合わせた。full Unix fixtureでさらにfake Nodeが新しいSetup runtime symlink確認をmetadata更新と誤認していたため、symlinkなしのfixture rootでno-op成功するケースを加えた。製品側期待値や安全判定は緩めていない。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| WSL Ubuntu 24.04の`sh -n`（4 shell files） | PASS。 |
+| `BLUE_TANUKI_TEST_AUTOSTART_ONLY=1 sh install/installer/test/safe_target_unix.sh` | PASS：同じ`Exec`を持つ未所有設定の無上書き／保持、生成entryの状態／disable／Uninstall候補、変更後設定の保持。 |
+| `sh install/installer/test/safe_target_unix.sh` | PASS：`unix_target_guard=pass`。製品Setup、Uninstall、既存の停止／復旧fixtureを含む。 |
+| native Linux installed製品、実data rollback／purge、workspace全suite、5OS、QE_QC／QE_QA | NOT_RUN。 |
+| `git diff --check`／`docs:check` | PASS。日本語基底の既存移行負債76件はwarningとして維持。 |
+
+実Linux distributionや実ユーザーデータは操作せず、fixtureは一時領域をtrap cleanupした。これはG03.03のautostart ownership subconsumerだけを接続する限定WIREDであり、Linux update／rollback／削除・data retention全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、native Linux QAやreleaseを成立扱いしない。次consumerはLinux installed packageのupdate失敗／再起動／rollbackと通常Uninstall／Purgeのdata retention・process停止・残留観測。
+
+---
+
 ## 2026-11-10 — QEB-G03.01-LINUX-PACKAGED-INSTALL-RUNTIME-SMOKE
 
 開始時local／`origin/main`=`d6e87cd2d44235219c3c51676c0febe816525b90`。直前復旧ref local branch／remote tag current=`d6e87cd2d44235219c3c51676c0febe816525b90`、previous=`850860fc7f740d744390aed53a51ae9d6b7079a0`。protected `.codex-attachments/`／`.codex-remote-attachments/`は変更しない。

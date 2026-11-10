@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 INSTALL_ENV="$SCRIPT_DIR/blue-tanuki-install.env"
 
 if [ ! -f "$INSTALL_ENV" ]; then
@@ -27,6 +27,15 @@ STDERR_LOG="$LOG_DIR/blue-tanuki.err.log"
 fail() {
   echo "error: $*" >&2
   exit 2
+}
+
+load_autostart_guard() {
+  SAFE_TARGET_LIB="$SCRIPT_DIR/install/unix/safe-target.sh"
+  if [ ! -f "$SAFE_TARGET_LIB" ] || [ -L "$SAFE_TARGET_LIB" ]; then
+    fail "shared Unix target guard is missing; refusing autostart management"
+  fi
+  # shellcheck disable=SC1090
+  . "$SAFE_TARGET_LIB"
 }
 
 read_env_value() {
@@ -457,18 +466,25 @@ autostart_enable() {
 EOF
       ;;
     linux)
+      load_autostart_guard
       entry_dir="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
       entry="$entry_dir/blue-tanuki.desktop"
+      [ "$INSTALL_ROOT" = "$SCRIPT_DIR" ] || fail "launcher install root does not match its installed location"
+      if [ -L "$entry_dir" ] || { [ -e "$entry_dir" ] && [ ! -d "$entry_dir" ]; }; then
+        fail "autostart directory is not a regular directory; existing data was preserved: $entry_dir"
+      fi
       mkdir -p "$entry_dir"
-      cat > "$entry" <<EOF
-[Desktop Entry]
-Type=Application
-Name=BLUE-TANUKI
-Comment=Start BLUE-TANUKI resident gateway
-Exec=$INSTALL_ROOT/BlueTanukiLauncher.sh resident-start
-Terminal=false
-X-GNOME-Autostart-enabled=true
-EOF
+      [ -d "$entry_dir" ] && [ ! -L "$entry_dir" ] || fail "autostart directory is not a regular directory: $entry_dir"
+      if [ -e "$entry" ] || [ -L "$entry" ]; then
+        is_managed_linux_autostart_entry "$entry" "$INSTALL_ROOT" ||
+          fail "existing autostart entry is not an exact managed BLUE-TANUKI entry; it was preserved: $entry"
+      else
+        if ! (umask 077; set -C; render_managed_linux_autostart_entry "$INSTALL_ROOT" > "$entry") 2>/dev/null; then
+          fail "autostart entry could not be created without replacing existing data: $entry"
+        fi
+        is_managed_linux_autostart_entry "$entry" "$INSTALL_ROOT" ||
+          fail "new autostart entry failed its ownership check: $entry"
+      fi
       ;;
     *)
       fail "autostart unsupported platform: $PLATFORM"
@@ -488,14 +504,47 @@ autostart_entry() {
 
 autostart_disable() {
   entry=$(autostart_entry)
-  if [ -n "$entry" ]; then
-    rm -f -- "$entry"
-  fi
-  echo "autostart_status=disabled"
+  case "$PLATFORM" in
+    linux)
+      load_autostart_guard
+      if [ -n "$entry" ] && { [ -e "$entry" ] || [ -L "$entry" ]; }; then
+        if is_managed_linux_autostart_entry "$entry" "$INSTALL_ROOT"; then
+          rm -f -- "$entry"
+          echo "autostart_status=disabled"
+        else
+          echo "autostart_status=preserved"
+          echo "autostart_entry=$entry"
+        fi
+      else
+        echo "autostart_status=disabled"
+      fi
+      return
+      ;;
+    macos)
+      if [ -n "$entry" ]; then rm -f -- "$entry"; fi
+      echo "autostart_status=disabled"
+      ;;
+    *)
+      echo "autostart_status=disabled"
+      ;;
+  esac
 }
 
 autostart_status() {
   entry=$(autostart_entry)
+  if [ "$PLATFORM" = linux ]; then
+    load_autostart_guard
+    if [ -n "$entry" ] && is_managed_linux_autostart_entry "$entry" "$INSTALL_ROOT"; then
+      echo "autostart_status=enabled"
+      echo "autostart_entry=$entry"
+    elif [ -n "$entry" ] && { [ -e "$entry" ] || [ -L "$entry" ]; }; then
+      echo "autostart_status=preserved"
+      echo "autostart_entry=$entry"
+    else
+      echo "autostart_status=disabled"
+    fi
+    return
+  fi
   if [ -n "$entry" ] && [ -f "$entry" ]; then
     echo "autostart_status=enabled"
     echo "autostart_entry=$entry"

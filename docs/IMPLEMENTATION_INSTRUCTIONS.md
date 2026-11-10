@@ -2,7 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABI・導入preflight・artifact生成
+## 現行BUILD_BATCH — QE_BUILD / G03.03 Linux autostart ownership guard（限定consumer）
+
+主語はLinux製品Launcherのautostart enable／disable／statusと、Linux製品Uninstallのautostart削除処理。目的はBLUE-TANUKIが生成したと確認できる設定だけを作成・削除し、同じ`Exec`行を含むだけの既存設定、変更済み設定、symlink、非regular fileを保持すること。
+
+共有`install/unix/safe-target.sh`が生成内容を描画し、通常file・非symlink・全bytes一致で所有を判定する。Launcherは対象が不在の場合だけnoclobberで作成し、既存設定を上書きしない。Linux disable／statusとUninstallも同じ完全一致判定を使う。Linux setupのautostart既定disabled、macOS／Windows経路、HDS・権限・外部作用は変更しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 変更shell群の`sh -n` | PASS：WSL Ubuntu 24.04。 |
+| autostart ownership focused fixture | PASS：未所有・同じ`Exec`行の設定でenable拒否／bytes保持、disable／status／Uninstallで保持。生成済み完全一致設定のenable／status／disableとUninstall予定削除を確認し、変更後は保持。 |
+| `install/installer/test/safe_target_unix.sh`全fixture | PASS：WSL Ubuntu 24.04、`unix_target_guard=pass`。現行Setupのruntime symlink確認をfixture Nodeがno-op時に扱うよう合わせ、既存のSetup／停止／復旧経路も最後まで実行。 |
+| Linux native installed製品、distribution通常利用、実データpurge／rollback、全suite、5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+この変更はG03.03のautostart ownership consumerのみを接続する。G03.03全体のLinux update失敗・再起動・rollback・削除とdata retention／残留process確認は未成立であり、次のconsumerとして継続する。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、Linux native QA、release／公開／owner GOを主張しない。
+
+UNIT_ID: G03.03 Linux autostart ownership subconsumer
+STATUS: WIRED（Launcher enable／disable／statusとUninstallが共通のexact-content guardを使う）
+NEXT_REQUIRED_CONSUMER: Linux installed packageのupdate失敗／再起動／rollbackと通常Uninstall／Purgeのdata retention、process停止・残留観測を同じ対象OSで接続する。
+SAFETY_STATUS: 未所有・編集済み・symlink・非regular autostartは保持。Linux setupのautostart default、macOS／Windows、HDS権限と外部作用は変更しない。
+
+### 前段完了BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABI・導入preflight・artifact生成
 
 主語はLinux package builder、installer manifestと`BlueTanukiSetup.sh`。目的は、対象runtimeを正しく同梱したLinux配布物を生成し、実際に含むNode runtimeとLinux host ABIを一致させ、対象外hostに中途半端な導入を開始しないこと。manifestだけの宣言やpackage生成だけでinstalled Linux製品が成立したとは扱わない。
 

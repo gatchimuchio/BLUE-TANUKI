@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
+### 直近BUILD_BATCH — G03.03 Linux autostart ownership guard（限定consumer）
+
+Linux製品Launcherのenable／disable／statusとUninstallを、共通のexact-content ownership判定へ接続した。既存の同じ`Exec`行だけを持つ設定、変更済み設定、symlink／非regular fileは保持し、空き時だけLinux autostartをnoclobberで作成する。Linux default disabled、macOS／Windows経路は維持。WSL Ubuntu 24.04で変更shell構文とfocused autostart fixture、`safe_target_unix.sh`全fixture（`unix_target_guard=pass`）を確認した。native Linux installed製品、実データのrollback／purge、全suite、5OS、QE_QC／QE_QAは未確認。G03.03のupdate・recovery・data retention全体は未成立で、次consumerとして継続する。
+
+### 前段完了BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
 
 Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。target-aware builderがLinux専用isolation helperを含むtar installerを生成し、Linux package verifierはそれを確認する。SetupはNode公式runtime内の既知`npm`／`npx`／`corepack` symlinkだけを安全に正規化し、ほかのsymlinkを引き続き拒否する。共通guardはLinux schema 2／x64とmacOS schema 1を区別し、部分stage cleanupをdirectory identityへ束縛した。
 

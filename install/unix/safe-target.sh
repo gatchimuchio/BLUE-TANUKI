@@ -3,6 +3,35 @@ safe_target_fail() {
   exit 1
 }
 
+render_managed_linux_autostart_entry() {
+  bt_autostart_install_root=$1
+  case "$bt_autostart_install_root" in
+    /*) ;;
+    *) safe_target_fail "Linux autostart install root must be absolute" ;;
+  esac
+  bt_autostart_cr=$(printf '\r')
+  case "$bt_autostart_install_root" in
+    *'
+'*|*"$bt_autostart_cr"*) safe_target_fail "Linux autostart install root contains a line break" ;;
+  esac
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Start BLUE-TANUKI resident gateway
+Exec=$bt_autostart_install_root/BlueTanukiLauncher.sh resident-start
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+}
+
+is_managed_linux_autostart_entry() {
+  bt_autostart_file=$1
+  bt_autostart_install_root=$2
+  [ -f "$bt_autostart_file" ] && [ ! -L "$bt_autostart_file" ] || return 1
+  render_managed_linux_autostart_entry "$bt_autostart_install_root" | cmp -s "$bt_autostart_file" -
+}
+
 trim_trailing_slashes() {
   value=$1
   while [ "$value" != "/" ] && [ "${value%/}" != "$value" ]; do

@@ -140,6 +140,21 @@ remove_file_if_owned() {
   say "Removed managed $owned_label: $owned_file"
 }
 
+remove_linux_autostart_if_owned() {
+  owned_file=$1
+  if [ ! -e "$owned_file" ] && [ ! -L "$owned_file" ]; then return; fi
+  if ! is_managed_linux_autostart_entry "$owned_file" "$INSTALL_ROOT"; then
+    say "Preserved unrelated autostart_entry: $owned_file"
+    return
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    say "Would remove managed autostart_entry: $owned_file"
+    return
+  fi
+  rm -f -- "$owned_file"
+  say "Removed managed autostart_entry: $owned_file"
+}
+
 LAUNCHER="$INSTALL_ROOT/BlueTanukiLauncher.sh"
 BIN_LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" BIN_LAUNCHER)
 if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
@@ -160,7 +175,7 @@ if [ "$PLATFORM" = macos ]; then
 else
   remove_file_if_owned "$SURFACE_FILE" "Exec=$BIN_LAUNCHER launch" "" desktop_launcher
   linux_autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/blue-tanuki.desktop"
-  remove_file_if_owned "$linux_autostart" "Exec=$INSTALL_ROOT/BlueTanukiLauncher.sh resident-start" "" autostart_entry
+  remove_linux_autostart_if_owned "$linux_autostart"
 fi
 
 cd /
