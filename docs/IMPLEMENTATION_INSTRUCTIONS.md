@@ -2,18 +2,18 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / Windows Uninstallの削除範囲を作用前に開示
+## 現行BUILD_BATCH — QE_BUILD / E01.01 Cron予定発火をprovider前にdurable claim
 
-主語はWindows製品Uninstallが削除するinstalled app・所有確認済みshortcut／registration・登録済みDataRoot。目的は、利用者が作用前に保持／全消去の範囲と削除先を理解できるようにし、既定の全データ保持と明示`-PurgeData`によるDataRoot全体消去の差を明確にすること。実ユーザーデータ、registry、shortcutを操作せず、Uninstallも実行しない。
+主語はCronSchedulerChannelが処理する予定eventとdynamic content provider／J ingress。目的は、eventを安定したschedule-version digestで永続claimしてからproviderを呼び、duplicate／stale／未解決eventのprovider再呼出しとJ再投入を抑止すること。event IDはsourceと予定時刻から作り、cursorは配送・再実行抑止だけを担う。
 
-安全対象とDataRootを検証した後、resident runtimeの停止・app／shortcut／registrationの削除より前に、絶対パスと作用予定を表示する。通常経路はDataRoot内の全項目保持、`-PurgeData`は登録済みDataRoot以下の全項目を完全削除しWindowsゴミ箱を経由しないと説明する。内容や秘密値は表示しない。`-DryRun`では予定形を示し、`-Quiet`指定時はこの計画表示を抑制する。実際の削除順・所有判定・保持範囲は変更しない。
+`task.payload_hash`を予定eventのcursor digestとしてclaimする。accepted時だけcontent providerを呼び、解決後のcontent hashは既存どおりJ/runtime metadataへ渡す。claim失敗ではprovider、J、Brokerを呼ばない。handler／process異常は`outcome_unknown`で保持し、ownerがHDS経由で明示するno-replay dispositionなしに後続eventを通さない。Approval、Authority、M receipt、外部作用の採否・成功はこの変更範囲に含めない。
 
-PowerShell parser、`git diff --check` PASS。test suite、実Windows package Setup／Uninstall、データ保持／purgeの実行、registry／shortcut、全OS、QE_QC／QE_QAはNOT_RUN。実ユーザーデータ・秘密・registry・shortcutは未変更。この事前開示だけの限定BUILDで、Setup／Uninstall E2E、`SYSTEM_SHAPED`、`BUILD_COVERED`の証拠ではない。
+Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。初回docs gateは前段READMEの古いmigration hashでFAILし、本文・負債数・gateを変えず現hashだけ同期後にPASS。testは追加・実行していない。Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。実provider、外部作用、実ユーザーデータ、別repoは対象外。
 
-UNIT_ID: G02.03 Windows product uninstall scope disclosure
-STATUS: CODE_PRESENT（作用前表示を追加。runtimeでの表示・利用者理解は未確認）
-NEXT_REQUIRED_CONSUMER: isolated installed-package lifecycle確認で表示と既定保持／明示全消去を動的観測する。F17.03のowner L3目的関係／step審査はCodexが代行せず未実施。
-SAFETY_STATUS: 作用より前に絶対パスと削除範囲を開示。現実のユーザーデータに作用なし。
+UNIT_ID: E01.01 Cron durable scheduled occurrence claim ordering
+STATUS: WIRED（source上でdurable claimがprovider／J ingressより前。runtime未確認）
+NEXT_REQUIRED_CONSUMER: durable event IDをOperationPlan・execution receipt・J/M結果と同一taskの回復projectionへ一気通貫で結び、outcome_unknownで自動再実行しない。
+SAFETY_STATUS: duplicate／stale／未解決eventはproviderとJへ進まない。event cursorを承認・作用成功・達成の証拠にしない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
 

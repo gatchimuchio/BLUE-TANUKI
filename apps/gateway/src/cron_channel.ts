@@ -27,6 +27,7 @@ export interface CronTaskOptions {
   time_zone?: string;
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
+  /** Stable schedule-version digest; the durable event claim is recorded before dynamic content resolution. */
   payload_hash?: string;
   delegation?: RuntimeScheduleDelegation;
 }
@@ -366,10 +367,10 @@ export class CronSchedulerChannel implements InboundChannel {
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
     runtime.lastFireAtMs = scheduledAtMs;
-    const resolved = await this.resolveContent(task, runtime.scheduledTimeZone ?? task.time_zone);
-    const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
-    const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
-    const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, payloadHash);
+    // Persist the scheduled occurrence before invoking a dynamic content provider.
+    // The cursor binds the occurrence to this schedule version; resolved content
+    // remains separately hashed for the J/runtime request below.
+    const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, task.payload_hash);
     const claim = this.eventStore?.claim(event) ?? { status: "accepted" as const };
     if (claim.status !== "accepted") {
       this.log(`[cron] event not dispatched id=${task.id} status=${claim.status}${claim.status === "duplicate" || claim.status === "blocked_unresolved" ? ` delivery_state=${claim.delivery_state}` : ""}`);
@@ -377,6 +378,9 @@ export class CronSchedulerChannel implements InboundChannel {
     }
     this.inFlightEventIds.add(event.event_id);
     try {
+      const resolved = await this.resolveContent(task, runtime.scheduledTimeZone ?? task.time_zone);
+      const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
+      const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
       try {
         this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event, task.delegation);
       } catch (error) {

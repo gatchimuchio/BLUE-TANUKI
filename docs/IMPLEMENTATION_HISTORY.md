@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-11-10 — QEB-G02.03-WINDOWS-UNINSTALL-SCOPE-DISCLOSURE
+
+Windows製品Uninstallへ作用前の削除範囲開示を追加した。install／DataRoot ownership validation後、resident stopや削除より前にresolved absolute pathsと予定作用を表示する。通常経路はDataRoot内容を保持し、明示`-PurgeData`は登録DataRoot以下を完全削除しWindows Recycle Binを経由しないと説明する。`-DryRun`は予定形、`-Quiet`は表示抑制。内容・secret値、実ユーザーデータ、registry、shortcutは変更しない。`install/README.md`へproduct `-PurgeData`と開発用`-Purge`の差も記録した。
+
+PowerShell parser、`git diff --check`はPASS。test suite、実installed Setup／Uninstall、registry／shortcut、実ユーザーデータ、全OS、QE_QC／QE_QAはNOT_RUN。commit=`fd832757f361ee4be43078b793c4034ab7eb2240`をGitHub `main`へpush済み。close後のlocal recovery branch／remote tag二世代はcurrent=`fd832757f361ee4be43078b793c4034ab7eb2240`／previous=`d6b543072a57182db9d02a24bedf7db94e2d8976`。
+
+---
+
 ## 2026-11-10 — QEB-F17.03-CANVAS-PARENT-C-J-BROKER-M-RECEIPT
 
 開始時local／`origin/main`／GitHub `main`=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。local recovery branch current／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。開始時に記録したremote recovery tagの旧値は不一致だったが、closeoutのfetch／`ls-remote`ではcurrent／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`となりlocal branchと一致したため、tag更新は行わない。fetchは古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のprune時に権限エラーを出した。dry-runはgitdir file欠落を示し、`git worktree list`にはmainのみ。管理領域は削除せず保留。保護attachmentは未変更。

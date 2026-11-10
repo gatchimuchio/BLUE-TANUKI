@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近安全修正BUILD_BATCH — Windows Uninstallの削除範囲を作用前に開示
+### 直近BUILD_BATCH — E01.01 Cron予定発火のdurable claimをprovider前へ接続
+
+Cron schedulerは、source・予定時刻・安定schedule-version digestをevent cursorへclaimしてからdynamic content providerとJ ingressへ進む。duplicate／stale／未解決eventではproviderもJも呼ばない。解決後本文のhash、J authority、Approval、Broker、M receipt、外部作用の境界は従来どおり維持する。Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。初回docs gateは前段READMEの古いmigration hashでFAILし、現hashだけ同期後にPASS（移行負債76件を維持）。testは追加・実行しておらず、Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。これはsource-level call order接続であり、E01.01／E03.02全体の耐久性や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。
+
+### 前段完了安全修正BUILD_BATCH — Windows Uninstallの削除範囲を作用前に開示
 
 Windows製品Uninstallは、安全なinstall／DataRoot所有検証の後、停止・削除前にresolved pathと予定作用を表示する。既定は登録済みDataRoot以下を全保持し、明示`-PurgeData`時は同root以下の全項目を完全削除してゴミ箱を経由しない。秘密値やファイル本文は表示しない。PowerShell parserと`git diff --check`はPASS。test suite、実installed product、保持／purge実行、registry／shortcut、実ユーザーデータはNOT_RUN／未変更。これは作用前開示の局所BUILDであり、Setup／Uninstall E2EやQE_QCの証拠ではない。
 
