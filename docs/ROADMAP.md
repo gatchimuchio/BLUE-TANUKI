@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近安全修正BUILD_BATCH — Windows Setup／Uninstallショートカット所有判定の完全一致化
+### 直近安全修正BUILD_BATCH — Windows Uninstallの削除範囲を作用前に開示
+
+Windows製品Uninstallは、安全なinstall／DataRoot所有検証の後、停止・削除前にresolved pathと予定作用を表示する。既定は登録済みDataRoot以下を全保持し、明示`-PurgeData`時は同root以下の全項目を完全削除してゴミ箱を経由しない。秘密値やファイル本文は表示しない。PowerShell parserと`git diff --check`はPASS。test suite、実installed product、保持／purge実行、registry／shortcut、実ユーザーデータはNOT_RUN／未変更。これは作用前開示の局所BUILDであり、Setup／Uninstall E2EやQE_QCの証拠ではない。
+
+### 前段完了安全修正BUILD_BATCH — Windows Setup／Uninstallショートカット所有判定の完全一致化
 
 Setupの既存ショートカット置換前とUninstallの削除前に、Launcherパスの部分文字列を含むだけで所有扱いする欠陥を修正した。共通guardがWindows PowerShellの実行先、生成済み固定引数、Launcher完全一致パスを照合する。PowerShell構文解析と`git diff --check`はPASS。テストsuite、実Setup／Uninstall、installed製品、実ユーザーデータは未実行・未変更。局所的安全修正であり製品E2EやQE_QCではない。
 

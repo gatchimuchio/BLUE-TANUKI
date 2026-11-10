@@ -144,6 +144,35 @@ function Remove-Target($Target, $Label, $ProductDataInstallRoot = $null) {
   if (-not $Quiet) { Write-Host "Removed ${Label}: $Target" }
 }
 
+function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
+  if ($Quiet) { return }
+  Write-Host 'Uninstall plan:'
+  if ($DryRun) {
+    Write-Host "Would remove installed application files under: $ResolvedInstallRoot"
+    Write-Host 'Would remove only shortcuts and uninstall registration verified as owned by this install.'
+    if ($PurgeData) {
+      Write-Host "Would permanently remove the full product data root and every file under it: $ResolvedDataRoot"
+      Write-Host 'This may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+      Write-Host 'Data removal does not use the Recycle Bin.'
+    } else {
+      Write-Host "Would retain all contents under the registered product data root: $ResolvedDataRoot"
+      Write-Host 'Retained contents may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+    }
+    return
+  }
+
+  Write-Host "Will remove installed application files under: $ResolvedInstallRoot"
+  Write-Host 'Will remove only shortcuts and uninstall registration verified as owned by this install.'
+  if ($PurgeData) {
+    Write-Host "Will permanently remove the full product data root and every file under it: $ResolvedDataRoot"
+    Write-Host 'This may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+    Write-Host 'Data removal does not use the Recycle Bin.'
+  } else {
+    Write-Host "Will retain all contents under the registered product data root: $ResolvedDataRoot"
+    Write-Host 'Retained contents may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+  }
+}
+
 function Remove-RegularFile($Path, $Label) {
   if (-not (Test-Path -LiteralPath $Path)) { return }
   $item = Get-Item -Force -LiteralPath $Path
@@ -256,6 +285,8 @@ try {
 } catch {
   Fail "Refusing to uninstall because product ownership and structure could not be verified. No files were changed. $($_.Exception.Message)"
 }
+
+Write-UninstallPlan $installRootResolved $dataRootResolved
 
 $launcher = Join-Path $installRootResolved 'BlueTanukiLauncher.ps1'
 if (Test-Path -LiteralPath $launcher -PathType Leaf) {

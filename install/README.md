@@ -394,3 +394,14 @@ Uninstallers remove the installed app and launcher by default while preserving
 the env file, audit chain, sessions, and local data. Use `-Purge` on Windows or
 `PURGE=1` on macOS/Linux to remove the retained data as well. Use `-DryRun` or
 `DRY_RUN=1` to preview the removal.
+
+The packaged Windows product uninstaller shows the resolved install and data
+roots before stopping the resident runtime or removing anything. Its default
+path retains every item under the registered data root. The command
+`UninstallBlueTanuki.cmd -PurgeData` permanently removes the entire registered
+data root. It may contain environment credentials, saved content and history,
+sessions, logs, audit records, and files added there; removal does not use the
+Recycle Bin. Use
+`UninstallBlueTanuki.cmd -DryRun` to preview the selected scope first. This
+packaged-product option is separate from the source/developer uninstaller's
+`-Purge` option.

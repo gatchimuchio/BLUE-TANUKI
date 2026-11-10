@@ -2,7 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
+## 現行BUILD_BATCH — QE_BUILD / Windows Uninstallの削除範囲を作用前に開示
+
+主語はWindows製品Uninstallが削除するinstalled app・所有確認済みshortcut／registration・登録済みDataRoot。目的は、利用者が作用前に保持／全消去の範囲と削除先を理解できるようにし、既定の全データ保持と明示`-PurgeData`によるDataRoot全体消去の差を明確にすること。実ユーザーデータ、registry、shortcutを操作せず、Uninstallも実行しない。
+
+安全対象とDataRootを検証した後、resident runtimeの停止・app／shortcut／registrationの削除より前に、絶対パスと作用予定を表示する。通常経路はDataRoot内の全項目保持、`-PurgeData`は登録済みDataRoot以下の全項目を完全削除しWindowsゴミ箱を経由しないと説明する。内容や秘密値は表示しない。`-DryRun`では予定形を示し、`-Quiet`指定時はこの計画表示を抑制する。実際の削除順・所有判定・保持範囲は変更しない。
+
+PowerShell parser、`git diff --check` PASS。test suite、実Windows package Setup／Uninstall、データ保持／purgeの実行、registry／shortcut、全OS、QE_QC／QE_QAはNOT_RUN。実ユーザーデータ・秘密・registry・shortcutは未変更。この事前開示だけの限定BUILDで、Setup／Uninstall E2E、`SYSTEM_SHAPED`、`BUILD_COVERED`の証拠ではない。
+
+UNIT_ID: G02.03 Windows product uninstall scope disclosure
+STATUS: CODE_PRESENT（作用前表示を追加。runtimeでの表示・利用者理解は未確認）
+NEXT_REQUIRED_CONSUMER: isolated installed-package lifecycle確認で表示と既定保持／明示全消去を動的観測する。F17.03のowner L3目的関係／step審査はCodexが代行せず未実施。
+SAFETY_STATUS: 作用より前に絶対パスと削除範囲を開示。現実のユーザーデータに作用なし。
+
+### 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
 
 主語はWindows製品Setup／Uninstallが更新・削除するショートカット。目的は、BLUE-TANUKIの生成物と確認できないユーザー項目を保持すること。既存判定はショートカット引数内にLauncherパス文字列が含まれるだけで所有を認定していたため、無関係な項目を上書き・削除し得た。
 
