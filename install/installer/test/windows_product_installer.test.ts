@@ -741,6 +741,7 @@ describe("Windows product installer package", () => {
 
   it("declares real package, verify, installer, and installed smoke scripts", () => {
     const pkg = read("package.json");
+    const smoke = read("scripts/smoke_windows_installed.ts");
     expect(pkg).toContain("\"package:windows\"");
     expect(pkg).toContain("\"package:windows:verify\"");
     expect(pkg).toContain("\"installer:windows\"");
@@ -758,26 +759,29 @@ describe("Windows product installer package", () => {
     expect(read("scripts/verify_windows_package.ts")).toContain("app/LICENSE-APACHE-2.0");
     expect(read("scripts/verify_windows_package.ts")).toContain("app/LICENSE-CC-BY-4.0");
     expect(read("scripts/verify_windows_package.ts")).toContain("app/NOTICE");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("source_tree_setup_guidance_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_build_from_source_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_cmd_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("installer_zip_setup_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("port_conflict_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("repair_install_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("crash_recovery_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("installed smoke registry preflight");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("installed smoke active Gateway preflight");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("active Gateway process prevents isolated Setup/Launcher/Uninstall smoke");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain('const isolatedProductEnv = {');
-    expect(read("scripts/smoke_windows_installed.ts")).toContain('path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0")');
-    expect(read("scripts/smoke_windows_installed.ts")).toContain('"installer setup", 600_000, isolatedProductEnv');
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("Get-CimInstance Win32_Process");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("blue-tanuki-stage-");
-    expect(read("scripts/smoke_windows_installed.ts")).toContain('const installRoot = path.join(work, "i");');
-    expect(read("scripts/smoke_windows_installed.ts")).toContain("preserving temporary install tree because product cleanup is unconfirmed");
+    expect(smoke).toContain("source_tree_setup_guidance_result=pass");
+    expect(smoke).toContain("root_source_entrypoint_result=pass");
+    expect(smoke).toContain("root_source_entrypoint_build_from_source_result=pass");
+    expect(smoke).toContain("root_source_entrypoint_cmd_result=pass");
+    expect(smoke).toContain("installer_zip_setup_result=pass");
+    expect(smoke).toContain("windows_runtime_smoke=skipped");
+    expect(smoke).toContain("port_conflict_result=pass");
+    expect(smoke).toContain("repair_install_result=pass");
+    expect(smoke).toContain("crash_recovery_result=pass");
+    expect(smoke).toContain("safe_mode_result=pass");
+    expect(smoke).toContain("installed smoke registry preflight");
+    expect(smoke).toContain("installed smoke active Gateway preflight");
+    expect(smoke).toContain("active Gateway process prevents isolated Setup/Launcher/Uninstall smoke");
+    expect(smoke).toContain('const isolatedProductEnv = {');
+    expect(smoke).toContain('path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0")');
+    expect(smoke).toContain('"installer setup", 600_000, isolatedProductEnv');
+    expect(smoke).toContain("Get-CimInstance Win32_Process");
+    expect(smoke).toContain("blue-tanuki-stage-");
+    expect(smoke).toContain('const installRoot = path.join(work, "i");');
+    expect(smoke).toContain("preserving temporary install tree because product cleanup is unconfirmed");
+    expect(smoke).toContain('run("powershell.exe"');
+    expect(smoke).toContain("Expand-Archive -LiteralPath");
+    expect(smoke).not.toContain('spawnSync("tar.exe"');
   });
 
   it("ships a deterministic Windows one-click artifact audit gate", () => {

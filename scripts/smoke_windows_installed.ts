@@ -132,33 +132,19 @@ function runExpectingStatus(
   return output;
 }
 
+function powershellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function expandArchive(artifact: string, destination: string): void {
   mkdirSync(destination, { recursive: true });
-  logStep("start expand installer archive with tar.exe");
-  const result = spawnSync("tar.exe", ["-xf", artifact, "-C", destination], {
-    cwd: process.cwd(),
-    env: { ...process.env, ...isolatedChildEnv },
-    stdio: "inherit",
-    encoding: "utf8",
-    timeout: 300_000,
-    windowsHide: true,
-  });
-  const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
-  if (errorCode === "ENOENT") {
-    logStep("tar.exe unavailable; using PowerShell Expand-Archive under the active execution policy");
-    run("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `Expand-Archive -LiteralPath ${JSON.stringify(artifact)} -DestinationPath ${JSON.stringify(destination)} -Force`,
-    ], process.cwd(), "expand installer archive with PowerShell", 600_000);
-    return;
-  }
-  if (result.error) throw new Error(`expand installer archive with tar.exe failed: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new Error(`expand installer archive with tar.exe failed with exit ${result.status} signal=${result.signal ?? "none"}`);
-  }
-  logStep("done expand installer archive with tar.exe");
+  logStep("start expand installer archive with PowerShell");
+  run("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath ${powershellLiteral(artifact)} -DestinationPath ${powershellLiteral(destination)} -Force`,
+  ], process.cwd(), "expand installer archive with PowerShell", 600_000);
 }
 
 function parseEnvFile(file: string): Record<string, string> {
