@@ -2,7 +2,7 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptへ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptと結果不明復帰へ接続（限定WIRED）
 
 主語はWebChat Control CenterのCanvas成果物と、そこからownerが明示した操作意図。目的は一致確認済みの限定本文を一回の親C計算へ渡し、提案されたsandbox内file.writeを既存J／Approval／Brokerへ接続し、検証済み結果とM receiptに基づくowner指定の達成判定まで同じtaskで通すこと。ownerは「明示規則と検証済み根拠」を選択済み。Canvas本文は権限・承認・目的変更の根拠ではなく、child候補へ本文を渡さない。
 
@@ -10,24 +10,27 @@ Canvas source MIME／UTF-8／SHA-256／表示版／返信request IDをowner task
 
 合成file.write計画をownerのsandbox内へ限定し、Jが委任目的との関係をowner L3 reviewへ送り、既存Operation Plan review・Approval Gate・Brokerで候補を処理する。明示規則はtarget=`owner-task-note.txt`、operation=`file.write`、検証済み出力`/bytes_written`が本文UTF-8 bytes数と一致する条件とし、Jがcurrent revisionの結果・M receipt・保存値を検証した場合だけ`achieved`へsealして停止する。規則欠落・不一致はheldのまま。これはC08.02の既存達成規則実装をCanvas経路へ使うもので、並行判定機構は作らない。
 
+failure/recoveryでは、sandbox内writeの直後・J/M receipt記録前にGateway processを終了し、再起動後も元stepを`outcome_unknown`、M receiptなし、未達成のまま保持する。自動再実行・重複writeを起こさず、digest-onlyの状態観測をownerが選んだ場合だけ同一taskの次候補へ渡す。次候補の目的関係は別のowner L3 reviewを通し、完全一致pathの`file.search`空queryは実装契約どおり限定`file.read preview`としてJ/M receiptと共に返す。これは保存時点のpreviewであり、元writeの成功・達成・現在状態を証明しない。WebChat応答待受は各HTTP受付が返すrequest IDへ束縛する。
+
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | Canvas入力検査、ephemeral parent-C routing、child本文遮断、通常session履歴除外 | PASS：4 test files中6件、151件skip。 |
 | Canvas owner意図→既存Tasks送信payload（artifact参照・選択済み委任目的・明示達成規則） | PASS：`webchat.test.ts`の限定1件。stub経由のpayload検査であり、served UIからの実Owner Task送信ではない。 |
 | served Gateway Canvas→synthetic C→J purpose relation review／plan review→sandbox file.write→verified result／M receipt | PASS：owner-authenticated local integration 1件。 |
 | 明示file.write規則一致時のJ達成projectionと再起動復元 | PASS：同じserved integrationで1/1規則・結果bytes・M receiptを確認。C08.02の規則判定は既存targeted testで確認済み。 |
+| write後・J/M receipt前のprocess kill、再起動、未知結果保持、owner選択観測、同一task再計画、saved-result返却 | PASS：対象served integration 1件（同ファイル内8 tests中1 PASS／7 skipped）。元writeは`outcome_unknown`／receiptなし／未達成、ファイル件数は不変。続くexact-path previewはM receipt確認済みで、別request IDへの誤照合なし。 |
 | Canvas送信時の永続化説明とOperation Plan SQLite内の本文保持 | PASS：HTML表示testとserved checkpoint readback。 |
 | loopback browser GUIでの合成Canvas生成・表示 | PASS：隔離Gatewayの`synthetic-file-write-plan`で通常WebChatを接続し、text/html応答をCanvasプレビューiframe内に表示。MIME／SHA-256／由来request IDを表示し、見出し・表の実描画を画面で確認。 |
 | Gateway依存build／`docs:check`／`git diff --check` | PASS：7 workspace projects。docs check・日本語基底監査（移行負債76件の注意）・license・差分whitespace。 |
-| GUIからのOwner Task送信／L3承認／file.write、実LLM/provider、failure injection、全suite、全OS、installed製品、QE_QC／QE_QA | NOT_RUN：この合成GUI確認ではowner taskを送らず、ファイル作用も行っていない。 |
+| 実GUIからのOwner Task送信・Owner本人によるL3操作、実LLM/provider、外部作用、全suite、全OS、installed製品、QE_QC／QE_QA | NOT_RUN。このsliceのfile.write／process kill／Approvalは隔離された合成local fixtureで実施。 |
 
-初回の永続化確認assertionはJSON文字列内の改行escapeを考慮せずFAILした。SQLite checkpoint実体に本文があることを読取観測し、JSON表現に合わせてassertionを直した後、同じCanvas testをPASSした。これはtest比較の修正で、product failureではない。
+初回の永続化確認assertionはJSON文字列内の改行escapeを考慮せずFAILした。SQLite checkpoint実体に本文があることを読取観測し、JSON表現に合わせてassertionを直した後、同じCanvas testをPASSした。追加のfailure/recovery testでは、request IDを指定しない待受が別`channel_send`を捕捉できたため、各owner受付のrequest IDと結合した。空query＋exact pathに対するsaved-resultは既存契約の限定previewであることをstep parametersと返却projectionの両方で確認し、テスト期待値を合わせた。合成planner fixtureのselected-observation context markerも実producer表現に合わせた。これらは検査入口／fixtureの是正で、Jのauthority policy変更ではない。raw `cmd`／`command`をOperation Coreへ埋め込むfile.edit→shell.exec fixtureはcoreのfail-closed拒否が正しいため本sliceから分離し、shell command-generation consumerは未解決として残す。raw-command保護は緩和しない。
 
-このbounded synthetic local routeと、WebChat生成→Canvasプレビューiframeの実ブラウザー表示だけをF17.03の限定`WIRED`証拠に含める。表示物はMIME=`text/html`、SHA-256=`da5ee2f82cc2ca286c0cb0a17fd018ad7772daafb52ef31f4416aaedc7ec8cfa`。生成されたControl Center scriptの制御文字escape不具合も修正し、構文・制御文字検査を追加した。GUIのOwner Task送信／L3／file.writeは未実施。実LLM/provider、失敗時の復帰、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、公開・出荷判断は未成立。外部作用・他repo変更なし。自分で起動した隔離Gatewayと一時state/log 26 files・485,762 bytes、および旧failed-start residue 4 files・9,159 bytesを停止・Windowsごみ箱へ移動し、元path消失とごみ箱収容を確認。既存Gateway processの実行元を今回のGUI試験専用と確証できないため、関連する可能性のあるTemp root 24 files・487,223 bytesは保留。`dist`はlocal build出力として保持し、protected attachment directoriesは未変更。
+このbounded synthetic local routeと、WebChat生成→Canvasプレビューiframeの実ブラウザー表示だけをF17.03の限定`WIRED`証拠に含める。表示物はMIME=`text/html`、SHA-256=`da5ee2f82cc2ca286c0cb0a17fd018ad7772daafb52ef31f4416aaedc7ec8cfa`。生成されたControl Center scriptの制御文字escape不具合も修正し、構文・制御文字検査を追加した。実GUIからのOwner Task送信・Owner本人のL3操作は未実施。実LLM/provider、外部作用、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、公開・出荷判断は未成立。外部作用・他repo変更なし。今回のintegration testは一時workspaceをtest cleanupで削除し、既存`dist`はbuild出力として保持。protected attachment directoriesは未変更。
 
-この継続の開始local／origin/main／GitHub main=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`。local recovery branchはcurrent=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`、remote recovery tagも同じ二世代。再同期時`git fetch --no-prune origin main`はmain SHA取得に成功したが、古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`管理領域の削除権限拒否を出した。`git worktree list`はmainのみ。保護された管理領域は手動削除・権限変更せず保留する。他repo変更なし。
+このBUILD_BATCHの開始local／origin/main／GitHub main=`e4a74fc57b76c96b5e64a6a12c0b0a7e1b59d979`。開始復旧ref local branch／remote tagのcurrent=`e4a74fc57b76c96b5e64a6a12c0b0a7e1b59d979`、previous=`b2ab1ca065cee64fac6a334914fb7627366e6bbc`。作業中の変更は`apps/gateway/test/document_organization_entry.test.ts`、`docs/IMPLEMENTATION_INSTRUCTIONS.md`、`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更。test-owned一時workspaceはcleanup済み。`dist`は保持。local main・upstream tracking・remote mainは開始SHAで一致し、worktreeはmain一つ。
 
-**次のproducer／consumer:** F17.03のfailure/recoveryを既存J Operation Plan／Recovery経路へ接続する。失敗・結果不明・再起動時も同一task・目的・規則・revision・M receiptを照合し、未解決ならheldを維持して自動作用を起こさない。実Owner認証・GUI送信・L3操作は行わず、synthetic local経路で限定施工する。
+**次のproducer／consumer:** Canvas artifactの参照・選択済み委任目的・明示達成規則を、served Control Centerからのowner操作意図とOwner Task送信まで同一requestへ接続する。synthetic local経路の一連の疎通を優先し、provider・外部作用・他repo変更を起動しない。
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 

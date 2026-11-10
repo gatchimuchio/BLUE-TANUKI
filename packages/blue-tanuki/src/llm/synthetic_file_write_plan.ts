@@ -359,7 +359,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   const parentContexts = messages.filter((message) => message.role === "system" &&
     message.content.includes("Jが所有・現行revision・task identityを照合した親planの原目的です。"));
   const observationContexts = messages.filter((message) => message.role === "system" &&
-    message.content.includes("Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。"));
+    message.content.includes("Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測metadataです。"));
   const citationContexts = messages.filter((message) => message.role === "system" &&
     message.content.includes("同一requestのJ受理済み引用判定"));
   const delegationMessages = messages.filter((message) => message.role === "system" &&
