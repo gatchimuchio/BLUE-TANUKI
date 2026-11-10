@@ -78,6 +78,29 @@ function Get-InstallPathIdentity {
   return $normalized
 }
 
+function Test-ManagedWindowsProductLauncherShortcut {
+  param(
+    [Parameter(Mandatory = $true)][string]$TargetPath,
+    [Parameter(Mandatory = $true)][string]$Arguments,
+    [Parameter(Mandatory = $true)][string]$InstallRoot
+  )
+
+  try {
+    $expectedPowerShell = Get-InstallPathIdentity (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+    $actualTarget = Get-InstallPathIdentity $TargetPath
+    if (-not [string]::Equals($actualTarget, $expectedPowerShell, [System.StringComparison]::OrdinalIgnoreCase)) {
+      return $false
+    }
+
+    $expectedLauncher = Get-InstallPathIdentity (Join-Path $InstallRoot 'BlueTanukiLauncher.ps1')
+    $launcherArgument = [regex]::Escape($expectedLauncher)
+    $pattern = '^(?:-NoProfile\s+-WindowStyle\s+Hidden\s+-File\s+"' + $launcherArgument + '"\s+open|-NoProfile\s+-File\s+"' + $launcherArgument + '"\s+(?:doctor-open|logs|safe-mode|stop))\s*$'
+    return [regex]::IsMatch($Arguments, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  } catch {
+    return $false
+  }
+}
+
 function Get-Sha256HexFromFile {
   param([Parameter(Mandatory = $true)][string]$Path)
   $stream = [System.IO.File]::OpenRead($Path)

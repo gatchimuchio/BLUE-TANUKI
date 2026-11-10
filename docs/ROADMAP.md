@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptへ接続（限定WIRED）
+### 直近安全修正BUILD_BATCH — Windows Setup／Uninstallショートカット所有判定の完全一致化
+
+Setupの既存ショートカット置換前とUninstallの削除前に、Launcherパスの部分文字列を含むだけで所有扱いする欠陥を修正した。共通guardがWindows PowerShellの実行先、生成済み固定引数、Launcher完全一致パスを照合する。PowerShell構文解析と`git diff --check`はPASS。テストsuite、実Setup／Uninstall、installed製品、実ユーザーデータは未実行・未変更。局所的安全修正であり製品E2EやQE_QCではない。
+
+### 保留中BUILD_BATCH — F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptへ接続（限定WIRED）
 
 WebChat Canvas本文をMIME／UTF-8／SHA-256／version／由来request IDに照合し、owner-authenticated taskから一回限り親Cへ渡す。child候補には本文を渡さず、session履歴に追加しない。C08.02で選択した明示達成規則を再利用し、Jの目的関係確認・plan review、sandbox内file.write、検証済みbytes数・M receiptが揃うと達成状態をGateway再起動後も復元する。file.write候補の本文・保存先は審査・復旧用にローカルJ Operation Plan SQLiteへ保存されることをUIで告知する。
 

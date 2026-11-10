@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptと結果不明復帰へ接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
+
+主語はWindows製品Setup／Uninstallが更新・削除するショートカット。目的は、BLUE-TANUKIの生成物と確認できないユーザー項目を保持すること。既存判定はショートカット引数内にLauncherパス文字列が含まれるだけで所有を認定していたため、無関係な項目を上書き・削除し得た。
+
+共通`install/windows/safe-target.ps1`に、Windows PowerShellの実行先、Setupが生成する固定起動引数、Launcherの完全一致パスを要求する判定を追加した。Setupの置換前判定とUninstallの削除前判定は同じ関数を利用し、余分な引数・未知のコマンド・別実行先は非所有として保護する。既存のLauncher／Uninstall直指定の完全一致判定は維持した。
+
+`install/windows/safe-target.ps1`、`BlueTanukiSetup.ps1`、`BlueTanukiUninstall.ps1`のPowerShell構文解析PASS、`git diff --check` PASS。suite、実Setup／Uninstall、installed Windows製品、動的データ保持、全OS、QE_QC／QE_QAはNOT_RUN。実ユーザーデータ・ショートカット・レジストリは操作していない。これは局所的な安全コード修正で、Windows製品E2E、`SYSTEM_SHAPED`、`BUILD_COVERED`の証拠ではない。
+
+UNIT_ID: G02.03 safety defect correction（QE_BUILD中の実安全欠陥修正。QE_QCは未開始）
+STATUS: WIRED（Setup置換前・Uninstall削除前の両consumerが共通の完全一致guardを呼ぶ）
+NEXT_REQUIRED_CONSUMER: owner L3を要するF17.03の目的関係／step審査は未実施。Windows installed-packageの動的Setup→通常Uninstall／Purge選択→データ保持・残留観測は後段の製品E2Eで扱う。
+SAFETY_STATUS: 非一致・曖昧ショートカットを保持。実ファイル操作なし。
+
+## 保留中BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptと結果不明復帰へ接続（限定WIRED）
+
+実際のowner L3による目的関係確認・plan step審査、file.write、M receiptは未実施。Codexは承認・目的適合判断を代行しない。以下は実装とserved候補生成の前回確認記録であり、この保留を解消した証拠ではない。
 
 主語はWebChat Control CenterのCanvas成果物と、そこからownerが明示した操作意図。目的は一致確認済みの限定本文を一回の親C計算へ渡し、提案されたsandbox内file.writeを既存J／Approval／Brokerへ接続し、検証済み結果とM receiptに基づくowner指定の達成判定まで同じtaskで通すこと。ownerは「明示規則と検証済み根拠」を選択済み。Canvas本文は権限・承認・目的変更の根拠ではなく、child候補へ本文を渡さない。
 

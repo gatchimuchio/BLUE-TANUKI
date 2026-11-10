@@ -170,7 +170,8 @@ function Test-ShortcutOwnedByInstall($Path, $InstallRootResolved) {
     $target = if ($shortcut.TargetPath) { Normalize-Path $shortcut.TargetPath } else { '' }
     if ([string]::Equals($target, $uninstaller, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
     if ([string]::Equals($target, $launcher, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
-    return ([string]$shortcut.Arguments).IndexOf($launcher, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    return Test-ManagedWindowsProductLauncherShortcut -TargetPath ([string]$shortcut.TargetPath) `
+      -Arguments ([string]$shortcut.Arguments) -InstallRoot $InstallRootResolved
   } catch {
     return $false
   }
