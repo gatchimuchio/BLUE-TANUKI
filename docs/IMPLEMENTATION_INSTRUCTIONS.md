@@ -2,27 +2,25 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / D06 OS保護秘密保管と利用consumerの限定接続（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / C08.02 explicit goal rulesからverified result／M receipt・同一task停止へのserved接続（限定WIRED）
 
-主語はBLUE GatewayのSetup／Settingsが保持するLLM・connector秘密と、その値を使う既存runtime consumer。目的は、資格情報を現行OSユーザーの保護保管先へ置いて不透明なrefだけを設定へ保存し、各consumerが自分の必要な秘密だけを利用時に解決すること。LLM実要求、外部作用、HDS authority、D4 Pocket側は変更しない。
+主語はownerが送る同一taskの明示的completion rulesと、HDS-JがGoalProjection／OperationPlanへ束縛する評価・停止経路。目的は、規則が明示されていないtaskを達成扱いせず、現行revision内の検証済みoperation resultとM receiptが全規則を満たす場合だけachievedをsealし、再起動後も同一taskの追加計算を拒否すること。Userが選んだ条件「明示規則と検証済み根拠」を適用する。実provider、外部作用、他repo変更は対象外。
 
-Windowsは既存DPAPIを維持し、Linuxは永続Secret Serviceだけ、macOSはKeychain backendを使う。Linuxの一時kernel-keyutils fallbackは使わない。Setup／Settingsは保護保管に失敗した場合に平文envへ逃がさず停止する。Gatewayの起動時に全connector秘密を`process.env`へ一括展開する経路を除き、LLM、各channel、Google Daily Brief、live smokeが対象keyのみ解決する。status projectionに秘密値を渡さず、Telegram tokenの代わりにconfigured booleanだけを出す。
+GoalProjectionは未確認のnecessity／target／validity／authorityを`unknown`のまま保ち、GoalProjection全体を`ready`に偽装しない。owner trustを通ったcompletion rulesがある場合だけ`evaluation_rules=referenced`としてdigest／件数／request refを保持する。実規則はJ管理のOperationPlan policyに置き、各stepの結果値、current revision、M receiptと保存値を照合する。外部metadataだけではrulesを投影しない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| 秘密保管・Setup／Settings・statusの対象test | PASS：4 files／34 tests。全suiteは未実施。 |
-| Gateway／root typecheck、root build | PASS。 |
-| `corepack pnpm docs:check`／`git diff --check` | PASS。日本語基底監査PASS、既存移行負債76件の注意、license PASS。 |
-| Windows x64 installer build／verify | PASS：2,540 entries、SHA-256 `b96d64edeaae4e1520f1ef8ed6d08db90f981f1a5fa1923a77112554137153d4`。obsolete Uninstall文字列条件を実物の同期実行契約へ修正。 |
-| Linux x64 installer build／verify | PASS：2,649 entries、SHA-256 `7519efef6dd283e7f62c7fa835bb32acd748df9eb367ccc2c4787f5aa16a80eb`。 |
-| macOS x64／arm64 installer build／verify | PASS：各2,645 entries、SHA-256 `a7f7315414ac515de46b400006633b79d06ed805b156d44befde4b6b590d4181`／`ce855b1468391a16bf522b8763b47ef9775ebb622ad212e2c6bbc431c63f99b5`。 |
-| Linux Secret Service実機、macOS Keychain実機、対象OS上のrestart／credential use | NOT_RUN。Windows上のtarget packaging証拠をruntime証拠へ拡張しない。 |
+| HDS GoalProjection owner rules ref／external metadata偽装拒否 | PASS：2 tests、3 skipped。 |
+| OperationPlan explicit rules・verified result／M receipt正例と不一致保留・再起動後停止 | PASS：2 tests、47 skipped。 |
+| Served Gateway owner task→synthetic file.search→M receipt→達成projection→Gateway restart restoration | PASS：1 test、6 skipped。規則なしtaskは`goal_completion_rules_missing`でheld、owner規則一致後だけachieved。live providerなし。 |
+| `docs:check`／`git diff --check` | 最終記録更新後に実施。 |
+| 実LLM／外部provider、外部作用、全suite、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
 
-このsliceだけを限定`WIRED`とする。D06全要求にあるhost／action／expiry単位の直前grant・revoke、秘密ごとの全consumer接続、Linuxの実host permission／namespace証拠、macOS signing/notarization、対象5OSでのruntime／restart証拠は未成立。秘密は使用中の該当client/channel instance内に残り得る。実provider、HDS採否変更、5OS QA、QE_QC／QE_QA、公開・出荷判断は行わない。
+served testのsnapshot pollingは直接取得でタイムアウトし、既存429-retry helperへ切り替えた同testはPASSした。429自体が原因だったかは記録されていない。production codeは変更していない。このC08.02縦断sliceだけを限定`WIRED`とする。GoalProjectionの他未同定要素、C08.02全状態・全OS・実LLMの長期運転、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。外部provider／作用、QE_QC／QE_QA、公開・出荷判断は行わない。
 
-開始local／remote `main`=`40822ba7fae2c726563a35342998134d59f285ee`。開始復旧ref local branch／remote tagのcurrent=`40822ba7fae2c726563a35342998134d59f285ee`、previous=`e1d39a2c9a681401d3b300619448fc9c31ee67da`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更。target installer archives、manifest、SHA sidecarは`.codex-tmp/`にQA証拠として一時保持し、shared staging／runtime cacheは内容・所有が確定するまで保留する。
+開始local／remote `main`=`9d2b3b4581bd8c521c124015ff74277e80f38bec`。開始復旧ref local branch／remote tagのcurrent=`9d2b3b4581bd8c521c124015ff74277e80f38bec`、previous=`40822ba7fae2c726563a35342998134d59f285ee`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更。E2Eの一時workspaceはtest cleanupで削除した。
 
-**次のproducer／consumer:** ownerが選んだC08.02の明示completion rulesと検証済み結果／M receiptによる同一task達成後停止を、rev4.0と最新mainの実状態から再照合する。既存J判定を重複せず、GoalProjectionと実consumer間の具体的な残gapだけを次のBUILD_BATCHにする。
+**次のproducer／consumer:** 最新mainとrev4.0から、GoalProjectionやOperationPlanで重複済みのJ判定を作らず、製品全体の未接続consumerを選ぶ。明示completion rulesはownerの指定した意味を保持する。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / E05.01 Setup管理FailureMemory・開発引継ぎの再起動永続化（限定WIRED）
 

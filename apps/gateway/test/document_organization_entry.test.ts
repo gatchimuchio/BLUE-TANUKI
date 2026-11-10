@@ -714,7 +714,7 @@ describe("delegated goal purpose owner review", () => {
         "path-bound owner task did not return a WebChat frame", 15_000);
 
       const plan = await waitFor(async () => {
-        const response = await fetch(baseUrl + "/runtime/snapshot", {
+        const response = await fetchResume(baseUrl + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
         });
         if (!response.ok) return null;
@@ -768,7 +768,7 @@ describe("delegated goal purpose owner review", () => {
       expect(reviewResponse.status).toBe(202);
 
       const verified = await waitFor(async () => {
-        const response = await fetch(baseUrl + "/runtime/snapshot", {
+        const response = await fetchResume(baseUrl + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
         });
         if (!response.ok) return null;
@@ -823,7 +823,7 @@ describe("delegated goal purpose owner review", () => {
       await waitFor(() => webchatContents.length > matchingTaskReplyStart ? webchatContents.length : null, gateway,
         "matching-rule owner task did not return a WebChat frame", 15_000);
       const matchingPlan = await waitFor(async () => {
-        const response = await fetch(baseUrl + "/runtime/snapshot", {
+        const response = await fetchResume(baseUrl + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
         });
         if (!response.ok) return null;
@@ -868,7 +868,7 @@ describe("delegated goal purpose owner review", () => {
       expect(matchingReviewResponse.status).toBe(202);
       let matchingLastState: unknown;
       const matchingVerifiedPlan = await waitFor(async () => {
-        const response = await fetch(baseUrl + "/runtime/snapshot", {
+        const response = await fetchResume(baseUrl + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
         });
         if (!response.ok) return null;
@@ -895,7 +895,7 @@ describe("delegated goal purpose owner review", () => {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
       const restoredAchievement = await waitFor(async () => {
-        const response = await fetch(baseUrl + "/runtime/snapshot", {
+        const response = await fetchResume(baseUrl + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
         });
         if (!response.ok) return null;
