@@ -424,6 +424,9 @@ function main(): void {
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "installer_archive_setup_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "repair_install_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "autostart_exec_restart_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "update_failure_rollback_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "interrupted_update_recovery_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "port_conflict_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "approval_flow_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "crash_recovery_result=pass");

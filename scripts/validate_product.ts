@@ -1175,6 +1175,8 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
   }
   const run = await runNodeScript(ctx, "scripts/smoke_unix_installed.ts", args);
   const log = commandLog(run);
+  const updateLifecyclePass = platform !== "linux" ||
+    (log.includes("update_failure_rollback_result=pass") && log.includes("interrupted_update_recovery_result=pass"));
   const pass =
     run.exit_code === 0 &&
     log.includes(`${platform}_installed_smoke=pass`) &&
@@ -1186,7 +1188,8 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
     log.includes("gui_result=pass") &&
     log.includes("first_message_result=pass") &&
     log.includes("repair_install_result=pass") &&
-    log.includes("reboot_persistence_result=pass") &&
+    log.includes("autostart_exec_restart_result=pass") &&
+    updateLifecyclePass &&
     log.includes("port_conflict_result=pass") &&
     log.includes("approval_flow_result=pass") &&
     log.includes("audit_tamper_result=pass") &&
@@ -1199,7 +1202,7 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/runtime-state-root/normal-uninstall-retention/reinstall/purge`
+      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart-exec-restart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/runtime-state-root/normal-uninstall-retention/reinstall/purge${platform === "linux" ? "/update-failure-rollback/interrupted-update-recovery" : ""}`
       : `${platform} installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1213,6 +1216,9 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
       gui_result: log.includes("gui_result=pass"),
       first_message_result: log.includes("first_message_result=pass"),
       repair_install_result: log.includes("repair_install_result=pass"),
+      autostart_exec_restart_result: log.includes("autostart_exec_restart_result=pass"),
+      update_failure_rollback_result: log.includes("update_failure_rollback_result=pass"),
+      interrupted_update_recovery_result: log.includes("interrupted_update_recovery_result=pass"),
       port_conflict_result: log.includes("port_conflict_result=pass"),
       approval_flow_result: log.includes("approval_flow_result=pass"),
       audit_tamper_result: log.includes("audit_tamper_result=pass"),

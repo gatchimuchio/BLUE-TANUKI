@@ -13,15 +13,15 @@ Setup configは`state_root`を保存し、旧schema-v1設定ではsession direct
 | Gateway build | PASS：`corepack pnpm --filter @blue-tanuki/gateway build`。 |
 | Gateway lifecycle focused tests | PASS：5 files／59 tests（runtime schedule、runtime health、recovery、Setup config、owner lease）。durable Cron storeを注入するfixtureと、backup完全性assertionが要求するFailureMemory fixtureを整合。 |
 | installer／packaging／製品marker | PASS：product installer 5 tests、`validate:packaging`、`docs:check`、`git diff --check`。 |
-| Linux package＋installed lifecycle | PASS：WSL Ubuntu 24.04 ext4でfrozen install、build、package、2,653-entry verifier、installed smoke。artifact SHA-256=`91049331b4f85ae1459024a7303ed0cd7a9dedbd12a565f5c7e13c68fb1e392b`。 |
-| installed smokeの観測 | PASS：Setup、Launch／GUI／first message、Repair、autostart、port conflict、Approval、audit normal／tamper、crash recovery、safe mode、state-root隔離、通常Uninstall後のsentinel／env／owner-state保持、reinstall、明示Purge。 |
-| native Linux／複数distribution、実reboot・update失敗rollback、system service／Secret Service、全suite、5OS、QE_QC／QE_QA | NOT_RUN。WSL限定BUILD証拠でありnative Linux QAではない。 |
+| Linux package＋installed lifecycle | PASS：WSL Ubuntu 24.04 ext4でfrozen install、build、package、2,653-entry verifier、installed smoke。smoke対象artifact SHA-256=`7bd19bc604c62b41a0da9fd9d453bffb7e018d2c78c852784735f65bf19ab262`。 |
+| installed smokeの観測 | PASS：Setup、Launch／GUI／first message、Repair、autostart設定、port conflict、Approval、audit normal／tamper、crash recovery、safe mode、state-root隔離、通常Uninstall後のsentinel／env／owner-state保持、reinstall、明示Purge。通常update失敗後のapp／runtime rollbackと保持状態、SetupをSIGKILLした後の旧app復旧・検証用更新完了、停止process不存在、管理autostart Exec targetからの新resident起動・health・状態保持も確認。 |
+| 実OS reboot／login、native Linux、複数distribution、system service／Secret Service実接続、全suite、5OS、QE_QC／QE_QA | NOT_RUN。autostart Exec targetの直接起動は実reboot証拠ではない。WSL限定BUILD evidenceでありnative Linux QAではない。 |
 
 本batchはG03.03のLinux installed lifecycleと保持状態に関する限定consumerを`WIRED`に進める。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、Linux native QA、G03.03全体、release／公開／owner GOを主張しない。
 
 UNIT_ID: G03.03 Linux installed lifecycle and retained-state ownership subconsumer
-STATUS: WIRED（Setup→Launcher→Gatewayのstate-root契約、schedule／health／recovery consumer、通常Uninstall保持／reinstall／明示Purgeを隔離WSL installed smokeで確認）
-NEXT_REQUIRED_CONSUMER: Linux update失敗時の復旧、実reboot後の所有・状態継続、rollbackと残留process観測を同じinstalled product経路へ接続する。
+STATUS: WIRED（Setup→Launcher→Gatewayのstate-root契約、schedule／health／recovery consumer、update failure rollback、SIGKILL後のSetup復旧、通常Uninstall保持／reinstall／明示Purgeを隔離WSL installed smokeで確認）
+NEXT_REQUIRED_CONSUMER: Linux desktopの実logout／loginまたはOS reboot後に、管理autostart・resident ownership・永続状態を同じinstalled product経路で確認する。WSL smokeはこの証拠を代替しない。
 SAFETY_STATUS: 通常UninstallではDATA_ROOT／STATE_ROOTを保持し、明示Purgeは隔離smoke対象rootだけで確認。未所有・編集済み・symlink・非regular autostartは保持。HDS権限、provider、外部作用、macOS／Windows経路は変更しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABI・導入preflight・artifact生成

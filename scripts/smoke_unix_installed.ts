@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -22,6 +22,7 @@ const INSTALLER_TRANSACTION_TIMEOUT_MS = 600_000;
 const GATEWAY_READY_TIMEOUT_MS = 30_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
+const WEBSOCKET_CLOSE_TIMEOUT_MS = 5_000;
 const FIRST_MESSAGE_TIMEOUT_MS = 10_000;
 const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const UNINSTALL_TIMEOUT_MS = 30_000;
@@ -181,6 +182,85 @@ function runExpectingStatus(
   }
   logStep(`done ${label} status=${result.status}`);
   return output;
+}
+
+function runExpectingFailure(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  label: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+  extraEnv: Record<string, string> = {},
+): string {
+  logStep(`start ${label}`);
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env: childEnv(extraEnv),
+    stdio: "pipe",
+    encoding: "utf8",
+    timeout: timeoutMs,
+  });
+  const output = commandLog(result);
+  if (output.trim()) process.stdout.write(output);
+  if (result.error) throw new Error(`${label} failed: ${result.error.message}`);
+  if (result.status === 0) throw new Error(`${label} unexpectedly succeeded`);
+  logStep(`done ${label} status=${result.status} signal=${result.signal ?? "none"}`);
+  return output;
+}
+
+async function interruptInstallerAfterAppMove(
+  args: readonly string[],
+  cwd: string,
+  extraEnv: Record<string, string>,
+  markerFile: string,
+  timeoutMs: number,
+): Promise<void> {
+  const child = spawn("sh", [...args], {
+    cwd,
+    env: childEnv(extraEnv),
+    stdio: "ignore",
+  });
+  let spawnError: Error | undefined;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  let resolveExit: (result: { code: number | null; signal: NodeJS.Signals | null }) => void = () => undefined;
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    resolveExit = resolve;
+  });
+  child.once("exit", (code, signal) => resolveExit({ code, signal }));
+
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(markerFile) && Date.now() < deadline) {
+    if (spawnError) throw new Error(`interrupted update process could not start: ${spawnError.message}`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      const result = await exited;
+      throw new Error(`interrupted update exited before the transaction point: code=${result.code} signal=${result.signal}`);
+    }
+    await sleep(50);
+  }
+  if (!existsSync(markerFile)) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    throw new Error("interrupted update did not reach the controlled app-move point");
+  }
+
+  const wrapperPid = Number(readFileSync(markerFile, "utf8").trim());
+  if (!Number.isInteger(wrapperPid) || wrapperPid <= 0 || child.pid === undefined) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+    throw new Error("interrupted update process identity could not be verified");
+  }
+  child.kill("SIGKILL");
+  const result = await exited;
+  try {
+    process.kill(wrapperPid, "SIGKILL");
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+  }
+  if (result.signal !== "SIGKILL") {
+    throw new Error(`interrupted update shell was not terminated as requested: ${result.signal ?? result.code}`);
+  }
 }
 
 function extractArchive(artifact: string, destination: string): void {
@@ -387,40 +467,59 @@ async function receiveFirstMessage(
       // ignore non-json frames
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let timer: NodeJS.Timeout;
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve();
-    };
-    timer = setTimeout(() => {
-      ws.terminate();
-      finish(new Error("websocket open timeout"));
-    }, WEBSOCKET_OPEN_TIMEOUT_MS);
-    ws.once("open", () => finish());
-    ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
-  });
-  await sleep(250);
-  const response = await fetchWithTimeout(`http://127.0.0.1:${port}/inbound`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ user: "unix-smoke", content: "Hello BLUE-TANUKI Unix installer smoke" }),
-  }, FETCH_TIMEOUT_MS, "first message POST");
-  if (!response.ok) {
-    throw new Error(`first message POST failed: ${response.status} ${await response.text()}`);
-  }
-  const deadline = Date.now() + FIRST_MESSAGE_TIMEOUT_MS;
-  while (!messages.some((message) => message.kind === "channel_send") && Date.now() < deadline) {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timeout;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      timer = setTimeout(() => {
+        ws.terminate();
+        finish(new Error("websocket open timeout"));
+      }, WEBSOCKET_OPEN_TIMEOUT_MS);
+      ws.once("open", () => finish());
+      ws.once("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
+    });
     await sleep(250);
+    const response = await fetchWithTimeout(`http://127.0.0.1:${port}/inbound`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ user: "unix-smoke", content: "Hello BLUE-TANUKI Unix installer smoke" }),
+    }, FETCH_TIMEOUT_MS, "first message POST");
+    if (!response.ok) {
+      throw new Error(`first message POST failed: ${response.status} ${await response.text()}`);
+    }
+    const deadline = Date.now() + FIRST_MESSAGE_TIMEOUT_MS;
+    while (!messages.some((message) => message.kind === "channel_send") && Date.now() < deadline) {
+      await sleep(250);
+    }
+  } finally {
+    if (ws.readyState !== WebSocket.CLOSED) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          ws.terminate();
+          resolve();
+        }, WEBSOCKET_CLOSE_TIMEOUT_MS);
+        ws.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        ws.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+        ws.close();
+      });
+    }
   }
-  ws.close();
   logStep("done websocket first-message probe");
   return {
     hello: messages.some((message) => message.kind === "hello"),
@@ -556,19 +655,14 @@ async function main(): Promise<void> {
     if (!autostartInitial.includes("autostart_status=disabled")) {
       throw new Error("autostart should be disabled before explicit owner opt-in");
     }
-    try {
-      const autostartEnabled = runExpectingStatus("sh", [launcher, "resident-autostart-enable"], installRoot, 0, "launcher autostart enable", 60_000, env);
-      if (!autostartEnabled.includes("autostart_status=enabled")) {
-        throw new Error("autostart enable output did not confirm enabled status");
-      }
-      const autostartStatus = runExpectingStatus("sh", [launcher, "resident-autostart-status"], installRoot, 0, "launcher autostart status enabled", 60_000, env);
-      if (!autostartStatus.includes("autostart_status=enabled")) {
-        throw new Error("autostart status did not observe user autostart entry");
-      }
-    } finally {
-      runExpectingStatus("sh", [launcher, "resident-autostart-disable"], installRoot, 0, "launcher autostart disable", 60_000, env);
+    const autostartEnabled = runExpectingStatus("sh", [launcher, "resident-autostart-enable"], installRoot, 0, "launcher autostart enable", 60_000, env);
+    if (!autostartEnabled.includes("autostart_status=enabled")) {
+      throw new Error("autostart enable output did not confirm enabled status");
     }
-    console.log("reboot_persistence_result=pass");
+    const autostartStatus = runExpectingStatus("sh", [launcher, "resident-autostart-status"], installRoot, 0, "launcher autostart status enabled", 60_000, env);
+    if (!autostartStatus.includes("autostart_status=enabled")) {
+      throw new Error("autostart status did not observe user autostart entry");
+    }
 
     const port = installedEnv.WEBCHAT_PORT ?? "8787";
     const portNumber = Number.parseInt(port, 10);
@@ -645,6 +739,167 @@ async function main(): Promise<void> {
       const leakedEntries = listDirectoryTreeForSmoke(leakedStateRoot);
       throw new Error(`installed runtime state leaked into the managed install root: ${leakedEntries.join(",")}`);
     }
+
+    const residentPidFile = path.join(dataRoot, "blue-tanuki.pid");
+    const pidBeforeUpdate = readPidFile(residentPidFile);
+    if (!pidBeforeUpdate) throw new Error("resident PID was unavailable before installed update lifecycle checks");
+    run("sh", [launcher, "stop"], installRoot, "launcher stop before update lifecycle checks", 60_000, env);
+    stopped = true;
+    if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+      throw new Error("installed gateway healthz stayed reachable before update lifecycle checks");
+    }
+
+    const updateRetentionFile = path.join(dataRoot, "data", "g03-update-retention-sentinel.txt");
+    const updateRetentionValue = "G03.03 isolated state survives update failure and recovery\n";
+    writeFileSync(updateRetentionFile, updateRetentionValue, "utf8");
+    const ownerStateBeforeUpdate = Buffer.from(readFileSync(runtimeOwnerState));
+    const envBeforeUpdate = Buffer.from(readFileSync(envFile));
+    const installInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
+    const runtimeInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
+
+    if (platform === "linux") {
+      const updatePackageParent = path.join(work, "update-package");
+      const updatePackageDir = path.join(updatePackageParent, path.basename(packageDir));
+      const updateToolDir = path.join(work, "update-test-tools");
+      run("mkdir", ["-p", updatePackageParent, updateToolDir], work, "create isolated update test package", 10_000, env);
+      run("cp", ["-R", packageDir, updatePackageParent], work, "copy isolated update test package", 60_000, env);
+      if (!existsSync(path.join(updatePackageDir, "app")) || !existsSync(path.join(updatePackageDir, "BlueTanukiSetup.sh"))) {
+        throw new Error("isolated update package copy is missing the app or setup entrypoint");
+      }
+      const updateMarkerInPackage = path.join(updatePackageDir, "app", "g03-update-marker.txt");
+      writeFileSync(updateMarkerInPackage, "G03.03 isolated package update marker\n", "utf8");
+      const updateSetup = path.join(updatePackageDir, "BlueTanukiSetup.sh");
+      const updateSetupArgs = [
+        updateSetup,
+        "--install-root", installRoot,
+        "--data-root", dataRoot,
+        "--config-root", configRoot,
+        "--runtime-root", runtimeRoot,
+        "--bin-root", binRoot,
+        "--force",
+        "--no-launch",
+      ];
+      const testPath = `${updateToolDir}:${process.env.PATH ?? "/usr/bin:/bin"}`;
+      const moveFailureMarker = path.join(work, "update-runtime-move-failure-triggered");
+      const moveFailureShim = [
+        "#!/bin/sh",
+        'if [ "$#" -eq 3 ] && [ "$1" = "--" ] && [ "$2" = "$BT_TEST_RUNTIME_ROOT" ] && [ ! -e "$BT_TEST_FAILURE_MARKER" ]; then',
+        '  case "$3" in "$BT_TEST_RUNTIME_ROLLBACK_PREFIX"*)',
+        '    : > "$BT_TEST_FAILURE_MARKER"',
+        '    echo "blue-tanuki injected runtime move failure" >&2',
+        "    exit 73",
+        "    ;;",
+        "  esac",
+        "fi",
+        "exec /usr/bin/mv \"$@\"",
+        "",
+      ].join("\n");
+      writeFileSync(path.join(updateToolDir, "mv"), moveFailureShim, "utf8");
+      run("chmod", ["+x", path.join(updateToolDir, "mv")], work, "enable isolated update failure shim", 10_000, env);
+      const failedUpdateOutput = runExpectingFailure("sh", updateSetupArgs, updatePackageDir, "installed update transaction failure rollback", INSTALLER_TRANSACTION_TIMEOUT_MS, {
+        ...env,
+        PATH: testPath,
+        BT_TEST_RUNTIME_ROOT: runtimeRoot,
+        BT_TEST_RUNTIME_ROLLBACK_PREFIX: path.join(work, ".RuntimeRoot.blue-tanuki-rollback-"),
+        BT_TEST_FAILURE_MARKER: moveFailureMarker,
+      });
+      if (!existsSync(moveFailureMarker) || !failedUpdateOutput.includes("blue-tanuki injected runtime move failure")) {
+        throw new Error("installed update did not hit the isolated runtime-move failure point");
+      }
+      if (!existsSync(installRoot) || !existsSync(runtimeRoot) || existsSync(path.join(installRoot, "g03-update-marker.txt"))) {
+        throw new Error("failed update did not restore the previous app and runtime pair");
+      }
+      if (!readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryBeforeUpdate) ||
+          !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryBeforeUpdate)) {
+        throw new Error("failed update changed the previous managed app or runtime inventory");
+      }
+      if (!existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
+          !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
+        throw new Error("failed update changed retained owner state, config, or user data");
+      }
+      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+        throw new Error("resident process remained after failed update rollback");
+      }
+      console.log("update_failure_rollback_result=pass");
+
+      const interruptedMoveMarker = path.join(work, "interrupted-update-app-move.pid");
+      const interruptedMoveShim = [
+        "#!/bin/sh",
+        'if [ "$#" -eq 3 ] && [ "$1" = "--" ] && [ "$2" = "$BT_TEST_INSTALL_ROOT" ]; then',
+        '  case "$3" in "$BT_TEST_INSTALL_ROLLBACK_PREFIX"*)',
+        '    /usr/bin/mv "$@" || exit $?',
+        '    printf "%s\\n" "$$" > "$BT_TEST_HOLD_PID_FILE"',
+        "    while :; do :; done",
+        "    ;;",
+        "  esac",
+        "fi",
+        "exec /usr/bin/mv \"$@\"",
+        "",
+      ].join("\n");
+      writeFileSync(path.join(updateToolDir, "mv"), interruptedMoveShim, "utf8");
+      run("chmod", ["+x", path.join(updateToolDir, "mv")], work, "enable isolated interrupted-update shim", 10_000, env);
+      await interruptInstallerAfterAppMove(updateSetupArgs, updatePackageDir, {
+        ...env,
+        PATH: testPath,
+        BT_TEST_INSTALL_ROOT: installRoot,
+        BT_TEST_INSTALL_ROLLBACK_PREFIX: path.join(work, ".InstallRoot.blue-tanuki-rollback-"),
+        BT_TEST_HOLD_PID_FILE: interruptedMoveMarker,
+      }, interruptedMoveMarker, INSTALLER_TRANSACTION_TIMEOUT_MS);
+
+      const rollbackPrefix = `.${path.basename(installRoot)}.blue-tanuki-rollback-`;
+      const rollbackCandidates = readdirSync(path.dirname(installRoot)).filter((name) => name.startsWith(rollbackPrefix));
+      if (rollbackCandidates.length !== 1 || existsSync(installRoot) || !existsSync(runtimeRoot)) {
+        throw new Error("interrupted update did not leave the exact expected old-app rollback and active-runtime state");
+      }
+      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+        throw new Error("resident process remained after interrupted update terminated");
+      }
+      const recoveryOutput = runExpectingStatus("sh", updateSetupArgs, updatePackageDir, 0, "installed interrupted-update recovery and resumed update", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+      if (!recoveryOutput.includes("restored the verified previous product after an interrupted update") ||
+          !existsSync(path.join(installRoot, "g03-update-marker.txt"))) {
+        throw new Error("installer did not restore the prior app and then complete the isolated update");
+      }
+      if (!existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
+          !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
+        throw new Error("interrupted-update recovery changed retained owner state, config, or user data");
+      }
+      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+        throw new Error("resident process remained after interrupted-update recovery");
+      }
+      console.log("interrupted_update_recovery_result=pass");
+    }
+
+    const autostartEntry = platform === "linux"
+      ? path.join(env.XDG_CONFIG_HOME!, "autostart", "blue-tanuki.desktop")
+      : path.join(homeDir, "Library", "LaunchAgents", "com.blue-tanuki.gateway.plist");
+    const autostartText = readFileSync(autostartEntry, "utf8");
+    stopped = false;
+    if (platform === "linux") {
+      const execLine = autostartText.split(/\r?\n/u).find((line) => line.startsWith("Exec="));
+      const execCommand = execLine?.slice("Exec=".length);
+      if (execCommand !== `${launcher} resident-start`) {
+        throw new Error("managed Linux autostart Exec does not target the installed resident launcher");
+      }
+      run(launcher, ["resident-start"], installRoot, "execute managed Linux autostart target after clean stop", 60_000, env);
+    } else {
+      if (!autostartText.includes(`<string>${launcher}</string>`) || !autostartText.includes("<string>resident-start</string>")) {
+        throw new Error("managed macOS LaunchAgent does not target the installed resident launcher");
+      }
+      run(launcher, ["resident-start"], installRoot, "execute managed macOS autostart target after clean stop", 60_000, env);
+    }
+    const autostartPid = await waitForPidChange(residentPidFile, pidBeforeUpdate, GATEWAY_READY_TIMEOUT_MS);
+    if (!autostartPid || !(await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS))) {
+      throw new Error("managed autostart command did not start a fresh healthy resident after update recovery");
+    }
+    if (!existsSync(runtimeOwnerState) || !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
+      throw new Error("autostart command restart did not preserve installed owner state, config, and user data");
+    }
+    runExpectingStatus("sh", [launcher, "resident-autostart-disable"], installRoot, 0, "launcher autostart disable", 60_000, env);
+    const autostartDisabled = runExpectingStatus("sh", [launcher, "resident-autostart-status"], installRoot, 0, "launcher autostart status disabled", 60_000, env);
+    if (!autostartDisabled.includes("autostart_status=disabled")) {
+      throw new Error("autostart disable did not remove the isolated managed entry");
+    }
+    console.log("autostart_exec_restart_result=pass");
 
     const resumeToken = installedEnv.WEBCHAT_RESUME_TOKEN;
     if (!resumeToken) throw new Error("WEBCHAT_RESUME_TOKEN missing from installed env file");
@@ -791,7 +1046,6 @@ async function main(): Promise<void> {
     console.log("gui_result=pass");
     console.log("first_message_result=pass");
     console.log("repair_install_result=pass");
-    console.log("reboot_persistence_result=pass");
     console.log("port_conflict_result=pass");
     console.log("approval_flow_result=pass");
     console.log("audit_tamper_result=pass");
