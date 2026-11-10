@@ -6858,7 +6858,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const validRef = function (value) {
             return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
               value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
-              !value.includes("..") && !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) &&
+              !value.includes("..") && !value.includes("@{") && !/[\\u0000-\\u0020\\u007f~^:?*\\\[]/.test(value) &&
               !value.endsWith(".") && value.split("/").every(function (segment) {
                 return segment.length > 0 && !segment.startsWith(".") && !segment.endsWith(".") && !segment.endsWith(".lock");
               });
@@ -6941,7 +6941,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "google_drive_file_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {
-            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+            return value === null || (typeof value === "string" && value.length <= max && !/[\\u0000-\\u001f\\u007f]/.test(value));
           };
           const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
             review.permissions.length <= 500 && review.permissions.every(function (permission) {
@@ -7045,7 +7045,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "google_drive_file_update") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {
-            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+            return value === null || (typeof value === "string" && value.length <= max && !/[\\u0000-\\u001f\\u007f]/.test(value));
           };
           const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
             review.permissions.length <= 500 && review.permissions.every(function (permission) {
@@ -7158,7 +7158,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "google_drive_permission_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {
-            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+            return value === null || (typeof value === "string" && value.length <= max && !/[\\u0000-\\u001f\\u007f]/.test(value));
           };
           const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
             review.permissions.length <= 500 && review.permissions.every(function (permission) {
@@ -7255,7 +7255,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "google_drive_file_trash") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {
-            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+            return value === null || (typeof value === "string" && value.length <= max && !/[\\u0000-\\u001f\\u007f]/.test(value));
           };
           const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
             review.permissions.length <= 500 && review.permissions.every(function (permission) {

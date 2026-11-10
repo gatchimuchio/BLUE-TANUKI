@@ -9,6 +9,8 @@ import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } 
 
 export const SYNTHETIC_FILE_WRITE_PLAN_BACKEND = "synthetic-file-write-plan";
 export const SYNTHETIC_FILE_WRITE_PLAN_TASK = "BLUE-TANUKI synthetic create-only file-write demonstration";
+export const SYNTHETIC_CANVAS_GENERATION_TASK = "BLUE-TANUKI synthetic Canvas generation demonstration";
+export const SYNTHETIC_CANVAS_GENERATION_HTML = "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>BLUE-TANUKI synthetic Canvas</title></head><body><main><h1>合成Canvasの表示確認</h1><p>決定事項: 青</p><table><thead><tr><th>項目</th><th>状態</th></tr></thead><tbody><tr><td>HDS authority</td><td>維持</td></tr><tr><td>外部作用</td><td>なし</td></tr></tbody></table></main></body></html>";
 const SYNTHETIC_FILE_WRITE_REPLAN_TASK = "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。";
 const SYNTHETIC_FILE_WRITE_OWNER_OBSERVATION_REPLAN_TASK = "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。";
 export const SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルを編集し、同じsandbox内で固定の隔離testを実行してから同じpathをfile.searchで再読してください。testは回復経路確認のため決定的に失敗します。編集JSON: ";
@@ -561,6 +563,18 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
     if (signal?.aborted) throw signal.reason ?? new Error("synthetic_plan_call_aborted");
     if (req.ephemeral_images?.length || req.ephemeral_audio?.length) {
       throw reject("Synthetic plan backend does not consume media input.");
+    }
+
+    const userMessages = req.messages.filter((message) => message.role === "user");
+    if (userMessages.length === 1 && userMessages[0]?.content === SYNTHETIC_CANVAS_GENERATION_TASK &&
+        !req.messages.some((message) => message.content.startsWith(SYNTHETIC_CANVAS_ARTIFACT_USER_PREFIX))) {
+      return {
+        content: SYNTHETIC_CANVAS_GENERATION_HTML,
+        tokens_used: 0,
+        tokens_usage_status: "provider_reported",
+        model: "synthetic-file-write-plan-v1",
+        provider: this.name,
+      };
     }
 
     // HDS consumes `plan:compute` before it calls C, so the provider receives

@@ -470,6 +470,9 @@ describe("WebChatChannel — construction", () => {
 
 describe("WebChatChannel — Control Center shell", () => {
   it("renders generated HTML and Markdown only in a sandboxed, network-denied display frame", () => {
+    const rawControlCharacters = Array.from(CONTROL_CENTER_SCRIPT, (character) => character.charCodeAt(0))
+      .filter((code) => code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d || code === 0x7f);
+    expect(rawControlCharacters).toEqual([]);
     expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
     const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function isCanvasPreviewContent(");
     const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("function bindCanvasPreviewDialog(", helperStart);

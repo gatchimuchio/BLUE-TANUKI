@@ -10,7 +10,7 @@
 
 WebChat Canvas本文をMIME／UTF-8／SHA-256／version／由来request IDに照合し、owner-authenticated taskから一回限り親Cへ渡す。child候補には本文を渡さず、session履歴に追加しない。C08.02で選択した明示達成規則を再利用し、Jの目的関係確認・plan review、sandbox内file.write、検証済みbytes数・M receiptが揃うと達成状態をGateway再起動後も復元する。file.write候補の本文・保存先は審査・復旧用にローカルJ Operation Plan SQLiteへ保存されることをUIで告知する。
 
-Canvas対象testは4 files／6件PASS（151件skip）、C08.02明示規則testは2件PASS（47件skip）。Gateway依存build（7 workspace projects）、`docs:check`（日本語基底移行負債76件の注意あり、license PASS）、`git diff --check`もPASS。実ブラウザ、実provider、失敗注入、全suite、5OS、QE_QC／QE_QAはNOT_RUN。これはbounded synthetic routeの限定`WIRED`で、F17.03全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次は実providerを使わないsynthetic product harnessで実GUI往復をつなぎ、failure/recoveryを扱う。
+Canvas対象testは4 files／6件PASS（151件skip）、C08.02明示規則testは2件PASS（47件skip）。Gateway依存build（7 workspace projects）、`docs:check`（日本語基底移行負債76件の注意あり、license PASS）、`git diff --check`もPASS。追加のloopback-only隔離Gateway browser確認では、synthetic Canvasの生成応答（MIME=`text/html`、SHA-256=`da5ee2f82cc2ca286c0cb0a17fd018ad7772daafb52ef31f4416aaedc7ec8cfa`）をControl Centerのプレビューiframeへ実描画した。実provider／Owner Task送信／L3／file.write／失敗注入／全suite／5OS／installed製品／QE_QC／QE_QAはNOT_RUN。bounded backend routeと生成→表示だけを限定`WIRED`証拠とし、F17.03全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はCanvas owner意図から既存Tasksフォーム・委任目的・J経路への接続を進める。
 
 ### 前段完了BUILD_BATCH — E05.01 Setup管理FailureMemory・開発引継ぎの再起動永続化（限定WIRED）
 

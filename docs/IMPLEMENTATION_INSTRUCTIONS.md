@@ -16,16 +16,17 @@ Canvas source MIME／UTF-8／SHA-256／表示版／返信request IDをowner task
 | served Gateway Canvas→synthetic C→J purpose relation review／plan review→sandbox file.write→verified result／M receipt | PASS：owner-authenticated local integration 1件。 |
 | 明示file.write規則一致時のJ達成projectionと再起動復元 | PASS：同じserved integrationで1/1規則・結果bytes・M receiptを確認。C08.02の規則判定は既存targeted testで確認済み。 |
 | Canvas送信時の永続化説明とOperation Plan SQLite内の本文保持 | PASS：HTML表示testとserved checkpoint readback。 |
+| loopback browser GUIでの合成Canvas生成・表示 | PASS：隔離Gatewayの`synthetic-file-write-plan`で通常WebChatを接続し、text/html応答をCanvasプレビューiframe内に表示。MIME／SHA-256／由来request IDを表示し、見出し・表の実描画を画面で確認。 |
 | Gateway依存build／`docs:check`／`git diff --check` | PASS：7 workspace projects。docs check・日本語基底監査（移行負債76件の注意）・license・差分whitespace。 |
-| 実browser GUI、実LLM/provider、failure injection、全suite、全OS、installed製品、QE_QC／QE_QA | NOT_RUN。 |
+| GUIからのOwner Task送信／L3承認／file.write、実LLM/provider、failure injection、全suite、全OS、installed製品、QE_QC／QE_QA | NOT_RUN：この合成GUI確認ではowner taskを送らず、ファイル作用も行っていない。 |
 
 初回の永続化確認assertionはJSON文字列内の改行escapeを考慮せずFAILした。SQLite checkpoint実体に本文があることを読取観測し、JSON表現に合わせてassertionを直した後、同じCanvas testをPASSした。これはtest比較の修正で、product failureではない。
 
-このbounded synthetic local routeだけをF17.03の限定`WIRED`とする。Canvas生成からの実GUI往復、live provider、失敗時の復帰、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、公開・出荷判断は未成立。実LLMは呼ばず、外部作用・他repo変更なし。test sandboxはcleanup済み。`dist`は再生成可能なlocal build出力、protected attachment directoriesは保持する。
+このbounded synthetic local routeと、WebChat生成→Canvasプレビューiframeの実ブラウザー表示だけをF17.03の限定`WIRED`証拠に含める。表示物はMIME=`text/html`、SHA-256=`da5ee2f82cc2ca286c0cb0a17fd018ad7772daafb52ef31f4416aaedc7ec8cfa`。生成されたControl Center scriptの制御文字escape不具合も修正し、構文・制御文字検査を追加した。GUIのOwner Task送信／L3／file.writeは未実施。実LLM/provider、失敗時の復帰、F17全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA、公開・出荷判断は未成立。外部作用・他repo変更なし。自分で起動した隔離Gatewayと一時state/log 26 files・485,762 bytes、および旧failed-start residue 4 files・9,159 bytesを停止・Windowsごみ箱へ移動し、元path消失とごみ箱収容を確認。既存Gateway processの実行元を今回のGUI試験専用と確証できないため、関連する可能性のあるTemp root 24 files・487,223 bytesは保留。`dist`はlocal build出力として保持し、protected attachment directoriesは未変更。
 
-開始local／origin/main／GitHub main=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。開始時local recovery branchはcurrent=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`／previous=`0c37506d2fda3b42a3d60872c66641a14f3e8fe2`。closeout時のfetch／`ls-remote`ではremote recovery tagもこの2 SHAと一致し、更新不要。fetch中に古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`管理領域のpruneが権限拒否となった。dry-runはgitdir file欠落、`git worktree list`はmainのみを示すため、手動削除せず保留する。他repo変更なし。
+この継続の開始local／origin/main／GitHub main=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`。local recovery branchはcurrent=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`、remote recovery tagも同じ二世代。再同期時`git fetch --no-prune origin main`はmain SHA取得に成功したが、古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`管理領域の削除権限拒否を出した。`git worktree list`はmainのみ。保護された管理領域は手動削除・権限変更せず保留する。他repo変更なし。
 
-**次のproducer／consumer:** bounded Canvasの実GUI生成→表示→意図送信を、実providerに依存しない承認済みsynthetic product harnessで同一ブラウザー往復としてつなぐ。failure/recoveryは本sliceでは未実施。
+**次のproducer／consumer:** Canvas上のowner意図を既存Tasksフォームへ束縛し、利用可能な明示委任目的をJ経路で照合する。GUIからOwner Taskを送る場合も既存のowner認証・L3／Approval／Brokerを維持し、目的不在・曖昧なら送信／作用を保留する。failure/recoveryは本sliceでは未実施。
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 

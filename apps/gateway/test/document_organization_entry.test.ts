@@ -9,8 +9,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK,
-  SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX, SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
+import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_CANVAS_GENERATION_HTML, SYNTHETIC_CANVAS_GENERATION_TASK,
+  SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK, SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX,
+  SYNTHETIC_FILE_WRITE_PLAN_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -1247,6 +1248,32 @@ describe("delegated goal purpose owner review", () => {
     try {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
+
+      // Keep the factual-memory citation gate in its valid no-candidate case: this synthetic, non-factual
+      // artifact is generated before the test writes any prior interaction into M.
+      const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(taskWebSocket, "open");
+
+      let resolveCanvasRequestId!: (requestId: string) => void;
+      const canvasRequestId = new Promise<string>((resolve) => { resolveCanvasRequestId = resolve; });
+      const canvasReply = waitForWebChatSend(taskWebSocket, "synthetic Canvas generation", canvasRequestId);
+      const canvasGenerationResponse = await fetch(`${baseUrl}/inbound`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", content: SYNTHETIC_CANVAS_GENERATION_TASK }),
+      });
+      expect(canvasGenerationResponse.status).toBe(202);
+      const canvasGenerationAccepted = await canvasGenerationResponse.json() as { request_id?: unknown };
+      expect(typeof canvasGenerationAccepted.request_id).toBe("string");
+      resolveCanvasRequestId(String(canvasGenerationAccepted.request_id));
+      const artifactBody = await canvasReply;
+      expect(artifactBody).toBe(SYNTHETIC_CANVAS_GENERATION_HTML);
+
       const purposeText = "Canvas由来の本文を、ownerが明示したsandbox内の単一新規ファイルへ保存する。";
       const purposeResponse = await fetch(`${baseUrl}/owner/goal-purpose-change`, {
         method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
@@ -1271,22 +1298,12 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
       } });
 
-      const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
-        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner" }),
-      });
-      expect(ticketResponse.status).toBe(200);
-      const { ticket } = await ticketResponse.json() as { ticket: string };
-      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
-      await once(taskWebSocket, "open");
-
-      const artifactBody = "# Canvas fixture\n\nThis bounded body is passed to parent C once.\n";
       const artifactReference = {
         schema_version: "blue-tanuki.canvas-artifact-reference.v1",
-        mime: "text/markdown",
+        mime: "text/html",
         sha256: createHash("sha256").update(artifactBody, "utf8").digest("hex"),
         version: 1,
-        source: { surface: "webchat-assistant-reply", request_id: "canvas-fixture-source-0001" },
+        source: { surface: "webchat-assistant-reply", request_id: String(canvasGenerationAccepted.request_id) },
         used_for_authority: false,
       } as const;
       const task = "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n" +

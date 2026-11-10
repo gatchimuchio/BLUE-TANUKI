@@ -3969,3 +3969,12 @@ owner-token付きControl Center task formにbounded JSON `goal_completion_rules`
 | 実served画面E2E／実provider・外部作用／installed製品／5OS／全suite／QE_QC／QE_QA | NOT_RUN。 |
 
 実装・限定合成consumer接続をC08.02の`WIRED`とする。生成したProtocol／HDS-BRAIN／Gateway／WebChat `dist`はlocal開発consumer用として保持し、testのtemp workspaceはfinally cleanupで回収した。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOには昇格しない。次はowner画面からserved GatewayのC/J/M経路・認証済みprojection・達成後停止を同一隔離runtimeで縦断し、規則欠落／不一致も確認する。
+## 2026-11-10 QE_BUILD — F17.03 synthetic Canvasの実ブラウザー表示
+
+前回のCanvas統合差分を継続し、Control Center script内template literalの正規表現で制御文字が生成される問題をescapeし、生成scriptにraw control characterがない検査を追加した。Gateway integration testはartifact本文のfixture直入れをやめ、通常`/inbound`の合成生成応答とrequest IDを使う。
+
+loopback-onlyの隔離Gatewayに合成tokenで接続し、`synthetic-file-write-plan` backendからCanvas HTMLを生成した。実ブラウザーでMIME、SHA-256、由来request IDとプレビューiframe内の見出し・文章・表の実描画を確認。artifact SHA-256=`da5ee2f82cc2ca286c0cb0a17fd018ad7772daafb52ef31f4416aaedc7ec8cfa`。設定ログ上、openai-compatible／Anthropic／OpenRouter等のproviderは未設定。実LLM、実資格、外部作用なし。GUI Owner Task送信／L3／file.writeは行っていない。
+
+Gateway served integration 1件とWebChatのpreview／MIME結合test 2件、Gateway依存build（7 workspace projects）、`docs:check`、`git diff --check`はPASS。全suite、failure/recovery、5OS、installed製品、QE_QC／QE_QAはNOT_RUN。F17.03の生成→表示と既存synthetic backend integrationだけを限定`WIRED`とし、意図送信・J／Approval／Broker経由のGUI実作用は次consumerとして残す。
+
+隔離Gatewayを停止し、今回のharness 26 files・485,762 bytesと未使用failed-start residue 4 files・9,159 bytesをWindowsごみ箱へ復元可能な状態で移動した。元path消失とごみ箱収容を確認。別のGateway processの実行元を今回のGUI試験専用と確証できないため、関連する可能性のあるTemp root 24 files・487,223 bytesは保留。protected attachment directories、local `dist` build output、別repoは変更していない。Git反映前の基準main=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`、復旧branch/tag二世代はcurrent=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。stale worktree metadata cleanupは権限拒否のため保留し、手動変更なし。
