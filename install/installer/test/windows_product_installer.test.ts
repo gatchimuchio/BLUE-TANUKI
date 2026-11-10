@@ -319,6 +319,12 @@ describe("Windows product installer package", () => {
     expect(launcher).toContain("safe-mode");
     expect(launcher).toContain("BLUE_TANUKI_SAFE_MODE");
     expect(launcher).toContain("Autostart is opt-in only");
+    expect(setup).toContain('$doctorErrorLog = Join-Path $LogDir "post-install-doctor.stderr.log"');
+    expect(setup).toContain('$ErrorActionPreference = "Continue"');
+    expect(setup).toContain('"--json" > $doctorLog 2> $doctorErrorLog');
+    expect(launcher).toContain('$doctorErrorLog = Join-Path $logDir "doctor.stderr.log"');
+    expect(launcher).toContain('$ErrorActionPreference = "Continue"');
+    expect(launcher).toContain('"--json" > $doctorLog 2> $doctorErrorLog');
     expect(read("install/windows/product/BlueTanukiSafeMode.cmd")).toContain("safe-mode");
     expect(uninstall).toContain("PurgeData");
     expect(uninstall).toContain("User data retained");
@@ -374,6 +380,7 @@ describe("Windows product installer package", () => {
       "install/windows/install.ps1",
       "install/windows/uninstall.ps1",
       "scripts/package_product_installers.ts",
+      "scripts/smoke_windows_installed.ts",
     ]) {
       expect(read(rel), rel).not.toMatch(/(?:-ExecutionPolicy\s+Bypass|["']-ExecutionPolicy["']\s*,\s*["']Bypass["'])/i);
     }
@@ -693,6 +700,16 @@ describe("Windows product installer package", () => {
     expect(read("scripts/smoke_windows_installed.ts")).toContain("repair_install_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("crash_recovery_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("installed smoke registry preflight");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("installed smoke active Gateway preflight");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("active Gateway process prevents isolated Setup/Launcher/Uninstall smoke");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain('const isolatedProductEnv = {');
+    expect(read("scripts/smoke_windows_installed.ts")).toContain('path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0")');
+    expect(read("scripts/smoke_windows_installed.ts")).toContain('"installer setup", 600_000, isolatedProductEnv');
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("Get-CimInstance Win32_Process");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("blue-tanuki-stage-");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain('const installRoot = path.join(work, "i");');
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("preserving temporary install tree because product cleanup is unconfirmed");
   });
 
   it("ships a deterministic Windows one-click artifact audit gate", () => {

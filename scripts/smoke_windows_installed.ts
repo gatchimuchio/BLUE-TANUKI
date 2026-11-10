@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -23,6 +24,7 @@ const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
 const FIRST_MESSAGE_TIMEOUT_MS = 10_000;
 const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const UNINSTALL_TIMEOUT_MS = 60_000;
+let isolatedChildEnv: Record<string, string> = {};
 
 function argValue(name: string): string | undefined {
   const prefix = `${name}=`;
@@ -58,7 +60,7 @@ function run(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -85,7 +87,7 @@ function runAllowing(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -112,7 +114,7 @@ function runExpectingStatus(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
     stdio: "pipe",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -131,11 +133,32 @@ function runExpectingStatus(
 }
 
 function expandArchive(artifact: string, destination: string): void {
-  run("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    `Expand-Archive -LiteralPath ${JSON.stringify(artifact)} -DestinationPath ${JSON.stringify(destination)} -Force`,
-  ], process.cwd(), "expand installer archive");
+  mkdirSync(destination, { recursive: true });
+  logStep("start expand installer archive with tar.exe");
+  const result = spawnSync("tar.exe", ["-xf", artifact, "-C", destination], {
+    cwd: process.cwd(),
+    env: { ...process.env, ...isolatedChildEnv },
+    stdio: "inherit",
+    encoding: "utf8",
+    timeout: 300_000,
+    windowsHide: true,
+  });
+  const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+  if (errorCode === "ENOENT") {
+    logStep("tar.exe unavailable; using PowerShell Expand-Archive under the active execution policy");
+    run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Expand-Archive -LiteralPath ${JSON.stringify(artifact)} -DestinationPath ${JSON.stringify(destination)} -Force`,
+    ], process.cwd(), "expand installer archive with PowerShell", 600_000);
+    return;
+  }
+  if (result.error) throw new Error(`expand installer archive with tar.exe failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`expand installer archive with tar.exe failed with exit ${result.status} signal=${result.signal ?? "none"}`);
+  }
+  logStep("done expand installer archive with tar.exe");
 }
 
 function parseEnvFile(file: string): Record<string, string> {
@@ -315,6 +338,93 @@ function readPidFile(file: string): number | undefined {
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
+function readSmokeRegistryState(runName: string, label: string): { uninstallPresent: boolean; autostartPresent: boolean } {
+  const script = [
+    "$uninstallKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\BlueTanuki'",
+    "$runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'",
+    "$uninstallPresent = Test-Path -LiteralPath $uninstallKey",
+    "$runKeyPresent = Test-Path -LiteralPath $runKey",
+    "$runProperties = if ($runKeyPresent) { Get-ItemProperty -LiteralPath $runKey -ErrorAction Stop } else { $null }",
+    "$autostartProperty = if ($runProperties) { $runProperties.PSObject.Properties[$env:BLUE_TANUKI_AUTOSTART_RUN_NAME] } else { $null }",
+    "$autostartPresent = $null -ne $autostartProperty",
+    'Write-Output "uninstall_present=$($uninstallPresent.ToString().ToLowerInvariant())"',
+    'Write-Output "autostart_present=$($autostartPresent.ToString().ToLowerInvariant())"',
+  ].join("; ");
+  const output = runExpectingStatus("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ], process.cwd(), 0, label, 60_000, { BLUE_TANUKI_AUTOSTART_RUN_NAME: runName });
+  const uninstall = output.match(/(?:^|\r?\n)uninstall_present=(true|false)(?:\r?\n|$)/i)?.[1]?.toLowerCase();
+  const autostart = output.match(/(?:^|\r?\n)autostart_present=(true|false)(?:\r?\n|$)/i)?.[1]?.toLowerCase();
+  if (!uninstall || !autostart) {
+    throw new Error(`${label} did not report both registry states`);
+  }
+  return { uninstallPresent: uninstall === "true", autostartPresent: autostart === "true" };
+}
+
+function assertSmokeRegistryAbsent(runName: string, label: string): void {
+  const state = readSmokeRegistryState(runName, label);
+  if (state.uninstallPresent || state.autostartPresent) {
+    throw new Error(`${label} found unexpected BLUE-TANUKI registry state uninstall=${state.uninstallPresent} autostart=${state.autostartPresent}`);
+  }
+}
+
+function assertNoActiveGatewayProcesses(label: string): void {
+  const script = [
+    "$matches = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf('apps/gateway/dist/main.js', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine.IndexOf('--serve', [StringComparison]::OrdinalIgnoreCase) -ge 0 })",
+    "if ($matches.Count -gt 0) { $ids = @($matches | ForEach-Object { $_.ProcessId }); throw ('active Gateway process prevents isolated Setup/Launcher/Uninstall smoke; no process was stopped; pid=' + ($ids -join ',')) }",
+    "Write-Output 'active_gateway_processes=none'",
+  ].join("; ");
+  const output = runExpectingStatus("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ], process.cwd(), 0, label, 60_000);
+  if (!output.includes("active_gateway_processes=none")) {
+    throw new Error(`${label} did not confirm an empty active Gateway process set`);
+  }
+}
+
+function stopVerifiedResidentProcess(
+  pid: number,
+  nodeExe: string,
+  envFile: string,
+  cwd: string,
+  productEnv: Record<string, string>,
+): void {
+  const script = [
+    "$targetPid = [int]$env:BLUE_TANUKI_SMOKE_PID",
+    "$cim = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $targetPid) -ErrorAction Stop",
+    "if ($null -eq $cim) { throw 'resident process was not found' }",
+    "$expectedNode = [IO.Path]::GetFullPath($env:BLUE_TANUKI_SMOKE_NODE_EXE)",
+    "$actualNode = [IO.Path]::GetFullPath([string]$cim.ExecutablePath)",
+    "if (-not [string]::Equals($actualNode, $expectedNode, [StringComparison]::OrdinalIgnoreCase)) { throw 'resident executable path does not match the smoke installation' }",
+    "$expectedEnvFile = [IO.Path]::GetFullPath($env:BLUE_TANUKI_SMOKE_ENV_FILE)",
+    "if ([string]::IsNullOrWhiteSpace($cim.CommandLine) -or $cim.CommandLine.IndexOf($expectedEnvFile, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $cim.CommandLine.IndexOf('apps/gateway/dist/main.js', [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $cim.CommandLine.IndexOf('--serve', [StringComparison]::OrdinalIgnoreCase) -lt 0) { throw 'resident command line does not match the smoke gateway and environment' }",
+    "$process = Get-Process -Id $targetPid -ErrorAction Stop",
+    "if (-not [string]::Equals([IO.Path]::GetFullPath($process.Path), $expectedNode, [StringComparison]::OrdinalIgnoreCase)) { throw 'resident process identity changed during verification' }",
+    "$created = ([datetime]$cim.CreationDate).ToUniversalTime()",
+    "$started = $process.StartTime.ToUniversalTime()",
+    "if ([Math]::Abs(($created - $started).TotalSeconds) -gt 3) { throw 'resident process start time changed during verification' }",
+    "Stop-Process -InputObject $process -Force -ErrorAction Stop",
+    "Write-Output 'verified_smoke_resident_stopped=true'",
+  ].join("; ");
+  run("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ], cwd, "simulate resident crash", 60_000, {
+    ...productEnv,
+    BLUE_TANUKI_SMOKE_PID: String(pid),
+    BLUE_TANUKI_SMOKE_NODE_EXE: nodeExe,
+    BLUE_TANUKI_SMOKE_ENV_FILE: envFile,
+  });
+}
+
 async function waitForPidChange(file: string, previousPid: number, timeoutMs: number): Promise<number | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -351,6 +461,17 @@ async function closeServer(server: net.Server): Promise<void> {
       else resolve();
     });
   });
+}
+
+async function findAvailableLoopbackPort(): Promise<number> {
+  const server = await holdLoopbackPort(0);
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await closeServer(server);
+    throw new Error("could not read an ephemeral loopback port for the installed smoke");
+  }
+  await closeServer(server);
+  return address.port;
 }
 
 async function receiveFirstMessage(
@@ -424,20 +545,52 @@ async function main(): Promise<void> {
     return;
   }
 
-  const work = mkdtempSync(path.join(tmpdir(), "blue-tanuki-windows-installed-"));
+  const smokeTempBase = path.join(process.env.LOCALAPPDATA ?? tmpdir(), "BTsmoke");
+  mkdirSync(smokeTempBase, { recursive: true });
+  const work = mkdtempSync(path.join(smokeTempBase, "w-"));
   const packageDir = path.join(work, "package");
-  const installRoot = path.join(work, "InstallRoot");
-  const dataRoot = path.join(work, "DataRoot");
+  const installRoot = path.join(work, "i");
+  const dataRoot = path.join(work, "d");
   const uninstallStatusFile = path.join(work, "uninstall.status");
+  const autostartRunName = `BLUE-TANUKI-SMOKE-${randomUUID()}`;
+  const isolatedProfile = path.join(work, "profile");
+  const isolatedAppData = path.join(isolatedProfile, "AppData", "Roaming");
+  const isolatedLocalAppData = path.join(isolatedProfile, "AppData", "Local");
+  const isolatedTemp = path.join(work, "Temp");
+  const windowsRoot = process.env.SystemRoot ?? "C:\\Windows";
+  const smokePort = await findAvailableLoopbackPort();
+  mkdirSync(isolatedAppData, { recursive: true });
+  mkdirSync(isolatedLocalAppData, { recursive: true });
+  mkdirSync(isolatedTemp, { recursive: true });
+  isolatedChildEnv = {
+    APPDATA: isolatedAppData,
+    LOCALAPPDATA: isolatedLocalAppData,
+    TEMP: isolatedTemp,
+    TMP: isolatedTemp,
+    WEBCHAT_PORT: String(smokePort),
+  };
+  const isolatedProductEnv = {
+    ...isolatedChildEnv,
+    PATH: [
+      path.join(windowsRoot, "System32"),
+      path.join(windowsRoot, "System32", "Wbem"),
+      path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0"),
+    ].join(path.delimiter),
+  };
   let launcher: string | undefined;
-  let setupComplete = false;
+  let setupAttempted = false;
   let stopped = false;
   let uninstalled = false;
+  let allowWorkCleanup = false;
   try {
+    assertNoActiveGatewayProcesses("installed smoke active Gateway preflight");
+    logStep("installed smoke active Gateway preflight passed");
+    assertSmokeRegistryAbsent(autostartRunName, "installed smoke registry preflight");
+    logStep("installed smoke registry preflight passed");
+
     const sourceTreeGuidance = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       path.join(process.cwd(), "install/windows/product/BlueTanukiSetup.ps1"),
       "-InstallRoot",
@@ -459,8 +612,7 @@ async function main(): Promise<void> {
 
     const rootEntrypointDefaultDryRun = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
       "-DryRun",
@@ -480,8 +632,7 @@ async function main(): Promise<void> {
     mkdirSync(emptyReleaseDir, { recursive: true });
     const rootEntrypointDryRun = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
       "-DryRun",
@@ -510,8 +661,7 @@ async function main(): Promise<void> {
 
     const developerBuildDryRun = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
       "-DryRun",
@@ -578,6 +728,8 @@ async function main(): Promise<void> {
     ]);
     console.log("defender_smartscreen_guidance_result=pass");
 
+    launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
+    setupAttempted = true;
     run("cmd.exe", [
       "/d",
       "/s",
@@ -588,11 +740,9 @@ async function main(): Promise<void> {
       "-DataRoot",
       dataRoot,
       "-NoLaunch",
-    ], packageDir, "installer setup", 180_000);
-    setupComplete = true;
+    ], packageDir, "installer setup", 600_000, isolatedProductEnv);
     console.log("installer_zip_setup_result=pass");
 
-    launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
     const envFile = path.join(dataRoot, "blue-tanuki.env");
     const envBeforeRepair = parseEnvFile(envFile);
     run("cmd.exe", [
@@ -605,7 +755,7 @@ async function main(): Promise<void> {
       "-DataRoot",
       dataRoot,
       "-NoLaunch",
-    ], packageDir, "installer repair install", 180_000);
+    ], packageDir, "installer repair install", 600_000, isolatedProductEnv);
     const env = parseEnvFile(envFile);
     assertEnvValuesRetained(envBeforeRepair, env, [
       "WEBCHAT_TOKEN",
@@ -614,13 +764,10 @@ async function main(): Promise<void> {
       "BLUE_TANUKI_SETTINGS_TOKEN",
     ]);
     console.log("repair_install_result=pass");
-    const autostartEnv = {
-      BLUE_TANUKI_AUTOSTART_RUN_NAME: `BLUE-TANUKI-SMOKE-${process.pid}`,
-    };
+    const autostartEnv = { ...isolatedProductEnv, BLUE_TANUKI_AUTOSTART_RUN_NAME: autostartRunName };
     const autostartInitial = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "resident-autostart-status",
@@ -631,8 +778,7 @@ async function main(): Promise<void> {
     try {
       const autostartEnabled = runExpectingStatus("powershell.exe", [
         "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        "-NonInteractive",
         "-File",
         launcher,
         "resident-autostart-enable",
@@ -642,8 +788,7 @@ async function main(): Promise<void> {
       }
       const autostartStatus = runExpectingStatus("powershell.exe", [
         "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        "-NonInteractive",
         "-File",
         launcher,
         "resident-autostart-status",
@@ -654,8 +799,7 @@ async function main(): Promise<void> {
     } finally {
       runExpectingStatus("powershell.exe", [
         "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        "-NonInteractive",
         "-File",
         launcher,
         "resident-autostart-disable",
@@ -663,8 +807,7 @@ async function main(): Promise<void> {
     }
     const autostartDisabled = runExpectingStatus("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "resident-autostart-status",
@@ -683,12 +826,11 @@ async function main(): Promise<void> {
     try {
       const conflictOutput = runExpectingStatus("powershell.exe", [
         "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
+        "-NonInteractive",
         "-File",
         launcher,
         "start",
-      ], installRoot, 2, "launcher port conflict", 60_000);
+      ], installRoot, 2, "launcher port conflict", 60_000, isolatedProductEnv);
       if (!conflictOutput.includes(`port_conflict=127.0.0.1:${port}`)) {
         throw new Error("launcher port conflict output did not include expected port_conflict marker");
       }
@@ -699,12 +841,11 @@ async function main(): Promise<void> {
 
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "start",
-    ], installRoot, "launcher start", 120_000);
+    ], installRoot, "launcher start", 120_000, isolatedProductEnv);
 
     const token = env.WEBCHAT_TOKEN;
     if (!token) throw new Error("WEBCHAT_TOKEN missing from installed env file");
@@ -763,7 +904,7 @@ async function main(): Promise<void> {
       "--audit-verify",
       "--env-file",
       envFile,
-    ], installRoot, "installed audit verify", 60_000);
+    ], installRoot, "installed audit verify", 60_000, isolatedProductEnv);
     const auditDir = env.BLUE_TANUKI_AUDIT_DIR;
     if (!auditDir) throw new Error("BLUE_TANUKI_AUDIT_DIR missing from installed env file");
     const tamperEnvFile = writeTamperedAuditEnv(envFile, auditDir, work);
@@ -772,7 +913,7 @@ async function main(): Promise<void> {
       "--audit-verify",
       "--env-file",
       tamperEnvFile,
-    ], installRoot, 1, "installed audit tamper verify", 60_000);
+    ], installRoot, 1, "installed audit tamper verify", 60_000, isolatedProductEnv);
     if (
       !tamperOutput.includes("BROKEN") &&
       !tamperOutput.includes("chain_valid: false") &&
@@ -785,11 +926,7 @@ async function main(): Promise<void> {
     const pidFile = path.join(dataRoot, "blue-tanuki.pid");
     const originalPid = readPidFile(pidFile);
     if (!originalPid) throw new Error("resident pid file was not written before crash recovery probe");
-    run("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      `Stop-Process -Id ${originalPid} -Force`,
-    ], installRoot, "simulate resident crash", 60_000);
+    stopVerifiedResidentProcess(originalPid, nodeExe, envFile, installRoot, isolatedProductEnv);
     const recoveredPid = await waitForPidChange(pidFile, originalPid, CRASH_RECOVERY_TIMEOUT_MS);
     if (!recoveredPid) throw new Error("resident watchdog did not write a recovered pid after simulated crash");
     const recoveredHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
@@ -798,20 +935,18 @@ async function main(): Promise<void> {
 
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "status",
-    ], installRoot, "launcher status running", 60_000);
+    ], installRoot, "launcher status running", 60_000, isolatedProductEnv);
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "stop",
-    ], installRoot, "launcher stop", 60_000);
+    ], installRoot, "launcher stop", 60_000, isolatedProductEnv);
     stopped = true;
     const stoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!stoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher stop");
@@ -819,22 +954,20 @@ async function main(): Promise<void> {
 
     runAllowing("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "doctor",
-    ], installRoot, [0, 1], "launcher doctor", 120_000);
+    ], installRoot, [0, 1], "launcher doctor", 120_000, isolatedProductEnv);
     console.log("doctor_result=pass");
 
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "restart",
-    ], installRoot, "launcher restart", 120_000);
+    ], installRoot, "launcher restart", 120_000, isolatedProductEnv);
     stopped = false;
     logStep("wait installed gateway healthz after restart");
     const restartHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
@@ -843,35 +976,32 @@ async function main(): Promise<void> {
     console.log("restart_result=pass");
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "stop",
-    ], installRoot, "launcher final stop", 60_000);
+    ], installRoot, "launcher final stop", 60_000, isolatedProductEnv);
     stopped = true;
     const finalStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!finalStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher final stop");
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "safe-mode",
-    ], installRoot, "launcher safe mode", 120_000);
+    ], installRoot, "launcher safe mode", 120_000, isolatedProductEnv);
     stopped = false;
     const safeModeHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
     if (!safeModeHealthReady) throw new Error("installed gateway healthz did not become ready in safe mode");
     console.log("safe_mode_result=pass");
     run("powershell.exe", [
       "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
+      "-NonInteractive",
       "-File",
       launcher,
       "stop",
-    ], installRoot, "launcher safe mode stop", 60_000);
+    ], installRoot, "launcher safe mode stop", 60_000, isolatedProductEnv);
     stopped = true;
     const safeModeStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!safeModeStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher safe mode stop");
@@ -882,7 +1012,8 @@ async function main(): Promise<void> {
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
       "-PurgeData",
       "-Quiet",
-    ], work, "installer uninstall", 120_000, {
+    ], work, "installer uninstall", 300_000, {
+      ...isolatedProductEnv,
       BLUE_TANUKI_UNINSTALL_STATUS_FILE: uninstallStatusFile,
     });
     const uninstallStatus = await waitForFileText(uninstallStatusFile, UNINSTALL_TIMEOUT_MS);
@@ -897,7 +1028,9 @@ async function main(): Promise<void> {
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) {
       throw new Error("data root still exists after purge uninstall");
     }
+    assertSmokeRegistryAbsent(autostartRunName, "post uninstall registry check");
     uninstalled = true;
+    allowWorkCleanup = true;
 
     console.log("windows_installed_smoke=pass");
     console.log("source_tree_setup_guidance_result=pass");
@@ -920,43 +1053,87 @@ async function main(): Promise<void> {
     console.log("uninstall_result=pass");
   } finally {
     if (process.platform === "win32") {
-      if (launcher && !stopped) {
+      if (launcher && existsSync(launcher)) {
+        try {
+          runExpectingStatus("powershell.exe", [
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            launcher,
+            "resident-autostart-disable",
+          ], installRoot, 0, "cleanup launcher autostart disable", 60_000, {
+            ...isolatedProductEnv,
+            BLUE_TANUKI_AUTOSTART_RUN_NAME: autostartRunName,
+          });
+        } catch (error) {
+          console.error(`[windows-smoke] cleanup autostart disable failed: ${errorMessage(error)}`);
+        }
+      }
+      if (launcher && existsSync(launcher) && !stopped) {
         try {
           runAllowing("powershell.exe", [
             "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
+            "-NonInteractive",
             "-File",
             launcher,
             "stop",
-          ], installRoot, [0, 1], "cleanup launcher stop", 60_000);
+          ], installRoot, [0, 1], "cleanup launcher stop", 60_000, {
+            ...isolatedProductEnv,
+            BLUE_TANUKI_AUTOSTART_RUN_NAME: autostartRunName,
+          });
         } catch (error) {
           console.error(`[windows-smoke] cleanup launcher stop failed: ${errorMessage(error)}`);
         }
       }
-      if (setupComplete && !uninstalled) {
+      if (setupAttempted && !uninstalled) {
         try {
-          const cleanupStatusFile = path.join(work, "cleanup-uninstall.status");
-          runAllowing("cmd.exe", [
-            "/d",
-            "/s",
-            "/c",
-            path.join(installRoot, "UninstallBlueTanuki.cmd"),
-            "-PurgeData",
-            "-Quiet",
-          ], work, [0, 1], "cleanup installer uninstall", 120_000, {
-            BLUE_TANUKI_UNINSTALL_STATUS_FILE: cleanupStatusFile,
-          });
-          await waitForFileText(cleanupStatusFile, 10_000);
-          await waitForAbsent(installRoot, 10_000);
-          await waitForAbsent(dataRoot, 10_000);
+          const installWasPresent = existsSync(installRoot);
+          if (installWasPresent) {
+            const uninstaller = path.join(installRoot, "UninstallBlueTanuki.cmd");
+            if (!existsSync(uninstaller)) throw new Error("installed uninstaller is unavailable for safe cleanup");
+            const cleanupStatusFile = path.join(work, "cleanup-uninstall.status");
+            run("cmd.exe", [
+              "/d",
+              "/s",
+              "/c",
+              uninstaller,
+              "-PurgeData",
+              "-Quiet",
+            ], work, "cleanup installer uninstall", 300_000, {
+              ...isolatedProductEnv,
+              BLUE_TANUKI_UNINSTALL_STATUS_FILE: cleanupStatusFile,
+            });
+            const cleanupStatus = await waitForFileText(cleanupStatusFile, UNINSTALL_TIMEOUT_MS);
+            if (!cleanupStatus || !/^exit_code=0\b/m.test(cleanupStatus.replace(/^\uFEFF/, ""))) {
+              throw new Error("cleanup uninstall status did not confirm success");
+            }
+          }
+          const installAbsent = await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS);
+          const dataAbsent = await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS);
+          const registryState = readSmokeRegistryState(autostartRunName, "cleanup registry verification");
+          const stagePrefix = `.${path.basename(installRoot)}.blue-tanuki-stage-`;
+          const preservedStages = readdirSync(work).filter((entry) => entry.startsWith(stagePrefix));
+          if (!installAbsent || (installWasPresent && !dataAbsent) || preservedStages.length > 0 || registryState.uninstallPresent || registryState.autostartPresent) {
+            throw new Error(`cleanup left product state installAbsent=${installAbsent} dataAbsent=${dataAbsent} installWasPresent=${installWasPresent} preservedStages=${preservedStages.join(",")} uninstallKey=${registryState.uninstallPresent} autostart=${registryState.autostartPresent}`);
+          }
+          // work is created uniquely for this run; when Setup never committed an
+          // install, any DataRoot contents beneath it are test-generated only.
+          allowWorkCleanup = true;
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
         }
+      } else if (!setupAttempted || uninstalled) {
+        allowWorkCleanup = true;
       }
+    } else {
+      allowWorkCleanup = true;
     }
-    logStep("cleanup temporary install tree");
-    await removeTreeBestEffort(work);
+    if (allowWorkCleanup) {
+      logStep("cleanup temporary install tree after product-state verification");
+      await removeTreeBestEffort(work);
+    } else {
+      console.error(`[windows-smoke] preserving temporary install tree because product cleanup is unconfirmed: ${work}`);
+    }
   }
 }
 

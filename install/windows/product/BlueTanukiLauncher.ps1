@@ -683,16 +683,29 @@ function Run-Doctor($OpenLog) {
   Ensure-EnvFile
   New-Item -ItemType Directory -Force -Path $logDir | Out-Null
   $nodeExe = Find-NodeExe
+  $doctorErrorLog = Join-Path $logDir "doctor.stderr.log"
   Push-Location $installRoot
   try {
-    & $nodeExe "apps/gateway/dist/main.js" "--doctor" "--env-file" $envFile "--json" *> $doctorLog
-    $code = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      # Windows PowerShell 5.1 promotes native stderr to an error record. Keep
+      # a warning on stderr from aborting Doctor while still checking Node's exit code.
+      $ErrorActionPreference = "Continue"
+      & $nodeExe "apps/gateway/dist/main.js" "--doctor" "--env-file" $envFile "--json" > $doctorLog 2> $doctorErrorLog
+      $code = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     Write-Host "doctor_exit_code=$code"
     Write-Host "doctor_log=$doctorLog"
+    Write-Host "doctor_stderr_log=$doctorErrorLog"
     if ($OpenLog) {
       Start-Process $doctorLog
     } else {
       Get-Content -LiteralPath $doctorLog -Tail 120
+      if ((Test-Path -LiteralPath $doctorErrorLog -PathType Leaf) -and (Get-Item -LiteralPath $doctorErrorLog).Length -gt 0) {
+        Get-Content -LiteralPath $doctorErrorLog -Tail 120
+      }
     }
     exit $code
   } finally {

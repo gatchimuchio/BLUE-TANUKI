@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
+### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
+
+Windows artifact（2,544 entries、SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`）の検証、PowerShell 5.1 parser、Doctor stderr分離、対象static test 1件はPASS。実package初回Setupは隔離rootへPASSしたが、Repairで既存Gateway PID `17528`のDataRootを確認できずSetupがfail-closedした。停止・更新・削除は行われず、Launch／first message／Uninstallの確認はNOT_RUN。smokeの新しい事前検査は同PIDを確認してSetup前に中止する。test用installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`へ保留。clean Windows profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。次はGateway停止済みの隔離Windows環境で保留installを正規Uninstallし、system-only PATHでSetupからfirst messageまでつなぐ。
+
+### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
 Control CenterはOwner Taskの受付成功後も送信済みsubmission IDを保持し、Gateway受付記録とRuntimeの同一依頼ID planを照合する。ownerが状態を確認して明示操作するまで次回用IDへ切り替えず、未送信IDは保存status履歴／既定照会先へ入れない。達成判定はowner明示規則、同一revisionの検証済み結果、M receiptを満たした場合だけHDS-Jが行う。現変更はstatus識別子の保持であり、J評価・owner L3・実作用を代行しない。選択した`webchat.test.ts` 2件（127件skip）、WebChat build、`docs:check`（日本語基底の既存移行負債76件の注意あり）、`git diff --check`はPASS。実provider、実owner L3、file.write、full suite、5OS、QE_QC／QE_QAはNOT_RUN。
 

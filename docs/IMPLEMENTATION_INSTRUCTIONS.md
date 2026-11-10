@@ -2,22 +2,34 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F17.03 Owner Task依頼IDを状態照合まで保持し、owner確認後だけ次IDへ切替
+## 現行BUILD_BATCH — QE_BUILD / G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-主語はControl Centerから同一taskを送信し、Gateway受付状態とHDS-J／OperationPlan状態を照合するOwner Task経路。目的は、受付成功後に未送信の次回IDへ先回りせず、送信済みID・同一taskの状態を保ち、ownerが結果を照合した後に明示操作でのみ次task用IDへ切り替えること。達成判定はownerの明示規則と、同じcurrent revision内の検証済み結果・M receiptをHDS-Jが満たす場合だけachievedとする。今回のUI変更はそのJ判定を複製せず、status照合の識別子を保つ。
+主語はWindows配布packageのSetup、Launcher、Gateway、Uninstall。目的は開発toolを前提としない製品導入から通常利用・保護境界までを実際のWindows package経路で接続すること。rev4.0のG02.01／G02.02を対象とし、source起動・fixture・別OS結果をinstalled Windowsの証拠へ読み替えない。
 
-Control Centerは正常応答後も送信済みsubmission IDをpending/currentとして保持し、同じIDをstatus selectorへ選択する。次回用IDはownerが受付とRuntime状態を照会してから明示ボタンを選んだ場合だけ発行し、未送信IDをstatus履歴へ加えない。Gateway送信前にsubmission IDをstatus履歴へ保存するため、応答不明時の照会は可能なままにする。再読込後もpending next IDより最後に送信したIDを状態照会先へ戻す。受付記録・Runtime projection・達成表示は非権威の状態表示であり、J判断、owner L3、実作用、別task実行の許可を発行しない。
+Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreference = Stop`によりSetupを中断しないよう、JSON stdoutとstderr logを分離してNode終了コードで判定する。Launcher Doctorにも同じstderr境界を適用した。installed smokeは一意の隔離profile／DataRoot、system-only child PATH、レジストリ事前確認、実行中Gateway PIDの事前検査を使う。実行中の不明Gatewayを停止・更新・削除しない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| Owner Task送信→同一submission ID維持→受付／Runtime状態照合後だけ次ID発行→再読込後の状態ID選択 | PASS：`webchat.test.ts` 2件、127件skip。 |
-| `@blue-tanuki/channel-webchat` build、`docs:check`、`git diff --check` | PASS。日本語基底移行負債76件の既存注意あり、license PASS。 |
-| 実provider、実UI owner L3、Canvas file.write、M receipt、full suite、5OS、QE_QC／QE_QA | NOT_RUN。この作業では実owner taskを送信せず、実作用を行わない。 |
+| Windows package生成／verifier | PASS：2,544 entries、artifact SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`。 |
+| Setup／Launcher PowerShell 5.1 parser、Doctor stderr分離のsynthetic capture | PASS。 |
+| `windows_product_installer.test.ts`のLauncher／Doctor／smoke契約test | PASS：1件、18件skip。 |
+| `windows_product_installer.test.ts`全体の前回実行 | FAIL：16/19 pass。resident-stop 2件は`EBUSY` cleanup、watchdog-stop 1件はstatus 2（期待0）。この実行後にDoctor／smoke修正を加えており、全体suiteは再実行していない。 |
+| 実Windows package Setup初回導入 | PASS：隔離install／DataRootへ導入し、Doctor JSONとstderr logを記録。ホスト自体はclean profileではなくNode／pnpm等を含むため、開発tool非依存証明ではない。 |
+| Repair／Launcher start／WebChat first message／Uninstall smoke | BLOCKED：実行中の既存Gateway PID `17528`（`C:\Users\ohira\AppData\Local\Programs\BLUE-TANUKI\node-v22.23.3-win-x64\node.exe`）をLauncherが検出したが、そのDataRoot所有を確認できずfail-closed。停止・更新・削除は拒否され、既存processは変更していない。起動・first message等はNOT_RUN。 |
+| smoke active-Gateway preflight | PASS：同じPIDを検出し、後続Setup前に中止。テスト用rootはcleanup済み。 |
+| `docs:check`、`git diff --check` | PASS。日本語基底の移行負債76件は既存注意。 |
+| clean Windows user／OS、5OS、QE_QC／QE_QA | 未実施または未成立。 |
 
-UNIT_ID: F17.03 / C08.02 owner-task status correlation consumer
-STATUS: WIRED（送信済みIDを受付・Runtime照合まで維持し、未送信の次IDを状態履歴・既定照会先に混ぜない）
-NEXT_REQUIRED_CONSUMER: 実利用時のownerが、表示された正確なtask・委任目的・plan revisionをL3審査する。CodexはL3を代行せず、file.write／provider／外部作用を実行しない。
-SAFETY_STATUS: C08.02の明示規則＋検証済み結果＋M receiptによるJ評価は維持。status projectionは非権威。未知・保留・不整合は成功扱いしない。
+UNIT_ID: G02.01／G02.02 Windows package install-to-first-message consumer
+STATUS: BUILD_GAP（package→初回Setup→Doctorは接続・実行。clean環境非依存、Launcher／first message、後片付けは未成立）
+NEXT_REQUIRED_CONSUMER: 既存Gatewayが稼働していないWindows検証環境で、保留中のsmoke installを正規Uninstallし、system-only PATHでSetup／Repair→Launcher start→health→合成WebChat first message→stop／Uninstallを再実行する。
+SAFETY_STATUS: active processのDataRootが不明な場合は停止・更新・削除しない。現在のsmoke installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`に残し、別processによる削除を保留する。
+LOCAL_ASSET_STATUS: `%LOCALAPPDATA%\Codex\BLUE-TANUKI-smoke\windows-installed-p1o6Yy`は隔離package／Setup stageの生成物（10,143 files／186,848,072 bytes）で、資格情報形式・DataRoot・registry/process参照がないことを確認してWindowsゴミ箱へ移動済み。元path消失・ゴミ箱収容を確認。current artifact `release/windows/codex-8fcd06c9-r2`は保持。OneDrive同期領域内のpackage/probe生成物は同領域の保護により保持し、片付け扱いにしない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始HEAD=`8fcd06c9b9567e55ad96c4bbab00d122859a4eb5`。保護添付2領域は変更せず、別repo／provider／外部業務作用／公開は対象外。
+
+### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
+
+Control Centerは送信済みsubmission IDを受付・Runtime照合まで保持し、ownerが結果を確認して明示操作するまで次task用IDへ切り替えない。達成判定はowner明示規則、同一revisionの検証済み結果、M receiptを満たす場合だけHDS-Jが行う。status projectionは非権威。選択した`webchat.test.ts` 2件（127件skip）、WebChat build、`docs:check`（日本語基底の既存移行負債76件の注意あり）、`git diff --check`はPASS。実provider、owner L3、file.write、full suite、5OS、QE_QC／QE_QAはNOT_RUN。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / S-02 Unix Setup／Launcher／Uninstall外部ファイル所有保護（限定安全修正）
 

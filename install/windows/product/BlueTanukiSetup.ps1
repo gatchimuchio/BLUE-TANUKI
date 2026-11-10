@@ -159,20 +159,29 @@ function Invoke-BundledSetup($NodeExe, $InstallRootResolved, $EnvFile, $DataDir)
 function Invoke-PostInstallDoctor($NodeExe, $InstallRootResolved, $EnvFile, $LogDir) {
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   $doctorLog = Join-Path $LogDir "post-install-doctor.json"
+  $doctorErrorLog = Join-Path $LogDir "post-install-doctor.stderr.log"
   Push-Location $InstallRootResolved
   try {
-    & $NodeExe "apps/gateway/dist/main.js" "--doctor" "--env-file" $EnvFile "--json" *> $doctorLog
-    $doctorCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      # Windows PowerShell 5.1 promotes native stderr to an error record. Keep
+      # a warning on stderr from aborting Setup while still checking Node's exit code.
+      $ErrorActionPreference = "Continue"
+      & $NodeExe "apps/gateway/dist/main.js" "--doctor" "--env-file" $EnvFile "--json" > $doctorLog 2> $doctorErrorLog
+      $doctorCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($doctorCode -eq 2) {
-      Fail "post-install doctor found blocking errors. Log: $doctorLog"
+      Fail "post-install doctor found blocking errors. Log: $doctorLog; stderr: $doctorErrorLog"
     }
     if ($doctorCode -ne 0 -and $doctorCode -ne 1) {
-      Fail "post-install doctor failed with exit code $doctorCode. Log: $doctorLog"
+      Fail "post-install doctor failed with exit code $doctorCode. Log: $doctorLog; stderr: $doctorErrorLog"
     }
     if ($doctorCode -eq 1) {
-      Write-Warning "post-install doctor completed with warnings. Log: $doctorLog"
+      Write-Warning "post-install doctor completed with warnings. Log: $doctorLog; stderr: $doctorErrorLog"
     } else {
-      Write-Host "post-install doctor passed. Log: $doctorLog"
+      Write-Host "post-install doctor passed. Log: $doctorLog; stderr: $doctorErrorLog"
     }
   } finally {
     Pop-Location
