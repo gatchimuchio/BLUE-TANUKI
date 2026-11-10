@@ -2,18 +2,18 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / E01.01 Cron予定発火をprovider前にdurable claim
+## 現行BUILD_BATCH — QE_BUILD / E01.01 Cron予定発火のdurable claimと未接続時fail-closed
 
-主語はCronSchedulerChannelが処理する予定eventとdynamic content provider／J ingress。目的は、eventを安定したschedule-version digestで永続claimしてからproviderを呼び、duplicate／stale／未解決eventのprovider再呼出しとJ再投入を抑止すること。event IDはsourceと予定時刻から作り、cursorは配送・再実行抑止だけを担う。
+主語はCronSchedulerChannelが処理する予定eventとdynamic content provider／J ingress。目的は、eventを安定したschedule-version digestで永続claimしてからproviderを呼び、duplicate／stale／未解決eventのprovider再呼出しとJ再投入を抑止すること。永続storeが未接続の経路もprovider／Jへ進めない。event IDはsourceと予定時刻から作り、cursorは配送・再実行抑止だけを担う。
 
-`task.payload_hash`を予定eventのcursor digestとしてclaimする。accepted時だけcontent providerを呼び、解決後のcontent hashは既存どおりJ/runtime metadataへ渡す。claim失敗ではprovider、J、Brokerを呼ばない。handler／process異常は`outcome_unknown`で保持し、ownerがHDS経由で明示するno-replay dispositionなしに後続eventを通さない。Approval、Authority、M receipt、外部作用の採否・成功はこの変更範囲に含めない。
+`task.payload_hash`を予定eventのcursor digestとしてclaimする。`event_store`未接続では`durable_store_unavailable`として停止し、最終発火時刻も更新しない。accepted時だけcontent providerを呼び、解決後のcontent hashは既存どおりJ/runtime metadataへ渡す。claim失敗ではprovider、J、Brokerを呼ばない。handler／process異常は`outcome_unknown`で保持し、ownerがHDS経由で明示するno-replay dispositionなしに後続eventを通さない。Approval、Authority、M receipt、外部作用の採否・成功はこの変更範囲に含めない。
 
-Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。初回docs gateは前段READMEの古いmigration hashでFAILし、本文・負債数・gateを変えず現hashだけ同期後にPASS。testは追加・実行していない。Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。実provider、外部作用、実ユーザーデータ、別repoは対象外。
+Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。docs、日本語基底監査、license gateがPASSし、日本語基底の移行負債76件は既存注意として維持した。testは追加・実行していない。Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。実provider、外部作用、実ユーザーデータ、別repoは対象外。
 
 UNIT_ID: E01.01 Cron durable scheduled occurrence claim ordering
-STATUS: WIRED（source上でdurable claimがprovider／J ingressより前。runtime未確認）
-NEXT_REQUIRED_CONSUMER: durable event IDをOperationPlan・execution receipt・J/M結果と同一taskの回復projectionへ一気通貫で結び、outcome_unknownで自動再実行しない。
-SAFETY_STATUS: duplicate／stale／未解決eventはproviderとJへ進まない。event cursorを承認・作用成功・達成の証拠にしない。
+STATUS: WIRED（durable claim後だけprovider／J ingress。store未接続はfail-closed。runtime未確認）
+NEXT_REQUIRED_CONSUMER: 現行sourceにはCron request digest→OperationPlan→Broker admission／receipt→J/M結果のread-only correlationがある。Cron ledgerはsourceごとの現在cursorだけを保持するため、次eventでcursorが進んだ後も同じtaskの結果・復旧根拠を追えるproducer／consumerを接続する。retentionや再実行方針を推測で拡張せず、outcome_unknownを自動再実行しない。
+SAFETY_STATUS: duplicate／stale／未解決eventおよびdurable store未接続時はproviderとJへ進まない。event cursor／`handler_returned`を承認・作用成功・達成の証拠にしない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
 

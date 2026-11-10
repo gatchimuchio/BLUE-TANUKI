@@ -366,16 +366,21 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
-    runtime.lastFireAtMs = scheduledAtMs;
     // Persist the scheduled occurrence before invoking a dynamic content provider.
     // The cursor binds the occurrence to this schedule version; resolved content
     // remains separately hashed for the J/runtime request below.
     const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, task.payload_hash);
-    const claim = this.eventStore?.claim(event) ?? { status: "accepted" as const };
+    const eventStore = this.eventStore;
+    if (!eventStore) {
+      this.log(`[cron] event not dispatched id=${task.id} status=durable_store_unavailable`);
+      return;
+    }
+    const claim = eventStore.claim(event);
     if (claim.status !== "accepted") {
       this.log(`[cron] event not dispatched id=${task.id} status=${claim.status}${claim.status === "duplicate" || claim.status === "blocked_unresolved" ? ` delivery_state=${claim.delivery_state}` : ""}`);
       return;
     }
+    runtime.lastFireAtMs = scheduledAtMs;
     this.inFlightEventIds.add(event.event_id);
     try {
       const resolved = await this.resolveContent(task, runtime.scheduledTimeZone ?? task.time_zone);
@@ -384,7 +389,7 @@ export class CronSchedulerChannel implements InboundChannel {
       try {
         this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event, task.delegation);
       } catch (error) {
-        this.eventStore?.settle(event, "outcome_unknown");
+        eventStore.settle(event, "outcome_unknown");
         throw error;
       }
       const metadata: GatewayInternalAuthorityMetadata = {
@@ -422,9 +427,9 @@ export class CronSchedulerChannel implements InboundChannel {
       this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
       try {
         await handler(inbound);
-        this.eventStore?.settle(event, "handler_returned");
+        eventStore.settle(event, "handler_returned");
       } catch (error) {
-        this.eventStore?.settle(event, "outcome_unknown");
+        eventStore.settle(event, "outcome_unknown");
         throw error;
       }
     } finally {

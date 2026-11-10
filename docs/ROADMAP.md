@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — E01.01 Cron予定発火のdurable claimをprovider前へ接続
+### 直近BUILD_BATCH — E01.01 Cron予定発火のdurable claimと未接続時fail-closed
 
-Cron schedulerは、source・予定時刻・安定schedule-version digestをevent cursorへclaimしてからdynamic content providerとJ ingressへ進む。duplicate／stale／未解決eventではproviderもJも呼ばない。解決後本文のhash、J authority、Approval、Broker、M receipt、外部作用の境界は従来どおり維持する。Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。初回docs gateは前段READMEの古いmigration hashでFAILし、現hashだけ同期後にPASS（移行負債76件を維持）。testは追加・実行しておらず、Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。これはsource-level call order接続であり、E01.01／E03.02全体の耐久性や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。
+Cron schedulerは、source・予定時刻・安定schedule-version digestをevent cursorへclaimしてからdynamic content providerとJ ingressへ進む。duplicate／stale／未解決eventおよび永続store未接続時はproviderもJも呼ばず、未dispatchのlast-fire表示も作らない。既存sourceにはCron request digest→OperationPlan→Broker receipt→J/M結果のread-only相関があるが、Cron ledgerはsourceごとの現在cursorのみであり、後続event後の同一task履歴相関は残件。Gateway依存typecheck、`docs:check`、`git diff --check`はPASS。testは追加・実行しておらず、Cron／provider runtime、全suite、全OS、QE_QC／QE_QAはNOT_RUN。これはsource-level接続であり、E01.01／E03.02全体の耐久性や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。
 
 ### 前段完了安全修正BUILD_BATCH — Windows Uninstallの削除範囲を作用前に開示
 

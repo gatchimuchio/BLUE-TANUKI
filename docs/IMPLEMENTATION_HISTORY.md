@@ -3986,3 +3986,18 @@ loopback-onlyの隔離Gatewayに合成tokenで接続し、`synthetic-file-write-
 Gateway served integration 1件とWebChatのpreview／MIME結合test 2件、Gateway依存build（7 workspace projects）、`docs:check`、`git diff --check`はPASS。全suite、failure/recovery、5OS、installed製品、QE_QC／QE_QAはNOT_RUN。F17.03の生成→表示と既存synthetic backend integrationだけを限定`WIRED`とし、意図送信・J／Approval／Broker経由のGUI実作用は次consumerとして残す。
 
 隔離Gatewayを停止し、今回のharness 26 files・485,762 bytesと未使用failed-start residue 4 files・9,159 bytesをWindowsごみ箱へ復元可能な状態で移動した。元path消失とごみ箱収容を確認。別のGateway processの実行元を今回のGUI試験専用と確証できないため、関連する可能性のあるTemp root 24 files・487,223 bytesは保留。protected attachment directories、local `dist` build output、別repoは変更していない。Git反映前の基準main=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`、復旧branch/tag二世代はcurrent=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`。stale worktree metadata cleanupは権限拒否のため保留し、手動変更なし。
+
+## 2026-11-10 QE_BUILD — E01.01 Cron durable store欠落時のfail-closed
+
+開始HEAD／`main`／`origin/main`=`9f3e69c36821dd15e7703f2056786414618b5e99`。rev4.0三点セット、現行pin、適用`AGENTS.md`、active指示、Cron→OperationPlan→ExecutionIntent→J/M recovery projectionを照合した。sourceではCron request IDとOperationPlan request digestが一致し、Broker admission／receipt・J/M結果へのread-only相関が接続済み。一方Cron ledgerはsource単位の現行cursorだけを保持し、後続event後の同一task相関は未解決。
+
+`CronSchedulerChannel.fire()`のevent store未接続fallbackが、durable claimなしに`accepted`扱いしてprovider／Jへ進む欠陥を修正した。store未接続時は`durable_store_unavailable`で停止し、`last_fire_at_ms`も更新しない。accepted claim後のみproviderへ進み、settleは同じ永続storeへ記録する。Approval、M authority、再実行、外部作用は変更していない。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| Gateway依存typecheck | PASS：`corepack pnpm --filter @blue-tanuki/gateway typecheck`。 |
+| `docs:check` | PASS：docs、日本語基底監査、license。移行負債76件は既存注意。 |
+| `git diff --check` | PASS。 |
+| test／Cron runtime／provider実呼出し／全OS／外部作用／QE_QC／QE_QA | NOT_RUN。testは追加・実行なし。 |
+
+local recovery branch／remote tagはcurrent=`9f3e69c36821dd15e7703f2056786414618b5e99`／previous=`fd832757f361ee4be43078b793c4034ab7eb2240`で一致。`git fetch`は成功したが、旧stale worktree metadataのACL拒否は迂回せず保持した。添付未追跡directory二件も変更していない。生成一時資産なし。
