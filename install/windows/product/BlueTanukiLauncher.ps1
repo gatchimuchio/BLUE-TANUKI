@@ -162,9 +162,13 @@ function Get-ManagedProcessSet($Kind) {
   foreach ($record in $records) {
     $commandLine = [string]$record.CommandLine
     if ($Kind -eq "resident") {
-      $entryMatches = (Test-CommandLineArgument $commandLine $expectedEntry) -or
-        (Test-CommandLineArgument $commandLine "apps/gateway/dist/main.js") -or
+      if ($record.Name -and -not [string]::Equals([string]$record.Name, "node.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
+        continue
+      }
+      $absoluteEntryMatches = Test-CommandLineArgument $commandLine $expectedEntry
+      $relativeEntryMatches = (Test-CommandLineArgument $commandLine "apps/gateway/dist/main.js") -or
         (Test-CommandLineArgument $commandLine "apps\gateway\dist\main.js")
+      $entryMatches = $absoluteEntryMatches -or $relativeEntryMatches
       if (-not $entryMatches -or -not (Test-CommandLineArgument $commandLine "--serve")) {
         if ([string]::IsNullOrWhiteSpace($commandLine) -and $record.ExecutablePath) {
           try {
@@ -177,7 +181,21 @@ function Get-ManagedProcessSet($Kind) {
       }
       if (-not (Test-CommandLineArgument $commandLine "--env-file") -or
           -not (Test-CommandLineArgument $commandLine $expectedEnv)) {
-        return @{ state = "unknown"; processes = @(); reason = "a process uses this Gateway entry but its DataRoot could not be verified" }
+        $expectedImageMatches = $false
+        try {
+          if ($record.ExecutablePath) {
+            $recordImage = Normalize-ProcessImagePath ([string]$record.ExecutablePath)
+            $expectedImageMatches = [string]::Equals($recordImage, $expectedImage, [System.StringComparison]::OrdinalIgnoreCase)
+          }
+        } catch {
+          return @{ state = "unknown"; processes = @(); reason = "a Gateway process executable path could not be inspected" }
+        }
+        if ($absoluteEntryMatches -or $expectedImageMatches -or [string]::IsNullOrWhiteSpace([string]$record.ExecutablePath)) {
+          return @{ state = "unknown"; processes = @(); reason = "a process uses this Gateway entry but its DataRoot could not be verified" }
+        }
+        # Relative Gateway arguments are common in source and other install roots.
+        # Without this install's runtime or env-file, they do not identify this installation.
+        continue
       }
     } else {
       $entryMatches = (Test-CommandLineArgument $commandLine "-File") -and

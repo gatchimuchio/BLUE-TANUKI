@@ -535,6 +535,74 @@ describe("Windows product installer package", () => {
     }
   });
 
+  it("ignores a foreign relative Gateway process and holds ambiguous install ownership", () => {
+    const command = findPowerShell();
+    const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
+    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
+      expect(launcher).toContain("$absoluteEntryMatches");
+      expect(launcher).toContain("$expectedImageMatches");
+      expect(launcher).toContain("a process uses this Gateway entry but its DataRoot could not be verified");
+      return;
+    }
+
+    const helperStart = launcher.indexOf("function Normalize-ProcessImagePath($Path) {");
+    const helperEnd = launcher.indexOf("\nfunction Get-ProcessSnapshot", helperStart);
+    const processSetStart = launcher.indexOf("function Get-ManagedProcessSet($Kind) {");
+    const processSetEnd = launcher.indexOf("\nfunction Stop-VerifiedProcess", processSetStart);
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(processSetStart).toBeGreaterThanOrEqual(0);
+    expect(processSetEnd).toBeGreaterThan(processSetStart);
+
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-foreign-gateway-owner-"));
+    const harness = join(temp, "process-set.test.ps1");
+    const install = join(temp, "app");
+    const expectedNode = join(install, "runtime", "node.exe");
+    const expectedEntry = join(install, "apps", "gateway", "dist", "main.js");
+    const envFile = join(temp, "data", "blue-tanuki.env");
+    const psQuote = (value: string) => value.replace(/'/gu, "''");
+    try {
+      writeFileSync(harness, [
+        "$ErrorActionPreference = 'Stop'",
+        `$installRoot = '${psQuote(install)}'`,
+        `$envFile = '${psQuote(envFile)}'`,
+        "function Find-NodeExe { return $env:BT_TEST_EXPECTED_NODE }",
+        "function Get-Process { throw 'the foreign process must never be inspected as an owned process' }",
+        "function Get-CimInstance { [CmdletBinding()] param([string]$ClassName, [string]$Filter); return @($script:ProcessRecords) }",
+        launcher.slice(helperStart, helperEnd),
+        launcher.slice(processSetStart, processSetEnd),
+        "$script:ProcessRecords = @([pscustomobject]@{ ProcessId = 41000; Name = 'powershell.exe'; ExecutablePath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'; CommandLine = 'powershell.exe -Command apps/gateway/dist/main.js --serve' })",
+        "$result = Get-ManagedProcessSet 'resident'",
+        "if ($result.state -ne 'stopped') { throw ('non-Node command line containing Gateway text was not ignored: ' + $result.state + ' ' + $result.reason) }",
+        "Write-Output 'non_node_gateway_text=ignored'",
+        "$script:ProcessRecords = @([pscustomobject]@{ ProcessId = 41001; Name = 'node.exe'; ExecutablePath = 'C:\\foreign\\node.exe'; CommandLine = 'node.exe apps/gateway/dist/main.js --serve' })",
+        "$result = Get-ManagedProcessSet 'resident'",
+        "if ($result.state -ne 'stopped') { throw ('foreign relative Gateway process was not ignored: ' + $result.state + ' ' + $result.reason) }",
+        "Write-Output 'foreign_relative_gateway=ignored'",
+        "$script:ProcessRecords = @([pscustomobject]@{ ProcessId = 41002; Name = 'node.exe'; ExecutablePath = $env:BT_TEST_EXPECTED_NODE; CommandLine = 'node.exe apps/gateway/dist/main.js --serve' })",
+        "$result = Get-ManagedProcessSet 'resident'",
+        "if ($result.state -ne 'unknown') { throw ('same-runtime process without a verified DataRoot was not held: ' + $result.state) }",
+        "Write-Output 'same_runtime_without_data_root=held'",
+        `$script:ProcessRecords = @([pscustomobject]@{ ProcessId = 41003; Name = 'node.exe'; ExecutablePath = 'C:\\foreign\\node.exe'; CommandLine = 'node.exe "${psQuote(expectedEntry)}" --serve' })`,
+        "$result = Get-ManagedProcessSet 'resident'",
+        "if ($result.state -ne 'unknown') { throw ('absolute install entry without a verified DataRoot was not held: ' + $result.state) }",
+        "Write-Output 'absolute_install_entry_without_data_root=held'",
+      ].join("\n"), "utf8");
+      const result = spawnSync(command, ["-NoProfile", "-File", harness], {
+        cwd: temp,
+        env: { ...process.env, BT_TEST_EXPECTED_NODE: expectedNode },
+        encoding: "utf8",
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("foreign_relative_gateway=ignored");
+      expect(result.stdout).toContain("non_node_gateway_text=ignored");
+      expect(result.stdout).toContain("same_runtime_without_data_root=held");
+      expect(result.stdout).toContain("absolute_install_entry_without_data_root=held");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it("stops the owned resident process only after matching its executable and launch arguments", async () => {
     const command = findPowerShell();
     if (!command || !command.toLowerCase().endsWith("powershell.exe")) {

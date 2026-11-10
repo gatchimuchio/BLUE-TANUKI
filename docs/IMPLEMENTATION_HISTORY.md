@@ -4089,3 +4089,11 @@ Linux autostart Setup／Launcher／Uninstallは共通exact-content ownership gua
 | native Linux・複数distribution・実reboot・update失敗rollback・system service／Secret Service・全suite・5OS・QE_QC／QE_QA | NOT_RUN。WSL installed BUILDであり対象distribution QAではない。 |
 
 smokeの一時archive／product rootは除去済み。追跡したouter WSL workspace `/tmp/blue-tanuki-linux-installed-path-final.K6PxA4` とinner smoke rootは終了確認時に既に存在せず、該当製品processも残っていない。Windows PCやOneDriveの資料、ユーザーデータ、別repo、provider、外部作用には触れていない。local ignored build outputは再生成可能な開発成果として保持。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、G03.03全体、Linux native QA、QE_QC／QE_QA、release／公開／owner GOは未成立。
+
+## 2026-11-11 QE_BUILD — G02.02 Launcherの相対Gateway process所有誤認修正
+
+主語はWindows製品LauncherがSetup／Repair／Uninstall前に分類するresident Gateway process。目的は相対`apps/gateway/dist/main.js --serve`を含むだけの別Node processを自install所有と誤認せず、実際に自install runtime／DataRootへ結び付くprocessだけを管理対象にすること。Node process名を確認し、相対entryを同一runtime imageまたは一致する`--env-file`へ束縛した。同一runtimeのDataRoot不明、絶対install entry、image照会不能はfail-closedを維持した。
+
+PID `17528`はrepo working directory、別installのNode image、一時state/session root、期待`--env-file`なしと観測したが、process・install・dataは停止・更新・削除していない。focused PowerShell fixture testは1 passed／19 skipped（非Node文字列と別Node相対entryの無視、同一runtime DataRoot不明と絶対install entryの保留）。installed smokeは修正後未実施。HKCU uninstall registrationが保留中test installを指しclean registry条件が不成立。GitHub Actionsは未dispatch。
+
+変更開始local／remote main=`ec3576abc3d0c0e60081ed8d6cd724f6673a36d8`。local recovery branchとremote backup tagはcurrent=`ec3576abc3d0c0e60081ed8d6cd724f6673a36d8`／previous=`12be9e570e8f6addab50fcd059b14a209d423dd7`で一致。remote照合時にGitが孤立worktree管理情報`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneを拒否した。`git worktree list`はmainのみで、対象にread-only／reparse-pointの`logs`、`refs`、`ORIG_HEAD`が残るため変更・削除を保留した。protected attachment directoriesは保持。

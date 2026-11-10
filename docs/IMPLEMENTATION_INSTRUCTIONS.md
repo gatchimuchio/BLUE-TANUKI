@@ -8,17 +8,20 @@
 
 Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreference = Stop`によりSetupを中断しないよう、JSON stdoutとstderr logを分離してNode終了コードで判定する。Launcher Doctorにも同じstderr境界を適用した。installed smokeは一意の隔離profile／DataRoot、system-only child PATH、レジストリ事前確認、実行中Gateway PIDの事前検査を使う。実行中の不明Gatewayを停止・更新・削除しない。
 
-ACTIONS_SCOPE: ローカルWindowsではPID `17528`と保留中test installを安全に解除できないため、現行`main` SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→Windows package生成／verify→既存`smoke:windows-installed`を補助実行する。workflowは`contents: read`のみ、secret／artifact uploadなし。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
+Launcherのprocess inventoryは、相対`apps/gateway/dist/main.js --serve`という文字列だけで別processを自install所有と誤認しないよう修正した。実際のNode process名を確認し、相対entryは自installのbundled Node imageまたは一致する`--env-file`に束縛する。絶対entry・同一runtimeなのにDataRoot不明・process image不明は引き続きfail-closedとする。現PID `17528`はworking directoryがrepo root、実行Nodeが別install配下、state/session rootがsmoke DataRoot外、`--env-file`なしと観測した。process自体は変更していない。
+
+ACTIONS_SCOPE: 現行`main` SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→Windows package生成／verify→既存`smoke:windows-installed`を補助実行する。workflowは`contents: read`のみ、secret／artifact uploadなし。今回、GitHub CLIには認証sessionがなく、GitHub connectorにもdispatch操作がないことを確認した。Computer Useは現在URLを確実に特定できず停止し、runは作成されていない。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | Windows package生成／verifier | PASS：2,544 entries、artifact SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`。 |
 | Setup／Launcher PowerShell 5.1 parser、Doctor stderr分離のsynthetic capture | PASS。 |
 | `windows_product_installer.test.ts`のLauncher／Doctor／smoke契約test | PASS：1件、18件skip。 |
+| relative Gateway process ownership focused test | PASS：1件、19件skip。別Nodeの相対entryと非Node command-line文字列を無視し、同一runtimeでDataRoot不明／絶対install entryの候補は保留する。これはisolated fixture上のコード確認で、installed smoke証拠ではない。 |
 | `windows_product_installer.test.ts`全体の前回実行 | FAIL：16/19 pass。resident-stop 2件は`EBUSY` cleanup、watchdog-stop 1件はstatus 2（期待0）。この実行後にDoctor／smoke修正を加えており、全体suiteは再実行していない。 |
 | 実Windows package Setup初回導入 | PASS：隔離install／DataRootへ導入し、Doctor JSONとstderr logを記録。ホスト自体はclean profileではなくNode／pnpm等を含むため、開発tool非依存証明ではない。 |
-| Repair／Launcher start／WebChat first message／Uninstall smoke | BLOCKED：実行中の既存Gateway PID `17528`（`C:\Users\ohira\AppData\Local\Programs\BLUE-TANUKI\node-v22.23.3-win-x64\node.exe`）をLauncherが検出したが、そのDataRoot所有を確認できずfail-closed。停止・更新・削除は拒否され、既存processは変更していない。起動・first message等はNOT_RUN。 |
-| smoke active-Gateway preflight | PASS：同じPIDを検出し、後続Setup前に中止。テスト用rootはcleanup済み。 |
+| Repair／Launcher start／WebChat first message／Uninstall smoke | NOT_RUN：前回のinstalled runではPID `17528`の曖昧なprocess分類によりfail-closedした。今回その誤分類を修正してfixture testをPASSしたが、更新済みpackageでのinstalled再実行はまだ行っていない。 |
+| smoke active-Gateway／registry preflight | BLOCKED：PID `17528`はrepo rootからの相対Gateway process、state/session rootは別の一時領域と確認した。現在のHKCU uninstall registrationは保留中smoke installを指すため、新規隔離smokeはclean registry条件を満たさない。どちらも停止・削除・上書きせず保持。 |
 | `docs:check`、`git diff --check` | PASS。日本語基底の移行負債76件は既存注意。 |
 | clean Windows user／OS、5OS、QE_QC／QE_QA | 未実施または未成立。 |
 

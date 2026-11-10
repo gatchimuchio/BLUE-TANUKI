@@ -8,7 +8,11 @@
 
 ### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-Windows artifact（2,544 entries、SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`）の検証、PowerShell 5.1 parser、Doctor stderr分離、対象static test 1件はPASS。実package初回Setupは隔離rootへPASSしたが、Repairで既存Gateway PID `17528`のDataRootを確認できずSetupがfail-closedした。停止・更新・削除は行われず、Launch／first message／Uninstallの確認はNOT_RUN。smokeの新しい事前検査は同PIDを確認してSetup前に中止する。test用installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`へ保留。次consumerのBUILD疎通には、現行main SHAを固定する`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→package verify→隔離installed smokeを行う。workflowはread-only token scopeとし、secret・artifact upload・release作用を持たない。これはWindows Server runner上の限定consumer evidenceであり、Windows Desktop QAを代替しない。local PID `17528`と保留rootの安全確認・正規Uninstallは別に残す。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
+前回生成したWindows artifact（2,544 entries、SHA-256=`fedd0e6229f52b6ab8e2e8487fd74ab14336243ccc2ea249bf11e60f4e45dab4`）の検証、PowerShell 5.1 parser、Doctor stderr分離と対象testはPASS。隔離rootへの初回SetupはPASSしたが、その後のRepairはGateway PID `17528`のDataRootを判定できずfail-closedし、Launcher／first message／Uninstallは未確認だった。
+
+今回、PID `17528`はrepo rootをworking directoryとし、smoke installとは別のNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。Launcherのprocess inventoryが相対Gateway引数だけで別processを自installと誤認する欠陥を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。PIDやtest dataは停止・更新・削除していない。
+
+更新済みpackageのinstalled Repair／Launcher start／health／合成WebChat first message／stop／UninstallはNOT_RUN。現在のHKCU uninstall registrationは保留中smoke installを指すため、新規isolated smokeはclean registry条件を満たさず、状態を変えず保持した。GitHub CLIには認証sessionがなく、接続済みGitHub toolにもdispatch操作がない。Computer Useは現在URLを特定できず停止し、workflow runは作成されていない。次consumerは現行main SHA固定の`workflow_dispatch`専用Windows 2022 hosted runnerでworkspace build→package verify→isolated installed smokeを通すこと。workflowはread-only token scope、secret／artifact uploadなしとし、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
