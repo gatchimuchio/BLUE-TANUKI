@@ -15,7 +15,9 @@ import { formatTextReport, runDoctor, type DoctorReport } from "./doctor.js";
 import {
   llmApiKeyForProvider,
   secretRefKey,
+  storeBlueTanukiSecret,
   storeLlmApiKeySecret,
+  type SecretKeyringFactory,
   type SecretProtector,
   type LlmSecretStoreResult,
 } from "./secret_store.js";
@@ -54,12 +56,13 @@ export interface SetupCommandIO {
 export interface SetupSecretStorageOptions {
   platform?: NodeJS.Platform;
   protector?: SecretProtector;
+  keyringFactory?: SecretKeyringFactory;
 }
 
 export interface SetupSecretStorageResult {
-  status: "not_supplied" | "stored" | "plaintext_env_fallback";
+  status: "not_supplied" | "stored";
   key: string | null;
-  storage: "win32_dpapi_current_user" | "env_file" | "unavailable";
+  storage: "win32_dpapi_current_user" | "os_keyring_current_user" | "unavailable";
   os_protected: boolean;
   used_for_authority: false;
   evidence_source: readonly ("CONFIG" | "EXTERNAL_EVIDENCE")[];
@@ -73,6 +76,7 @@ export interface SetupResult {
   env_keys: string[];
   secret_storage: {
     llm_api_key: SetupSecretStorageResult;
+    composio_api_key: SetupSecretStorageResult;
   };
   doctor?: DoctorReport;
 }
@@ -397,18 +401,6 @@ function protectSetupLlmApiKey(
   }
 
   const platform = opts.platform ?? process.platform;
-  if (platform !== "win32") {
-    return {
-      status: "plaintext_env_fallback",
-      key,
-      storage: "env_file",
-      os_protected: false,
-      used_for_authority: false,
-      evidence_source: ["CONFIG"],
-      detail: "OS-protected LLM secret storage is available only on Windows in this release.",
-    };
-  }
-
   let stored: LlmSecretStoreResult;
   try {
     stored = storeLlmApiKeySecret(key, plaintext, {
@@ -416,10 +408,11 @@ function protectSetupLlmApiKey(
       env,
       platform,
       protector: opts.protector,
+      keyringFactory: opts.keyringFactory,
     });
   } catch (error) {
     throw new Error(
-      `Windows LLM secret storage failed; refusing to write plaintext ${key}: ${
+      `OS-protected LLM secret storage failed; refusing to write plaintext ${key}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -435,8 +428,55 @@ function protectSetupLlmApiKey(
     os_protected: true,
     used_for_authority: false,
     evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
-    detail: `${key} stored via ${secretRefKey(key)} using Windows DPAPI CurrentUser.`,
+    detail: `${key} stored via ${secretRefKey(key)} using ${stored.storage}.`,
   };
+}
+
+function protectSetupComposioApiKey(
+  config: BlueTanukiSetupConfig,
+  outputPath: string,
+  env: NodeJS.ProcessEnv,
+  opts: SetupSecretStorageOptions = {},
+): SetupSecretStorageResult {
+  const plaintext = config.composio.api_key;
+  if (!plaintext) {
+    return {
+      status: "not_supplied",
+      key: "COMPOSIO_API_KEY",
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No Composio API key was supplied during setup.",
+    };
+  }
+  const platform = opts.platform ?? process.platform;
+  try {
+    const stored = storeBlueTanukiSecret("COMPOSIO_API_KEY", plaintext, {
+      envFilePath: outputPath,
+      env,
+      platform,
+      protector: opts.protector,
+      keyringFactory: opts.keyringFactory,
+    });
+    delete config.composio.api_key;
+    config.composio.api_key_ref = stored.ref;
+    return {
+      status: "stored",
+      key: "COMPOSIO_API_KEY",
+      storage: stored.storage,
+      os_protected: true,
+      used_for_authority: false,
+      evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+      detail: `COMPOSIO_API_KEY stored via ${secretRefKey("COMPOSIO_API_KEY")} using ${stored.storage}.`,
+    };
+  } catch (error) {
+    throw new Error(
+      `OS-protected secret storage failed; refusing to write plaintext COMPOSIO_API_KEY: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 export async function runSetupCommand(
@@ -464,6 +504,12 @@ export async function runSetupCommand(
     env,
     io.secret_storage,
   );
+  const composioSecretStorage = protectSetupComposioApiKey(
+    config,
+    outputPath,
+    env,
+    io.secret_storage,
+  );
   const envFile = renderSetupEnvFile(config, { source_env: env });
   const writeResult = await writeEnvFileAtomic(outputPath, envFile, {
     mode: 0o600,
@@ -486,6 +532,7 @@ export async function runSetupCommand(
     env_keys: Object.keys(setupEnv).sort(),
     secret_storage: {
       llm_api_key: secretStorage,
+      composio_api_key: composioSecretStorage,
     },
     doctor,
   };
@@ -528,6 +575,7 @@ export async function runSetupCli(
         stdout,
         `llm_secret_storage=${result.secret_storage.llm_api_key.status}`,
       );
+      writeLine(stdout, `composio_secret_storage=${result.secret_storage.composio_api_key.status}`);
       writeLine(stdout, "Use this file with --env-file or BLUE_TANUKI_ENV_FILE.");
       if (result.doctor) {
         writeLine(stdout);

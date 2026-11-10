@@ -20,11 +20,12 @@
     "test": "node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
-    "@blue-tanuki/protocol": "workspace:*",
-    "@blue-tanuki/hds-brain": "workspace:*",
-    "@blue-tanuki/core": "workspace:*",
     "@blue-tanuki/channel-base": "workspace:*",
+    "@blue-tanuki/channel-telegram": "workspace:*",
     "@blue-tanuki/channel-webchat": "workspace:*",
-    "@blue-tanuki/channel-telegram": "workspace:*"
+    "@blue-tanuki/core": "workspace:*",
+    "@blue-tanuki/hds-brain": "workspace:*",
+    "@blue-tanuki/protocol": "workspace:*",
+    "@napi-rs/keyring": "2.1.2"
   }
 }

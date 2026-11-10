@@ -3,6 +3,7 @@ import type { InboundChannel, OutboundChannel } from "@blue-tanuki/channel-base"
 import { buildLLMBackendFromEnv, describeLLMConfig } from "./llm_config.js";
 import { GatewayDiscordEventStore } from "./discord_event_store.js";
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
+import { resolveSecretMaterial } from "./secret_store.js";
 
 const LIVE_REQUIRED = process.env.BLUE_TANUKI_LIVE_REQUIRED === "1";
 const TIMEOUT_MS = parsePositiveInt(process.env.BLUE_TANUKI_LIVE_TIMEOUT_MS, 30_000);
@@ -121,8 +122,8 @@ async function smokeSlack(plugins: PluginRuntime): Promise<string | null> {
     SLACK_LIVE_PERMISSIONS,
     "live smoke slack",
   );
-  const botToken = process.env.SLACK_BOT_TOKEN;
-  const appToken = process.env.SLACK_APP_TOKEN;
+  const botToken = resolveSecretMaterial(process.env, "SLACK_BOT_TOKEN");
+  const appToken = resolveSecretMaterial(process.env, "SLACK_APP_TOKEN");
   if (!botToken || !appToken || !target) return null;
 
   const slack = plugins.createChannel<InboundChannel & OutboundChannel>({
@@ -170,7 +171,7 @@ async function smokeDiscord(plugins: PluginRuntime): Promise<string | null> {
     DISCORD_LIVE_PERMISSIONS,
     "live smoke discord",
   );
-  const botToken = process.env.DISCORD_BOT_TOKEN;
+  const botToken = resolveSecretMaterial(process.env, "DISCORD_BOT_TOKEN");
   if (!botToken || !target) return null;
 
   const inbox = GatewayDiscordEventStore.fromEnvironment(process.env, botToken);
@@ -227,7 +228,7 @@ async function smokeTeams(plugins: PluginRuntime): Promise<string | null> {
     TEAMS_LIVE_PERMISSIONS,
     "live smoke teams",
   );
-  const accessToken = process.env.MICROSOFT_GRAPH_ACCESS_TOKEN;
+  const accessToken = resolveSecretMaterial(process.env, "MICROSOFT_GRAPH_ACCESS_TOKEN");
   if (!accessToken || !target) return null;
 
   const teams = plugins.createChannel<InboundChannel & OutboundChannel>({
@@ -274,7 +275,7 @@ async function smokeLine(plugins: PluginRuntime): Promise<string | null> {
     LINE_LIVE_PERMISSIONS,
     "live smoke line",
   );
-  const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const channelAccessToken = resolveSecretMaterial(process.env, "LINE_CHANNEL_ACCESS_TOKEN");
   if (!channelAccessToken || !target) return null;
 
   const line = plugins.createChannel<InboundChannel & OutboundChannel>({

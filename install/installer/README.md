@@ -45,8 +45,8 @@ If an existing env file is overwritten with `--force`, setup creates a `.bak` fi
 ## Boundaries
 
 - No 5-minute setup guarantee is claimed.
-- On Windows, first-run setup and settings-saved LLM API keys are stored as DPAPI CurrentUser secret references.
-- On other platforms, API key values remain env-file material until a later keychain phase.
+- First-run setup and settings-saved LLM/Composio keys use Windows DPAPI CurrentUser, macOS Keychain, or Linux Secret Service.
+- Linux setup refuses to save a secret when Secret Service is unavailable; it does not fall back to plaintext or the reboot-volatile kernel keyring.
 - API key values are not printed by the installer.
 - LLM providers remain downstream devices under HDS-BRAIN authority.
 - The guided installer does not modify Approval Gate, audit, runtime invariants, or Layer A / Layer B authority boundaries.

@@ -17,6 +17,7 @@ import type { PluginRuntime } from "./plugin_loader.js";
 import {
   applySettingsPatch,
   assessLlmComputeReadiness,
+  protectComposioApiKeyForEnvFile,
   protectLlmApiKeyForEnvFile,
   type LlmComputeReadiness,
   type SettingsSecretStorageOptions,
@@ -324,6 +325,7 @@ export async function updateSettingsEnvFile(
   env_keys: string[];
   secret_storage: {
     llm_api_key: SettingsSecretStorageResult;
+    composio_api_key: SettingsSecretStorageResult;
   };
 }> {
   const target = envFilePath(env);
@@ -334,6 +336,7 @@ export async function updateSettingsEnvFile(
   const baseEnv = { ...env, ...fileEnv };
   const nextConfig = applySettingsPatch(setupConfigFromEnv(baseEnv), body);
   const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
+  const composioSecretStorage = protectComposioApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
   const writeResult = await writeEnvFileAtomic(target, renderSetupEnvFile(nextConfig), {
     mode: 0o600,
     backup: true,
@@ -346,6 +349,7 @@ export async function updateSettingsEnvFile(
     env_keys: Object.keys(setupConfigToEnv(nextConfig)).sort(),
     secret_storage: {
       llm_api_key: secretStorage,
+      composio_api_key: composioSecretStorage,
     },
   };
 }

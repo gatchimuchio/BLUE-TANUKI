@@ -57,6 +57,7 @@ export interface BlueTanukiSetupConfig {
   };
   composio: {
     api_key?: string;
+    api_key_ref?: string;
     allowed_toolkits?: string;
     allowed_actions?: string;
     revoked_actions?: string;
@@ -431,6 +432,7 @@ export function setupConfigFromEnv(
   config.settings.token =
     env.BLUE_TANUKI_SETTINGS_TOKEN ?? config.settings.token;
   config.composio.api_key = env.COMPOSIO_API_KEY;
+  config.composio.api_key_ref = env.COMPOSIO_API_KEY_REF;
   config.composio.allowed_toolkits = env.COMPOSIO_ALLOWED_TOOLKITS;
   config.composio.allowed_actions = env.COMPOSIO_ALLOWED_ACTIONS;
   config.composio.revoked_actions = env.COMPOSIO_REVOKED_ACTIONS;
@@ -541,6 +543,8 @@ export function setupConfigToEnv(
   }
   if (config.composio.api_key) {
     env.COMPOSIO_API_KEY = config.composio.api_key;
+  } else if (config.composio.api_key_ref) {
+    env.COMPOSIO_API_KEY_REF = config.composio.api_key_ref;
   }
   if (config.composio.allowed_toolkits) {
     env.COMPOSIO_ALLOWED_TOOLKITS = config.composio.allowed_toolkits;
@@ -617,6 +621,7 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_FAILURE_MEMORY_FILE",
     "BLUE_TANUKI_FAILURE_MEMORY_DIR",
     "COMPOSIO_API_KEY",
+    "COMPOSIO_API_KEY_REF",
     "COMPOSIO_ALLOWED_TOOLKITS",
     "COMPOSIO_ALLOWED_ACTIONS",
     "COMPOSIO_REVOKED_ACTIONS",

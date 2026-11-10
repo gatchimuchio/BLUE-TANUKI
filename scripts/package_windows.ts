@@ -10,6 +10,11 @@ interface PackageJson {
   version: string;
 }
 
+export interface NativeAppTarget {
+  platform: "win32" | "linux" | "darwin";
+  arch: "x64" | "arm64";
+}
+
 interface WindowsInstallerManifest {
   schema_version: 1;
   name: "blue-tanuki";
@@ -206,7 +211,98 @@ async function copyGateway(appRoot: string): Promise<void> {
   );
 }
 
-export async function copyAppLayout(appRoot: string): Promise<void> {
+function lockedPackageIntegrity(packageName: string, version: string): string {
+  const lock = readFileSync(path.join(root, "pnpm-lock.yaml"), "utf8").split(/\r?\n/);
+  const expectedHeader = `${packageName}@${version}`;
+  const start = lock.findIndex((line) => {
+    const header = line.trim().replace(/:$/, "").replace(/^['"]|['"]$/g, "");
+    return header === expectedHeader;
+  });
+  if (start < 0) throw new Error(`pnpm-lock.yaml has no entry for ${expectedHeader}`);
+  for (let i = start + 1; i < lock.length; i += 1) {
+    const line = lock[i] ?? "";
+    if (line.startsWith("  ") && !line.startsWith("    ") && line.trim()) break;
+    const match = line.match(/integrity:\s*(sha512-[A-Za-z0-9+/=]+)/);
+    if (match?.[1]) return match[1];
+  }
+  throw new Error(`pnpm-lock.yaml has no sha512 integrity for ${expectedHeader}`);
+}
+
+function keyringNativePackages(target: NativeAppTarget): string[] {
+  if (target.platform === "win32") {
+    if (target.arch !== "x64") throw new Error(`unsupported keyring target: ${target.platform}-${target.arch}`);
+    return ["@napi-rs/keyring-win32-x64-msvc"];
+  }
+  if (target.platform === "darwin") {
+    return [`@napi-rs/keyring-darwin-${target.arch}`];
+  }
+  if (target.arch !== "x64") throw new Error(`unsupported keyring target: ${target.platform}-${target.arch}`);
+  return ["@napi-rs/keyring-linux-x64-gnu", "@napi-rs/keyring-linux-x64-musl"];
+}
+
+async function copyLockedNapiPackage(
+  packageName: string,
+  version: string,
+  appRoot: string,
+  stagingRoot: string,
+): Promise<void> {
+  const expectedIntegrity = lockedPackageIntegrity(packageName, version);
+  const metadataUrl = `https://registry.npmjs.org/${packageName.replace("/", "%2f")}/${version}`;
+  const metadata = JSON.parse((await downloadBuffer(metadataUrl)).toString("utf8")) as {
+    name?: string;
+    version?: string;
+    dist?: { tarball?: string; integrity?: string };
+  };
+  const tarballUrl = metadata.dist?.tarball;
+  if (
+    metadata.name !== packageName ||
+    metadata.version !== version ||
+    metadata.dist?.integrity !== expectedIntegrity ||
+    !tarballUrl ||
+    new URL(tarballUrl).protocol !== "https:" ||
+    new URL(tarballUrl).hostname !== "registry.npmjs.org"
+  ) {
+    throw new Error(`npm registry metadata does not match the locked package ${packageName}@${version}`);
+  }
+
+  const archive = await downloadBuffer(tarballUrl);
+  const actualIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  if (actualIntegrity !== expectedIntegrity) {
+    throw new Error(`npm tarball integrity mismatch for ${packageName}@${version}`);
+  }
+  if (!commandExists("tar")) throw new Error("tar is required to stage the locked keyring native module");
+
+  const safeName = packageName.replace(/[\\/@]/g, "_");
+  const packageStage = path.join(stagingRoot, `${safeName}-${version}`);
+  const extractRoot = path.join(packageStage, "extract");
+  await mkdir(extractRoot, { recursive: true });
+  const tarballPath = path.join(packageStage, "package.tgz");
+  await writeFile(tarballPath, archive);
+  const extracted = spawnSync("tar", ["-xzf", tarballPath, "-C", extractRoot], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (extracted.status !== 0) {
+    throw new Error(`failed to extract locked keyring module ${packageName}@${version}: ${extracted.stderr || extracted.error?.message || "unknown"}`);
+  }
+  const packageRoot = path.join(extractRoot, "package");
+  const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
+    name?: string;
+    version?: string;
+  };
+  if (packageJson.name !== packageName || packageJson.version !== version) {
+    throw new Error(`staged package identity mismatch for ${packageName}@${version}`);
+  }
+  await copyDir(packageRoot, path.join(appRoot, "node_modules", packageName));
+}
+
+export async function copyAppLayout(
+  appRoot: string,
+  target: NativeAppTarget,
+  stagingRoot: string,
+): Promise<void> {
   await mkdir(appRoot, { recursive: true });
   for (const rel of ROOT_TEXT_FILES) {
     await copyFileIfExists(rel, appRoot);
@@ -234,6 +330,21 @@ export async function copyAppLayout(appRoot: string): Promise<void> {
     "packages/protocol/node_modules/zod",
     "node_modules/.pnpm/node_modules/zod",
   ], appRoot);
+  const gatewayPackage = JSON.parse(
+    readFileSync(path.join(root, "apps/gateway/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const keyringVersion = gatewayPackage.dependencies?.["@napi-rs/keyring"];
+  if (!keyringVersion || !/^\d+\.\d+\.\d+$/.test(keyringVersion)) {
+    throw new Error("apps/gateway/package.json must pin @napi-rs/keyring to an exact version");
+  }
+  await copyExternalModule("@napi-rs/keyring", [
+    "apps/gateway/node_modules/@napi-rs/keyring",
+    "node_modules/@napi-rs/keyring",
+  ], appRoot);
+  await mkdir(stagingRoot, { recursive: true });
+  for (const nativePackage of keyringNativePackages(target)) {
+    await copyLockedNapiPackage(nativePackage, keyringVersion, appRoot, stagingRoot);
+  }
 }
 
 async function copyProductLaunchers(packageRoot: string): Promise<void> {
@@ -397,7 +508,7 @@ async function main(): Promise<void> {
   await mkdir(packageRoot, { recursive: true });
   await mkdir(path.dirname(outFile), { recursive: true });
   await copyProductLaunchers(packageRoot);
-  await copyAppLayout(appRoot);
+  await copyAppLayout(appRoot, { platform: "win32", arch: "x64" }, workRoot);
 
   const runtime = await downloadNodeRuntime(nodeVersion, cacheDir);
   await mkdir(path.join(packageRoot, "runtime"), { recursive: true });

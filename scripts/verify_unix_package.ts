@@ -42,6 +42,21 @@ interface ExternalManifest {
 
 const root = process.cwd();
 
+function requiredKeyringEntries(platform: UnixPlatform, arch: UnixArch): string[] {
+  const packages = platform === "linux"
+    ? ["@napi-rs/keyring-linux-x64-gnu", "@napi-rs/keyring-linux-x64-musl"]
+    : [`@napi-rs/keyring-darwin-${arch}`];
+  return packages.flatMap((packageName) => {
+    const suffix = packageName.replace("@napi-rs/keyring-", "");
+    const base = `app/node_modules/${packageName}`;
+    return [
+      `${base}/package.json`,
+      `${base}/keyring.${suffix}.node`,
+      `${base}/LICENSE.third-party.md`,
+    ];
+  });
+}
+
 const REQUIRED_APP_ENTRIES = [
   "app/package.json",
   "app/pnpm-workspace.yaml",
@@ -80,6 +95,8 @@ const REQUIRED_APP_ENTRIES = [
   "app/node_modules/@blue-tanuki/operator-developer/package.json",
   "app/node_modules/ws/package.json",
   "app/node_modules/zod/package.json",
+  "app/node_modules/@napi-rs/keyring/package.json",
+  "app/node_modules/@napi-rs/keyring/index.js",
   "app/install/linux/install.sh",
   "app/install/macos/install.sh",
   "app/install/unix/safe-target.sh",
@@ -294,6 +311,7 @@ export function verifyUnixPackage(
     "launcher/BlueTanukiLauncher.sh",
     "launcher/BlueTanukiUninstall.sh",
     ...REQUIRED_APP_ENTRIES,
+    ...requiredKeyringEntries(platform, arch),
   ]) {
     if (!entrySet.has(required)) {
       throw new Error(`installer archive missing required entry: ${required}`);
@@ -322,7 +340,7 @@ export function verifyUnixPackage(
     "exec \"$NODE_EXE\" apps/gateway/dist/main.js --serve",
   ]);
   requireSourceText("install/unix/product/BlueTanukiUninstall.sh", [
-    "safe_target",
+    "safe_destructive_target",
     "install/unix/safe-target.sh",
     "assert_not_ancestor_target",
     "Data retained",

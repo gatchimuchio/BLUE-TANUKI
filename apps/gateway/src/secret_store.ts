@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import * as path from "node:path";
+import { Entry } from "@napi-rs/keyring";
 import { windowsSystemChildEnvironment } from "./child_process_environment.js";
 
 type Env = Record<string, string | undefined>;
@@ -33,12 +34,22 @@ export interface SecretProtector {
   unprotect(protectedValue: string): string;
 }
 
+export interface SecretKeyringPort {
+  setPassword(plaintext: string): void;
+  getPassword(): string | null;
+}
+
+export type SecretKeyringFactory = (
+  platform: NodeJS.Platform,
+  key: BlueTanukiSecretKey,
+) => SecretKeyringPort;
+
 export interface LlmSecretStorageStatus {
   configured_key: BlueTanukiSecretKey | null;
   raw_env_present: boolean;
   secret_ref_present: boolean;
   os_protected: boolean;
-  storage: "win32_dpapi_current_user" | "env_file" | "unavailable" | "unknown";
+  storage: "win32_dpapi_current_user" | "os_keyring_current_user" | "env_file" | "unavailable" | "unknown";
   reason: string;
   used_for_authority: false;
   evidence_source: readonly ["CONFIG"];
@@ -48,7 +59,7 @@ export interface LlmSecretStoreResult {
   key: BlueTanukiSecretKey;
   ref_key: string;
   ref: string;
-  storage: "win32_dpapi_current_user";
+  storage: "win32_dpapi_current_user" | "os_keyring_current_user";
   os_protected: true;
   used_for_authority: false;
   evidence_source: readonly ["EXTERNAL_EVIDENCE"];
@@ -59,14 +70,18 @@ interface StoreOptions {
   env?: Env;
   platform?: NodeJS.Platform;
   protector?: SecretProtector;
+  keyringFactory?: SecretKeyringFactory;
 }
 
 interface ResolveOptions {
   platform?: NodeJS.Platform;
   protector?: SecretProtector;
+  keyringFactory?: SecretKeyringFactory;
 }
 
 const SECRET_REF_PREFIX = "win32-dpapi-current-user:file:";
+const OS_KEYRING_REF_PREFIX = "os-keyring:v1:";
+const OS_KEYRING_SERVICE = "blue-tanuki";
 
 export const LLM_SECRET_KEYS: readonly LlmSecretKey[] = [
   "ANTHROPIC_API_KEY",
@@ -226,6 +241,34 @@ function defaultProtector(): SecretProtector {
   };
 }
 
+function defaultKeyringFactory(platform: NodeJS.Platform, key: BlueTanukiSecretKey): SecretKeyringPort {
+  if (platform !== "linux" && platform !== "darwin") {
+    throw new Error(`OS keyring secret storage is unsupported on ${platform}`);
+  }
+  if (platform !== process.platform) {
+    throw new Error(`cannot access the ${platform} keyring from a ${process.platform} runtime`);
+  }
+  const entry = platform === "linux"
+    ? new Entry(OS_KEYRING_SERVICE, key, { linux: { store: "secret-service" } })
+    : new Entry(OS_KEYRING_SERVICE, key);
+  return {
+    setPassword: (plaintext) => entry.setPassword(plaintext),
+    getPassword: () => entry.getPassword(),
+  };
+}
+
+function osKeyringRef(platform: NodeJS.Platform, key: BlueTanukiSecretKey): string {
+  return `${OS_KEYRING_REF_PREFIX}${platform}:${key}`;
+}
+
+function isMatchingOsKeyringRef(
+  ref: string,
+  platform: NodeJS.Platform,
+  key: BlueTanukiSecretKey,
+): boolean {
+  return (platform === "linux" || platform === "darwin") && ref === osKeyringRef(platform, key);
+}
+
 export function storeLlmApiKeySecret(
   key: LlmSecretKey,
   plaintext: string,
@@ -240,30 +283,49 @@ export function storeBlueTanukiSecret(
   opts: StoreOptions,
 ): LlmSecretStoreResult {
   const platform = opts.platform ?? process.platform;
-  if (platform !== "win32" && !opts.protector) {
-    throw new Error("OS-protected BLUE-TANUKI secret storage is only available on Windows in this release");
+  if (!plaintext) throw new Error("refusing to store an empty secret");
+  if (platform === "win32") {
+    const protector = opts.protector ?? defaultProtector();
+    const secretPath = secretPathForKey(opts.envFilePath, key, opts.env ?? {});
+    mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
+    writeFileSync(secretPath, `${protector.protect(plaintext)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    try {
+      chmodSync(secretPath, 0o600);
+    } catch {
+      // Windows ACLs are enforced by DPAPI CurrentUser; chmod is best-effort.
+    }
+    return {
+      key,
+      ref_key: secretRefKey(key),
+      ref: refForPath(secretPath),
+      storage: "win32_dpapi_current_user",
+      os_protected: true,
+      used_for_authority: false,
+      evidence_source: ["EXTERNAL_EVIDENCE"],
+    };
   }
-  const protector = opts.protector ?? defaultProtector();
-  const secretPath = secretPathForKey(opts.envFilePath, key, opts.env ?? {});
-  mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
-  writeFileSync(secretPath, `${protector.protect(plaintext)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  try {
-    chmodSync(secretPath, 0o600);
-  } catch {
-    // Windows ACLs are enforced by DPAPI CurrentUser; chmod is best-effort.
+
+  if (opts.protector) {
+    throw new Error("Windows DPAPI protector cannot be used as an OS keyring on this platform");
   }
-  return {
-    key,
-    ref_key: secretRefKey(key),
-    ref: refForPath(secretPath),
-    storage: "win32_dpapi_current_user",
-    os_protected: true,
-    used_for_authority: false,
-    evidence_source: ["EXTERNAL_EVIDENCE"],
-  };
+  if (platform === "linux" || platform === "darwin") {
+    const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key);
+    keyring.setPassword(plaintext);
+    return {
+      key,
+      ref_key: secretRefKey(key),
+      ref: osKeyringRef(platform, key),
+      storage: "os_keyring_current_user",
+      os_protected: true,
+      used_for_authority: false,
+      evidence_source: ["EXTERNAL_EVIDENCE"],
+    };
+  }
+
+  throw new Error(`OS-protected BLUE-TANUKI secret storage is unsupported on ${platform}`);
 }
 
 export function resolveLLMSecretRefs(
@@ -287,6 +349,14 @@ export function resolveAllSecretRefs(
   return resolveSecretRefs(env, opts, BLUE_TANUKI_SECRET_KEYS);
 }
 
+export function resolveSecretMaterial(
+  env: Env,
+  key: BlueTanukiSecretKey,
+  opts: ResolveOptions = {},
+): string | undefined {
+  return resolveSecretRefs(env, opts, [key])[key];
+}
+
 function resolveSecretRefs(
   env: Env,
   opts: ResolveOptions,
@@ -299,15 +369,31 @@ function resolveSecretRefs(
     if (next[key]) continue;
     const ref = next[secretRefKey(key)];
     if (!ref) continue;
-    if (platform !== "win32" && !protector) {
-      throw new Error(`${secretRefKey(key)} requires Windows DPAPI secret storage`);
+    if (ref.startsWith(SECRET_REF_PREFIX)) {
+      if (platform !== "win32") {
+        throw new Error(`${secretRefKey(key)} requires Windows DPAPI secret storage`);
+      }
+      const secretPath = pathFromRef(ref);
+      const protectedValue = readFileSync(secretPath, "utf8").trim();
+      if (!protectedValue) {
+        throw new Error(`${secretRefKey(key)} points to an empty secret file`);
+      }
+      next[key] = (protector ?? defaultProtector()).unprotect(protectedValue);
+      continue;
     }
-    const secretPath = pathFromRef(ref);
-    const protectedValue = readFileSync(secretPath, "utf8").trim();
-    if (!protectedValue) {
-      throw new Error(`${secretRefKey(key)} points to an empty secret file`);
+
+    if (ref.startsWith(OS_KEYRING_REF_PREFIX)) {
+      if (!isMatchingOsKeyringRef(ref, platform, key)) {
+        throw new Error(`${secretRefKey(key)} does not match this platform or secret key`);
+      }
+      const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key);
+      const secret = keyring.getPassword();
+      if (!secret) throw new Error(`${secretRefKey(key)} is not available in the OS keyring`);
+      next[key] = secret;
+      continue;
     }
-    next[key] = (protector ?? defaultProtector()).unprotect(protectedValue);
+
+    throw new Error(`${secretRefKey(key)} uses an unsupported secret ref format`);
   }
   return next;
 }
@@ -320,15 +406,26 @@ export function llmSecretStorageStatus(
   const key = llmApiKeyForProvider(provider) ?? null;
   const raw = key ? Boolean(env[key]) : false;
   const ref = key ? Boolean(env[secretRefKey(key)]) : false;
-  const dpapi = ref && platform === "win32";
+  const refValue = key ? env[secretRefKey(key)] : undefined;
+  const dpapi = ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const osKeyring = key !== null && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
+  const protectedStorage = dpapi
+    ? "win32_dpapi_current_user"
+    : osKeyring
+    ? "os_keyring_current_user"
+    : null;
   return {
     configured_key: key,
     raw_env_present: raw,
     secret_ref_present: ref,
-    os_protected: dpapi,
-    storage: dpapi ? "win32_dpapi_current_user" : raw ? "env_file" : ref ? "unknown" : "unavailable",
+    os_protected: protectedStorage !== null,
+    storage: protectedStorage ?? (raw ? "env_file" : ref ? "unknown" : "unavailable"),
     reason: dpapi
       ? "LLM API key is stored as a Windows DPAPI CurrentUser secret reference"
+      : osKeyring
+      ? platform === "linux"
+        ? "LLM API key is configured for the Linux Secret Service keyring"
+        : "LLM API key is configured for the macOS Keychain"
       : raw
       ? "LLM API key is present in process/env-file material"
       : ref
@@ -346,15 +443,26 @@ export function connectorSecretStorageStatus(
 ): LlmSecretStorageStatus {
   const raw = Boolean(env[key]);
   const ref = Boolean(env[secretRefKey(key)]);
-  const dpapi = ref && platform === "win32";
+  const refValue = env[secretRefKey(key)];
+  const dpapi = ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const osKeyring = refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
+  const protectedStorage = dpapi
+    ? "win32_dpapi_current_user"
+    : osKeyring
+    ? "os_keyring_current_user"
+    : null;
   return {
     configured_key: key,
     raw_env_present: raw,
     secret_ref_present: ref,
-    os_protected: dpapi,
-    storage: dpapi ? "win32_dpapi_current_user" : raw ? "env_file" : ref ? "unknown" : "unavailable",
+    os_protected: protectedStorage !== null,
+    storage: protectedStorage ?? (raw ? "env_file" : ref ? "unknown" : "unavailable"),
     reason: dpapi
       ? `${key} is stored as a Windows DPAPI CurrentUser secret reference`
+      : osKeyring
+      ? platform === "linux"
+        ? `${key} is configured for the Linux Secret Service keyring`
+        : `${key} is configured for the macOS Keychain`
       : raw
       ? `${key} is present in process/env-file material`
       : ref

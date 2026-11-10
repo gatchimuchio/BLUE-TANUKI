@@ -2,26 +2,27 @@
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / D04.02 保存済みresult deliveryのOwner再照合（限定WIRED）
+## 現行BUILD_BATCH — QE_BUILD / D06 OS保護秘密保管と利用consumerの限定接続（限定WIRED）
 
-主語は、BLUE Gatewayが私有outboxへ保存した既存実行結果deliveryと、それを同一J/M記録へ届けるOwner復旧操作。目的は、通常実行中に保留となった既存deliveryを、OwnerがControl Centerから明示的に再照合できるようにし、HDSの受理済み結果とM receiptまで閉じること。新しい仕事・承認・外部作用を開始する機能ではない。
+主語はBLUE GatewayのSetup／Settingsが保持するLLM・connector秘密と、その値を使う既存runtime consumer。目的は、資格情報を現行OSユーザーの保護保管先へ置いて不透明なrefだけを設定へ保存し、各consumerが自分の必要な秘密だけを利用時に解決すること。LLM実要求、外部作用、HDS authority、D4 Pocket側は変更しない。
 
-`POST /runtime/reconcile-results`はWebChat inbound tokenで認証し、空の要求だけを受け付ける。ticket・command・scope等のcaller指定値は拒否する。Gatewayのsingle-writerが既存`execution_result_outbox`を現在のexecution epochで照合し、J/Mの既承認commit回復が成功した時だけ同一deliveryを一度再試行する。結果はready、採用／保留／旧世代隔離件数、Mとstoreの可用性だけをno-storeで返す。Control Centerは結果を数値で表示してRuntime Snapshotを再取得する。Executor、worker、tool、provider、Approvalや外部作用は再実行しない。
+Windowsは既存DPAPIを維持し、Linuxは永続Secret Serviceだけ、macOSはKeychain backendを使う。Linuxの一時kernel-keyutils fallbackは使わない。Setup／Settingsは保護保管に失敗した場合に平文envへ逃がさず停止する。Gatewayの起動時に全connector秘密を`process.env`へ一括展開する経路を除き、LLM、各channel、Google Daily Brief、live smokeが対象keyのみ解決する。status projectionに秘密値を渡さず、Telegram tokenの代わりにconfigured booleanだけを出す。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| `corepack pnpm --filter @blue-tanuki/gateway... build` | PASS：7 workspace projects。 |
-| Gateway保存outbox→J/M再照合consumer | PASS：1件、同fileの他83件skip。Executor再呼出しなし、delivery ackとJ verifiedを確認。 |
-| WebChat auth／method／scope拒否／response境界 | PASS：1件、同fileの他123件skip。 |
-| 生成Control Center script構文 | PASS。 |
-| `corepack pnpm docs:check`／`git diff --check` | PASS。日本語基底監査PASS（移行負債76件の既存注意）、license PASS。 |
-| 全suite、実provider／外部作用、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
+| 秘密保管・Setup／Settings・statusの対象test | PASS：4 files／34 tests。全suiteは未実施。 |
+| Gateway／root typecheck、root build | PASS。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS。日本語基底監査PASS、既存移行負債76件の注意、license PASS。 |
+| Windows x64 installer build／verify | PASS：2,540 entries、SHA-256 `b96d64edeaae4e1520f1ef8ed6d08db90f981f1a5fa1923a77112554137153d4`。obsolete Uninstall文字列条件を実物の同期実行契約へ修正。 |
+| Linux x64 installer build／verify | PASS：2,649 entries、SHA-256 `7519efef6dd283e7f62c7fa835bb32acd748df9eb367ccc2c4787f5aa16a80eb`。 |
+| macOS x64／arm64 installer build／verify | PASS：各2,645 entries、SHA-256 `a7f7315414ac515de46b400006633b79d06ed805b156d44befde4b6b590d4181`／`ce855b1468391a16bf522b8763b47ef9775ebb622ad212e2c6bbc431c63f99b5`。 |
+| Linux Secret Service実機、macOS Keychain実機、対象OS上のrestart／credential use | NOT_RUN。Windows上のtarget packaging証拠をruntime証拠へ拡張しない。 |
 
-このOwner手動再照合sliceだけを限定`WIRED`とする。常時自動配送、容量解消、私有DBの運用復元、Windows ACL／5OS、D4Pocket Brokerとの独立Permission・receipt調停、D04全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、他repo変更、公開・出荷判断には触れない。
+このsliceだけを限定`WIRED`とする。D06全要求にあるhost／action／expiry単位の直前grant・revoke、秘密ごとの全consumer接続、Linuxの実host permission／namespace証拠、macOS signing/notarization、対象5OSでのruntime／restart証拠は未成立。秘密は使用中の該当client/channel instance内に残り得る。実provider、HDS採否変更、5OS QA、QE_QC／QE_QA、公開・出荷判断は行わない。
 
-開始local／remote `main`=`d11bd85613c2935e8d1384e30849033a950de902`。意味編集前のlocal recovery branchとremote recovery tagはcurrent=`d11bd85613c2935e8d1384e30849033a950de902`／previous=`633af7fcba726a6e00c05f4388247d20462089cd`。保護された`.codex-attachments/`／`.codex-remote-attachments/`は未変更。Gateway dependency build出力は開発用ignored資産として保持。synthetic testは一時領域をfixture cleanupへ委ねた。
+開始local／remote `main`=`40822ba7fae2c726563a35342998134d59f285ee`。開始復旧ref local branch／remote tagのcurrent=`40822ba7fae2c726563a35342998134d59f285ee`、previous=`e1d39a2c9a681401d3b300619448fc9c31ee67da`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更。target installer archives、manifest、SHA sidecarは`.codex-tmp/`にQA証拠として一時保持し、shared staging／runtime cacheは内容・所有が確定するまで保留する。
 
-**次のproducer／consumer:** 次の独立BUILD_BATCHではrev4.0と最新HEADからBLUE単独で閉じられる未接続consumerを再選定する。D4／Mobileの別repo依存・実provider・live外部作用を仮実装へ置き換えない。
+**次のproducer／consumer:** ownerが選んだC08.02の明示completion rulesと検証済み結果／M receiptによる同一task達成後停止を、rev4.0と最新mainの実状態から再照合する。既存J判定を重複せず、GoalProjectionと実consumer間の具体的な残gapだけを次のBUILD_BATCHにする。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / E05.01 Setup管理FailureMemory・開発引継ぎの再起動永続化（限定WIRED）
 

@@ -3,6 +3,7 @@ import {
   type GoogleReadService,
 } from "@blue-tanuki/core";
 import type { CronContentProvider } from "./cron_channel.js";
+import { resolveSecretMaterial, type BlueTanukiSecretKey } from "./secret_store.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -18,8 +19,19 @@ export function googleDailyBriefProviderFromEnv(
   const calendarDays = parsePositiveInt(env.BLUE_TANUKI_DAILY_BRIEF_GOOGLE_CALENDAR_DAYS, 1, 31);
   return async (task) => {
     if (task.name !== "daily_brief" && task.id !== "daily_brief") return null;
+    const credentialEnv = { ...env };
+    const credentialKeyByService: Record<GoogleReadService, BlueTanukiSecretKey> = {
+      gmail: "GMAIL_ACCESS_TOKEN",
+      calendar: "GOOGLE_CALENDAR_ACCESS_TOKEN",
+      drive: "GOOGLE_DRIVE_ACCESS_TOKEN",
+    };
+    for (const service of services) {
+      const key = credentialKeyByService[service];
+      credentialEnv[key] = resolveSecretMaterial(env, key) ??
+        resolveSecretMaterial(env, "GOOGLE_ACCESS_TOKEN");
+    }
     const content = await buildGoogleDailyBriefContent({
-      env,
+      env: credentialEnv,
       services,
       maxResults,
       calendarDays,

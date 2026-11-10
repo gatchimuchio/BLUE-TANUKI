@@ -242,7 +242,11 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   await mkdir(packageRoot, { recursive: true });
   await mkdir(path.dirname(outFile), { recursive: true });
   await copyUnixLaunchers(packageRoot, target);
-  await copyAppLayout(appRoot);
+  await copyAppLayout(
+    appRoot,
+    { platform: target.platform === "macos" ? "darwin" : "linux", arch: target.arch },
+    workRoot,
+  );
 
   const runtime = await downloadNodeRuntime(nodeVersion, target, cacheDir);
   await mkdir(path.join(packageRoot, "runtime"), { recursive: true });

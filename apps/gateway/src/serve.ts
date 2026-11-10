@@ -192,7 +192,7 @@ import {
   readCronNotificationState,
 } from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
-import { resolveAllSecretRefs } from "./secret_store.js";
+import { hasSecretMaterial, resolveSecretMaterial } from "./secret_store.js";
 import {
   documentOrganizationSourceFromRequest,
   presentRestoredDocumentOrganizationProjection,
@@ -864,7 +864,6 @@ export async function serve(): Promise<ServeShutdown> {
 }
 
 async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promise<ServeShutdown> {
-  Object.assign(process.env, resolveAllSecretRefs(process.env));
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
   plugins.enforceSessionConfig(process.env);
@@ -3782,7 +3781,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
               webchat_token: process.env.WEBCHAT_TOKEN,
               webchat_resume_token: process.env.WEBCHAT_RESUME_TOKEN,
               webchat_maintenance_token: process.env.BLUE_TANUKI_MAINTENANCE_TOKEN,
-              telegram_bot_token: process.env.TELEGRAM_BOT_TOKEN,
+              telegram_configured: hasSecretMaterial(process.env, "TELEGRAM_BOT_TOKEN"),
               pending_approvals_count: pendingApprovals.length,
               runtime_schedules_count: runtimeSchedulesCount,
               pending_schedule_approvals_count: pendingScheduleApprovalsCount,
@@ -5629,15 +5628,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     telegramPermissions,
     "read/register telegram channel",
   );
-  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramBotToken = resolveSecretMaterial(process.env, "TELEGRAM_BOT_TOKEN");
   const telegramInboundGrants = telegramBotToken
     ? parseTelegramInboundGrants(process.env.TELEGRAM_INBOUND_GRANTS_JSON)
     : [];
   const telegramUpdateStore = telegramBotToken
     ? GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken)
     : null;
-  const slackBotToken = process.env.SLACK_BOT_TOKEN;
-  const slackAppToken = process.env.SLACK_APP_TOKEN;
+  const slackBotToken = resolveSecretMaterial(process.env, "SLACK_BOT_TOKEN");
+  const slackAppToken = resolveSecretMaterial(process.env, "SLACK_APP_TOKEN");
   const slackLiveConfigured = Boolean(slackBotToken && slackAppToken);
   const slackInboundGrants = slackLiveConfigured
     ? parseSlackInboundGrants(process.env.SLACK_INBOUND_GRANTS_JSON)
@@ -5645,7 +5644,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const slackEventStore = slackLiveConfigured && slackBotToken
     ? GatewaySlackEventStore.fromEnvironment(process.env, slackBotToken)
     : null;
-  const discordBotToken = process.env.DISCORD_BOT_TOKEN;
+  const discordBotToken = resolveSecretMaterial(process.env, "DISCORD_BOT_TOKEN");
   const discordInboundGrants = discordBotToken
     ? parseDiscordInboundGrants(process.env.DISCORD_INBOUND_GRANTS_JSON)
     : [];
@@ -5659,13 +5658,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const teamsInboundGrants = teamsIngressConfigured
     ? parseTeamsInboundGrants(process.env.TEAMS_INBOUND_GRANTS_JSON)
     : [];
-  const teamsSenderConfigured = Boolean(process.env.MICROSOFT_GRAPH_ACCESS_TOKEN?.trim());
+  const microsoftGraphAccessToken = resolveSecretMaterial(process.env, "MICROSOFT_GRAPH_ACCESS_TOKEN");
+  const teamsSenderConfigured = Boolean(microsoftGraphAccessToken?.trim());
   const teamsStoreConfigured = plugins.has("@blue-tanuki/channel-teams") &&
     (teamsIngressConfigured || teamsSenderConfigured);
   const teamsEventStore = teamsStoreConfigured
     ? GatewayTeamsEventStore.fromEnvironment(
         process.env,
-        teamsAgentCredentials?.client_id ?? `graph-token:${createHash("sha256").update(process.env.MICROSOFT_GRAPH_ACCESS_TOKEN!).digest("hex")}`,
+        teamsAgentCredentials?.client_id ?? `graph-token:${createHash("sha256").update(microsoftGraphAccessToken!).digest("hex")}`,
       )
     : null;
   const lineChannelSecret = process.env.LINE_CHANNEL_SECRET;
@@ -5676,7 +5676,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const lineIngressConfigured = Boolean(
     lineChannelSecret && lineDestination && plugins.has("@blue-tanuki/channel-line"),
   );
-  const lineChannelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const lineChannelAccessToken = resolveSecretMaterial(process.env, "LINE_CHANNEL_ACCESS_TOKEN");
   const lineSenderConfigured = Boolean(lineChannelAccessToken?.trim() && plugins.has("@blue-tanuki/channel-line"));
   const lineInboundGrants = lineIngressConfigured
     ? parseLineInboundGrants(process.env.LINE_INBOUND_GRANTS_JSON)
@@ -5731,7 +5731,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         "secrets:TEAMS_AGENT_CLIENT_SECRET",
       ] : []),
     ], "register teams channel", {
-      access_token: process.env.MICROSOFT_GRAPH_ACCESS_TOKEN,
+      access_token: microsoftGraphAccessToken,
       ...(teamsIngressConfigured && teamsAgentCredentials ? {
         agent_auth: teamsAgentCredentials,
         inbound_grants: teamsInboundGrants,

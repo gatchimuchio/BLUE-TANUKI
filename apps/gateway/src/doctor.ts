@@ -15,6 +15,7 @@ import {
 import { cronSchedulesFromEnv } from "./cron_channel.js";
 import { parseGoogleServices } from "./google_daily_brief.js";
 import { remediationFor } from "./doctor_remediation.js";
+import { BLUE_TANUKI_SECRET_KEYS, hasSecretMaterial, type BlueTanukiSecretKey } from "./secret_store.js";
 
 /**
  * doctor — environment diagnostic for blue-tanuki gateway.
@@ -455,7 +456,11 @@ function checkOptionalEnv(
   opts: { required?: boolean } = {},
 ): CheckDraft {
   const v = env[name];
-  if (!v) {
+  const isSecretKey = (BLUE_TANUKI_SECRET_KEYS as readonly string[]).includes(name);
+  const present = isSecretKey
+    ? hasSecretMaterial(env, name as BlueTanukiSecretKey)
+    : Boolean(v);
+  if (!present) {
     return {
       id: `env:${name}`,
       level: opts.required ? "error" : "warn",
@@ -467,7 +472,9 @@ function checkOptionalEnv(
     id: `env:${name}`,
     level: "ok",
     label: `env ${name}`,
-    detail: `present (length=${v.length})`,
+    detail: isSecretKey && !v
+      ? "present (protected secret ref configured)"
+      : `present (length=${v?.length ?? 0})`,
   };
 }
 
@@ -612,8 +619,8 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
     };
   }
   if (backend === "anthropic" || backend === "claude") {
-    const key = env.ANTHROPIC_API_KEY;
-    if (!key) {
+    const keyConfigured = hasSecretMaterial(env, "ANTHROPIC_API_KEY");
+    if (!keyConfigured) {
       return {
         id: "llm_backend",
         level: "error",
@@ -635,12 +642,11 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
       "OPENAI_MODEL",
       "LLM_MODEL",
     );
-    const key = envValue(
-      env,
+    const keyConfigured = [
       "OPENAI_COMPAT_API_KEY",
       "OPENAI_API_KEY",
       "LLM_API_KEY",
-    );
+    ].some((key) => hasSecretMaterial(env, key as BlueTanukiSecretKey));
     const endpoint = envValue(
       env,
       "OPENAI_COMPAT_ENDPOINT",
@@ -663,7 +669,7 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
         detail: "openai-compatible but no endpoint is set (OPENAI_COMPAT_ENDPOINT/LLM_ENDPOINT)",
       };
     }
-    if (backend === "openai" && !key) {
+    if (backend === "openai" && !keyConfigured) {
       return {
         id: "llm_backend",
         level: "error",
@@ -683,7 +689,7 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
   }
   if (backend === "openrouter") {
     const model = envValue(env, "OPENROUTER_MODEL", "LLM_MODEL");
-    const key = envValue(env, "OPENROUTER_API_KEY");
+    const keyConfigured = hasSecretMaterial(env, "OPENROUTER_API_KEY");
     if (!model) {
       return {
         id: "llm_backend",
@@ -692,7 +698,7 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
         detail: "openrouter but no model is set (OPENROUTER_MODEL/LLM_MODEL)",
       };
     }
-    if (!key) {
+    if (!keyConfigured) {
       return {
         id: "llm_backend",
         level: "error",
@@ -759,10 +765,10 @@ function checkLlmCommandRoute(env: NodeJS.ProcessEnv): CheckDraft {
 }
 
 function checkComposioConnector(env: NodeJS.ProcessEnv): CheckDraft {
-  const key = envValue(env, "COMPOSIO_API_KEY");
+  const keyConfigured = hasSecretMaterial(env, "COMPOSIO_API_KEY");
   const allowed = envValue(env, "COMPOSIO_ALLOWED_TOOLKITS");
   const dryRun = (env.COMPOSIO_DRY_RUN ?? "true").trim().toLowerCase();
-  if (!key) {
+  if (!keyConfigured) {
     return {
       id: "composio_connector",
       level: "warn",
@@ -957,9 +963,9 @@ function checkGoogleDailyBriefSource(env: NodeJS.ProcessEnv): CheckDraft {
     };
   }
   const missing = services.filter((service) => {
-    if (service === "gmail") return !env.GMAIL_ACCESS_TOKEN && !env.GOOGLE_ACCESS_TOKEN;
-    if (service === "calendar") return !env.GOOGLE_CALENDAR_ACCESS_TOKEN && !env.GOOGLE_ACCESS_TOKEN;
-    if (service === "drive") return !env.GOOGLE_DRIVE_ACCESS_TOKEN && !env.GOOGLE_ACCESS_TOKEN;
+    if (service === "gmail") return !hasSecretMaterial(env, "GMAIL_ACCESS_TOKEN") && !hasSecretMaterial(env, "GOOGLE_ACCESS_TOKEN");
+    if (service === "calendar") return !hasSecretMaterial(env, "GOOGLE_CALENDAR_ACCESS_TOKEN") && !hasSecretMaterial(env, "GOOGLE_ACCESS_TOKEN");
+    if (service === "drive") return !hasSecretMaterial(env, "GOOGLE_DRIVE_ACCESS_TOKEN") && !hasSecretMaterial(env, "GOOGLE_ACCESS_TOKEN");
     return true;
   });
   if (missing.length > 0) {

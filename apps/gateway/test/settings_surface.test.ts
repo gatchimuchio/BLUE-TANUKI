@@ -15,6 +15,7 @@ import {
   updateSettingsEnvFile,
 } from "../src/settings_surface.js";
 import { assessLlmComputeReadiness, verifyLlmProvisioning } from "../src/control_center/setup/api_settings.js";
+import type { SecretKeyringFactory } from "../src/secret_store.js";
 import {
   createDefaultSetupConfig,
   renderSetupEnvFile,
@@ -28,6 +29,17 @@ const fakeSecretProtector = {
     return decoded.slice("protected:".length);
   },
 };
+
+function fakeSecretKeyringFactory(): SecretKeyringFactory {
+  const secrets = new Map<string, string>();
+  return (platform, key) => {
+    const id = `${platform}:${key}`;
+    return {
+      setPassword: (plaintext) => { secrets.set(id, plaintext); },
+      getPassword: () => secrets.get(id) ?? null,
+    };
+  };
+}
 
 function runtime(): PluginRuntime {
   return new PluginRuntime("/tmp/blue-tanuki", [
@@ -258,24 +270,35 @@ describe("settings surface", () => {
           paths: { file_root: path.join(dir, "files"), shell_root: path.join(dir, "files") },
         },
         { BLUE_TANUKI_ENV_FILE: envFile },
-        { platform: "linux" },
+        { platform: "linux", keyringFactory: fakeSecretKeyringFactory() },
       );
 
       expect(result.restart_required).toBe(true);
       expect(result.backup_path).toBeTruthy();
       expect(result.secret_storage.llm_api_key).toMatchObject({
-        status: "plaintext_env_fallback",
+        status: "stored",
         key: "OPENROUTER_API_KEY",
-        os_protected: false,
+        storage: "os_keyring_current_user",
+        os_protected: true,
         used_for_authority: false,
+      });
+      expect(result.secret_storage.composio_api_key).toMatchObject({
+        status: "stored",
+        key: "COMPOSIO_API_KEY",
+        storage: "os_keyring_current_user",
+        os_protected: true,
       });
       const raw = await fs.readFile(envFile, "utf8");
       expect(raw).toContain("LLM_BACKEND=openrouter");
       expect(raw).toContain("OPENROUTER_MODEL=openrouter/model");
-      expect(raw).toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).toContain("OPENROUTER_API_KEY_REF=os-keyring:v1:linux:OPENROUTER_API_KEY");
+      expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).not.toContain("openrouter-secret");
       expect(raw).toContain("OPENROUTER_SITE_URL=https://blue-tanuki.local");
       expect(raw).toContain("OPENROUTER_APP_TITLE=BLUE-TANUKI");
-      expect(raw).toContain("COMPOSIO_API_KEY=composio-secret");
+      expect(raw).toContain("COMPOSIO_API_KEY_REF=os-keyring:v1:linux:COMPOSIO_API_KEY");
+      expect(raw).not.toContain("COMPOSIO_API_KEY=composio-secret");
+      expect(raw).not.toContain("composio-secret");
       expect(raw).toContain("COMPOSIO_ALLOWED_TOOLKITS=github,gmail");
       expect(raw).toContain("COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE");
       expect(raw).toContain("COMPOSIO_REVOKED_ACTIONS=github:GITHUB_DELETE_REPO");
@@ -444,7 +467,6 @@ describe("settings surface", () => {
           provider: "openai-compatible",
           endpoint: "https://fixture.invalid/v1",
           model: "fixture-model",
-          api_key: "fixture-key-only",
           max_tokens: "128",
           timeout_ms: "5000",
           provider_cost_profiles_json: profileJson,

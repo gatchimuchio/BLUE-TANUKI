@@ -9,3 +9,8 @@ Copyright 2026 gatchimuchio
 これはリポジトリ全体を Apache-2.0 / CC-BY-4.0 のどちらか任意で利用できるデュアルライセンスではない。適用範囲は `LICENSE`、正式条件は `LICENSE-APACHE-2.0` / `LICENSE-CC-BY-4.0` を参照すること。
 
 第三者由来のソース、資料、データ、画像、フォント、モデル関連成果物その他の資産には、各出典・原著作者・提供元の著作権、ライセンスおよび利用条件が適用される。個別の帰属表示、manifest、provenance、監査記録がある場合はそれらも参照すること。
+
+## 配布物に含む第三者ソフトウェア
+
+- `@napi-rs/keyring` 2.1.2 — MIT。OS credential store binding。本体および配布するplatform packageのライセンス表記に従う。
+- platform packageはビルド済みRust依存の帰属・ライセンス文を`LICENSE.third-party.md`に含む。Linux packageに静的リンクされたlibdbusのAFL-2.1またはGPL-2.0-or-laterの条件・著作権表示も同ファイルに含まれる。

@@ -138,11 +138,11 @@ Windows/macOS/Linuxユーザーが、Node / Corepack / pnpm / Git / source build
 
 目的: stub依存から脱却し、実LLMで製品として使える。
 
-現状（実測）: **partial（高進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、Windows DPAPI CurrentUser secret ref保存、runtime secret ref解決、`validate:product` P5の実HTTP abort timeout / settings verify timeout / Windows DPAPI connector secret roundtrip checkが追加済み。
+現状（コード観測）: **partial（高進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、Windows DPAPIとLinux/macOS OS keyringのsecret ref保存・用途別解決経路がある。`validate:product` P5の実HTTP abort timeout / settings verify timeout / Windows DPAPI connector secret roundtrip checkもある。Linux/macOSの実keyring保存・再起動後取得は対象hostで未確認。
 
 残差（実測で不在を確認）:
 - Windows実機でのDPAPI保存→restart→会話成立 evidence
-- Linux/macOS keychain保存（必要性・方式決定含む）
+- Linux/macOS対象hostでのSecret Service / Keychain保存・再起動後取得の証拠
 - owner資格情報でのlive smoke PASS証跡（Linux・Windows両方）
 
 完了条件: 両OSでlive smoke PASS。CCから設定→会話成立。鍵がOS保護下にある。

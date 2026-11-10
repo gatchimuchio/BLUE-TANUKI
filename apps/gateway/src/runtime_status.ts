@@ -12,7 +12,7 @@ export interface RuntimeStatusInput {
   webchat_token?: string;
   webchat_resume_token?: string;
   webchat_maintenance_token?: string;
-  telegram_bot_token?: string;
+  telegram_configured?: boolean;
   pending_approvals_count: number;
   runtime_schedules_count: number;
   pending_schedule_approvals_count: number;
@@ -42,7 +42,7 @@ export function buildRuntimeStatusSnapshot(
       input.webchat_token !== input.webchat_maintenance_token &&
       input.webchat_resume_token !== input.webchat_maintenance_token,
   );
-  const telegram_configured = Boolean(input.telegram_bot_token);
+  const telegram_configured = input.telegram_configured === true;
   const audit_chain_valid = input.hds.audit.chain_valid === true;
   const gateway_status =
     input.gateway_status ?? (hds_invariants_ok && audit_chain_valid ? "running" : "degraded");

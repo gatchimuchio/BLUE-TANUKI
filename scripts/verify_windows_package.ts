@@ -95,6 +95,11 @@ const REQUIRED_ENTRIES = [
   "app/node_modules/@blue-tanuki/operator-developer/package.json",
   "app/node_modules/ws/package.json",
   "app/node_modules/zod/package.json",
+  "app/node_modules/@napi-rs/keyring/package.json",
+  "app/node_modules/@napi-rs/keyring/index.js",
+  "app/node_modules/@napi-rs/keyring-win32-x64-msvc/package.json",
+  "app/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+  "app/node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md",
   "app/install/unix/safe-target.sh",
   "app/docs/WINDOWS_INSTALLER_GUIDE.md",
   "app/docs/WINDOWS_FIRST_RUN.md",
@@ -320,7 +325,7 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
   ]);
   requireSourceText("install/windows/product/UninstallBlueTanuki.cmd", [
     "copy /Y",
-    "start \"\" /b powershell.exe",
+    "powershell.exe -NoProfile -File",
     "BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT",
     "BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT",
     "BLUE_TANUKI_UNINSTALL_TEMP_HELPER",

@@ -7,6 +7,7 @@ import {
   parseSetupArgs,
   runSetupCommand,
 } from "../src/setup.js";
+import type { SecretKeyringFactory } from "../src/secret_store.js";
 
 const fakeSecretProtector = {
   protect: (plaintext: string) => Buffer.from(`protected:${plaintext}`, "utf8").toString("base64url"),
@@ -16,6 +17,17 @@ const fakeSecretProtector = {
     return decoded.slice("protected:".length);
   },
 };
+
+function fakeSecretKeyringFactory(): SecretKeyringFactory {
+  const secrets = new Map<string, string>();
+  return (platform, key) => {
+    const id = `${platform}:${key}`;
+    return {
+      setPassword: (plaintext) => { secrets.set(id, plaintext); },
+      getPassword: () => secrets.get(id) ?? null,
+    };
+  };
+}
 
 describe("setup CLI", () => {
   it("parses non-interactive provider options", () => {
@@ -182,6 +194,48 @@ describe("setup CLI", () => {
       expect(raw).toContain("OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:");
       expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-env-secret");
       expect(raw).not.toContain("openrouter-env-secret");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores Linux setup keys as Secret Service refs without writing plaintext", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-linux-secret-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      const result = await runSetupCommand(
+        ["--yes", "--no-doctor", "--output", output, "--base-dir", path.join(dir, "data"),
+          "--provider", "openrouter", "--model", "openrouter/auto", "--api-key", "openrouter-secret"],
+        {
+          cwd: dir,
+          env: {},
+          secret_storage: { platform: "linux", keyringFactory: fakeSecretKeyringFactory() },
+        },
+      );
+      expect(result.secret_storage.llm_api_key).toMatchObject({
+        status: "stored",
+        storage: "os_keyring_current_user",
+        os_protected: true,
+      });
+      const raw = await fs.readFile(output, "utf8");
+      expect(raw).toContain("OPENROUTER_API_KEY_REF=os-keyring:v1:linux:OPENROUTER_API_KEY");
+      expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).not.toContain("openrouter-secret");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses plaintext when the requested OS keyring is not available", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-no-keyring-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      await expect(runSetupCommand(
+        ["--yes", "--no-doctor", "--output", output, "--base-dir", path.join(dir, "data"),
+          "--provider", "openrouter", "--model", "openrouter/auto", "--api-key", "openrouter-secret"],
+        { cwd: dir, env: {}, secret_storage: { platform: "linux" } },
+      )).rejects.toThrow(/refusing to write plaintext OPENROUTER_API_KEY/);
+      await expect(fs.readFile(output, "utf8")).rejects.toThrow();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

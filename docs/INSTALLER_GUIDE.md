@@ -91,10 +91,10 @@ endpoint, and API key. Use `Verify LLM` before saving non-stub changes.
 API key values are stored only through the env file/settings path and are
 redacted from Control Center status, runtime snapshots, doctor output, and
 audit output.
-On Windows, first-run setup and Settings store LLM API keys as DPAPI
-CurrentUser secret references; if protected storage fails, setup refuses to
-write plaintext provider keys. On other platforms, API key values remain
-env-file material until a later keychain phase.
+First-run setup and Settings store LLM/Composio API keys in an OS credential
+store: Windows DPAPI CurrentUser, macOS Keychain, or Linux Secret Service.
+Linux setup refuses to save when Secret Service is unavailable; it does not
+fall back to plaintext or the reboot-volatile kernel keyring.
 
 ## Common Commands
 

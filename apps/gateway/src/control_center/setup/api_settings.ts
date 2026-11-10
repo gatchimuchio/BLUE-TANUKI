@@ -12,7 +12,9 @@ import type { PluginRuntime } from "../../plugin_loader.js";
 import {
   llmApiKeyForProvider,
   secretRefKey,
+  storeBlueTanukiSecret,
   storeLlmApiKeySecret,
+  type SecretKeyringFactory,
   type SecretProtector,
   type LlmSecretStoreResult,
 } from "../../secret_store.js";
@@ -51,9 +53,9 @@ export interface LlmComputeReadiness {
 }
 
 export interface SettingsSecretStorageResult {
-  status: "not_supplied" | "stored" | "plaintext_env_fallback";
+  status: "not_supplied" | "stored";
   key: string | null;
-  storage: "win32_dpapi_current_user" | "env_file" | "unavailable";
+  storage: "win32_dpapi_current_user" | "os_keyring_current_user" | "unavailable";
   os_protected: boolean;
   used_for_authority: false;
   evidence_source: readonly ("CONFIG" | "EXTERNAL_EVIDENCE")[];
@@ -63,6 +65,7 @@ export interface SettingsSecretStorageResult {
 export interface SettingsSecretStorageOptions {
   platform?: NodeJS.Platform;
   protector?: SecretProtector;
+  keyringFactory?: SecretKeyringFactory;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -239,7 +242,10 @@ export function applySettingsPatch(
     const composio = body.composio;
     const clearApiKey = optionalBooleanField(composio, "clear_api_key");
     const apiKey = optionalStringField(composio, "api_key");
-    if (apiKey !== undefined && clearApiKey !== true) config.composio.api_key = apiKey;
+    if (apiKey !== undefined && clearApiKey !== true) {
+      config.composio.api_key = apiKey;
+      delete config.composio.api_key_ref;
+    }
     const allowedToolkits = optionalStringField(composio, "allowed_toolkits");
     if (allowedToolkits !== undefined) config.composio.allowed_toolkits = allowedToolkits;
     const allowedActions = optionalStringField(composio, "allowed_actions");
@@ -278,6 +284,7 @@ export function applySettingsPatch(
     }
     if (clearApiKey === true) {
       config.composio.api_key = undefined;
+      delete config.composio.api_key_ref;
       config.composio.dry_run = true;
       config.composio.live_execution = false;
     }
@@ -306,17 +313,6 @@ export function protectLlmApiKeyForEnvFile(
       detail: "No new LLM API key was supplied in this settings update.",
     };
   }
-  if (platform !== "win32") {
-    return {
-      status: "plaintext_env_fallback",
-      key,
-      storage: "env_file",
-      os_protected: false,
-      used_for_authority: false,
-      evidence_source: ["CONFIG"],
-      detail: "OS-protected LLM secret storage is available only on Windows in this release.",
-    };
-  }
   let stored: LlmSecretStoreResult;
   try {
     stored = storeLlmApiKeySecret(key, config.llm.api_key, {
@@ -324,10 +320,11 @@ export function protectLlmApiKeyForEnvFile(
       env,
       platform,
       protector: options.protector,
+      keyringFactory: options.keyringFactory,
     });
   } catch (error) {
     throw new Error(
-      `Windows LLM secret storage failed; refusing to write plaintext ${key}: ${
+      `OS-protected LLM secret storage failed; refusing to write plaintext ${key}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -341,7 +338,56 @@ export function protectLlmApiKeyForEnvFile(
     os_protected: true,
     used_for_authority: false,
     evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
-    detail: `${key} stored via ${secretRefKey(key)} using Windows DPAPI CurrentUser.`,
+    detail: `${key} stored via ${secretRefKey(key)} using ${stored.storage}.`,
+  };
+}
+
+export function protectComposioApiKeyForEnvFile(
+  config: BlueTanukiSetupConfig,
+  envFilePath: string,
+  env: Env,
+  opts: SettingsSecretStorageOptions | NodeJS.Platform = {},
+): SettingsSecretStorageResult {
+  const options = typeof opts === "string" ? { platform: opts } : opts;
+  const plaintext = config.composio.api_key;
+  if (!plaintext) {
+    return {
+      status: "not_supplied",
+      key: "COMPOSIO_API_KEY",
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No new Composio API key was supplied in this settings update.",
+    };
+  }
+  const platform = options.platform ?? process.platform;
+  let stored: LlmSecretStoreResult;
+  try {
+    stored = storeBlueTanukiSecret("COMPOSIO_API_KEY", plaintext, {
+      envFilePath,
+      env,
+      platform,
+      protector: options.protector,
+      keyringFactory: options.keyringFactory,
+    });
+  } catch (error) {
+    throw new Error(
+      `OS-protected secret storage failed; refusing to write plaintext COMPOSIO_API_KEY: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  delete config.composio.api_key;
+  config.composio.api_key_ref = stored.ref;
+  return {
+    status: "stored",
+    key: "COMPOSIO_API_KEY",
+    storage: stored.storage,
+    os_protected: true,
+    used_for_authority: false,
+    evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+    detail: `COMPOSIO_API_KEY stored via ${secretRefKey("COMPOSIO_API_KEY")} using ${stored.storage}.`,
   };
 }
 

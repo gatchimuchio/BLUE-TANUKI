@@ -35,7 +35,6 @@ import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { GatewayResourceBackpressure } from "./resource_backpressure.js";
-import { resolveAllSecretRefs } from "./secret_store.js";
 import {
   documentOrganizationSourceFromRequest,
   presentRestoredDocumentOrganizationProjection,
@@ -105,7 +104,6 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   let computeBudget: GatewayComputeBudgetStore | undefined;
   let resourceBackpressure: GatewayResourceBackpressure | undefined;
   try {
-    Object.assign(process.env, resolveAllSecretRefs(process.env));
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
