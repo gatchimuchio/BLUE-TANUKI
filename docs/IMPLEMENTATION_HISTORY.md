@@ -24,6 +24,8 @@ Windows workspace `corepack pnpm typecheck`／`corepack pnpm build`、Setup／sa
 
 追加のmanual Actions run `42812303398`（source=`24c8c3ca781496e822f7287d7654ec17c723ffc1`、Ubuntu 24.04）はworkspace buildとLinux package generation／verificationをPASSした。Setup stepはharnessがempty `runtime_root`を先に作っていたため、製品のsafe-target guardが未検証runtime rootを拒否してFAIL。これはharness初期化の誤りで、Setupのfail-closed動作を確認した。Workflowからこの事前作成を除去し、同じ限定scopeで再dispatchする。runはartifact upload、provider、外部作用を実施していない。
 
+同workflowを修正後、run `42813081239`（source=`e642a6755f123d72ce785872f4fb8d9bcb4ef614`）はsuccess。Ubuntu 24.04 hosted runner（kernel `7.0.0-1017-azure`、glibc 2.39）でworkspace build／Linux package生成／2,649 entry verification、artifact SHA-256=`d9e81a678acec967defdf59ef4323c2804e44a7d136364380127fbe4be87cf44`、隔離Setup、bundled Node、env file mode 600、autostart disabled、resident起動、loopback `/healthz`と`/app` HTTP 200、停止後の疎通断をPASSした。artifactはrunner内のみで生成しuploadしていない。system service／Secret Service／実provider／外部作用／distribution別QA／全suiteはNOT_RUN。これはhosted Linux runner上の限定BUILD evidenceであり、5OS・製品全体の完成を示さない。
+
 ---
 
 ## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-BUILDER-AND-ARTIFACT

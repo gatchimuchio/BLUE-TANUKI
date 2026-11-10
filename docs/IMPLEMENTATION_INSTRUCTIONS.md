@@ -14,11 +14,11 @@ Setupの実導入で、同梱Nodeの公式`npm`／`npx`／`corepack` symlinkがg
 
 修正版artifactをWSL Ubuntu 24.04 ext4上の隔離HOMEへ導入し、`PATH`からNode／pnpm／Gitを除いた環境でSetupを完了した。同梱Node v22.14.0、env file mode 600、autostart disabledを確認し、一時`resident-start`からloopback `/healthz`と`/app`がHTTP 200、`resident-stop`後にportが閉じることを確認した。smoke専用env fileはport 18787に設定した。これはWSL内の限定BUILD疎通であり、native Linux QAではない。Secret Service、system service、distribution別通常利用、外部provider、全suite、全OS、QE_QC／QE_QAはNOT_RUN。
 
-ローカルにnative Linuxがないため、`.github/workflows/linux-installed-package-build-smoke.yml`を`workflow_dispatch`専用で追加する。Ubuntu 24.04 runner上で選択commitのworkspace build、Linux package生成／検証、独立temp rootへのSetup、bundled Nodeからのresident起動、loopback `/healthz`／`/app`、停止後疎通断を一回確認する。権限は`contents: read`、checkout credentialは保持せず、artifact upload・実provider・外部業務作用・system service・Secret Serviceを含めない。このrunner確認はG03.01の限定BUILD consumer evidenceに限り、distribution別QAや製品全体完成を示さない。初回run `42812303398`（source=`24c8c3c`）はworkspace build／package verifier PASS後、harnessが空のruntime rootを事前作成したためSetupが安全に拒否した。harnessを修正し、再実行は未確認。
+ローカルにnative Linuxがないため追加した`workflow_dispatch`専用workflow `linux-installed-package-build-smoke.yml`を、run `42813081239`／source=`e642a6755f123d72ce785872f4fb8d9bcb4ef614`で実行した。Ubuntu 24.04 hosted runner（kernel `7.0.0-1017-azure`、glibc 2.39）でworkspace build、2,649 entryのLinux package verification、artifact SHA-256 `d9e81a678acec967defdf59ef4323c2804e44a7d136364380127fbe4be87cf44`、隔離temp rootへのSetup、bundled Node、env file mode 600、autostart disabled、resident起動、loopback `/healthz`／`/app` HTTP 200、停止後の疎通断を確認した。初回run `42812303398`はharnessが空のruntime rootを事前作成し、Setupが安全に拒否したため、Setupにroot作成を任せて再実行した。権限は`contents: read`、checkout credentialなし、artifact upload・実provider・外部作用・system service・Secret Serviceなし。このhosted runnerは限定BUILD evidenceであり、対象distributionのQAや製品全体完成を示さない。
 
 UNIT_ID: G03.01 Linux packaged target and host ABI preflight
-STATUS: WIRED（target-aware package builder→Linux artifact→Setup→bundled Node／Gateway→resident launcherをWSL隔離環境で限定疎通。native host証拠は未成立）
-NEXT_REQUIRED_CONSUMER: 対象native Linux distribution上のinstalled product通常利用・権限・service・Secret Serviceを別々に観測する。WSLの証拠をnative Linuxへ転用しない。
+STATUS: WIRED（WSL隔離環境とGitHub-hosted Ubuntu 24.04でLinux artifact→Setup→bundled Node／Gateway→resident launcherを限定疎通。distribution QAは未成立）
+NEXT_REQUIRED_CONSUMER: 対象Linux distribution上の通常利用と実環境権限、service、Secret Service、更新／復旧を観測する。WSL／hosted runnerの証拠を対象distribution QAへ転用しない。
 SAFETY_STATUS: 非x64、kernel < 4.18、glibc < 2.28、musl／未知libc、必須installer utility欠落、manifestとruntime target不一致はfilesystem変更前に拒否。秘密保存・service・network・HDS権限はこのsliceで変更しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
