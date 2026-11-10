@@ -980,8 +980,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
         };
         ownerTaskStatusSubmissionIdsMemory.forEach(add);
-        try { add(sessionStorage.getItem("blue-tanuki.owner-task-submission-id.v1")); }
-        catch { /* current-tab pending identifier is optional */ }
         try { add(sessionStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1")); }
         catch { /* the cross-session list may still be available */ }
         try { add(localStorage.getItem("blue-tanuki.owner-task-status-submission-id.v1")); }
@@ -1055,7 +1053,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         ownerTaskSubmissionIdMemory = crypto.randomUUID();
         try { sessionStorage.setItem("blue-tanuki.owner-task-submission-id.v1", ownerTaskSubmissionIdMemory); }
         catch { /* page memory remains available */ }
-        rememberOwnerTaskStatusSubmissionId(ownerTaskSubmissionIdMemory);
         byId("owner-task-new-submission").hidden = true;
       }
 
@@ -1639,7 +1636,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ...(imagePayload ? { image_input: imagePayload } : {}),
           ...(canvasArtifactInput ? { canvas_artifact_input: canvasArtifactInput } : {})
         });
-        clearOwnerTaskSubmissionId();
         renderOwnerTaskStatusSubmissionIds(submissionId);
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";

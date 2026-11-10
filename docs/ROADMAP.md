@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — S-02 Unix外部ファイル所有保護の限定安全修正
+### 直近BUILD_BATCH — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
+
+Control CenterはOwner Taskの受付成功後も送信済みsubmission IDを保持し、Gateway受付記録とRuntimeの同一依頼ID planを照合する。ownerが状態を確認して明示操作するまで次回用IDへ切り替えず、未送信IDは保存status履歴／既定照会先へ入れない。達成判定はowner明示規則、同一revisionの検証済み結果、M receiptを満たした場合だけHDS-Jが行う。現変更はstatus識別子の保持であり、J評価・owner L3・実作用を代行しない。選択した`webchat.test.ts` 2件（127件skip）、WebChat build、`docs:check`（日本語基底の既存移行負債76件の注意あり）、`git diff --check`はPASS。実provider、実owner L3、file.write、full suite、5OS、QE_QC／QE_QAはNOT_RUN。
+
+### 前段BUILD_BATCH — S-02 Unix外部ファイル所有保護の限定安全修正
 
 Unix製品Setup／Launcher／Uninstallは、user-bin launcher、macOS application command／LaunchAgent、Linux desktop entryを生成物全体のbyte一致で判定する。Setupは一致するregular fileだけを採用し、不在時のno-clobber作成を行う。macOS LauncherとUninstallは実install root・親directory・非symlink条件を含めて照合し、変更済み・他者所有の対象を保持する。WSL Ubuntu 24.04 ext4の全Unix safety fixtureはPASS。native macOS／launchd／login／reboot、Linux native、5OS全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。これは局所安全修正であり工程全体の完了を示さない。
 

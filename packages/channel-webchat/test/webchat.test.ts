@@ -640,13 +640,15 @@ describe("WebChatChannel — Control Center shell", () => {
       }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
     };
     const calls: Array<{ token: string; body: unknown }> = [];
-    const cleared: string[] = [];
+    const renderedSubmissionIds: string[] = [];
     const messages: Array<[string, string]> = [];
     await new Script(`${submit}\nsubmitOwnerTask()`).runInNewContext({
       byId: (id: string) => nodes[id], state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
+      CANVAS_OPERATION_TASK_PREFIX: "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n",
       btoa: (value: string) => Buffer.from(value, "binary").toString("base64"),
-      pendingOwnerTaskSubmissionId: () => "submission-1", clearOwnerTaskSubmissionId: () => cleared.push("submission"),
-      renderOwnerTaskStatusSubmissionIds: (id: string) => cleared.push(id),
+      pendingOwnerTaskSubmissionId: () => "submission-1",
+      clearOwnerTaskSubmissionId: () => { throw new Error("successful task submission must keep its id until status review"); },
+      renderOwnerTaskStatusSubmissionIds: (id: string) => renderedSubmissionIds.push(id),
       postOwnerTaskCompute: async (token: string, body: unknown) => { calls.push({ token, body });
         return { status: "queued_for_hds_decision", request_id: "request-1" }; },
       appendChat: (kind: string, content: string) => messages.push([kind, content]),
@@ -658,8 +660,105 @@ describe("WebChatChannel — Control Center shell", () => {
     } }]);
     expect(nodes["owner-task-completion-rules"]?.value).toBe("");
     expect(nodes["owner-task-image"]?.value).toBe("");
-    expect(cleared).toEqual(["submission", "submission-1"]);
+    expect(renderedSubmissionIds).toEqual(["submission-1"]);
     expect(messages).toEqual([["owner", "Find blue."], ["accepted", "request-1"]]);
+  });
+
+  it("keeps the submitted owner task id through status review and excludes the next unsent id", async () => {
+    const helpersStart = CONTROL_CENTER_SCRIPT.indexOf("let ownerTaskSubmissionIdMemory = null;");
+    const helpersEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOwnerTaskCompute(", helpersStart + 1);
+    const checkStart = CONTROL_CENTER_SCRIPT.indexOf("async function checkOwnerTaskSubmissionStatus(");
+    const checkEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function ownerTaskExecutionEvidenceSummary(", checkStart + 1);
+    const submitStart = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
+    const submitEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", submitStart + 1);
+    expect(helpersStart).toBeGreaterThanOrEqual(0);
+    expect(helpersEnd).toBeGreaterThan(helpersStart);
+    expect(checkStart).toBeGreaterThanOrEqual(0);
+    expect(checkEnd).toBeGreaterThan(checkStart);
+    expect(submitStart).toBeGreaterThanOrEqual(0);
+    expect(submitEnd).toBeGreaterThan(submitStart);
+
+    const submittedId = "00000000-0000-4000-8000-000000000001";
+    const nextId = "00000000-0000-4000-8000-000000000002";
+    const gatewayRequestId = "00000000-0000-4000-8000-000000000099";
+    const sessionValues = new Map<string, string>([["blue-tanuki.owner-task-submission-id.v1", submittedId]]);
+    const localValues = new Map<string, string>();
+    const storage = (values: Map<string, string>) => ({
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    });
+    const makeSelect = () => ({ value: "", hidden: false, disabled: false, options: [] as Array<{ text: string; value: string }>,
+      replaceChildren(...options: Array<{ text: string; value: string }>) { this.options = options; this.value = ""; },
+      add(option: { text: string; value: string }) { this.options.push(option); } });
+    const nodes: Record<string, { value: string; textContent?: string; className?: string; hidden?: boolean; disabled?: boolean;
+      files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }>;
+      replaceChildren?: (...options: Array<{ text: string; value: string }>) => void;
+      add?: (option: { text: string; value: string }) => void;
+      options?: Array<{ text: string; value: string }> }> = {
+      "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Do one bounded task." },
+      "owner-task-image": { value: "", files: [] }, "owner-task-completion-rules": { value: "" },
+      "owner-task-goal-ref": { value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }] },
+      "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
+      "owner-task-new-submission": { value: "", hidden: true }, "check-owner-task-status": { value: "", hidden: true, disabled: false },
+      "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "runtime-token" },
+    };
+    const submitted: string[] = [];
+    const harness = new Script(`
+      ${CONTROL_CENTER_SCRIPT.slice(helpersStart, helpersEnd)}
+      async function postOwnerTaskCompute(_token, body) {
+        submitted.push(body.submission_id);
+        rememberOwnerTaskStatusSubmissionId(body.submission_id);
+        return { status: "queued_for_hds_decision", request_id: "${gatewayRequestId}" };
+      }
+      async function ownerTaskRuntimeCorrelation() { return "same task status correlated"; }
+      ${CONTROL_CENTER_SCRIPT.slice(checkStart, checkEnd)}
+      ${CONTROL_CENTER_SCRIPT.slice(submitStart, submitEnd)}
+      (async function () {
+        await submitOwnerTask();
+        const afterSubmit = { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
+          newSubmissionHidden: byId("owner-task-new-submission").hidden };
+        byId("owner-task-token").value = "owner-token";
+        await checkOwnerTaskSubmissionStatus();
+        const afterStatusReview = { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
+          newSubmissionHidden: byId("owner-task-new-submission").hidden };
+        clearOwnerTaskSubmissionId();
+        const afterExplicitNewId = { currentId: ownerTaskSubmissionIdMemory,
+          statusIds: ownerTaskStatusSubmissionIds(), newSubmissionHidden: byId("owner-task-new-submission").hidden };
+        ownerTaskSubmissionIdMemory = null;
+        ownerTaskStatusSubmissionIdsMemory = [];
+        byId("owner-task-status-submission-id").value = "";
+        pendingOwnerTaskSubmissionId();
+        renderOwnerTaskStatusSubmissionIds(ownerTaskStatusSubmissionId());
+        return { afterSubmit, afterStatusReview, afterExplicitNewId,
+          restoredCurrentId: ownerTaskSubmissionIdMemory, restoredStatusId: ownerTaskStatusSubmissionId(),
+          restoredStatusIds: ownerTaskStatusSubmissionIds() };
+      })()
+    `);
+    const result = await harness.runInNewContext({
+      nodes, submitted,
+      crypto: { randomUUID: () => nextId },
+      sessionStorage: storage(sessionValues), localStorage: storage(localValues),
+      CANVAS_OPERATION_TASK_PREFIX: "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n",
+      Option: function Option(this: { text: string; value: string }, text: string, value: string) { this.text = text; this.value = value; },
+      byId: (id: string) => nodes[id],
+      state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
+      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned" }),
+      loadRuntime: async () => ({}),
+      appendChat: () => {},
+    }) as {
+      afterSubmit: { currentId: string; statusId: string; newSubmissionHidden: boolean };
+      afterStatusReview: { currentId: string; statusId: string; newSubmissionHidden: boolean };
+      afterExplicitNewId: { currentId: string; statusIds: string[]; newSubmissionHidden: boolean };
+      restoredCurrentId: string; restoredStatusId: string; restoredStatusIds: string[];
+    };
+
+    expect(submitted).toEqual([submittedId]);
+    expect(result.afterSubmit).toEqual({ currentId: submittedId, statusId: submittedId, newSubmissionHidden: true });
+    expect(result.afterStatusReview).toEqual({ currentId: submittedId, statusId: submittedId, newSubmissionHidden: false });
+    expect(result.afterExplicitNewId).toEqual({ currentId: nextId, statusIds: [submittedId], newSubmissionHidden: true });
+    expect(result.restoredCurrentId).toBe(nextId);
+    expect(result.restoredStatusId).toBe(submittedId);
+    expect(result.restoredStatusIds).toEqual([submittedId]);
   });
 
   it("sends audio for owner-reviewed transcription separately from task planning", async () => {

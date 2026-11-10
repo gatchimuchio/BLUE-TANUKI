@@ -2,7 +2,24 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / S-02 Unix Setup／Launcher／Uninstall外部ファイル所有保護（限定安全修正）
+## 現行BUILD_BATCH — QE_BUILD / F17.03 Owner Task依頼IDを状態照合まで保持し、owner確認後だけ次IDへ切替
+
+主語はControl Centerから同一taskを送信し、Gateway受付状態とHDS-J／OperationPlan状態を照合するOwner Task経路。目的は、受付成功後に未送信の次回IDへ先回りせず、送信済みID・同一taskの状態を保ち、ownerが結果を照合した後に明示操作でのみ次task用IDへ切り替えること。達成判定はownerの明示規則と、同じcurrent revision内の検証済み結果・M receiptをHDS-Jが満たす場合だけachievedとする。今回のUI変更はそのJ判定を複製せず、status照合の識別子を保つ。
+
+Control Centerは正常応答後も送信済みsubmission IDをpending/currentとして保持し、同じIDをstatus selectorへ選択する。次回用IDはownerが受付とRuntime状態を照会してから明示ボタンを選んだ場合だけ発行し、未送信IDをstatus履歴へ加えない。Gateway送信前にsubmission IDをstatus履歴へ保存するため、応答不明時の照会は可能なままにする。再読込後もpending next IDより最後に送信したIDを状態照会先へ戻す。受付記録・Runtime projection・達成表示は非権威の状態表示であり、J判断、owner L3、実作用、別task実行の許可を発行しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Owner Task送信→同一submission ID維持→受付／Runtime状態照合後だけ次ID発行→再読込後の状態ID選択 | PASS：`webchat.test.ts` 2件、127件skip。 |
+| `@blue-tanuki/channel-webchat` build、`docs:check`、`git diff --check` | PASS。日本語基底移行負債76件の既存注意あり、license PASS。 |
+| 実provider、実UI owner L3、Canvas file.write、M receipt、full suite、5OS、QE_QC／QE_QA | NOT_RUN。この作業では実owner taskを送信せず、実作用を行わない。 |
+
+UNIT_ID: F17.03 / C08.02 owner-task status correlation consumer
+STATUS: WIRED（送信済みIDを受付・Runtime照合まで維持し、未送信の次IDを状態履歴・既定照会先に混ぜない）
+NEXT_REQUIRED_CONSUMER: 実利用時のownerが、表示された正確なtask・委任目的・plan revisionをL3審査する。CodexはL3を代行せず、file.write／provider／外部作用を実行しない。
+SAFETY_STATUS: C08.02の明示規則＋検証済み結果＋M receiptによるJ評価は維持。status projectionは非権威。未知・保留・不整合は成功扱いしない。
+
+### 前段完了BUILD_BATCH — QE_BUILD / S-02 Unix Setup／Launcher／Uninstall外部ファイル所有保護（限定安全修正）
 
 主語はUnix製品Setupが管理する`~/.local/bin/blue-tanuki`、macOS application command／LaunchAgent、Linux desktop entryと、それらを扱うLauncher／Uninstall。目的は、BLUE-TANUKI生成時の完全な期待bytesと一致する通常ファイルだけを生成・有効・削除対象とし、一致しない内容、対象fileのsymlink、非regular file、macOS LaunchAgentsの親directory symlinkを保持すること。public repoで確認できる契約のみを扱い、HDS権限、ユーザーデータ、他repo、3点セット、公開・出荷判断は変更しない。
 
