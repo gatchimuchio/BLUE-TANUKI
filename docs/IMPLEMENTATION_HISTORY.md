@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-BUILDER-AND-ARTIFACT
+
+G03.01のLinux package generationを実際のconsumerへ進めた。`scripts/package_windows.ts`の共通build入力判定がWindows専用exeを全OSへ要求していたため、target別isolation helperを検査するよう修正。Unix package builderは選択targetを共通layoutへ渡し、Linux package verifierはbundled Linux isolation helperを必須entryにした。macOS packageの既存keyring target選択は維持する。
+
+source tree `18a8b97497c968cf309ab11ca3fb27415202a478`をWSL Ubuntu 24.04 ext4へ展開し、frozen-lockfile依存導入とworkspace buildを実行した。Linux x64 installerを`/home/ohira/.cache/blue-tanuki/qe-build-artifacts/18a8b97497c968cf309ab11ca3fb27415202a478/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz`に生成。artifact SHA-256=`a52ee047c620a651046af8e4a5c1f761d359561098b22125509d988ec2a231b8`、size=45,948,061 bytes。bundled Node v22.14.0 archive SHA-256=`69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式`SHASUMS256.txt`の値と照合した。`verify_unix_package.ts`は2649 entryを検証し、tar listingでSetup／Linux isolation helperの実行bitを確認した。archiveは未公開でWSL cacheに保持する。
+
+Windows `corepack pnpm typecheck`と`corepack pnpm build`、WSL `pnpm install --frozen-lockfile`と`pnpm build`、Linux artifact verifier、`corepack pnpm docs:check`、`git diff --check`はPASS。test suite、packageのinstalled実行、native Linux host、distribution matrix、Secret Service live behavior、service、全OS、QE_QC／QE_QAはNOT_RUN。WSL package evidenceをnative Linux installed QAへ拡張しない。
+
+開始時local／remote `main`=`850860fc7f740d744390aed53a51ae9d6b7079a0`。開始時recovery ref current=`850860fc7f740d744390aed53a51ae9d6b7079a0`、previous=`a6c3e5dfdec7d06e1a21ec2df7dbc5e7aec55183`。stale worktree metadataのACL拒否は保持し、回避しない。protected `.codex-attachments/`／`.codex-remote-attachments/`は変更しない。
+
+---
+
 ## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-ABI-PREFLIGHT
 
 rev4.0 G03.01に従い、Linux x64 packageの対象をvendor-supported glibc GNU/Linux、kernel >= 4.18、glibc >= 2.28に固定した。Node.js v22.14.0公式Linux x64 runtimeの互換条件をpackage manifest／READMEへ記載し、Linux Setupはmanifest targetとhost ABI・必要utilityを確認してからinstall／stage pathを作成する。musl、非x64、kernel／glibc下限未満、未知libcは拒否する。credential永続化時にLinux Secret Service over current-user session D-Busが必要なことを明記した。Linux manifestだけschema 2とし、macOS schema 1を保った。既存Unix installer fixtureをmanifest 2へ同期した。

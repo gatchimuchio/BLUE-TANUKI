@@ -11,6 +11,7 @@ import {
   readPackage,
   root,
   sha256File,
+  type NativeAppTarget,
 } from "./package_windows.ts";
 
 type UnixPlatform = "linux" | "macos";
@@ -254,7 +255,11 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   const appRoot = path.join(packageRoot, "app");
   const cacheDir = path.join(root, ".codex-tmp", "unix-runtime-cache");
 
-  assertBuilt();
+  const appTarget: NativeAppTarget = {
+    platform: target.platform === "macos" ? "darwin" : "linux",
+    arch: target.arch,
+  };
+  assertBuilt(appTarget);
   if (!commandExists("tar")) {
     throw new Error("tar is required to create Unix installer archives");
   }
@@ -264,7 +269,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   await copyUnixLaunchers(packageRoot, target);
   await copyAppLayout(
     appRoot,
-    { platform: target.platform === "macos" ? "darwin" : "linux", arch: target.arch },
+    appTarget,
     workRoot,
   );
 

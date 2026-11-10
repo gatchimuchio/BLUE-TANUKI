@@ -8,7 +8,7 @@
 
 ### 直近BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
 
-Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。Node.js v22.14.0のABI条件は公式`BUILDING.md`に束縛する。配布package生成／installed Linux runtime、distribution別通常利用、service／Secret Service動作、test suite、全OS、QE_QC／QE_QAは未確認。これは対象定義・早期拒否までのsource接続で、installed Linux成功や5OS完成を主張しない。
+Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。target-aware builderがLinux専用isolation helperを含むtar installerを生成し、Linux package verifierはそれを確認する。WSL Ubuntu 24.04 ext4上で生成したpackage verifierは2649 entryを確認し、archive SHA-256 `a52ee047c620a651046af8e4a5c1f761d359561098b22125509d988ec2a231b8`、公式SHASUMS256.txtと一致するNode runtime SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`を記録した。これはartifact生成・構造確認までであり、native Linux installed runtime、distribution別通常利用、service／Secret Service動作、test suite、全OS、QE_QC／QE_QAは未確認。installed Linux成功や5OS完成を主張しない。
 
 ### 前段完了BUILD_BATCH — G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
 

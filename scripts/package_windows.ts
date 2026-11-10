@@ -84,13 +84,12 @@ const ROOT_TEXT_FILES = [
   "CHANGELOG.md",
 ] as const;
 
-const REQUIRED_BUILT_FILES = [
+const REQUIRED_COMMON_BUILT_FILES = [
   "apps/gateway/dist/main.js",
   "apps/gateway/dist/plugin_review_gate.js",
   "packages/protocol/dist/index.js",
   "packages/hds-brain/dist/index.js",
   "packages/blue-tanuki/dist/index.js",
-  "packages/blue-tanuki/dist/native/blue-tanuki-windows-isolation.exe",
   "packages/channel-base/dist/index.js",
   "packages/channel-webchat/dist/index.js",
   "packages/channel-telegram/dist/index.js",
@@ -119,9 +118,14 @@ function assertExists(rel: string): void {
   }
 }
 
-export function assertBuilt(): void {
-  for (const rel of REQUIRED_BUILT_FILES) {
+export function assertBuilt(target: NativeAppTarget): void {
+  for (const rel of REQUIRED_COMMON_BUILT_FILES) {
     assertExists(rel);
+  }
+  if (target.platform === "win32") {
+    assertExists("packages/blue-tanuki/dist/native/blue-tanuki-windows-isolation.exe");
+  } else if (target.platform === "linux") {
+    assertExists("packages/blue-tanuki/dist/native/blue-tanuki-linux-isolation");
   }
 }
 
@@ -503,7 +507,7 @@ async function main(): Promise<void> {
   const appRoot = path.join(packageRoot, "app");
   const cacheDir = path.join(root, ".codex-tmp/windows-runtime-cache");
 
-  assertBuilt();
+  assertBuilt({ platform: "win32", arch: "x64" });
   await rm(workRoot, { recursive: true, force: true });
   await mkdir(packageRoot, { recursive: true });
   await mkdir(path.dirname(outFile), { recursive: true });

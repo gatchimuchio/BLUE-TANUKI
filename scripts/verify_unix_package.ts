@@ -348,6 +348,9 @@ export function verifyUnixPackage(
   const entries = listTarEntries(archive);
   const entrySet = new Set(entries);
   for (const entry of entries) assertSafeEntry(entry);
+  const platformNativeEntries = platform === "linux"
+    ? ["app/node_modules/@blue-tanuki/core/dist/native/blue-tanuki-linux-isolation"]
+    : [];
   for (const required of [
     "BlueTanukiSetup.sh",
     "safe-target.sh",
@@ -356,6 +359,7 @@ export function verifyUnixPackage(
     "launcher/BlueTanukiLauncher.sh",
     "launcher/BlueTanukiUninstall.sh",
     ...REQUIRED_APP_ENTRIES,
+    ...platformNativeEntries,
     ...requiredKeyringEntries(platform, arch),
   ]) {
     if (!entrySet.has(required)) {

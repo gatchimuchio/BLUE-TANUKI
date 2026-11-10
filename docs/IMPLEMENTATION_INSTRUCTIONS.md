@@ -2,17 +2,17 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABIと導入preflight
+## 現行BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABI・導入preflight・artifact生成
 
-主語はLinux installer manifestと`BlueTanukiSetup.sh`。目的は、配布物が実際に含むNode runtimeとLinux host ABIを一致させ、対象外OSに中途半端な導入を開始しないこと。manifestだけの宣言でinstalled Linux製品が成立したとは扱わない。
+主語はLinux package builder、installer manifestと`BlueTanukiSetup.sh`。目的は、対象runtimeを正しく同梱したLinux配布物を生成し、実際に含むNode runtimeとLinux host ABIを一致させ、対象外hostに中途半端な導入を開始しないこと。manifestだけの宣言やpackage生成だけでinstalled Linux製品が成立したとは扱わない。
 
-対象はvendor-supported GNU/Linux distribution、x86_64、kernel >= 4.18、glibc >= 2.28。Node.js v22.14.0公式Linux x64 runtimeの条件を根拠にし、musl／非x64を拒否する。manifest schema 2にNode runtimeと導入utility、Secret Service over current-user session D-Busが秘密永続化に必要な条件を記録する。Setupはkernel/libc/architecture/utilityを読み取り、installer manifestのpackage typeとABI項目を照合してから `mkdir`／stage作成へ進む。
+対象はvendor-supported GNU/Linux distribution、x86_64、kernel >= 4.18、glibc >= 2.28。Node.js v22.14.0公式Linux x64 runtimeの条件を根拠にし、musl／非x64を拒否する。manifest schema 2にNode runtimeと導入utility、Secret Service over current-user session D-Busが秘密永続化に必要な条件を記録する。Setupはkernel/libc/architecture/utilityを読み取り、installer manifestのpackage typeとABI項目を照合してから `mkdir`／stage作成へ進む。target-aware package builderは共通成果物とOS専用isolation helperを区別し、Linux package生成時にWindows専用exeを必須入力にしない。Linux package verifierはLinux isolation helperの同梱を要求する。
 
-これはsource接続の対象固定・早期拒否であり、Linux native package生成・clean installed起動・通常利用・service・Secret Service保存は未確認。Node ABI基準は[Node.js v22.14.0 BUILDING.md](https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md)。distribution E2E、全suite、全OS、QE_QC／QE_QAはこのBUILD_BATCHで実施しない。追加・実行testはない。
+Node.js v22.14.0 runtimeを含むLinux x64 installerをWSL Ubuntu 24.04のext4作業領域で生成し、package verifierが2649 entryを確認した。archive SHA-256は`a52ee047c620a651046af8e4a5c1f761d359561098b22125509d988ec2a231b8`。同梱Node runtime archive SHA-256 `69b09dba5c8dcb05c4e4273a4340db1005abeafe3927efda2bc5b249e80437ec`は公式`SHASUMS256.txt`と一致する。tar内のSetupとLinux isolation helperの実行bitも確認した。package source Git treeは`18a8b97497c968cf309ab11ca3fb27415202a478`。WSLでの生成・検証はLinux native installed QA evidenceではない。Node ABI基準は[Node.js v22.14.0 BUILDING.md](https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md)。distribution E2E、全suite、全OS、QE_QC／QE_QAはこのBUILD_BATCHで実施しない。
 
 UNIT_ID: G03.01 Linux packaged target and host ABI preflight
-STATUS: WIRED（package builder→manifest／README→Setup preflight。installed product runtime未確認）
-NEXT_REQUIRED_CONSUMER: native Linux installed package→bundled Node／Gateway entry→GUI／resident launcherの実consumer。対象distributionでuser-space install条件と実行に必要なSecret Service状態を分けて観測する。
+STATUS: WIRED（target-aware package builder→Linux artifact→manifest／README→Setup preflight。native installed product runtime未確認）
+NEXT_REQUIRED_CONSUMER: native Linux installed package→bundled Node／Gateway entry→GUI／resident launcherの実consumer。対象distributionの実導入と通常利用を、秘密永続化時のSecret Service状態と分けて観測する。
 SAFETY_STATUS: 非x64、kernel < 4.18、glibc < 2.28、musl／未知libc、必須installer utility欠落、manifestとruntime target不一致はfilesystem変更前に拒否。秘密保存・service・network・HDS権限はこのsliceで変更しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛

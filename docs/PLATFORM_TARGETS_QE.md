@@ -18,7 +18,7 @@
 
 installerはNode runtimeを同梱する。導入側にはPOSIX shell／標準utility、`getconf`、`tar`、`mktemp`、`find`、`ps`、`awk`、`sha256sum`または`shasum`を要求する。Secret Service over session D-Busは秘密情報を永続化する場合の依存であり、installerの導入成功からその稼働を推定しない。配布manifestとREADMEに同じ境界を出し、対応外のarchitecture、kernel、libcではファイル変更前に停止する。
 
-manifest・preflightのsource接続はQE_BUILDの一部で、native Linux installed productの起動、distribution別の通常利用、Secret Service、service、更新／復旧は実行証拠が未成立。これらを後段QCで対象hostごとに確認する。
+manifest・preflightとx64 package builderのsource接続はQE_BUILDの一部。Linux x64 tar installerはWSL Ubuntu 24.04 ext4上で生成・構造確認済みだが、WSLはnative Linux QAの代用ではない。native Linux installed productの起動、distribution別の通常利用、Secret Service、service、更新／復旧は実行証拠が未成立。これらを後段QCで対象hostごとに確認する。
 
 ## Mobileの構造と安全
 
