@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-ABI-PREFLIGHT
+
+rev4.0 G03.01に従い、Linux x64 packageの対象をvendor-supported glibc GNU/Linux、kernel >= 4.18、glibc >= 2.28に固定した。Node.js v22.14.0公式Linux x64 runtimeの互換条件をpackage manifest／READMEへ記載し、Linux Setupはmanifest targetとhost ABI・必要utilityを確認してからinstall／stage pathを作成する。musl、非x64、kernel／glibc下限未満、未知libcは拒否する。credential永続化時にLinux Secret Service over current-user session D-Busが必要なことを明記した。Linux manifestだけschema 2とし、macOS schema 1を保った。既存Unix installer fixtureをmanifest 2へ同期した。
+
+Workspace `typecheck`、workspace `build`、Unix Setupとfixtureの`bash -n`、`docs:check`、`git diff --check`はPASS。typecheckが削除したignored workspace outputはbuildで再生成して保持した。tests、package generation／verification、Linux native installed runtime、distribution matrix、Secret Service live behavior、全OS、QE_QC／QE_QAはNOT_RUN。これはsource-level package target／preflight接続であり、installed Linux QAや製品全体成立を示さない。
+
+開始時local／remote `main`=`a6c3e5dfdec7d06e1a21ec2df7dbc5e7aec55183`。fetch時に既知のstale worktree metadata削除がACL拒否となったため、迂回せず対象を保持した。復旧refは作業開始時current=`a6c3e5dfdec7d06e1a21ec2df7dbc5e7aec55183`、previous=`f9e00b2e80b8cb369e3ce24c1f8d3218df82cbc7`。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。作業用`dist`と`.tsbuildinfo`は再生成済みlocal build outputとして保持した。
+
 ## 2026-11-10 — QEB-G02.03-WINDOWS-UNINSTALL-SCOPE-DISCLOSURE
 
 Windows製品Uninstallへ作用前の削除範囲開示を追加した。install／DataRoot ownership validation後、resident stopや削除より前にresolved absolute pathsと予定作用を表示する。通常経路はDataRoot内容を保持し、明示`-PurgeData`は登録DataRoot以下を完全削除しWindows Recycle Binを経由しないと説明する。`-DryRun`は予定形、`-Quiet`は表示抑制。内容・secret値、実ユーザーデータ、registry、shortcutは変更しない。`install/README.md`へproduct `-PurgeData`と開発用`-Purge`の差も記録した。

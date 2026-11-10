@@ -27,6 +27,45 @@ case "$UNAME_S" in
     ;;
 esac
 
+version_meets_minimum() {
+  version_value=$1
+  minimum_major=$2
+  minimum_minor=$3
+  case "$version_value" in *[!0-9.]*|'') return 1 ;; esac
+  version_major=${version_value%%.*}
+  version_rest=${version_value#*.}
+  version_minor=${version_rest%%.*}
+  case "$version_major:$version_minor" in *[!0-9:]*|:|*:) return 1 ;; esac
+  [ "$version_major" -gt "$minimum_major" ] ||
+    { [ "$version_major" -eq "$minimum_major" ] && [ "$version_minor" -ge "$minimum_minor" ]; }
+}
+
+assert_linux_runtime_compatibility() {
+  [ "$PLATFORM" = "linux" ] || return 0
+  linux_arch=$(uname -m 2>/dev/null || printf unknown)
+  case "$linux_arch" in
+    x86_64|amd64) ;;
+    *) fail "this Linux package supports x86_64 only; detected architecture: $linux_arch" ;;
+  esac
+  linux_kernel=$(uname -r 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\1.\2/p')
+  version_meets_minimum "$linux_kernel" 4 18 || fail "this Linux package requires kernel >= 4.18; detected: ${linux_kernel:-unknown}"
+  if ! command -v getconf >/dev/null 2>&1; then
+    fail "this Linux package requires getconf to identify the system libc; no install files were changed"
+  fi
+  linux_libc=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+  case "$linux_libc" in
+    "glibc "*) linux_glibc_version=${linux_libc#glibc } ;;
+    *) fail "this Linux package requires glibc >= 2.28 and does not support musl or an unidentified libc; detected: ${linux_libc:-unknown}" ;;
+  esac
+  version_meets_minimum "$linux_glibc_version" 2 28 || fail "this Linux package requires glibc >= 2.28; detected: $linux_glibc_version"
+  for runtime_command in tar mktemp find ps awk; do
+    command -v "$runtime_command" >/dev/null 2>&1 || fail "required Linux command is missing: $runtime_command"
+  done
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    fail "this Linux package requires sha256sum or shasum to verify managed files"
+  fi
+}
+
 INSTALL_ROOT="${INSTALL_ROOT:-${BLUE_TANUKI_INSTALL_ROOT:-$DEFAULT_INSTALL_ROOT}}"
 DATA_ROOT="${DATA_ROOT:-${BLUE_TANUKI_DATA_ROOT:-$DEFAULT_DATA_ROOT}}"
 CONFIG_ROOT="${CONFIG_ROOT:-${BLUE_TANUKI_CONFIG_ROOT:-$DEFAULT_CONFIG_ROOT}}"
@@ -192,14 +231,29 @@ assert_no_symlinks_in_tree "$PACKAGE_ROOT/runtime" packaged_runtime
 assert_no_symlinks_in_tree "$PACKAGE_ROOT/launcher" packaged_launchers
 PACKAGE_MANIFEST="$PACKAGE_ROOT/unix-installer-manifest.json"
 [ "$(wc -c < "$PACKAGE_MANIFEST" | tr -d '[:space:]')" -le 1048576 ] || fail "installer manifest exceeds the size limit"
-grep -Fqx '  "schema_version": 1,' "$PACKAGE_MANIFEST" || fail "installer manifest schema is not recognized"
 grep -Fqx '  "name": "blue-tanuki",' "$PACKAGE_MANIFEST" || fail "installer manifest does not identify BLUE-TANUKI"
-grep -Eq "^  \\\"package_type\\\": \\\"$PLATFORM-(x64|arm64)-tar-installer\\\",?$" "$PACKAGE_MANIFEST" || fail "installer manifest platform does not match $PLATFORM"
+if [ "$PLATFORM" = "linux" ]; then
+  grep -Fqx '  "schema_version": 2,' "$PACKAGE_MANIFEST" || fail "Linux installer manifest schema is not recognized"
+  grep -Fqx '  "package_type": "linux-x64-tar-installer",' "$PACKAGE_MANIFEST" || fail "installer manifest must identify the Linux x64 package"
+  grep -Fqx '  "linux_runtime": {' "$PACKAGE_MANIFEST" || fail "Linux runtime requirements are missing from the installer manifest"
+  grep -Fqx '    "distribution": "vendor-supported GNU/Linux releases using glibc",' "$PACKAGE_MANIFEST" || fail "Linux distribution target is missing or unsupported"
+  grep -Fqx '    "architecture": "x64",' "$PACKAGE_MANIFEST" || fail "Linux architecture target is missing or unsupported"
+  grep -Fqx '    "minimum_kernel": "4.18",' "$PACKAGE_MANIFEST" || fail "Linux kernel requirement is missing or unsupported"
+  grep -Fqx '    "libc": "glibc",' "$PACKAGE_MANIFEST" || fail "Linux libc requirement is missing or unsupported"
+  grep -Fqx '    "minimum_libc": "2.28",' "$PACKAGE_MANIFEST" || fail "Linux glibc requirement is missing or unsupported"
+  grep -Fqx '    "musl_supported": false,' "$PACKAGE_MANIFEST" || fail "Linux musl support must not be implied"
+  grep -Fqx '    "credential_storage": "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials",' "$PACKAGE_MANIFEST" || fail "Linux credential storage dependency is missing or unsupported"
+  grep -Fqx '    "compatibility_source": "https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md"' "$PACKAGE_MANIFEST" || fail "Linux compatibility source is missing"
+else
+  grep -Fqx '  "schema_version": 1,' "$PACKAGE_MANIFEST" || fail "macOS installer manifest schema is not recognized"
+  grep -Eq "^  \\\"package_type\\\": \\\"macos-(x64|arm64)-tar-installer\\\",?$" "$PACKAGE_MANIFEST" || fail "installer manifest platform does not match $PLATFORM"
+fi
 PACKAGE_MANIFEST_SHA256=$(sha256_file "$PACKAGE_MANIFEST")
 case "$PACKAGE_MANIFEST_SHA256" in
   *[!0-9a-fA-F]*|'') fail "installer manifest SHA-256 could not be verified" ;;
 esac
 [ "${#PACKAGE_MANIFEST_SHA256}" -eq 64 ] || fail "installer manifest SHA-256 has an invalid length"
+assert_linux_runtime_compatibility
 
 runtime_archive=$(find "$PACKAGE_ROOT/runtime" -type f -name "$RUNTIME_GLOB" | sort | sed -n '1p')
 [ -n "$runtime_archive" ] || fail "bundled Node runtime archive not found for $PLATFORM"

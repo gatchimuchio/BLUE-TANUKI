@@ -12,6 +12,14 @@
 | Android | Mobile native製品入口 | install・初回起動、Android権限・秘密保管、Device Link、仕事の開始・承認・状態・取消・再接続、更新・削除 | Android端末固有の実動作・QC／QA |
 | iOS | Mobile native製品入口 | install・初回起動、Keychain/App Sandbox、Device Link、仕事の開始・承認・状態・取消・再接続、更新・削除 | iOS端末固有の実動作・QC／QA |
 
+## Linux packageの現在の対象契約
+
+現在のLinux installer sourceはx86_64専用で、vendor-supportedなGNU/Linux distributionのうちglibcを使い、Linux kernel 4.18以上・glibc 2.28以上を満たす環境を対象とする。musl-based Linuxはこのpackageの対象外。Node.js v22.14.0の公式build基準は[Node.js v22.14.0 BUILDING.md](https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md)を参照する。これはNode runtimeとの互換条件であり、BLUE-TANUKIのdistribution別installed QAを意味しない。
+
+installerはNode runtimeを同梱する。導入側にはPOSIX shell／標準utility、`getconf`、`tar`、`mktemp`、`find`、`ps`、`awk`、`sha256sum`または`shasum`を要求する。Secret Service over session D-Busは秘密情報を永続化する場合の依存であり、installerの導入成功からその稼働を推定しない。配布manifestとREADMEに同じ境界を出し、対応外のarchitecture、kernel、libcではファイル変更前に停止する。
+
+manifest・preflightのsource接続はQE_BUILDの一部で、native Linux installed productの起動、distribution別の通常利用、Secret Service、service、更新／復旧は実行証拠が未成立。これらを後段QCで対象hostごとに確認する。
+
 ## Mobileの構造と安全
 
 AndroidとiOSは一括した「モバイル対応」ではなく、独立した製品要求として管理する。画像・音声入力を扱うF16は共通媒体の責務であって、Android/iOSの製品完成ではない。[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)が指す非公開QE正本の実装索引ではAndroid=G09、iOS=G10。旧G05・G06は別のQC親成果であり上書きしない。

@@ -2,18 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
+## 現行BUILD_BATCH — QE_BUILD / G03.01 Linux package対象ABIと導入preflight
+
+主語はLinux installer manifestと`BlueTanukiSetup.sh`。目的は、配布物が実際に含むNode runtimeとLinux host ABIを一致させ、対象外OSに中途半端な導入を開始しないこと。manifestだけの宣言でinstalled Linux製品が成立したとは扱わない。
+
+対象はvendor-supported GNU/Linux distribution、x86_64、kernel >= 4.18、glibc >= 2.28。Node.js v22.14.0公式Linux x64 runtimeの条件を根拠にし、musl／非x64を拒否する。manifest schema 2にNode runtimeと導入utility、Secret Service over current-user session D-Busが秘密永続化に必要な条件を記録する。Setupはkernel/libc/architecture/utilityを読み取り、installer manifestのpackage typeとABI項目を照合してから `mkdir`／stage作成へ進む。
+
+これはsource接続の対象固定・早期拒否であり、Linux native package生成・clean installed起動・通常利用・service・Secret Service保存は未確認。Node ABI基準は[Node.js v22.14.0 BUILDING.md](https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md)。distribution E2E、全suite、全OS、QE_QC／QE_QAはこのBUILD_BATCHで実施しない。追加・実行testはない。
+
+UNIT_ID: G03.01 Linux packaged target and host ABI preflight
+STATUS: WIRED（package builder→manifest／README→Setup preflight。installed product runtime未確認）
+NEXT_REQUIRED_CONSUMER: native Linux installed package→bundled Node／Gateway entry→GUI／resident launcherの実consumer。対象distributionでuser-space install条件と実行に必要なSecret Service状態を分けて観測する。
+SAFETY_STATUS: 非x64、kernel < 4.18、glibc < 2.28、musl／未知libc、必須installer utility欠落、manifestとruntime target不一致はfilesystem変更前に拒否。秘密保存・service・network・HDS権限はこのsliceで変更しない。
+
+### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
 
 主語はWindows製品Setupが生成するinstall metadata／DataRoot markerと、それを使う製品Launcher。目的は、Setupが選んだ最終install pathとDataRootだけを後続runtimeが引き継ぎ、欠落・破損・別製品・別pathのmetadataから既定DataRootへ黙って切り替わらないこと。製品全体の導入・更新・Uninstall成立やWindows E2Eの完了を主張しない。
 
 Setupはstage inventoryの格納先とmetadataに記録する最終install pathを分離した。Launcherは同梱`safe-target.ps1`、schema／product ID、実install path一致、`Assert-SafeInstallTargets`、DataRoot ownership markerを確認してからruntimeへ進む。検証できない場合はfail-closedし、APPDATA既定値へfallbackしない。通常起動時はbounded markerとroot identityを確認し、Uninstall側の既存全tree保護検査を弱めない。既存Windows実行fixtureはこの同一install/DataRoot契約に合わせたが、testは実行していない。
 
-PowerShell構文解析、`git diff --check`、`docs:check`の結果をこのBUILD_BATCH内で記録する。test suite、実package Setup、installed Launcher、通常Uninstall／明示Purge、rollback、registry／shortcut、clean WindowsでのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。実ユーザーデータ、registry、shortcut、外部作用は操作しない。
-
-UNIT_ID: G02.03 Windows product setup/runtime DataRoot ownership binding
-STATUS: WIRED（Setup stage metadata→最終install path、Launcher→同metadata／DataRoot marker consumer。source接続のみ、runtime未確認）
-NEXT_REQUIRED_CONSUMER: clean Windowsのpackaged install→Launcher起動→update／rollback→通常Uninstall保持／owner明示Purgeの各状態を同じDataRootで観測し、失敗時の設定・秘密・履歴保持を確認する。Node/Git/pnpmなしの導入条件も個別に確認する。
-SAFETY_STATUS: install metadata／helper／DataRoot markerの欠落、不一致、reparse、上限超過では起動しない。既定DataRootへ切り替えない。通常Uninstallのデータ保持と明示Purge境界は変更しない。
+source構文確認と文書確認は完了履歴に記録した。test suite、実package Setup、installed Launcher、通常Uninstall／明示Purge、rollback、registry／shortcut、clean WindowsでのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows Setup・Uninstallのショートカット所有判定を実パスへ束縛（安全修正）
 

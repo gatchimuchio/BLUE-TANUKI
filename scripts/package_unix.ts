@@ -28,7 +28,7 @@ interface UnixTarget {
 }
 
 interface UnixInstallerManifest {
-  schema_version: 1;
+  schema_version: 1 | 2;
   name: "blue-tanuki";
   version: string;
   package_type: `${UnixPlatform}-${UnixArch}-tar-installer`;
@@ -40,6 +40,17 @@ interface UnixInstallerManifest {
     source: string;
     sha256: string;
     shasums_source: string;
+  };
+  linux_runtime?: {
+    distribution: "vendor-supported GNU/Linux releases using glibc";
+    architecture: "x64";
+    minimum_kernel: "4.18";
+    libc: "glibc";
+    minimum_libc: "2.28";
+    musl_supported: false;
+    installer_dependencies: string[];
+    credential_storage: "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials";
+    compatibility_source: "https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md";
   };
   user_experience: {
     requires_node_pnpm_git_from_user: false;
@@ -214,6 +225,15 @@ function packageReadmeText(version: string, target: UnixTarget): string {
     "",
     `Installer archive: ${archive}`,
     `SHA-256 sidecar: ${archive}.sha256`,
+    ...(target.platform === "linux" ? [
+      "Target: vendor-supported GNU/Linux releases with x86_64, kernel >= 4.18, and glibc >= 2.28.",
+      "musl-based distributions and non-x64 Linux are not supported by this package.",
+      "Installer dependencies: POSIX sh and utilities, getconf, tar, mktemp, find, ps, awk, and sha256sum or shasum.",
+      "Saving credentials requires Linux Secret Service over the user's session D-Bus; install and launch do not claim that credential service is available.",
+      "Node.js v22.14.0 compatibility reference: https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md",
+      "Distribution release support depends on the distribution vendor; Node.js upstream compatibility examples are not BLUE-TANUKI QA evidence.",
+      "",
+    ] : []),
     "user_requires_node_pnpm_git=false",
     "",
   ].join("\n");
@@ -257,7 +277,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   }
 
   const manifest: UnixInstallerManifest = {
-    schema_version: 1,
+    schema_version: target.platform === "linux" ? 2 : 1,
     name: "blue-tanuki",
     version: pkg.version,
     package_type: packageType,
@@ -270,6 +290,19 @@ async function packageTarget(target: UnixTarget): Promise<void> {
       sha256: runtime.sha256,
       shasums_source: runtime.shasumsUrl,
     },
+    ...(target.platform === "linux" ? {
+      linux_runtime: {
+        distribution: "vendor-supported GNU/Linux releases using glibc",
+        architecture: "x64",
+        minimum_kernel: "4.18",
+        libc: "glibc",
+        minimum_libc: "2.28",
+        musl_supported: false,
+        installer_dependencies: ["POSIX sh and utilities", "getconf", "tar", "mktemp", "find", "ps", "awk", "sha256sum or shasum"],
+        credential_storage: "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials",
+        compatibility_source: "https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md",
+      },
+    } : {}),
     user_experience: {
       requires_node_pnpm_git_from_user: false,
       creates_user_launcher: true,

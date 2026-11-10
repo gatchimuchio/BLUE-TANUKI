@@ -24,6 +24,17 @@ interface ExternalManifest {
     sha256?: string;
     shasums_source?: string;
   };
+  linux_runtime?: {
+    distribution?: string;
+    architecture?: string;
+    minimum_kernel?: string;
+    libc?: string;
+    minimum_libc?: string;
+    musl_supported?: boolean;
+    installer_dependencies?: string[];
+    credential_storage?: "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials";
+    compatibility_source?: string;
+  };
   user_experience?: {
     requires_node_pnpm_git_from_user?: boolean;
     creates_user_launcher?: boolean;
@@ -225,7 +236,10 @@ function assertManifest(
   platform: UnixPlatform,
   arch: UnixArch,
 ): void {
-  if (manifest.schema_version !== 1) throw new Error("manifest schema_version must be 1");
+  const expectedSchemaVersion = platform === "linux" ? 2 : 1;
+  if (manifest.schema_version !== expectedSchemaVersion) {
+    throw new Error(`manifest schema_version must be ${expectedSchemaVersion}`);
+  }
   if (manifest.name !== "blue-tanuki") throw new Error("manifest name must be blue-tanuki");
   if (manifest.package_type !== `${platform}-${arch}-tar-installer`) throw new Error("manifest package_type mismatch");
   if (manifest.archive?.file !== path.basename(archive)) throw new Error("manifest archive file mismatch");
@@ -237,6 +251,30 @@ function assertManifest(
   }
   if (manifest.node_runtime?.shasums_source !== "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt") {
     throw new Error("manifest Node runtime shasums_source mismatch");
+  }
+  if (platform === "linux") {
+    const linux = manifest.linux_runtime;
+    if (linux?.distribution !== "vendor-supported GNU/Linux releases using glibc") {
+      throw new Error("Linux manifest must identify vendor-supported glibc GNU/Linux distributions");
+    }
+    if (linux.architecture !== "x64") throw new Error("Linux manifest architecture must be x64");
+    if (linux.minimum_kernel !== "4.18") throw new Error("Linux manifest minimum kernel must be 4.18");
+    if (linux.libc !== "glibc" || linux.minimum_libc !== "2.28" || linux.musl_supported !== false) {
+      throw new Error("Linux manifest must identify the glibc 2.28 floor and reject musl");
+    }
+    if (JSON.stringify(linux.installer_dependencies) !== JSON.stringify([
+      "POSIX sh and utilities", "getconf", "tar", "mktemp", "find", "ps", "awk", "sha256sum or shasum",
+    ])) {
+      throw new Error("Linux manifest installer dependencies mismatch");
+    }
+    if (linux.credential_storage !== "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials") {
+      throw new Error("Linux manifest credential storage requirement mismatch");
+    }
+    if (linux.compatibility_source !== "https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md") {
+      throw new Error("Linux manifest compatibility source mismatch");
+    }
+  } else if (manifest.linux_runtime !== undefined) {
+    throw new Error("macOS manifest must not declare Linux runtime requirements");
   }
   if (manifest.user_experience?.requires_node_pnpm_git_from_user !== false) {
     throw new Error("manifest must declare no user Node/pnpm/Git requirement");
@@ -289,11 +327,18 @@ export function verifyUnixPackage(
   const readme = readFileSync(readmeFile, "utf8");
   const platformLabel = platform === "macos" ? "macOS" : "Linux";
   const setup = platform === "macos" ? "BlueTanukiSetup.command" : "BlueTanukiSetup.sh";
+  const platformNeedles = platform === "linux" ? [
+    "Target: vendor-supported GNU/Linux releases with x86_64, kernel >= 4.18, and glibc >= 2.28.",
+    "musl-based distributions and non-x64 Linux are not supported by this package.",
+    "Installer dependencies: POSIX sh and utilities, getconf, tar, mktemp, find, ps, awk, and sha256sum or shasum.",
+    "Saving credentials requires Linux Secret Service over the user's session D-Bus; install and launch do not claim that credential service is available.",
+  ] : [];
   for (const needle of [
     `Normal ${platformLabel} users should not run source builds`,
     "Extract the installer archive",
     `Run ${setup}`,
     "user_requires_node_pnpm_git=false",
+    ...platformNeedles,
   ]) {
     if (!readme.includes(needle)) {
       throw new Error(`${path.basename(readmeFile)} missing required text: ${needle}`);

@@ -411,10 +411,21 @@ tar -cJf "$SETUP_PACKAGE/runtime/node-v-test-linux-x64.tar.xz" -C "$TMP_ROOT/fak
 SETUP_RUNTIME_SHA256=$(sha256_file "$SETUP_PACKAGE/runtime/node-v-test-linux-x64.tar.xz")
 cat > "$SETUP_PACKAGE/unix-installer-manifest.json" <<MANIFEST
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "blue-tanuki",
   "version": "1.0.0-rc.1",
   "package_type": "linux-x64-tar-installer",
+  "linux_runtime": {
+    "distribution": "vendor-supported GNU/Linux releases using glibc",
+    "architecture": "x64",
+    "minimum_kernel": "4.18",
+    "libc": "glibc",
+    "minimum_libc": "2.28",
+    "musl_supported": false,
+    "installer_dependencies": ["POSIX sh and utilities", "getconf", "tar", "mktemp", "find", "ps", "awk", "sha256sum or shasum"],
+    "credential_storage": "Linux Secret Service over the current-user session D-Bus is required only when persisting credentials",
+    "compatibility_source": "https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md"
+  },
   "node_runtime": {
     "bundled": true,
     "version": "test",

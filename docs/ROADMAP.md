@@ -6,9 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
+### 直近BUILD_BATCH — G03.01 Linux package対象ABIと導入preflight
 
-Setupの一時stage内inventory格納先とmetadataに記録する最終install pathを分離し、Launcherが同梱safety helper、製品識別子、install path、DataRoot ownership markerを検証してからruntimeへ進むよう接続した。欠落・破損・不一致時は既定APPDATAへfallbackせずfail-closedする。通常起動はbounded markerとroot identityを検査し、Uninstallの既存全tree保護を弱めない。既存Windows実行fixtureを新しい所有契約へ合わせた。PowerShell 5.1 parser、`docs:check`、最終`git diff --check`はPASS。test suite、実package Setup／Launcher／Uninstall／Purge／rollback、clean WindowsのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。source接続の限定WIREDであり、Windows導入E2E、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。
+Linux package manifest schema 2にx86_64、vendor-supported glibc GNU/Linux、kernel 4.18以上、glibc 2.28以上、Node runtime、導入utility、秘密永続化時のSecret Service依存を固定する。macOS manifest schema 1は維持する。Setupはmanifestと一致するhost条件をファイル作成前に判定し、musl・非x64・古いkernel/libc・必須utility欠落ではfail-closedする。Node.js v22.14.0のABI条件は公式`BUILDING.md`に束縛する。配布package生成／installed Linux runtime、distribution別通常利用、service／Secret Service動作、test suite、全OS、QE_QC／QE_QAは未確認。これは対象定義・早期拒否までのsource接続で、installed Linux成功や5OS完成を主張しない。
+
+### 前段完了BUILD_BATCH — G02.03 Windows製品Setup→Launcherのinstall/DataRoot束縛
+
+Setupの一時stage内inventory格納先とmetadataに記録する最終install pathを分離し、Launcherが同梱safety helper、製品識別子、install path、DataRoot ownership markerを検証してからruntimeへ進むよう接続した。欠落・破損・不一致時は既定APPDATAへfallbackせずfail-closedする。通常起動はbounded markerとroot identityを検査し、Uninstallの既存全tree保護を維持する。既存Windows実行fixtureを新しい所有契約へ合わせた。test suite、実package Setup／Launcher／Uninstall／Purge／rollback、clean WindowsのNode/Git/pnpm非依存、全OS、QE_QC／QE_QAはNOT_RUN。source接続の限定WIREDであり、Windows導入E2E、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。
 
 ### 前段完了安全修正BUILD_BATCH — Windows Uninstallの削除範囲を作用前に開示
 
