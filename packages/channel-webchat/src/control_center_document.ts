@@ -815,6 +815,19 @@ ${CONTROL_CENTER_STYLE}    </style>
       </div>
     </div>
 
+    <dialog id="canvas-preview-dialog" class="canvas-preview-dialog" aria-labelledby="canvas-preview-title">
+      <div class="canvas-preview-header">
+        <div>
+          <h2 id="canvas-preview-title">生成UIの隔離表示</h2>
+          <p class="canvas-preview-disclaimer">表示専用です。生成物からnetwork、credential、file、GUI bridge、承認、操作を利用できません。</p>
+        </div>
+        <button id="canvas-preview-close" type="button">閉じる</button>
+      </div>
+      <div class="canvas-preview-frame-shell">
+        <iframe id="canvas-preview-frame" class="canvas-preview-frame" title="隔離された生成UIプレビュー" sandbox="" referrerpolicy="no-referrer" tabindex="-1"></iframe>
+      </div>
+    </dialog>
+
     <script>
 ${CONTROL_CENTER_SCRIPT}    </script>
   </body>

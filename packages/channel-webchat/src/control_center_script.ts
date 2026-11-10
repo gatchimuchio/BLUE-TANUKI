@@ -486,8 +486,158 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         item.className = "chat-item " + role;
         item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(text) + '</p>' + correlation + '</div>';
         if (log.querySelector(".chat-item.system .chat-bubble p")?.textContent === "Ready.") log.innerHTML = "";
+        const bubble = item.querySelector(".chat-bubble");
+        if (role === "assistant" && bubble && isCanvasPreviewContent(text)) {
+          bindCanvasPreviewDialog();
+          const previewButton = document.createElement("button");
+          previewButton.type = "button";
+          previewButton.className = "canvas-preview-button";
+          previewButton.textContent = "生成UIを表示";
+          previewButton.setAttribute("aria-label", "生成されたHTMLまたはMarkdownを隔離表示する");
+          previewButton.addEventListener("click", function () { openCanvasPreview(text); });
+          bubble.appendChild(previewButton);
+        }
         log.appendChild(item);
         log.scrollTop = log.scrollHeight;
+      }
+
+      function isCanvasPreviewContent(value) {
+        const source = typeof value === "string" ? value : "";
+        if (source.length === 0 || source.length > 65536) return false;
+        return /^\\s*</.test(source) || /(^|\\n)\\s*\x60{3}/.test(source) ||
+          /(^|\\n)\\s{0,3}#{1,6}\\s|(^|\\n)\\s*[-*+]\\s|(^|\\n)\\s*\\d+\\.\\s|\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)/m.test(source);
+      }
+
+      function buildCanvasPreviewDocument(value) {
+        const source = String(value ?? "");
+        function escape(value) {
+          return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }
+        function inlineMarkdown(value) {
+          const text = String(value);
+          const tokenPattern = /!\\[([^\\]]*)\\]\\([^)]+\\)|\\[([^\\]]+)\\]\\([^)]+\\)|\x60([^\\x60]+)\x60|\\*\\*([^*]+)\\*\\*|\\*([^*]+)\\*/g;
+          let rendered = "";
+          let lastIndex = 0;
+          let match;
+          while ((match = tokenPattern.exec(text)) !== null) {
+            rendered += escape(text.slice(lastIndex, match.index));
+            if (match[1] !== undefined) rendered += escape(match[1]);
+            else if (match[2] !== undefined) rendered += escape(match[2]);
+            else if (match[3] !== undefined) rendered += "<code>" + escape(match[3]) + "</code>";
+            else if (match[4] !== undefined) rendered += "<strong>" + escape(match[4]) + "</strong>";
+            else if (match[5] !== undefined) rendered += "<em>" + escape(match[5]) + "</em>";
+            lastIndex = tokenPattern.lastIndex;
+          }
+          return rendered + escape(text.slice(lastIndex));
+        }
+        function markdown(sourceText) {
+          const lines = String(sourceText).replace(/\\r\\n?/g, "\\n").split("\\n");
+          const blocks = [];
+          let paragraph = [];
+          let listTag = "";
+          let codeLines = null;
+          function flushParagraph() {
+            if (paragraph.length > 0) blocks.push("<p>" + paragraph.map(inlineMarkdown).join("<br>") + "</p>");
+            paragraph = [];
+          }
+          function closeList() {
+            if (listTag) blocks.push("</" + listTag + ">");
+            listTag = "";
+          }
+          for (const line of lines) {
+            if (codeLines !== null) {
+              if (/^\\s{0,3}\x60{3}/.test(line)) {
+                blocks.push("<pre><code>" + escape(codeLines.join("\\n")) + "</code></pre>");
+                codeLines = null;
+              } else codeLines.push(line);
+              continue;
+            }
+            if (/^\\s{0,3}\x60{3}/.test(line)) {
+              flushParagraph();
+              closeList();
+              codeLines = [];
+              continue;
+            }
+            const heading = /^(#{1,6})\\s+(.*)$/.exec(line);
+            const unordered = /^\\s*[-*+]\\s+(.*)$/.exec(line);
+            const ordered = /^\\s*\\d+\\.\\s+(.*)$/.exec(line);
+            const quote = /^\\s*>\\s?(.*)$/.exec(line);
+            if (heading) {
+              flushParagraph(); closeList();
+              const level = heading[1].length;
+              blocks.push("<h" + level + ">" + inlineMarkdown(heading[2]) + "</h" + level + ">");
+            } else if (unordered || ordered) {
+              flushParagraph();
+              const nextTag = unordered ? "ul" : "ol";
+              if (listTag !== nextTag) { closeList(); blocks.push("<" + nextTag + ">"); listTag = nextTag; }
+              blocks.push("<li>" + inlineMarkdown((unordered || ordered)[1]) + "</li>");
+            } else if (quote) {
+              flushParagraph(); closeList();
+              blocks.push("<blockquote><p>" + inlineMarkdown(quote[1]) + "</p></blockquote>");
+            } else if (/^\\s*(?:---+|___+|\\*\\*\\*+)\\s*$/.test(line)) {
+              flushParagraph(); closeList(); blocks.push("<hr>");
+            } else if (line.trim() === "") {
+              flushParagraph(); closeList();
+            } else {
+              closeList(); paragraph.push(line);
+            }
+          }
+          flushParagraph();
+          closeList();
+          if (codeLines !== null) blocks.push("<pre><code>" + escape(codeLines.join("\\n")) + "</code></pre>");
+          return blocks.join("\\n");
+        }
+        function htmlPreview(sourceHtml) {
+          return String(sourceHtml)
+            .replace(/<script\\b[^>]*>[\\s\\S]*?<\\/script\\s*>/gi, "")
+            .replace(/<\\/?script\\b[^>]*>/gi, "")
+            .replace(/<(iframe|frame|object|embed|applet)\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>/gi, "")
+            .replace(/<(iframe|frame|object|embed|applet)\\b[^>]*\\/?\\s*>/gi, "")
+            .replace(/<(meta|base|link)\\b[^>]*\\/?\\s*>/gi, "")
+            .replace(/\\s+(?:on[a-z0-9_-]+|src|srcset|href|xlink:href|action|formaction|poster|data|background|longdesc|manifest|codebase|archive|usemap|style)\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+)/gi, "")
+            .replace(/\\s+on[a-z0-9_-]+\\b/gi, "")
+            .replace(/<!doctype\\b[^>]*>/gi, "")
+            .replace(/<\\/?(?:html|head|body|title)\\b[^>]*>/gi, "");
+        }
+        const isHtmlDocument = /^\\s*</.test(source) && !/^\\s*\x60{3}/.test(source);
+        const rendered = isHtmlDocument ? htmlPreview(source) : markdown(source);
+        const policy = "default-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + policy + '"><meta name="viewport" content="width=device-width, initial-scale=1"><style>*{box-sizing:border-box}body{margin:0;padding:20px;color:#101828;background:#fff;font:16px/1.55 system-ui,sans-serif;overflow-wrap:anywhere}main{max-width:100%;min-height:100vh}img,video,audio,iframe,frame,object,embed{display:none!important}a{color:inherit;text-decoration:none}button,input,select,textarea{pointer-events:none!important;opacity:.55!important}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:#f2f4f7;border-radius:8px}code{font-family:ui-monospace,monospace}blockquote{margin:8px 0;padding-left:12px;border-left:3px solid #98a2b3}</style></head><body><main inert>' + rendered + '</main></body></html>';
+      }
+
+      function bindCanvasPreviewDialog() {
+        const dialog = byId("canvas-preview-dialog");
+        const frame = byId("canvas-preview-frame");
+        const close = byId("canvas-preview-close");
+        if (!dialog || !frame || !close || dialog.getAttribute("data-preview-bound") === "true") return;
+        dialog.setAttribute("data-preview-bound", "true");
+        close.addEventListener("click", function () { dialog.close(); });
+        dialog.addEventListener("close", function () {
+          frame.srcdoc = "";
+          frame.style.height = "0px";
+        });
+      }
+
+      function openCanvasPreview(value) {
+        const source = typeof value === "string" ? value : "";
+        if (!isCanvasPreviewContent(source)) return;
+        bindCanvasPreviewDialog();
+        const dialog = byId("canvas-preview-dialog");
+        const frame = byId("canvas-preview-frame");
+        if (!dialog || !frame) return;
+        frame.setAttribute("sandbox", "");
+        frame.setAttribute("referrerpolicy", "no-referrer");
+        frame.setAttribute("tabindex", "-1");
+        frame.removeAttribute("allow");
+        frame.removeAttribute("src");
+        frame.style.height = Math.min(24000, Math.max(800, Math.ceil(source.length / 80) * 24 + 240)) + "px";
+        frame.srcdoc = buildCanvasPreviewDocument(source);
+        dialog.showModal();
       }
 
       function setChatStatus(value, tone) {

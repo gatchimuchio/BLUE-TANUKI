@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-10 — QEB-F17.01-WEBCHAT-CANVAS-ISOLATED-PREVIEW
+
+開始local／remote main=c11443bb36a9410c20e2ab1a5e357a3c4e72946d。開始復旧ref local branch／remote tag current=c11443bb36a9410c20e2ab1a5e357a3c4e72946d、previous=9d2b3b4581bd8c521c124015ff74277e80f38bec。main worktreeのみ。保護.codex-attachments／.codex-remote-attachmentsと未checkout branchは保持。
+
+assistantが返したHTML／MarkdownをWebChat Control Center上でowner操作後に限り隔離表示するconsumerを追加した。通常会話本文は従来のescapeHtmlを維持する。Markdownは限定書式から許可要素だけを構成し、raw HTMLをescapeする。HTMLはscript／frame／object／applet、meta/base/link、remote URL／event／action／style属性を除去する。srcdoc iframeへ空sandbox・no-referrer・inertとCSP（script・network・frame・form・worker・manifest deny）を適用し、allowやsrcは付与しない。dialog closeでpreview sourceを消去する。生成物から権限、実行、承認、network、secret、file、GUI bridgeを使う経路は接続していない。
+
+選択WebChat testはPASS（新規preview test 1件、Control Center全体script構文test 1件）。channel-webchat依存buildはPASS（protocol、channel-base、channel-webchat）。全webchat.test.tsは122 passed／3 failed。失敗はscope-applicability projectionのnull参照、resident app /app のscope文言期待値不一致、Recovery UI fixtureのvalue欠落で、変更差分には含まれない。編集前baseline比較は一時worktree作成がexecution policyで拒否され未実施のため、既存失敗かは断定しない。テスト内一時環境は残していない。
+
+docs:checkとgit diff --checkはPASS（日本語基底監査は既存移行負債76件を注意表示、license監査PASS）。実browser、実provider、外部作用、全workspace build、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このWebChat preview consumerだけを限定WIREDとし、F17.01全体・製品全体SYSTEM_SHAPED／BUILD_COVEREDへ拡張しない。F16.03のD4 native producer／Runtime task-input契約は別repo変更が必要なためBLOCKED_AUTHORITY。package build outputsはlocal開発再利用物として保持。protected attachment directoriesと他branchは変更していない。
+
+---
+
 ## 2026-11-10 — QEB-E05.01-FAILURE-MEMORY-SETUP-RESTART-PERSISTENCE
 
 開始時local／`origin/main`／GitHub `main`=`633af7fcba726a6e00c05f4388247d20462089cd`。編集前復旧refはCAS回転済みでlocal branch／remote tagともcurrent=`633af7fcba726a6e00c05f4388247d20462089cd`、previous=`73f2608e1347c7df4d4c3ed60563a9fa9a5c8d9f`。main worktreeのみ。`.codex-attachments/`／`.codex-remote-attachments/`は保護し未変更。

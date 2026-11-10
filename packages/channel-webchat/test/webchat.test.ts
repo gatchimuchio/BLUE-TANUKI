@@ -31,6 +31,7 @@ import {
   AOTANU_ASSET_ROUTE_PREFIX,
   AOTANU_SPRITE_SPECS,
   mapRuntimeSnapshotToAotanuMascotState,
+  renderControlCenterHtml,
 } from "../src/index.js";
 
 async function allocateTestPort(): Promise<number> {
@@ -468,6 +469,53 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("renders generated HTML and Markdown only in a sandboxed, network-denied display frame", () => {
+    const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function isCanvasPreviewContent(");
+    const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("function bindCanvasPreviewDialog(", helperStart);
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const preview = new Script(`${CONTROL_CENTER_SCRIPT.slice(helperStart, helperEnd)}\n({ isCanvasPreviewContent, buildCanvasPreviewDocument })`)
+      .runInNewContext() as {
+        isCanvasPreviewContent: (value: unknown) => boolean;
+        buildCanvasPreviewDocument: (value: unknown) => string;
+      };
+
+    expect(preview.isCanvasPreviewContent("<main>preview</main>")).toBe(true);
+    expect(preview.isCanvasPreviewContent("# Preview\n\n- item")).toBe(true);
+    expect(preview.isCanvasPreviewContent("ordinary answer")).toBe(false);
+    expect(preview.isCanvasPreviewContent("#" + "x".repeat(65536))).toBe(false);
+
+    const hostileHtml = "<!doctype html><html><head><meta http-equiv=refresh content='0;url=https://attacker.invalid'><script>fetch('https://attacker.invalid')</script></head>" +
+      "<body><div onclick=run() style='background:url(https://attacker.invalid)'><a href=https://attacker.invalid>label</a>" +
+      "<img src=https://attacker.invalid><iframe src=https://attacker.invalid></iframe><form action=https://attacker.invalid>" +
+      "<button formaction=https://attacker.invalid>submit</button></form></div></body></html>";
+    const htmlDocument = preview.buildCanvasPreviewDocument(hostileHtml);
+    const htmlMain = htmlDocument.match(/<main inert>([\s\S]*?)<\/main>/)?.[1] ?? "";
+    expect(htmlDocument).toContain("default-src 'none'");
+    expect(htmlDocument).toContain("script-src 'none'");
+    expect(htmlDocument).toContain("connect-src 'none'");
+    expect(htmlDocument).toContain("frame-src 'none'");
+    expect(htmlDocument).toContain("form-action 'none'");
+    expect(htmlMain).toContain("<div>");
+    expect(htmlMain).toContain(">label</a>");
+    expect(htmlMain).not.toMatch(/<script\b|<iframe\b|<meta\b|onclick\s*=|href\s*=|src\s*=|action\s*=|style\s*=/i);
+    expect(htmlMain).not.toContain("attacker.invalid");
+
+    const markdownDocument = preview.buildCanvasPreviewDocument("# Demo\n\n<img src=x onerror=alert(1)> **safe** [label](https://attacker.invalid)\n\n```html\n<script>alert(1)</script>\n```");
+    const markdownMain = markdownDocument.match(/<main inert>([\s\S]*?)<\/main>/)?.[1] ?? "";
+    expect(markdownMain).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(markdownMain).toContain("<strong>safe</strong>");
+    expect(markdownMain).toContain("label");
+    expect(markdownMain).not.toContain("attacker.invalid");
+    expect(markdownMain).not.toMatch(/<script\b|<img\b|<a\b/i);
+
+    const shell = renderControlCenterHtml();
+    expect(shell).toContain('id="canvas-preview-frame" class="canvas-preview-frame"');
+    expect(shell).toContain('title="隔離された生成UIプレビュー" sandbox=""');
+    expect(CONTROL_CENTER_SCRIPT).toContain('role === "assistant" && bubble && isCanvasPreviewContent(text)');
+    expect(CONTROL_CENTER_SCRIPT).toContain("escapeHtml(text)");
+  });
+
   it("submits explicit task completion rules and one ephemeral image through the owner task form", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", start + 1);

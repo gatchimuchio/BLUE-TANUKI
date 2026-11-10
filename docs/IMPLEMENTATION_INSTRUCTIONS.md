@@ -1,8 +1,29 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
+## 現行BUILD_BATCH — QE_BUILD / F17.01 WebChat生成Canvasの隔離表示consumer（限定WIRED）
+
+主語はBLUE-TANUKI WebChat Control Centerが表示するassistant生成HTML／Markdown。目的は通常の会話本文を安全なテキストとして保持し、ownerが明示操作した場合だけ、権限・通信・秘密・file・GUI bridgeを持たない隔離viewerへ生成UIを表示すること。生成物を実行・承認・作用させず、F17.01の表示consumerだけを接続する。
+
+assistantのHTML／Markdown本文に限り、長さ上限内で「生成UIを表示」ボタンを出す。通常チャット本文のescapeHtmlを維持する。Markdownの限定書式は許可タグだけを組み立て、未対応本文・raw HTML・fenced codeはescapeする。HTML入力はscript、埋め込みframe/object、remote URL・event/action/style属性等を除去し、CSPもscript・network・frame・form・worker・manifestをdenyする。previewはsandbox=""・no-referrer・inertのsrcdoc iframeに限定し、allowやsrcを付与せず、閉じたとき本文を消去する。実provider・外部作用・別repo変更は対象外。F16.03はD4 Pocket側native producer／runtime task-input契約不足によりBLOCKED_AUTHORITYのまま保持し、D4へ書き込まない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 生成HTML／Markdownのsandbox・CSP・raw HTML escape test | PASS：1 test、同fileの他124件skip。 |
+| Control Center全体script構文 | PASS：選択実行で1 test。 |
+| channel-webchat依存build | PASS：protocol／channel-base／channel-webchatの3 project。 |
+| webchat.test.ts全体 | 122 passed／3 failed。対象外のscope-applicability projection、resident app文言、Recovery UI fixtureで失敗。いずれもこの差分では触れていない。baseline比較は実行ポリシーにより一時worktree作成が拒否されたため未確認。 |
+| docs:check／git diff --check | PASS：docs、日本語基底監査（移行負債76件の注意あり）、license監査を含む。 |
+| 実browser、実provider、外部作用、全workspace、installed製品、5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+限定WIREDはWebChat Control Centerからのassistant生成UIを隔離表示する経路だけ。実browserでの描画、他consumer、全OS、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開・出荷判断は未成立。full testで観測した3 failuresは対象外として既存欠陥候補へ残す。
+
+開始local／remote main=c11443bb36a9410c20e2ab1a5e357a3c4e72946d。開始復旧ref local branch／remote tag current=c11443bb36a9410c20e2ab1a5e357a3c4e72946d、previous=9d2b3b4581bd8c521c124015ff74277e80f38bec。保護.codex-attachments／.codex-remote-attachmentsと未checkout branchは未変更。package build outputsはlocal開発再利用物として保持する。testはtemporary workspaceを残していない。baseline worktree作成要求はexecution policyに拒否され、追加環境は作られていない。
+
+**次のproducer／consumer:** 最新mainとrev4.0から、全体実装の未接続consumerを再選定する。F16.03は契約・authority不足を解消する別repo委任までBLOCKED_AUTHORITYを維持する。
+
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
-## 現行BUILD_BATCH — QE_BUILD / C08.02 explicit goal rulesからverified result／M receipt・同一task停止へのserved接続（限定WIRED）
+## 前段完了BUILD_BATCH — QE_BUILD / C08.02 explicit goal rulesからverified result／M receipt・同一task停止へのserved接続（限定WIRED）
 
 主語はownerが送る同一taskの明示的completion rulesと、HDS-JがGoalProjection／OperationPlanへ束縛する評価・停止経路。目的は、規則が明示されていないtaskを達成扱いせず、現行revision内の検証済みoperation resultとM receiptが全規則を満たす場合だけachievedをsealし、再起動後も同一taskの追加計算を拒否すること。Userが選んだ条件「明示規則と検証済み根拠」を適用する。実provider、外部作用、他repo変更は対象外。
 

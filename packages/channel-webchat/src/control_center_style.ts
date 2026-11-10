@@ -791,6 +791,65 @@ export const CONTROL_CENTER_STYLE = `      :root {
         overflow-wrap: anywhere;
       }
 
+      .chat-item.assistant .canvas-preview-button {
+        display: block;
+        min-height: 28px;
+        margin-top: 8px;
+        padding: 4px 9px;
+        font-size: 12px;
+      }
+
+      .canvas-preview-dialog {
+        width: min(1000px, 94vw);
+        max-width: 1000px;
+        max-height: 92dvh;
+        padding: 0;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--surface-strong);
+        color: var(--text);
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+      }
+
+      .canvas-preview-dialog::backdrop {
+        background: rgba(16, 24, 40, 0.58);
+      }
+
+      .canvas-preview-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .canvas-preview-header > div {
+        min-width: 0;
+      }
+
+      .canvas-preview-disclaimer {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .canvas-preview-frame-shell {
+        max-height: 74dvh;
+        overflow: auto;
+        overscroll-behavior: contain;
+        background: #ffffff;
+      }
+
+      .canvas-preview-frame {
+        display: block;
+        width: 100%;
+        min-height: 0;
+        border: 0;
+        background: #ffffff;
+      }
+
       .chat-composer {
         display: grid;
         gap: 8px;
