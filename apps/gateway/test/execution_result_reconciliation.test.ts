@@ -22,7 +22,8 @@ import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDig
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
-import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults, reconcilePendingExecutionResults,
+  reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
 import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
@@ -558,6 +559,26 @@ function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
+  it("保存済みreceiptの手動再照合は同一deliveryだけを採用し、Executorを呼び直さない", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(c.execution.pendingResults()).toHaveLength(1);
+    const reconcileJ = vi.spyOn(c.hds, "reconcileOperationPlanResult");
+    const executeAgain = vi.spyOn(c.executor, "execute");
+
+    expect(reconcilePendingExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({
+      ready: true, adopted: 1, deferred: 0, stale_generation_archived: 0,
+      memory_ready: true, result_store_readable: true,
+    });
+    expect(reconcileJ).toHaveBeenCalledTimes(1);
+    expect(executeAgain).not.toHaveBeenCalled();
+    expect(c.execution.pendingResults()).toHaveLength(0);
+    expect(c.execution.lookup(c.admission.ticket_id)).toMatchObject({ result_delivery_acknowledged: true,
+      result_delivery_disposition: "reconciled" });
+    expect(c.j.load()?.plans[0]?.bindings[0]).toMatchObject({ status: "verified" });
+  }), 20_000);
+
   for (const writeCase of githubWriteCases) {
     const { operation } = writeCase;
     const operationLabel = `${operation}${writeCase.comment_kind === "pull_request_review_inline" ? " inline diff" : ""}` +

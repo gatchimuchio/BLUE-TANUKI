@@ -84,7 +84,10 @@ ${CONTROL_CENTER_STYLE}    </style>
           <p class="muted">WebChatの切断やこの画面を閉じる操作は、チャット接続だけを閉じます。Gatewayサービスの停止を意味しません。Gateway状態は認証済みRuntime Snapshotで別途確認し、再接続時はRuntime tokenがある場合に再取得します。</p>
           <input id="runtime-token" type="password" autocomplete="off" placeholder="webchat token" />
           <button id="load-runtime" class="primary">Load</button>
+          <button id="reconcile-runtime-results" type="button">保存済み結果を再照合</button>
+          <span id="runtime-reconcile-status" class="badge warn">未実行</span>
         </section>
+        <p class="muted" data-screen-group="doctor">再照合は保存済みの実行結果をJ/Mへ結び直すだけです。worker・tool・providerの再実行、承認の復元、新しい作用は行いません。</p>
 
         <section class="card">
           <h2>Scheduled Tasks / Runtime Schedules</h2>

@@ -5097,6 +5097,39 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function reconcileRuntimeResults() {
+        const token = byId("runtime-token").value.trim();
+        if (!token) {
+          setText("runtime-reconcile-status", "Runtime tokenが必要です");
+          byId("runtime-reconcile-status").className = "badge warn";
+          return;
+        }
+        setText("runtime-reconcile-status", "保存済みreceiptを照合中");
+        byId("runtime-reconcile-status").className = "badge warn";
+        try {
+          const body = await postJson("/runtime/reconcile-results", token, {});
+          const result = isObject(body) && isObject(body.result) ? body.result : null;
+          if (!result || !["ready", "held"].includes(body.status) || typeof result.ready !== "boolean" ||
+              typeof result.memory_ready !== "boolean" || typeof result.result_store_readable !== "boolean" ||
+              !Number.isSafeInteger(result.adopted) || result.adopted < 0 ||
+              !Number.isSafeInteger(result.deferred) || result.deferred < 0 ||
+              !Number.isSafeInteger(result.stale_generation_archived) || result.stale_generation_archived < 0 ||
+              body.used_for_authority !== false || body.may_execute !== false ||
+              (body.status === "ready") !== result.ready) {
+            throw new Error("照合結果を検証できません");
+          }
+          const summary = "採用 " + result.adopted + "件 / 保留 " + result.deferred + "件 / 旧世代隔離 " +
+            result.stale_generation_archived + "件 / M " + (result.memory_ready ? "確認" : "未確認") +
+            " / 保存先 " + (result.result_store_readable ? "読取可" : "未確認");
+          setText("runtime-reconcile-status", (result.ready ? "照合済み: " : "保留: ") + summary);
+          byId("runtime-reconcile-status").className = "badge " + (result.ready ? "good" : "warn");
+          await loadRuntime("runtime-result-reconciliation");
+        } catch {
+          setText("runtime-reconcile-status", "再照合できません。保存状態とRuntime tokenを確認してください");
+          byId("runtime-reconcile-status").className = "badge bad";
+        }
+      }
+
       async function loadApprovals() {
         const token = byId("approval-token").value.trim();
         const requestId = ++state.approvalSnapshotRequestId;
@@ -7436,6 +7469,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       });
 
       byId("load-runtime").addEventListener("click", loadRuntime);
+      byId("reconcile-runtime-results").addEventListener("click", function () { void reconcileRuntimeResults(); });
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
       byId("load-owner-task-goals").addEventListener("click", function () {

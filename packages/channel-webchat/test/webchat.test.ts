@@ -4532,6 +4532,52 @@ describe("WebChatChannel — runtime snapshot API", () => {
       await ctx.teardown();
     }
   });
+
+  it("reconciles existing result deliveries only through authenticated, unscoped POST", async () => {
+    let reconcileCallCount = 0;
+    const reconcilePendingResults = async () => {
+      reconcileCallCount++;
+      return {
+      ready: true,
+      adopted: 1,
+      deferred: 0,
+      stale_generation_archived: 0,
+      memory_ready: true,
+      result_store_readable: true,
+      };
+    };
+    const ctx = await setup({ runtime: {
+      getSnapshot: async () => ({ gateway_status: "running" }),
+      reconcilePendingResults,
+    } });
+    await ctx.ch.start(async () => {});
+    try {
+      expect((await getRaw(ctx.port, "/runtime/reconcile-results", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(405);
+      expect((await postJson(ctx.port, "/runtime/reconcile-results", {}, {})).status).toBe(401);
+      expect((await postJson(ctx.port, "/runtime/reconcile-results", {}, {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      })).status).toBe(401);
+      expect((await postJson(ctx.port, "/runtime/reconcile-results", { ticket_id: "caller-controlled" }, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(400);
+      expect(reconcileCallCount).toBe(0);
+
+      const response = await postJson(ctx.port, "/runtime/reconcile-results", {}, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ status: "ready", result: {
+        ready: true, adopted: 1, deferred: 0, stale_generation_archived: 0,
+        memory_ready: true, result_store_readable: true,
+      }, used_for_authority: false, may_execute: false });
+      expect(reconcileCallCount).toBe(1);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      await ctx.teardown();
+    }
+  });
 });
 
 describe("WebChatChannel — authority trace API", () => {

@@ -48,7 +48,8 @@ import { recoverPendingTaskCancellationHistory, taskCancellationHistoryInput } f
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
-import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults, reconcilePendingExecutionResults,
+  reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, refreshOwnerSelectedFileStateObservations,
   runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
@@ -3813,6 +3814,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             ),
           };
         },
+        reconcilePendingResults: async () => reconcilePendingExecutionResults(
+          hds, executionStore, ownerLease.executionEpoch,
+        ),
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),

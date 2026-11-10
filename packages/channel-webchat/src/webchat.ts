@@ -87,6 +87,7 @@ import type {
   WebChatRecoverySurface,
   WebChatResumeContext,
   WebChatRuntimeSurface,
+  WebChatRuntimeResultReconciliation,
   WebChatSettingsSurface,
   WebChatUpdateSurface,
 } from "./webchat_types.js";
@@ -711,6 +712,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/runtime/snapshot") {
       await this.handleRuntimeSnapshot(req, res);
+      return;
+    }
+
+    if (url.pathname === "/runtime/reconcile-results") {
+      await this.handleRuntimeResultReconciliation(req, res);
       return;
     }
 
@@ -2102,6 +2108,62 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       "cache-control": "no-store",
     });
     res.end(JSON.stringify(snapshot));
+  }
+
+  private async handleRuntimeResultReconciliation(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const reconcile = this.opts.runtime?.reconcilePendingResults;
+    if (!reconcile) {
+      res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "runtime_result_reconciliation_not_configured" }));
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (!this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "runtime-result-reconciliation", res)) return;
+
+    let body: Record<string, unknown> | null;
+    try { body = await readJson(req, 1024); }
+    catch {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "invalid_runtime_reconciliation_request" }));
+      return;
+    }
+    if (body !== null && (Array.isArray(body) || Object.keys(body).length > 0)) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "runtime_reconciliation_does_not_accept_scope_or_command" }));
+      return;
+    }
+
+    try {
+      const result = await reconcile();
+      if (typeof result.ready !== "boolean" || typeof result.memory_ready !== "boolean" ||
+          typeof result.result_store_readable !== "boolean" ||
+          [result.adopted, result.deferred, result.stale_generation_archived].some((value) =>
+            !Number.isSafeInteger(value) || value < 0)) {
+        throw new Error("invalid_runtime_reconciliation_result");
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({
+        status: result.ready ? "ready" : "held",
+        result,
+        used_for_authority: false,
+        may_execute: false,
+      }));
+    } catch {
+      res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "runtime_result_reconciliation_unavailable" }));
+    }
   }
 
   private async handleNotifications(

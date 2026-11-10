@@ -40,8 +40,8 @@ export function reconcileExecutionResults(
   return { adopted, deferred, stale_generation_archived: staleGenerationArchived };
 }
 
-/** 起動consumer。未決outbox/Mを回復できない場合、通常runtime開始前にfail-closedする。 */
-export function reconcileStartupExecutionState(
+/** 保存済み結果配送だけをOwner操作で再照合する。worker・adapterは起動しない。 */
+export function reconcilePendingExecutionResults(
   hds: HDSUpperController,
   store: GatewayExecutionIntentStore,
   current_execution_epoch: string,
@@ -52,9 +52,6 @@ export function reconcileStartupExecutionState(
   readonly stale_generation_archived: number;
   readonly memory_ready: boolean;
   readonly result_store_readable: boolean;
-  readonly wait_compute_candidate_reconciled: number;
-  readonly wait_compute_interrupted: number;
-  readonly wait_compute_reconciliation_ready: boolean;
 } {
   let resultStoreReadable = true;
   const reconcile = () => {
@@ -71,7 +68,7 @@ export function reconcileStartupExecutionState(
   let staleGenerationArchived = firstPass.stale_generation_archived;
   let memoryReady = reconcileMemory();
 
-  // M receipt回復で配送保留が解消した場合に限り、同じ不変receiptを一度だけ再照合する。
+  // J/Mの復旧が成功した場合だけ、同一の永続deliveryを一度再照合する。
   if (deferred > 0 && memoryReady) {
     const retry = reconcile();
     adopted += retry.adopted;
@@ -79,6 +76,34 @@ export function reconcileStartupExecutionState(
     staleGenerationArchived += retry.stale_generation_archived;
     memoryReady = reconcileMemory();
   }
+
+  return {
+    ready: resultStoreReadable && deferred === 0 && memoryReady,
+    adopted,
+    deferred,
+    stale_generation_archived: staleGenerationArchived,
+    memory_ready: memoryReady,
+    result_store_readable: resultStoreReadable,
+  };
+}
+
+/** 起動consumer。未決outbox/Mを回復できない場合、通常runtime開始前にfail-closedする。 */
+export function reconcileStartupExecutionState(
+  hds: HDSUpperController,
+  store: GatewayExecutionIntentStore,
+  current_execution_epoch: string,
+): {
+  readonly ready: boolean;
+  readonly adopted: number;
+  readonly deferred: number;
+  readonly stale_generation_archived: number;
+  readonly memory_ready: boolean;
+  readonly result_store_readable: boolean;
+  readonly wait_compute_candidate_reconciled: number;
+  readonly wait_compute_interrupted: number;
+  readonly wait_compute_reconciliation_ready: boolean;
+} {
+  const resultRecovery = reconcilePendingExecutionResults(hds, store, current_execution_epoch);
 
   let waitComputeCandidateReconciled = 0;
   let waitComputeInterrupted = 0;
@@ -92,9 +117,10 @@ export function reconcileStartupExecutionState(
     waitComputeReconciliationReady = false;
   }
 
-  return { ready: resultStoreReadable && deferred === 0 && memoryReady && waitComputeReconciliationReady, adopted, deferred,
-    stale_generation_archived: staleGenerationArchived,
-    memory_ready: memoryReady, result_store_readable: resultStoreReadable,
+  return { ready: resultRecovery.ready && waitComputeReconciliationReady,
+    adopted: resultRecovery.adopted, deferred: resultRecovery.deferred,
+    stale_generation_archived: resultRecovery.stale_generation_archived,
+    memory_ready: resultRecovery.memory_ready, result_store_readable: resultRecovery.result_store_readable,
     wait_compute_candidate_reconciled: waitComputeCandidateReconciled,
     wait_compute_interrupted: waitComputeInterrupted,
     wait_compute_reconciliation_ready: waitComputeReconciliationReady,

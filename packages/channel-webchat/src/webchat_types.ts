@@ -67,6 +67,17 @@ export interface WebChatSettingsSurface {
 export interface WebChatRuntimeSurface {
   /** Return the HDS/process/memory/authority state visible to the local console. */
   getSnapshot: () => Promise<unknown>;
+  /** 永続化済み結果配送だけを再照合する。仕事・worker・adapterを開始または再実行しない。 */
+  reconcilePendingResults?: () => Promise<WebChatRuntimeResultReconciliation>;
+}
+
+export interface WebChatRuntimeResultReconciliation {
+  readonly ready: boolean;
+  readonly adopted: number;
+  readonly deferred: number;
+  readonly stale_generation_archived: number;
+  readonly memory_ready: boolean;
+  readonly result_store_readable: boolean;
 }
 
 export interface WebChatOperatorSurface {
