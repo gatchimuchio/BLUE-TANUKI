@@ -14,7 +14,7 @@ Setupの実導入で、同梱Nodeの公式`npm`／`npx`／`corepack` symlinkがg
 
 修正版artifactをWSL Ubuntu 24.04 ext4上の隔離HOMEへ導入し、`PATH`からNode／pnpm／Gitを除いた環境でSetupを完了した。同梱Node v22.14.0、env file mode 600、autostart disabledを確認し、一時`resident-start`からloopback `/healthz`と`/app`がHTTP 200、`resident-stop`後にportが閉じることを確認した。smoke専用env fileはport 18787に設定した。これはWSL内の限定BUILD疎通であり、native Linux QAではない。Secret Service、system service、distribution別通常利用、外部provider、全suite、全OS、QE_QC／QE_QAはNOT_RUN。
 
-ローカルにnative Linuxがないため、`.github/workflows/linux-installed-package-build-smoke.yml`を`workflow_dispatch`専用で追加する。Ubuntu 24.04 runner上で選択commitのworkspace build、Linux package生成／検証、独立temp rootへのSetup、bundled Nodeからのresident起動、loopback `/healthz`／`/app`、停止後疎通断を一回確認する。権限は`contents: read`、checkout credentialは保持せず、artifact upload・実provider・外部業務作用・system service・Secret Serviceを含めない。このrunner確認はG03.01の限定BUILD consumer evidenceに限り、distribution別QAや製品全体完成を示さない。
+ローカルにnative Linuxがないため、`.github/workflows/linux-installed-package-build-smoke.yml`を`workflow_dispatch`専用で追加する。Ubuntu 24.04 runner上で選択commitのworkspace build、Linux package生成／検証、独立temp rootへのSetup、bundled Nodeからのresident起動、loopback `/healthz`／`/app`、停止後疎通断を一回確認する。権限は`contents: read`、checkout credentialは保持せず、artifact upload・実provider・外部業務作用・system service・Secret Serviceを含めない。このrunner確認はG03.01の限定BUILD consumer evidenceに限り、distribution別QAや製品全体完成を示さない。初回run `42812303398`（source=`24c8c3c`）はworkspace build／package verifier PASS後、harnessが空のruntime rootを事前作成したためSetupが安全に拒否した。harnessを修正し、再実行は未確認。
 
 UNIT_ID: G03.01 Linux packaged target and host ABI preflight
 STATUS: WIRED（target-aware package builder→Linux artifact→Setup→bundled Node／Gateway→resident launcherをWSL隔離環境で限定疎通。native host証拠は未成立）

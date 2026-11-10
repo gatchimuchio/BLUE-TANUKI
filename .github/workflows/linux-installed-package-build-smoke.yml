@@ -87,7 +87,7 @@ jobs:
           runtime_root="$work_root/runtime"
           bin_root="$work_root/bin"
           unpack_root="$work_root/unpacked"
-          mkdir -p "$home_root" "$config_root" "$data_root" "$runtime_root" "$bin_root" "$unpack_root" \
+          mkdir -p "$home_root" "$config_root" "$data_root" "$bin_root" "$unpack_root" \
             "$work_root/xdg-config" "$work_root/xdg-data" "$work_root/xdg-state" "$work_root/xdg-runtime" "$work_root/tmp"
           chmod 700 "$work_root/xdg-runtime" "$work_root/tmp"
           export HOME="$home_root" XDG_CONFIG_HOME="$work_root/xdg-config" XDG_DATA_HOME="$work_root/xdg-data" \
@@ -97,6 +97,8 @@ jobs:
           setup="$(find "$unpack_root" -type f -name BlueTanukiSetup.sh -print -quit)"
           test -n "$setup"
           test -x "$setup"
+          test ! -e "$runtime_root"
+          printf 'runtime_root_initially_absent=pass\n'
           "$setup" \
             --install-root "$install_root" \
             --data-root "$data_root" \

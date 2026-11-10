@@ -22,6 +22,8 @@ Windows workspace `corepack pnpm typecheck`／`corepack pnpm build`、Setup／sa
 
 作業開始時にlocalだけにあった同名stale tagは`150e57cd`／`36eefc47`を指していた。両commitが開始mainの祖先であることを確認し、expected-old付きでlocal tagのみ削除した。local復旧branchとGitHub remote復旧tagはcurrent=`d6e87cd2d44235219c3c51676c0febe816525b90`／previous=`850860fc7f740d744390aed53a51ae9d6b7079a0`で作業開始時に一致。fetchのstale worktree metadata ACL拒否は回避せず、remote状態は`ls-remote`で再照合する。
 
+追加のmanual Actions run `42812303398`（source=`24c8c3ca781496e822f7287d7654ec17c723ffc1`、Ubuntu 24.04）はworkspace buildとLinux package generation／verificationをPASSした。Setup stepはharnessがempty `runtime_root`を先に作っていたため、製品のsafe-target guardが未検証runtime rootを拒否してFAIL。これはharness初期化の誤りで、Setupのfail-closed動作を確認した。Workflowからこの事前作成を除去し、同じ限定scopeで再dispatchする。runはartifact upload、provider、外部作用を実施していない。
+
 ---
 
 ## 2026-11-10 — QEB-G03.01-LINUX-PACKAGE-BUILDER-AND-ARTIFACT
