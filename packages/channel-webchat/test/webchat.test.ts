@@ -524,6 +524,9 @@ describe("WebChatChannel — Control Center shell", () => {
 
   it("binds Canvas owner intent to source MIME, content digest, version, and the existing J task path", async () => {
     const artifactContent = "<main>chart</main>";
+    const completionRules = { schema_version: "blue-tanuki.goal-completion-rules.v1",
+      rules: [{ rule_id: "canvas-file-created", operation: "file.write",
+        target: { kind: "file", id: "owner-task-note.txt" }, output_pointer: "/bytes_written", expected_value: 18 }] };
     const artifactHelpersStart = CONTROL_CENTER_SCRIPT.indexOf("function canvasArtifactMime(");
     const artifactHelpersEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function buildCanvasPreviewDocument(", artifactHelpersStart + 1);
     const prepareStart = CONTROL_CENTER_SCRIPT.indexOf("function prepareCanvasOperationIntent(");
@@ -548,11 +551,11 @@ describe("WebChatChannel — Control Center shell", () => {
 
     const nodes: Record<string, { value: string; textContent?: string; className?: string; open?: boolean;
       close?: () => void; focus?: () => void; files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
-      "canvas-preview-action-intent": { value: "表示された表の数値を要約する計画を作って" },
+      "canvas-preview-action-intent": { value: "Canvas本文をowner-task-note.txtへそのまま新規作成してください。" },
       "owner-task-intent": { value: "", focus() {} },
       "canvas-preview-dialog": { value: "", close() { this.open = false; } },
       "owner-task-token": { value: "owner-token" }, "owner-task-image": { value: "", files: [] },
-      "owner-task-completion-rules": { value: "" }, "owner-task-goal-ref": {
+      "owner-task-completion-rules": { value: JSON.stringify(completionRules) }, "owner-task-goal-ref": {
         value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
       }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
     };
@@ -606,12 +609,13 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ token: "owner-token", body: {
       task: preparedTask, goal_ref: "goal_0123456789abcdef", purpose_version: 2, submission_id: "submission-1",
+      goal_completion_rules: completionRules,
       canvas_artifact_input: { schema_version: "blue-tanuki.canvas-artifact-input.v1",
         artifact_reference: reference, content: artifactContent },
     } });
     const taskPayload = JSON.parse(preparedTask.slice(preparedTask.indexOf("\n") + 1)) as Record<string, unknown>;
     expect(taskPayload).toMatchObject({ schema_version: "blue-tanuki.canvas-operation-intent.v1",
-      owner_intent: "表示された表の数値を要約する計画を作って",
+      owner_intent: "Canvas本文をowner-task-note.txtへそのまま新規作成してください。",
       artifact_reference: reference, artifact_reference_used_for_authority: false });
     expect(messages).toContainEqual(["status", expect.stringContaining("file.write候補では本文と保存先がローカルJ Operation Plan SQLiteへ残ります")]);
   });

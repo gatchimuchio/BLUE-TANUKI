@@ -13,6 +13,7 @@ Canvas source MIME／UTF-8／SHA-256／表示版／返信request IDをowner task
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | Canvas入力検査、ephemeral parent-C routing、child本文遮断、通常session履歴除外 | PASS：4 test files中6件、151件skip。 |
+| Canvas owner意図→既存Tasks送信payload（artifact参照・選択済み委任目的・明示達成規則） | PASS：`webchat.test.ts`の限定1件。stub経由のpayload検査であり、served UIからの実Owner Task送信ではない。 |
 | served Gateway Canvas→synthetic C→J purpose relation review／plan review→sandbox file.write→verified result／M receipt | PASS：owner-authenticated local integration 1件。 |
 | 明示file.write規則一致時のJ達成projectionと再起動復元 | PASS：同じserved integrationで1/1規則・結果bytes・M receiptを確認。C08.02の規則判定は既存targeted testで確認済み。 |
 | Canvas送信時の永続化説明とOperation Plan SQLite内の本文保持 | PASS：HTML表示testとserved checkpoint readback。 |
@@ -26,7 +27,7 @@ Canvas source MIME／UTF-8／SHA-256／表示版／返信request IDをowner task
 
 この継続の開始local／origin/main／GitHub main=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`。local recovery branchはcurrent=`cfa2c8ab74be5d30af03567a44b9f5d3a58568f0`／previous=`e18be972c81147ea212e5d642d420fd1bc4ef2bd`、remote recovery tagも同じ二世代。再同期時`git fetch --no-prune origin main`はmain SHA取得に成功したが、古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`管理領域の削除権限拒否を出した。`git worktree list`はmainのみ。保護された管理領域は手動削除・権限変更せず保留する。他repo変更なし。
 
-**次のproducer／consumer:** Canvas上のowner意図を既存Tasksフォームへ束縛し、利用可能な明示委任目的をJ経路で照合する。GUIからOwner Taskを送る場合も既存のowner認証・L3／Approval／Brokerを維持し、目的不在・曖昧なら送信／作用を保留する。failure/recoveryは本sliceでは未実施。
+**次のproducer／consumer:** F17.03のfailure/recoveryを既存J Operation Plan／Recovery経路へ接続する。失敗・結果不明・再起動時も同一task・目的・規則・revision・M receiptを照合し、未解決ならheldを維持して自動作用を起こさない。実Owner認証・GUI送信・L3操作は行わず、synthetic local経路で限定施工する。
 
 設計・工程・施工の現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) がpinするrev4.0三点セットである。独立作業の開始・切替・再開時は三点セットの全文を読み直す。読むのは現行pinが指す一組だけとし、適用`AGENTS.md`、最新owner指示・active指示・HEAD・dirty差分・remote・復旧refも照合する。旧版と完了記録は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) に履歴として保持し、依存・変更系譜・矛盾の解決に必要な部分だけ参照する。
 
