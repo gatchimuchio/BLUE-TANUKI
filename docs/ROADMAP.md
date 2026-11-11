@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G04.03 macOS更新・復旧・削除
+### 直近完了BUILD_BATCH — G04.03 macOS更新・復旧・削除
 
-G04.03はrev4.0の`BT-R-G04-05`／`BT-R-G04-06`について、packaged `BlueTanukiSetup.sh`、macOS resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`を介した更新失敗rollback、中断更新からの復旧、resident restart、permission-denial、ログ参照、通常削除後のDataRoot／ConfigRoot／runtime state／log保持、明示Purgeを隔離macOS環境で別結果として確認する施工単位である。現在は接続を施工中。OS rebootとowner実機はhosted macOS runnerでは代替せず`NOT_RUN`とする。
+G04.03はrev4.0の`BT-R-G04-05`／`BT-R-G04-06`について、packaged `BlueTanukiSetup.sh`、macOS resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`を介した更新失敗rollback、中断更新からの復旧、resident restart、permission-denial、ログ参照、通常削除後のDataRoot／ConfigRoot／runtime state／log保持、明示Purgeを隔離macOS環境で確認し、2026-11-11に限定BUILD_BATCHを閉じた。workflow_dispatch run `43005886593`（source SHA `f2dc2da5f66836960eff1a76c56bd6c31da57587`）でLinux、macOS arm64、macOS x64のconsumerが成功した。OS reboot、owner実機、署名／notary、実provider／credential、外部作用は`NOT_RUN`または保留である。
 
-実smokeの変更・native run・最終SHA・各結果はG04.03の閉包後にここへ記録する。local fixtureやrunner successは実機QA、G04全体、macOS対象QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。署名／notary、実provider／credential、外部作用は保留する。
+これはG04.03の限定`WIRED` consumerの閉包であり、G04全体、macOS対象QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。C08.02のowner明示規則＋同一revisionの検証済み結果＋M receiptは既存J/M経路に限定WIREDであり、重複実装しない。次の独立BUILD_BATCHは現行rev4.0とHEADから未接続consumerを選定する。D4-Pocket／ミニドラの別repo変更、C08.03実provider、Rust authority cutover、公開・出荷判断は引き続き保留する。
 
 ### 前段BUILD_BATCH記録 — G04.02 macOS署名・Gatekeeper保護境界
 

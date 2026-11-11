@@ -1,8 +1,8 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
-この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
+この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G04.03 macOS更新・復旧・削除
+## 前段完了BUILD_BATCH — QE_BUILD / G04.03 macOS更新・復旧・削除
 
 主語はmacOS x64／arm64のpackaged `BlueTanukiSetup.sh`、resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`とその実consumerである。目的は、native macOS runner上の隔離installで更新失敗rollback、中断更新からの復旧、resident再起動、権限拒否、ログの読取、通常削除後のDataRoot／ConfigRoot／runtime state／ログ保持、明示Purgeを別結果として確認すること。G04.03の実装接続であり、実機QAやmacOS再起動を証明しない。
 
@@ -12,9 +12,10 @@
 
 UNIT_ID: G04.03 macOS update / recovery / uninstall consumer
 STATUS: WIRED（workflow_dispatch run `43005886593`／source SHA `f2dc2da5f66836960eff1a76c56bd6c31da57587`のLinux・macOS x64・macOS arm64 hosted consumersが成功。G04.03の限定consumerであり、macOS QAや親成果の完了ではない）
+BATCH_STATUS: CLOSED（2026-11-11。限定consumerの実装・hosted疎通と記録を閉じた。G04.03全体、macOS QA、製品全体完成を意味しない）
 PREVIOUS_NATIVE_ATTEMPTS: runs `42988683062`／`42992867367`／`42998945466`はそれぞれshim path、fixture HOME干渉、macOS lifecycle timeoutで未完了。詳細はGit履歴に保持。最後の失敗後にprocess inventory／managed-tree inventoryの余分なsubprocessを除去し、macOS両archのtransaction timeoutを900秒へ統一した。
 LATEST_NATIVE_ATTEMPT: workflow_dispatch run `43005886593`（#10、source SHA=`f2dc2da5f66836960eff1a76c56bd6c31da57587`）は40m45sで成功。Linux job `130473141429`、macOS arm64 job `130473141790`、macOS x64 job `130473141837`が全てPASSした。両macOS jobで2,646 entryのarchive、one-file Setup／Repair、resident launch・HTTP／WebSocket、process stop、update-failure rollback、中断更新の復旧・再適用、permission-denial、autostart restart、Approval／audit tamper拒否、crash recovery、Doctor／restart／safe mode、通常Uninstall時のstate保持、保持状態の再install、明示Purgeを確認した。全consumer markerはPASS。artifact uploadはなく、署名・notary、host reboot、owner実機、実credential／provider、外部作用は対象外。GitHubはNode.js 20 deprecationのwarningとmacOS arm64 runner capacity noticeを表示したが、全jobは成功した。
-NEXT_REQUIRED_CONSUMER: G04.03を閉じ、次の作業開始時に現行rev4.0全体工程表から依存を再確認して未接続producer／consumerを選定する。ownerが指定したC08.02達成規則（明示規則＋同一revisionの検証済み根拠＋M receipt）を優先候補として保持し、作業開始規律を再実行してから対象を確定する。C08.03実provider、D4-Pocket／ミニドラ別repo変更、Rust authority cutover、公開・出荷判断は保留。
+NEXT_REQUIRED_CONSUMER: G04.03の限定BUILD_BATCHは閉鎖済み。次の独立作業では作業開始規律を再実行し、rev4.0と現行HEADから未接続consumerを選ぶ。owner指定のC08.02達成規則（明示規則＋同一revisionの検証済み根拠＋M receipt）は既存J/M実経路に限定WIREDであり、重複施工しない。C08.03実provider、D4-Pocket／ミニドラ別repo変更、Rust authority cutover、公開・出荷判断は保留。
 MINIMAL_TECH_CHECKS: `pnpm typecheck`、`pnpm build`（15 workspace packages）、`pnpm docs:check`（日本語基底の既存移行負債76件を注意表示）、`pnpm validate:release-hardening`、`pnpm validate:packaging`、`git diff --check`、WSL Ubuntu 24.04で`sh install/installer/test/safe_target_unix.sh`（`unix_target_guard=pass`）がPASS。test fixtureはtrap後にTemp残存なし。run #10で固定SHAのLinux/macOS x64/macOS arm64 packaged consumerが全てPASS。全suite、native owner device／OS reboot、5OS QA、QE_QC／QE_QAはNOT_RUN。
 SAFETY_STATUS: 合成package・隔離temp rootのみ。専用permission-denial parentのmodeはfixture内で復元。provider、実資格情報、署名・notary、Keychain、外部作用、別repo変更、host設定変更なし。
 LOCAL_ASSET_STATUS: typecheck後にworkspace buildで再生成したignored `dist`／tsbuildinfoは稼働中の開発環境として保持。WSL fixture tempはcleanup後に残存なし。run #10はGitHub hosted runner上のみで動作しartifact uploadなし。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持・未変更。
