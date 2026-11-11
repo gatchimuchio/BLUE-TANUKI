@@ -3,6 +3,16 @@ run-name: Unix installed package BUILD smoke on ${{ github.sha }}
 
 on:
   workflow_dispatch:
+    inputs:
+      target_os:
+        description: Select the installed consumer to run
+        type: choice
+        options:
+          - all
+          - linux
+          - macos
+        default: all
+        required: true
 
 permissions:
   contents: read
@@ -14,6 +24,7 @@ concurrency:
 jobs:
   linux-installed-package-build-smoke:
     name: Build and start the installed Linux consumer
+    if: ${{ inputs.target_os == 'all' || inputs.target_os == 'linux' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -171,6 +182,7 @@ jobs:
 
   macos-installed-package-build-smoke:
     name: Build and start the installed macOS ${{ matrix.arch }} consumer
+    if: ${{ inputs.target_os == 'all' || inputs.target_os == 'macos' }}
     strategy:
       fail-fast: false
       matrix:
