@@ -159,7 +159,7 @@ function Get-ManagedTreeInventory {
   Assert-NoReparsePointsInTree -Path $resolvedRoot -Label 'ManagedTreeRoot'
   $metadataKey = $MetadataFileName.ToLowerInvariant()
   $inventoryKey = $InventoryFileName.ToLowerInvariant()
-  $entries = @()
+  $entries = [System.Collections.Generic.List[object]]::new()
   foreach ($item in @(Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse -ErrorAction Stop)) {
     $relativePath = $item.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/') -replace '\\', '/'
     $pathKey = $relativePath.ToLowerInvariant()
@@ -168,12 +168,12 @@ function Get-ManagedTreeInventory {
       throw "Managed tree contains a reparse point: $($item.FullName)"
     }
     if ($item.PSIsContainer) {
-      $entries += [ordered]@{ path = $pathKey; kind = 'directory'; length = 0; sha256 = '' }
+      $entries.Add([ordered]@{ path = $pathKey; kind = 'directory'; length = 0; sha256 = '' })
     } else {
-      $entries += [ordered]@{ path = $pathKey; kind = 'file'; length = [Int64]$item.Length; sha256 = Get-Sha256HexFromFile -Path $item.FullName }
+      $entries.Add([ordered]@{ path = $pathKey; kind = 'file'; length = [Int64]$item.Length; sha256 = Get-Sha256HexFromFile -Path $item.FullName })
     }
   }
-  return ,@($entries | Sort-Object -Property path)
+  return ,@($entries.ToArray() | Sort-Object -Property path)
 }
 
 function Write-ManagedTreeInventory {

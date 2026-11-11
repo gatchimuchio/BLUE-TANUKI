@@ -2,22 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows installed smoke子process環境の秘密分離
+## 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows installed lifecycleの秘密分離・rollback・中断復旧
 
-主語はWindows installed smoke runnerが起動するPowerShell／cmd／Gateway子processである。目的は、ホストのcredential・任意環境変数をinstalled productへ継承せず、run固有profile／APPDATA／LOCALAPPDATA／TEMPとWindows必須system環境だけを渡しながら、Windows installed consumerを隔離確認すること。
+主語はWindows installed smoke runnerの子process、およびSetup／Update／Recovery／Uninstallが所有範囲を検証するmanaged product treeである。目的は、ホストcredentialをproduct子processへ継承せず、Windows製品の導入・更新失敗・中断復旧・データ保持・削除を隔離実物でつなぐこと。
 
-`scripts/smoke_windows_installed.ts`に子process用allowlist環境を追加した。SystemRoot／WINDIR／SystemDrive／ComSpec／PATHEXT／system-only PATH／OSと、run固有APPDATA／LOCALAPPDATA／TEMP／TMP／USERPROFILE／HOME／HOMEDRIVE／HOMEPATHを渡す。五つのPowerShell／cmd／Node spawn siteから親`process.env`全体の継承をなくした。smokeを同じWindows hostで一回実行し、package verify、source guidance／dry-run、Setup／Repair、autostart、port-conflict拒否、Gateway health／WebSocket first-message、Approval／Audit、crash recovery、stop／doctor／restart／safe-modeはPASSした。env fileは`provider=stub`、実LLM／provider secretなし。
+`scripts/smoke_windows_installed.ts`にallowlist子環境を接続した。SystemRoot／WINDIR／SystemDrive／ComSpec／PATHEXT／system-only PATH／OSと、run固有APPDATA／LOCALAPPDATA／TEMP／TMP／USERPROFILE／HOME／HOMEDRIVE／HOMEPATHだけを五つのPowerShell／cmd／Node spawn siteへ渡す。`install/windows/safe-target.ps1`の`Get-ManagedTreeInventory`は、各entryごとの`$entries +=`配列複製を`List[object].Add`へ置換した。個別SHA-256、reparse拒否、path正規化、最終sortは維持する。
 
-更新失敗failpointは旧installのbackup move後に到達したが、Setup transactionが600,000msの上限を超え、runnerは`spawnSync powershell.exe ETIMEDOUT`で終了した。更新結果、後続の中断復旧、DataRoot保持Uninstallの成立証拠にはしない。finallyの明示Purgeによりrun固有InstallRoot／DataRootは不在、HKCU Uninstall／一意Run登録も不在。processは残っていない。runnerがstageを検証・削除できなかったためwork rootを意図的に保持した。`%LOCALAPPDATA%\BTsmoke\w-x8Lq7k`は10,092 files／283,305,471 bytesで、合成package／audit fixture／残留stageだけを含む。原因調査が終わるまで保持し、強制cleanupしない。
+Windows 11 Home x64（10.0.26300）で`corepack pnpm package:windows`、`corepack pnpm docs:check`、PowerShell parse、`git diff --check`はPASS。更新後packageは2,545 entries、48,412,095 bytes、SHA-256=`1fd8e883a4434065e1d3bf38d30d557473ab93740809ce5e7441cc5dc09be542`。ZIP内`app/install/windows/safe-target.ps1`とsourceのSHA-256=`6c38af470cda2aa9ef58ac4c171804ea5cd3d924486973fb62e8ba878aaed1ad`が一致。installerはunsigned、bundled Node runtimeをhash照合済み。
 
-対象package SHA-256=`5969d518d68a7a1fe12c7523cbef418fa67b30341fb28b5aea673c210ff8abe7`。本run前mainはlocal／origin／GitHub `4ad06ff40488b14dbd7ec5aa81829730f05dcce0`一致。編集前recovery refsはcurrent=`4ad06ff40488b14dbd7ec5aa81829730f05dcce0`／previous=`f1bfb122d795cdf19101b610ce79180cced6a100`へ照合付き回転済み。`install/windows/product/BlueTanukiSetup.ps1`と`install/windows/safe-target.ps1`は過去のWindows 2022 run `42968413273`以降変更なしである。同runのG02.03成功証拠は保持するが、今回local timeoutをPASSへ読み替えない。製品全体BUILD_COVERED／QC／QAは未成立。
+`corepack pnpm smoke:windows-installed`は終了コード0。source guidance／dry-run、package verify、Setup／Repair、設定保持、HKCU Run enable／disable readback、port-conflict拒否、Gateway health／WebSocket first-message、Approval、Audit valid／tamper rejection、crash recovery、stop／doctor／restart／safe-mode、Windows Setup update failure rollback、rollback後の旧install／設定／DataRoot保持、update中断後に旧installを検証・復元して更新を再開、stage／rollback cleanup、通常Uninstall後のDataRoot保持、同一root再導入、隔離DataRootの明示PurgeまでPASSした。最初の更新failpoint runでは600,000ms ETIMEDOUTが出たが、inventory蓄積を変更した後の同条件再実行では再現せず、rollbackと中断復旧がPASSした。これは単一Windows 11 hostでの限定installed smoke証拠であり、広範な性能評価ではない。
 
-UNIT_ID: G02.03（Windows smoke runner環境隔離。製品update rollbackのlocal再確認は未完了）
-STATUS: WIRED（子processのallowlist環境を五つのspawn siteへ接続。local installed smokeは前半consumer PASS、update failure処理はETIMEDOUT／結果未確認）
-NEXT_REQUIRED_CONSUMER: 最新rev4.0／HEADから製品全体の次の未接続consumerを再選定する。G02.03の製品経路はWindows 2022 run `42968413273`で限定WIRED済みだが、local timeoutのhost性能根因と残留stageは必要時に調査する。timeout拡張でPASSへ寄せない。C08.03実provider、別repo変更、Rust cutover、公開・出荷判断は引き続き保留。
-SAFETY_STATUS: 子processへホストcredential類を継承しない。smokeはstub／専用Tempのみ。実ユーザーデータ・実provider・外部作用なし。失敗work rootは内容確認済み／現存processなし／registryなし／stageを含むため保留。
-LOCAL_ASSET_STATUS: `release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip` 48,409,785 bytes・SHA-256上記を検証用packageとして保持。`%LOCALAPPDATA%\BTsmoke\w-x8Lq7k` 283,305,471 bytes／10,092 filesは未解決stageを含む回復・調査用として保持。protected attachments、開発依存環境、OneDrive同期領域は変更・削除しない。
-CURRENT_HEAD_AND_DIRTY_OWNER: code／status記録commit `661102d39e56de6a294a0dd7cc205221ce20f611` はlocal／origin／GitHub `main`で一致確認済み。local recovery branchとremote tagはcurrent=`661102d39e56de6a294a0dd7cc205221ce20f611`／previous=`4ad06ff40488b14dbd7ec5aa81829730f05dcce0`。worktreeはmainのみ。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untrackedのまま未変更・未stage。commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupがPermission deniedとなったが、該当metadataは変更せず、commit／pushは成功した。
+providerはstubで、実LLM/provider secret・外部作用・実ユーザーデータは使用していない。出力中の`reboot_persistence_result=pass`はHKCU Run値のenable／disable検査を指すため、Windows本体の実再起動は未実施。SmartScreenの結果はpackage guidance確認のみで、署名・画面通過・保護解除を示さない。過去のWindows Server 2022 run `42968413273`は別環境の限定証拠として維持する。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOは未成立。
+
+初回smokeの失敗root `%LOCALAPPDATA%\BTsmoke\w-x8Lq7k`は10,092 files／283,305,471 bytesで、synthetic package複製・監査fixture・未完stageと、同rootだけで生成した5つのrandom setup tokenを含むことを確認した。現存process／Uninstall登録／Run登録／reparse pointなし。原因調査と後続PASS後、この正確なrootだけをWindows標準Recycle Binへ移し、元path不在とRecycle Bin metadata内のoriginal path／283,305,471 bytesを照合した。成功run root `%LOCALAPPDATA%\BTsmoke\w-juU7KC`はsmoke cleanup後に不在で、関連processなし。ごみ箱移動分は空き容量回復に数えない。
+
+UNIT_ID: G02.03（Windows installed update／rollback／中断復旧／Uninstallの隔離consumer）
+STATUS: WIRED（Windows 11 hostの限定installed smokeで上記consumer PASS。実OS再起動、clean Windows別環境、実provider、5OS QAではない）
+NEXT_REQUIRED_CONSUMER: 次の独立BUILD_BATCHでrev4.0と最新HEADを再同期し、全体施工で最も欠けるconsumerを選ぶ。現repo source scanでAndroid／iOS native product entryは見つからなかったため、G09.01 Android entryと既存D4 mobile契約のread-only照合を優先候補とする。D4Pocket／MINIDORAの別repo変更、C08.03実provider、Rust authority cutover、公開・出荷GOは保留。
+SAFETY_STATUS: 子processはallowlist envのみ。provider=stub、実外部作用なし。失敗・成功両runのInstallRoot／DataRoot／registry／processを閉鎖。旧失敗rootは正確なRecycle Bin itemとして保管し、OneDrive／別repoは変更なし。
+LOCAL_ASSET_STATUS: `release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip` 48,412,095 bytes・上記SHA-256を現行source packageとして保持。成功smoke rootはcleanup済み。失敗smoke root 283,305,471 bytesはRecycle Bin移動済み（復元可能、空き容量回復ではない）。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untracked保持。OneDrive内`.codex-tmp`には触れていない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 今回batch開始main=`bf1297331db32ccb3fb509b66e3b4abcb4bb09a0`。編集前local recovery branch／remote tagはcurrent=`bf1297331db32ccb3fb509b66e3b4abcb4bb09a0`／previous=`661102d39e56de6a294a0dd7cc205221ce20f611`へCAS照合して回転。worktreeはmainのみ。protected attachment directoriesは未変更。fetch時のstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanup ACL拒否は迂回せずmetadataを保持した。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / F17.03 Canvasからsynthetic C・J・Broker・M receiptまでのローカル縦断
 

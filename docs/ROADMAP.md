@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 現在の補助BUILD_BATCH — G02.03 Windows smoke runnerの子process環境隔離
+### 直近完了BUILD_BATCH — G02.03 Windows installed lifecycleの秘密分離・inventory照合
 
-smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。Windows local package smokeはSetup／Repair／通常利用、approval／audit、restart／safe-modeまでPASSした。更新failpointは到達したがSetupが600,000msでETIMEDOUTとなり、更新結果・中断復旧・DataRoot保持の今回実行は未成立。cleanupで隔離InstallRoot／DataRoot／HKCU登録は不在。検証未完のstageを含むTemp root（10,092 files／283,305,471 bytes）は調査用に保持する。製品Setup／safe-targetは過去のWindows 2022 run `42968413273`以降変更なし。同runの限定PASSは維持し、今回のlocal timeoutを成功にも製品全体のFAILにも拡張しない。製品全体QE_BUILDは継続、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。managed-tree inventoryのentry蓄積を`List[object].Add`へ変更し、各entryごとの配列複製を避けつつ、個別SHA-256、reparse拒否、path正規化、最終sortを維持した。Windows 11 Home x64の修正後installed smokeは終了コード0で、Setup／Repair、通常利用、Approval／Audit tamper拒否、crash recovery、stop／doctor／restart／safe-mode、update failure rollback、rollback後の旧install／設定／DataRoot保持、中断後の復旧と更新再開、通常Uninstall後のDataRoot保持、再導入、隔離rootの明示PurgeまでPASSした。初回runの600,000ms ETIMEDOUTは修正後の単一runで再現しなかったが、原因を性能改善と断定せず広範な性能評価にも拡張しない。provider=stub、実LLM／secret／外部作用なし。HKCU Run readbackはPASSしたがWindows本体の再起動は未実施。製品全体QE_BUILDは継続し、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 直近完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
 
