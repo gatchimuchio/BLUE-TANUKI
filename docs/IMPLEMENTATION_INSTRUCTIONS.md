@@ -2,7 +2,24 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G02.01・G02.02 Windows package Setupから通常利用へ接続
+## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows DataRoot通常保持・再導入・明示Purge
+
+主語はWindows installed packageのSetup／Uninstallと、そのDataRootを使い直す後続Setup。目的は、通常UninstallがInstallRootと登録を外しつつ利用者データを保全し、同じDataRootでの再Setup後もデータが使えること、明示`-PurgeData`だけが隔離smokeのDataRootを削除することをinstalled consumerで接続すること。rev4.0の全体施工P2と現在の高リスク優先「Windows製品Setup→Uninstall動的Dの未観測」に従う。G02.03全体、Windows Desktop QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`の成立は主張しない。
+
+直前にownerが選んだC08.02達成条件（現行J正本へ結び付く明示規則、同一revisionの検証済み結果、M receipt）は既存実装にあり、再起動復帰・一致達成／不一致保留・達成後停止を合成consumerで再確認した。これはローカル限定WIREDであり、実providerや製品全体の証拠ではない。
+
+製品Uninstallは既定で登録済みDataRootの全内容を保持し、`-PurgeData`だけが完全削除する実装を持つ。既存installed smokeは明示Purgeしか通していなかったため、`scripts/smoke_windows_installed.ts`を「通常Uninstall→InstallRootと登録の消失／env bytesと合成sentinelの保持→同じInstallRoot／DataRootで再Setup→保持内容と登録の確認→明示Purge→隔離DataRootの消失」へ延長した。変更はsmoke harnessだけで、製品削除対象・権限・workflow triggerは変えていない。
+
+ローカル`pnpm typecheck`と`pnpm build`（15 workspace project）はPASS。現在のhostに残る保留中product install／HKCU登録を触らないためinstalled smokeはローカル実行しない。`.github/workflows/windows-installed-package-build-smoke.yml`は`workflow_dispatch`かつ`refs/heads/main`限定、`contents: read`のみなので、mainへ反映した正確なSHAでWindows Server 2022上の限定BUILD smokeを実行し、結果を読戻してからこの単位を閉じる。secret／artifact uploadは追加しない。
+
+UNIT_ID: G02.03 Windows DataRoot retention／same-root reinstall／explicit purge consumer
+STATUS: CODE_PRESENT（smoke接続を実装。installed Windows consumerはworkflow未実行のためBUILD_GAP）
+NEXT_REQUIRED_CONSUMER: mainの確定SHAに固定した手動Windows installed smokeで通常Uninstall保持・再Setup・明示Purgeを確認し、次のWindows更新失敗rollback／状態保持consumerを現HEADから選ぶ。
+SAFETY_STATUS: 作業中のsmokeはrun固有temp配下の隔離InstallRoot／DataRootだけを扱う。通常Uninstallでsentinel／env bytesが変われば失敗とし、実ユーザーデータ、保留中local install／registry、別repoには作用しない。明示Purgeは同runが生成した隔離DataRootだけを対象にする。
+LOCAL_ASSET_STATUS: `pnpm typecheck`が除去したignored `dist`／tsbuildinfoは成功した`pnpm build`で再生成し、開発環境として保持。C08.02の合成test残存root（5 files／151,557 bytes）とrev4.0読取用Tempコピー（3 files／2,363,935 bytes）は内容・所有・非稼働を確認してWindowsゴミ箱へ移し、元path不在と収容を確認。package artifactは生成していない。保護添付／OneDrive資料は未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin/mainは`979d7de85f22bd876bf6bda36e723d3fd76d0605`。local recovery branchとremote tagはcurrent=`979d7de85f22bd876bf6bda36e723d3fd76d0605`／previous=`07dbc1e4b68847280f459e1e94e8f6b55f37f7d4`で照合済み。local installed smokeは既存登録条件のためNOT_RUN。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更・未stage。D4-Pocketは別repoでdirty worktree稼働中のため一切変更しない。
+
+### 前段完了BUILD_BATCH — QE_BUILD / G02.01・G02.02 Windows package Setupから通常利用へ接続
 
 主語はWindows配布packageのSetup、Launcher、Gateway、Uninstall。目的は開発toolを前提としない製品導入から通常利用・保護境界までを実際のWindows package経路で接続すること。rev4.0のG02.01／G02.02を対象とし、source起動・fixture・別OS結果をinstalled Windowsの証拠へ読み替えない。
 

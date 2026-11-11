@@ -811,6 +811,7 @@ async function main(): Promise<void> {
   const isolatedAppData = path.join(isolatedProfile, "AppData", "Roaming");
   const isolatedLocalAppData = path.join(isolatedProfile, "AppData", "Local");
   const isolatedTemp = path.join(work, "Temp");
+  const retentionUninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-retain-${randomUUID()}.status`);
   const uninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`);
   const windowsRoot = process.env.SystemRoot ?? "C:\\Windows";
   const smokePort = await findAvailableLoopbackPort();
@@ -1270,6 +1271,65 @@ async function main(): Promise<void> {
     stopped = true;
     const safeModeStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!safeModeStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher safe mode stop");
+
+    const retainedEnvFile = path.join(dataRoot, "blue-tanuki.env");
+    const retainedEnvBeforeUninstall = readFileSync(retainedEnvFile);
+    const retainedSentinel = path.join(dataRoot, "user-data-retention-sentinel.txt");
+    const retainedSentinelContents = `BLUE-TANUKI isolated installed smoke ${randomUUID()}\n`;
+    writeFileSync(retainedSentinel, retainedSentinelContents, { encoding: "utf8", flag: "wx" });
+    logStep("uninstall without purge and verify registered user data is retained");
+    run("cmd.exe", [
+      "/d",
+      "/s",
+      "/c",
+      path.join(installRoot, "UninstallBlueTanuki.cmd"),
+      "-Quiet",
+    ], work, "installer uninstall with retained data", 300_000, {
+      ...isolatedProductEnv,
+      BLUE_TANUKI_UNINSTALL_STATUS_FILE: retentionUninstallStatusFile,
+    });
+    const retentionUninstallStatus = await waitForFileText(retentionUninstallStatusFile, UNINSTALL_TIMEOUT_MS);
+    if (!retentionUninstallStatus || !/^exit_code=0\b/m.test(retentionUninstallStatus.replace(/^\uFEFF/, ""))) {
+      throw new Error("default uninstall status did not confirm success");
+    }
+    if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) {
+      throw new Error("install root still exists after default uninstall");
+    }
+    const retainedSentinelAfterUninstall = readFileSync(retainedSentinel, "utf8");
+    const retainedEnvAfterUninstall = readFileSync(retainedEnvFile);
+    if (!existsSync(dataRoot) || retainedSentinelAfterUninstall !== retainedSentinelContents ||
+        !retainedEnvAfterUninstall.equals(retainedEnvBeforeUninstall)) {
+      throw new Error("default uninstall did not preserve the isolated data root, sentinel, and environment bytes");
+    }
+    assertSmokeRegistryAbsent(autostartRunName, "post retention uninstall registry check");
+    console.log("uninstall_data_retention_result=pass");
+
+    logStep("reinstall into the same roots and verify retained data remains usable");
+    run("cmd.exe", [
+      "/d",
+      "/s",
+      "/c",
+      path.join(packageDir, "BlueTanukiSetup.cmd"),
+      "-InstallRoot",
+      installRoot,
+      "-DataRoot",
+      dataRoot,
+      "-NoLaunch",
+    ], packageDir, "installer reinstall with retained data", 600_000, isolatedProductEnv);
+    const retainedSentinelAfterReinstall = readFileSync(retainedSentinel, "utf8");
+    const retainedEnvAfterReinstall = readFileSync(retainedEnvFile);
+    if (!existsSync(path.join(installRoot, "BlueTanukiLauncher.ps1")) ||
+        retainedSentinelAfterReinstall !== retainedSentinelContents ||
+        !retainedEnvAfterReinstall.equals(retainedEnvBeforeUninstall)) {
+      throw new Error("reinstall did not retain the isolated user data and environment bytes");
+    }
+    const reinstalledRegistry = readSmokeRegistryState(autostartRunName, "post retention reinstall registry check");
+    if (!reinstalledRegistry.uninstallPresent || reinstalledRegistry.autostartPresent) {
+      throw new Error(`reinstall registry state was unexpected uninstall=${reinstalledRegistry.uninstallPresent} autostart=${reinstalledRegistry.autostartPresent}`);
+    }
+    console.log("reinstall_retained_data_result=pass");
+
+    logStep("explicitly purge only the isolated smoke DataRoot");
     run("cmd.exe", [
       "/d",
       "/s",
@@ -1288,10 +1348,10 @@ async function main(): Promise<void> {
       throw new Error(`uninstall status was not successful: ${uninstallStatus.trim()}`);
     }
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) {
-      throw new Error("install root still exists after uninstall");
+      throw new Error("install root still exists after explicit purge uninstall");
     }
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) {
-      throw new Error("data root still exists after purge uninstall");
+      throw new Error("isolated data root still exists after explicit purge uninstall");
     }
     assertSmokeRegistryAbsent(autostartRunName, "post uninstall registry check");
     uninstalled = true;
@@ -1315,6 +1375,7 @@ async function main(): Promise<void> {
     console.log("crash_recovery_result=pass");
     console.log("safe_mode_result=pass");
     console.log("defender_smartscreen_guidance_result=pass");
+    console.log("uninstall_data_purge_result=pass");
     console.log("uninstall_result=pass");
   } finally {
     if (process.platform === "win32") {
