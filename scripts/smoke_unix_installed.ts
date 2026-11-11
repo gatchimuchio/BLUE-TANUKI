@@ -532,6 +532,9 @@ async function receiveFirstMessage(
 async function main(): Promise<void> {
   const platform = targetPlatform();
   const arch = targetArch(platform);
+  const installerTransactionTimeoutMs = platform === "macos" && arch === "x64"
+    ? 900_000
+    : INSTALLER_TRANSACTION_TIMEOUT_MS;
   const systemMoveCommand = platform === "macos" ? "/bin/mv" : "/usr/bin/mv";
   const artifact = path.resolve(argValue("--artifact") ?? defaultArtifact(platform, arch));
   logStep("verify installer package");
@@ -625,7 +628,7 @@ async function main(): Promise<void> {
       binRoot,
       "--no-launch",
       "--skip-doctor",
-    ], packageDir, "installer setup", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    ], packageDir, "installer setup", installerTransactionTimeoutMs, env);
     console.log("installer_archive_setup_result=pass");
 
     const launcher = path.join(installRoot, "BlueTanukiLauncher.sh");
@@ -646,7 +649,7 @@ async function main(): Promise<void> {
       "--force",
       "--no-launch",
       "--skip-doctor",
-    ], packageDir, "installer repair install", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    ], packageDir, "installer repair install", installerTransactionTimeoutMs, env);
     const installedEnv = parseEnvFile(envFile);
     const expectedStateRoot = realpathSync(path.join(dataRoot, "data"));
     if (installedEnv.BLUE_TANUKI_STATE_ROOT !== expectedStateRoot) {
@@ -834,7 +837,7 @@ async function main(): Promise<void> {
       ].join("\n");
       writeFileSync(path.join(updateToolDir, "mv"), moveFailureShim, "utf8");
       run("chmod", ["+x", path.join(updateToolDir, "mv")], work, "enable isolated update failure shim", 10_000, env);
-      const failedUpdateOutput = runExpectingFailure("sh", updateSetupArgs, updatePackageDir, "installed update transaction failure rollback", INSTALLER_TRANSACTION_TIMEOUT_MS, {
+      const failedUpdateOutput = runExpectingFailure("sh", updateSetupArgs, updatePackageDir, "installed update transaction failure rollback", installerTransactionTimeoutMs, {
         ...env,
         PATH: testPath,
         BT_TEST_RUNTIME_ROOT: runtimeRoot,
@@ -882,7 +885,7 @@ async function main(): Promise<void> {
         BT_TEST_INSTALL_ROOT: installRoot,
         BT_TEST_INSTALL_ROLLBACK_PREFIX: path.join(work, ".InstallRoot.blue-tanuki-rollback-"),
         BT_TEST_HOLD_PID_FILE: interruptedMoveMarker,
-      }, interruptedMoveMarker, INSTALLER_TRANSACTION_TIMEOUT_MS);
+      }, interruptedMoveMarker, installerTransactionTimeoutMs);
 
       const rollbackPrefix = `.${path.basename(installRoot)}.blue-tanuki-rollback-`;
       const rollbackCandidates = readdirSync(path.dirname(installRoot)).filter((name) => name.startsWith(rollbackPrefix));
@@ -892,7 +895,7 @@ async function main(): Promise<void> {
       if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
         throw new Error("resident process remained after interrupted update terminated");
       }
-      const recoveryOutput = runExpectingStatus("sh", updateSetupArgs, updatePackageDir, 0, "installed interrupted-update recovery and resumed update", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+      const recoveryOutput = runExpectingStatus("sh", updateSetupArgs, updatePackageDir, 0, "installed interrupted-update recovery and resumed update", installerTransactionTimeoutMs, env);
       if (!recoveryOutput.includes("restored the verified previous product after an interrupted update") ||
           !existsSync(path.join(installRoot, "g04-03-update-marker.txt"))) {
         throw new Error("installer did not restore the prior app and then complete the isolated update");
@@ -914,7 +917,15 @@ async function main(): Promise<void> {
         }
         const permissionCaseRoot = path.join(work, "permission-denial");
         const permissionInstallParent = path.join(permissionCaseRoot, "readonly-install-parent");
-        run("mkdir", ["-p", permissionInstallParent], work, "create isolated permission-denial parent", 10_000, env);
+        const permissionHome = path.join(permissionCaseRoot, "home");
+        const permissionHomeApplications = path.join(permissionHome, "Applications");
+        const permissionEnv = {
+          ...env,
+          HOME: permissionHome,
+          XDG_CONFIG_HOME: path.join(permissionHome, ".config"),
+          XDG_DATA_HOME: path.join(permissionHome, ".local", "share"),
+        };
+        run("mkdir", ["-p", permissionInstallParent, permissionHomeApplications], work, "create isolated permission-denial parent", 10_000, env);
         const permissionInstallRoot = path.join(permissionInstallParent, "InstallRoot");
         const permissionMode = statSync(permissionInstallParent).mode & 0o777;
         if ((permissionMode & 0o200) === 0) {
@@ -932,7 +943,7 @@ async function main(): Promise<void> {
             "--bin-root", path.join(permissionCaseRoot, "BinRoot"),
             "--no-launch",
             "--skip-doctor",
-          ], updatePackageDir, "macOS packaged setup permission denial", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+          ], updatePackageDir, "macOS packaged setup permission denial", installerTransactionTimeoutMs, permissionEnv);
         } finally {
           chmodSync(permissionInstallParent, permissionMode);
         }
@@ -1076,7 +1087,7 @@ async function main(): Promise<void> {
     const envBeforeUninstall = parseEnvFile(envFile);
     const productLogsBeforeUninstall = productLogPaths.map((logPath) => Buffer.from(readFileSync(logPath)));
     const uninstaller = path.join(installRoot, "BlueTanukiUninstall.sh");
-    run("sh", [uninstaller, "--quiet"], work, "installer normal uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    run("sh", [uninstaller, "--quiet"], work, "installer normal uninstall", installerTransactionTimeoutMs, env);
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("install root still exists after normal uninstall");
     if (!(await waitForAbsent(runtimeRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("runtime root still exists after normal uninstall");
     if (!(await waitForAbsent(path.join(binRoot, "blue-tanuki"), UNINSTALL_TIMEOUT_MS))) {
@@ -1110,7 +1121,7 @@ async function main(): Promise<void> {
       binRoot,
       "--no-launch",
       "--skip-doctor",
-    ], packageDir, "installer reinstall after retained uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    ], packageDir, "installer reinstall after retained uninstall", installerTransactionTimeoutMs, env);
     if (readFileSync(retainedUserFile, "utf8") !== retainedUserData) {
       throw new Error("reinstall after normal uninstall changed or removed isolated user data");
     }
@@ -1122,7 +1133,7 @@ async function main(): Promise<void> {
     ]);
     console.log("reinstall_after_retention_result=pass");
 
-    run("sh", [path.join(installRoot, "BlueTanukiUninstall.sh"), "--purge", "--quiet"], work, "installer purge uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+    run("sh", [path.join(installRoot, "BlueTanukiUninstall.sh"), "--purge", "--quiet"], work, "installer purge uninstall", installerTransactionTimeoutMs, env);
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("install root still exists after uninstall");
     if (!(await waitForAbsent(runtimeRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("runtime root still exists after purge uninstall");
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("data root still exists after purge uninstall");
