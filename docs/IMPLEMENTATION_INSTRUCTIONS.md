@@ -17,6 +17,7 @@ STATUS: WIRED（子processのallowlist環境を五つのspawn siteへ接続。lo
 NEXT_REQUIRED_CONSUMER: 最新rev4.0／HEADから製品全体の次の未接続consumerを再選定する。G02.03の製品経路はWindows 2022 run `42968413273`で限定WIRED済みだが、local timeoutのhost性能根因と残留stageは必要時に調査する。timeout拡張でPASSへ寄せない。C08.03実provider、別repo変更、Rust cutover、公開・出荷判断は引き続き保留。
 SAFETY_STATUS: 子processへホストcredential類を継承しない。smokeはstub／専用Tempのみ。実ユーザーデータ・実provider・外部作用なし。失敗work rootは内容確認済み／現存processなし／registryなし／stageを含むため保留。
 LOCAL_ASSET_STATUS: `release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip` 48,409,785 bytes・SHA-256上記を検証用packageとして保持。`%LOCALAPPDATA%\BTsmoke\w-x8Lq7k` 283,305,471 bytes／10,092 filesは未解決stageを含む回復・調査用として保持。protected attachments、開発依存環境、OneDrive同期領域は変更・削除しない。
+CURRENT_HEAD_AND_DIRTY_OWNER: code／status記録commit `661102d39e56de6a294a0dd7cc205221ce20f611` はlocal／origin／GitHub `main`で一致確認済み。local recovery branchとremote tagはcurrent=`661102d39e56de6a294a0dd7cc205221ce20f611`／previous=`4ad06ff40488b14dbd7ec5aa81829730f05dcce0`。worktreeはmainのみ。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untrackedのまま未変更・未stage。commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupがPermission deniedとなったが、該当metadataは変更せず、commit／pushは成功した。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / F17.03 Canvasからsynthetic C・J・Broker・M receiptまでのローカル縦断
 
