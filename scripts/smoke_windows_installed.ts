@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  renameSync,
   readdirSync,
   rmSync,
   statSync,
@@ -166,6 +167,33 @@ function parseEnvFile(file: string): Record<string, string> {
     }
   }
   return out;
+}
+
+function setEnvFileValue(file: string, key: string, value: string): void {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) throw new Error("invalid isolated env key");
+  const original = readFileSync(file, "utf8");
+  const lines = original.split(/\r?\n/);
+  const matches: number[] = [];
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator > 0 && trimmed.slice(0, separator).trim() === key) matches.push(index);
+  }
+  if (matches.length !== 1) {
+    throw new Error(`isolated env file must contain exactly one ${key} entry`);
+  }
+  lines[matches[0]!] = `${key}=${JSON.stringify(value)}`;
+  const tempFile = `${file}.smoke-${process.pid}-${randomUUID()}.tmp`;
+  const newline = original.includes("\r\n") ? "\r\n" : "\n";
+  const updated = lines.join(newline) + (original.endsWith("\n") ? newline : "");
+  try {
+    writeFileSync(tempFile, updated, { encoding: "utf8", mode: 0o600 });
+    renameSync(tempFile, file);
+  } catch (error) {
+    rmSync(tempFile, { force: true });
+    throw error;
+  }
 }
 
 function assertEnvValuesRetained(
@@ -510,11 +538,13 @@ function readInstalledGatewayProcessAndListeners(
   pid: number | undefined,
   port: number,
   expectedNodePath: string,
+  expectedEnvFile: string,
 ): {
   readonly process_state: "present" | "missing" | "unknown";
   readonly process_name: string | null;
   readonly installed_node_matches: boolean | null;
   readonly gateway_serve_args_match: boolean | null;
+  readonly env_file_arg_matches: boolean | null;
   readonly tcp_query_state: "readable" | "unavailable";
   readonly tcp_listeners: readonly { readonly address: string; readonly process_id: number }[];
 } {
@@ -523,6 +553,7 @@ function readInstalledGatewayProcessAndListeners(
     process_name: null,
     installed_node_matches: null,
     gateway_serve_args_match: null,
+    env_file_arg_matches: null,
     tcp_query_state: "unavailable" as const,
     tcp_listeners: [] as const,
   };
@@ -532,16 +563,18 @@ function readInstalledGatewayProcessAndListeners(
     "$targetPid = [int]$env:BLUE_TANUKI_DIAG_PID",
     "$targetPort = [int]$env:BLUE_TANUKI_DIAG_PORT",
     "$expectedNode = [IO.Path]::GetFullPath($env:BLUE_TANUKI_DIAG_NODE)",
+    "$expectedEnvFile = [IO.Path]::GetFullPath($env:BLUE_TANUKI_DIAG_ENV_FILE)",
     "$process = if ($targetPid -gt 0) { Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $targetPid) -ErrorAction SilentlyContinue } else { $null }",
     "$processName = if ($process) { [string]$process.Name } else { $null }",
     "$installedNodeMatches = if ($process -and $process.ExecutablePath) { [string]::Equals([IO.Path]::GetFullPath([string]$process.ExecutablePath), $expectedNode, [StringComparison]::OrdinalIgnoreCase) } else { $null }",
     "$commandLine = if ($process) { [string]$process.CommandLine } else { '' }",
     "$gatewayServeArgsMatch = if ($process) { $commandLine.IndexOf('apps/gateway/dist/main.js', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $commandLine.IndexOf('--serve', [StringComparison]::OrdinalIgnoreCase) -ge 0 } else { $null }",
+    "$envFileArgMatches = if ($process) { $commandLine.IndexOf($expectedEnvFile, [StringComparison]::OrdinalIgnoreCase) -ge 0 } else { $null }",
     "$queryState = 'readable'",
     "$listeners = @()",
     "$netstat = Join-Path $env:SystemRoot 'System32\\netstat.exe'",
     "if (-not (Test-Path -LiteralPath $netstat -PathType Leaf)) { $queryState = 'unavailable' } else { $rows = @(& $netstat -ano -p tcp 2>$null); if ($LASTEXITCODE -ne 0) { $queryState = 'unavailable' } else { $listeners = @($rows | ForEach-Object { $parts = ([string]$_).Trim() -split '\\s+'; if ($parts.Count -ge 5 -and $parts[0] -eq 'TCP' -and $parts[1] -match (':' + [regex]::Escape([string]$targetPort) + '$') -and $parts[3] -eq 'LISTENING' -and $parts[4] -match '^\\d+$') { [ordered]@{ address = [string]$parts[1]; process_id = [int]$parts[4] } } }) } }",
-    "$result = [ordered]@{ process_state = if ($process) { 'present' } else { 'missing' }; process_name = $processName; installed_node_matches = $installedNodeMatches; gateway_serve_args_match = $gatewayServeArgsMatch; tcp_query_state = $queryState; tcp_listeners = @($listeners) }",
+    "$result = [ordered]@{ process_state = if ($process) { 'present' } else { 'missing' }; process_name = $processName; installed_node_matches = $installedNodeMatches; gateway_serve_args_match = $gatewayServeArgsMatch; env_file_arg_matches = $envFileArgMatches; tcp_query_state = $queryState; tcp_listeners = @($listeners) }",
     "$result | ConvertTo-Json -Compress -Depth 4",
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
@@ -552,6 +585,7 @@ function readInstalledGatewayProcessAndListeners(
       BLUE_TANUKI_DIAG_PID: String(pid ?? 0),
       BLUE_TANUKI_DIAG_PORT: String(port),
       BLUE_TANUKI_DIAG_NODE: expectedNodePath,
+      BLUE_TANUKI_DIAG_ENV_FILE: expectedEnvFile,
     },
     encoding: "utf8",
     stdio: "pipe",
@@ -565,6 +599,7 @@ function readInstalledGatewayProcessAndListeners(
       process_name?: unknown;
       installed_node_matches?: unknown;
       gateway_serve_args_match?: unknown;
+      env_file_arg_matches?: unknown;
       tcp_query_state?: unknown;
       tcp_listeners?: unknown;
     };
@@ -581,6 +616,7 @@ function readInstalledGatewayProcessAndListeners(
       process_name: typeof parsed.process_name === "string" ? parsed.process_name.slice(0, 64) : null,
       installed_node_matches: typeof parsed.installed_node_matches === "boolean" ? parsed.installed_node_matches : null,
       gateway_serve_args_match: typeof parsed.gateway_serve_args_match === "boolean" ? parsed.gateway_serve_args_match : null,
+      env_file_arg_matches: typeof parsed.env_file_arg_matches === "boolean" ? parsed.env_file_arg_matches : null,
       tcp_query_state: parsed.tcp_query_state === "readable" ? "readable" : "unavailable",
       tcp_listeners: listeners,
     };
@@ -655,12 +691,17 @@ async function reportInstalledGatewayStartupFailure(
     .filter(([, marker]) => marker.test(stdout.text))
     .map(([name]) => name);
   const startupLogLines = stdout.text.split(/\r?\n/)
-    .filter((line) => /webchat listening|Gateway startup blocked|shutting down|\bfatal\b/i.test(line))
+    .filter((line) => /webchat listening|Gateway startup blocked|received signal|shutting down|\bfatal\b/i.test(line))
     .slice(-8)
     .map((line) => redactStartupDiagnostic(line, secretValues, privatePaths));
   const startupBlocked = /Gateway startup blocked before inbound channels/i.test(`${stdout.text}\n${stderr.text}`);
   const tcpListening = await probeLoopbackTcp(port);
-  const processAndListeners = readInstalledGatewayProcessAndListeners(pid, port, findBundledNode(installRoot));
+  const processAndListeners = readInstalledGatewayProcessAndListeners(
+    pid,
+    port,
+    findBundledNode(installRoot),
+    path.join(dataRoot, "blue-tanuki.env"),
+  );
   console.error(`[windows-smoke] installed_gateway_diagnostics ${JSON.stringify({
     resident_pid: pid ?? null,
     pid_process_presence: pidProcessPresence,
@@ -668,7 +709,10 @@ async function reportInstalledGatewayStartupFailure(
     process_name: processAndListeners.process_name,
     installed_node_matches: processAndListeners.installed_node_matches,
     gateway_serve_args_match: processAndListeners.gateway_serve_args_match,
+    env_file_arg_matches: processAndListeners.env_file_arg_matches,
     loopback_tcp_listener: tcpListening ? "accepting" : "not_accepting",
+    tested_host: "127.0.0.1",
+    tested_port: port,
     tcp_query_state: processAndListeners.tcp_query_state,
     tcp_listeners: processAndListeners.tcp_listeners,
     stdout_bytes: stdout.bytes,
@@ -778,6 +822,7 @@ async function main(): Promise<void> {
     LOCALAPPDATA: isolatedLocalAppData,
     TEMP: isolatedTemp,
     TMP: isolatedTemp,
+    WEBCHAT_HOST: "127.0.0.1",
     WEBCHAT_PORT: String(smokePort),
   };
   const isolatedProductEnv = {
@@ -967,7 +1012,13 @@ async function main(): Promise<void> {
       dataRoot,
       "-NoLaunch",
     ], packageDir, "installer repair install", 600_000, isolatedProductEnv);
+    setEnvFileValue(envFile, "WEBCHAT_HOST", isolatedChildEnv.WEBCHAT_HOST!);
+    setEnvFileValue(envFile, "WEBCHAT_PORT", isolatedChildEnv.WEBCHAT_PORT!);
     const env = parseEnvFile(envFile);
+    if (env.WEBCHAT_HOST !== isolatedChildEnv.WEBCHAT_HOST || env.WEBCHAT_PORT !== isolatedChildEnv.WEBCHAT_PORT) {
+      throw new Error("installed smoke WebChat endpoint does not match its isolated env file");
+    }
+    console.log(`installed_smoke_webchat_endpoint=${env.WEBCHAT_HOST}:${env.WEBCHAT_PORT}`);
     assertEnvValuesRetained(envBeforeRepair, env, [
       "WEBCHAT_TOKEN",
       "WEBCHAT_RESUME_TOKEN",

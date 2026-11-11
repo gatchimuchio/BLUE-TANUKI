@@ -342,7 +342,16 @@ describe("Windows product installer package", () => {
     expect(uninstallCmd).toContain('powershell.exe -NoProfile -File "%BT_UNINSTALL_TEMP%" %*');
     expect(uninstallCmd).not.toContain('start "" /b powershell.exe');
     expect(uninstallCmd).toContain('findstr /x /c:"exit_code=0"');
-    expect(uninstallCmd).toContain("uninstall_unknown");
+    const uninstallCmdLines = uninstallCmd.split(/\r?\n/);
+    const uninstallExecuteLine = uninstallCmdLines.findIndex((line) =>
+      line.includes('powershell.exe -NoProfile -File "%BT_UNINSTALL_TEMP%" %*'));
+    expect(uninstallExecuteLine).toBeGreaterThanOrEqual(0);
+    const uninstallExecuteCommand = uninstallCmdLines[uninstallExecuteLine] ?? "";
+    expect(uninstallExecuteCommand).toContain('&& findstr /x /c:"exit_code=0"');
+    expect(uninstallExecuteCommand).toContain('&& exit /b 0 || (');
+    expect(uninstallExecuteCommand).toContain('exit /b 1)');
+    expect(uninstallCmdLines.slice(uninstallExecuteLine + 1).every((line) => line.trim() === "")).toBe(true);
+    expect(uninstallCmd).toContain("did not complete successfully");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_SAFE_TARGET");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_STATUS_FILE");
@@ -790,6 +799,9 @@ describe("Windows product installer package", () => {
     expect(smoke).toContain("installed_node_matches");
     expect(smoke).toContain("gateway_serve_args_match");
     expect(smoke).toContain("startup_log_lines");
+    expect(smoke).toContain("tested_port: port");
+    expect(smoke).toContain("env_file_arg_matches");
+    expect(smoke).toContain("setEnvFileValue(envFile, \"WEBCHAT_PORT\", isolatedChildEnv.WEBCHAT_PORT!)");
     expect(smoke).toContain("cleanup_uninstall_state");
     expect(uninstaller).toContain("$statusPath.StartsWith($tempRoot");
     expect(uninstaller).toContain("BlueTanukiUninstall-[A-Za-z0-9-]+\\.status$");
