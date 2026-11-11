@@ -786,6 +786,10 @@ describe("Windows product installer package", () => {
     expect(smoke).toContain('path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`)');
     expect(smoke).toContain("reportInstalledGatewayStartupFailure");
     expect(smoke).toContain("loopback_tcp_listener");
+    expect(smoke).toContain("netstat.exe");
+    expect(smoke).toContain("installed_node_matches");
+    expect(smoke).toContain("gateway_serve_args_match");
+    expect(smoke).toContain("startup_log_lines");
     expect(smoke).toContain("cleanup_uninstall_state");
     expect(uninstaller).toContain("$statusPath.StartsWith($tempRoot");
     expect(uninstaller).toContain("BlueTanukiUninstall-[A-Za-z0-9-]+\\.status$");

@@ -506,6 +506,89 @@ function readFileTail(file: string, maxBytes = 16 * 1024): {
   }
 }
 
+function readInstalledGatewayProcessAndListeners(
+  pid: number | undefined,
+  port: number,
+  expectedNodePath: string,
+): {
+  readonly process_state: "present" | "missing" | "unknown";
+  readonly process_name: string | null;
+  readonly installed_node_matches: boolean | null;
+  readonly gateway_serve_args_match: boolean | null;
+  readonly tcp_query_state: "readable" | "unavailable";
+  readonly tcp_listeners: readonly { readonly address: string; readonly process_id: number }[];
+} {
+  const empty = {
+    process_state: "unknown" as const,
+    process_name: null,
+    installed_node_matches: null,
+    gateway_serve_args_match: null,
+    tcp_query_state: "unavailable" as const,
+    tcp_listeners: [] as const,
+  };
+  if (process.platform !== "win32") return empty;
+
+  const script = [
+    "$targetPid = [int]$env:BLUE_TANUKI_DIAG_PID",
+    "$targetPort = [int]$env:BLUE_TANUKI_DIAG_PORT",
+    "$expectedNode = [IO.Path]::GetFullPath($env:BLUE_TANUKI_DIAG_NODE)",
+    "$process = if ($targetPid -gt 0) { Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $targetPid) -ErrorAction SilentlyContinue } else { $null }",
+    "$processName = if ($process) { [string]$process.Name } else { $null }",
+    "$installedNodeMatches = if ($process -and $process.ExecutablePath) { [string]::Equals([IO.Path]::GetFullPath([string]$process.ExecutablePath), $expectedNode, [StringComparison]::OrdinalIgnoreCase) } else { $null }",
+    "$commandLine = if ($process) { [string]$process.CommandLine } else { '' }",
+    "$gatewayServeArgsMatch = if ($process) { $commandLine.IndexOf('apps/gateway/dist/main.js', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $commandLine.IndexOf('--serve', [StringComparison]::OrdinalIgnoreCase) -ge 0 } else { $null }",
+    "$queryState = 'readable'",
+    "$listeners = @()",
+    "$netstat = Join-Path $env:SystemRoot 'System32\\netstat.exe'",
+    "if (-not (Test-Path -LiteralPath $netstat -PathType Leaf)) { $queryState = 'unavailable' } else { $rows = @(& $netstat -ano -p tcp 2>$null); if ($LASTEXITCODE -ne 0) { $queryState = 'unavailable' } else { $listeners = @($rows | ForEach-Object { $parts = ([string]$_).Trim() -split '\\s+'; if ($parts.Count -ge 5 -and $parts[0] -eq 'TCP' -and $parts[1] -match (':' + [regex]::Escape([string]$targetPort) + '$') -and $parts[3] -eq 'LISTENING' -and $parts[4] -match '^\\d+$') { [ordered]@{ address = [string]$parts[1]; process_id = [int]$parts[4] } } }) } }",
+    "$result = [ordered]@{ process_state = if ($process) { 'present' } else { 'missing' }; process_name = $processName; installed_node_matches = $installedNodeMatches; gateway_serve_args_match = $gatewayServeArgsMatch; tcp_query_state = $queryState; tcp_listeners = @($listeners) }",
+    "$result | ConvertTo-Json -Compress -Depth 4",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      ...isolatedChildEnv,
+      BLUE_TANUKI_DIAG_PID: String(pid ?? 0),
+      BLUE_TANUKI_DIAG_PORT: String(port),
+      BLUE_TANUKI_DIAG_NODE: expectedNodePath,
+    },
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) return empty;
+  try {
+    const parsed = JSON.parse((result.stdout ?? "").trim()) as {
+      process_state?: unknown;
+      process_name?: unknown;
+      installed_node_matches?: unknown;
+      gateway_serve_args_match?: unknown;
+      tcp_query_state?: unknown;
+      tcp_listeners?: unknown;
+    };
+    const listeners = Array.isArray(parsed.tcp_listeners)
+      ? parsed.tcp_listeners.slice(0, 8).flatMap((listener) => {
+        if (!listener || typeof listener !== "object") return [];
+        const row = listener as { address?: unknown; process_id?: unknown };
+        if (typeof row.address !== "string" || typeof row.process_id !== "number") return [];
+        return [{ address: row.address.slice(0, 64), process_id: row.process_id }];
+      })
+      : [];
+    return {
+      process_state: parsed.process_state === "present" ? "present" : parsed.process_state === "missing" ? "missing" : "unknown",
+      process_name: typeof parsed.process_name === "string" ? parsed.process_name.slice(0, 64) : null,
+      installed_node_matches: typeof parsed.installed_node_matches === "boolean" ? parsed.installed_node_matches : null,
+      gateway_serve_args_match: typeof parsed.gateway_serve_args_match === "boolean" ? parsed.gateway_serve_args_match : null,
+      tcp_query_state: parsed.tcp_query_state === "readable" ? "readable" : "unavailable",
+      tcp_listeners: listeners,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function redactStartupDiagnostic(
   value: string,
   secretValues: readonly string[],
@@ -527,6 +610,7 @@ function redactStartupDiagnostic(
 }
 
 async function reportInstalledGatewayStartupFailure(
+  installRoot: string,
   dataRoot: string,
   port: number,
   env: Record<string, string>,
@@ -570,17 +654,29 @@ async function reportInstalledGatewayStartupFailure(
   const startupEvents = startupEventMarkers
     .filter(([, marker]) => marker.test(stdout.text))
     .map(([name]) => name);
+  const startupLogLines = stdout.text.split(/\r?\n/)
+    .filter((line) => /webchat listening|Gateway startup blocked|shutting down|\bfatal\b/i.test(line))
+    .slice(-8)
+    .map((line) => redactStartupDiagnostic(line, secretValues, privatePaths));
   const startupBlocked = /Gateway startup blocked before inbound channels/i.test(`${stdout.text}\n${stderr.text}`);
   const tcpListening = await probeLoopbackTcp(port);
+  const processAndListeners = readInstalledGatewayProcessAndListeners(pid, port, findBundledNode(installRoot));
   console.error(`[windows-smoke] installed_gateway_diagnostics ${JSON.stringify({
     resident_pid: pid ?? null,
     pid_process_presence: pidProcessPresence,
+    process_state: processAndListeners.process_state,
+    process_name: processAndListeners.process_name,
+    installed_node_matches: processAndListeners.installed_node_matches,
+    gateway_serve_args_match: processAndListeners.gateway_serve_args_match,
     loopback_tcp_listener: tcpListening ? "accepting" : "not_accepting",
+    tcp_query_state: processAndListeners.tcp_query_state,
+    tcp_listeners: processAndListeners.tcp_listeners,
     stdout_bytes: stdout.bytes,
     stdout_log_state: stdout.state,
     stderr_bytes: stderr.bytes,
     stderr_log_state: stderr.state,
     startup_events: startupEvents,
+    startup_log_lines: startupLogLines,
     startup_blocked_marker: startupBlocked,
     stderr_error_lines: errorLines.length,
   })}`);
@@ -967,7 +1063,7 @@ async function main(): Promise<void> {
     logStep("wait installed gateway healthz");
     const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
     if (!healthReady) {
-      await reportInstalledGatewayStartupFailure(dataRoot, portNumber, env, [work, installRoot, dataRoot, isolatedTemp]);
+      await reportInstalledGatewayStartupFailure(installRoot, dataRoot, portNumber, env, [work, installRoot, dataRoot, isolatedTemp]);
       throw new Error("installed gateway healthz did not become ready");
     }
     logStep("done installed gateway healthz");

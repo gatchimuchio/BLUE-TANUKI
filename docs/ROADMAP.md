@@ -8,13 +8,13 @@
 
 ### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-Windows Actions run `42920784728`（main SHA `fb782f3d712717174befdc1c18a0bb16f41dbd12`）でworkspace buildと2,544-entry package verify（SHA-256=`e0092925916bd66b089bb0fc9070d69b275aa23767a60a185f2080929ded0f9c`）をPASSした。隔離Setup／Repair／autostart／port conflict拒否までPASSしたが、resident Gatewayはhealthz未応答でfirst message未到達。cleanup Uninstallも失敗し、runner内の隔離rootは保全された。これはinstalled Windows経路の未成立であり、通常利用へ進めない。
+Windows Actions run `42936917811`（main SHA `6264f7c7452b1d4fd40f22799f1273614b9234b1`）はworkspace build、Windows package build／verify、展開、初回Setup、Repair、autostart、port conflict拒否をPASSした。resident PID `6604`とGatewayの`webchat listening`起動markerが観測された一方、configured portのloopback TCP／healthzは不成立でfirst messageへ未到達。cleanup Uninstallはpath error／status fileなしでFAILしたが、事後のinstall rootとDataRootは不在だったため、前runのようにroot保全とは記録しない。削除結果の成功記録・終了コードが未確認で、通常利用／first message／Uninstallの閉包は未成立。
 
 今回、PID `17528`はrepo rootをworking directoryとし、smoke installとは別のNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。Launcherのprocess inventoryが相対Gateway引数だけで別processを自installと誤認する欠陥を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。PIDやtest dataは停止・更新・削除していない。
 
 先行run `42917086029`ではRust channel設定不正、run `42918832218`では`tar.exe`のZIP展開失敗を確認し、channel pinとsmoke extractorを修正した。run `42920784728`では修正後の展開とSetup／Repairまで実際に到達し、Gateway healthの実起動欠陥を新たに観測した。
 
-run `42920784728`のcleanup診断から、smokeは製品が許す`%TEMP%`下の所定名と異なる場所へUninstall statusを指定していたため、成功記録を受け取れないことが分かった。status fileを隔離TEMP内の許可名へ修正し、次runではredacted Gateway stderr、起動段階marker、loopback TCP状態を記録する。Gateway health根因を修正後、合成WebChat first message／stop／再起動・回復／Uninstallまで同じ隔離installed経路で続ける。local HKCU uninstall registrationと保留中installは別のconsumerを指すため、参照解決まで変更しない。workflowはread-only token scope、secret／artifact uploadなしで使い、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
+run `42936917811`では隔離TEMP内の許可status pathへ変更済みにも関わらず、Uninstall statusが書かれず一般path errorで終わった。install rootとDataRootが事後に不在だったため、cmd wrapperとstatus書込み／自己削除の境界を調べる。Gateway側は安全なlistenログ行、PIDの実process image／Gateway args、OSのTCP listener tableを次runで採取し、`webchat listening`後の不一致を根因まで追う。rootを修正後、合成WebChat first message／stop／再起動・回復／Uninstallまで同じ隔離installed経路で続ける。local HKCU uninstall registrationと保留中installは別のconsumerを指すため、参照解決まで変更しない。workflowはread-only token scope、secret／artifact uploadなしで使い、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
