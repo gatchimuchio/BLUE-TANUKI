@@ -330,7 +330,8 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT",
     "BLUE_TANUKI_UNINSTALL_TEMP_HELPER",
     "BLUE_TANUKI_UNINSTALL_STATUS_FILE",
-    "exit /b 0",
+    "call \"%~f0\" %*",
+    "&& exit 0 || (",
   ]);
 
   console.log(`windows_installer_verified=${archive}`);

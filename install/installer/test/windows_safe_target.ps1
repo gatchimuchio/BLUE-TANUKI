@@ -270,8 +270,16 @@ try {
   $previousAppData = $env:APPDATA
   $previousUninstallStatus = $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE
   $previousStagedGuard = $env:BLUE_TANUKI_UNINSTALL_SAFE_TARGET
+  $previousTemp = $env:TEMP
+  $previousTmp = $env:TMP
+  $previousNoPause = $env:BLUE_TANUKI_NO_PAUSE
   $env:APPDATA = $testAppData
   $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE = ""
+  $isolatedTemp = Join-Path $tempRoot "uninstall-temp"
+  New-Item -ItemType Directory -Path $isolatedTemp | Out-Null
+  $env:TEMP = $isolatedTemp
+  $env:TMP = $isolatedTemp
+  $env:BLUE_TANUKI_NO_PAUSE = "1"
   try {
     $unlistedFile = Join-Path $productInstall "owner-added-file.txt"
     Set-Content -LiteralPath $unlistedFile -Value "preserve" -Encoding UTF8
@@ -294,19 +302,32 @@ try {
 
     Remove-Item -LiteralPath $unlistedFile -Force
     $metadata.install_root = $productInstall
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../../windows/product/BlueTanukiUninstall.ps1") `
+      -Destination (Join-Path $productInstall "BlueTanukiUninstall.ps1") -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../../windows/product/UninstallBlueTanuki.cmd") `
+      -Destination (Join-Path $productInstall "UninstallBlueTanuki.cmd") -Force
+    $metadata.managed_files_sha256 = Write-ManagedTreeInventory -Root $productInstall `
+      -MetadataFileName "blue-tanuki-install.json" -InventoryFileName "blue-tanuki-managed-files.json" `
+      -ProductId "blue-tanuki-product-install"
     $metadata | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $productInstall "blue-tanuki-install.json") -Encoding UTF8
     $successStagedGuard = Join-Path $env:TEMP ("BlueTanukiSafeTarget-" + [Guid]::NewGuid().ToString("N") + ".ps1")
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../../windows/safe-target.ps1") -Destination $successStagedGuard
     $env:BLUE_TANUKI_UNINSTALL_SAFE_TARGET = $successStagedGuard
     $successStdout = Join-Path $tempRoot "product-uninstall-success.stdout.txt"
     $successStderr = Join-Path $tempRoot "product-uninstall-success.stderr.txt"
-    $successProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-      "-NoProfile", "-NonInteractive", "-File", $productUninstaller,
-      "-InstallRoot", $productInstall, "-DataRoot", $productData, "-Quiet") -PassThru -Wait -NoNewWindow `
+    $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE = Join-Path $env:TEMP ("BlueTanukiUninstall-" + [Guid]::NewGuid().ToString("N") + ".status")
+    $productUninstallerCmd = Join-Path $productInstall "UninstallBlueTanuki.cmd"
+    $successProcess = Start-Process -FilePath "cmd.exe" -ArgumentList @(
+      "/d", "/s", "/c", "`"$productUninstallerCmd`" -Quiet") -WorkingDirectory $tempRoot -PassThru -Wait -NoNewWindow `
         -RedirectStandardOutput $successStdout -RedirectStandardError $successStderr
-    if ($successProcess.ExitCode -ne 0) {
-      $successOutput = (Get-Content -LiteralPath $successStdout -Raw) + (Get-Content -LiteralPath $successStderr -Raw)
-      throw "Windows product uninstall failed for the owned fixture: exit=$($successProcess.ExitCode) $successOutput"
+    $successOutput = (Get-Content -LiteralPath $successStdout -Raw) + (Get-Content -LiteralPath $successStderr -Raw)
+    if ($successProcess.ExitCode -ne 0 -or $successOutput -match "The system cannot find the path specified\." -or
+        $successOutput -notmatch "BLUE-TANUKI uninstall completed\.") {
+      throw "Windows product uninstaller entrypoint failed for the owned fixture: exit=$($successProcess.ExitCode) $successOutput"
+    }
+    if (-not (Test-Path -LiteralPath $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE -PathType Leaf) -or
+        (Get-Content -LiteralPath $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE -Raw).Trim() -ne "exit_code=0") {
+      throw "Windows product uninstaller entrypoint did not produce a successful status receipt"
     }
     if (Test-Path -LiteralPath $productInstall) {
       throw "Windows product uninstall left the owned app fixture behind"
@@ -320,6 +341,9 @@ try {
     $env:APPDATA = $previousAppData
     $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE = $previousUninstallStatus
     $env:BLUE_TANUKI_UNINSTALL_SAFE_TARGET = $previousStagedGuard
+    $env:TEMP = $previousTemp
+    $env:TMP = $previousTmp
+    $env:BLUE_TANUKI_NO_PAUSE = $previousNoPause
   }
 
   Write-Output "windows_target_guard=pass"
