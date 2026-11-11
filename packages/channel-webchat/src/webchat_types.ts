@@ -479,6 +479,40 @@ export interface WebChatGoogleDrivePermissionCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGoogleDrivePublicLinkCreateContentReview {
+  kind: "google_drive_public_link_create";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  target_version_digest: string;
+  operation: "google.drive.write.permissions.create.public_link";
+  file_id: string;
+  file_name: string;
+  parent_ids: readonly string[];
+  drive_id: string | null;
+  file_version: string;
+  file_modified_time: string | null;
+  file_mime_type: "text/plain";
+  file_shared: boolean | null;
+  inherited_permissions_disabled: boolean | null;
+  target_access_scope_complete: true;
+  target_access_scope_digest: string;
+  permissions: WebChatGoogleDrivePermissionCreateContentReview["permissions"];
+  current_content: string;
+  current_content_digest: string;
+  current_content_bytes: number;
+  permission_type: "anyone";
+  permission_role: "reader";
+  sharing_scope: "anyone_with_link";
+  allow_file_discovery: false;
+  notification_email_sent: false;
+  ownership_transfer: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoogleDriveFileTrashContentReview {
   kind: "google_drive_file_trash";
   command_id: string;
@@ -863,6 +897,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |
+  WebChatGoogleDrivePublicLinkCreateContentReview |
   WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview |
   WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCommentCreateContentReview |
   WebChatGitHubPullRequestCommentCreateContentReview |

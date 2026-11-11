@@ -67,6 +67,31 @@ export const GoogleDrivePermissionCreateTargetVersionObservationSchema = z.objec
 export type GoogleDrivePermissionCreateTargetVersionObservation =
   z.infer<typeof GoogleDrivePermissionCreateTargetVersionObservationSchema>;
 
+/** Operation Plan-bound, non-authority preflight evidence for a public, link-only reader grant. */
+export const GoogleDrivePublicLinkCreateTargetVersionObservationSchema = z.object({
+  schema_version: z.literal("blue-tanuki.google-drive-public-link-create-target-version.v1"),
+  operation: z.literal("permissions.create.public_link"),
+  target_identity_digest: DigestSchema,
+  request_payload_digest: DigestSchema,
+  file_id: z.string().min(1).max(512),
+  file_state_digest: DigestSchema,
+  target_access_scope_digest: DigestSchema,
+  target_access_scope_complete: z.literal(true),
+  target_access_scope_entry_count: z.number().int().min(1).max(500),
+  permission_type: z.literal("anyone"),
+  permission_role: z.literal("reader"),
+  allow_file_discovery: z.literal(false),
+  current_content_digest: DigestSchema,
+  current_content_bytes: z.number().int().min(0).max(64_000),
+  command_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema,
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+
+export type GoogleDrivePublicLinkCreateTargetVersionObservation =
+  z.infer<typeof GoogleDrivePublicLinkCreateTargetVersionObservationSchema>;
+
 /** Operation Plan-bound, non-authority preflight evidence for moving one owned text/plain file to Drive trash. */
 export const GoogleDriveTrashTargetVersionObservationSchema = z.object({
   schema_version: z.literal("blue-tanuki.google-drive-trash-target-version.v1"),
@@ -158,6 +183,26 @@ export function googleDrivePermissionCreateRequestPayloadDigest(input: {
     input.file_id,
     input.email_address,
     input.role,
+    false,
+  ]), "utf8").digest("hex");
+}
+
+export function googleDrivePublicLinkCreateTargetIdentityDigest(fileId: string): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.google-drive-public-link-create-target.v1",
+    fileId,
+    "anyone",
+    "reader",
+    false,
+  ]), "utf8").digest("hex");
+}
+
+export function googleDrivePublicLinkCreateRequestPayloadDigest(fileId: string): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.google-drive-public-link-create-payload.v1",
+    fileId,
+    "anyone",
+    "reader",
     false,
   ]), "utf8").digest("hex");
 }

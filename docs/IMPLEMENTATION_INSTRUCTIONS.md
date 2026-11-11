@@ -2,7 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F04.01 Google Docsの限定exportを資料整理consumerへ接続
+## 現行BUILD_BATCH — QE_BUILD / F04.02 Google Driveの公開リンクreader共有を独立L3 consumerへ接続
+
+主語は既存`google.drive.write`と、その候補を扱うHDS-J／Gateway／Executor／Control Centerである。目的は、私有のfile作成・個別ユーザーgrantから独立した`permissions.create.public_link`を追加し、Ownerが公開範囲と公開される現行本文を確認した場合だけ作用候補・承認へ進めること。実provider共有ではなく、通常consumerのコード接続と合成fixture疎通までを扱う。
+
+公開操作はOwner taskが対象fileと「リンクを知る全員へのreader公開」を明示した場合だけ候補化する。引数は`sharing_scope=anyone_with_link`、`role=reader`、`allow_file_discovery=false`に固定し、既存の非公開作成／共有許可を転用しない。対象は認証中Ownerが所有するMy Driveの単一`text/plain` file、本文はUTF-8 64,000 byte以内。既存の有効な`anyone` permission、非完全なACL取得、対象・版・本文の変化は作用前に拒否する。
+
+HDS C計画文、Jのtarget-version検査、Executor、GatewayのL3 content review経路、Control Center表示を同一operationへ接続した。no-store reviewはfile identity／版／アクセス権一覧／公開範囲と本文全体・byte数・SHA-256を表示し、本文は`textContent`で表示する。Approval Gateのhigh／L3、Executor ticket、作用直前の再照合を維持する。Drive APIへは`type=anyone`／`role=reader`／`allowFileDiscovery=false`だけを送る。通知メール・所有権移転は要求しない。
+
+作用後にpermission ID、アクセス権一覧、対象版と本文を再読する。応答不明・readback不一致は自動再送も自動取消もしない。Google側の並行権限／本文変更を原子的に排除できないため、失敗時は公開アクセスが残る可能性と手動で共有状態を確認する必要を伝える。この時点で実際のGoogle Drive API・credential・外部共有は使用していない。
+
+対象確認：protocol／HDS-BRAIN／core／Gateway／channel-webchat buildはPASS。`packages/blue-tanuki/test/google_drive_public_link.test.ts`の合成request fixture 5件はPASS（許可範囲、既存公開grant拒否、レビュー後本文変更、結果不明の再送抑止、readback、L3区分）。Control Center script parseの選択test 1件PASS。`docs:check`／`git diff --check`はPASS（日本語基底の既存移行負債76件を注意表示）。全workspace suite、実provider、served UI、実外部共有、QE_QC／QE_QAはNOT_RUN。
+
+UNIT_ID: F04.02（公開リンク共有の限定slice）
+STATUS: WIRED（HDS計画→J／L3→Broker adapter→合成provider readback→操作結果までのコード経路。実Google Drive動作ではない）
+NEXT_REQUIRED_CONSUMER: 次の独立作業開始時にrev4.0と最新HEADから再選定する。F04親成果、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+SAFETY_STATUS: 公開reader共有専用。非公開許可の転用不可。内容・対象・permission digest不一致時は送信前拒否。送信後の結果不明はpublic accessが残る可能性を明示し、再送・自動取消をしない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／origin／GitHub main=`6e8b9ee1597af12763781b43af5e806860315e0b`。編集前local recovery branch current／previous=`6e8b9ee1597af12763781b43af5e806860315e0b`／`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`、remote backup tagも同じSHA。`git fetch origin main`はmainを取得したが、stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`整理でpermission deniedを報告。迂回・変更はせず、`git worktree list`ではmainのみを確認。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。終了SHAはmain push後にgitで照合する。
+LOCAL_ASSET_STATUS: buildで更新されたignored workspace `dist`とRust `target`生成物、test runner cacheは稼働中の開発生成物として保持。stale worktree metadataはpermission deniedのため未変更・保留。新規の外部artifact／実Drive dataはなし。protected attachment directoriesは未変更。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F04.01 Google Docsの限定exportを資料整理consumerへ接続
 
 主語は既存`google.drive.read`とGatewayの`/organize-drive file_id=<exact-id>`本文consumerである。目的は、既存の単一`text/plain` blob読取に加え、Google Docs native document一種だけを`text/plain` exportで同じ一時・非信頼資料整理経路へ接続すること。F04.01のfile ID／MIME／version・revision／sharing取得と、文書内指示をownerの目的・権限へ昇格させない境界を維持する。
 

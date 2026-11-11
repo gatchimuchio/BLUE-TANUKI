@@ -4167,3 +4167,13 @@ local `corepack pnpm typecheck`、`corepack pnpm validate:packaging`、`corepack
 主語はGatewayから利用者へ返す資料整理projection。projectionの`completed`は原文引用範囲の被覆状態として表示し、owner目的全体の達成とは区別した。「目的達成判定: 未判定」と明示し、owner規則・同一revisionの検証済み結果・M receiptをJが照合する別経路を記載した。Gateway呼出し、status schema、J/M判定、権限、実行、記憶更新は変更していない。
 
 `pnpm --filter @blue-tanuki/hds-brain build`、`pnpm docs:check`、`git diff --check`はPASS。テスト、実served Gateway、実資料、実provider、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。変更はmain commit `a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`に含まれる。
+
+## 2026-11-11 QE_BUILD — F04.02 Google Drive公開リンクreader共有
+
+HDS計画文でOwnerが対象fileと「リンクを知る全員へのreader公開」を明示した場合のみ、専用`permissions.create.public_link`を候補化する。`sharing_scope=anyone_with_link`／`role=reader`／`allow_file_discovery=false`に固定し、一般の非公開作成・個別grantからの転用を拒否する。認証Owner所有のMy Drive `text/plain`一件、UTF-8 64,000 byte以内に限定し、既存のanyone permissionと不完全／staleなtargetを拒否する。
+
+L3 content reviewは現行本文全体、本文bytes／SHA-256、file identity／version、現在ACL、公開範囲、検索discoverability無効、通知なし／owner移転なしをno-storeで表示する。Executor／Gatewayはtarget schemaとreview digestを束縛し、Control Centerは本文を`textContent`で表示する。Drive APIへは`type=anyone`／`role=reader`／`allowFileDiscovery=false`を一度だけ送る。作成permission ID、ACL、file version、本文をreadbackし、内容／scope差異または不明結果は自動再送／自動取消しない。APIが他writerとの同時変更を原子的に排除しないため、異常結果では公開permissionが残る可能性を明示する。
+
+protocol／HDS-BRAIN／core／Gateway／channel-webchat build PASS。新規合成fixture 5/5 PASS（review内容と非作用、公開scope固定、既存public grant拒否、review後本文変更拒否、成功readback、結果不明で一回のみ、L3必須）。Control Center script parse選択test 1/1 PASS。`docs:check`／`git diff --check` PASS（日本語基底の既存移行負債76件は注意表示）。全suite、実Google API／credential、served UI、外部共有、5OS、QE_QC／QE_QAはNOT_RUN。状態はF04.02公開共有sliceの`WIRED`であり、F04親成果や製品全体完成ではない。
+
+開始local／origin／GitHub main=`6e8b9ee1597af12763781b43af5e806860315e0b`。編集前local recovery branches／remote backup tags current／previous=`6e8b9ee1597af12763781b43af5e806860315e0b`／`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`。protected attachment directoriesは保持。`dist`とRust `target`は開発用生成物として保持。external artifacts／real Drive dataは生成していない。

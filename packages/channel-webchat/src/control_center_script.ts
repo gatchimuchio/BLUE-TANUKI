@@ -7151,6 +7151,109 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "置換前後の本文とアクセス範囲を再確認";
           return;
         }
+        if (review.kind === "google_drive_public_link_create") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validOptionalString = function (value, max) {
+            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+          };
+          const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
+            review.permissions.length <= 500 && review.permissions.every(function (permission) {
+              return permission && ["user", "group", "domain", "anyone"].includes(permission.type) &&
+                typeof permission.role === "string" && permission.role.length > 0 && permission.role.length <= 128 &&
+                validOptionalString(permission.email_address, 320) && validOptionalString(permission.domain, 320) &&
+                (permission.allow_file_discovery === null || typeof permission.allow_file_discovery === "boolean") &&
+                validOptionalString(permission.expiration_time, 128) && typeof permission.deleted === "boolean" &&
+                Array.isArray(permission.permission_details) && permission.permission_details.length <= 32 &&
+                permission.permission_details.every(function (detail) {
+                  return detail && validOptionalString(detail.permission_type, 128) &&
+                    validOptionalString(detail.role, 128) &&
+                    (detail.inherited === null || typeof detail.inherited === "boolean") &&
+                    validOptionalString(detail.inherited_from, 512);
+                });
+            });
+          if (review.command_id !== commandId || review.operation !== "google.drive.write.permissions.create.public_link" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.permission_type !== "anyone" || review.permission_role !== "reader" ||
+              review.sharing_scope !== "anyone_with_link" || review.allow_file_discovery !== false ||
+              review.notification_email_sent !== false || review.ownership_transfer !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.target_access_scope_digest) ||
+              typeof review.file_id !== "string" || review.file_id.length === 0 || review.file_id.length > 512 ||
+              typeof review.file_name !== "string" || review.file_name.length === 0 || review.file_name.length > 512 ||
+              !Array.isArray(review.parent_ids) || review.parent_ids.length === 0 || review.parent_ids.length > 32 ||
+              review.parent_ids.some(function (id) { return typeof id !== "string" || id.length === 0 || id.length > 512; }) ||
+              review.drive_id !== null || typeof review.file_version !== "string" ||
+              review.file_version.length === 0 || review.file_version.length > 128 ||
+              !validOptionalString(review.file_modified_time, 128) ||
+              (review.file_shared !== null && typeof review.file_shared !== "boolean") ||
+              (review.inherited_permissions_disabled !== null && typeof review.inherited_permissions_disabled !== "boolean") ||
+              review.file_mime_type !== "text/plain" || review.target_access_scope_complete !== true || !validPermissions ||
+              typeof review.current_content !== "string" || review.current_content_bytes < 0 || review.current_content_bytes > 64000 ||
+              new TextEncoder().encode(review.current_content).byteLength !== review.current_content_bytes ||
+              !isDigest(review.current_content_digest)) {
+            throw new Error("公開リンクの対象・共有範囲・公開される本文がこの承認要求へ結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "公開リンク共有：リンクを知る全員に閲覧を許可";
+          view.appendChild(heading);
+          const warning = document.createElement("p");
+          warning.className = "warning";
+          warning.textContent = "このファイルの本文はリンクを知る人が閲覧できます。リンクが転送されると、その相手にも閲覧されます。検索で見つけられる設定は無効ですが、リンクを知る人への公開です。";
+          view.appendChild(warning);
+          [
+            ["対象ファイル", review.file_name],
+            ["ファイルID", review.file_id],
+            ["現在版", review.file_version],
+            ["親フォルダーID", review.parent_ids.join(", ")],
+            ["付与する権限", "リンクを知る全員・閲覧者"],
+            ["検索での検出", "無効"],
+            ["通知メール", "送信しない"],
+            ["所有権移転", "しない"],
+            ["公開本文のUTF-8 bytes / SHA-256", String(review.current_content_bytes) + " / " + review.current_content_digest],
+            ["アクセス範囲digest", review.target_access_scope_digest],
+            ["対象版digest", review.target_version_digest],
+            ["Operation Plan束縛digest", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const contentHeading = document.createElement("strong");
+          contentHeading.textContent = "公開される本文（全体）";
+          const content = document.createElement("pre");
+          content.textContent = review.current_content;
+          view.append(contentHeading, content);
+          const scopeHeading = document.createElement("strong");
+          scopeHeading.textContent = "現在のアクセス権限（" + review.permissions.length + "件）";
+          view.appendChild(scopeHeading);
+          review.permissions.forEach(function (permission) {
+            const principal = permission.type === "anyone" ? "全員（公開範囲）" :
+              permission.type === "domain" ? "ドメイン " + (permission.domain || "不明") :
+                permission.type === "group" ? "グループ " + (permission.email_address || "不明") :
+                  "ユーザー " + (permission.email_address || "不明");
+            const item = document.createElement("p");
+            item.textContent = principal + " / 権限=" + permission.role +
+              (permission.deleted ? " / 削除済み権限" : "");
+            view.appendChild(item);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "確認内容と本文は保存されません。承認直前・要求直前に対象版、本文、現在のアクセス権限を再読取し、共有後にも権限と本文を再照合します。Drive APIは同一ファイルへの並行権限変更や本文変更を原子的に防げず、最終照合直後の他writerとの競合は排除できません。結果不明・本文不一致時は自動再送・自動取消をしません。公開アクセスが残る可能性があるため、Driveで現在の共有状態を確認してください。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "公開範囲と公開される本文を再確認";
+          return;
+        }
         if (review.kind === "google_drive_permission_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {

@@ -19,6 +19,7 @@ import {
   GoogleDriveWriteTargetVersionObservationSchema,
   GoogleDriveUpdateTargetVersionObservationSchema,
   GoogleDrivePermissionCreateTargetVersionObservationSchema,
+  GoogleDrivePublicLinkCreateTargetVersionObservationSchema,
   GoogleDriveTrashTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
@@ -271,7 +272,7 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     return `file:${await brokerFileResourceLockDigest(tool_name, args)}`;
   }
   if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
-      ["file.update", "permissions.create", "file.trash"].includes(String(args.operation))) {
+      ["file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(args.operation))) {
     return `google-drive:${createHash("sha256").update(args.file_id, "utf8").digest("hex")}`;
   }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
@@ -693,7 +694,9 @@ function approveCommandForExecution(
       : snapshot.payload.arguments.operation === "file.create"
         ? "blue-tanuki.google-drive-write-target-version.v1"
         : snapshot.payload.arguments.operation === "permissions.create"
-          ? "blue-tanuki.google-drive-permission-create-target-version.v1" : undefined;
+          ? "blue-tanuki.google-drive-permission-create-target-version.v1"
+          : snapshot.payload.arguments.operation === "permissions.create.public_link"
+            ? "blue-tanuki.google-drive-public-link-create-target-version.v1" : undefined;
     if (!hds_binding?.operation_plan_binding_digest || !expectedDriveTargetVersion ||
         target_version_observation?.schema_version !== expectedDriveTargetVersion) {
     throw new Error("Executor approval rejected: google.drive.write requires an Operation Plan-bound target version observation");
@@ -954,6 +957,8 @@ export class Executor {
           ? GoogleDriveUpdateTargetVersionObservationSchema.parse(rawObservation)
           : command.payload.arguments.operation === "permissions.create"
             ? GoogleDrivePermissionCreateTargetVersionObservationSchema.parse(rawObservation)
+            : command.payload.arguments.operation === "permissions.create.public_link"
+              ? GoogleDrivePublicLinkCreateTargetVersionObservationSchema.parse(rawObservation)
             : GoogleDriveWriteTargetVersionObservationSchema.parse(rawObservation);
       return Object.freeze(assertGoogleDriveWriteTargetVersion(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest));
@@ -1350,6 +1355,7 @@ export class Executor {
       if (!operationPlanBindingDigest ||
           (command.payload.arguments.operation !== "file.create" && command.payload.arguments.operation !== "file.update" &&
             command.payload.arguments.operation !== "permissions.create" &&
+            command.payload.arguments.operation !== "permissions.create.public_link" &&
             command.payload.arguments.operation !== "file.trash")) {
         throw new Error("google.drive.write content review requires a plan-bound supported operation");
       }
@@ -1411,6 +1417,38 @@ export class Executor {
         const { review_digest: reviewDigest, ...reviewBody } = review;
         if (operationPlanDigest(reviewBody) !== reviewDigest) {
           throw new Error("google.drive.write permissions.create content review digest was invalid");
+        }
+        return review;
+      }
+      if (args.operation === "permissions.create.public_link") {
+        const validPublicLinkReview = "kind" in review && review.kind === "google_drive_public_link_create" &&
+          review.command_digest === operationPlanDigest(command) &&
+          review.operation_plan_binding_digest === operationPlanBindingDigest &&
+          review.operation === "google.drive.write.permissions.create.public_link" && review.file_id === args.file_id &&
+          review.file_mime_type === "text/plain" && review.permission_type === "anyone" &&
+          review.permission_role === "reader" && review.sharing_scope === "anyone_with_link" &&
+          review.allow_file_discovery === false && review.notification_email_sent === false &&
+          review.ownership_transfer === false && review.target_access_scope_complete === true &&
+          typeof review.current_content === "string" && Buffer.byteLength(review.current_content, "utf8") === review.current_content_bytes &&
+          review.current_content_bytes >= 0 && review.current_content_bytes <= 64_000 &&
+          /^[a-f0-9]{64}$/.test(review.current_content_digest) &&
+          createHash("sha256").update(review.current_content, "utf8").digest("hex") === review.current_content_digest &&
+          /^[a-f0-9]{64}$/.test(review.target_access_scope_digest) &&
+          Array.isArray(review.permissions) && review.permissions.length >= 1 && review.permissions.length <= 500 &&
+          typeof review.file_name === "string" && review.file_name.length > 0 && review.file_name.length <= 512 &&
+          Array.isArray(review.parent_ids) && review.parent_ids.length >= 1 && review.parent_ids.length <= 128 &&
+          review.drive_id === null && typeof review.file_version === "string" &&
+          review.file_version.length > 0 && review.file_version.length <= 128 &&
+          /^[a-f0-9]{64}$/.test(review.request_payload_digest) &&
+          /^[a-f0-9]{64}$/.test(review.target_version_digest) &&
+          /^[a-f0-9]{64}$/.test(review.review_digest) &&
+          review.used_for_authority === false && review.may_execute === false;
+        if (!validPublicLinkReview) {
+          throw new Error("google.drive.write public-link content review returned evidence for another command, target, or plan source");
+        }
+        const { review_digest: reviewDigest, ...reviewBody } = review;
+        if (operationPlanDigest(reviewBody) !== reviewDigest) {
+          throw new Error("google.drive.write public-link content review digest was invalid");
         }
         return review;
       }

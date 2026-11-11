@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — F04.01 Google Docs本文を資料整理consumerへ接続
+### 直近完了BUILD_BATCH — F04.02 Google Drive公開リンクreader共有の限定consumer
+
+`google.drive.write`へ専用`permissions.create.public_link`を接続した。Owner taskで対象と「リンクを知る全員へのreader公開」を明示し、`allow_file_discovery=false`を固定する。認証Owner所有のMy Drive `text/plain`一件だけを対象とし、既存公開grant・版／本文／アクセスscope変化は拒否する。no-store L3 reviewで公開本文全体とACLを示し、作用直前と作用後にpermission・版・本文を再読して確認する。失敗時は自動再送／自動取消を行わず、公開状態が残る可能性を返す。
+
+protocol／HDS-BRAIN／core／Gateway／channel-webchat buildはPASS。合成provider fixture 5件PASS。実provider／credential／Drive共有／served UI／全suite／QE_QC／QE_QAはNOT_RUN。これはF04.02の限定`WIRED` sliceであり、F04親成果・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。実装は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)、詳細証拠は[実装履歴](IMPLEMENTATION_HISTORY.md)に記録する。次の独立作業はrev4.0と最新HEADから選定する。
+
+### 前段完了BUILD_BATCH — F04.01 Google Docs本文を資料整理consumerへ接続
 
 既存`google.drive.read`の単一exact file読取について、`text/plain` blobに加えGoogle Docs native document一種を`files.export`の`text/plain`で既存の一時資料整理consumerへ接続した。元ファイルのsizeとexport sizeを比較せず、実export bytesをconsumer上限12,000以内に制限する。読取前後のfile/version/revision/sharing state digestを照合し、strict UTF-8、SHA-256、untrusted-document境界、直接本文表示・書込みなしを維持する。Slides／Sheets等の他Workspace形式は未対応。
 

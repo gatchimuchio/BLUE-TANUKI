@@ -2195,7 +2195,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           : cmd.payload.arguments.operation === "file.create"
             ? "blue-tanuki.google-drive-write-target-version.v1"
             : cmd.payload.arguments.operation === "permissions.create"
-              ? "blue-tanuki.google-drive-permission-create-target-version.v1" : undefined
+              ? "blue-tanuki.google-drive-permission-create-target-version.v1"
+              : cmd.payload.arguments.operation === "permissions.create.public_link"
+                ? "blue-tanuki.google-drive-public-link-create-target-version.v1" : undefined
         : undefined;
       const observedDriveTargetVersionDigest = expectedDriveTargetVersion !== undefined &&
         targetVersionObservation?.schema_version === expectedDriveTargetVersion
@@ -3160,7 +3162,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       (pending.command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
       (pending.command.payload.tool_name === "google.drive.write" &&
-        ["file.create", "file.update", "permissions.create", "file.trash"].includes(String(pending.command.payload.arguments.operation))) ||
+        ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(pending.command.payload.arguments.operation))) ||
       (pending.command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(pending.command.payload.arguments.operation)))
     );
@@ -4907,6 +4909,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (pending.command.payload.arguments.operation === "file.create" ||
           pending.command.payload.arguments.operation === "file.update" ||
           pending.command.payload.arguments.operation === "permissions.create" ||
+          pending.command.payload.arguments.operation === "permissions.create.public_link" ||
           pending.command.payload.arguments.operation === "file.trash") &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -4916,7 +4919,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const expectedKind = pending.command.payload.arguments.operation === "file.trash"
           ? "google_drive_file_trash" : pending.command.payload.arguments.operation === "file.update"
             ? "google_drive_file_update" : pending.command.payload.arguments.operation === "permissions.create"
-              ? "google_drive_permission_create" : "google_drive_file_create";
+              ? "google_drive_permission_create" : pending.command.payload.arguments.operation === "permissions.create.public_link"
+                ? "google_drive_public_link_create" : "google_drive_file_create";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
             snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
@@ -5088,6 +5092,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         (pending.command.payload.arguments.operation === "file.create" ||
           pending.command.payload.arguments.operation === "file.update" ||
           pending.command.payload.arguments.operation === "permissions.create" ||
+          pending.command.payload.arguments.operation === "permissions.create.public_link" ||
           pending.command.payload.arguments.operation === "file.trash")) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -5100,7 +5105,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const expectedKind = pending.command.payload.arguments.operation === "file.trash"
           ? "google_drive_file_trash" : pending.command.payload.arguments.operation === "file.update"
             ? "google_drive_file_update" : pending.command.payload.arguments.operation === "permissions.create"
-              ? "google_drive_permission_create" : "google_drive_file_create";
+              ? "google_drive_permission_create" : pending.command.payload.arguments.operation === "permissions.create.public_link"
+                ? "google_drive_public_link_create" : "google_drive_file_create";
         return current && "kind" in current && current.kind === expectedKind &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
@@ -5204,7 +5210,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             (p.command.payload.tool_name === "github.write" &&
               ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&
-              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))))) ||
+              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))) ||
+            (p.command.payload.tool_name === "google.drive.write" &&
+              ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"]
+                .includes(String(p.command.payload.arguments.operation))))) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),
