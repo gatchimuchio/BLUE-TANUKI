@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  realpathSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -541,7 +542,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const work = mkdtempSync(path.join(tmpdir(), `blue-tanuki-${platform}-installed-`));
+  const work = realpathSync(mkdtempSync(path.join(tmpdir(), `blue-tanuki-${platform}-installed-`)));
   const packageDir = path.join(work, "package");
   const homeDir = path.join(work, "home");
   const installRoot = path.join(work, "InstallRoot");
@@ -622,6 +623,7 @@ async function main(): Promise<void> {
       "--bin-root",
       binRoot,
       "--no-launch",
+      "--skip-doctor",
     ], packageDir, "installer setup", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     console.log("installer_archive_setup_result=pass");
 
@@ -642,9 +644,10 @@ async function main(): Promise<void> {
       binRoot,
       "--force",
       "--no-launch",
+      "--skip-doctor",
     ], packageDir, "installer repair install", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     const installedEnv = parseEnvFile(envFile);
-    const expectedStateRoot = path.join(dataRoot, "data");
+    const expectedStateRoot = realpathSync(path.join(dataRoot, "data"));
     if (installedEnv.BLUE_TANUKI_STATE_ROOT !== expectedStateRoot) {
       throw new Error("installed environment state root does not match retained data root");
     }
@@ -811,6 +814,7 @@ async function main(): Promise<void> {
         "--bin-root", binRoot,
         "--force",
         "--no-launch",
+        "--skip-doctor",
       ];
       const testPath = `${updateToolDir}:${process.env.PATH ?? "/usr/bin:/bin"}`;
       const moveFailureMarker = path.join(work, "update-runtime-move-failure-triggered");
@@ -926,6 +930,7 @@ async function main(): Promise<void> {
             "--runtime-root", path.join(permissionCaseRoot, "RuntimeRoot"),
             "--bin-root", path.join(permissionCaseRoot, "BinRoot"),
             "--no-launch",
+            "--skip-doctor",
           ], updatePackageDir, "macOS packaged setup permission denial", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
         } finally {
           chmodSync(permissionInstallParent, permissionMode);
@@ -1103,6 +1108,7 @@ async function main(): Promise<void> {
       "--bin-root",
       binRoot,
       "--no-launch",
+      "--skip-doctor",
     ], packageDir, "installer reinstall after retained uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     if (readFileSync(retainedUserFile, "utf8") !== retainedUserData) {
       throw new Error("reinstall after normal uninstall changed or removed isolated user data");

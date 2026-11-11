@@ -6,14 +6,14 @@
 
 主語はmacOS x64／arm64のpackaged `BlueTanukiSetup.sh`、resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`とその実consumerである。目的は、native macOS runner上の隔離installで更新失敗rollback、中断更新からの復旧、resident再起動、権限拒否、ログの読取、通常削除後のDataRoot／ConfigRoot／runtime state／ログ保持、明示Purgeを別結果として確認すること。G04.03の実装接続であり、実機QAやmacOS再起動を証明しない。
 
-既存`scripts/smoke_unix_installed.ts`の更新失敗rollback／中断復旧fixtureはLinuxだけで実行されていたため、実際のmacOS packaged consumerにも接続する。macOS向けに専用の書込不可Install parentを使ってpermission-denialを確認し、そのmodeは必ず元へ戻す。`linux-installed-package-build-smoke.yml`は既存の`workflow_dispatch`限定・`contents: read`を維持し、macOS x64／arm64 native jobから同じarchive lifecycle smokeを呼ぶ。user data、credential、実provider、別repoには作用しない。
+既存`scripts/smoke_unix_installed.ts`の更新失敗rollback／中断復旧fixtureはLinuxだけで実行されていたため、実際のmacOS packaged consumerにも接続する。smoke用temp rootは作成後にrealpathで正規化し、`/var`／`/private/var`表記差を製品のpath比較へ持ち込まない。G04.03の反復Setupではpost-install Doctorをskipし、独立したLauncher Doctor probeは残す。macOS向けに専用の書込不可Install parentを使ってpermission-denialを確認し、そのmodeは必ず元へ戻す。`linux-installed-package-build-smoke.yml`は既存の`workflow_dispatch`限定・`contents: read`を維持し、macOS x64／arm64 native jobから同じarchive lifecycle smokeを呼ぶ。user data、credential、実provider、別repoには作用しない。
 
 失敗時は既存InstallRoot／RuntimeRoot／DataRoot／ConfigRootを変えずfail-closedで停止することを確認する。ログ内容は標準出力へ流さず、隔離profile内のlog path・存在・保持だけを検査する。runner内resident restartとtransaction recoveryは確認対象だが、ホストOS reboot、owner実機、署名・notary、実credential／外部作用は対象外であり、`NOT_RUN`として保持する。QE_BUILDの限定consumerであり、G04.03全体、G04親成果、macOS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。
 
 UNIT_ID: G04.03 macOS update / recovery / uninstall consumer
 STATUS: IN_PROGRESS（現行packaged consumerへのmacOS x64／arm64接続を施工中）
 NEXT_REQUIRED_CONSUMER: G04.03のnative実行とローカル最小検証を閉じた後、rev4.0全体工程表の依存関係から次の未接続producer／consumerを再読して選定する。
-MINIMAL_TECH_CHECKS: 変更したsmokeの型検査、shell構文、対象scriptの局所確認、固定SHAでのnative macOS x64／arm64 packaged lifecycle smokeを行う。全suite／異常網羅／host OS reboot／owner実機QAは対象外。
+MINIMAL_TECH_CHECKS: 変更したsmokeの型検査、shell構文、対象scriptの局所確認、固定SHAでのnative macOS x64／arm64 packaged lifecycle smokeを行う。初回導入後のSetup Doctorは既存scope外としてskipし、Launcher Doctor probeだけを行う。全suite／異常網羅／host OS reboot／owner実機QAは対象外。
 SAFETY_STATUS: 合成packageとrun固有一時rootのみ。専用Install parentのmodeを一時変更するfixture以外にhost設定を変更しない。provider、実資格情報、署名・notary、Keychain、外部作用、別repo変更なし。
 LOCAL_ASSET_STATUS: 施工中。生成package／log／一時rootは分類し、run後cleanupを確認する。protected attachment directoriesは保持。
 CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`cb5ab4d1971b47b6cf9591a845eab525930780a7`。意味のある編集前にlocal recovery branch current=`cb5ab4d1971b47b6cf9591a845eab525930780a7`／previous=`dd2b6fa743b9b69031b820a598aa445541a494c6`、remote tagも同SHAへ更新・readback済み。単一checkoutは`main`。未追跡`.codex-attachments/`／`.codex-remote-attachments/`は保護対象として未変更。stale worktree metadataのACL拒否は保留し迂回しない。
