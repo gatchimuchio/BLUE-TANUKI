@@ -2,22 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows DataRoot通常保持・再導入・明示Purge
+## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
-主語はWindows installed packageのSetup／Uninstallと、そのDataRootを使い直す後続Setup。目的は、通常UninstallがInstallRootと登録を外しつつ利用者データを保全し、同じDataRootでの再Setup後もデータが使えること、明示`-PurgeData`だけが隔離smokeのDataRootを削除することをinstalled consumerで接続すること。rev4.0の全体施工P2と現在の高リスク優先「Windows製品Setup→Uninstall動的Dの未観測」に従う。G02.03全体、Windows Desktop QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`の成立は主張しない。
+主語はWindows installed packageのSetupと、更新前InstallRoot／DataRootを引き継ぐ再Setup。目的は、更新失敗で検証済み旧app／bundled runtime・設定・利用者DataRootを復元し、Setup process中断後の次回Setupが旧版を復元して更新を再開する実consumerを接続すること。rev4.0 G02.03の`BT-R-G02-04`を主対象にし、`BT-R-G02-05`の非署名・OS保護境界を変えず、`BT-R-G02-06`の通常保持／明示Purgeを維持する。G02.03全体、実OS再起動、Windows Desktop QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は主張しない。
 
-直前にownerが選んだC08.02達成条件（現行J正本へ結び付く明示規則、同一revisionの検証済み結果、M receipt）は既存実装にあり、再起動復帰・一致達成／不一致保留・達成後停止を合成consumerで再確認した。これはローカル限定WIREDであり、実providerや製品全体の証拠ではない。
+`install/windows/safe-target.ps1`の中断復旧は、復元した旧managed installを再検証し、同じtransaction GUIDを持つstaging siblingをmanaged inventory・対象InstallRoot/DataRoot・直接親・reparse不在で検証した場合だけ削除する。検証／削除が成立しないstagingは警告付きで保留する。`scripts/smoke_windows_installed.ts`は隔離package複製に合成markerを加え、旧appのbackup移動直後に注入失敗・process停止を行う。次に実Setupをbackup移動直後で停止し、旧app／runtime・設定bytes・DataRoot sentinel・resident process・registryを別々に観測してから、次Setupによる復元・更新再開・staging片付けを確認する経路を追加した。`validate_product.ts`と`validate_packaging.ts`も3つの更新lifecycle markerを必須化した。
 
-製品Uninstallは既定で登録済みDataRootの全内容を保持し、`-PurgeData`だけが完全削除する実装を持つ。既存installed smokeは明示Purgeしか通していなかったため、`scripts/smoke_windows_installed.ts`を「通常Uninstall→InstallRootと登録の消失／env bytesと合成sentinelの保持→同じInstallRoot／DataRootで再Setup→保持内容と登録の確認→明示Purge→隔離DataRootの消失」へ延長した。変更はsmoke harnessだけで、製品削除対象・権限・workflow triggerは変えていない。
+ローカル`pnpm typecheck`、`pnpm build`（15 workspace projects）、`safe-target.ps1`／Setup.ps1／smoke内PowerShell hookの構文解析、`git diff --check`はPASS。local installed smokeは既存product install／HKCU登録を触らないためNOT_RUN。Windows Server 2022 workflowは`workflow_dispatch`限定・`refs/heads/main`限定・`contents: read`である。commit `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`へのdispatchはGit credential経由のGitHub APIがHTTP 403を返し、該当SHAのrunは確認できなかった。hosted／installed runtime evidenceはNOT_RUNであり、ローカル静的PASSに昇格しない。
 
-ローカル`pnpm typecheck`と`pnpm build`（15 workspace project）はPASS。現在のhostに残る保留中product install／HKCU登録を触らないためinstalled smokeはローカル実行しない。`.github/workflows/windows-installed-package-build-smoke.yml`は`workflow_dispatch`かつ`refs/heads/main`限定、`contents: read`のみ。run `42958390912`（Windows Server 2022、main SHA `46c31ced7855afcc945fcc097a014d6865dfd239`）はworkspace build／package build・verify／installed smokeがPASSし、`uninstall_data_retention_result=pass`、`reinstall_retained_data_result=pass`、`uninstall_data_purge_result=pass`、`windows_installed_smoke=pass`を同一runで確認した。secret／artifact uploadなし。証拠は同runnerの隔離InstallRoot／DataRootに限る。
-
-UNIT_ID: G02.03 Windows DataRoot retention／same-root reinstall／explicit purge consumer
-STATUS: WIRED（Windows Server 2022 hosted BUILDの同一installed smokeで通常Uninstall後のInstallRoot／登録削除、env bytes／合成sentinel保持、同一root再Setup、登録復帰、明示Purgeを確認。G02.03全体には拡張しない）
-NEXT_REQUIRED_CONSUMER: G02.03のWindows installed update失敗rollback／中断復旧と設定・DataRoot保持を現HEADから接続する。署名状態・OS保護を変更せず、失敗後のapp/runtime/data/process結果を別々に観測する。
-SAFETY_STATUS: 作業中のsmokeはrun固有temp配下の隔離InstallRoot／DataRootだけを扱う。通常Uninstallでsentinel／env bytesが変われば失敗とし、実ユーザーデータ、保留中local install／registry、別repoには作用しない。明示Purgeは同runが生成した隔離DataRootだけを対象にする。
-LOCAL_ASSET_STATUS: `pnpm typecheck`が除去したignored `dist`／tsbuildinfoは成功した`pnpm build`で再生成し、開発環境として保持。C08.02の合成test残存root（5 files／151,557 bytes）とrev4.0読取用Tempコピー（3 files／2,363,935 bytes）は内容・所有・非稼働を確認してWindowsゴミ箱へ移し、元path不在と収容を確認。package artifactは生成していない。保護添付／OneDrive資料は未変更。
-CURRENT_HEAD_AND_DIRTY_OWNER: source／smoke／現行記録は`46c31ced7855afcc945fcc097a014d6865dfd239`でmain／origin/main一致。recovery branch／remote tagはcurrent=`979d7de85f22bd876bf6bda36e723d3fd76d0605`／previous=`07dbc1e4b68847280f459e1e94e8f6b55f37f7d4`（次の意味あるBUILD_BATCH編集前に規定どおり回転）。local installed smokeは既存登録条件のためNOT_RUN。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更・未stage。D4-Pocketは別repoでdirty worktree稼働中のため一切変更しない。
+UNIT_ID: G02.03 Windows installed update-failure rollback／interrupted-update recovery consumer
+STATUS: WIRED（実Setupを呼ぶ隔離installed smokeと検証条件を接続した。local installed／hosted runtime実行はNOT_RUN）
+NEXT_REQUIRED_CONSUMER: 認可済みのworkflow_dispatch経路でSHA `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`のWindows 2022 installed smokeを実行し、3 lifecycle markerと終了時worktree状態を確認する。OS自体の再起動後の復帰は別証拠として扱う。
+SAFETY_STATUS: smokeのInstallRoot／DataRoot／package／markerはrun固有一時root内だけ。更新失敗は旧installを動かさず検証し、interruption helperはmarker内PIDが起動したPowerShell child PIDと一致した場合だけそのchildを停止する。秘密値はログへ出さず、署名・Defender等OS保護を変更せず、実provider／外部作用／releaseは行わない。実ユーザーデータ、保留中local install／registry、別repoには作用しない。
+LOCAL_ASSET_STATUS: `pnpm typecheck`で除去されたignored `dist`／tsbuildinfoは成功した`pnpm build`で再生成し、次のWindows開発に必要なbuild出力として保持。package artifactとsmoke Temp rootは生成していない（hosted dispatch未成立）。protected `.codex-attachments/`／`.codex-remote-attachments/`は未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 実装commit `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`はpush時にlocal／remote `main`一致を確認。local recovery branches／remote tagsはcurrent=`e17eae7907e307610ea28595539612f049163d50`／previous=`979d7de85f22bd876bf6bda36e723d3fd76d0605`。本BUILD_BATCHの文書閉鎖commitはこの後mainへ反映する。作業ツリーは保護添付2領域だけ未追跡・未stage。D4-Pocketの`codex/linux-same-source-update` worktreeはdirtyのまま別repoで稼働中、変更なし。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.01・G02.02 Windows package Setupから通常利用へ接続
 
