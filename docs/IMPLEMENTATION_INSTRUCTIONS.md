@@ -15,7 +15,7 @@ Gateway依存7 workspace project buildと`failure_review_runtime.test.ts` 11/11�
 現物の状態:
 
 - BLUE側にAndroid／Mobile製品ソースはなく、`apps/`はGatewayのみ。既存D4 Runtime入力受け口は`packages/channel-webchat/src/webchat.ts`にあり、専用D4 Runtime bearerで`/runtime/ws-ticket`と`/runtime/intent`を扱う。返却は認証済み同一sessionのWebSocket ticketで、入力は既存Gateway handler／HDSへ限定userとして渡す。受け口は存在するが、D4からの接続は未成立。
-- D4 Pocket remote `main`=`c598ab237a1a03f4803c8578bc2933ad005660b6`のMobile契約はMobile→Device Link TLS→Desktop Rust Broker→Shell Core→Adapter→Runtime。Android native側に招待入力・Keystore・TLS clientがある。一方、同じmainの`packages/blue_tanuki_adapter/adapter.py`はhealth／ready等の固定参照応答だけを返し、BLUE Runtimeへ仕事を送る経路を持たない。
+- D4 Pocket remote `main`=`671039ca397136c881bd805ca22334da54cb37be`では、Android native `apps/mobile_flutter/lib/services/device_link_client.dart`が対話開始・送信・取得・中止を含む既存Device Link契約を公開している。一方、`packages/blue_tanuki_adapter/adapter.py`（blob=`670cc387862328c5e6ee91a3e6fee4686016ef02`）はhealth／ready等の固定参照応答だけを返し、BLUE Runtimeへ仕事を送る経路を持たない。Adapterのdialogue producer／同一session結果consumerは未実装。
 - BLUEの`packages/channel-webchat/test/webchat.test.ts`にあるD4 Runtime受け口の限定合成試験5件はPASS（同file内125件はskip）。これはAndroid／D4 Brokerからの送信や実機動作の証拠ではない。
 - 実行時にD4 repoの別checkoutでdirtyな並行作業を観測したため、D4のsource確認は固定したremote `main` SHAの読み取りに限定。D4への編集なし。Android端末なし、AVDなし。
 
