@@ -368,18 +368,24 @@ managed_tree_inventory() {
         digest=-
       elif [ -f "$entry" ]; then
         kind=file
-        size=$(wc -c < "$entry" | tr -d "[:space:]") || exit 1
+        size=$(wc -c < "$entry") || exit 1
+        size=$((size))
         if command -v sha256sum >/dev/null 2>&1; then
-          digest=$(sha256sum < "$entry" 2>/dev/null | cut -c1-64)
+          digest=$(sha256sum < "$entry" 2>/dev/null) || exit 1
         else
-          digest=$(shasum -a 256 < "$entry" 2>/dev/null | cut -c1-64) || exit 1
+          digest=$(shasum -a 256 < "$entry" 2>/dev/null) || exit 1
         fi
+        digest=${digest%% *}
         [ "${#digest}" -eq 64 ] || exit 1
       else
         echo "error: managed tree contains an unsupported filesystem entry: $relative" >&2
         exit 1
       fi
-      path_hex=$(printf "%s" "$relative" | od -An -v -tx1 | tr -d "[:space:]") || exit 1
+      path_hex_bytes=$(printf "%s" "$relative" | od -An -v -tx1) || exit 1
+      set -f
+      set -- $path_hex_bytes
+      path_hex=
+      for path_hex_byte do path_hex=$path_hex$path_hex_byte; done
       printf "%s|%s|%s|%s\\n" "$kind" "$size" "$digest" "$path_hex" >> "$chunk_file" || exit 1
     done
   '

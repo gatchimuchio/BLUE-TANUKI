@@ -190,8 +190,18 @@ list_owned_process_pids() {
   process_lines=$(ps -ww -axo pid= -o stat= -o command= 2>/dev/null) || return 2
   [ -n "$process_lines" ] || return 0
   printf '%s\n' "$process_lines" | while IFS= read -r process_line; do
-    process_line=$(printf '%s\n' "$process_line" | sed 's/^[[:space:]]*//')
-    [ -n "$process_line" ] || continue
+    # Process inventories can be large on macOS. A mandatory identity fragment
+    # cheaply rejects unrelated rows before spawning per-row text utilities;
+    # the full ownership checks below remain authoritative.
+    case "$process_kind" in
+      resident)
+        case "$process_line" in *"apps/gateway/dist/main.js"*) ;; *) continue ;; esac
+        ;;
+      watchdog)
+        case "$process_line" in *"resident-watchdog"*) ;; *) continue ;; esac
+        ;;
+      *) return 2 ;;
+    esac
     # ps emits a numeric PID followed by its command; disable glob expansion while splitting.
     set -f
     set -- $process_line

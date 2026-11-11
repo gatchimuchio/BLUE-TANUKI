@@ -532,7 +532,7 @@ async function receiveFirstMessage(
 async function main(): Promise<void> {
   const platform = targetPlatform();
   const arch = targetArch(platform);
-  const installerTransactionTimeoutMs = platform === "macos" && arch === "x64"
+  const installerTransactionTimeoutMs = platform === "macos"
     ? 900_000
     : INSTALLER_TRANSACTION_TIMEOUT_MS;
   const systemMoveCommand = platform === "macos" ? "/bin/mv" : "/usr/bin/mv";

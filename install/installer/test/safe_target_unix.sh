@@ -1012,6 +1012,10 @@ LIFECYCLE_INSTALL="$LIFECYCLE_ROOT/install"
 LIFECYCLE_DATA="$LIFECYCLE_ROOT/data"
 LIFECYCLE_RUNTIME="$LIFECYCLE_ROOT/runtime"
 LIFECYCLE_NODE="$LIFECYCLE_RUNTIME/bin/node"
+LIFECYCLE_TEST_BIN="$TMP_ROOT/lifecycle-test-bin"
+LIFECYCLE_TEST_REAL_PS=$(command -v ps)
+LIFECYCLE_TEST_REAL_GREP=$(command -v grep)
+LIFECYCLE_TEST_GREP_COUNT="$TMP_ROOT/lifecycle-grep-count"
 mkdir -p "$LIFECYCLE_INSTALL" "$LIFECYCLE_DATA" "$LIFECYCLE_RUNTIME/bin"
 cp "$REPO_ROOT/install/unix/product/BlueTanukiLauncher.sh" "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh"
 cat > "$LIFECYCLE_NODE" <<'NODE'
@@ -1069,12 +1073,42 @@ kill -0 "$LIFECYCLE_GATEWAY_PID" 2>/dev/null || exit 82
 [ ! -e "$LIFECYCLE_DATA/blue-tanuki.stop" ] || exit 83
 [ -f "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 84
 rm -f -- "$LIFECYCLE_DATA/blue-tanuki.pid"
-if ! HOME="$LIFECYCLE_ROOT" sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-stop > "$TMP_ROOT/lifecycle-recovered-stop.out" 2>&1; then
+mkdir -p "$LIFECYCLE_TEST_BIN"
+cat > "$LIFECYCLE_TEST_BIN/ps" <<'PS'
+#!/usr/bin/env sh
+case " $* " in
+  *" -axo "*)
+    "$BLUE_TANUKI_TEST_REAL_PS" "$@" || exit
+    noise_pid=90000000
+    while [ "$noise_pid" -lt 90000400 ]; do
+      printf '%s S /usr/bin/unrelated-process --fixture-noise %s\n' "$noise_pid" "$noise_pid"
+      noise_pid=$((noise_pid + 1))
+    done
+    ;;
+  *) exec "$BLUE_TANUKI_TEST_REAL_PS" "$@" ;;
+esac
+PS
+cat > "$LIFECYCLE_TEST_BIN/grep" <<'GREP'
+#!/usr/bin/env sh
+printf x >> "$BLUE_TANUKI_TEST_GREP_COUNT"
+exec "$BLUE_TANUKI_TEST_REAL_GREP" "$@"
+GREP
+chmod +x "$LIFECYCLE_TEST_BIN/ps" "$LIFECYCLE_TEST_BIN/grep"
+if ! HOME="$LIFECYCLE_ROOT" \
+  PATH="$LIFECYCLE_TEST_BIN:$PATH" \
+  BLUE_TANUKI_TEST_REAL_PS="$LIFECYCLE_TEST_REAL_PS" \
+  BLUE_TANUKI_TEST_REAL_GREP="$LIFECYCLE_TEST_REAL_GREP" \
+  BLUE_TANUKI_TEST_GREP_COUNT="$LIFECYCLE_TEST_GREP_COUNT" \
+  sh "$LIFECYCLE_INSTALL/BlueTanukiLauncher.sh" resident-stop > "$TMP_ROOT/lifecycle-recovered-stop.out" 2>&1; then
   cat "$TMP_ROOT/lifecycle-recovered-stop.out" >&2
   echo "resident stop did not recover the missing PID record by process identity" >&2
   exit 85
 fi
 [ ! -e "$LIFECYCLE_DATA/blue-tanuki.pid" ] && [ ! -e "$LIFECYCLE_DATA/blue-tanuki-watchdog.pid" ] || exit 86
+[ "$(wc -c < "$LIFECYCLE_TEST_GREP_COUNT" | tr -d '[:space:]')" -lt 250 ] || {
+  echo "resident stop spawned too many identity checks for unrelated process rows" >&2
+  exit 92
+}
 kill -0 "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || exit 87
 kill -TERM "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || true
 wait "$LIFECYCLE_UNRELATED_PID" 2>/dev/null || true
