@@ -4,18 +4,19 @@
 
 ## 現行BUILD_BATCH — QE_BUILD / G04.01 macOS単体配布物から導入・通常利用への接続
 
-主語はmacOS x64／arm64向けone-file `.command` product installer、同梱Node runtime、installed Gateway。目的は、native macOS上で単体配布物を導入し、開発用Node／pnpmなしに同梱runtimeで起動・loopback利用・停止するconsumerを実際に接続すること。既存Unix smokeは展開済みtar payloadを直接Setupへ渡すため、one-file wrapper経路のnative証拠がない。
+主語はmacOS x64／arm64向けone-file `.command` product installer、同梱Node runtime、installed Gateway。目的は、native macOS上で単体配布物を導入し、開発用Node／pnpmなしに同梱runtimeで起動・loopback利用・停止するconsumerを実際に接続すること。既存Unix smokeは展開済みtar payloadを直接Setupへ渡すため、one-file wrapper経路のnative証拠がなかった。
 
-既存の`.github/workflows/linux-installed-package-build-smoke.yml`をUnix共通の`workflow_dispatch` workflowへ拡張し、選択SHAをcheckoutする。Linux jobは維持する。x64は`macos-15-intel`、arm64は`macos-15`で個別にnative payloadとproduct installerをbuild／verifyし、隔離HOMEとrun固有一時rootでone-file `.command`を起動する。installed PATHからNode／pnpmを除き、同梱Nodeのplatform／architecture、env file mode、`/healthz`・`/app`、resident停止を確認する。token権限は`contents: read`だけで、secret／artifact uploadはない。
+既存の`.github/workflows/linux-installed-package-build-smoke.yml`をUnix共通の`workflow_dispatch` workflowへ拡張し、選択SHAをcheckoutする。既存Linux jobは維持する。x64は`macos-15-intel`、arm64は`macos-15`で個別にnative payloadとproduct installerをbuild／verifyし、隔離HOMEとrun固有一時rootでone-file `.command`を起動する。installed PATHに開発用Node／pnpmがないこと、同梱Nodeのplatform／architecture、env file mode 600、`/healthz`・`/app` HTTP 200、resident停止、一時root削除後の不存在を確認する。token権限は`contents: read`だけで、secret／artifact uploadはない。
 
-Windows開発環境ではnative macOS動作を検証できず、実行shell parserも備えていない。workflowを固定したbranch SHAへdispatchして両architectureのBUILD疎通を確認後、同一の成功commitだけをmainへ反映する。現時点ではActions未実行のためSTATUSはIN_PROGRESS。製品全体の実装、更新／Uninstall／OS再起動、macOS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。
+Windows開発環境ではnative macOS動作を検証できず、実行shell parserも備えていないため、workflowを固定したbranch SHAへdispatchした。run `42976127050`（source SHA `9e00413cc82e99998fb87a4bfe5402deaa791566`）はLinux既存jobとmacOS x64／arm64 jobのすべてが成功した。macOS x64 payload／installer SHA-256は`cf2e295139ec3237c2d1e9ea9a395375e020c64c2333ecc34e559131bc584b88`／`e480f8975181d0f4a69a1d39eb1524eb1f9df65444fbc39d64bbbe7383fac1b4`、arm64は`4f8ae4115db50b10ca25cbd1b2c2754a5f013d7358ddd17163482ed49544f47b`／`514b18def6f5b2f59e684dd0a4c69926f04338971c5ac8048488e5eff3858de6`。両architectureでsystem Node／pnpmなし、同梱Node v22.14.0、install、`/healthz`／`/app` HTTP 200、resident停止、`isolated_temp_cleanup=pass`を確認した。providerはstub、LLM／Composio資格情報は未提供。token権限は`contents: read`、upload artifactはなくrun artifactは0件。Node.js 20 action deprecationとNode SQLite ExperimentalWarningが記録されたが、run結果はsuccess。
 
 UNIT_ID: G04.01 macOS one-file product install-to-first-use consumer
-STATUS: IN_PROGRESS（dispatch専用workflowと隔離smokeを追加。native x64／arm64実行は未確認）
-NEXT_REQUIRED_CONSUMER: Actions runでmacOS x64／arm64のworkspace build、payload／installer verify、one-file導入、health/app、停止を確認する。失敗時は根因を修正し同一scopeを再実行する。
-SAFETY_STATUS: 実provider、認証資格、外部作用、OS保護設定、別repo、公開・出荷判断は触らない。秘密を含むenv fileはrun固有root内で作成し、値を出力しない。
-LOCAL_ASSET_STATUS: local package／product installerは未生成。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
-CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`897c579be6b0694e1a037a5cb76665947c09baa7`。編集前復旧branch／remote tag current=`897c579be6b0694e1a037a5cb76665947c09baa7`／previous=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。worktreeはmainから作成した作業branchのみ。protected attachment directoriesは他writerの可能性を保ち変更していない。
+STATUS: WIRED（native macOS x64／arm64のone-file install→resident→loopback応答→停止consumerを限定接続。G04.01全要求、G04全体、製品全体は未成立）
+NEXT_REQUIRED_CONSUMER: G04.02 macOS通常利用・保護境界。署名/notarization状態を事実どおり観測し、OS保護を変えずに既存の資格情報・常駐・browser/worker境界へ進む。
+MINIMAL_TECH_CHECKS: run `42976127050`のLinux／macOS x64／arm64 build・package verify・installed smokeはPASS。`corepack pnpm exec tsx scripts/release_hardening_gate.ts`は`pass_pre_signing_blocked`（署名資格情報なしで署名gateは未成立）。`corepack pnpm docs:check`と`git diff --check`はPASS。日本語基底の既存移行負債76件は注意として残る。全suite、実provider、実資格、macOS QA、update／Uninstall／OS再起動、QE_QC／QE_QAはNOT_RUN。
+SAFETY_STATUS: provider=stub、LLM／Composio秘密なし。外部業務作用、実利用者資格、別repo、OS保護設定、公開・出荷判断は触らない。secret値は出力せず、隔離HOME／rootのenv file mode 600。macOS runnerはx64／arm64ともcleanup markerをPASS。
+LOCAL_ASSET_STATUS: Windows local package／installer／smoke tempは生成していない。hosted runnerの生成物はartifact uploadなし、run artifact 0件。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。provider credentialsなし。Node.js 20 action deprecation／Node SQLite ExperimentalWarningは将来のrunner/tooling追従候補。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`897c579be6b0694e1a037a5cb76665947c09baa7`。検証code branch local／remote=`9e00413cc82e99998fb87a4bfe5402deaa791566`。local recovery branches current／previous=`897c579be6b0694e1a037a5cb76665947c09baa7`／`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`、remote同名tagのtargetも一致。作業branch以外のactive worktreeは観測されず、protected attachment directoriesは未追跡・未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneはACL拒否のため保留し迂回しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 

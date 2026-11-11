@@ -4116,7 +4116,7 @@ PID `17528`はrepo working directory、別installのNode image、一時state/ses
 
 作業開始時local／`origin/main`／GitHub `main`=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。current recovery branch／remote tagは`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`、previousは`46685ccef0870a9441338e44394dc5b27474d4be`へ、旧SHA照合後に回転した。worktreeはmainのみ。`.codex-attachments/`と`.codex-remote-attachments/`は保護対象として維持し、別repoへ書き込んでいない。
 
-owner選択の達成契約を現行C08.02へ適用し、現物`packages/hds-brain/src/operation_plan.ts`の現行J規則束縛、同一revision結果／M receipt照合、達成seal、同一task停止を確認した。Gateway統合testは隔離workspaceの合成`file.search`で一致規則時の達成と再起動後停止、不一致時の保留を実行する。wait試験ではC計算完了後の保存候補復元と、C計算中断後の未保存返信破棄・新しいowner返信からの再開を実行する。J/M制御testはM反映後・J receipt確定前にstate storeを閉じて再起動し、同一receiptを再照合してreadyへ復帰する。missing／ambiguous／unverified code pathは達成に倒れないことを確認したが、各理由別test全数は今回実行していない。
+ownerが選択した達成判定は、現行J正本に結び付く明示規則と検証済み結果・M receiptを必要条件とし、不足・曖昧は保留とする。これを現行C08.02へ適用し、現物`packages/hds-brain/src/operation_plan.ts`のJ規則束縛、同一revision結果／M receipt照合、達成seal、同一task停止を確認した。Gateway統合testは隔離workspaceの合成`file.search`で一致規則時の達成と再起動後停止、不一致時の保留を実行する。wait試験ではC計算完了後の保存候補復元と、C計算中断後の未保存返信破棄・新しいowner返信からの再開を実行する。J/M制御testはM反映後・J receipt確定前にstate storeを閉じて再起動し、同一receiptを再照合してreadyへ復帰する。missing／ambiguous／unverified code pathは達成に倒れないことを確認したが、各理由別test全数は今回実行していない。
 
 | 確認 | 結果 |
 |---|---|
@@ -4125,3 +4125,13 @@ owner選択の達成契約を現行C08.02へ適用し、現物`packages/hds-brai
 | source change | なし。既存実装を現HEADで再確認し、現在の作業指示・roadmap・履歴へ閉包結果を同期。 |
 
 STATUS=`WIRED`（限定合成C/J/M経路）。実LLM C08.03はowner指示により製品全体の実装が進むまで保留。次consumerはG04.01 macOS packaged install。生成テストTempはtest cleanup済み。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner release/public GOへ拡張しない。
+
+## 2026-11-11 QE_BUILD — G04.01 macOS one-file installed consumer
+
+rev4.0の現行pinとG04.01施工条件を照合し、既存`linux-installed-package-build-smoke.yml`をmanual-onlyのUnix package consumerへ拡張。macOS x64／arm64 native runnerでworkspace build、package／one-file installer verify、開発用Node／pnpmなしのPATHから隔離HOMEへ導入、同梱NodeでGateway起動、loopback `/healthz`・`/app` HTTP 200、resident停止、run固有一時root cleanup後の不存在を確認するsmokeを追加した。Linux既存jobは維持。workflow tokenは`contents: read`のみで、artifact uploadなし。
+
+GitHub Actions workflow_dispatch run `42976127050` はsource SHA `9e00413cc82e99998fb87a4bfe5402deaa791566`を検査し、Linux既存job、macOS x64、arm64すべてsuccess。x64 payload／installer SHA-256=`cf2e295139ec3237c2d1e9ea9a395375e020c64c2333ecc34e559131bc584b88`／`e480f8975181d0f4a69a1d39eb1524eb1f9df65444fbc39d64bbbe7383fac1b4`。arm64=`4f8ae4115db50b10ca25cbd1b2c2754a5f013d7358ddd17163482ed49544f47b`／`514b18def6f5b2f59e684dd0a4c69926f04338971c5ac8048488e5eff3858de6`。両Mac architectureで同梱Node v22.14.0、install、health/app、停止、cleanup PASS。providerはstub、LLM／Composio資格情報なし。artifactは0件。Node.js 20 action deprecationとNode SQLite ExperimentalWarningは記録されたが、runはsuccess。
+
+local `corepack pnpm exec tsx scripts/release_hardening_gate.ts`=`pass_pre_signing_blocked`（署名資格情報なしのため署名gateは未成立）、`corepack pnpm docs:check`=PASS（既存の日本語基底移行負債76件を注意として保持）、`git diff --check`=PASS。全suite、実provider／資格情報、macOS QA、Uninstall、OS再起動、QE_QC／QE_QAはNOT_RUN。local macOS packageは生成していない。
+
+変更branch `codex/g04-01-macos-installed-smoke`上で検証。開始時`main`／`origin/main`=`897c579be6b0694e1a037a5cb76665947c09baa7`。編集前local recovery branches current／previous=`897c579be6b0694e1a037a5cb76665947c09baa7`／`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`、remote同名tagのpeeled targetも一致。`.codex-attachments/`と`.codex-remote-attachments/`は未追跡のまま保持。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`のACL拒否は迂回せず保留。G04.01のこの範囲は`WIRED`。G04.02は次consumerであり、本記録はmacOS通常利用・保護境界、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、release／公開／owner GOを成立させない。

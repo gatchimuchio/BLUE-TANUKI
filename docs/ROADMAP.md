@@ -8,7 +8,7 @@
 
 ### 直近BUILD_BATCH — G04.01 macOS単体配布物から導入・通常利用への接続
 
-C08.02は前段の完了履歴であり、限定合成C/J/M経路を`WIRED`として閉じた。次consumer G04.01では、macOS x64／arm64のone-file `.command` installerを各native runnerでbuild／verifyし、Node／pnpmを除いたPATHから隔離導入・同梱Node起動・`/healthz`／`/app`・停止まで通す。既存Linux installed smokeは維持し、macOS jobを同じ`workflow_dispatch`へ追加した。実行結果は未確認。これはmacOS nativeの限定QE_BUILD証拠を目的とし、配布物署名、通常Uninstall、OS再起動、native QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QAへ拡張しない。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
+C08.02は前段の完了履歴であり、限定合成C/J/M経路を`WIRED`として閉じた。G04.01ではmacOS x64／arm64のone-file `.command` installerをnative runnerでbuild／verifyし、Node／pnpmのないPATHから隔離導入・同梱Node起動・`/healthz`／`/app` HTTP 200・resident停止・一時root cleanupを通した。run `42976127050`（source SHA `9e00413cc82e99998fb87a4bfe5402deaa791566`）はLinux既存job、macOS x64、arm64が全成功。これは限定macOS BUILD consumerの`WIRED`証拠であり、署名／notarization、通常Uninstall、OS再起動、資格情報・browser/worker境界、native QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。次consumerはG04.02 macOS通常利用・保護境界。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
 
 ### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
