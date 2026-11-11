@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — C08.02 owner明示達成規則・J/M根拠・境界復帰
+### 直近BUILD_BATCH — G04.01 macOS単体配布物から導入・通常利用への接続
 
-現HEAD `bf16fd141bfb878a8c745b3caa8d95e95f712cd8`で、合成`file.search`実結果に基づく明示規則一致→達成／同一task停止、不一致→保留、C計算waitの再起動後再開・中断時の旧返信破棄、新しいowner返信からの再開、J/Mのreceipt境界で停止した後の再起動・同一receipt復帰をfocused testで確認した（2 files、5 passed、63 skipped）。規則欠落・曖昧、未検証結果またはreceiptはJ側で達成にしない。試験はlocal syntheticであり、実LLM／実Owner L3／実外部作用ではない。C08.02を限定`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QAへ拡張しない。次consumerはG04.01 macOS配布・導入。実macOS未導入環境ではローカル証拠と区別し、必要なnative検査だけを許可条件に沿う`workflow_dispatch`で補助する。C08.03実LLMはowner指示により製品全体の実装が先行するまで保留。
+C08.02は前段の完了履歴であり、限定合成C/J/M経路を`WIRED`として閉じた。次consumer G04.01では、macOS x64／arm64のone-file `.command` installerを各native runnerでbuild／verifyし、Node／pnpmを除いたPATHから隔離導入・同梱Node起動・`/healthz`／`/app`・停止まで通すdispatch専用workflowを追加した。実行結果は未確認。これはmacOS nativeの限定QE_BUILD証拠を目的とし、配布物署名、通常Uninstall、OS再起動、native QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QAへ拡張しない。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
 
 ### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 

@@ -2,20 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / C08.02 owner達成規則・J/M根拠・復帰consumerの閉包
+## 現行BUILD_BATCH — QE_BUILD / G04.01 macOS単体配布物から導入・通常利用への接続
 
-主語は通常Gateway経路から合成taskを処理するC、単独J authority、およびJ管理M receipt。目的は、ownerが選択した「現行J正本に結び付く明示達成規則と検証済み根拠」だけで同一taskの達成・停止を決め、規則・結果・receiptの欠落、不一致、曖昧さは保留にすること。実provider、実資格、業務外部作用、別repo変更、公開・出荷判断は対象外。
+主語はmacOS x64／arm64向けone-file `.command` product installer、同梱Node runtime、installed Gateway。目的は、native macOS上で単体配布物を導入し、開発用Node／pnpmなしに同梱runtimeで起動・loopback利用・停止するconsumerを実際に接続すること。既存Unix smokeは展開済みtar payloadを直接Setupへ渡すため、one-file wrapper経路のnative証拠がない。
 
-現HEADには`packages/hds-brain/src/operation_plan.ts`の達成評価・receipt照合・seal・同一task停止があり、`apps/gateway/test/operation_plan_runtime.test.ts`は隔離workspaceの合成`file.search`実結果とM receiptで一致時の達成／再起動後停止、不一致時の保留／再起動保持を通す。同ファイルのwait試験は保存済みowner規則の保持、C再開、C計算中断後に旧返信を再利用せず新しいowner返信だけを使う復帰を通す。`packages/hds-brain/test/制御状態.test.ts`はM反映後・J receipt確定前の停止と再起動、同一receiptの再照合を通す。欠落／曖昧／未検証を達成へ昇格させない判定はコード上 fail-closed。今回の限定確認では代表経路を実行し、各理由別の全試験は実行していない。
+追加する`.github/workflows/macos-installed-package-build-smoke.yml`は`workflow_dispatch`だけをtriggerにし、選択SHAをcheckoutする。x64は`macos-15-intel`、arm64は`macos-15`で個別にnative payloadとproduct installerをbuild／verifyし、隔離HOMEとrun固有一時rootでone-file `.command`を起動する。installed PATHからNode／pnpmを除き、同梱Nodeのplatform／architecture、env file mode、`/healthz`・`/app`、resident停止を確認する。token権限は`contents: read`だけで、secret／artifact uploadはない。
 
-実行確認：`node node_modules/vitest/vitest.mjs run apps/gateway/test/operation_plan_runtime.test.ts packages/hds-brain/test/制御状態.test.ts -t "assesses explicit completion|BT-U-C07.02-P|永続waitを再起動後|再起動後に結果未記録wait" --maxWorkers=2 --minWorkers=2` はPASS（2 files、5 passed、63 skipped）。これは合成local BUILD証拠であり、実LLM、実Owner L3、実ユーザーデータ、OS再起動、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを示さない。実装変更はなく、今回は既存consumerの現HEAD再確認と作業状態同期。
+Windows開発環境ではnative macOS動作を検証できず、実行shell parserも備えていない。workflowを固定したbranch SHAへdispatchして両architectureのBUILD疎通を確認後、同一の成功commitだけをmainへ反映する。現時点ではActions未実行のためSTATUSはIN_PROGRESS。製品全体の実装、更新／Uninstall／OS再起動、macOS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。
 
-UNIT_ID: C08.02 owner明示達成規則・J/M根拠・同一task停止
-STATUS: WIRED（明示規則＋同一revisionの検証済み結果＋M receiptで達成し、達成後停止。不一致は保留。J/M receipt境界の再起動復帰を限定合成経路で確認）
-NEXT_REQUIRED_CONSUMER: G04.01 macOS製品配布・導入consumer。C08.03の実LLM証拠はowner指示によりBLUE製品全体の実装が進むまで保留し、合成成功を実LLM証拠へ読み替えない。
-SAFETY_STATUS: HDS-J／Approval／L3／M非権威・audit／fail-closedを維持。実provider、資格、外部作用、別repo、公開・releaseは未実行。
-LOCAL_ASSET_STATUS: focused testsはテスト所有Temp領域をcleanup。新規package／artifactなし。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡のまま保持。
-CURRENT_HEAD_AND_DIRTY_OWNER: 編集前local／`origin/main`／GitHub `main`=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。復旧枝／remote tagはcurrent=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`／previous=`46685ccef0870a9441338e44394dc5b27474d4be`。worktreeはmainのみ、変更者不明の添付2 directoryは未変更。
+UNIT_ID: G04.01 macOS one-file product install-to-first-use consumer
+STATUS: IN_PROGRESS（dispatch専用workflowと隔離smokeを追加。native x64／arm64実行は未確認）
+NEXT_REQUIRED_CONSUMER: Actions runでmacOS x64／arm64のworkspace build、payload／installer verify、one-file導入、health/app、停止を確認する。失敗時は根因を修正し同一scopeを再実行する。
+SAFETY_STATUS: 実provider、認証資格、外部作用、OS保護設定、別repo、公開・出荷判断は触らない。秘密を含むenv fileはrun固有root内で作成し、値を出力しない。
+LOCAL_ASSET_STATUS: local package／product installerは未生成。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`897c579be6b0694e1a037a5cb76665947c09baa7`。編集前復旧branch／remote tag current=`897c579be6b0694e1a037a5cb76665947c09baa7`／previous=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。worktreeはmainから作成した作業branchのみ。protected attachment directoriesは他writerの可能性を保ち変更していない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
