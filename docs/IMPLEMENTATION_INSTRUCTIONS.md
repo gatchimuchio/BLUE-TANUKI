@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime受理後handler failure通知
+## 直近完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime冪等受付と状態照会
+
+`POST /runtime/intent`はUUIDv4の`submission_id`を必須とし、既存のprivate SQLite inboxへsession単位のscope digest、submission ID digest、intentを含むpayload HMAC、server request ID、状態だけを保存してからhandlerへ渡す。同じsession・ID・入力の再送は既存request IDと状態を返して再dispatchせず、同じIDで入力が変われば409で拒否する。専用D4 Runtime bearerで認証する`POST /runtime/intent/status`は、同sessionのrequest IDと`dispatching`／`handler_returned`／`outcome_unknown`／`rejected`状態だけを返す。生のintent、session/runtime ID、submission ID、credential、処理結果は保存・状態応答へ含めない。
+
+handler failure時は同sessionへ固定の`kind=error`とrequest IDをbest-effortで通知し、状態は`outcome_unknown`にする。callbackが正常復帰した`handler_returned`は、使用者目標の達成・結果配送・M receiptを意味しない。再起動時の`dispatching`は`outcome_unknown`へ移し、同じsubmissionを再実行しない。処理結果本文の永続化・回復、実D4 producer、D4側status consumerは含まない。
+
+Protocol／WebChat／Gateway build、WebChat D4 Runtime focused test 7/7（同file 125件skip）、owner-task focused regression 3/3、Gateway durable store restart test 1/1はPASS。このBLUE ingress sliceだけをD03.01の限定`WIRED`とする。D4 producer→BLUE ingress未接続のためG09.01／D03.01全体は`BLOCKED_AUTHORITY`／`BUILD_GAP`。全suite、D4実接続、Android実機、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。
+
+UNIT_ID: D03.01（冪等受付・content-free状態照会・handler failure通知のBLUE側限定slice）
+STATUS: WIRED（同じsession/submission IDの一回受付、再送抑止、状態照会と接続中の失敗通知。結果回復・実D4 producerを含まない）
+NEXT_REQUIRED_CONSUMER: D4 `blue_tanuki_adapter` producerが`submission_id`付きintentを既存BLUE ingressへ送信し、同sessionでstatus／結果を扱う。D4別repo書込みはownerの限定委任待ち。
+SAFETY_STATUS: submission IDは冪等性専用で権限ではない。claimを永続化できない時はhandlerを呼ばず503。同じID・異payloadは409、同一payload duplicateはdispatchしない。状態APIは専用D4 Runtime bearerとruntime/session scopeに束縛し、request IDとcallback状態のみ返す。`handler_returned`を目標達成と解釈しない。raw intent／token／session/runtime IDはinboxや状態応答へ保存しない。inboxの保持上限・期限は未設計で、自動pruneを行わない。容量影響は未評価。
+LOCAL_ASSET_STATUS: test内SQLite temp rootは終了時削除。Protocol／WebChat／Gateway build生成物は既存開発環境として保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`9fb57175e854df0cdc2f968018d891a6acf83dcb`。編集前recovery branch／remote tag current／previous=`9fb57175e854df0cdc2f968018d891a6acf83dcb`／`8816fd4f6f77aabbc7a1d69bf1d7f8ddbb198267`。BLUE worktreeはmainのみ。D4 `main`／remoteは`d173657ab1fd2707cd7c7c50cb2b73f40dadcd2e`で一致。D4にはdirty並行worktree `codex/linux-same-source-update`（`0cb7d2e4204e1b32bfd108f9ecda29434c1ac3e5`）とcleanな`codex/linux-mcp-discovery-diagnostic`（`611136525d71234589ded2526483b4fee4cef399`）を観測。別repoは読み取りのみ。
+
+## 前段完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime受理後handler failure通知
 
 `POST /runtime/intent`が認証・入力検査後に202受理した依頼について、Gateway handlerが拒否した場合、BLUEが同じ認証済みsessionへ固定の`kind=error`と同一request IDをbest-effortで送る。例外本文、intent、token、runtime/session識別子はerror frameとlogへ含めない。利用側に結果unknownと再送抑止を伝える。これは切断中のdurable通知・再取得やD4側consumerを含まない。
 
@@ -27,12 +42,12 @@ Gateway依存7 workspace project buildと`failure_review_runtime.test.ts` 11/11�
 
 現物の状態:
 
-- BLUE側にAndroid／Mobile製品ソースはなく、`apps/`はGatewayのみ。既存D4 Runtime入力受け口は`packages/channel-webchat/src/webchat.ts`にあり、専用D4 Runtime bearerで`/runtime/ws-ticket`と`/runtime/intent`を扱う。返却は認証済み同一sessionのWebSocket ticketで、入力は既存Gateway handler／HDSへ限定userとして渡す。受け口は存在するが、D4からの接続は未成立。
+- BLUE側にAndroid／Mobile製品ソースはなく、`apps/`はGatewayのみ。既存D4 Runtime入力受け口は`packages/channel-webchat/src/webchat.ts`にあり、専用D4 Runtime bearerで`/runtime/ws-ticket`、冪等`/runtime/intent`、content-freeな`/runtime/intent/status`を扱う。入力は永続claim後に既存Gateway handler／HDSへ限定userとして渡す。受け口は存在するが、D4からの接続は未成立で、D4 producerによるstatus／結果consumerも未接続。
 - D4 Pocketの最新読み取り観測はremote `main`=`d173657ab1fd2707cd7c7c50cb2b73f40dadcd2e`。Android native `apps/mobile_flutter/lib/services/device_link_client.dart`（blob=`e8c49337127cb7f62fad248988b99707c5e49219`）は対話開始・送信・取得・中止を公開する。一方、`packages/blue_tanuki_adapter/adapter.py`（blob=`670cc387862328c5e6ee91a3e6fee4686016ef02`）はhealth／ready等の固定参照応答だけを返し、BLUE Runtimeへ仕事を送る経路を持たない。Adapterのdialogue producer／同一session結果consumerは未実装。
-- BLUE受け口は、handler rejection後に相関ID付き固定`kind=error`を同sessionへbest-effort通知する経路を加えた。対象選択試験1/1とtypecheckはPASS。ただし通知の永続化・切断中の回復・D4による送信／受信の証拠ではない。
-- D4 repoにはdirtyな並行worktree `codex/linux-same-source-update`（HEAD=`0cb7d2e4204e1b32bfd108f9ecda29434c1ac3e5`）がある。さらに別のclean worktree `codex/linux-mcp-discovery-diagnostic`（HEAD=`611136525d71234589ded2526483b4fee4cef399`）も観測。D4は読み取りのみで、編集・Git操作なし。Android端末なし、AVDなし。
+- BLUE受け口は、同じsubmissionの一回受付・再送抑止・session scoped状態照会、handler failure時のbest-effort通知を実装した。Protocol／WebChat／Gateway build、WebChat focused test 6件、Gateway SQLite再起動試験1件はPASS。ただしD4による送信／status取得、処理結果本文の回復、Android実機証拠ではない。
+- D4 repoのremote／local mainは`d173657ab1fd2707cd7c7c50cb2b73f40dadcd2e`で一致。dirtyな並行worktree `codex/linux-same-source-update`（HEAD=`0cb7d2e4204e1b32bfd108f9ecda29434c1ac3e5`）とcleanな`codex/linux-mcp-discovery-diagnostic`（HEAD=`611136525d71234589ded2526483b4fee4cef399`）を観測。D4変更は行わず、Android端末／AVDは未確認。
 
-`STATUS: BLOCKED_AUTHORITY`。BLUE側receiverは合成入力、成功応答、およびhandler failure通知の限定経路まで確認済みだが、D4 native producer→D4 `blue_tanuki_adapter`→BLUE input ingressの実接続がない。次に必要なのは、D4 Adapterが専用のserver-side credentialを使って既存BLUE ingressへ認証接続し、同じsessionの結果をBrokerへ返す責任経路の実装・検証である。これはD4別repo変更のため、既存の限定委任がない範囲の書込みは行わない。D4のdirty worktreeを避け、BLUE内に第二Mobile／Broker経路を複製せず、G09.01を未完のまま保持する。実provider・実資格・外部業務作用・製品公開・Android実機試験は行わない。
+`STATUS: BLOCKED_AUTHORITY`。BLUE側receiverは合成入力、重複受付抑止、状態照会、handler failure通知までの限定経路を持つが、D4 native producer→D4 `blue_tanuki_adapter`→BLUE ingress→同session status／結果consumerの実接続がない。次に必要なのは、D4 Adapterが専用のserver-side credentialとsubmission IDを使って既存BLUE ingressへ認証接続し、同じsessionのstatus／結果をBrokerへ返す責任経路の実装・検証である。これはD4別repo変更のため、既存の限定委任がない範囲の書込みは行わない。D4の並行worktreeを避け、BLUE内に第二Mobile／Broker経路を複製せず、G09.01を未完のまま保持する。実provider・実資格・外部業務作用・製品公開・Android実機試験は行わない。
 
 ## 直近完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの既存tagへの未公開draft release作成
 

@@ -57,6 +57,17 @@ const SETTINGS_TOKEN = "settings-token-1234";
 const WEBHOOK_TOKEN = "webhook-token-1234";
 const MAINTENANCE_TOKEN = "maintenance-token-1234";
 const D4_RUNTIME_TOKEN = "d4-runtime-token-test-value-1234567890";
+const D4_SUBMISSION_ID_1 = "00000000-0000-4000-8000-000000000001";
+const D4_SUBMISSION_ID_2 = "00000000-0000-4000-8000-000000000002";
+const D4_SUBMISSION_ID_3 = "00000000-0000-4000-8000-000000000003";
+const D4_SUBMISSION_ID_4 = "00000000-0000-4000-8000-000000000004";
+
+type TestSubmission = {
+  payload_digest: string;
+  request_id: string;
+  state: "dispatching" | "handler_returned" | "outcome_unknown" | "rejected";
+  scope_digest?: string;
+};
 
 interface Ctx {
   ch: WebChatChannel;
@@ -65,11 +76,7 @@ interface Ctx {
 }
 
 function createTestOwnerTaskSubmissionStore(): WebChatOwnerTaskSubmissionStore {
-  const submissions = new Map<string, {
-    payload_digest: string;
-    request_id: string;
-    state: "dispatching" | "handler_returned" | "outcome_unknown" | "rejected";
-  }>();
+  const submissions = new Map<string, TestSubmission>();
   return {
     claim(input) {
       const key = input.submission_id.toLowerCase();
@@ -85,15 +92,43 @@ function createTestOwnerTaskSubmissionStore(): WebChatOwnerTaskSubmissionStore {
     markHandlerReturned(requestId) { setSubmissionState(submissions, requestId, "handler_returned"); },
     markOutcomeUnknown(requestId) { setSubmissionState(submissions, requestId, "outcome_unknown"); },
     markRejected(requestId) { setSubmissionState(submissions, requestId, "rejected"); },
+    claimD4RuntimeIntent(input) {
+      const key = `d4:${input.scope_digest}:${input.submission_id.toLowerCase()}`;
+      const current = submissions.get(key);
+      if (current) {
+        return current.payload_digest === input.payload_digest
+          ? { status: "duplicate", request_id: current.request_id, state: current.state }
+          : { status: "identity_conflict", request_id: current.request_id };
+      }
+      submissions.set(key, {
+        payload_digest: input.payload_digest,
+        request_id: input.request_id,
+        state: "dispatching",
+        scope_digest: input.scope_digest,
+      });
+      return { status: "accepted", request_id: input.request_id };
+    },
+    getD4RuntimeIntentStatus(input) {
+      const current = submissions.get(`d4:${input.scope_digest}:${input.submission_id.toLowerCase()}`);
+      return current ? { request_id: current.request_id, state: current.state } : null;
+    },
+    markD4RuntimeIntentHandlerReturned(input) {
+      setSubmissionState(submissions, input.request_id, "handler_returned", input.scope_digest);
+    },
+    markD4RuntimeIntentOutcomeUnknown(input) {
+      setSubmissionState(submissions, input.request_id, "outcome_unknown", input.scope_digest);
+    },
   };
 }
 
 function setSubmissionState(
-  submissions: Map<string, { payload_digest: string; request_id: string; state: "dispatching" | "handler_returned" | "outcome_unknown" | "rejected" }>,
+  submissions: Map<string, TestSubmission>,
   requestId: string,
   state: "handler_returned" | "outcome_unknown" | "rejected",
+  scopeDigest?: string,
 ): void {
-  const row = [...submissions.values()].find((item) => item.request_id === requestId);
+  const row = [...submissions.values()].find((item) => item.request_id === requestId &&
+    (scopeDigest === undefined || item.scope_digest === scopeDigest));
   if (!row || row.state !== "dispatching") throw new Error("test_submission_state_transition_rejected");
   row.state = state;
 }
@@ -146,7 +181,7 @@ async function setup(
         purpose_preview: string;
         purpose_digest: string;
       }[]>;
-      owner_task_submission_store?: WebChatOwnerTaskSubmissionStore;
+      owner_task_submission_store?: WebChatOwnerTaskSubmissionStore | null;
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
@@ -188,7 +223,9 @@ async function setup(
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
     onOwnerTaskGoalOptions: opts.onOwnerTaskGoalOptions,
-    owner_task_submission_store: opts.owner_task_submission_store ?? createTestOwnerTaskSubmissionStore(),
+    owner_task_submission_store: opts.owner_task_submission_store === null
+      ? undefined
+      : opts.owner_task_submission_store ?? createTestOwnerTaskSubmissionStore(),
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
     ws_ticket_ttl_ms: opts.ws_ticket_ttl_ms,
@@ -3756,6 +3793,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     const r = await postJson(ctx.port, "/runtime/intent", {
       runtime_id: "blue_tanuki",
       session_id: "session-1234-abcd",
+      submission_id: D4_SUBMISSION_ID_1,
       intent: "hello",
     }, { authorization: `Bearer ${TOKEN}` });
     expect(r.status).toBe(404);
@@ -3810,9 +3848,12 @@ describe("WebChatChannel — HTTP inbound", () => {
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
     });
     let ws: WebSocket | undefined;
+    let finishHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => { finishHandler = resolve; });
     try {
       await runtimeCtx.ch.start(async (req) => {
         runtimeCtx.received.push(req);
+        await handlerGate;
       });
       const ticketResponse = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
         runtime_id: "blue_tanuki",
@@ -3824,12 +3865,63 @@ describe("WebChatChannel — HTTP inbound", () => {
       const response = await postJson(runtimeCtx.port, "/runtime/intent", {
         runtime_id: "blue_tanuki",
         session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
         intent: "整理して要点を教えて",
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(response.status).toBe(202);
-      expect(response.body).toMatchObject({ accepted: true });
+      expect(response.body).toMatchObject({ accepted: true, duplicate: false, state: "dispatching" });
+      const requestId = (response.body as { request_id: string }).request_id;
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(runtimeCtx.received).toHaveLength(1);
+
+      const duplicate = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
+        intent: "整理して要点を教えて",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(duplicate.status).toBe(202);
+      expect(duplicate.body).toMatchObject({
+        accepted: true,
+        duplicate: true,
+        request_id: requestId,
+        state: "dispatching",
+      });
+      expect(runtimeCtx.received).toHaveLength(1);
+
+      const conflictingReuse = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
+        intent: "別の依頼",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(conflictingReuse.status).toBe(409);
+      expect(conflictingReuse.body).toMatchObject({ accepted: false,
+        error: "runtime_intent_submission_id_conflict" });
+      expect(runtimeCtx.received).toHaveLength(1);
+
+      const status = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(status.status).toBe(200);
+      expect(status.body).toEqual({ found: true, request_id: requestId, state: "dispatching" });
+      const otherSessionStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki",
+        session_id: "another-session",
+        submission_id: D4_SUBMISSION_ID_1,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(otherSessionStatus.body).toEqual({ found: false });
+
+      finishHandler();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const returned = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(returned.body).toEqual({ found: true, request_id: requestId, state: "handler_returned" });
 
       const received = runtimeCtx.received[0]!;
       const sessionDigest = createHmac("sha256", D4_RUNTIME_TOKEN)
@@ -3867,6 +3959,8 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(Object.values(received.metadata ?? {})).not.toContain("blue_tanuki");
       expect(JSON.stringify(response.body)).not.toContain("blue_tanuki");
       expect(response.body).toMatchObject({ session_ref_digest: sessionDigest });
+      expect(JSON.stringify(status.body)).not.toContain("session-1234-abcd");
+      expect(JSON.stringify(status.body)).not.toContain("整理して要点を教えて");
     } finally {
       ws?.close();
       await runtimeCtx.teardown();
@@ -3884,6 +3978,7 @@ describe("WebChatChannel — HTTP inbound", () => {
       const response = await postJson(runtimeCtx.port, "/runtime/intent", {
         runtime_id: "blue_tanuki",
         session_id: "session-without-response",
+        submission_id: D4_SUBMISSION_ID_2,
         intent: "do not start without a return path",
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(response.status).toBe(409);
@@ -3894,6 +3989,45 @@ describe("WebChatChannel — HTTP inbound", () => {
       });
       expect(runtimeCtx.received).toHaveLength(0);
       expect(JSON.stringify(response.body)).not.toContain("session-without-response");
+      const status = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-without-response",
+        submission_id: D4_SUBMISSION_ID_2,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(status.body).toEqual({ found: false });
+    } finally {
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("fails closed when D4 Runtime submission storage is unavailable", async () => {
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      owner_task_submission_store: null,
+    });
+    try {
+      await runtimeCtx.ch.start(async (req) => {
+        runtimeCtx.received.push(req);
+      });
+      const input = {
+        runtime_id: "blue_tanuki",
+        session_id: "session-without-durable-store",
+        submission_id: D4_SUBMISSION_ID_2,
+        intent: "must not dispatch without a durable claim",
+      };
+      const response = await postJson(runtimeCtx.port, "/runtime/intent", input, {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(response.status).toBe(503);
+      expect(response.body).toMatchObject({ accepted: false,
+        error: "runtime_intent_submission_store_unavailable" });
+      const status = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: input.runtime_id,
+        session_id: input.session_id,
+        submission_id: input.submission_id,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(status.status).toBe(503);
+      expect(runtimeCtx.received).toHaveLength(0);
     } finally {
       await runtimeCtx.teardown();
     }
@@ -3936,7 +4070,8 @@ describe("WebChatChannel — HTTP inbound", () => {
       await waitForConnectionCount(runtimeCtx.ch, sessionScope, 1);
 
       const accepted = await postJson(runtimeCtx.port, "/runtime/intent", {
-        runtime_id: "blue_tanuki", session_id: sessionId, intent: "status request",
+        runtime_id: "blue_tanuki", session_id: sessionId, submission_id: D4_SUBMISSION_ID_3,
+        intent: "status request",
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(accepted.status).toBe(202);
       const requestId = (accepted.body as { request_id: string }).request_id;
@@ -3971,8 +4106,10 @@ describe("WebChatChannel — HTTP inbound", () => {
     let ws: WebSocket | undefined;
     const sessionId = "session-runtime-failure-001";
     const intent = "private runtime intent that must not be echoed";
+    let handlerCalls = 0;
     try {
       await runtimeCtx.ch.start(async () => {
+        handlerCalls += 1;
         throw new Error(`handler failure ${D4_RUNTIME_TOKEN} ${sessionId} ${intent}`);
       });
       const issued = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
@@ -3989,6 +4126,7 @@ describe("WebChatChannel — HTTP inbound", () => {
       const accepted = await postJson(runtimeCtx.port, "/runtime/intent", {
         runtime_id: "blue_tanuki",
         session_id: sessionId,
+        submission_id: D4_SUBMISSION_ID_4,
         intent,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(accepted.status).toBe(202);
@@ -4006,6 +4144,17 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(serialized).not.toContain("blue_tanuki");
       expect(serialized).not.toContain(intent);
       expect(serialized).not.toContain("handler failure");
+
+      const status = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki", session_id: sessionId, submission_id: D4_SUBMISSION_ID_4,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(status.body).toEqual({ found: true, request_id: requestId, state: "outcome_unknown" });
+      const duplicate = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki", session_id: sessionId, submission_id: D4_SUBMISSION_ID_4, intent,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(duplicate.status).toBe(202);
+      expect(duplicate.body).toMatchObject({ duplicate: true, request_id: requestId, state: "outcome_unknown" });
+      expect(handlerCalls).toBe(1);
     } finally {
       ws?.close();
       await runtimeCtx.teardown();
@@ -4030,11 +4179,17 @@ describe("WebChatChannel — HTTP inbound", () => {
       const request = {
         runtime_id: "blue_tanuki",
         session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
         intent: "整理して要点を教えて",
       };
       expect((await postJson(runtimeCtx.port, "/runtime/intent", request, {
         authorization: `Bearer ${TOKEN}`,
       })).status).toBe(401);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: request.runtime_id,
+        session_id: request.session_id,
+        submission_id: request.submission_id,
+      }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
       expect((await postJson(runtimeCtx.port, "/runtime/intent", {
         ...request,
         command: { type: "tool.call", operation: "shell.exec" },

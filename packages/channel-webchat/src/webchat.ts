@@ -15,6 +15,7 @@ import {
   GoalCompletionRulesSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
+  RuntimeIntentStatusInputSchema,
   RuntimeSessionInputSchema,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
@@ -313,6 +314,20 @@ function d4RuntimeReferenceDigest(token: string, kind: "runtime" | "session", va
     .digest("hex");
 }
 
+function d4RuntimeIntentScopeDigest(runtimeId: string, sessionId: string): string {
+  return createHash("sha256")
+    .update("blue-tanuki.d4-runtime.intent-submission-scope.v1\0", "utf8")
+    .update(JSON.stringify([runtimeId, sessionId]), "utf8")
+    .digest("hex");
+}
+
+function d4RuntimeIntentPayloadDigest(token: string, runtimeId: string, sessionId: string, intent: string): string {
+  return createHmac("sha256", token)
+    .update("blue-tanuki.d4-runtime.intent-submission-payload.v1\0", "utf8")
+    .update(JSON.stringify([runtimeId, sessionId, intent]), "utf8")
+    .digest("hex");
+}
+
 function isDirectToolShortcutContent(content: string): boolean {
   return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(content.trim());
 }
@@ -336,7 +351,8 @@ function findAotanuAssetRoot(): string {
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
  *   POST /runtime/ws-ticket body:{runtime_id, session_id} auth:dedicated D4 Runtime bearer
- *   POST /runtime/intent body:{runtime_id, session_id, intent} auth:dedicated D4 Runtime bearer
+ *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent} auth:dedicated D4 Runtime bearer
+ *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
@@ -968,7 +984,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
-        : url.pathname === "/runtime/intent" || url.pathname === "/runtime/ws-ticket"
+        : url.pathname === "/runtime/intent" || url.pathname === "/runtime/intent/status" ||
+          url.pathname === "/runtime/ws-ticket"
         ? "d4_runtime"
         : url.pathname === "/inbound" || url.pathname === "/ws-ticket"
         ? "inbound"
@@ -1416,6 +1433,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
 
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore || typeof submissionStore.claimD4RuntimeIntent !== "function") {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
+        return;
+      }
       const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
       const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
       const sessionScope = `d4-runtime:${sessionIdDigest}`;
@@ -1428,8 +1451,50 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         }));
         return;
       }
+      const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
+      const payloadDigest = d4RuntimeIntentPayloadDigest(
+        config.token, parsed.data.runtime_id, parsed.data.session_id, parsed.data.intent,
+      );
+      let claim;
+      try {
+        claim = submissionStore.claimD4RuntimeIntent({
+          submission_id: parsed.data.submission_id,
+          payload_digest: payloadDigest,
+          scope_digest: scopeDigest,
+          request_id: randomUUID(),
+        });
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
+        return;
+      }
+      if (claim.status === "identity_conflict") {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_id_conflict" }));
+        return;
+      }
+      if (claim.status === "duplicate" && claim.state === "rejected") {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, request_id: claim.request_id, state: claim.state }));
+        return;
+      }
+      if (claim.status === "duplicate") {
+        res.writeHead(202, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({
+          accepted: true,
+          duplicate: true,
+          request_id: claim.request_id,
+          state: claim.state,
+          session_ref_digest: sessionIdDigest,
+        }));
+        return;
+      }
       const inboundReq = createGatewayInternalInboundRequest({
-        id: randomUUID(),
+        id: claim.request_id,
         channel: "webchat",
         user: D4_RUNTIME_TOKEN_ACTOR,
         content: parsed.data.intent,
@@ -1447,11 +1512,33 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "blue_tanuki.runtime_ingress.used_for_authority": false,
         },
       });
-      void Promise.resolve().then(() => this.handler?.(inboundReq)).catch(() => {
+      const markOutcomeUnknown = () => {
+        try {
+          submissionStore.markD4RuntimeIntentOutcomeUnknown({
+            request_id: claim.request_id,
+            scope_digest: scopeDigest,
+          });
+        } catch { /* retain the durable claim even if state recording is unavailable */ }
+      };
+      const reportHandlerFailure = () => {
         // Keep caller-provided Runtime/Session references and intent out of logs.
         // eslint-disable-next-line no-console
         console.error("[webchat] D4 Runtime intent handler error");
-        this.notifyD4RuntimeIntentProcessingFailure(sessionScope, inboundReq.id);
+        this.notifyD4RuntimeIntentProcessingFailure(sessionScope, claim.request_id);
+      };
+      void Promise.resolve().then(() => this.handler?.(inboundReq)).then(() => {
+        try {
+          submissionStore.markD4RuntimeIntentHandlerReturned({
+            request_id: claim.request_id,
+            scope_digest: scopeDigest,
+          });
+        } catch {
+          markOutcomeUnknown();
+          reportHandlerFailure();
+        }
+      }, () => {
+        markOutcomeUnknown();
+        reportHandlerFailure();
       });
       res.writeHead(202, {
         "content-type": "application/json",
@@ -1460,9 +1547,52 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       });
       res.end(JSON.stringify({
         accepted: true,
+        duplicate: false,
         request_id: inboundReq.id,
+        state: "dispatching",
         session_ref_digest: sessionIdDigest,
       }));
+      return;
+    }
+
+    if (url.pathname === "/runtime/intent/status") {
+      const parsed = RuntimeIntentStatusInputSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_runtime_intent_status" }));
+        return;
+      }
+      const config = this.opts.d4_runtime_intent!;
+      if (parsed.data.runtime_id !== config.runtime_id) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_not_registered" }));
+        return;
+      }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore || typeof submissionStore.getD4RuntimeIntentStatus !== "function") {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_intent_status_unavailable" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, D4_RUNTIME_TOKEN_ACTOR, res)) return;
+      const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
+      try {
+        const status = submissionStore.getD4RuntimeIntentStatus({
+          submission_id: parsed.data.submission_id,
+          scope_digest: scopeDigest,
+        });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify(status
+          ? { found: true, request_id: status.request_id, state: status.state }
+          : { found: false }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_intent_status_unavailable" }));
+      }
       return;
     }
 

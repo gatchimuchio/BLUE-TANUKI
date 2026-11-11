@@ -22,7 +22,7 @@ interface SubmissionRow {
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
 }
 
-/** Durable, content-free inbox for deduplicating authenticated WebChat owner task submissions. */
+/** Durable, content-free inbox for deduplicating authenticated WebChat submissions. */
 export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore {
   private readonly db: DatabaseType;
   private closed = false;
@@ -53,11 +53,11 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       if (!integrity || Object.values(integrity)[0] !== "ok") {
         throw new Error("webchat_owner_task_store_integrity_check_failed");
       }
-      // A previous process may have stopped after claiming the event but before completing the handler.
-      // Preserve the event identity and refuse replay; never infer that no work started.
+      // A previous process may have stopped after claiming an event but before completing its handler.
+      // Preserve every identity and refuse replay; never infer that no work started.
       this.transaction(() => {
         this.db.prepare(`UPDATE webchat_owner_task_inbox SET delivery_state='outcome_unknown',updated_at_ms=?
-          WHERE scope_digest=? AND delivery_state='dispatching'`).run(Date.now(), OWNER_TASK_SCOPE);
+          WHERE delivery_state='dispatching'`).run(Date.now());
       });
     } catch (error) {
       this.db.close();
@@ -86,13 +86,57 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
         !REQUEST_ID.test(input.request_id)) throw new Error("webchat_owner_task_claim_invalid");
     const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
+    return this.claimInScope(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id);
+  }
+
+  claimD4RuntimeIntent(input: {
+    readonly submission_id: string;
+    readonly payload_digest: string;
+    readonly scope_digest: string;
+    readonly request_id: string;
+  }): WebChatOwnerTaskSubmissionClaim {
+    this.assertOpen();
+    if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
+        !DIGEST.test(input.scope_digest) || !REQUEST_ID.test(input.request_id)) {
+      throw new Error("webchat_d4_runtime_intent_claim_invalid");
+    }
+    const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
+    return this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id);
+  }
+
+  getD4RuntimeIntentStatus(input: {
+    readonly submission_id: string;
+    readonly scope_digest: string;
+  }): WebChatOwnerTaskSubmissionStatus | null {
+    this.assertOpen();
+    if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.scope_digest)) {
+      throw new Error("webchat_d4_runtime_intent_submission_id_invalid");
+    }
+    const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
+    return this.getStatusInScope(input.scope_digest, eventDigest);
+  }
+
+  markD4RuntimeIntentHandlerReturned(input: { readonly request_id: string; readonly scope_digest: string }): void {
+    this.updateDispatchState(input.request_id, "handler_returned", input.scope_digest);
+  }
+
+  markD4RuntimeIntentOutcomeUnknown(input: { readonly request_id: string; readonly scope_digest: string }): void {
+    this.updateDispatchState(input.request_id, "outcome_unknown", input.scope_digest);
+  }
+
+  private claimInScope(
+    scopeDigest: string,
+    eventDigest: string,
+    payloadDigest: string,
+    requestId: string,
+  ): WebChatOwnerTaskSubmissionClaim {
     return this.transaction(() => {
       const current = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
         FROM webchat_owner_task_inbox WHERE scope_digest=? AND event_digest=?`)
-        .get(OWNER_TASK_SCOPE, eventDigest) as SubmissionRow | undefined;
+        .get(scopeDigest, eventDigest) as SubmissionRow | undefined;
       if (current) {
         validateSubmissionRow(current);
-        return current.payload_digest === input.payload_digest
+        return current.payload_digest === payloadDigest
           ? { status: "duplicate", request_id: current.request_id, state: current.delivery_state } as const
           : { status: "identity_conflict", request_id: current.request_id } as const;
       }
@@ -100,21 +144,25 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       this.db.prepare(`INSERT INTO webchat_owner_task_inbox
         (scope_digest,event_digest,payload_digest,request_id,delivery_state,created_at_ms,updated_at_ms)
         VALUES (?,?,?,?,'dispatching',?,?)`)
-        .run(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id, now, now);
-      return { status: "accepted", request_id: input.request_id } as const;
+        .run(scopeDigest, eventDigest, payloadDigest, requestId, now, now);
+      return { status: "accepted", request_id: requestId } as const;
     });
+  }
+
+  private getStatusInScope(scopeDigest: string, eventDigest: string): WebChatOwnerTaskSubmissionStatus | null {
+    const row = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
+      FROM webchat_owner_task_inbox WHERE scope_digest=? AND event_digest=?`)
+      .get(scopeDigest, eventDigest) as SubmissionRow | undefined;
+    if (!row) return null;
+    validateSubmissionRow(row);
+    return { request_id: row.request_id, state: row.delivery_state };
   }
 
   getStatus(input: { readonly submission_id: string }): WebChatOwnerTaskSubmissionStatus | null {
     this.assertOpen();
     if (!SUBMISSION_ID.test(input.submission_id)) throw new Error("webchat_owner_task_submission_id_invalid");
     const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
-    const row = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
-      FROM webchat_owner_task_inbox WHERE scope_digest=? AND event_digest=?`)
-      .get(OWNER_TASK_SCOPE, eventDigest) as SubmissionRow | undefined;
-    if (!row) return null;
-    validateSubmissionRow(row);
-    return { request_id: row.request_id, state: row.delivery_state };
+    return this.getStatusInScope(OWNER_TASK_SCOPE, eventDigest);
   }
 
   markHandlerReturned(request_id: string): void {
@@ -135,12 +183,16 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     this.closed = true;
   }
 
-  private updateDispatchState(requestId: string, state: Exclude<WebChatOwnerTaskSubmissionState, "dispatching">): void {
+  private updateDispatchState(
+    requestId: string,
+    state: Exclude<WebChatOwnerTaskSubmissionState, "dispatching">,
+    scopeDigest: string = OWNER_TASK_SCOPE,
+  ): void {
     this.assertOpen();
-    if (!REQUEST_ID.test(requestId)) throw new Error("webchat_owner_task_request_id_invalid");
+    if (!REQUEST_ID.test(requestId) || !DIGEST.test(scopeDigest)) throw new Error("webchat_owner_task_request_id_invalid");
     const result = this.db.prepare(`UPDATE webchat_owner_task_inbox SET delivery_state=?,updated_at_ms=?
       WHERE scope_digest=? AND request_id=? AND delivery_state='dispatching'`)
-      .run(state, Date.now(), OWNER_TASK_SCOPE, requestId);
+      .run(state, Date.now(), scopeDigest, requestId);
     if (result.changes !== 1) throw new Error("webchat_owner_task_state_transition_rejected");
   }
 

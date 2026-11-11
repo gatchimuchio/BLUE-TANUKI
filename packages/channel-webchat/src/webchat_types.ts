@@ -1477,4 +1477,19 @@ export interface WebChatOwnerTaskSubmissionStore {
   markHandlerReturned(request_id: string): void;
   markOutcomeUnknown(request_id: string): void;
   markRejected(request_id: string): void;
+  /** Claim a D4 Runtime intent in a stable runtime/session scope before dispatch. */
+  claimD4RuntimeIntent(input: {
+    readonly submission_id: string;
+    readonly payload_digest: string;
+    readonly scope_digest: string;
+    readonly request_id: string;
+  }): WebChatOwnerTaskSubmissionClaim;
+  /** Read only the content-free dispatch state for a D4 Runtime intent. */
+  getD4RuntimeIntentStatus(input: {
+    readonly submission_id: string;
+    readonly scope_digest: string;
+  }): WebChatOwnerTaskSubmissionStatus | null;
+  /** `handler_returned` means the inbound callback returned, not that the user's goal completed. */
+  markD4RuntimeIntentHandlerReturned(input: { readonly request_id: string; readonly scope_digest: string }): void;
+  markD4RuntimeIntentOutcomeUnknown(input: { readonly request_id: string; readonly scope_digest: string }): void;
 }

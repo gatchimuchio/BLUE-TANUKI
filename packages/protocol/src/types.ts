@@ -772,13 +772,26 @@ export const RuntimeSessionInputSchema = z.object({
 }).strict();
 export type RuntimeSessionInput = z.infer<typeof RuntimeSessionInputSchema>;
 
-/** Authenticated D4 Runtime dialogue input; identifiers are context only. */
+const RuntimeSubmissionIdSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu,
+);
+
+/** Authenticated D4 Runtime dialogue input; submission_id is an idempotency key, never authority. */
 export const RuntimeIntentInputSchema = z.object({
   runtime_id: RegisteredRuntimeReferenceSchema,
   session_id: RegisteredRuntimeReferenceSchema,
+  submission_id: RuntimeSubmissionIdSchema,
   intent: z.string().min(1).max(4_096),
 }).strict();
 export type RuntimeIntentInput = z.infer<typeof RuntimeIntentInputSchema>;
+
+/** Content-free state lookup for a previously submitted D4 Runtime intent. */
+export const RuntimeIntentStatusInputSchema = z.object({
+  runtime_id: RegisteredRuntimeReferenceSchema,
+  session_id: RegisteredRuntimeReferenceSchema,
+  submission_id: RuntimeSubmissionIdSchema,
+}).strict();
+export type RuntimeIntentStatusInput = z.infer<typeof RuntimeIntentStatusInputSchema>;
 
 export type InboundRequestBoundaryFailureReason =
   | "schema_validation_failed"

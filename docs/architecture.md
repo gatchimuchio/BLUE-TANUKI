@@ -132,7 +132,8 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 | `POST /inbound` | Bearer | `{user, content}` を `InboundRequest` 化、handler に投入。同期で `{accepted, request_id}` を返す |
 | `POST /ws-ticket` → `GET /ws?ticket=...` | inbound Bearer → 単回ticket | ticketに束縛されたuser単位でWS接続し、`OutboundChannel.send`を受信 |
 | `POST /runtime/ws-ticket` | 専用D4 Runtime Bearer | 登録済みruntimeとsessionを照合し、HMAC session scopeだけを受信する単回ticketを発行 |
-| `POST /runtime/intent` | 専用D4 Runtime Bearer | `{runtime_id, session_id, intent}`をlimited user入力としてhandlerへ渡す。session WebSocket接続がなければ`409 not_dispatched` |
+| `POST /runtime/intent` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id, intent}`を受ける。UUIDv4 submission IDをsession scopeへ束縛してprivate inboxへ先にclaimし、同じID・同じ入力は再dispatchせず既存request ID／stateを返す。同じIDの異入力は`409` |
+| `POST /runtime/intent/status` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id}`で同sessionの`found`、request ID、dispatch stateだけを返す。intentや処理結果は返さない |
 | `POST /resume` | Bearer (`WEBCHAT_RESUME_TOKEN`) | `{request_id, verdict}` を `onResume` コールバックに転送 (Phase 1 の人間 RESUME 窓口) |
 | `GET/POST /update/*` | Bearer (`BLUE_TANUKI_MAINTENANCE_TOKEN`) | manual update verify / prepare の保守操作 |
 | `GET/POST /recovery/*` | Bearer (`BLUE_TANUKI_MAINTENANCE_TOKEN`) | backup / restore / reset / factory-reset の保守操作 |
@@ -141,8 +142,9 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 設計上の制約:
 - bind 既定 `127.0.0.1` (loopback only)。外部公開は明示的に `WEBCHAT_HOST` を変える必要がある
 - `WEBCHAT_TOKEN` は `/inbound` と通常の `/ws-ticket` 用に8文字以上必須。D4 Runtime用ticket発行と意図入力は別の `BLUE_TANUKI_D4_RUNTIME_TOKEN`・固定 `BLUE_TANUKI_D4_RUNTIME_ID` を使い、通常WebChat資格とは分離する
-- D4 Runtimeは同じsessionで `/runtime/ws-ticket` を先に呼び、返された単回ticketで `/ws` に接続してから `/runtime/intent` を送る。応答接続がなければ`409 not_dispatched`となりHDS handlerは呼ばれない。ticketは期限付きで、raw runtime/session IDはWebSocket user scopeや応答に含めず、session IDはtoken鍵付きdigestへ変換する。HDS出力が同じscopeへ送られた場合、その接続だけが既存`channel_send` frameを受信する。`202`は仕事の完了を意味しない
-- Blue側のsession-scoped戻りtransportは接続されたが、D4アプリ側producer・受信loopとの結合、workspace登録、再接続・切断後の回復は未確認。D03.01全体は未成立で、D4 Pocket repoは変更していない
+- D4 Runtimeは同じsessionで `/runtime/ws-ticket` を先に呼び、返された単回ticketで `/ws` に接続してからUUIDv4の`submission_id`付き `/runtime/intent` を送る。応答接続がなければ`409 not_dispatched`となりclaim／HDS handlerは呼ばれず、再接続後は同じIDで再送できる。ticketは期限付きで、raw runtime/session ID・intent・submission ID・credentialはInbox／状態応答に含めず、保存するsubmission ID digest、runtime/session scope digest、token-keyed payload HMAC、request ID、dispatch stateだけから同一受付を照合する。同じID・異入力は`409`、inbox保存失敗は`503`でhandlerへ渡さない。HDS出力が同じscopeへ送られた場合、その接続だけが既存`channel_send` frameを受信する。`202`は受付のみを示す
+- `/runtime/intent/status`は専用Bearerで同じruntime/sessionから照会し、`dispatching`／`handler_returned`／`outcome_unknown`／`rejected`状態のみ返す。`handler_returned`はhandler callbackの復帰であり、使用者目標の達成、結果配送、M receiptを意味しない。handler失敗や再起動で結果が不明になったsubmissionは自動再実行しない。結果本文の保存・再取得は未実装である。inboxの保持上限／期限は未設計で、自動pruneを行わず、容量影響は未評価
+- Blue側の一回claim・session-scoped状態照会・戻りtransportは接続されたが、D4アプリ側producer・受信loopとの結合、workspace登録、再接続・切断後の処理結果回復は未確認。D03.01全体は未成立で、D4 Pocket repoは変更していない
 - WSは長期Bearerでなくsingle-use ticketで認証する。ticket消費後は再利用できない。接続はin-memoryで、Gateway再起動後の継続・結果再取得を保証しない
 - セッションは in-memory (`Map<user, Set<WebSocket>>`)。プロセス再起動で切断
 - HTTP body の hard cap 1MB
