@@ -2,7 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime冪等受付と状態照会
+## 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows DPAPI資格情報を含むDataRoot保持・再導入・Purge
+
+Windows installed productの通常UninstallはInstallRootと所有確認済みshortcut／registryだけを除去し、DataRoot内の環境設定、本文・履歴、session、log、audit、追加file、DPAPI CurrentUser provider credentialを保持することを実装consumerで確認した。同じWindows userで同じrootへ再導入後もcredential参照が復号可能だった。明示`-PurgeData`は破棄範囲を表示し、隔離DataRootとそのDPAPI fileを完全削除する。production default、権限、HDS、外部provider接続は変更していない。
+
+Windows 11 Home x64（10.0.26300）、合成credentialのみの`corepack pnpm smoke:windows-installed -- --artifact release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip`は最終runでexit 0。markers `uninstall_data_retention_result=pass`、`uninstall_secret_retention_result=pass`、`reinstall_retained_data_result=pass`、`windows_installed_smoke=pass`。最初の試行は既存watchdog回復待ちで失敗し、再実行で回復した。次の再実行は新REFキーを既存の「一件必須」編集helperで更新しようとして失敗したため、smoke testに重複拒否付きappendを追加し、同じpackageで全体を再実行した。これは製品コードの失敗ではない。`corepack pnpm typecheck`、workspace build 15 projects、installer test 20/20、`docs:check`、`git diff --check`はPASS。最終hosted QA、全suite、他OS、再起動後の証拠、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+UNIT_ID: G02.03（Windows製品Setup／UninstallのDPAPI資格情報保持・同root再導入・明示Purgeに限る）
+STATUS: WIRED（Windows installed consumerで合成DPAPI資格情報の暗号化、既定保持、同一user再導入後の復号、表示付き明示Purgeを確認。G02.03全体ではない）
+NEXT_REQUIRED_CONSUMER: 現行rev4.0と最新HEADから次の未接続producer／consumerを再選定する。G09.01のD4 Adapter→BLUE Runtime接続阻害、Linux／macOS等のOS別仕事成立は未完了。
+SAFETY_STATUS: 合成値だけをDataRootへ保存し、子processへhost credentialsを渡さない既存allowlistを使用。通常Uninstallで資格情報を保持し、explicit purgeでのみ削除。秘密値はtest outputへ出さない。setup／uninstallerの所有・path検証は維持。
+LOCAL_ASSET_STATUS: run固有BTsmoke rootはtest cleanupで消失確認。Windows package ZIP／manifestはローカル成果物として保持し、公開していない。workspace `dist`／tsbuildinfoはtypecheckで除去された後buildで再生成して開発環境として保持する。`.codex-tmp`／`release/windows`はOneDrive Cloud Files領域のため保留せず保持。protected添付2領域は未追跡・未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub `main`=`102808ce80ad91bca63397a8db0c27b7a2a7c230`。開始時recovery branch／remote tag current／previous=`102808ce80ad91bca63397a8db0c27b7a2a7c230`／`9fb57175e854df0cdc2f968018d891a6acf83dcb`。閉鎖時のcommit／復旧refは履歴記録に追記する。worktreeはmainのみ。他repoは変更していない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime冪等受付と状態照会
 
 `POST /runtime/intent`はUUIDv4の`submission_id`を必須とし、既存のprivate SQLite inboxへsession単位のscope digest、submission ID digest、intentを含むpayload HMAC、server request ID、状態だけを保存してからhandlerへ渡す。同じsession・ID・入力の再送は既存request IDと状態を返して再dispatchせず、同じIDで入力が変われば409で拒否する。専用D4 Runtime bearerで認証する`POST /runtime/intent/status`は、同sessionのrequest IDと`dispatching`／`handler_returned`／`outcome_unknown`／`rejected`状態だけを返す。生のintent、session/runtime ID、submission ID、credential、処理結果は保存・状態応答へ含めない。
 

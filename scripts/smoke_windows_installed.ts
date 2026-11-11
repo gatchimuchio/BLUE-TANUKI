@@ -20,6 +20,7 @@ import * as net from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
+import { resolveSecretMaterial, storeLlmApiKeySecret } from "../apps/gateway/src/secret_store.ts";
 import { verifyWindowsPackage } from "./verify_windows_package.ts";
 
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -141,6 +142,7 @@ function runExpectingStatus(
   label: string,
   timeoutMs = COMMAND_TIMEOUT_MS,
   extraEnv: Record<string, string> = {},
+  redactedValues: readonly string[] = [],
 ): string {
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
@@ -152,7 +154,11 @@ function runExpectingStatus(
     windowsHide: true,
   });
   const output = [result.stdout ?? "", result.stderr ?? ""].join("\n");
-  if (output.trim()) process.stdout.write(output);
+  let safeOutput = output;
+  for (const value of redactedValues) {
+    if (value) safeOutput = safeOutput.split(value).join("[redacted]");
+  }
+  if (safeOutput.trim()) process.stdout.write(safeOutput);
   if (result.error) {
     throw new Error(`${label} failed: ${result.error.message}`);
   }
@@ -216,6 +222,29 @@ function setEnvFileValue(file: string, key: string, value: string): void {
   const updated = lines.join(newline) + (original.endsWith("\n") ? newline : "");
   try {
     writeFileSync(tempFile, updated, { encoding: "utf8", mode: 0o600 });
+    renameSync(tempFile, file);
+  } catch (error) {
+    rmSync(tempFile, { force: true });
+    throw error;
+  }
+}
+
+function appendEnvFileValue(file: string, key: string, value: string): void {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key)) throw new Error("invalid isolated env key");
+  const original = readFileSync(file, "utf8");
+  const lines = original.split(/\r?\n/);
+  const matches = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return false;
+    const separator = trimmed.indexOf("=");
+    return separator > 0 && trimmed.slice(0, separator).trim() === key;
+  });
+  if (matches.length !== 0) throw new Error(`isolated env file already contains ${key}`);
+  const newline = original.includes("\r\n") ? "\r\n" : "\n";
+  const base = original.endsWith("\n") ? original : `${original}${newline}`;
+  const tempFile = `${file}.smoke-${process.pid}-${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tempFile, `${base}${key}=${JSON.stringify(value)}${newline}`, { encoding: "utf8", mode: 0o600 });
     renameSync(tempFile, file);
   } catch (error) {
     rmSync(tempFile, { force: true });
@@ -1498,21 +1527,41 @@ async function main(): Promise<void> {
     console.log("interrupted_update_staging_cleanup_result=pass");
 
     const retainedEnvFile = path.join(dataRoot, "blue-tanuki.env");
+    const syntheticSecret = `synthetic-uninstall-secret-${randomUUID()}`;
+    const storedSecret = storeLlmApiKeySecret("OPENROUTER_API_KEY", syntheticSecret, {
+      envFilePath: retainedEnvFile,
+      platform: "win32",
+    });
+    if (storedSecret.storage !== "win32_dpapi_current_user" || !storedSecret.os_protected) {
+      throw new Error("isolated uninstall secret was not stored with Windows DPAPI CurrentUser protection");
+    }
+    appendEnvFileValue(retainedEnvFile, storedSecret.ref_key, storedSecret.ref);
+    const secretFile = path.join(dataRoot, "secrets", "openrouter_api_key.dpapi");
+    if (!existsSync(secretFile)) throw new Error("isolated DPAPI secret file was not created under the DataRoot");
+    const secretBytesBeforeUninstall = readFileSync(secretFile);
+    if (secretBytesBeforeUninstall.toString("utf8").includes(syntheticSecret) ||
+        resolveSecretMaterial(parseEnvFile(retainedEnvFile), "OPENROUTER_API_KEY", { platform: "win32" }) !== syntheticSecret) {
+      throw new Error("isolated DPAPI secret was not protected and readable through its stored reference");
+    }
     const retainedEnvBeforeUninstall = readFileSync(retainedEnvFile);
     const retainedSentinel = path.join(dataRoot, "user-data-retention-sentinel.txt");
     const retainedSentinelContents = `BLUE-TANUKI isolated installed smoke ${randomUUID()}\n`;
     writeFileSync(retainedSentinel, retainedSentinelContents, { encoding: "utf8", flag: "wx" });
     logStep("uninstall without purge and verify registered user data is retained");
-    run("cmd.exe", [
+    const defaultUninstallOutput = runExpectingStatus("cmd.exe", [
       "/d",
       "/s",
       "/c",
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
-      "-Quiet",
-    ], work, "installer uninstall with retained data", 300_000, {
+    ], work, 0, "installer uninstall with retained data", 300_000, {
       ...isolatedProductEnv,
       BLUE_TANUKI_UNINSTALL_STATUS_FILE: retentionUninstallStatusFile,
-    });
+    }, [syntheticSecret]);
+    if (!defaultUninstallOutput.includes("Will retain all contents under the registered product data root:") ||
+        !defaultUninstallOutput.includes("DPAPI-protected provider credentials") ||
+        defaultUninstallOutput.includes(syntheticSecret)) {
+      throw new Error("default uninstall did not clearly disclose retained DPAPI credentials without exposing their value");
+    }
     const retentionUninstallStatus = await waitForFileText(retentionUninstallStatusFile, UNINSTALL_TIMEOUT_MS);
     if (!retentionUninstallStatus || !/^exit_code=0\b/m.test(retentionUninstallStatus.replace(/^\uFEFF/, ""))) {
       throw new Error("default uninstall status did not confirm success");
@@ -1522,12 +1571,15 @@ async function main(): Promise<void> {
     }
     const retainedSentinelAfterUninstall = readFileSync(retainedSentinel, "utf8");
     const retainedEnvAfterUninstall = readFileSync(retainedEnvFile);
+    const retainedSecretAfterUninstall = resolveSecretMaterial(parseEnvFile(retainedEnvFile), "OPENROUTER_API_KEY", { platform: "win32" });
     if (!existsSync(dataRoot) || retainedSentinelAfterUninstall !== retainedSentinelContents ||
-        !retainedEnvAfterUninstall.equals(retainedEnvBeforeUninstall)) {
-      throw new Error("default uninstall did not preserve the isolated data root, sentinel, and environment bytes");
+        !retainedEnvAfterUninstall.equals(retainedEnvBeforeUninstall) ||
+        !readFileSync(secretFile).equals(secretBytesBeforeUninstall) || retainedSecretAfterUninstall !== syntheticSecret) {
+      throw new Error("default uninstall did not preserve isolated content, settings, and the decryptable DPAPI credential");
     }
     assertSmokeRegistryAbsent(autostartRunName, "post retention uninstall registry check");
     console.log("uninstall_data_retention_result=pass");
+    console.log("uninstall_secret_retention_result=pass");
 
     logStep("reinstall into the same roots and verify retained data remains usable");
     run("cmd.exe", [
@@ -1543,10 +1595,12 @@ async function main(): Promise<void> {
     ], packageDir, "installer reinstall with retained data", 600_000, isolatedProductEnv);
     const retainedSentinelAfterReinstall = readFileSync(retainedSentinel, "utf8");
     const retainedEnvAfterReinstall = readFileSync(retainedEnvFile);
+    const retainedSecretAfterReinstall = resolveSecretMaterial(parseEnvFile(retainedEnvFile), "OPENROUTER_API_KEY", { platform: "win32" });
     if (!existsSync(path.join(installRoot, "BlueTanukiLauncher.ps1")) ||
         retainedSentinelAfterReinstall !== retainedSentinelContents ||
-        !retainedEnvAfterReinstall.equals(retainedEnvBeforeUninstall)) {
-      throw new Error("reinstall did not retain the isolated user data and environment bytes");
+        !retainedEnvAfterReinstall.equals(retainedEnvBeforeUninstall) ||
+        !readFileSync(secretFile).equals(secretBytesBeforeUninstall) || retainedSecretAfterReinstall !== syntheticSecret) {
+      throw new Error("reinstall did not retain isolated content, settings, and the decryptable DPAPI credential");
     }
     const reinstalledRegistry = readSmokeRegistryState(autostartRunName, "post retention reinstall registry check");
     if (!reinstalledRegistry.uninstallPresent || reinstalledRegistry.autostartPresent) {
@@ -1555,17 +1609,20 @@ async function main(): Promise<void> {
     console.log("reinstall_retained_data_result=pass");
 
     logStep("explicitly purge only the isolated smoke DataRoot");
-    run("cmd.exe", [
+    const purgeUninstallOutput = runExpectingStatus("cmd.exe", [
       "/d",
       "/s",
       "/c",
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
       "-PurgeData",
-      "-Quiet",
-    ], work, "installer uninstall", 300_000, {
+    ], work, 0, "installer uninstall with explicit data purge", 300_000, {
       ...isolatedProductEnv,
       BLUE_TANUKI_UNINSTALL_STATUS_FILE: uninstallStatusFile,
-    });
+    }, [syntheticSecret]);
+    if (!purgeUninstallOutput.includes("Will permanently remove the full product data root and every file under it:") ||
+        !purgeUninstallOutput.includes("DPAPI-protected provider credentials") || purgeUninstallOutput.includes(syntheticSecret)) {
+      throw new Error("explicit purge did not clearly disclose DPAPI credential removal without exposing its value");
+    }
     const uninstallStatus = await waitForFileText(uninstallStatusFile, UNINSTALL_TIMEOUT_MS);
     if (!uninstallStatus) throw new Error("uninstall status file was not written");
     const normalizedUninstallStatus = uninstallStatus.replace(/^\uFEFF/, "");
@@ -1578,6 +1635,7 @@ async function main(): Promise<void> {
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) {
       throw new Error("isolated data root still exists after explicit purge uninstall");
     }
+    if (existsSync(secretFile)) throw new Error("explicit purge left the isolated DPAPI secret file behind");
     assertSmokeRegistryAbsent(autostartRunName, "post uninstall registry check");
     uninstalled = true;
     allowWorkCleanup = true;

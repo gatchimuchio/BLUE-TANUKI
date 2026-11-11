@@ -1,50 +1,41 @@
-# Windows Uninstall
+# Windowsのアンインストール
 
-The Windows installer registers BLUE-TANUKI under the current-user uninstall
-registry key:
+Windows installerは、現在のWindows userのアンインストール登録へBLUE-TANUKIを登録する。
 
 ```text
 HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\BlueTanuki
 ```
 
-Use either:
+次のいずれかから実行できる。
 
-- Windows Apps / Control Panel,
-- Start Menu `Uninstall BLUE-TANUKI`,
-- `%LOCALAPPDATA%\Programs\BlueTanuki\UninstallBlueTanuki.cmd`.
+- Windowsの「アプリ」またはコントロールパネル
+- スタートメニューの「Uninstall BLUE-TANUKI」
+- `%LOCALAPPDATA%\Programs\BlueTanuki\UninstallBlueTanuki.cmd`
 
-## Default Behavior
+## 通常のアンインストール
 
-Default uninstall:
+既定では、常駐runtimeを停止し、所有を確認できたスタートメニュー項目・任意のデスクトップ項目・アンインストール登録・導入済みapp filesを除去する。登録済みDataRootの内容は保持する。
 
-- stops the resident runtime,
-- removes Start Menu shortcuts,
-- removes the optional Desktop shortcut if present,
-- removes the uninstall registry key,
-- removes installed app files,
-- preserves user data.
-
-Preserved data:
+既定のDataRootは次の場所である。Setup時に別のDataRootを指定した場合は、登録済みの場所を使う。
 
 ```text
 %APPDATA%\BlueTanuki
 ```
 
-User data retained means env, logs, audit, sessions, and local state remain for
-reinstall or manual review.
+Windows provider credentialはDPAPI CurrentUserで保護され、DataRoot内の`secrets`へ保存される。通常のアンインストールは、これらのcredential files、保存した本文と履歴、session、log、audit記録、環境設定、DataRootへ追加されたほかのfileを保持する。同じWindows userで再導入すると、残したcredentialを同じDPAPI保護境界で復号できる。
 
-## Purge
+通常表示では、DataRootを保持することと、保持対象に秘密・履歴・audit記録が含まれることを削除前に表示する。`-Quiet`を指定した場合は計画表示を抑制する。
 
-To remove user data too:
+## DataRootの破棄
+
+DataRootも除去する場合は、登録済みのuninstallerへ`-PurgeData`を渡す。
 
 ```powershell
 %LOCALAPPDATA%\Programs\BlueTanuki\UninstallBlueTanuki.cmd -PurgeData
 ```
 
-Use purge only when the owner intentionally wants env, logs, audit, session, and
-local data removed.
+`-PurgeData`はDataRoot全体を完全削除し、ごみ箱は経由しない。DPAPI保護credential、保存本文、履歴、session、log、audit記録、環境設定、DataRootへ追加されたfileをすべて含む一括選択であり、category別の部分保持は行わない。通常表示では、破棄する範囲を削除前に表示する。全DataRootの除去を意図するときだけ指定する。
 
-## Safety
+## 保護
 
-The uninstaller guards against broad user-directory and filesystem-root removal.
-It must not delete secrets or audit data silently through the default path.
+uninstallerは、広いuser directory、filesystem root、または所有を確認できないpathを削除対象にしない。通常のアンインストールで秘密やaudit記録を黙って削除しない。Purge時はDataRootの所有・構造を検証し、検証できない場合はdataを保持して停止する。

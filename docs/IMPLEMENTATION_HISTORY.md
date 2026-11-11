@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-11-12 — QEB-G02.03-WINDOWS-DPAPI-UNINSTALL-RETENTION
+
+開始時local／`origin/main`／GitHub `main`=`102808ce80ad91bca63397a8db0c27b7a2a7c230`。開始recovery branch／remote tag current／previous=`102808ce80ad91bca63397a8db0c27b7a2a7c230`／`9fb57175e854df0cdc2f968018d891a6acf83dcb`。BLUE worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。D4-Pocketは読み取りのみ。
+
+Windows DataRoot内に`OPENROUTER_API_KEY`を既存`storeLlmApiKeySecret`から合成値として保存し、実DPAPI CurrentUser protectorで暗号化された`.dpapi` bytesを作った。envへsecret refだけを書き、`resolveSecretMaterial`で同一process userから復号可能か確認する。通常Uninstallの出力はDPAPI credential、保存content/history、sessions、logs、audit、env settingsを保持する旨を表示し、status fileでexit 0、InstallRoot／登録消失、DataRoot／sentinel／env bytes／secret bytes保持、復号可能性を確認した。同じWindows userで同rootへ再Setup後も保持・復号を確認した。`-PurgeData`側は削除範囲とcredential含有を表示し、隔離InstallRoot／DataRoot／secret／registryを削除した。実資格・実provider・実ユーザーデータ・実Windows installには触れていない。
+
+`install/windows/product/BlueTanukiUninstall.ps1`の通常／purge表示を対象内容に合わせ、`docs/WINDOWS_UNINSTALL.md`を日本語基底へ翻訳して保持とall-or-nothing purgeを明記した。対応する日本語移行台帳entryを除き、負債件数76→75。`scripts/smoke_windows_installed.ts`はsynthetic DPAPI secretの暗号化／復号／保持／再導入／purgeを照合し、output redactionを行う。既存`setEnvFileValue`は既存key一件の前提を維持し、新規secret ref用に重複拒否append helperを追加した。
+
+Windows 11 Home x64（10.0.26300）の最終`corepack pnpm smoke:windows-installed -- --artifact release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip`はexit 0。package verification PASS、2,545 entries、ZIP SHA-256=`ea7101ebe2f8cd6cbc10bdd0fe930e52ccda4ec7b9c9ef76638c0cc98ac1b76a`。Markers: `crash_recovery_result=pass`、`update_failure_rollback_result=pass`、`interrupted_update_recovery_result=pass`、`uninstall_data_retention_result=pass`、`uninstall_secret_retention_result=pass`、`reinstall_retained_data_result=pass`、全体`windows_installed_smoke=pass`。その他`corepack pnpm typecheck`、15-project build、`windows_product_installer.test.ts` 20/20、`docs:check`、`git diff --check`はPASS。初回実行で既存watchdog recovery 60秒待ちが失敗し、同package rerunではPASS。次のrunはtest env helperが未設定REF keyを更新しようとしてFAILしたためtest-only appendを是正し、同じinstalled smoke全体を再実行してPASS。これは実行時の製品欠陥を意味しないが、初回watchdog timeoutの根因は未確定。
+
+QE_BUILDのWindows installed lifecycle sliceだけを限定`WIRED`とする。G02.03全体、他OS・再起動QA、全suite、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOは未成立。`docs/WINDOWS_UNINSTALL.md`は日本語移行負債から除外し、`debt_count`を76から75へ更新。run固有BTsmoke rootは元path消失確認済み。local Windows packageは再利用可能成果物として保持し、公開していない。`.codex-tmp`／`release/windows` Cloud Files領域は移動・削除せず保持。workspace `dist`／tsbuildinfoはtypecheck後にworkspace buildで再生成して保持する。OneDrive原資料、protected添付、D4-Pocket、実provider、外部作用は変更していない。
+
+---
+
 ## 2026-11-12 — QEB-E04.02-GOOGLE-CALENDAR-DRIVE-FAILURE-REVIEW-OBSERVATION
 
 開始時local／`origin/main`／GitHub `main`=`3b467eb11e0cd8182042594a8ac2ad1830662e28`。開始時recovery branch／remote tag current=`3b467eb11e0cd8182042594a8ac2ad1830662e28`／previous=`e8046b43c355bc5b2a860fb21d093d0e8c560fc9`。worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。D4-Pocketは変更していない。

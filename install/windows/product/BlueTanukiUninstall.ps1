@@ -152,11 +152,11 @@ function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
     Write-Host 'Would remove only shortcuts and uninstall registration verified as owned by this install.'
     if ($PurgeData) {
       Write-Host "Would permanently remove the full product data root and every file under it: $ResolvedDataRoot"
-      Write-Host 'This may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+      Write-Host 'This includes DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
       Write-Host 'Data removal does not use the Recycle Bin.'
     } else {
       Write-Host "Would retain all contents under the registered product data root: $ResolvedDataRoot"
-      Write-Host 'Retained contents may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+      Write-Host 'Retained contents include DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
     }
     return
   }
@@ -165,11 +165,11 @@ function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
   Write-Host 'Will remove only shortcuts and uninstall registration verified as owned by this install.'
   if ($PurgeData) {
     Write-Host "Will permanently remove the full product data root and every file under it: $ResolvedDataRoot"
-    Write-Host 'This may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+    Write-Host 'This includes DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
     Write-Host 'Data removal does not use the Recycle Bin.'
   } else {
     Write-Host "Will retain all contents under the registered product data root: $ResolvedDataRoot"
-    Write-Host 'Retained contents may include environment credentials, saved content and history, sessions, logs, audit records, and files added under that root.'
+    Write-Host 'Retained contents include DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
   }
 }
 
