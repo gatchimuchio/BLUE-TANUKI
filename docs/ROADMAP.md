@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — F04.02 Google Drive公開リンクreader共有の限定consumer
+### 直近完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
+
+2026-11-11、既存WebChat/GatewayのCanvas経路を合成CからJの委任目的関係・plan step審査、Approval Gate、隔離sandbox file.write、bytes結果照合、M receipt、owner明示達成規則、Gateway再起動後の復元まで一つのtaskで通す統合testを実行しPASSした。実環境はlocalhost Gatewayと固有Temp root、synthetic backend、fixture tokenのみ。試験は1件PASS／同file内7件skip。Temp root cleanupと元path不在を確認した。
+
+これはF17.03の限定synthetic WIRED consumerで、実人間L3操作・実ブラウザー操作・実LLM/provider・外部書込み・実ユーザーデータを証明しない。製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。次の独立作業は現行rev4.0とHEADからローカル隔離で進められる全体接続を選ぶ。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[実装履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — F04.02 Google Drive公開リンクreader共有の限定consumer
 
 `google.drive.write`へ専用`permissions.create.public_link`を接続した。Owner taskで対象と「リンクを知る全員へのreader公開」を明示し、`allow_file_discovery=false`を固定する。認証Owner所有のMy Drive `text/plain`一件だけを対象とし、既存公開grant・版／本文／アクセスscope変化は拒否する。no-store L3 reviewで公開本文全体とACLを示し、作用直前と作用後にpermission・版・本文を再読して確認する。失敗時は自動再送／自動取消を行わず、公開状態が残る可能性を返す。
 

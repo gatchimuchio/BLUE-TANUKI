@@ -4177,3 +4177,16 @@ L3 content reviewは現行本文全体、本文bytes／SHA-256、file identity�
 protocol／HDS-BRAIN／core／Gateway／channel-webchat build PASS。新規合成fixture 5/5 PASS（review内容と非作用、公開scope固定、既存public grant拒否、review後本文変更拒否、成功readback、結果不明で一回のみ、L3必須）。Control Center script parse選択test 1/1 PASS。`docs:check`／`git diff --check` PASS（日本語基底の既存移行負債76件は注意表示）。全suite、実Google API／credential、served UI、外部共有、5OS、QE_QC／QE_QAはNOT_RUN。状態はF04.02公開共有sliceの`WIRED`であり、F04親成果や製品全体完成ではない。
 
 開始local／origin／GitHub main=`6e8b9ee1597af12763781b43af5e806860315e0b`。編集前local recovery branches／remote backup tags current／previous=`6e8b9ee1597af12763781b43af5e806860315e0b`／`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`。protected attachment directoriesは保持。`dist`とRust `target`は開発用生成物として保持。external artifacts／real Drive dataは生成していない。
+## 2026-11-11 QE_BUILD — F17.03 Canvas synthetic owner-task縦断からfile.write/M receiptまで
+
+対象はWebChat Canvas本文から親C・J・BrokerへつながるF17.03の限定consumer。owner選択済みの達成条件「現行J正本に結び付く明示規則と検証済み根拠・M receipt」を維持し、実LLMや実外部providerを使わない。
+
+実行コマンド：corepack pnpm exec vitest run apps/gateway/test/document_organization_entry.test.ts -t "routes bounded Canvas data only to parent C and verifies an owner-reviewed local file.write receipt" --maxWorkers=1 --minWorkers=1
+
+結果：PASS、1件／同file内7件skip。localhost Gatewayを起動し、synthetic Canvas生成とC、fixture owner／resume token、目的関係L3 endpoint、plan step review、隔離Temp file rootを通した。Canvas参照のrequest ID／MIME／version／SHA-256と本文を結び、planは最初unverifiedのまま提示。fixture owner review後、sandbox内の一つの新規file.write候補だけを作用し、実bytes readback、M receipt、明示completion ruleを確認した。Gatewayを停止・再起動後、plan／receipt／achieved状態を復元し、対象fileを再実行しないことも確認した。
+
+SQLite ExperimentalWarningは出力されたがtestは成功。これはfixture tokenでAPI経路を駆動した合成integrationで、実人間L3同意、Control Center実browser操作、実LLM／provider、外部作用、実ユーザーデータを証明しない。F17.03の限定synthetic consumerをWIREDとする。F17全体、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。
+
+生成資産：testの一意Temp rootはfinally cleanupされ、bt-canvas-file-write-* prefixの再確認でも残存なし。追加package／外部artifactなし。既存ignored build出力とprotected attachment directoriesは保持。別repo変更なし。
+
+開始local／origin／GitHub main=f1bfb122d795cdf19101b610ce79180cced6a100。編集前local recovery branch／remote tag current／previous=f1bfb122d795cdf19101b610ce79180cced6a100／6e8b9ee1597af12763781b43af5e806860315e0b。終了local／origin／remote main SHAは作業閉包時に独立照合する。

@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F04.02 Google Driveの公開リンクreader共有を独立L3 consumerへ接続
+## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvasからsynthetic C・J・Broker・M receiptまでのローカル縦断
+
+主語はWebChat Control Centerが表示するCanvas成果物と、その本文を使うowner-authenticated Task経路である。目的は、Canvas生成応答のrequest ID／MIME／UTF-8本文／SHA-256／versionへ束縛したowner意図を一回限り親Cへ送り、既存Jの委任目的関係・plan step審査、Approval Gate、隔離Broker file.write、結果照合、M receipt、ownerの明示達成規則、再起動復元まで同一taskで接続すること。
+
+実行した確認は corepack pnpm exec vitest run apps/gateway/test/document_organization_entry.test.ts -t "routes bounded Canvas data only to parent C and verifies an owner-reviewed local file.write receipt" --maxWorkers=1 --minWorkers=1。PASS：1件、同file内7件skip。localhostでGatewayを実起動し、synthetic Canvas／C、fixture owner・resume token、owner review endpoint、隔離temp file rootを使った。実行後、対象fileの本文とbytesを照合し、M receiptとowner明示規則による達成を確認。Gatewayを再起動し、同じplan／receipt／達成状態が復元され、fileを再実行しないことを確認した。
+
+これは既存コードの限定synthetic WIRED consumer確認である。実LLM、実provider、実人間のL3操作、Control Center実ブラウザー操作、外部書込み、実ユーザーデータ、製品全体のSYSTEM_SHAPED／BUILD_COVEREDは含まない。試験はSQLiteのExperimentalWarningを出したが成功。試験が作成するbt-canvas-file-write-* Temp rootはfinally cleanupされ、再確認時に残存なし。
+
+UNIT_ID: F17.03（Canvas由来のowner taskからローカルsandbox作用・M receipt・達成後停止までの限定slice）
+STATUS: WIRED（synthetic C→owner-authenticated Task→J purpose/relation/step→Approval→sandbox file.write→verified result/M receipt→明示規則評価→restart restore。実LLMや実ユーザー操作の証拠ではない）
+NEXT_REQUIRED_CONSUMER: 次の独立作業でrev4.0・最新HEADを再照合し、P2全体連結から選定する。C08.03実provider、F04.03の専用Drive live作用、実外部作用は個別保留を維持。Windows installed product lifecycleなどローカル隔離で進められる残存consumerを優先候補として現物確認する。
+SAFETY_STATUS: file.writeはテスト専用Temp root内だけ。承認はfixture tokenで経路を駆動する合成入力であり、人間ownerの実同意を代行しない。Canvas内容・LLM出力・M receiptは権限を作らない。
+LOCAL_ASSET_STATUS: test Temp rootはcleanup済み。新規package／外部artifactなし。既存ignored build outputは変更していない。protected attachment directoriesは保持・未stage。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／origin／GitHub main=f1bfb122d795cdf19101b610ce79180cced6a100。編集前recovery branch／remote tag current／previous=f1bfb122d795cdf19101b610ce79180cced6a100／6e8b9ee1597af12763781b43af5e806860315e0bへ照合付きで回転。作業開始時の未追跡はprotected attachment directoriesのみ。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F04.02 Google Driveの公開リンクreader共有を独立L3 consumerへ接続
 
 主語は既存`google.drive.write`と、その候補を扱うHDS-J／Gateway／Executor／Control Centerである。目的は、私有のfile作成・個別ユーザーgrantから独立した`permissions.create.public_link`を追加し、Ownerが公開範囲と公開される現行本文を確認した場合だけ作用候補・承認へ進めること。実provider共有ではなく、通常consumerのコード接続と合成fixture疎通までを扱う。
 
@@ -224,9 +239,11 @@ STATUS: WIRED（Setup置換前・Uninstall削除前の両consumerが共通の完
 NEXT_REQUIRED_CONSUMER: owner L3を要するF17.03の目的関係／step審査は未実施。Windows installed-packageの動的Setup→通常Uninstall／Purge選択→データ保持・残留観測は後段の製品E2Eで扱う。
 SAFETY_STATUS: 非一致・曖昧ショートカットを保持。実ファイル操作なし。
 
-## 保留中BUILD_BATCH — QE_BUILD / F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptと結果不明復帰へ接続（限定WIRED）
+### 前段保留記録（2026-11-10時点） — F17.03 Canvas本文から親C・J・Brokerのsandbox作用・M receiptと結果不明復帰へ接続
 
 実際のowner L3による目的関係確認・plan step審査、file.write、M receiptは未実施。Codexは承認・目的適合判断を代行しない。以下は実装とserved候補生成の前回確認記録であり、この保留を解消した証拠ではない。
+
+この節は2026-11-10時点の観測記録。後続の2026-11-11限定synthetic Gateway test結果は本書先頭とIMPLEMENTATION_HISTORY.mdに記録し、この時点の未承認候補状態を現在状態へ流用しない。
 
 主語はWebChat Control CenterのCanvas成果物と、そこからownerが明示した操作意図。目的は一致確認済みの限定本文を一回の親C計算へ渡し、提案されたsandbox内file.writeを既存J／Approval／Brokerへ接続し、検証済み結果とM receiptに基づくowner指定の達成判定まで同じtaskで通すこと。ownerは「明示規則と検証済み根拠」を選択済み。Canvas本文は権限・承認・目的変更の根拠ではなく、child候補へ本文を渡さない。
 
