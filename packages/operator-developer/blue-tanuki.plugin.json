@@ -19,6 +19,7 @@
     "github:pr.write",
     "github:comment.write",
     "github:code.write",
+    "github:release.write",
     "tool:browser.snapshot",
     "tool:browser.automation",
     "browser:snapshot",

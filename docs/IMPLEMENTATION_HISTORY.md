@@ -4190,3 +4190,29 @@ SQLite ExperimentalWarningは出力されたがtestは成功。これはfixture 
 生成資産：testの一意Temp rootはfinally cleanupされ、bt-canvas-file-write-* prefixの再確認でも残存なし。追加package／外部artifactなし。既存ignored build出力とprotected attachment directoriesは保持。別repo変更なし。
 
 開始local／origin／GitHub main=f1bfb122d795cdf19101b610ce79180cced6a100。編集前local recovery branch／remote tag current／previous=f1bfb122d795cdf19101b610ce79180cced6a100／6e8b9ee1597af12763781b43af5e806860315e0b。終了local／origin／remote main SHAは作業閉包時に独立照合する。
+
+## 2026-11-12 QE_BUILD — F05.02 GitHub既存tagへのdraft release作成consumer
+
+rev4.0のF05.02（GitHub書込み種別・公開境界）に沿って、release作成をissue／PR／comment／code pushから分離した`release.draft.create` consumerとして追加した。既存`github.write`経路に`github:release.write`を追加し、Protocol、HDS command／Operation Plan、Executor、Gateway L3 content review、Developer Control Center、plugin permission allowlistを接続した。D4-Pocket／MINIDORAは変更していない。
+
+対象は既存repository内のexact tag一つと、そのtagが直接指すcommit一つ。repository ID／canonical name／visibility、tag object SHA／type、resolved commit、release不存在、name／bodyをtarget／request digestとno-store reviewへ束縛する。lightweight tagとcommitへ直接つながるannotated tagを対象にし、nested tag、stale target、既存release、未対応引数はPOST前に拒否する。POST直前にrepository／tag／release状態を再照合し、`draft=true`、`prerelease=false`、`generate_release_notes=false`、assetなしを固定する。作成応答、tag、releaseをreadbackして一致した場合だけ受理receiptを返す。通知の可能性と非原子的観測をreviewへ示し、明示provider拒否と結果不明を区別する。結果不明は自動再送しない。
+
+Gatewayのloopback process testは合成providerを使い、L3 content review必須、review前POSTなし、承認後に正確なbodyで一回POST、draft／tag readback、J/Mへの受理結果と保存済み結果照会を確認した。同test群で明示拒否と結果不明がM receiptへ別状態で保存され、自動再送しないことも確認した。release本文・名前・tokenが記憶、audit、history、session、process outputへ漏れないことを照合した。実GitHub credential／API、実release、ownerの実browser／L3、通知は使っていない。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm typecheck` | PASS。 |
+| `corepack pnpm build` | PASS、15 workspace projects。 |
+| `corepack pnpm --filter @blue-tanuki/core test -- test/tools_builtin.test.ts` | PASS：98 passed、6 skipped。 |
+| `corepack pnpm --filter @blue-tanuki/hds-brain test -- test/github_write_operation_plan.test.ts` | PASS：2 passed。 |
+| `corepack pnpm --filter @blue-tanuki/channel-webchat test -- test/webchat.test.ts -t "renders GitHub draft release"` | PASS：1 passed、129 skipped。 |
+| `corepack pnpm --filter @blue-tanuki/gateway test -- test/plugin_loader.test.ts` | PASS：9 passed。 |
+| `corepack pnpm --filter @blue-tanuki/gateway test -- test/execution_result_reconciliation.test.ts -t "release.draft.create" --maxWorkers=1 --minWorkers=1` | PASS：4 passed、84 skipped（受理・拒否・結果不明・real Gateway process loopback）。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債76件の既存注意を維持。 |
+| 全workspace suite、GitHub実API／credential、実release、実owner browser操作、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+このconsumerだけを限定`WIRED`とする。F05.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、P13公開・出荷GOへ拡張しない。owner選択済みC08.02達成規則には触れていない。
+
+生成資産はworkspace buildのignored `dist`／Rust `target`。稼働中のローカル開発物として保持した。focused Gateway process testのtest-owned temporary rootはfinally cleanupされる。releaseや外部artifact、実データは作成していない。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untrackedとして維持した。
+
+開始時local／origin／GitHub main=`77b0bd3e449a2bbecc88a3fec9442d14892d7e1f`、復旧current／previous=`77b0bd3e449a2bbecc88a3fec9442d14892d7e1f`／`bf1297331db32ccb3fb509b66e3b4abcb4bb09a0`。閉包後のmain／remote SHA・recovery ref・clean stateはGitから再照合する。次consumerはG09.01 Android native entryとD4 mobile contractのread-only照合。

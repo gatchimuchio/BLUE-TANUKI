@@ -35,6 +35,7 @@ import {
   githubPullRequestCommentCreateRequestPayloadDigest,
   githubPullRequestCreateRequestPayloadDigest,
   githubCodePushRequestPayloadDigest,
+  githubReleaseDraftCreateRequestPayloadDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -241,7 +242,7 @@ export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v6";
     readonly operation: "github.write";
-    readonly operation_name: "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push";
+    readonly operation_name: "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create";
     readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
     readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
     readonly http_status: number | null;
@@ -1038,6 +1039,17 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     return githubCodePushRequestPayloadDigest({ owner, repo, branch, expected_head_sha: expectedHeadSha,
       path, content, commit_message: commitMessage });
   }
+  if (operation === "release.draft.create") {
+    const tagName = parameters.tag_name;
+    const targetCommitSha = parameters.target_commit_sha;
+    const name = githubWriteText(parameters, "name", 256, true);
+    if (!validGitHubBranchRef(tagName) || typeof targetCommitSha !== "string" ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(targetCommitSha) || !name || name.trim() !== name ||
+        /[\u0000-\u001f\u007f]/.test(name) ||
+        !allowedKeys(["operation", "owner", "repo", "tag_name", "target_commit_sha", "name", "body"])) return undefined;
+    return githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName,
+      target_commit_sha: targetCommitSha, name, ...(body === undefined ? {} : { body }) });
+  }
   return undefined;
 }
 
@@ -1080,7 +1092,9 @@ function githubWriteResultMatches(
         : parameters.operation === "pr.create"
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 }
           : parameters.operation === "code.push"
-            ? { method: "POST", path: "/graphql", status: 200 } : undefined;
+            ? { method: "POST", path: "/graphql", status: 200 }
+            : parameters.operation === "release.draft.create"
+              ? { method: "POST", path: `/repos/${owner}/${repo}/releases`, status: 201 } : undefined;
   if (!route || output.method !== route.method || output.path !== route.path ||
       output.mutation_status !== "provider_accepted" && output.mutation_status !== "provider_rejected") return false;
   if (output.mutation_status === "provider_rejected") {
@@ -1126,6 +1140,12 @@ function githubWriteResultMatches(
       result.branch === parameters.branch && result.parent_sha === parameters.expected_head_sha &&
       result.path === parameters.path && typeof result.commit_sha === "string" &&
       /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.commit_sha) && result.content_sha256 === contentDigest;
+  }
+  if (parameters.operation === "release.draft.create") {
+    return Object.keys(result).sort().join(",") === "draft,id,name,prerelease,tag_name,target_commit_sha" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.name === parameters.name &&
+      result.tag_name === parameters.tag_name && result.target_commit_sha === parameters.target_commit_sha &&
+      result.draft === true && result.prerelease === false;
   }
   const expectedDraft = parameters.draft ?? false;
   const expectedHeadRepository = typeof parameters.head_repository === "string"
@@ -4614,7 +4634,7 @@ export class OperationPlanLedger {
         : binding.status === "provider_rejected" ? "provider_rejected" : null;
       if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
           !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
-          !["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create", "code.push"].includes(String(operationName)) ||
+          !["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
           committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
           committedObservation.record_type !== "github_write_outcome_observation" ||
           committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
@@ -4658,7 +4678,7 @@ export class OperationPlanLedger {
         memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
         observed_at_ms: binding.result_observed_at_ms,
         operation: "github.write",
-        operation_name: operationName as "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push",
+        operation_name: operationName as "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create",
         status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
         mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
         provider_result_digest: summary?.provider_result_digest ?? null,

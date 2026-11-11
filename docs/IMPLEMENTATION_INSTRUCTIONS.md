@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows installed lifecycleの秘密分離・rollback・中断復旧
+## 直近完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの既存tagへの未公開draft release作成
+
+主語は既存`github.write`と、それを使うHDS-J／Operation Plan／Executor／Gateway／Developer Control Centerである。目的は、既存tagが現在指すcommitに固定したrelease draftの新規作成だけを、独立した`github:release.write`能力とno-storeのL3内容確認へ接続すること。公開release、asset追加、tag作成・変更、実GitHub API送信は含めない。
+
+Protocolはrepository ID／canonical name／visibility、正確なtag object SHA／type、tagが直接指すcommit、release不存在、release name／bodyをdigestへ束縛する。lightweight tagとcommitを直接指すannotated tagを扱い、nested annotated tagは対象外。HDS／Operation Planはrequest／target digestと固定結果形を検査し、Executor／Gatewayはreview kind・対象版・command・plan bindingを照合する。Control Centerはrelease内容、repository visibility、tag／commit、draft／未公開／assetなし、通知の可能性、非原子的観測、結果不明時の自動再送なしを表示する。作用直前にrepository・tag・既存releaseを再観測し、GitHubの作成応答とtag／release readbackが一致した場合だけ受理receiptを返す。明示拒否と結果不明は区別し、結果不明を自動再送しない。
+
+`corepack pnpm typecheck`と全workspace build（15 projects）はPASS。Focused testsはcore `tools_builtin.test.ts` 98 passed／6 skipped、HDS Operation Plan 2 passed、WebChat review 1 passed、Gateway real-process loopback `release.draft.create` 4 passed／84 skipped、Gateway plugin loader 9 passed。Gateway試験は合成GitHub endpointのみを使用し、L3内容review前はPOSTなし、内容承認後のPOST一回、draft readback、受理／拒否／結果不明のJ/M結果照合を確認した。`corepack pnpm docs:check`と`git diff --check`もPASS。日本語基底監査の既存移行負債76件は注意として維持。全workspace test、GitHub実credential／API、実release、owner browser操作、他OS、QE_QC／QE_QAはNOT_RUN。
+
+UNIT_ID: F05.02（GitHub release作成consumerの限定slice）
+STATUS: WIRED（HDS／L3／Executor／Gateway／synthetic loopback provider／Operation Plan結果・M receiptまでの限定接続。実GitHub作用の証拠ではない）
+NEXT_REQUIRED_CONSUMER: G09.01 Android native product entryの現物確認とD4 mobile contractのread-only照合。D4／MINIDORA別repo編集、C08.03実provider、Rust authority cutover、公開・出荷GOは保留。
+SAFETY_STATUS: `draft=true`、`prerelease=false`、`generate_release_notes=false`、assetsなしに固定。既存tagとrelease不存在を再確認する。通知が発生する可能性をL3表示する。POST／readbackは非原子的であり、不確定結果を自動再送しない。
+LOCAL_ASSET_STATUS: 全workspace buildとfixtureが使用するignored `dist`／Rust `target`は再生成済みのローカル開発物として保持。test固有temp rootはcleanup済み。外部artifact・実releaseなし。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡のまま保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／origin／GitHub main=`77b0bd3e449a2bbecc88a3fec9442d14892d7e1f`。編集前local recovery branch／remote backup tag current／previous=`77b0bd3e449a2bbecc88a3fec9442d14892d7e1f`／`bf1297331db32ccb3fb509b66e3b4abcb4bb09a0`。worktreeはmainのみ。他repoに書き込んでいない。閉包後のmain／復旧ref照合は履歴記録を参照。
+
+## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows installed lifecycleの秘密分離・rollback・中断復旧
 
 主語はWindows installed smoke runnerの子process、およびSetup／Update／Recovery／Uninstallが所有範囲を検証するmanaged product treeである。目的は、ホストcredentialをproduct子processへ継承せず、Windows製品の導入・更新失敗・中断復旧・データ保持・削除を隔離実物でつなぐこと。
 

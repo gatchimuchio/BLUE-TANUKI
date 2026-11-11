@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — G02.03 Windows installed lifecycleの秘密分離・inventory照合
+### 直近完了BUILD_BATCH — F05.02 GitHubの既存tagへの未公開draft release作成
+
+`github.write release.draft.create`を、既存のtag／commit観測、独立`github:release.write`能力、HDS／Operation Plan、Executor、GatewayのL3 no-store review、Control Center、結果receiptまで接続した。既存tagが指すcommitとrelease不存在を作用前に再確認し、作成後にtagとdraft releaseをreadbackする。draft／非prerelease／release notes生成なし／assetなしを固定し、通知可能性と非原子的観測をreviewに表示する。明示拒否と結果不明を分け、結果不明は自動再送しない。
+
+workspace typecheck、15 project build、core fixture 98 passed／6 skipped、HDS 2 passed、WebChat 1 passed、Gateway loopback serve 4 passed／84 skipped、`docs:check`、`git diff --check`はPASS。Gateway試験は合成providerであり、実GitHub credential／APIや実releaseは未使用。全workspace suite、owner browser、5OS QA、QE_QC／QE_QAはNOT_RUN。このrelease作成sliceのみ`WIRED`とし、F05.02全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。次はG09.01 Android entryとD4 mobile contractのread-only照合。
+
+### 前段完了BUILD_BATCH — G02.03 Windows installed lifecycleの秘密分離・inventory照合
 
 smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。managed-tree inventoryのentry蓄積を`List[object].Add`へ変更し、各entryごとの配列複製を避けつつ、個別SHA-256、reparse拒否、path正規化、最終sortを維持した。Windows 11 Home x64の修正後installed smokeは終了コード0で、Setup／Repair、通常利用、Approval／Audit tamper拒否、crash recovery、stop／doctor／restart／safe-mode、update failure rollback、rollback後の旧install／設定／DataRoot保持、中断後の復旧と更新再開、通常Uninstall後のDataRoot保持、再導入、隔離rootの明示PurgeまでPASSした。初回runの600,000ms ETIMEDOUTは修正後の単一runで再現しなかったが、原因を性能改善と断定せず広範な性能評価にも拡張しない。provider=stub、実LLM／secret／外部作用なし。HKCU Run readbackはPASSしたがWindows本体の再起動は未実施。製品全体QE_BUILDは継続し、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 

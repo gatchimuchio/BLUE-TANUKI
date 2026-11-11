@@ -890,6 +890,36 @@ export interface WebChatGitHubCodePushContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubReleaseDraftCreateContentReview {
+  kind: "github_release_draft_create";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.release.draft.create";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  tag_name: string;
+  tag_ref_sha: string;
+  tag_ref_type: "commit" | "tag";
+  target_commit_sha: string;
+  release_name: string;
+  body?: string;
+  draft: true;
+  prerelease: false;
+  assets_added: false;
+  release_published: false;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview |
@@ -901,7 +931,8 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview |
   WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCommentCreateContentReview |
   WebChatGitHubPullRequestCommentCreateContentReview |
-  WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview;
+  WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
+  WebChatGitHubReleaseDraftCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

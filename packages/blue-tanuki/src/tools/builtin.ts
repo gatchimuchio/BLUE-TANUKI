@@ -20,6 +20,7 @@ import {
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
+  GitHubReleaseDraftCreateTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
@@ -38,6 +39,8 @@ import {
   githubPullRequestCreateTargetIdentityDigest,
   githubCodePushRequestPayloadDigest,
   githubCodePushTargetIdentityDigest,
+  githubReleaseDraftCreateRequestPayloadDigest,
+  githubReleaseDraftCreateTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
@@ -50,12 +53,14 @@ import {
   type GitHubPullRequestCommentCreateTargetVersionObservation,
   type GitHubPullRequestCreateTargetVersionObservation,
   type GitHubCodePushTargetVersionObservation,
+  type GitHubReleaseDraftCreateTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
   type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview,
   type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCommentCreateContentReview,
-  type GitHubPullRequestCreateContentReview, type GitHubCodePushContentReview, type Tool } from "./registry.js";
+  type GitHubPullRequestCreateContentReview, type GitHubCodePushContentReview,
+  type GitHubReleaseDraftCreateContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -991,8 +996,38 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
     };
   }
 
+  if (operation === "release.draft.create") {
+    const tagName = stringArg(args, "tag_name")!;
+    githubBranchRefArg(tagName, "tag_name");
+    const targetCommitSha = stringArg(args, "target_commit_sha")!;
+    const name = stringArg(args, "name")!;
+    const releaseBody = githubOptionalBody(args);
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(targetCommitSha) || name.length > 256 ||
+        name.trim() !== name || /[\u0000-\u001f\u007f]/.test(name) ||
+        Object.keys(args).some((key) => !["operation", "owner", "repo", "tag_name", "target_commit_sha",
+          "name", "body", "max_bytes"].includes(key))) {
+      throw new Error("github.write release.draft.create requires one existing exact tag, target commit, and bounded name; mutation_sent=false");
+    }
+    const body: Record<string, unknown> = {
+      tag_name: tagName,
+      target_commitish: targetCommitSha,
+      name,
+      draft: true,
+      prerelease: false,
+      generate_release_notes: false,
+    };
+    if (releaseBody !== undefined) body.body = releaseBody;
+    return {
+      operation,
+      method: "POST",
+      path: `/repos/${ownerPath}/${repoPath}/releases`,
+      body,
+      repo,
+    };
+  }
+
   throw new Error(
-    "operation must be issue.create, issue.comment.create, issue.update, pr.create, pr.comment.create, or code.push",
+    "operation must be issue.create, issue.comment.create, issue.update, pr.create, pr.comment.create, code.push, or release.draft.create",
   );
 }
 
@@ -1539,6 +1574,7 @@ export async function invokeGitHubWrite(
   if (route.operation === "pr.comment.create") return await invokeGitHubPullRequestCommentCreate(args, opts);
   if (route.operation === "pr.create") return await invokeGitHubPullRequestCreate(args, opts);
   if (route.operation === "code.push") return await invokeGitHubCodePush(args, opts);
+  if (route.operation === "release.draft.create") return await invokeGitHubReleaseDraftCreate(args, opts);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} is not connected to a plan-bound review path; mutation_sent=false; status=BUILD_GAP`);
   }
@@ -2143,6 +2179,301 @@ export async function inspectGitHubIssueCreateContentReview(args: Record<string,
     may_execute: false as const,
   };
   return { ...base, review_digest: sha256Hex(base) };
+}
+
+export async function inspectGitHubReleaseDraftCreateTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubReleaseDraftCreateTargetVersionObservation> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "release.draft.create") {
+    throw new Error(`github.write ${route.operation} target observation is not implemented; status=BUILD_GAP`);
+  }
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "tag_name", "target_commit_sha", "name", "body", "max_bytes"].includes(key))) {
+    throw new Error("github.write release.draft.create contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write release.draft.create target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const tagName = stringArg(args, "tag_name")!;
+  githubBranchRefArg(tagName, "tag_name");
+  const encodedTag = encodeURIComponent(tagName);
+  const requestedCommit = stringArg(args, "target_commit_sha")!;
+  const name = stringArg(args, "name")!;
+  const body = githubOptionalBody(args);
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create target inspection");
+  const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "release draft target repository");
+  const repositoryId = repository.id;
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerLogin = isRecord(repository.owner) && typeof repository.owner.login === "string"
+    ? repository.owner.login : "";
+  const isPrivate = repository.private;
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      fullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase() || repositoryName.toLowerCase() !== repo.toLowerCase() ||
+      ownerLogin.toLowerCase() !== owner.toLowerCase() || typeof isPrivate !== "boolean") {
+    throw new Error("github.write release.draft.create repository identity or visibility is incomplete or mismatched");
+  }
+
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create tag inspection");
+  const tagResponse = await readRequest({ path: `${repositoryPath}/git/ref/tags/${encodedTag}`, maxBytes, token }, opts.signal);
+  const tagRecord = requireGitHubJsonRecord(tagResponse, "release draft tag");
+  const tagObject = isRecord(tagRecord.object) ? tagRecord.object : null;
+  const tagRefSha = tagObject?.sha;
+  const tagRefType = tagObject?.type;
+  if (typeof tagRefSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tagRefSha) ||
+      (tagRefType !== "commit" && tagRefType !== "tag")) {
+    throw new Error("github.write release.draft.create tag target is incomplete or unsupported; mutation_sent=false");
+  }
+  let targetCommitSha = tagRefSha;
+  if (tagRefType === "tag") {
+    assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create annotated tag inspection");
+    const annotatedTagResponse = await readRequest({ path: `${repositoryPath}/git/tags/${tagRefSha}`, maxBytes, token }, opts.signal);
+    const annotatedTag = requireGitHubJsonRecord(annotatedTagResponse, "annotated release draft tag");
+    const annotatedTarget = isRecord(annotatedTag.object) ? annotatedTag.object : null;
+    if (annotatedTarget?.type !== "commit" || typeof annotatedTarget.sha !== "string" ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(annotatedTarget.sha)) {
+      throw new Error("github.write release.draft.create supports only tags that directly identify a commit; mutation_sent=false; status=BUILD_GAP");
+    }
+    targetCommitSha = annotatedTarget.sha;
+  }
+  if (targetCommitSha !== requestedCommit) {
+    throw new Error("github.write release.draft.create requested commit does not match the exact tag target; mutation_sent=false; outcome=stale");
+  }
+
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create existing release inspection");
+  const existingRelease = await readRequest({ path: `${repositoryPath}/releases/tags/${encodedTag}`, maxBytes, token }, opts.signal);
+  if (existingRelease.status !== 404 || existingRelease.ok || existingRelease.truncated ||
+      !existingRelease.content_type?.toLowerCase().includes("json")) {
+    throw new Error("github.write release.draft.create requires the exact tag to have no existing release; mutation_sent=false");
+  }
+
+  return GitHubReleaseDraftCreateTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "release.draft.create",
+    repository_id: repositoryId,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: fullName,
+    repository_visibility: isPrivate ? "private" : "public",
+    tag_name: tagName,
+    tag_ref_sha: tagRefSha,
+    tag_ref_type: tagRefType,
+    target_commit_sha: targetCommitSha,
+    release_absent: true,
+    target_identity_digest: githubReleaseDraftCreateTargetIdentityDigest({ repository_id: repositoryId,
+      canonical_full_name: fullName, tag_name: tagName, tag_ref_sha: tagRefSha, tag_ref_type: tagRefType,
+      target_commit_sha: targetCommitSha }),
+    request_payload_digest: githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName,
+      target_commit_sha: targetCommitSha, name, ...(body === undefined ? {} : { body }) }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+export function assertGitHubReleaseDraftCreateTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubReleaseDraftCreateTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "release.draft.create") {
+    throw new Error("github.write release.draft.create target observation has another operation");
+  }
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const tagName = stringArg(args, "tag_name")!;
+  const targetCommitSha = stringArg(args, "target_commit_sha")!;
+  const name = stringArg(args, "name")!;
+  const body = githubOptionalBody(args);
+  const targetDigest = githubReleaseDraftCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+    canonical_full_name: observation.canonical_full_name, tag_name: observation.tag_name,
+    tag_ref_sha: observation.tag_ref_sha, tag_ref_type: observation.tag_ref_type,
+    target_commit_sha: observation.target_commit_sha });
+  const payloadDigest = githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName,
+    target_commit_sha: targetCommitSha, name, ...(body === undefined ? {} : { body }) });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "tag_name", "target_commit_sha", "name", "body", "max_bytes"].includes(key)) ||
+      route.operation !== "release.draft.create" || observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      observation.tag_name !== tagName || observation.target_commit_sha !== targetCommitSha || !observation.release_absent ||
+      observation.command_digest !== commandDigest || observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
+      observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write release.draft.create target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubReleaseDraftCreateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubReleaseDraftCreateContentReview> {
+  const observation = await inspectGitHubReleaseDraftCreateTargetVersion(args, opts);
+  const route = githubWriteRoute(args);
+  const base = {
+    kind: "github_release_draft_create" as const,
+    operation: "github.write.release.draft.create" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    tag_name: observation.tag_name,
+    tag_ref_sha: observation.tag_ref_sha,
+    tag_ref_type: observation.tag_ref_type,
+    target_commit_sha: observation.target_commit_sha,
+    release_name: String(route.body.name),
+    ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+    draft: true as const,
+    prerelease: false as const,
+    assets_added: false as const,
+    release_published: false as const,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
+async function invokeGitHubReleaseDraftCreate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "release.draft.create" || route.method !== "POST" ||
+      route.path !== `/repos/${encodeURIComponent(githubNameArg(args, "owner"))}/${encodeURIComponent(githubNameArg(args, "repo"))}/releases`) {
+    throw new Error("github.write release.draft.create route mismatch; mutation_sent=false");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write release.draft.create requires a command, Operation Plan binding, and reviewed target; mutation_sent=false");
+  }
+  const expected = assertGitHubReleaseDraftCreateTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const before = await inspectGitHubReleaseDraftCreateTargetVersion(args, { env, signal: opts.signal,
+    command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request: readRequest });
+  if (canonicalGitHubWriteTargetVersionObservation(before) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write release.draft.create repository, tag, or release state changed after review; mutation_sent=false; outcome=stale");
+  }
+
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  let response: GitHubWriteResponse;
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create create draft");
+    response = await request({ method: "POST", path: route.path, body: route.body, maxBytes, token }, opts.signal);
+  } catch {
+    throw new Error("github.write release.draft.create outcome_unknown; request may have reached GitHub; do not retry automatically");
+  }
+
+  const responseData = parseJsonOrText(response.body);
+  const explicitRejection = !response.ok && !response.truncated &&
+    [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+  if (explicitRejection) {
+    return {
+      schema_version: "blue-tanuki.github-write-result.v1", operation: "release.draft.create", api_host: "api.github.com",
+      repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+      request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+      operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
+      status: response.status, mutation_status: "provider_rejected", result_digest: sha256Hex(responseData),
+      retry_permitted: false,
+      next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+    };
+  }
+  if (!response.ok || response.status !== 201 || response.truncated ||
+      !response.content_type?.toLowerCase().includes("json")) {
+    throw new Error(`github.write release.draft.create outcome_unknown; HTTP ${response.status}; do not retry automatically`);
+  }
+  const created = isRecord(responseData) ? responseData : null;
+  const requestedBody = typeof route.body.body === "string" ? route.body.body : undefined;
+  const bodyMatches = created?.body === requestedBody ||
+    (requestedBody === undefined || requestedBody === "") && (created?.body === null || created?.body === "");
+  if (!created || typeof created.id !== "number" || !Number.isSafeInteger(created.id) || created.id <= 0 ||
+      created.tag_name !== expected.tag_name || created.name !== route.body.name || !bodyMatches ||
+      created.draft !== true || created.prerelease !== false || !Array.isArray(created.assets) || created.assets.length !== 0) {
+    throw new Error("github.write release.draft.create response did not confirm the exact draft release; outcome_unknown; do not retry automatically");
+  }
+
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create readback");
+    const repositoryPath = `/repos/${encodeURIComponent(expected.requested_owner)}/${encodeURIComponent(expected.requested_repo)}`;
+    const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
+    const repository = requireGitHubJsonRecord(repositoryResponse, "draft release repository readback");
+    if (repository.id !== expected.repository_id || repository.full_name !== expected.canonical_full_name ||
+        repository.private !== (expected.repository_visibility === "private")) {
+      throw new Error("repository identity or visibility changed");
+    }
+
+    const tagPath = `${repositoryPath}/git/ref/tags/${encodeURIComponent(expected.tag_name)}`;
+    const tagResponse = await readRequest({ path: tagPath, maxBytes, token }, opts.signal);
+    const tagRecord = requireGitHubJsonRecord(tagResponse, "draft release tag readback");
+    const tagObject = isRecord(tagRecord.object) ? tagRecord.object : null;
+    if (tagObject?.sha !== expected.tag_ref_sha || tagObject?.type !== expected.tag_ref_type) {
+      throw new Error("tag reference changed");
+    }
+    let targetCommitSha = tagObject.sha;
+    if (tagObject.type === "tag") {
+      const annotatedResponse = await readRequest({ path: `${repositoryPath}/git/tags/${tagObject.sha}`, maxBytes, token }, opts.signal);
+      const annotated = requireGitHubJsonRecord(annotatedResponse, "draft release annotated tag readback");
+      const annotatedObject = isRecord(annotated.object) ? annotated.object : null;
+      if (annotatedObject?.type !== "commit" || typeof annotatedObject.sha !== "string") {
+        throw new Error("annotated tag no longer resolves directly to a commit");
+      }
+      targetCommitSha = annotatedObject.sha;
+    }
+    if (targetCommitSha !== expected.target_commit_sha) throw new Error("tag target commit changed");
+
+    const releasePath = `${repositoryPath}/releases/tags/${encodeURIComponent(expected.tag_name)}`;
+    const releaseResponse = await readRequest({ path: releasePath, maxBytes, token }, opts.signal);
+    const release = requireGitHubJsonRecord(releaseResponse, "draft release readback");
+    const readbackBodyMatches = release.body === requestedBody ||
+      (requestedBody === undefined || requestedBody === "") && (release.body === null || release.body === "");
+    if (release.id !== created.id || release.tag_name !== expected.tag_name || release.name !== route.body.name ||
+        !readbackBodyMatches || release.draft !== true || release.prerelease !== false ||
+        !Array.isArray(release.assets) || release.assets.length !== 0) {
+      throw new Error("release readback differs from the reviewed draft");
+    }
+  } catch {
+    throw new Error("github.write release.draft.create readback could not confirm the exact draft and tag; outcome_unknown; do not retry automatically");
+  }
+
+  const result = { id: created.id, tag_name: expected.tag_name, target_commit_sha: expected.target_commit_sha,
+    name: String(route.body.name), draft: true, prerelease: false };
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1", operation: "release.draft.create", api_host: "api.github.com",
+    repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
+    status: response.status, mutation_status: "provider_accepted", content_type: response.content_type,
+    truncated: response.truncated, rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id, result_digest: sha256Hex(result), result,
+    provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+  };
 }
 
 export async function inspectGitHubPullRequestCreateTargetVersion(
@@ -4692,9 +5023,16 @@ export const githubReadTool: Tool = {
 
 export const githubWriteTool: Tool = {
   name: "github.write",
-  description: "Create plan-bound GitHub issues, comments, pull requests, and one new file on an existing non-default branch with an exact expected HEAD. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
+  description: "Create plan-bound GitHub issues, comments, pull requests, one new file on an existing non-default branch at an exact expected HEAD, and unpublished draft releases on an existing exact tag. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
+    if (githubOperation(args) === "release.draft.create") {
+      return await inspectGitHubReleaseDraftCreateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "code.push") {
       return await inspectGitHubCodePushTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -4741,7 +5079,14 @@ export const githubWriteTool: Tool = {
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
     GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
-    GitHubCodePushContentReview> {
+    GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
+    if (githubOperation(args) === "release.draft.create") {
+      return await inspectGitHubReleaseDraftCreateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "code.push") {
       return await inspectGitHubCodePushContentReview(args, {
         ...(options.env ? { env: options.env } : {}),

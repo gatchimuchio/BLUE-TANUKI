@@ -33,6 +33,8 @@ import {
   inspectGitHubPullRequestCreateContentReview,
   inspectGitHubCodePushTargetVersion,
   inspectGitHubCodePushContentReview,
+  inspectGitHubReleaseDraftCreateTargetVersion,
+  inspectGitHubReleaseDraftCreateContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -98,10 +100,11 @@ describe("built-in tools", () => {
       "fs:delete",
       "fs:read",
       "fs:write",
-      "github:comment.write",
       "github:code.write",
+      "github:comment.write",
       "github:issue.write",
       "github:pr.write",
+      "github:release.write",
       "google:calendar.read",
       "google:calendar.write",
       "google:drive.read",
@@ -3263,6 +3266,149 @@ describe("built-in tools", () => {
     expect(seen[0]).toMatchObject({ method: "POST", path: "/graphql" });
     expect(JSON.stringify(result)).not.toContain(args.content);
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write release.draft.create binds an existing annotated tag and verifies an unpublished draft", async () => {
+    const args = { operation: "release.draft.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      tag_name: "v1.0/review", target_commit_sha: "a".repeat(40), name: "Reviewed draft", body: "Draft body" };
+    const commandDigest = "c".repeat(64);
+    const planDigest = "d".repeat(64);
+    const tagObjectSha = "b".repeat(40);
+    const tagRefPath = "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0%2Freview";
+    const annotatedTagPath = `/repos/gatchimuchio/blue-tanuki/git/tags/${tagObjectSha}`;
+    const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/tags/v1.0%2Freview";
+    let created: Record<string, unknown> | undefined;
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") {
+        return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, private: false });
+      }
+      if (target.path === tagRefPath) return githubReadJson({ object: { sha: tagObjectSha, type: "tag" } });
+      if (target.path === annotatedTagPath) return githubReadJson({ object: { sha: args.target_commit_sha, type: "commit" } });
+      if (target.path === releasePath) return created ? githubReadJson(created)
+        : { status: 404, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Not Found" }),
+          truncated: false, rate_limit_remaining: "60" };
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const request: NonNullable<GitHubWriteOptions["request"]> = async (target) => {
+      writes += 1;
+      expect(target.method).toBe("POST");
+      expect(target.path).toBe("/repos/gatchimuchio/blue-tanuki/releases");
+      expect(target.body).toEqual({ tag_name: args.tag_name, target_commitish: args.target_commit_sha,
+        name: args.name, body: args.body, draft: true, prerelease: false, generate_release_notes: false });
+      created = { id: 987, tag_name: args.tag_name, name: args.name, body: args.body,
+        draft: true, prerelease: false, assets: [] };
+      return { status: 201, ok: true, content_type: "application/json", body: JSON.stringify(created),
+        truncated: false, rate_limit_remaining: "59", request_id: "DRAFT-REQ" };
+    };
+    const options = fakeGitHubWrite(request, undefined, read_request);
+    const target = await inspectGitHubReleaseDraftCreateTargetVersion(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest });
+    expect(target).toMatchObject({ operation: "release.draft.create", tag_name: args.tag_name,
+      tag_ref_sha: tagObjectSha, tag_ref_type: "tag", target_commit_sha: args.target_commit_sha,
+      release_absent: true, mutation_sent: false, used_for_authority: false, may_execute: false });
+    const review = await inspectGitHubReleaseDraftCreateContentReview(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest });
+    expect(review).toMatchObject({ kind: "github_release_draft_create", operation: "github.write.release.draft.create",
+      release_name: args.name, body: args.body, draft: true, prerelease: false, assets_added: false,
+      release_published: false, provider_observation_is_atomic: false, used_for_authority: false, may_execute: false });
+    const result = await invokeGitHubWrite(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest, expected_target_version_observation: target });
+    expect(result).toMatchObject({ operation: "release.draft.create", method: "POST",
+      path: "/repos/gatchimuchio/blue-tanuki/releases", status: 201, mutation_status: "provider_accepted",
+      result: { id: 987, tag_name: args.tag_name, target_commit_sha: args.target_commit_sha,
+        name: args.name, draft: true, prerelease: false } });
+    expect(writes).toBe(1);
+    expect(JSON.stringify(result)).not.toContain(args.body);
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write release.draft.create rejects existing releases and stale tags before mutation", async () => {
+    const args = { operation: "release.draft.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      tag_name: "v1.0", target_commit_sha: "a".repeat(40), name: "Reviewed draft" };
+    let tagCommit = args.target_commit_sha;
+    let releaseExists = true;
+    const options = fakeGitHubWrite(async () => { throw new Error("mutation must not be sent"); }, undefined,
+      async (target) => {
+        if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+          full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+        if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+          return githubReadJson({ object: { sha: tagCommit, type: "commit" } });
+        }
+        if (target.path === "/repos/gatchimuchio/blue-tanuki/releases/tags/v1.0") {
+          return releaseExists ? githubReadJson({ id: 1 })
+            : { status: 404, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Not Found" }),
+              truncated: false, rate_limit_remaining: "60" };
+        }
+        throw new Error("unexpected synthetic GitHub read " + target.path);
+      });
+    await expect(inspectGitHubReleaseDraftCreateTargetVersion(args, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/requires the exact tag to have no existing release/);
+    releaseExists = false;
+    tagCommit = "b".repeat(40);
+    await expect(inspectGitHubReleaseDraftCreateTargetVersion(args, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) }))
+      .rejects.toThrow(/does not match the exact tag target/);
+  });
+
+  it("github.write release.draft.create reports a no-retry receipt for explicit provider rejection", async () => {
+    const args = { operation: "release.draft.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      tag_name: "v1.0", target_commit_sha: "a".repeat(40), name: "Reviewed draft" };
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+        full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+        return githubReadJson({ object: { sha: args.target_commit_sha, type: "commit" } });
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/releases/tags/v1.0") return { status: 404, ok: false,
+        content_type: "application/json", body: JSON.stringify({ message: "Not Found" }), truncated: false,
+        rate_limit_remaining: "60" };
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const options = fakeGitHubWrite(async () => {
+      writes += 1;
+      return { status: 422, ok: false, content_type: "application/json", body: JSON.stringify({ message: "Validation failed" }),
+        truncated: false, rate_limit_remaining: "59", request_id: "DRAFT-REJECT" };
+    }, undefined, read_request);
+    const target = await inspectGitHubReleaseDraftCreateTargetVersion(args, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) });
+    const result = await invokeGitHubWrite(args, { ...options, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64), expected_target_version_observation: target }) as Record<string, unknown>;
+    expect(result).toMatchObject({ operation: "release.draft.create", status: 422, mutation_status: "provider_rejected",
+      retry_permitted: false, used_for_authority: false, may_execute: false });
+    expect(writes).toBe(1);
+  });
+
+  it("github.write release.draft.create does not retry when provider readback is uncertain", async () => {
+    const args = { operation: "release.draft.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      tag_name: "v1.0", target_commit_sha: "a".repeat(40), name: "Reviewed draft" };
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+        full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+        return githubReadJson({ object: { sha: args.target_commit_sha, type: "commit" } });
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/releases/tags/v1.0") return { status: 404, ok: false,
+        content_type: "application/json", body: JSON.stringify({ message: "Not Found" }), truncated: false,
+        rate_limit_remaining: "60" };
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const options = fakeGitHubWrite(async () => {
+      writes += 1;
+      return { status: 201, ok: true, content_type: "application/json", body: JSON.stringify({ id: 987,
+        tag_name: args.tag_name, name: args.name, draft: true, prerelease: false, assets: [] }),
+        truncated: false, rate_limit_remaining: "59", request_id: "DRAFT-UNCERTAIN" };
+    }, undefined, read_request);
+    const target = await inspectGitHubReleaseDraftCreateTargetVersion(args, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) });
+    await expect(invokeGitHubWrite(args, { ...options, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64), expected_target_version_observation: target }))
+      .rejects.toThrow(/readback could not confirm.*outcome_unknown.*do not retry automatically/);
+    expect(writes).toBe(1);
   });
 
   it("github.write code.push refuses default branches, existing files, and a stale expected HEAD before mutation", async () => {

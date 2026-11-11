@@ -2049,6 +2049,87 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(approve.disabled).toBe(false);
   });
 
+  it("renders GitHub draft release tag, commit, and body before enabling approval", async () => {
+    const commandId = "github-draft-release-command";
+    const bodyText = "<script>synthetic release notes</script>";
+    const review = {
+      kind: "github_release_draft_create",
+      command_id: commandId,
+      command_digest: "a".repeat(64),
+      operation: "github.write.release.draft.create",
+      requested_owner: "gatchimuchio",
+      requested_repo: "blue-tanuki",
+      canonical_full_name: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      repository_visibility: "public",
+      tag_name: "v1.0/review",
+      tag_ref_sha: "b".repeat(40),
+      tag_ref_type: "tag",
+      target_commit_sha: "c".repeat(40),
+      release_name: "Reviewed draft",
+      body: bodyText,
+      draft: true,
+      prerelease: false,
+      assets_added: false,
+      release_published: false,
+      request_payload_digest: "d".repeat(64),
+      target_version_digest: "e".repeat(64),
+      operation_plan_binding_digest: "f".repeat(64),
+      review_digest: "1".repeat(64),
+      notification_effect: "github_api_may_trigger_notifications",
+      provider_observation_is_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName,
+      textContent: "",
+      className: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view :
+        selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const run = new Script(`
+      async function runReview() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+        const document = {
+          querySelectorAll() { return [reviewCard]; },
+          createElement(tagName) { return makeNode(tagName); },
+        };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await reviewApprovalContent("${commandId}", { textContent: "Review draft release" });
+      }
+      runReview();
+    `);
+    await run.runInNewContext({ reviewState: state, reviewCard: card, reviewData: review, makeNode, TextEncoder });
+    const preformatted = view.children.filter((child) => child.tagName === "pre").map((child) => child.textContent);
+    const collectText = (node: { textContent?: string; children?: Array<Record<string, unknown>> }): string =>
+      [String(node.textContent ?? ""), ...(node.children ?? []).map((child) =>
+        collectText(child as { textContent?: string; children?: Array<Record<string, unknown>> }))].join(" ");
+    expect(preformatted).toContain("Reviewed draft");
+    expect(preformatted).toContain(bodyText);
+    expect(collectText(view)).toContain("Draft。公開releaseにはしません");
+    expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
+    expect(approve.disabled).toBe(false);
+  });
+
   it("reveals a meaning-update candidate only after digest-bound owner content review", async () => {
     const commandId = "meaning-update-command";
     const commandDigest = "c".repeat(64);

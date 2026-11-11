@@ -66,6 +66,8 @@ import {
   githubPullRequestCreateRequestPayloadDigest,
   githubCodePushTargetIdentityDigest,
   githubCodePushRequestPayloadDigest,
+  githubReleaseDraftCreateTargetIdentityDigest,
+  githubReleaseDraftCreateRequestPayloadDigest,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
@@ -3908,7 +3910,8 @@ ${planControl.question}`,
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
           (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.comment.create" &&
-            operation !== "pr.create" && operation !== "pr.comment.create" && operation !== "code.push")) {
+            operation !== "pr.create" && operation !== "pr.comment.create" && operation !== "code.push" &&
+            operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
       }
       const observation = GitHubWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
@@ -4040,6 +4043,31 @@ ${planControl.question}`,
         targetIdentityDigest = githubCodePushTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, default_branch: observation.default_branch,
           branch: branch!, expected_head_sha: expectedHeadSha, path: path! });
+      } else if (operation === "release.draft.create") {
+        const tagName = optionalText("tag_name");
+        const targetCommitSha = optionalText("target_commit_sha");
+        const name = optionalText("name");
+        const body = optionalText("body");
+        const tagSegments = tagName?.split("/") ?? [];
+        const safeTag = Boolean(tagName && tagName.length <= 255 && tagName === tagName.trim() && tagName !== "@" &&
+          !tagName.startsWith("/") && !tagName.endsWith("/") && !tagName.includes("//") && !tagName.includes("..") &&
+          !tagName.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(tagName) && !tagName.endsWith(".") &&
+          tagSegments.every((segment) => segment && segment !== "." && segment !== ".." && !segment.startsWith(".") &&
+            !segment.endsWith(".") && !segment.endsWith(".lock")));
+        if (!safeTag || !targetCommitSha || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(targetCommitSha) ||
+            !name || name.length > 256 || name !== name.trim() || /[\u0000-\u001f\u007f]/.test(name) ||
+            (body !== undefined && body.length > 500_000) ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "tag_name", "target_commit_sha",
+              "name", "body", "max_bytes"].includes(key)) ||
+            observation.operation !== "release.draft.create" || observation.tag_name !== tagName ||
+            observation.target_commit_sha !== targetCommitSha || observation.release_absent !== true) {
+          throw new Error("HDS github.write release.draft.create parameters or observed tag are invalid");
+        }
+        requestPayloadDigest = githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName!,
+          target_commit_sha: targetCommitSha, name, ...(body === undefined ? {} : { body }) });
+        targetIdentityDigest = githubReleaseDraftCreateTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, tag_name: tagName!, tag_ref_sha: observation.tag_ref_sha,
+          tag_ref_type: observation.tag_ref_type, target_commit_sha: targetCommitSha });
       } else {
         const title = optionalText("title");
         const body = optionalText("body");

@@ -18,6 +18,7 @@ import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDig
   githubPullRequestCommentCreateRequestPayloadDigest, githubPullRequestCommentCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest, githubPullRequestCreateTargetIdentityDigest,
   githubCodePushRequestPayloadDigest, githubCodePushTargetIdentityDigest,
+  githubReleaseDraftCreateRequestPayloadDigest, githubReleaseDraftCreateTargetIdentityDigest,
   GitHubWriteTargetVersionObservationSchema, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -157,7 +158,8 @@ function fileEditCandidate(id: string): OperationPlan {
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
-type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push";
+type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" |
+  "code.push" | "release.draft.create";
 type GitHubWriteCase = { operation: GitHubWriteOperation; comment_kind?: "pull_request_review_inline"; inline_range?: boolean };
 const GITHUB_PR_HEAD_REPOSITORY = "fixture-contributor/synthetic-repo";
 const githubWriteCases: readonly GitHubWriteCase[] = [
@@ -166,6 +168,7 @@ const githubWriteCases: readonly GitHubWriteCase[] = [
   { operation: "issue.comment.create" },
   { operation: "pr.create" },
   { operation: "code.push" },
+  { operation: "release.draft.create" },
   { operation: "pr.comment.create" },
   { operation: "pr.comment.create", comment_kind: "pull_request_review_inline" },
   { operation: "pr.comment.create", comment_kind: "pull_request_review_inline", inline_range: true },
@@ -301,6 +304,28 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
       accepted_result: { branch, commit_sha: commitSha, parent_sha: expectedHeadSha,
         path: filePath, content_sha256: contentSha256 },
       private_values: [content, commitMessage] };
+  }
+  if (operation === "release.draft.create") {
+    const tagName = "v1.0.0-synthetic";
+    const tagRefSha = "8".repeat(40);
+    const targetCommitSha = "9".repeat(40);
+    const name = "Synthetic draft release title";
+    const releaseBody = "Synthetic draft release body never retained in M";
+    return { operation, step_id: "write-release-draft",
+      parameters: { operation, owner, repo, tag_name: tagName, target_commit_sha: targetCommitSha, name, body: releaseBody },
+      target_identity_digest: githubReleaseDraftCreateTargetIdentityDigest({ repository_id: repositoryId,
+        canonical_full_name: canonicalFullName, tag_name: tagName, tag_ref_sha: tagRefSha, tag_ref_type: "tag",
+        target_commit_sha: targetCommitSha }),
+      request_payload_digest: githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName,
+        target_commit_sha: targetCommitSha, name, body: releaseBody }),
+      target_fields: { tag_name: tagName, tag_ref_sha: tagRefSha, tag_ref_type: "tag",
+        target_commit_sha: targetCommitSha, release_absent: true },
+      method: "POST", path: `/repos/${owner}/${repo}/releases`, accepted_status: 201,
+      accepted_provider_response: { id: 42_449, tag_name: tagName, target_commitish: targetCommitSha, name,
+        body: releaseBody, draft: true, prerelease: false, assets: [] },
+      accepted_result: { id: 42_449, tag_name: tagName, target_commit_sha: targetCommitSha, name,
+        draft: true, prerelease: false },
+      private_values: [name, releaseBody] };
   }
   const prTitle = "synthetic pull request title";
   const prBody = "synthetic pull request body never retained in M";
@@ -2060,6 +2085,10 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const title = String(scenario.parameters.title ?? "");
     const body = String(scenario.parameters.body);
     const repositoryPath = "/repos/fixture-owner/synthetic-repo";
+    const releaseTagName = String(scenario.parameters.tag_name ?? "");
+    const releaseTagRefPath = `${repositoryPath}/git/ref/tags/${encodeURIComponent(releaseTagName)}`;
+    const releaseAnnotatedTagPath = `${repositoryPath}/git/tags/${String(scenario.target_fields.tag_ref_sha ?? "")}`;
+    const releaseByTagPath = `${repositoryPath}/releases/tags/${encodeURIComponent(releaseTagName)}`;
     const headRepositoryFullName = typeof scenario.parameters.head_repository === "string"
       ? scenario.parameters.head_repository : "fixture-owner/synthetic-repo";
     const headRepositoryPath = "/repos/" + headRepositoryFullName;
@@ -2075,6 +2104,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const mockRequests: Array<{ method: string; path: string; authorization: string | undefined; body: string }> = [];
     const mockResponses: Array<{ method: string; path: string; status: number; finished: boolean; closed: boolean }> = [];
     const unexpectedMockRequests: Array<{ method: string; path: string }> = [];
+    let createdRelease: Record<string, unknown> | undefined;
     const mutationRequests = () => mockRequests.filter((item) => item.method === scenario.method && item.path === scenario.path);
     const mockServer = createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -2089,6 +2119,26 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         response.on("close", () => { responseRecord.closed = true; });
         mockRequests.push({ method, path, authorization: request.headers.authorization, body: requestBody });
         response.setHeader("content-type", "application/json; charset=utf-8");
+        if (operation === "release.draft.create" && method === "GET" && path === releaseTagRefPath) {
+          response.statusCode = 200;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify({ ref: `refs/tags/${releaseTagName}`,
+            object: { sha: scenario.target_fields.tag_ref_sha, type: scenario.target_fields.tag_ref_type } }));
+          return;
+        }
+        if (operation === "release.draft.create" && method === "GET" && path === releaseAnnotatedTagPath) {
+          response.statusCode = 200;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify({ sha: scenario.target_fields.tag_ref_sha,
+            object: { sha: scenario.target_fields.target_commit_sha, type: "commit" } }));
+          return;
+        }
+        if (operation === "release.draft.create" && method === "GET" && path === releaseByTagPath) {
+          response.statusCode = createdRelease ? 200 : 404;
+          responseRecord.status = response.statusCode;
+          response.end(JSON.stringify(createdRelease ?? { message: "synthetic release absent" }));
+          return;
+        }
         if (method === "GET" && (path === repositoryPath || path === headRepositoryPath)) {
           response.statusCode = 200;
           responseRecord.status = response.statusCode;
@@ -2156,6 +2206,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         if (method === scenario.method && path === scenario.path) {
           response.statusCode = scenario.accepted_status;
           responseRecord.status = response.statusCode;
+          if (operation === "release.draft.create") createdRelease = scenario.accepted_provider_response;
           response.end(JSON.stringify(scenario.accepted_provider_response));
           return;
         }
@@ -2287,6 +2338,12 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
                 base_commit_sha: "b".repeat(40), title, body, draft: true, draft_was_defaulted: false,
                 maintainer_can_modify: false, publication_effect: "visible_to_repository_audience",
                 creation_is_reversible: false }
+              : operation === "release.draft.create"
+                ? { kind: "github_release_draft_create", operation: "github.write.release.draft.create",
+                  tag_name: releaseTagName, tag_ref_sha: scenario.target_fields.tag_ref_sha,
+                  tag_ref_type: scenario.target_fields.tag_ref_type, target_commit_sha: scenario.target_fields.target_commit_sha,
+                  release_name: String(scenario.parameters.name), body, draft: true, prerelease: false,
+                  assets_added: false, release_published: false }
               : inlineReview
                 ? { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
                   pull_request_id: scenario.target_fields.pull_request_id, pull_request_number: 7,
@@ -2355,8 +2412,20 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
           ? { title, body, head: String(scenario.parameters.head_repository).split("/")[0] + ":" + scenario.parameters.head,
             head_repo: String(scenario.parameters.head_repository).split("/")[1], base: scenario.parameters.base,
             draft: true, maintainer_can_modify: false }
+          : operation === "release.draft.create"
+            ? { tag_name: releaseTagName, target_commitish: scenario.target_fields.target_commit_sha,
+              name: scenario.parameters.name, body, draft: true, prerelease: false, generate_release_notes: false }
           : { title, body };
       expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);
+      if (operation === "release.draft.create") {
+        const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
+        for (const readPath of [repositoryPath, releaseTagRefPath, releaseAnnotatedTagPath, releaseByTagPath]) {
+          expect(mockRequests.some((item, index) => index >= githubRequestCountBeforeApproval && index < writeIndex &&
+            item.method === "GET" && item.path === readPath), `missing post-review readback for ${readPath}`).toBe(true);
+        }
+        expect(createdRelease).toMatchObject({ id: 42_449, tag_name: releaseTagName,
+          target_commitish: scenario.target_fields.target_commit_sha, draft: true, prerelease: false, assets: [] });
+      }
       if (operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") {
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         const postApprovalIssueReadIndexes = mockRequests.map((item, index) => ({ item, index }))

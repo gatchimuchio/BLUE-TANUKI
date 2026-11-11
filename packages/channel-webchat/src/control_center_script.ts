@@ -6934,6 +6934,80 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub追加先branch・commit message・ファイル内容を再確認";
           return;
         }
+        if (review.kind === "github_release_draft_create") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          const validRef = function (value) {
+            return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
+              value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
+              !value.includes("..") && !value.includes("@{") && !/[\\u0000-\\u0020\\u007f~^:?*\\\\\\[]/.test(value) &&
+              !value.endsWith(".") && value.split("/").every(function (segment) {
+                return segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith(".") &&
+                  !segment.endsWith(".") && !segment.endsWith(".lock");
+              });
+          };
+          const bodyBytes = typeof review.body === "string" ? new TextEncoder().encode(review.body).byteLength : 0;
+          if (review.command_id !== commandId || review.operation !== "github.write.release.draft.create" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              review.draft !== true || review.prerelease !== false || review.assets_added !== false ||
+              review.release_published !== false || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isCommitSha(review.tag_ref_sha) ||
+              !isCommitSha(review.target_commit_sha) || !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              !validRef(review.tag_name) || (review.tag_ref_type !== "commit" && review.tag_ref_type !== "tag") ||
+              typeof review.release_name !== "string" || review.release_name.length < 1 || review.release_name.length > 256 ||
+              review.release_name !== review.release_name.trim() || /[\\u0000-\\u001f\\u007f]/.test(review.release_name) ||
+              (review.body !== undefined && (typeof review.body !== "string" || bodyBytes > 500000 || review.body.indexOf("\\u0000") >= 0))) {
+            throw new Error("GitHub draft releaseのrepository・tag・対象commit・内容がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHubの既存tagにdraft releaseを作成（未公開）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name + " (ID " + review.repository_id + ")"],
+            ["可視性", review.repository_visibility === "public" ? "Public repository" : "Private repository"],
+            ["既存tag", review.tag_name + "（" + review.tag_ref_type + " object " + review.tag_ref_sha + "）"],
+            ["tagが指すcommit", review.target_commit_sha],
+            ["公開状態", "Draft。公開releaseにはしません。assetは追加しません。"],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+            ["作用", "既存tagと対象commitを再照合してdraftを作成し、GitHubからreadbackします。照合とPOSTは非原子的です。結果不明時は自動再送しません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const nameHeading = document.createElement("strong");
+          nameHeading.textContent = "Draft release名";
+          const name = document.createElement("pre");
+          name.textContent = review.release_name;
+          view.append(nameHeading, name);
+          const bodyHeading = document.createElement("strong");
+          bodyHeading.textContent = "Draft release本文";
+          const body = document.createElement("pre");
+          body.textContent = review.body === undefined ? "（本文なし）" : review.body;
+          view.append(bodyHeading, body);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub draft releaseの対象tag・commit・内容を再確認";
+          return;
+        }
         if (review.kind === "google_drive_file_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {

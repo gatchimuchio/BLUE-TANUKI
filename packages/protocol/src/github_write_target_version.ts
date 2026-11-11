@@ -91,6 +91,16 @@ export const GitHubCodePushTargetVersionObservationSchema = GitHubWriteTargetVer
   path: z.string().min(1).max(4096),
 }).strict();
 
+/** A draft release bound to an existing tag and its observed commit. */
+export const GitHubReleaseDraftCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("release.draft.create"),
+  tag_name: z.string().min(1).max(255),
+  tag_ref_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  tag_ref_type: z.enum(["commit", "tag"]),
+  target_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  release_absent: z.literal(true),
+}).strict();
+
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
@@ -98,6 +108,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
+  GitHubReleaseDraftCreateTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
   if (value.operation === "pr.create") {
     const sameRepository = value.head_repository_id === value.repository_id &&
@@ -150,6 +161,7 @@ export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof Gi
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
 export type GitHubCodePushTargetVersionObservation = z.infer<typeof GitHubCodePushTargetVersionObservationSchema>;
+export type GitHubReleaseDraftCreateTargetVersionObservation = z.infer<typeof GitHubReleaseDraftCreateTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
   repository_id: number;
@@ -432,6 +444,70 @@ export function githubCodePushRequestPayloadDigest(input: {
     contentDigest,
     input.commit_message,
   ]), "utf8").digest("hex");
+}
+
+export function githubReleaseDraftCreateTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  tag_name: string;
+  tag_ref_sha: string;
+  tag_ref_type: "commit" | "tag";
+  target_commit_sha: string;
+}): string {
+  if (!Number.isSafeInteger(input.repository_id) || input.repository_id <= 0 ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.tag_ref_sha) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.target_commit_sha) ||
+      !isSafeGitHubRef(input.tag_name)) {
+    throw new Error("invalid GitHub draft release target identity");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-release-draft-create-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.tag_name,
+    input.tag_ref_sha,
+    input.tag_ref_type,
+    input.target_commit_sha,
+    true,
+  ]), "utf8").digest("hex");
+}
+
+export function githubReleaseDraftCreateRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  tag_name: string;
+  target_commit_sha: string;
+  name: string;
+  body?: string;
+}): string {
+  if (!isSafeGitHubRef(input.tag_name) || !input.name || input.name.length > 256 ||
+      input.name !== input.name.trim() || /[\u0000-\u001f\u007f]/.test(input.name) ||
+      (input.body !== undefined && (input.body.length > 500_000 || input.body.includes("\u0000") ||
+        Buffer.from(input.body, "utf8").toString("utf8") !== input.body)) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.target_commit_sha)) {
+    throw new Error("invalid GitHub draft release request");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-release-draft-create-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.tag_name,
+    input.target_commit_sha,
+    input.name,
+    input.body ?? null,
+    true,
+    false,
+    false,
+  ]), "utf8").digest("hex");
+}
+
+function isSafeGitHubRef(value: string): boolean {
+  const segments = value.split("/");
+  return value.length > 0 && value.length <= 255 && value === value.trim() && value !== "@" &&
+    !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") && !value.includes("..") &&
+    !value.includes("@{") && !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(value) && !value.endsWith(".") &&
+    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== ".." &&
+      !segment.startsWith(".") && !segment.endsWith(".") && !segment.endsWith(".lock"));
 }
 
 /** Stable serialization used by HDS, Executor and the registered GitHub adapter. */
