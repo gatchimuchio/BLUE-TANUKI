@@ -3964,6 +3964,54 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
+  it("notifies the D4 Runtime session when an accepted intent handler fails without leaking input", async () => {
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    });
+    let ws: WebSocket | undefined;
+    const sessionId = "session-runtime-failure-001";
+    const intent = "private runtime intent that must not be echoed";
+    try {
+      await runtimeCtx.ch.start(async () => {
+        throw new Error(`handler failure ${D4_RUNTIME_TOKEN} ${sessionId} ${intent}`);
+      });
+      const issued = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki",
+        session_id: sessionId,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(issued.status).toBe(200);
+      const ticketBody = issued.body as { ticket: string; session_ref_digest: string };
+      ws = await openWsWithTicket(runtimeCtx.port, ticketBody.ticket);
+      const sessionScope = `d4-runtime:${ticketBody.session_ref_digest}`;
+      await waitForConnectionCount(runtimeCtx.ch, sessionScope, 1);
+
+      const nextFrame = readWsMessage(ws);
+      const accepted = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki",
+        session_id: sessionId,
+        intent,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      const requestId = (accepted.body as { request_id: string }).request_id;
+      const frame = await nextFrame;
+      expect(frame).toMatchObject({
+        kind: "error",
+        request_id: requestId,
+      });
+      const serialized = JSON.stringify(frame);
+      expect(serialized).toContain("処理結果を確認できません");
+      expect(serialized).toContain(requestId);
+      expect(serialized).not.toContain(D4_RUNTIME_TOKEN);
+      expect(serialized).not.toContain(sessionId);
+      expect(serialized).not.toContain("blue_tanuki");
+      expect(serialized).not.toContain(intent);
+      expect(serialized).not.toContain("handler failure");
+    } finally {
+      ws?.close();
+      await runtimeCtx.teardown();
+    }
+  });
+
   it("requires the dedicated D4 Runtime credential and rejects authority-shaped input", async () => {
     expect(() => new WebChatChannel({
       port: 1234,

@@ -696,6 +696,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
   }
 
+  private notifyD4RuntimeIntentProcessingFailure(target: string, requestId: string): void {
+    const connections = this.conns.get(target);
+    if (!connections?.size) return;
+    const frame = JSON.stringify({
+      kind: "error",
+      request_id: requestId,
+      content: `依頼の処理結果を確認できません。重複実行を避けるため、状態を確認するまで同じ依頼を再送しないでください。参照ID: ${requestId}`,
+    });
+    for (const ws of connections) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      try { ws.send(frame); } catch { /* notification is best-effort and carries no authority */ }
+    }
+  }
+
   connectionCount(user?: string): number {
     if (user) return this.conns.get(user)?.size ?? 0;
     let n = 0;
@@ -1433,10 +1447,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "blue_tanuki.runtime_ingress.used_for_authority": false,
         },
       });
-      this.handler?.(inboundReq).catch(() => {
+      void Promise.resolve().then(() => this.handler?.(inboundReq)).catch(() => {
         // Keep caller-provided Runtime/Session references and intent out of logs.
         // eslint-disable-next-line no-console
         console.error("[webchat] D4 Runtime intent handler error");
+        this.notifyD4RuntimeIntentProcessingFailure(sessionScope, inboundReq.id);
       });
       res.writeHead(202, {
         "content-type": "application/json",
