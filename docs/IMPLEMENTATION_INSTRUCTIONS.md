@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows DPAPI資格情報を含むDataRoot保持・再導入・Purge
+## 直近完了BUILD_BATCH — QE_BUILD / G03.03 Linux native installed lifecycle consumer
+
+主語はLinux x64配布物と、Ubuntu 24.04 native runnerでSetupから常駐利用・更新復旧・Uninstallまでを消費する製品経路である。目的は、WSLの限定証拠にLinux native runnerの同一package lifecycle consumerを接続し、更新失敗rollback、中断後の復旧、状態保持、再導入、明示Purgeを実際のLinux上で確認すること。
+
+GitHub Actions `workflow_dispatch` run [`43106832686`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43106832686) は `target_os=linux`、source SHA=`1dda946d070ae5287529ed984e17a339374f59fc`、Ubuntu 24.04 x64でsuccess。package SHA-256=`998fcdc347fecf11323e9a937a1a44f0a2923c9ff27d8e413b1754c494e1eb34`。Linux packaged lifecycle smokeはSetup／Repair／first message／Approval・audit tamper／crash recovery／state-root isolation／update failure rollback／interrupted update recovery／autostart Exec restart／通常Uninstall後のdata・config・state保持／reinstall／隔離rootへの明示Purgeを通過した。`linux_installed_smoke=pass`。同runのmacOS jobsはselectorでskip。
+
+workflowへmanual-onlyの`target_os`選択（`all`既定、`linux`、`macos`）を追加し、既定の全Unix consumer実行を維持しつつ個別OSの限定runを可能にした。Linux native smokeを既存manual workflowへ接続した。ローカルYAML parse、manual-only／read-only permission／selector検査、`git diff --check`はPASS。`docs:check`はPASS（日本語基底移行負債75件の既存注意）。初回selector導入前の全OS run `43106467701`はmacOS重複実行を避けてcancelledで閉じ、証拠に使っていない。artifact uploadなし。
+
+UNIT_ID: G03.03（Linux native installed lifecycle consumerの限定slice）
+STATUS: WIRED（Ubuntu 24.04 hosted native consumerでLinux installed lifecycle smoke PASS。実logout／login・OS reboot、複数distribution、Linux QA、G03.03全体ではない）
+NEXT_REQUIRED_CONSUMER: G09.01のAndroid native producer→D4 Adapter→BLUE ingressは別repo変更権限がないためBLOCKED_AUTHORITY。D4 main／並行worktreeは読み取りのみ。BLUE内に第二Mobile／Broker経路を作らず、次の独立consumerを現行rev4.0とHEADから選ぶ。
+SAFETY_STATUS: 合成入力とrun固有isolated rootsのみ。provider／実credential／外部作用なし。Purgeはsmoke専用rootに限定。権限・HDS authority・release条件を変更していない。
+LOCAL_ASSET_STATUS: hosted runnerのpackageとsmoke rootはrunner上で使用後cleanup、artifact uploadなし。local package/temp assetは生成していない。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除はACL拒否のため未変更・保留。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`550d31ba831485f19a5d856ada00ef8d2682daf2`、復旧current／previous=`550d31ba831485f19a5d856ada00ef8d2682daf2`／`38795324b1e5d077c1160a607dfe38216f03eb7b`。tested source `1dda946d070ae5287529ed984e17a339374f59fc`をsuccess後にmainへpush。docs closure commitはこのtested SHAの子。D4-Pocketは読み取りのみ（remote／main=`8da02d7eae0ea518618e9fc322fa81dcfbbd03b3`、`C:\d4-qe-main`に並行dirty変更あり）。
+
+## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows DPAPI資格情報を含むDataRoot保持・再導入・Purge
 
 Windows installed productの通常UninstallはInstallRootと所有確認済みshortcut／registryだけを除去し、DataRoot内の環境設定、本文・履歴、session、log、audit、追加file、DPAPI CurrentUser provider credentialを保持することを実装consumerで確認した。同じWindows userで同じrootへ再導入後もcredential参照が復号可能だった。明示`-PurgeData`は破棄範囲を表示し、隔離DataRootとそのDPAPI fileを完全削除する。production default、権限、HDS、外部provider接続は変更していない。
 
@@ -56,9 +71,9 @@ Gateway依存7 workspace project buildと`failure_review_runtime.test.ts` 11/11�
 現物の状態:
 
 - BLUE側にAndroid／Mobile製品ソースはなく、`apps/`はGatewayのみ。既存D4 Runtime入力受け口は`packages/channel-webchat/src/webchat.ts`にあり、専用D4 Runtime bearerで`/runtime/ws-ticket`、冪等`/runtime/intent`、content-freeな`/runtime/intent/status`を扱う。入力は永続claim後に既存Gateway handler／HDSへ限定userとして渡す。受け口は存在するが、D4からの接続は未成立で、D4 producerによるstatus／結果consumerも未接続。
-- D4 Pocketの最新読み取り観測はremote `main`=`d173657ab1fd2707cd7c7c50cb2b73f40dadcd2e`。Android native `apps/mobile_flutter/lib/services/device_link_client.dart`（blob=`e8c49337127cb7f62fad248988b99707c5e49219`）は対話開始・送信・取得・中止を公開する。一方、`packages/blue_tanuki_adapter/adapter.py`（blob=`670cc387862328c5e6ee91a3e6fee4686016ef02`）はhealth／ready等の固定参照応答だけを返し、BLUE Runtimeへ仕事を送る経路を持たない。Adapterのdialogue producer／同一session結果consumerは未実装。
+- 2026-11-12の読み取り観測でD4 remote／local `main` HEAD=`8da02d7eae0ea518618e9fc322fa81dcfbbd03b3`は一致。Android native `apps/mobile_flutter/lib/services/device_link_client.dart`（blob=`e8c49337127cb7f62fad248988b99707c5e49219`）は対話開始・送信・取得・中止を公開する。一方、同じmainの`packages/blue_tanuki_adapter/adapter.py`（blob=`670cc387862328c5e6ee91a3e6fee4686016ef02`）はhealth／ready／snapshot／audit等の参照応答だけを持ち、BLUE Runtimeへintentを送るproducerや同一session結果consumerを持たない。
 - BLUE受け口は、同じsubmissionの一回受付・再送抑止・session scoped状態照会、handler failure時のbest-effort通知を実装した。Protocol／WebChat／Gateway build、WebChat focused test 6件、Gateway SQLite再起動試験1件はPASS。ただしD4による送信／status取得、処理結果本文の回復、Android実機証拠ではない。
-- D4 repoのremote／local mainは`d173657ab1fd2707cd7c7c50cb2b73f40dadcd2e`で一致。dirtyな並行worktree `codex/linux-same-source-update`（HEAD=`0cb7d2e4204e1b32bfd108f9ecda29434c1ac3e5`）とcleanな`codex/linux-mcp-discovery-diagnostic`（HEAD=`611136525d71234589ded2526483b4fee4cef399`）を観測。D4変更は行わず、Android端末／AVDは未確認。
+- 同日のD4並行作業状態：`C:\d4-qe-main`はHEADが上記remote mainと一致するが、A2A／Broker／launcher等7 tracked filesに未commit変更あり。OneDriveのD4 Pocket worktree `codex/linux-same-source-update`（HEAD=`0cb7d2e4204e1b32bfd108f9ecda29434c1ac3e5`）にはLinux update関連12 staged files、`C:\d4-qe-20261105`の`codex/linux-mcp-discovery-diagnostic`（HEAD=`611136525d71234589ded2526483b4fee4cef399`）はclean。すべて読み取りのみ、D4変更なし。Android端末／AVDは未確認。
 
 `STATUS: BLOCKED_AUTHORITY`。BLUE側receiverは合成入力、重複受付抑止、状態照会、handler failure通知までの限定経路を持つが、D4 native producer→D4 `blue_tanuki_adapter`→BLUE ingress→同session status／結果consumerの実接続がない。次に必要なのは、D4 Adapterが専用のserver-side credentialとsubmission IDを使って既存BLUE ingressへ認証接続し、同じsessionのstatus／結果をBrokerへ返す責任経路の実装・検証である。これはD4別repo変更のため、既存の限定委任がない範囲の書込みは行わない。D4の並行worktreeを避け、BLUE内に第二Mobile／Broker経路を複製せず、G09.01を未完のまま保持する。実provider・実資格・外部業務作用・製品公開・Android実機試験は行わない。
 

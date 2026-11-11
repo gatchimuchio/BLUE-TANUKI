@@ -6,7 +6,15 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — F05.02 GitHubの既存tagへの未公開draft release作成
+### 直近完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
+
+Linux installed packageのライフサイクルsmokeを既存manual workflowへ接続し、`workflow_dispatch` run [`43106832686`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43106832686) で `target_os=linux`を選択して実行した。source SHA=`1dda946d070ae5287529ed984e17a339374f59fc`、Ubuntu 24.04 x64、Linux installer SHA-256=`998fcdc347fecf11323e9a937a1a44f0a2923c9ff27d8e413b1754c494e1eb34`。初期Setup／Repair／通常利用、更新失敗rollback／中断復旧、autostart Exec restart、通常Uninstallでのdata/config/runtime state/log保持、再導入、隔離rootへの明示PurgeがPASS。選択外のmacOS jobsはskip、artifact uploadなし。
+
+これはG03.03のLinux native hosted BUILD consumerを限定`WIRED`とする。GitHub runner内のautostart Exec再起動であり、OS logout/login・reboot、複数distribution、実利用者data、実provider／credentialを証明しない。G03.03全体、Linux対象QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／公開／owner GOは未成立。初回全OS dispatch `43106467701`はmacOS重複実行回避のためcancelledであり証拠に数えない。
+
+G09.01 Android native producer→D4 Adapter→BLUE ingressは、D4別repoの限定変更権限がなく`BLOCKED_AUTHORITY`のまま保持する。D4現行mainは読み取りのみ照合し、別repoに書き込まない。次の独立BUILD_BATCHはrev4.0と最新HEADから選ぶ。
+
+### 前段BUILD_BATCH — F05.02 GitHubの既存tagへの未公開draft release作成
 
 `github.write release.draft.create`を、既存のtag／commit観測、独立`github:release.write`能力、HDS／Operation Plan、Executor、GatewayのL3 no-store review、Control Center、結果receiptまで接続した。既存tagが指すcommitとrelease不存在を作用前に再確認し、作成後にtagとdraft releaseをreadbackする。draft／非prerelease／release notes生成なし／assetなしを固定し、通知可能性と非原子的観測をreviewに表示する。明示拒否と結果不明を分け、結果不明は自動再送しない。
 
