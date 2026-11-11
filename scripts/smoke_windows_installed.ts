@@ -1,11 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   rmSync,
   statSync,
@@ -460,6 +463,132 @@ async function findAvailableLoopbackPort(): Promise<number> {
   return address.port;
 }
 
+async function probeLoopbackTcp(port: number, timeoutMs = 1_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (connected: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+
+function readFileTail(file: string, maxBytes = 16 * 1024): {
+  readonly bytes: number | null;
+  readonly state: "readable" | "missing" | "unreadable";
+  readonly text: string;
+} {
+  if (!existsSync(file)) return { bytes: 0, state: "missing", text: "" };
+  let fd: number | undefined;
+  try {
+    const bytes = statSync(file).size;
+    const count = Math.min(bytes, maxBytes);
+    const buffer = Buffer.alloc(count);
+    fd = openSync(file, "r");
+    const start = Math.max(0, bytes - count);
+    let offset = 0;
+    while (offset < count) {
+      const read = readSync(fd, buffer, offset, count - offset, start + offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return { bytes, state: "readable", text: buffer.subarray(0, offset).toString("utf8") };
+  } catch {
+    return { bytes: null, state: "unreadable", text: "" };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function redactStartupDiagnostic(
+  value: string,
+  secretValues: readonly string[],
+  privatePaths: readonly string[],
+): string {
+  let redacted = value;
+  for (const secret of secretValues) {
+    if (secret.length >= 4) redacted = redacted.replaceAll(secret, "<redacted>");
+  }
+  for (const privatePath of [...privatePaths].sort((left, right) => right.length - left.length)) {
+    if (privatePath) redacted = redacted.replaceAll(privatePath, "<smoke-path>");
+  }
+  return redacted
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, "$1<redacted>")
+    .replace(/\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API[_-]?KEY)[A-Z0-9_]*\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1<redacted>")
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,})\b/gi, "<redacted-token>")
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "<redacted-jwt>")
+    .slice(0, 600);
+}
+
+async function reportInstalledGatewayStartupFailure(
+  dataRoot: string,
+  port: number,
+  env: Record<string, string>,
+  privatePaths: readonly string[],
+): Promise<void> {
+  const logDir = path.join(dataRoot, "logs");
+  const stdout = readFileTail(path.join(logDir, "blue-tanuki.out.log"));
+  const stderr = readFileTail(path.join(logDir, "blue-tanuki.err.log"));
+  const pid = readPidFile(path.join(dataRoot, "blue-tanuki.pid"));
+  let pidProcessPresence = pid ? "unverified" : "pid_record_missing";
+  if (pid) {
+    try {
+      process.kill(pid, 0);
+      pidProcessPresence = "present";
+    } catch (error) {
+      pidProcessPresence = (error as NodeJS.ErrnoException).code === "ESRCH" ? "not_present" : "unverified";
+    }
+  }
+  const secretValues = [
+    ...Object.entries(env)
+      .filter(([key, value]) => value && /TOKEN|SECRET|PASSWORD|CREDENTIAL|API[_-]?KEY/i.test(key))
+      .map(([, value]) => value),
+    ...Object.entries(process.env)
+      .filter(([key, value]) => value && /TOKEN|SECRET|PASSWORD|CREDENTIAL|API[_-]?KEY/i.test(key))
+      .map(([, value]) => value!),
+  ];
+  const errorLines = stderr.text.split(/\r?\n/)
+    .filter((line) => /\b(?:Error|Exception|FATAL|ERR_[A-Z0-9_]+|EADDRINUSE|ENOENT|EACCES|EPERM|TypeError|SyntaxError|ReferenceError|uncaught|missing|required)\b/i.test(line))
+    .slice(-8)
+    .map((line) => redactStartupDiagnostic(line, secretValues, privatePaths));
+  const startupEventMarkers = [
+    ["env_file_loaded", /env file loaded/i],
+    ["gateway_starting", /BLUE-TANUKI starting/i],
+    ["complete_history_initialized", /complete history/i],
+    ["startup_saved_result_reconciliation", /startup saved-result reconciliation/i],
+    ["failure_memory_verification", /failure memory verification/i],
+    ["inbound_channels_started", /inbound channels/i],
+    ["outbound_channels_started", /outbound channels/i],
+    ["webchat_listening", /webchat listening/i],
+  ] as const;
+  const startupEvents = startupEventMarkers
+    .filter(([, marker]) => marker.test(stdout.text))
+    .map(([name]) => name);
+  const startupBlocked = /Gateway startup blocked before inbound channels/i.test(`${stdout.text}\n${stderr.text}`);
+  const tcpListening = await probeLoopbackTcp(port);
+  console.error(`[windows-smoke] installed_gateway_diagnostics ${JSON.stringify({
+    resident_pid: pid ?? null,
+    pid_process_presence: pidProcessPresence,
+    loopback_tcp_listener: tcpListening ? "accepting" : "not_accepting",
+    stdout_bytes: stdout.bytes,
+    stdout_log_state: stdout.state,
+    stderr_bytes: stderr.bytes,
+    stderr_log_state: stderr.state,
+    startup_events: startupEvents,
+    startup_blocked_marker: startupBlocked,
+    stderr_error_lines: errorLines.length,
+  })}`);
+  for (const line of errorLines) {
+    console.error(`[windows-smoke] installed_gateway_stderr ${line}`);
+  }
+}
+
 async function receiveFirstMessage(
   wsUrl: string,
   token: string,
@@ -537,12 +666,12 @@ async function main(): Promise<void> {
   const packageDir = path.join(work, "package");
   const installRoot = path.join(work, "i");
   const dataRoot = path.join(work, "d");
-  const uninstallStatusFile = path.join(work, "uninstall.status");
   const autostartRunName = `BLUE-TANUKI-SMOKE-${randomUUID()}`;
   const isolatedProfile = path.join(work, "profile");
   const isolatedAppData = path.join(isolatedProfile, "AppData", "Roaming");
   const isolatedLocalAppData = path.join(isolatedProfile, "AppData", "Local");
   const isolatedTemp = path.join(work, "Temp");
+  const uninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`);
   const windowsRoot = process.env.SystemRoot ?? "C:\\Windows";
   const smokePort = await findAvailableLoopbackPort();
   mkdirSync(isolatedAppData, { recursive: true });
@@ -837,7 +966,10 @@ async function main(): Promise<void> {
     if (!token) throw new Error("WEBCHAT_TOKEN missing from installed env file");
     logStep("wait installed gateway healthz");
     const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
-    if (!healthReady) throw new Error("installed gateway healthz did not become ready");
+    if (!healthReady) {
+      await reportInstalledGatewayStartupFailure(dataRoot, portNumber, env, [work, installRoot, dataRoot, isolatedTemp]);
+      throw new Error("installed gateway healthz did not become ready");
+    }
     logStep("done installed gateway healthz");
 
     logStep("request websocket ticket");
@@ -1072,12 +1204,12 @@ async function main(): Promise<void> {
         }
       }
       if (setupAttempted && !uninstalled) {
+        const cleanupStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`);
         try {
           const installWasPresent = existsSync(installRoot);
           if (installWasPresent) {
             const uninstaller = path.join(installRoot, "UninstallBlueTanuki.cmd");
             if (!existsSync(uninstaller)) throw new Error("installed uninstaller is unavailable for safe cleanup");
-            const cleanupStatusFile = path.join(work, "cleanup-uninstall.status");
             run("cmd.exe", [
               "/d",
               "/s",
@@ -1107,6 +1239,18 @@ async function main(): Promise<void> {
           allowWorkCleanup = true;
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
+          const cleanupStatus = existsSync(cleanupStatusFile)
+            ? readFileSync(cleanupStatusFile, "utf8").trim().replace(/^exit_code=/m, "")
+            : "absent";
+          const stagedHelperCount = existsSync(isolatedTemp)
+            ? readdirSync(isolatedTemp).filter((entry) => /^BlueTanuki(?:Uninstall|SafeTarget)-.*\.ps1$/i.test(entry)).length
+            : 0;
+          console.error(`[windows-smoke] cleanup_uninstall_state ${JSON.stringify({
+            install_root_present: existsSync(installRoot),
+            data_root_present: existsSync(dataRoot),
+            status_file: cleanupStatus,
+            staged_script_count: stagedHelperCount,
+          })}`);
         }
       } else if (!setupAttempted || uninstalled) {
         allowWorkCleanup = true;

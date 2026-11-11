@@ -10,7 +10,7 @@ Setup後DoctorはWindows PowerShell 5.1でnative stderrが`$ErrorActionPreferenc
 
 Launcherのprocess inventoryは、相対`apps/gateway/dist/main.js --serve`という文字列だけで別processを自install所有と誤認しないよう修正した。実際のNode process名を確認し、相対entryは自installのbundled Node imageまたは一致する`--env-file`に束縛する。絶対entry・同一runtimeなのにDataRoot不明・process image不明は引き続きfail-closedとする。現PID `17528`はworking directoryがrepo root、実行Nodeが別install配下、state/session rootがsmoke DataRoot外、`--env-file`なしと観測した。process自体は変更していない。
 
-ACTIONS_SCOPE: `workflow_dispatch`専用のWindows 2022 hosted runnerを使用する。workflowは`contents: read`のみで、secret／artifact uploadはない。run `42917086029`（SHA `937ea684b4788cadbc53deaeb5aff10ab93d1c18`）では不正なRust toolchain channelによりworkspace buildがFAILし、package／smokeはSKIPした。channel pinを修正したrun `42918832218`（SHA `c3d4f13f389d1cd3012cf6441fb75bfbaa184336`）はworkspace buildと2,544-entry package verifier（SHA-256=`e0092925916bd66b089bb0fc9070d69b275aa23767a60a185f2080929ded0f9c`）までPASSしたが、smokeの`tar.exe`がarchive entry filenameを読めず展開に失敗した。これは実Setupでも使うPowerShell `Expand-Archive`へ統一する。local PowerShell 5.1での旧2,481-entry artifact展開とsource marker確認はPASSだが、最新artifactの証明ではない。修正後main上のhosted再実行を次consumerとする。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
+ACTIONS_SCOPE: `workflow_dispatch`専用のWindows 2022 hosted runnerを使用する。workflowは`contents: read`のみで、secret／artifact uploadはない。run `42917086029`（SHA `937ea684`）はRust toolchain channel不正でworkspace build FAIL、run `42918832218`（SHA `c3d4f13`）はbuild／package verify PASS後に`tar.exe`展開FAIL。PowerShell `Expand-Archive`へ直したrun `42920784728`（SHA `fb782f3d712717174befdc1c18a0bb16f41dbd12`）はbuild、2,544-entry package verify（SHA-256=`e0092925916bd66b089bb0fc9070d69b275aa23767a60a185f2080929ded0f9c`）、展開、初回Setup、Repair、autostart enable/status/disable、port conflict拒否までPASSした。Launcherはresident PID `6512`／watchdog PID `7304`を返したが、healthzが45秒以内に応答しなかった。停止は両PIDとも確認でき、続くUninstall cleanupもFAILして隔離install rootをrunner内に保全した。run `42920784728`はartifactをuploadしておらずrunner終了後のログを再取得できない。今回smokeのUninstall status fileが製品契約の許す`%TEMP%`配下・所定名の外にあった欠陥を修正し、Gateway stderrの秘密値を伏せた起動段階／TCP診断を加えて再実行する。次のrunでGateway起動根因を確認・是正し、通常利用・first message・Uninstallまでつなぐ。証明範囲は当該runner上の隔離installed smokeに限り、Windows Desktop QA／release GOの代替ではない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
@@ -19,25 +19,27 @@ ACTIONS_SCOPE: `workflow_dispatch`専用のWindows 2022 hosted runnerを使用�
 | Windows 2022 hosted workspace build／package（run `42918832218`、SHA `c3d4f13`） | PASS：workspace build、package verify 2,544 entries、artifact SHA-256=`e0092925916bd66b089bb0fc9070d69b275aa23767a60a185f2080929ded0f9c`。 |
 | 同runのisolated smoke | FAIL：active-Gateway／registry preflightとsource-entrypoint dry-runはPASS。`tar.exe`がZIP entry filenameを読めず展開失敗。product Setup前に停止し、Repair／Launcher／health／first message／UninstallはNOT_RUN。 |
 | PowerShell 5.1 ZIP展開経路 | PASS（旧local artifactのみ）：2,481 entries／68,251,120 uncompressed bytesを`Expand-Archive`で展開し`BlueTanukiSetup.cmd`を確認。これはrun `42918832218`の2,544-entry artifactとは異なる。 |
-| smoke archive extractor correction | PASS（static/test）：PowerShell `Expand-Archive`を直接使い、`tar.exe`依存を除去。focused contract test 1件、smoke script `tsc --noEmit` PASS。hosted再実行はNOT_RUN。 |
+| smoke archive extractor correction | PASS：PowerShell `Expand-Archive`を使い、run `42920784728`で2,544-entry archive展開とinstalled Setupまで到達。 |
+| Windows 2022 hosted installed smoke（run `42920784728`、SHA `fb782f3`） | BUILD_GAP：build／package verify、初回Setup、Repair、autostart、port conflict拒否はPASS。Gateway healthz未応答、合成WebChat first message・回復・restart・safe modeはNOT_RUN。cleanup Uninstallは失敗し隔離install rootをrunner内に保持。 |
+| smoke診断／Uninstall記録先の修正 | PASS（local）：Gatewayログの限定redacted診断とTCP／起動段階記録、status fileを許可されたisolated `%TEMP%`配下へ移動。smoke script strict TypeScript check、契約test 1件PASS／19件skip。Actions再実行は次consumer。 |
 | Rust toolchain修正後のWindows local core build／workspace build | PASS：`pnpm --filter @blue-tanuki/core build`、`pnpm build`。hosted修正版runはGitHubへ反映後に実行する。 |
 | Setup／Launcher PowerShell 5.1 parser、Doctor stderr分離のsynthetic capture | PASS。 |
 | `windows_product_installer.test.ts`のLauncher／Doctor／smoke契約test | PASS：1件、18件skip。 |
 | relative Gateway process ownership focused test | PASS：1件、19件skip。別Nodeの相対entryと非Node command-line文字列を無視し、同一runtimeでDataRoot不明／絶対install entryの候補は保留する。これはisolated fixture上のコード確認で、installed smoke証拠ではない。 |
 | `windows_product_installer.test.ts`全体の前回実行 | FAIL：16/19 pass。resident-stop 2件は`EBUSY` cleanup、watchdog-stop 1件はstatus 2（期待0）。この実行後にDoctor／smoke修正を加えており、全体suiteは再実行していない。 |
 | 実Windows package Setup初回導入 | PASS：隔離install／DataRootへ導入し、Doctor JSONとstderr logを記録。ホスト自体はclean profileではなくNode／pnpm等を含むため、開発tool非依存証明ではない。 |
-| Repair／Launcher start／WebChat first message／Uninstall smoke | NOT_RUN：run `42918832218`はarchive展開より前段で停止した。前回のinstalled runはPID `17528`の曖昧なprocess分類でfail-closedし、その誤分類のfocused fixture testはPASS。修正packageでのinstalled lifecycleはまだ未観測。 |
+| Repair／Launcher start／WebChat first message／Uninstall smoke | run `42920784728`：RepairとLauncher process startは到達。healthz応答がなくfirst message未到達。cleanup Uninstallも失敗。productの通常利用／first message／完全Uninstallは未成立。 |
 | local smoke active-Gateway／registry preflight | BLOCKED：PID `17528`はrepo rootからの相対Gateway process、state/session rootは別の一時領域と確認した。現在のHKCU uninstall registrationは保留中smoke installを指し、新規local isolated smokeはclean registry条件を満たさない。どちらも停止・削除・上書きせず保持。 |
-| hosted smoke active-Gateway／registry preflight（run `42918832218`） | PASS：新規Windows 2022 runner上で既存processなし、隔離registry条件を確認。 |
+| hosted smoke active-Gateway／registry preflight（run `42920784728`） | PASS：新規Windows 2022 runner上で既存processなし、隔離registry条件を確認。 |
 | `docs:check`、`git diff --check` | PASS：docs check／日本語基底監査／license gate、`git diff --check`。日本語基底の移行負債76件は既存注意。 |
 | clean Windows user／OS、5OS、QE_QC／QE_QA | 未実施または未成立。 |
 
 UNIT_ID: G02.01／G02.02 Windows package install-to-first-message consumer
 STATUS: BUILD_GAP（package→初回Setup→Doctorは接続・実行。clean環境非依存、Launcher／first message、後片付けは未成立）
-NEXT_REQUIRED_CONSUMER: `Expand-Archive` extractor修正後のmain SHAで同workflowをworkflow_dispatchし、package verifyからinstalled lifecycle smokeまで継続する。ローカルの保留installはPID `17528`が存在しない時だけ正規Uninstallし、別に後片付けを確認する。
+NEXT_REQUIRED_CONSUMER: Uninstall status fileの契約不一致を直し、起動段階／限定stderr／TCP診断を加えたsmokeをmainへpush後、同workflowを`workflow_dispatch`し、Gateway healthの根因を実物で確定・修正する。その後、WebChat first message／再起動・回復／Uninstallを同じinstalled経路で閉じる。ローカル保留install／registryは所有判定・参照が解決するまで変更しない。
 SAFETY_STATUS: active processのDataRootが不明な場合は停止・更新・削除しない。現在のsmoke installとHKCU登録は`C:\Users\ohira\AppData\Local\BTsmoke\w-8lYmhG`に残し、別processによる削除を保留する。
 LOCAL_ASSET_STATUS: `%LOCALAPPDATA%\Codex\BLUE-TANUKI-smoke\windows-installed-p1o6Yy`は隔離package／Setup stageの生成物（10,143 files／186,848,072 bytes）で、資格情報形式・DataRoot・registry/process参照がないことを確認してWindowsゴミ箱へ移動済み。元path消失・ゴミ箱収容を確認。current artifact `release/windows/codex-8fcd06c9-r2`は保持。OneDrive同期領域内のpackage/probe生成物は同領域の保護により保持し、片付け扱いにしない。
-CURRENT_HEAD_AND_DIRTY_OWNER: extractor修正単位の開始HEAD=`c3d4f13f389d1cd3012cf6441fb75bfbaa184336`。今回のtracked差分はsmoke ZIP extractor／contract testと作業状態記録のみ。local temp再現の展開tree（2,481 files／68,251,120 bytes）はWindows Recycle Binへ移動済みで元path消失を確認。OneDrive同期workspace内の既存package／build outputと保護添付2領域は保持し、別repo／provider／外部業務作用／公開は対象外。
+CURRENT_HEAD_AND_DIRTY_OWNER: 現在main=`fb782f3d712717174befdc1c18a0bb16f41dbd12`。今回の未commit差分はWindows smokeの起動失敗診断、Uninstall status fileの隔離TEMP配置、対応契約test、現行状態記録。strict TypeScript check、対象test 1件、`git diff --check`はPASS。保護された`.codex-attachments/`／`.codex-remote-attachments/`は未変更・未stage。OneDrive同期workspace内の既存package／build outputは保持し、別repo／provider／外部業務作用／公開は対象外。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 

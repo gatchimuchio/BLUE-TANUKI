@@ -742,6 +742,7 @@ describe("Windows product installer package", () => {
   it("declares real package, verify, installer, and installed smoke scripts", () => {
     const pkg = read("package.json");
     const smoke = read("scripts/smoke_windows_installed.ts");
+    const uninstaller = read("install/windows/product/BlueTanukiUninstall.ps1");
     expect(pkg).toContain("\"package:windows\"");
     expect(pkg).toContain("\"package:windows:verify\"");
     expect(pkg).toContain("\"installer:windows\"");
@@ -782,6 +783,12 @@ describe("Windows product installer package", () => {
     expect(smoke).toContain('run("powershell.exe"');
     expect(smoke).toContain("Expand-Archive -LiteralPath");
     expect(smoke).not.toContain('spawnSync("tar.exe"');
+    expect(smoke).toContain('path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`)');
+    expect(smoke).toContain("reportInstalledGatewayStartupFailure");
+    expect(smoke).toContain("loopback_tcp_listener");
+    expect(smoke).toContain("cleanup_uninstall_state");
+    expect(uninstaller).toContain("$statusPath.StartsWith($tempRoot");
+    expect(uninstaller).toContain("BlueTanukiUninstall-[A-Za-z0-9-]+\\.status$");
   });
 
   it("ships a deterministic Windows one-click artifact audit gate", () => {
