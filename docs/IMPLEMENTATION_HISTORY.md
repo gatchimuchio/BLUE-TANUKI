@@ -16,6 +16,8 @@ Windows 11 Home x64（10.0.26300）の最終`corepack pnpm smoke:windows-install
 
 QE_BUILDのWindows installed lifecycle sliceだけを限定`WIRED`とする。G02.03全体、他OS・再起動QA、全suite、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOは未成立。`docs/WINDOWS_UNINSTALL.md`は日本語移行負債から除外し、`debt_count`を76から75へ更新。run固有BTsmoke rootは元path消失確認済み。local Windows packageは再利用可能成果物として保持し、公開していない。`.codex-tmp`／`release/windows` Cloud Files領域は移動・削除せず保持。workspace `dist`／tsbuildinfoはtypecheck後にworkspace buildで再生成して保持する。OneDrive原資料、protected添付、D4-Pocket、実provider、外部作用は変更していない。
 
+実装commit／push後main=`38795324b1e5d077c1160a607dfe38216f03eb7b`。開始時SHAを`codex/backup-main-prev` branch／remote tagに、実装commitを`codex/backup-main` branch／remote tagに保全し、GitHub `main`／local `main`との一致を確認した。commit hookはstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadata削除時にACL拒否を出したがcommit自体は作成・pushされ、権限・metadataは変更していない。
+
 ---
 
 ## 2026-11-12 — QEB-E04.02-GOOGLE-CALENDAR-DRIVE-FAILURE-REVIEW-OBSERVATION
