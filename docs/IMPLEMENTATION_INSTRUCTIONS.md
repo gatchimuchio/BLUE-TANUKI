@@ -2,7 +2,22 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
+## 現行BUILD_BATCH — QE_BUILD / C08.02 owner達成規則・J/M根拠・復帰consumerの閉包
+
+主語は通常Gateway経路から合成taskを処理するC、単独J authority、およびJ管理M receipt。目的は、ownerが選択した「現行J正本に結び付く明示達成規則と検証済み根拠」だけで同一taskの達成・停止を決め、規則・結果・receiptの欠落、不一致、曖昧さは保留にすること。実provider、実資格、業務外部作用、別repo変更、公開・出荷判断は対象外。
+
+現HEADには`packages/hds-brain/src/operation_plan.ts`の達成評価・receipt照合・seal・同一task停止があり、`apps/gateway/test/operation_plan_runtime.test.ts`は隔離workspaceの合成`file.search`実結果とM receiptで一致時の達成／再起動後停止、不一致時の保留／再起動保持を通す。同ファイルのwait試験は保存済みowner規則の保持、C再開、C計算中断後に旧返信を再利用せず新しいowner返信だけを使う復帰を通す。`packages/hds-brain/test/制御状態.test.ts`はM反映後・J receipt確定前の停止と再起動、同一receiptの再照合を通す。欠落／曖昧／未検証を達成へ昇格させない判定はコード上 fail-closed。今回の限定確認では代表経路を実行し、各理由別の全試験は実行していない。
+
+実行確認：`node node_modules/vitest/vitest.mjs run apps/gateway/test/operation_plan_runtime.test.ts packages/hds-brain/test/制御状態.test.ts -t "assesses explicit completion|BT-U-C07.02-P|永続waitを再起動後|再起動後に結果未記録wait" --maxWorkers=2 --minWorkers=2` はPASS（2 files、5 passed、63 skipped）。これは合成local BUILD証拠であり、実LLM、実Owner L3、実ユーザーデータ、OS再起動、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを示さない。実装変更はなく、今回は既存consumerの現HEAD再確認と作業状態同期。
+
+UNIT_ID: C08.02 owner明示達成規則・J/M根拠・同一task停止
+STATUS: WIRED（明示規則＋同一revisionの検証済み結果＋M receiptで達成し、達成後停止。不一致は保留。J/M receipt境界の再起動復帰を限定合成経路で確認）
+NEXT_REQUIRED_CONSUMER: G04.01 macOS製品配布・導入consumer。C08.03の実LLM証拠はowner指示によりBLUE製品全体の実装が進むまで保留し、合成成功を実LLM証拠へ読み替えない。
+SAFETY_STATUS: HDS-J／Approval／L3／M非権威・audit／fail-closedを維持。実provider、資格、外部作用、別repo、公開・releaseは未実行。
+LOCAL_ASSET_STATUS: focused testsはテスト所有Temp領域をcleanup。新規package／artifactなし。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡のまま保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: 編集前local／`origin/main`／GitHub `main`=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。復旧枝／remote tagはcurrent=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`／previous=`46685ccef0870a9441338e44394dc5b27474d4be`。worktreeはmainのみ、変更者不明の添付2 directoryは未変更。
+
+### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
 主語はWindows installed packageのSetupと、更新前InstallRoot／DataRootを引き継ぐ再Setup。目的は、更新失敗で検証済み旧app／bundled runtime・設定・利用者DataRootを復元し、Setup process中断後の次回Setupが旧版を復元して更新を再開する実consumerを接続すること。rev4.0 G02.03の`BT-R-G02-04`を主対象にし、`BT-R-G02-05`の非署名・OS保護境界を変えず、`BT-R-G02-06`の通常保持／明示Purgeを維持する。G02.03全体、実OS再起動、Windows Desktop QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は主張しない。
 

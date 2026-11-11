@@ -4111,3 +4111,17 @@ smokeの一時archive／product rootは除去済み。追跡したouter WSL work
 PID `17528`はrepo working directory、別installのNode image、一時state/session root、期待`--env-file`なしと観測したが、process・install・dataは停止・更新・削除していない。focused PowerShell fixture testは1 passed／19 skipped（非Node文字列と別Node相対entryの無視、同一runtime DataRoot不明と絶対install entryの保留）。installed smokeは修正後未実施。HKCU uninstall registrationが保留中test installを指しclean registry条件が不成立。GitHub Actionsは未dispatch。
 
 変更開始local／remote main=`ec3576abc3d0c0e60081ed8d6cd724f6673a36d8`。local recovery branchとremote backup tagはcurrent=`ec3576abc3d0c0e60081ed8d6cd724f6673a36d8`／previous=`12be9e570e8f6addab50fcd059b14a209d423dd7`で一致。remote照合時にGitが孤立worktree管理情報`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneを拒否した。`git worktree list`はmainのみで、対象にread-only／reparse-pointの`logs`、`refs`、`ORIG_HEAD`が残るため変更・削除を保留した。protected attachment directoriesは保持。
+
+## 2026-11-11 QE_BUILD — C08.02 current-head consumer confirmation and closure
+
+作業開始時local／`origin/main`／GitHub `main`=`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`。current recovery branch／remote tagは`bf16fd141bfb878a8c745b3caa8d95e95f712cd8`、previousは`46685ccef0870a9441338e44394dc5b27474d4be`へ、旧SHA照合後に回転した。worktreeはmainのみ。`.codex-attachments/`と`.codex-remote-attachments/`は保護対象として維持し、別repoへ書き込んでいない。
+
+owner選択の達成契約を現行C08.02へ適用し、現物`packages/hds-brain/src/operation_plan.ts`の現行J規則束縛、同一revision結果／M receipt照合、達成seal、同一task停止を確認した。Gateway統合testは隔離workspaceの合成`file.search`で一致規則時の達成と再起動後停止、不一致時の保留を実行する。wait試験ではC計算完了後の保存候補復元と、C計算中断後の未保存返信破棄・新しいowner返信からの再開を実行する。J/M制御testはM反映後・J receipt確定前にstate storeを閉じて再起動し、同一receiptを再照合してreadyへ復帰する。missing／ambiguous／unverified code pathは達成に倒れないことを確認したが、各理由別test全数は今回実行していない。
+
+| 確認 | 結果 |
+|---|---|
+| `node node_modules/vitest/vitest.mjs run apps/gateway/test/operation_plan_runtime.test.ts packages/hds-brain/test/制御状態.test.ts -t "assesses explicit completion|BT-U-C07.02-P|永続waitを再起動後|再起動後に結果未記録wait" --maxWorkers=2 --minWorkers=2` | PASS：2 files、5 passed、63 skipped。 |
+| 実LLM／provider、owner L3、外部作用、OS別QA、全suite、QE_QC／QE_QA | NOT_RUN。 |
+| source change | なし。既存実装を現HEADで再確認し、現在の作業指示・roadmap・履歴へ閉包結果を同期。 |
+
+STATUS=`WIRED`（限定合成C/J/M経路）。実LLM C08.03はowner指示により製品全体の実装が進むまで保留。次consumerはG04.01 macOS packaged install。生成テストTempはtest cleanup済み。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner release/public GOへ拡張しない。

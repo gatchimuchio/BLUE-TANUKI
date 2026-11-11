@@ -6,9 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
+### 直近BUILD_BATCH — C08.02 owner明示達成規則・J/M根拠・境界復帰
 
-Windows Server 2022の`workflow_dispatch` run `42968413273`（#10、main SHA `46685ccef0870a9441338e44394dc5b27474d4be`）はworkspace build、Windows package build／verify、isolated installed smokeの全stepがPASSした。installed smokeでは更新失敗後の旧install rollback、Setup中断後の次Setupによる旧版復旧・更新再開、staging cleanup、通常Uninstall後のDataRoot保持、reinstall後の保持を個別markerで確認し、`windows_installed_smoke=pass`で終了。runner内artifactは0件で、workflowは`workflow_dispatch`／contents read-only、artifact uploadなし。これは当該hosted Windows consumerの限定BUILD証拠であり、OS自体の再起動、clean Windows Desktop、G02.03全体、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを成立扱いしない。次consumerはowner選択済みC08.02：現行J正本に結び付いた明示達成規則・同一revisionの検証済み結果・M receiptが揃う場合だけ達成し、欠落／曖昧／未確認なら保留、境界復帰とJ達成後停止を接続する。
+現HEAD `bf16fd141bfb878a8c745b3caa8d95e95f712cd8`で、合成`file.search`実結果に基づく明示規則一致→達成／同一task停止、不一致→保留、C計算waitの再起動後再開・中断時の旧返信破棄、新しいowner返信からの再開、J/Mのreceipt境界で停止した後の再起動・同一receipt復帰をfocused testで確認した（2 files、5 passed、63 skipped）。規則欠落・曖昧、未検証結果またはreceiptはJ側で達成にしない。試験はlocal syntheticであり、実LLM／実Owner L3／実外部作用ではない。C08.02を限定`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QAへ拡張しない。次consumerはG04.01 macOS配布・導入。実macOS未導入環境ではローカル証拠と区別し、必要なnative検査だけを許可条件に沿う`workflow_dispatch`で補助する。C08.03実LLMはowner指示により製品全体の実装が先行するまで保留。
+
+### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
 ### 前段BUILD_BATCH記録 — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
