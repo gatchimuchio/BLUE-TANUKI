@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-11-11 — QEB-G02.03-WINDOWS-UPDATE-ROLLBACK-INTERRUPTED-RECOVERY
+
+開始時local／`origin/main`／GitHub `main`=`46685ccef0870a9441338e44394dc5b27474d4be`。開始時recovery branch／remote tag current=`38ed69c5e0e226d0d12c10a02fe76c59a720d838`／previous=`5ab893bb220e5fdd3e9dabea6cb02b64f24c0eb9`。編集前にexpected-old照合でlocal branch／remote tagをcurrent=`46685ccef0870a9441338e44394dc5b27474d4be`／previous=`38ed69c5e0e226d0d12c10a02fe76c59a720d838`へ回転した。worktreeはmainだけ、protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未stageのまま保持。stale worktree metadataへのACL拒否は迂回せず保持した。
+
+G02.03の実consumerをWindows Server 2022 hosted runnerで確認するため、`workflow_dispatch`限定workflowをmain SHA `46685ccef0870a9441338e44394dc5b27474d4be`へdispatchした。source code commit `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`は対象SHAの祖先で、対象code／workflowに後続変更がないことを確認した。run `42968413273`（#10、run attempt 1）は11m09s、workspace build・Windows package build／verify・isolated installed smoke全体がsuccess。
+
+実Setup smokeのmarkerは`update_failure_rollback_result=pass`、`interrupted_update_recovery_result=pass`、`interrupted_update_staging_cleanup_result=pass`、`uninstall_data_retention_result=pass`、`reinstall_retained_data_result=pass`、最終`windows_installed_smoke=pass`。隔離runnerの一時InstallRoot／DataRoot／package／registryだけを使い、失敗rollback後の旧app/runtime・env bytes・sentinel、process停止、registry uninstall/autostart状態、interruption後の再Setup復旧と更新再開、staging cleanup、通常Uninstall/reinstallのDataRoot保持を検証した。workflow permissionは`contents: read`のみ、artifact uploadなし、run artifact 0件。実利用者のinstall／DataRoot／registry、OS reboot、provider、外部作用には触れていない。
+
+これはG02.03更新復旧sliceのlimited hosted BUILD evidenceである。G02.03全体、Windows Desktop QA、OS reboot後の回復、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOは未成立。次consumerはowner選択済みC08.02：現行J正本に結び付いた明示達成規則、同一revisionの検証済み結果、M receiptを満たす場合のみ達成し、欠落・曖昧・未確認は保留とする。境界停止／復帰とJ達成後停止を既存consumerへ接続する。
+
+文書同期後の`corepack pnpm docs:check`と`git diff --check`はPASS。日本語基底の既存移行負債76件の注意はそのまま記録した。今回のローカル生成・取得物は0件。hosted package/smoke temporary dataはrun終了時にrunner内でcleanupされ、artifactなし。ignored `dist`／tsbuildinfoは前回のWindows workspace build出力として保持。別repoは変更していない。
+
+---
+
 ## 2026-11-10 — QEB-G03.03-LINUX-AUTOSTART-OWNERSHIP
 
 開始時local／`origin/main`／GitHub `main`=`819f7bcaa64b29999a4ca6e8734552324ce69dff`。直近復旧ref current=`819f7bcaa64b29999a4ca6e8734552324ce69dff`、previous=`e642a6755f123d72ce785872f4fb8d9bcb4ef614`。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持した。別repo D4-Pocketには変更していない。
