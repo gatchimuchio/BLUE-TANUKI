@@ -6,11 +6,17 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G04.02 macOS署名・Gatekeeper保護境界
+### 直近BUILD_BATCH — G04.03 macOS更新・復旧・削除
+
+G04.03はrev4.0の`BT-R-G04-05`／`BT-R-G04-06`について、packaged `BlueTanukiSetup.sh`、macOS resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`を介した更新失敗rollback、中断更新からの復旧、resident restart、permission-denial、ログ参照、通常削除後のDataRoot／ConfigRoot／runtime state／log保持、明示Purgeを隔離macOS環境で別結果として確認する施工単位である。現在は接続を施工中。OS rebootとowner実機はhosted macOS runnerでは代替せず`NOT_RUN`とする。
+
+実smokeの変更・native run・最終SHA・各結果はG04.03の閉包後にここへ記録する。local fixtureやrunner successは実機QA、G04全体、macOS対象QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。署名／notary、実provider／credential、外部作用は保留する。
+
+### 前段BUILD_BATCH記録 — G04.02 macOS署名・Gatekeeper保護境界
 
 G04.01ではmacOS x64／arm64のone-file `.command` installerをnative runnerでbuild／verifyし、隔離導入・同梱Node起動・`/healthz`／`/app` HTTP 200・resident停止まで確認済み。G04.02はそのpackage consumerへ署名／notarization状態の事実記録とOS保護の読取確認を結ぶ。product manifestはinstaller code signatureがunsigned、builderはnotary serviceへ未提出と明示し、package verifierがOS対象に応じて検証する。native smokeは`codesign`でinstaller自体の状態を照合し、`spctl --status`でGatekeeper assessment enabledを導入前後に読み、設定を変更しない。resident autostartの既定disabledも確認する。
 
-G04.02は固定source SHA=`13356da4c3af4d1230f89935177de4377c94a139`のGitHub Actions workflow_dispatch run [`42979799381`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/42979799381)でLinux／macOS x64／arm64 jobがsuccess。x64／arm64ともinstallerはunsigned、builder notary submissionなし、Gatekeeper assessmentは前後enabledで不変。隔離導入、resident autostart disabled、bundled Node、`/healthz`／`/app` HTTP 200、resident停止、一時root cleanupを確認した。これはG04.02の限定`WIRED` consumerであり、G04.02全体、G04親成果、macOS QA、署名配布、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。未実施はnotary ticket確認、quarantined download/Finder起動QA、実provider／利用者secret、全suite。次consumerはrev4.0 G04.03（macOS更新・再起動・rollback・削除とdata保持）。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
+G04.02は固定source SHA=`13356da4c3af4d1230f89935177de4377c94a139`のGitHub Actions workflow_dispatch run [`42979799381`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/42979799381)でLinux／macOS x64／arm64 jobがsuccess。x64／arm64ともinstallerはunsigned、builder notary submissionなし、Gatekeeper assessmentは前後enabledで不変。隔離導入、resident autostart disabled、bundled Node、`/healthz`／`/app` HTTP 200、resident停止、一時root cleanupを確認した。これはG04.02の限定`WIRED` consumerであり、G04.02全体、G04親成果、macOS QA、署名配布、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。未実施はnotary ticket確認、quarantined download/Finder起動QA、実provider／利用者secret、全suite。次consumerのG04.03へ接続した。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
 
 ### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 

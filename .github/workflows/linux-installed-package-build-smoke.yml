@@ -217,3 +217,17 @@ jobs:
           printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
           shasum -a 256 "$artifact" "$installer"
           PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash scripts/smoke_macos_product_installed.sh "$artifact" "$installer" "${{ matrix.arch }}"
+
+      - name: Exercise isolated macOS update, recovery, logs, and uninstall consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version)")"
+          artifact="release/macos/blue-tanuki-${version}-macos-${{ matrix.arch }}-installer.tar.gz"
+          test -f "$artifact"
+          printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+          shasum -a 256 "$artifact"
+          pnpm exec tsx scripts/smoke_unix_installed.ts \
+            --platform=macos \
+            --arch="${{ matrix.arch }}" \
+            --artifact="$artifact"

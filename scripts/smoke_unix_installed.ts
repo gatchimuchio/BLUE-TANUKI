@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -548,6 +549,10 @@ async function main(): Promise<void> {
   const configRoot = path.join(work, "ConfigRoot");
   const runtimeRoot = path.join(work, "RuntimeRoot");
   const binRoot = path.join(work, "BinRoot");
+  const productLogPaths = [
+    path.join(dataRoot, "logs", "blue-tanuki.out.log"),
+    path.join(dataRoot, "logs", "blue-tanuki.err.log"),
+  ];
   const env: Record<string, string> = {
     HOME: homeDir,
     XDG_CONFIG_HOME: path.join(homeDir, ".config"),
@@ -684,6 +689,34 @@ async function main(): Promise<void> {
     stopped = false;
     const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
     if (!healthReady) throw new Error("installed gateway healthz did not become ready");
+    for (const logPath of productLogPaths) {
+      if (!existsSync(logPath) || !statSync(logPath).isFile()) {
+        throw new Error("installed resident did not create its isolated stdout and stderr logs");
+      }
+    }
+    const logsCommand = spawnSync("sh", [launcher, "logs"], {
+      cwd: installRoot,
+      env: childEnv(env),
+      stdio: "pipe",
+      encoding: "utf8",
+      timeout: COMMAND_TIMEOUT_MS,
+    });
+    if (logsCommand.error || logsCommand.status !== 0) {
+      throw new Error(`installed logs command failed with exit ${logsCommand.status ?? "null"}`);
+    }
+    const logsProjection = commandLog(logsCommand);
+    if (!logsProjection.includes(`stdout=${productLogPaths[0]}`) ||
+        !logsProjection.includes(`stderr=${productLogPaths[1]}`)) {
+      throw new Error("installed logs command did not identify the isolated stdout and stderr log paths");
+    }
+    const logContents = productLogPaths.map((logPath) => readFileSync(logPath, "utf8"));
+    const syntheticSecrets = Object.entries(installedEnv)
+      .filter(([key, value]) => value.length > 0 && /TOKEN|SECRET|PASSWORD|CREDENTIAL|API[_-]?KEY/i.test(key))
+      .map(([, value]) => value);
+    if (syntheticSecrets.some((secret) => logsProjection.includes(secret) || logContents.some((content) => content.includes(secret)))) {
+      throw new Error("installed log projection or files exposed an isolated credential value");
+    }
+    console.log("installed_logs_result=pass");
     const installerMetadata = readFileSync(path.join(installRoot, "blue-tanuki-install.env"), "utf8");
     if (!installerMetadata.split(/\r?\n/u).includes(`STATE_ROOT='${expectedStateRoot}'`)) {
       throw new Error("launcher metadata state root does not match retained data root");
@@ -749,15 +782,15 @@ async function main(): Promise<void> {
       throw new Error("installed gateway healthz stayed reachable before update lifecycle checks");
     }
 
-    const updateRetentionFile = path.join(dataRoot, "data", "g03-update-retention-sentinel.txt");
-    const updateRetentionValue = "G03.03 isolated state survives update failure and recovery\n";
+    const updateRetentionFile = path.join(dataRoot, "data", "g04-03-update-retention-sentinel.txt");
+    const updateRetentionValue = "G04.03 isolated state survives update failure and recovery\n";
     writeFileSync(updateRetentionFile, updateRetentionValue, "utf8");
     const ownerStateBeforeUpdate = Buffer.from(readFileSync(runtimeOwnerState));
     const envBeforeUpdate = Buffer.from(readFileSync(envFile));
     const installInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
     const runtimeInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
 
-    if (platform === "linux") {
+    {
       const updatePackageParent = path.join(work, "update-package");
       const updatePackageDir = path.join(updatePackageParent, path.basename(packageDir));
       const updateToolDir = path.join(work, "update-test-tools");
@@ -766,8 +799,8 @@ async function main(): Promise<void> {
       if (!existsSync(path.join(updatePackageDir, "app")) || !existsSync(path.join(updatePackageDir, "BlueTanukiSetup.sh"))) {
         throw new Error("isolated update package copy is missing the app or setup entrypoint");
       }
-      const updateMarkerInPackage = path.join(updatePackageDir, "app", "g03-update-marker.txt");
-      writeFileSync(updateMarkerInPackage, "G03.03 isolated package update marker\n", "utf8");
+      const updateMarkerInPackage = path.join(updatePackageDir, "app", "g04-03-update-marker.txt");
+      writeFileSync(updateMarkerInPackage, "G04.03 isolated package update marker\n", "utf8");
       const updateSetup = path.join(updatePackageDir, "BlueTanukiSetup.sh");
       const updateSetupArgs = [
         updateSetup,
@@ -806,7 +839,7 @@ async function main(): Promise<void> {
       if (!existsSync(moveFailureMarker) || !failedUpdateOutput.includes("blue-tanuki injected runtime move failure")) {
         throw new Error("installed update did not hit the isolated runtime-move failure point");
       }
-      if (!existsSync(installRoot) || !existsSync(runtimeRoot) || existsSync(path.join(installRoot, "g03-update-marker.txt"))) {
+      if (!existsSync(installRoot) || !existsSync(runtimeRoot) || existsSync(path.join(installRoot, "g04-03-update-marker.txt"))) {
         throw new Error("failed update did not restore the previous app and runtime pair");
       }
       if (!readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryBeforeUpdate) ||
@@ -856,7 +889,7 @@ async function main(): Promise<void> {
       }
       const recoveryOutput = runExpectingStatus("sh", updateSetupArgs, updatePackageDir, 0, "installed interrupted-update recovery and resumed update", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
       if (!recoveryOutput.includes("restored the verified previous product after an interrupted update") ||
-          !existsSync(path.join(installRoot, "g03-update-marker.txt"))) {
+          !existsSync(path.join(installRoot, "g04-03-update-marker.txt"))) {
         throw new Error("installer did not restore the prior app and then complete the isolated update");
       }
       if (!existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
@@ -867,6 +900,51 @@ async function main(): Promise<void> {
         throw new Error("resident process remained after interrupted-update recovery");
       }
       console.log("interrupted_update_recovery_result=pass");
+      const installInventoryAfterRecovery = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
+      const runtimeInventoryAfterRecovery = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
+
+      if (platform === "macos") {
+        if (typeof process.getuid !== "function" || process.getuid() === 0) {
+          throw new Error("macOS permission-denial smoke requires a non-root runner account");
+        }
+        const permissionCaseRoot = path.join(work, "permission-denial");
+        const permissionInstallParent = path.join(permissionCaseRoot, "readonly-install-parent");
+        run("mkdir", ["-p", permissionInstallParent], work, "create isolated permission-denial parent", 10_000, env);
+        const permissionInstallRoot = path.join(permissionInstallParent, "InstallRoot");
+        const permissionMode = statSync(permissionInstallParent).mode & 0o777;
+        if ((permissionMode & 0o200) === 0) {
+          throw new Error("isolated permission-denial parent was not writable before the test");
+        }
+        let permissionDeniedOutput = "";
+        chmodSync(permissionInstallParent, permissionMode & ~0o222);
+        try {
+          permissionDeniedOutput = runExpectingFailure("sh", [
+            updateSetup,
+            "--install-root", permissionInstallRoot,
+            "--data-root", path.join(permissionCaseRoot, "DataRoot"),
+            "--config-root", path.join(permissionCaseRoot, "ConfigRoot"),
+            "--runtime-root", path.join(permissionCaseRoot, "RuntimeRoot"),
+            "--bin-root", path.join(permissionCaseRoot, "BinRoot"),
+            "--no-launch",
+          ], updatePackageDir, "macOS packaged setup permission denial", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
+        } finally {
+          chmodSync(permissionInstallParent, permissionMode);
+        }
+        if (!/permission denied|operation not permitted/i.test(permissionDeniedOutput)) {
+          throw new Error("macOS packaged setup did not report the expected permission denial");
+        }
+        if (existsSync(permissionInstallRoot) || readdirSync(permissionInstallParent).length !== 0) {
+          throw new Error("permission-denied setup created an install or staging path");
+        }
+        if (!existsSync(installRoot) || !existsSync(runtimeRoot) ||
+            !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryAfterRecovery) ||
+            !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryAfterRecovery) ||
+            !existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
+            !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
+          throw new Error("permission-denied setup changed the existing isolated installation or retained state");
+        }
+        console.log("permission_denied_update_result=pass");
+      }
     }
 
     const autostartEntry = platform === "linux"
@@ -985,11 +1063,12 @@ async function main(): Promise<void> {
     const safeModeStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!safeModeStoppedReady) throw new Error("installed gateway healthz stayed reachable after safe mode stop");
 
-    const retainedUserFile = path.join(dataRoot, "data", "g03-retention-sentinel.txt");
-    const retainedUserData = "G03.03 isolated user data survives normal uninstall\n";
+    const retainedUserFile = path.join(dataRoot, "data", "g04-03-retention-sentinel.txt");
+    const retainedUserData = "G04.03 isolated user data survives normal uninstall\n";
     run("mkdir", ["-p", path.dirname(retainedUserFile)], work, "create isolated retained data", 10_000, env);
     writeFileSync(retainedUserFile, retainedUserData, "utf8");
     const envBeforeUninstall = parseEnvFile(envFile);
+    const productLogsBeforeUninstall = productLogPaths.map((logPath) => Buffer.from(readFileSync(logPath)));
     const uninstaller = path.join(installRoot, "BlueTanukiUninstall.sh");
     run("sh", [uninstaller, "--quiet"], work, "installer normal uninstall", INSTALLER_TRANSACTION_TIMEOUT_MS, env);
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("install root still exists after normal uninstall");
@@ -1002,6 +1081,9 @@ async function main(): Promise<void> {
     }
     if (!existsSync(runtimeOwnerState)) {
       throw new Error("normal uninstall changed or removed runtime owner state under the retained data root");
+    }
+    if (productLogPaths.some((logPath, index) => !existsSync(logPath) || !readFileSync(logPath).equals(productLogsBeforeUninstall[index]))) {
+      throw new Error("normal uninstall changed or removed isolated resident logs");
     }
     if (JSON.stringify(parseEnvFile(envFile)) !== JSON.stringify(envBeforeUninstall)) {
       throw new Error("normal uninstall changed or removed the isolated env file");
@@ -1038,6 +1120,7 @@ async function main(): Promise<void> {
     if (!(await waitForAbsent(runtimeRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("runtime root still exists after purge uninstall");
     if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("data root still exists after purge uninstall");
     if (!(await waitForAbsent(configRoot, UNINSTALL_TIMEOUT_MS))) throw new Error("config root still exists after purge uninstall");
+    if (productLogPaths.some((logPath) => existsSync(logPath))) throw new Error("purge uninstall retained isolated resident logs");
 
     console.log(INSTALLED_SMOKE_MARKERS[platform]);
     console.log("installer_archive_setup_result=pass");
@@ -1053,8 +1136,13 @@ async function main(): Promise<void> {
     console.log("safe_mode_result=pass");
     console.log("runtime_state_root_result=pass");
     console.log("normal_uninstall_retention_result=pass");
+    console.log("purge_removed_logs_result=pass");
     console.log("reinstall_after_retention_result=pass");
     console.log("uninstall_result=pass");
+    if (platform === "macos") {
+      console.log("macos_host_reboot=NOT_RUN");
+      console.log("macos_owner_device_qa=NOT_RUN");
+    }
   } finally {
     const launcher = path.join(installRoot, "BlueTanukiLauncher.sh");
     if (!stopped && existsSync(launcher)) {

@@ -2,21 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / G04.02 macOS署名・保護境界の実状態観測
+## 現行BUILD_BATCH — QE_BUILD / G04.03 macOS更新・復旧・削除
 
-主語はmacOS x64／arm64向けone-file `.command` product installer、生成manifest、native installed smoke、Gatekeeper。目的は、macOS installer自体のcode signature状態をnative `codesign`で観測し、builderがnotary serviceへ提出していない事実をmanifestへ記録し、Gatekeeper assessmentsが有効なまま通常導入・resident利用を通すconsumerを接続すること。`spctl --status`は読み取りのみとし、Gatekeeper・quarantine・OS保護設定を変更しない。
+主語はmacOS x64／arm64のpackaged `BlueTanukiSetup.sh`、resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`とその実consumerである。目的は、native macOS runner上の隔離installで更新失敗rollback、中断更新からの復旧、resident再起動、権限拒否、ログの読取、通常削除後のDataRoot／ConfigRoot／runtime state／ログ保持、明示Purgeを別結果として確認すること。G04.03の実装接続であり、実機QAやmacOS再起動を証明しない。
 
-既存`package_product_installers.ts`がmacOS manifestへ`installer_code_signature=unsigned`と`notarization_submission=not_submitted_by_builder`を記録し、`verify_product_installers.ts`が対象OSと値を検証する。`smoke_macos_product_installed.sh`はnative x64／arm64上でmanifest値と実installerの`codesign`結果を照合し、導入前後のGatekeeper assessmentsがenabled・不変であること、resident autostart既定値がdisabledであること、通常resident起動／loopback応答／停止を確認する。Gatekeeperが無効または署名状態が不一致なら有効化・設定変更で通さず停止する。Workflowは既存のmanual-only Unix smokeを利用し、`contents: read`のまま。
+既存`scripts/smoke_unix_installed.ts`の更新失敗rollback／中断復旧fixtureはLinuxだけで実行されていたため、実際のmacOS packaged consumerにも接続する。macOS向けに専用の書込不可Install parentを使ってpermission-denialを確認し、そのmodeは必ず元へ戻す。`linux-installed-package-build-smoke.yml`は既存の`workflow_dispatch`限定・`contents: read`を維持し、macOS x64／arm64 native jobから同じarchive lifecycle smokeを呼ぶ。user data、credential、実provider、別repoには作用しない。
 
-Apple署名・notarization資格情報は使用しない。実notary serviceへのsubmission、notary ticket検証、quarantined downloadをFinderから初回起動するQA、実provider／利用者secretは対象外であり、未確認は未確認のまま記録する。Windows側ではnative macOS smokeを実行できないため、コード・package manifestをローカル検証後、固定SHAのworkflow_dispatchでnative x64／arm64確認を行う。これは限定QE_BUILD接続であり、G04.02全体、G04親成果、macOS QA、署名配布、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。
+失敗時は既存InstallRoot／RuntimeRoot／DataRoot／ConfigRootを変えずfail-closedで停止することを確認する。ログ内容は標準出力へ流さず、隔離profile内のlog path・存在・保持だけを検査する。runner内resident restartとtransaction recoveryは確認対象だが、ホストOS reboot、owner実機、署名・notary、実credential／外部作用は対象外であり、`NOT_RUN`として保持する。QE_BUILDの限定consumerであり、G04.03全体、G04親成果、macOS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。
 
-UNIT_ID: G04.02 macOS installer signature / notarization record and Gatekeeper preservation
-STATUS: WIRED（限定QE_BUILD consumer。manifest producer／verifierとnative x64／arm64 smokeを固定SHAで接続。G04.02全体・macOS QA・署名配布は未成立）
-NEXT_REQUIRED_CONSUMER: rev4.0 G04.03（BT-R-G04-05／BT-R-G04-06）。macOS更新・再起動・rollback・削除とdata保持の実consumerを、開始時の現行三点セット再照合後に施工する。対象OS以外のprocess／dataを変更しない。
-MINIMAL_TECH_CHECKS: package producer／verifierの型と最小manifest検証、`release_hardening_gate.ts`の署名資格情報不在記録、shell構文検査、native workflow smokeを実行する。全suite／異常網羅／macOS QAは対象外。
-SAFETY_STATUS: provider=stub。Apple Developer ID／notarization資格情報、LLM／Composio秘密は使用しない。コード署名・notary submissionを開始せず、Gatekeeper・quarantine・Keychain・外部データを変更しない。
-LOCAL_ASSET_STATUS: 今回のローカルpackage生成は未実施。Actions artifact uploadなし。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は他writerの可能性を保ち未変更。
-CURRENT_HEAD_AND_DIRTY_OWNER: 検査対象commit=`13356da4c3af4d1230f89935177de4377c94a139`、GitHub Actions workflow_dispatch run `42979799381`のLinux／macOS x64／arm64 jobは全てsuccess。閉包後local／`origin/main`／GitHub `main`=`dd2b6fa743b9b69031b820a598aa445541a494c6`で一致。検証branch `codex/g04-02-macos-security-observation`はfast-forward後にlocal／remoteから正規削除済み。復旧ref current=`dd2b6fa743b9b69031b820a598aa445541a494c6`／previous=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`でlocal branchとremote tagのtarget一致。単一checkoutのworktreeはmain上。protected attachment directoriesは未追跡・未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneはACL拒否のため保留し迂回しない。
+UNIT_ID: G04.03 macOS update / recovery / uninstall consumer
+STATUS: IN_PROGRESS（現行packaged consumerへのmacOS x64／arm64接続を施工中）
+NEXT_REQUIRED_CONSUMER: G04.03のnative実行とローカル最小検証を閉じた後、rev4.0全体工程表の依存関係から次の未接続producer／consumerを再読して選定する。
+MINIMAL_TECH_CHECKS: 変更したsmokeの型検査、shell構文、対象scriptの局所確認、固定SHAでのnative macOS x64／arm64 packaged lifecycle smokeを行う。全suite／異常網羅／host OS reboot／owner実機QAは対象外。
+SAFETY_STATUS: 合成packageとrun固有一時rootのみ。専用Install parentのmodeを一時変更するfixture以外にhost設定を変更しない。provider、実資格情報、署名・notary、Keychain、外部作用、別repo変更なし。
+LOCAL_ASSET_STATUS: 施工中。生成package／log／一時rootは分類し、run後cleanupを確認する。protected attachment directoriesは保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`cb5ab4d1971b47b6cf9591a845eab525930780a7`。意味のある編集前にlocal recovery branch current=`cb5ab4d1971b47b6cf9591a845eab525930780a7`／previous=`dd2b6fa743b9b69031b820a598aa445541a494c6`、remote tagも同SHAへ更新・readback済み。単一checkoutは`main`。未追跡`.codex-attachments/`／`.codex-remote-attachments/`は保護対象として未変更。stale worktree metadataのACL拒否は保留し迂回しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
