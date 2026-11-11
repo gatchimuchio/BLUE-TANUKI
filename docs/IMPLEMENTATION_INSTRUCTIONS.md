@@ -10,6 +10,8 @@
 
 ローカル`pnpm typecheck`、`pnpm build`（15 workspace projects）、`safe-target.ps1`／Setup.ps1／smoke内PowerShell hookの構文解析、`git diff --check`はPASS。local installed smokeは既存product install／HKCU登録を触らないためNOT_RUN。Windows Server 2022 workflowは`workflow_dispatch`限定・`refs/heads/main`限定・`contents: read`である。commit `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`へのdispatchはGit credential経由のGitHub APIがHTTP 403を返し、該当SHAのrunは確認できなかった。hosted／installed runtime evidenceはNOT_RUNであり、ローカル静的PASSに昇格しない。
 
+追加したWindows safe-target fixture確認：`pnpm exec vitest run install/installer/test/windows_safe_target.test.ts` PASS（2/2）。中断rollback fixtureを含む一時directory内の合成install／DataRootだけを使用し、実installed product／HKCU登録／利用者DataRootへ作用しない。テスト終了後、当該fixtureのTemp rootは残っていない。この証拠は実Setupを使うhosted installed smokeの代替ではない。
+
 UNIT_ID: G02.03 Windows installed update-failure rollback／interrupted-update recovery consumer
 STATUS: WIRED（実Setupを呼ぶ隔離installed smokeと検証条件を接続した。local installed／hosted runtime実行はNOT_RUN）
 NEXT_REQUIRED_CONSUMER: 認可済みのworkflow_dispatch経路でSHA `358ce35be1a4f7e79fc3222ce4d706e2e2af975b`のWindows 2022 installed smokeを実行し、3 lifecycle markerと終了時worktree状態を確認する。OS自体の再起動後の復帰は別証拠として扱う。
