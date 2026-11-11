@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — G04.03 macOS更新・復旧・削除
+### 直近完了BUILD_BATCH — F04.01 Google Docs本文を資料整理consumerへ接続
+
+既存`google.drive.read`の単一exact file読取について、`text/plain` blobに加えGoogle Docs native document一種を`files.export`の`text/plain`で既存の一時資料整理consumerへ接続した。元ファイルのsizeとexport sizeを比較せず、実export bytesをconsumer上限12,000以内に制限する。読取前後のfile/version/revision/sharing state digestを照合し、strict UTF-8、SHA-256、untrusted-document境界、直接本文表示・書込みなしを維持する。Slides／Sheets等の他Workspace形式は未対応。
+
+`pnpm --filter @blue-tanuki/core build`と`pnpm --filter @blue-tanuki/gateway... build`はPASS。`pnpm docs:check`はPASS（日本語基底の既存移行負債76件を注意表示）。最終記録の`git diff --check`もPASS。実Google credentials／資料／provider、LLM、外部作用、テスト、QE_QC／QE_QAはNOT_RUN。このF04.01限定consumerを`WIRED`とし、F04全体や製品全体完成へ拡張しない。owner指定の達成判定は既存J経路の明示規則＋同一revisionの検証済み結果＋M receiptを維持し、projectionの引用範囲状態から推定しない。
+
+### 前段完了BUILD_BATCH — G04.03 macOS更新・復旧・削除
 
 G04.03はrev4.0の`BT-R-G04-05`／`BT-R-G04-06`について、packaged `BlueTanukiSetup.sh`、macOS resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`を介した更新失敗rollback、中断更新からの復旧、resident restart、permission-denial、ログ参照、通常削除後のDataRoot／ConfigRoot／runtime state／log保持、明示Purgeを隔離macOS環境で確認し、2026-11-11に限定BUILD_BATCHを閉じた。workflow_dispatch run `43005886593`（source SHA `f2dc2da5f66836960eff1a76c56bd6c31da57587`）でLinux、macOS arm64、macOS x64のconsumerが成功した。OS reboot、owner実機、署名／notary、実provider／credential、外部作用は`NOT_RUN`または保留である。
 

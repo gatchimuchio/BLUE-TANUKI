@@ -4152,3 +4152,18 @@ local `corepack pnpm typecheck`、`corepack pnpm validate:packaging`、`corepack
 未実施：Apple署名、notary service submission／ticket確認、quarantined downloadをFinderから初回起動するQA、macOS Uninstall／update／rollback、実provider／利用者secret、全suite、QE_QC／QE_QA。native runner smokeはinstallerを明示的にshellで起動し、Gatekeeperの設定値を照合した証拠である。通常のquarantined downloadに対するFinder／Gatekeeper launch acceptanceへ拡張しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、G04.02全体、macOS QA、release／owner GOは未成立。
 
 開始時local／`origin/main`／GitHub `main`=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`、復旧current／previous=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`／`897c579be6b0694e1a037a5cb76665947c09baa7`。検証branch `codex/g04-02-macos-security-observation`のcommit `dd2b6fa743b9b69031b820a598aa445541a494c6`をmainへfast-forwardしpush。閉包後local／`origin/main`／GitHub `main`=`dd2b6fa743b9b69031b820a598aa445541a494c6`。一時branchはlocal／remote双方から正規削除済み。復旧current／previous branchとremote tag target=`dd2b6fa743b9b69031b820a598aa445541a494c6`／`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`へ競合検出付きで回転済み。今回のlocal product package生成なし、Actions artifact uploadなし、runnerの隔離root cleanup PASS。`.codex-attachments/`／`.codex-remote-attachments/`は保護対象として保持。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`はACL拒否のため未変更・保留し、迂回しない。次consumerはrev4.0 G04.03 macOS update／restart／rollback／uninstall data retention。
+## 2026-11-11 QE_BUILD — F04.01 bounded Google Docs text export to document organizer
+
+主語は既存の`google.drive.read`からGatewayの`/organize-drive file_id=<exact-id>`へ流れる本文consumer。`application/vnd.google-apps.document`だけをGoogle Drive `files.export`の`text/plain`へ接続し、従来の`text/plain` blob downloadは維持した。Google Docs native MIMEをwrite／share／delete経路へ広げていない。
+
+両方式とも単一exact file ID、`trashed=false`、`canDownload=true`、既知version、sharing情報を必要とし、前後のfile state digest一致を要求する。blobはmetadata sizeとdownload byte数を一致させ、Docs exportは元文書sizeとexport byte数を比較せず、返却byte数を12,000以内に制限する。export MIME、HTTP status、strict UTF-8、binary control、SHA-256、Gateway側mode／source MIME bindingを確認する。本文は従来どおり資料整理用の一時untrusted inputで、文書内の指示は目的・承認・権限を変更できず、直接表示・Operation Plan・historyへのraw本文保存・外部書込みを行わない。達成判定はowner選択どおり明示規則・同一revisionの検証済み結果・M receiptを要する既存J経路のまま。
+
+`pnpm --filter @blue-tanuki/core build` PASS。`pnpm --filter @blue-tanuki/gateway... build` PASS（7 workspace projects）。`pnpm docs:check` PASS（日本語基底の既存移行負債76件を注意表示）。最終記録の`git diff --check` PASS。テスト、実Google provider／credentials／資料、実LLM、外部作用、5OS QA、QE_QC／QE_QAはNOT_RUN。Google公式Drive APIは`files.export`が要求MIMEへのWorkspace document exportを返し、Docsの`text/plain`が対応形式であることを確認したが、この実装ではAPI live呼出しを行っていない。
+
+開始local／origin／GitHub main=`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`。編集前local recovery branch／remote tagはcurrent=`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`／previous=`1df2fda3537e92ab58689c20da2d7ea093c94c04`へCAS照合付きで回転。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。build生成distはローカル開発物として保持。次作業では最新HEADからconsumerを再選定する。
+
+## 2026-11-11 QE_BUILD — 資料整理projectionの完了表示を引用範囲へ限定
+
+主語はGatewayから利用者へ返す資料整理projection。projectionの`completed`は原文引用範囲の被覆状態として表示し、owner目的全体の達成とは区別した。「目的達成判定: 未判定」と明示し、owner規則・同一revisionの検証済み結果・M receiptをJが照合する別経路を記載した。Gateway呼出し、status schema、J/M判定、権限、実行、記憶更新は変更していない。
+
+`pnpm --filter @blue-tanuki/hds-brain build`、`pnpm docs:check`、`git diff --check`はPASS。テスト、実served Gateway、実資料、実provider、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。変更はmain commit `a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`に含まれる。

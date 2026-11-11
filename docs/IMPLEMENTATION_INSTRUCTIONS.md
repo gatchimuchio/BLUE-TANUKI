@@ -2,7 +2,24 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / 資料整理projectionの完了表示を引用範囲へ限定
+## 現行BUILD_BATCH — QE_BUILD / F04.01 Google Docsの限定exportを資料整理consumerへ接続
+
+主語は既存`google.drive.read`とGatewayの`/organize-drive file_id=<exact-id>`本文consumerである。目的は、既存の単一`text/plain` blob読取に加え、Google Docs native document一種だけを`text/plain` exportで同じ一時・非信頼資料整理経路へ接続すること。F04.01のfile ID／MIME／version・revision／sharing取得と、文書内指示をownerの目的・権限へ昇格させない境界を維持する。
+
+Drive metadataは一つのexact `file_id`、非trashed、`canDownload=true`、versionあり、sharing情報ありを要求する。blobはmetadata sizeと実bytesを一致させる。Google Docsは`files.export`の`text/plain`だけを使い、元sizeとexport bytesを誤比較せず、実export byte数をconsumer既存上限12,000以内に制限する。両経路とも厳密UTF-8・制御文字検査、本文SHA-256、読取前後の同一file/version/revision/sharing state digest一致を要求する。Slides、Sheets、他Workspace形式、binary、検索結果、Operation Plan、直接本文表示は対象外。
+
+達成表示は資料引用projectionの`completed`から推定しない。ownerが選んだ現行J正本に結び付く明示規則、同一revisionの検証済みoperation result、M receiptが揃う場合のみ達成し、不足・曖昧は保留する既存C08.02経路を維持し、本batchでは判定・J/M・権限・実行・書込みを変更しない。Google API live、実資料、実provider、LLM、外部作用は未実施。
+
+`pnpm --filter @blue-tanuki/core build`と`pnpm --filter @blue-tanuki/gateway... build`はPASS。`pnpm docs:check`はPASS（日本語基底の既存移行負債76件を注意表示）。履歴末尾を整えた後の`git diff --check`もPASS。テストはNOT_RUN。F04.01の限定consumerを`WIRED`とし、F04全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷／owner GOへ拡張しない。
+
+UNIT_ID: F04.01
+STATUS: WIRED（既存blob読取とGoogle Docs `text/plain` exportを、版照合付きの一時資料整理consumerへ接続。実providerの動作証拠ではない）
+NEXT_REQUIRED_CONSUMER: 次の独立作業開始時に現行rev4.0と最新HEADから再選定する。C08.03実provider、別repo変更、Rust authority cutover、公開・出荷判断は保留。
+SAFETY_STATUS: Google Docs exportは単一exact ID・read-only・untrusted input。元revisionの前後照合が崩れた場合は本文をconsumerへ渡さない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub main=`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`。編集前recovery current／previous=`a5f6e0bec8cc94e54ac25a639d1fe0c0a4299471`／`1df2fda3537e92ab58689c20da2d7ea093c94c04`へ照合付き回転済み。protected `.codex-attachments/`と`.codex-remote-attachments/`は保持・未変更。
+LOCAL_ASSET_STATUS: core／Gateway buildで再生成したignored `dist`は開発consumer用に保持。test temp・外部artifact・Driveデータは作成していない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / 資料整理projectionの完了表示を引用範囲へ限定
 
 主語はGatewayから利用者へ返す資料整理projectionである。目的は、projection内部の`completed`（全非空白範囲が原文引用で被覆済み）を、owner目的全体の達成と誤読させないこと。`renderDocumentOrganizationProjection`の表示を「資料整理状態（引用範囲）」に限定し、「目的達成判定: 未判定」と、owner明示規則・同一revisionの検証済み結果・M receiptをJが照合する別経路が必要であることを明記した。Gateway呼出し、status schema、J/M判定、権限・実行・記憶更新は変更していない。
 

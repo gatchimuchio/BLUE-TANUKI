@@ -713,6 +713,13 @@ function validateGoogleDriveOrganizationFeedback(
   const contentType = result.document_content_type;
   const files = result.files;
   const trust = result.trust_boundary;
+  const sourceFile = Array.isArray(files) && files.length === 1 && isRecord(files[0]) ? files[0] : undefined;
+  const sourceContentBindingMatches = sourceFile !== undefined && (
+    (sourceFile.mime_type === "text/plain" && result.document_content_mode === "blob_download" &&
+      sourceFile.size_bytes === bytes) ||
+    (sourceFile.mime_type === "application/vnd.google-apps.document" &&
+      result.document_content_mode === "workspace_export")
+  );
   if (result.service !== "drive" || result.mode !== "read_only" || result.target_mode !== "file_content" ||
       result.file_id !== fileId || result.status !== 200 || result.document_content_status !== 200 ||
       result.request_status !== "ok" || result.truncated !== false || result.result_complete !== true ||
@@ -725,14 +732,14 @@ function validateGoogleDriveOrganizationFeedback(
       Buffer.byteLength(text, "utf8") !== bytes || bytes > DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS ||
       typeof contentType !== "string" || contentType.split(";", 1)[0]?.trim().toLowerCase() !== "text/plain" ||
       createHash("sha256").update(text, "utf8").digest("hex") !== digest ||
-      !Array.isArray(files) || files.length !== 1 || !isRecord(files[0]) ||
-      files[0].id !== fileId || files[0].mime_type !== "text/plain" || files[0].trashed !== false ||
-      files[0].can_download !== true || files[0].version !== revision || files[0].size_bytes !== bytes ||
-      !isRecord(files[0].permission_inventory) || files[0].permission_inventory.state === "not_requested" ||
+      !Array.isArray(files) || files.length !== 1 || !sourceFile || !sourceContentBindingMatches ||
+      sourceFile.id !== fileId || sourceFile.trashed !== false ||
+      sourceFile.can_download !== true || sourceFile.version !== revision ||
+      !isRecord(sourceFile.permission_inventory) || sourceFile.permission_inventory.state === "not_requested" ||
       !["available", "not_returned", "shared_drive_partial", "shared_drive_not_returned"].includes(
-        String(files[0].permission_inventory.state),
-      ) || typeof files[0].permission_inventory.complete !== "boolean" ||
-      !Array.isArray(files[0].permission_inventory.entries) ||
+        String(sourceFile.permission_inventory.state),
+      ) || typeof sourceFile.permission_inventory.complete !== "boolean" ||
+      !Array.isArray(sourceFile.permission_inventory.entries) ||
       !isRecord(trust) || trust.provider_data_is_untrusted !== true ||
       trust.drive_metadata_can_authorize_operation !== false || trust.document_content_is_untrusted_data !== true ||
       trust.document_instructions_can_change_user_goal !== false ||
