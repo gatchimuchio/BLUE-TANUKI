@@ -26,6 +26,11 @@
     "@blue-tanuki/core": "workspace:*",
     "@blue-tanuki/hds-brain": "workspace:*",
     "@blue-tanuki/protocol": "workspace:*",
+    "@modelcontextprotocol/client": "2.4.0",
     "@napi-rs/keyring": "2.1.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.2.0"
   }
 }
