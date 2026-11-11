@@ -1,6 +1,19 @@
 # BLUE-TANUKI QE_BUILD指示・作業状態参照
 
-この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
+この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
+
+## 現在の阻害状態 — QE_BUILD / G09.01 Android導入・起動・初期設定
+
+主語はAndroid native Mobile入力・認証・仕事ID／結果producerと、Desktop BrokerおよびBLUE Gateway／C／J／M consumerである。目的はD4の既存Device Link契約を通じて一仕事を実consumerまで接続すること。rev4.0のBT-R-G09-01／02に対し、この単位は未完了であり、G09.01全体を`WIRED`または完了と扱わない。
+
+現物の状態:
+
+- BLUE側にAndroid／Mobile製品ソースはなく、`apps/`はGatewayのみ。既存D4 Runtime入力受け口は`packages/channel-webchat/src/webchat.ts`にあり、専用D4 Runtime bearerで`/runtime/ws-ticket`と`/runtime/intent`を扱う。返却は認証済み同一sessionのWebSocket ticketで、入力は既存Gateway handler／HDSへ限定userとして渡す。受け口は存在するが、D4からの接続は未成立。
+- D4 Pocket remote `main`=`c598ab237a1a03f4803c8578bc2933ad005660b6`のMobile契約はMobile→Device Link TLS→Desktop Rust Broker→Shell Core→Adapter→Runtime。Android native側に招待入力・Keystore・TLS clientがある。一方、同じmainの`packages/blue_tanuki_adapter/adapter.py`はhealth／ready等の固定参照応答だけを返し、BLUE Runtimeへ仕事を送る経路を持たない。
+- BLUEの`packages/channel-webchat/test/webchat.test.ts`にあるD4 Runtime受け口の限定合成試験5件はPASS（同file内125件はskip）。これはAndroid／D4 Brokerからの送信や実機動作の証拠ではない。
+- 実行時にD4 repoの別checkoutでdirtyな並行作業を観測したため、D4のsource確認は固定したremote `main` SHAの読み取りに限定。D4への編集なし。Android端末なし、AVDなし。
+
+`STATUS: BLOCKED_AUTHORITY`。BLUE側receiverの合成consumerは確認済みだが、D4 native producer→D4 `blue_tanuki_adapter`→BLUE input ingressの実接続がない。次に必要なのは、D4 Adapterが専用のserver-side credentialを使って既存BLUE ingressへ認証接続し、同じsessionの結果をBrokerへ返す責任経路の実装・検証である。これはD4別repo変更のため、本作業許可に含まれない限定委任が必要。許可が得られるまでD4を変更せず、BLUE内に第二Mobile／Broker経路を複製せず、G09.01を未完のまま保持する。実provider・実資格・外部業務作用・製品公開・Android実機試験は行わない。
 
 ## 直近完了BUILD_BATCH — QE_BUILD / F05.02 GitHubの既存tagへの未公開draft release作成
 
