@@ -8,13 +8,13 @@
 
 ### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-最新Windows Actions run `42939695019`（main SHA `89667fcaaf5fe5069236420def9edaa1453c4b66`）はworkspace／package build・verify、展開、初回Setup、Repair、autostart、port conflict拒否をPASSした。Gateway processは同梱Node image／serve argsと一致し、stdoutは`127.0.0.1:60636`でlistenを記録した。一方Launcherとsmoke probeはenv file値8787を使用しており、smokeがprocess environmentだけへ注入した60636と不一致だった。Gateway health／first messageは未検証で、listener欠陥とは判定しない。cleanup Uninstallはwrapper path error／終了1だが、status file内容`exit_code=0`、install root／DataRoot不在、staged script 0件を確認し、製品削除・statusは成功、wrapper終了だけ失敗と判定する。
+最新Windows Actions run `42944051144`（main SHA `1f94158aba48003bd10d105c84312c15461deeb5`）はworkspace／package build・verify、初回Setup、Repair、Gateway health、WebSocket first-message、approval照会、audit chain／改ざん拒否、resident crash recovery、stop／doctor／restart／safe-modeまでPASSした。Uninstallではstatus `exit_code=0`、install root／DataRoot不在、registry項目不在を確認したが、wrapperがpath errorを2件出して終了1となりrun全体はFAIL。製品削除とwrapper終了を別々に評価する。previous runのenv-file／process port不一致はこのrunで解消している。
 
-今回、PID `17528`はrepo rootをworking directoryとし、smoke installとは別のNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。Launcherのprocess inventoryが相対Gateway引数だけで別processを自installと誤認する欠陥を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。PIDやtest dataは停止・更新・削除していない。
+前段のlocal process ownership確認ではPID `17528`のworking directoryがrepo rootで、smoke installと異なるNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。この観測に基づきLauncher process inventoryの誤所有判定を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。これは前段時点の観測であり、その後のPID再利用や現在状態の主張には用いない。
 
 先行run `42917086029`ではRust channel設定不正、run `42918832218`では`tar.exe`のZIP展開失敗を確認し、channel pinとsmoke extractorを修正した。run `42920784728`では修正後の展開とSetup／Repairまで実際に到達し、Gateway healthの実起動欠陥を新たに観測した。
 
-run `42939695019`を受け、smokeは隔離env fileへloopback host／ephemeral portを保存してGatewayのprocess environmentと一致させ、OS listener診断に検査portとprocess `--env-file`一致を出す。Uninstall wrapperはPowerShell完了後に自身のファイルが削除されてもバッチを再読しないよう、status確認と終了を同じ物理行のchainにする。修正をmainへpushし、同じworkflowを再実行してhealth、first message、回復、restart、safe mode、Uninstallを順に確認する。local HKCU uninstall registrationと保留中installは別のconsumerを指すため、参照解決まで変更しない。workflowはread-only token scope、secret／artifact uploadなしで使い、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
+port同期修正によりrun `42944051144`でhealth／first-messageと通常consumer経路が成立した。path errorの根因はInstallRoot内の実行中`.cmd`を削除した後にcmd interpreterが失敗すること。現修正はwrapperを`%TEMP%`へstageし、元InstallRootを束縛した同期実行でexit codeを返す。focused contract testはPASSした。次はこの変更をmainへpushし、同じworkflowを`workflow_dispatch`してwrapper exit 0、成功status、install root／DataRoot／registry項目不在を同一runで確認する。local HKCU uninstall registrationと保留中installは別consumerなので参照解決まで変更しない。workflowはread-only token scope、secret／artifact uploadなしで使い、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
