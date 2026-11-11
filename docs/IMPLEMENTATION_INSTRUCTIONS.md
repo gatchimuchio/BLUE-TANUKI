@@ -12,6 +12,7 @@
 
 UNIT_ID: G04.03 macOS update / recovery / uninstall consumer
 STATUS: IN_PROGRESS（現行packaged consumerへのmacOS x64／arm64接続を施工中）
+NATIVE_ATTEMPT: workflow_dispatch run `42988683062`（source SHA=`1e0443175743f49e3f4697d8bf92c3def37b359d`）でLinux consumerはPASS。macOS arm64はpackage build／install／repair／Launcher／HTTP／WebSocketまで通過し、G04.03 update-failure fixtureでfailure injection marker前に失敗した。原因はfixtureの`mv` shimが`/usr/bin/mv`を固定し、macOS runnerでは実行できないこと。原因確定後に残りx64 jobをcancelした。このrunはG04.03のPASS証拠としない。修正は対象OSの標準配置（macOS=`/bin/mv`、Linux=`/usr/bin/mv`）を使うfixture呼出しに限定し、local typecheck／workspace build／docs:check／release hardening gate／diff checkはPASS。修正SHAのnative macOS再実行待ち。
 NEXT_REQUIRED_CONSUMER: G04.03のnative実行とローカル最小検証を閉じた後、rev4.0全体工程表の依存関係から次の未接続producer／consumerを再読して選定する。
 MINIMAL_TECH_CHECKS: 変更したsmokeの型検査、shell構文、対象scriptの局所確認、固定SHAでのnative macOS x64／arm64 packaged lifecycle smokeを行う。初回導入後のSetup Doctorは既存scope外としてskipし、Launcher Doctor probeだけを行う。全suite／異常網羅／host OS reboot／owner実機QAは対象外。
 SAFETY_STATUS: 合成packageとrun固有一時rootのみ。専用Install parentのmodeを一時変更するfixture以外にhost設定を変更しない。provider、実資格情報、署名・notary、Keychain、外部作用、別repo変更なし。

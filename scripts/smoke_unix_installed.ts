@@ -532,6 +532,7 @@ async function receiveFirstMessage(
 async function main(): Promise<void> {
   const platform = targetPlatform();
   const arch = targetArch(platform);
+  const systemMoveCommand = platform === "macos" ? "/bin/mv" : "/usr/bin/mv";
   const artifact = path.resolve(argValue("--artifact") ?? defaultArtifact(platform, arch));
   logStep("verify installer package");
   verifyUnixPackage(artifact, platform, arch);
@@ -828,7 +829,7 @@ async function main(): Promise<void> {
         "    ;;",
         "  esac",
         "fi",
-        "exec /usr/bin/mv \"$@\"",
+        `exec ${systemMoveCommand} \"$@\"`,
         "",
       ].join("\n");
       writeFileSync(path.join(updateToolDir, "mv"), moveFailureShim, "utf8");
@@ -864,13 +865,13 @@ async function main(): Promise<void> {
         "#!/bin/sh",
         'if [ "$#" -eq 3 ] && [ "$1" = "--" ] && [ "$2" = "$BT_TEST_INSTALL_ROOT" ]; then',
         '  case "$3" in "$BT_TEST_INSTALL_ROLLBACK_PREFIX"*)',
-        '    /usr/bin/mv "$@" || exit $?',
+        `    ${systemMoveCommand} "$@" || exit $?`,
         '    printf "%s\\n" "$$" > "$BT_TEST_HOLD_PID_FILE"',
         "    while :; do :; done",
         "    ;;",
         "  esac",
         "fi",
-        "exec /usr/bin/mv \"$@\"",
+        `exec ${systemMoveCommand} \"$@\"`,
         "",
       ].join("\n");
       writeFileSync(path.join(updateToolDir, "mv"), interruptedMoveShim, "utf8");
