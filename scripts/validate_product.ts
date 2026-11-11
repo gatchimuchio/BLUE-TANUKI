@@ -1060,11 +1060,14 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     log.includes("crash_recovery_result=pass") &&
     log.includes("safe_mode_result=pass") &&
     log.includes("defender_smartscreen_guidance_result=pass") &&
+    log.includes("update_failure_rollback_result=pass") &&
+    log.includes("interrupted_update_recovery_result=pass") &&
+    log.includes("interrupted_update_staging_cleanup_result=pass") &&
     log.includes("uninstall_result=pass");
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? "Windows installed-app smoke passed source-tree guidance/root entrypoint/installer setup/install/repair/reboot-persistence/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
+      ? "Windows installed-app smoke passed source-tree guidance/root entrypoint/installer setup/install/repair/reboot-persistence/update-failure-rollback/interrupted-update-recovery/staging-cleanup/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
       : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1089,6 +1092,9 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
       crash_recovery_result: log.includes("crash_recovery_result=pass"),
       safe_mode_result: log.includes("safe_mode_result=pass"),
       defender_smartscreen_guidance_result: log.includes("defender_smartscreen_guidance_result=pass"),
+      update_failure_rollback_result: log.includes("update_failure_rollback_result=pass"),
+      interrupted_update_recovery_result: log.includes("interrupted_update_recovery_result=pass"),
+      interrupted_update_staging_cleanup_result: log.includes("interrupted_update_staging_cleanup_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };

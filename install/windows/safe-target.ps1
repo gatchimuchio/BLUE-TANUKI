@@ -365,7 +365,7 @@ function Restore-InterruptedWindowsProductUpdate {
   }
 
   $candidatePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) +
-    '\.blue-tanuki-rollback-[0-9a-f]{32}$'
+    '\.blue-tanuki-rollback-([0-9a-f]{32})$'
   $candidates = @($siblings | Where-Object {
     [System.Text.RegularExpressions.Regex]::IsMatch(
       [string]$_.Name,
@@ -379,6 +379,14 @@ function Restore-InterruptedWindowsProductUpdate {
   }
 
   $candidate = $candidates[0]
+  $candidateMatch = [System.Text.RegularExpressions.Regex]::Match(
+    [string]$candidate.Name,
+    $candidatePattern,
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if (-not $candidateMatch.Success) {
+    throw 'Interrupted product-update rollback candidate identity could not be verified.'
+  }
   if (-not $candidate.PSIsContainer -or
       ($candidate.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Interrupted product-update rollback candidate is not a regular directory; no files were moved.'
@@ -402,6 +410,31 @@ function Restore-InterruptedWindowsProductUpdate {
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $install -DataRoot $data -MetadataInstallRoot $install)
   } catch {
     throw "Restored product install could not be reverified; it remains at the requested install root for inspection. $($_.Exception.Message)"
+  }
+
+  $stageName = '.' + $installName + '.blue-tanuki-stage-' + $candidateMatch.Groups[1].Value
+  $stagePath = Join-Path $parent $stageName
+  if (Test-Path -LiteralPath $stagePath) {
+    try {
+      $stageItem = Get-Item -Force -LiteralPath $stagePath -ErrorAction Stop
+      if (-not $stageItem.PSIsContainer -or
+          ($stageItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Interrupted product-update staging candidate is not a regular directory.'
+      }
+      $stageResolved = Resolve-SafeDirectoryTarget -Path $stageItem.FullName -Label 'ProductUpdateStagingCandidate'
+      if (-not [string]::Equals(
+          (Split-Path -Parent $stageResolved), $parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Interrupted product-update staging candidate is not a direct child of the install parent.'
+      }
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageResolved -DataRoot $data -MetadataInstallRoot $install)
+      Assert-NoReparsePointsInTree -Path $stageResolved -Label 'InterruptedProductUpdateStagingCandidate'
+      Remove-Item -LiteralPath $stageResolved -Recurse -Force -ErrorAction Stop
+      if (Test-Path -LiteralPath $stageResolved) {
+        throw 'Interrupted product-update staging candidate remains after cleanup.'
+      }
+    } catch {
+      Write-Warning "The verified previous product was restored, but its paired staging directory was preserved for inspection. $($_.Exception.Message)"
+    }
   }
   return $true
 }
