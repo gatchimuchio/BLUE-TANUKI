@@ -57,7 +57,14 @@ cleanup() {
     "$launcher" resident-stop >/dev/null 2>&1
   fi
   case "$work_root" in
-    "$tmp_parent"/blue-tanuki-g0401-macos.*) /bin/rm -rf -- "$work_root" ;;
+    "$tmp_parent"/blue-tanuki-g0401-macos.*)
+      if /bin/rm -rf -- "$work_root" && [[ ! -e "$work_root" && ! -L "$work_root" ]]; then
+        printf 'isolated_temp_cleanup=pass\n'
+      else
+        printf 'isolated_temp_cleanup=fail\n' >&2
+        status=1
+      fi
+      ;;
     *) printf 'refusing cleanup outside the isolated G04.01 temp root: %s\n' "$work_root" >&2; status=1 ;;
   esac
   exit "$status"
