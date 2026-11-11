@@ -10,7 +10,7 @@
 
 G04.01ではmacOS x64／arm64のone-file `.command` installerをnative runnerでbuild／verifyし、隔離導入・同梱Node起動・`/healthz`／`/app` HTTP 200・resident停止まで確認済み。G04.02はそのpackage consumerへ署名／notarization状態の事実記録とOS保護の読取確認を結ぶ。product manifestはinstaller code signatureがunsigned、builderはnotary serviceへ未提出と明示し、package verifierがOS対象に応じて検証する。native smokeは`codesign`でinstaller自体の状態を照合し、`spctl --status`でGatekeeper assessment enabledを導入前後に読み、設定を変更しない。resident autostartの既定disabledも確認する。
 
-作業開始HEAD=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`。署名／notarization資格情報、実provider、利用者秘密は使わず、コード署名・notary submission・quarantined download QAは実施しない。Gatekeeperが無効なら変更せず停止する。これはG04.02の限定QE_BUILD接続であり、G04.02全体、G04親成果、macOS QA、G04.03、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QA、release／owner GOを成立させない。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
+G04.02は固定source SHA=`13356da4c3af4d1230f89935177de4377c94a139`のGitHub Actions workflow_dispatch run [`42979799381`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/42979799381)でLinux／macOS x64／arm64 jobがsuccess。x64／arm64ともinstallerはunsigned、builder notary submissionなし、Gatekeeper assessmentは前後enabledで不変。隔離導入、resident autostart disabled、bundled Node、`/healthz`／`/app` HTTP 200、resident停止、一時root cleanupを確認した。これはG04.02の限定`WIRED` consumerであり、G04.02全体、G04親成果、macOS QA、署名配布、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。未実施はnotary ticket確認、quarantined download/Finder起動QA、実provider／利用者secret、全suite。次consumerはrev4.0 G04.03（macOS更新・再起動・rollback・削除とdata保持）。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
 
 ### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 

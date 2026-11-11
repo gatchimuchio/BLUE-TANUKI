@@ -11,12 +11,12 @@
 Apple署名・notarization資格情報は使用しない。実notary serviceへのsubmission、notary ticket検証、quarantined downloadをFinderから初回起動するQA、実provider／利用者secretは対象外であり、未確認は未確認のまま記録する。Windows側ではnative macOS smokeを実行できないため、コード・package manifestをローカル検証後、固定SHAのworkflow_dispatchでnative x64／arm64確認を行う。これは限定QE_BUILD接続であり、G04.02全体、G04親成果、macOS QA、署名配布、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。
 
 UNIT_ID: G04.02 macOS installer signature / notarization record and Gatekeeper preservation
-STATUS: IN_PROGRESS（manifest producer／verifierとnative smokeを接続中。native x64／arm64結果は未確認）
-NEXT_REQUIRED_CONSUMER: package verifyとnative x64／arm64 smokeが同じunsigned/not-submitted事実を照合し、Gatekeeper enabled・不変、resident autostart disabled、resident利用・停止を確認する。保護設定が既に無効なら変更せず失敗・保留とする。
+STATUS: WIRED（限定QE_BUILD consumer。manifest producer／verifierとnative x64／arm64 smokeを固定SHAで接続。G04.02全体・macOS QA・署名配布は未成立）
+NEXT_REQUIRED_CONSUMER: rev4.0 G04.03（BT-R-G04-05／BT-R-G04-06）。macOS更新・再起動・rollback・削除とdata保持の実consumerを、開始時の現行三点セット再照合後に施工する。対象OS以外のprocess／dataを変更しない。
 MINIMAL_TECH_CHECKS: package producer／verifierの型と最小manifest検証、`release_hardening_gate.ts`の署名資格情報不在記録、shell構文検査、native workflow smokeを実行する。全suite／異常網羅／macOS QAは対象外。
 SAFETY_STATUS: provider=stub。Apple Developer ID／notarization資格情報、LLM／Composio秘密は使用しない。コード署名・notary submissionを開始せず、Gatekeeper・quarantine・Keychain・外部データを変更しない。
 LOCAL_ASSET_STATUS: 今回のローカルpackage生成は未実施。Actions artifact uploadなし。保護対象`.codex-attachments/`／`.codex-remote-attachments/`は他writerの可能性を保ち未変更。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`。validation branch `codex/g04-02-macos-security-observation`はlocalのみ。復旧ref current=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`／previous=`897c579be6b0694e1a037a5cb76665947c09baa7`でlocal branch／remote tagが一致。active worktreeはmainのみ。protected attachment directoriesは未追跡・未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneはACL拒否のため保留し迂回しない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 検査対象commit=`13356da4c3af4d1230f89935177de4377c94a139`、GitHub Actions workflow_dispatch run `42979799381`のLinux／macOS x64／arm64 jobは全てsuccess。run完了時local／`origin/main`／GitHub `main`=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`。検証branch `codex/g04-02-macos-security-observation`はlocal／remoteとも対象commitを指し、本閉包記録のmain反映後に正規削除する。復旧ref current=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`／previous=`897c579be6b0694e1a037a5cb76665947c09baa7`でlocal branchとremote tagのtarget一致。単一checkoutのworktreeは検証branch上。protected attachment directoriesは未追跡・未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`のpruneはACL拒否のため保留し迂回しない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 
