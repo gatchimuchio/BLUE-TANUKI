@@ -413,7 +413,12 @@ export type SkepticalReviewRequest = z.infer<typeof SkepticalReviewRequestSchema
 export const FAILURE_REVIEW_LOCAL_P_VERSION = "blue-tanuki.failure-review.v1" as const;
 
 /** Exact read-only tool calls whose existing Complete History results may be projected by Gateway. */
-export const FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS = Object.freeze(["browser.read", "gmail.read"] as const);
+export const FAILURE_REVIEW_READ_ONLY_TOOL_OPERATIONS = Object.freeze([
+  "browser.read",
+  "gmail.read",
+  "google.calendar.read",
+  "google.drive.read",
+] as const);
 
 const FailureReviewSha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const FailureReviewScopeSchema = z.enum([

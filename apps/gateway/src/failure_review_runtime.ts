@@ -90,7 +90,7 @@ export function prepareFailureReviewInbound(
 
 /**
  * Find one later read-only observation of the same exact operation under the
- * same goal and actor/channel. Gmail results are projected as digests only;
+ * same goal and actor/channel. Google results are projected as digests only;
  * this does not issue a new provider request. It can inform scope review,
  * but it is not evidence that a failure cause was resolved or authority to resume work.
  */

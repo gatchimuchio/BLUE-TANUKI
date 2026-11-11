@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-12 — QEB-E04.02-GOOGLE-CALENDAR-DRIVE-FAILURE-REVIEW-OBSERVATION
+
+開始時local／`origin/main`／GitHub `main`=`3b467eb11e0cd8182042594a8ac2ad1830662e28`。開始時recovery branch／remote tag current=`3b467eb11e0cd8182042594a8ac2ad1830662e28`／previous=`e8046b43c355bc5b2a860fb21d093d0e8c560fc9`。worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。D4-Pocketは変更していない。
+
+FailureReviewのtool-scope allowlistへ既存read-only `google.calendar.read`と`google.drive.read`を追加した。GatewayはComplete History hash-chainが有効で全baseline entryが同一の失敗executor callとして照合され、baseline後に同一operation・action/input・actor/channelの成功executor entryがある場合だけ独立後続観測として投影する。C/Jへ渡すGoogle読取値はoperation名と、保存済みresult digestをさらにhashしたdigestに限定し、Google API要求、カレンダー項目、Drive本文・metadata、credential、raw failure、履歴entry IDは含めない。異なるactorまたはchannelは一致とみなさず`unavailable`に保留する。既存のHDS authority、approval、FailureGate、C08.02達成規則は変更しない。
+
+`corepack pnpm --filter @blue-tanuki/gateway... build`は7 workspace projectでPASS。`apps/gateway/test/failure_review_runtime.test.ts`は11/11 PASS（calendar／drive各成功producer、actor/channel不一致各負例、および既存7件を含む）。focused testはSQLite ExperimentalWarningを表示したが成功。`docs:check`、`git diff --check`はPASS。full test suite、実FailureReview往復、Google API／credential／LLM provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。
+
+これはE04.02のcalendar／drive history observation extensionのみを限定`WIRED`とする。E04.02全体、FailureReviewが原因や外部状態を証明すること、FailureGateによる再開、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立させない。workspace build出力は再利用用として保持し、test固有temporary fileは作成していない。次の独立作業ではrev4.0と最新HEADから未接続consumerを再選定する。G09.01はD4 adapter→BLUE ingressの別repo producerが未接続かつ限定権限外のため`BLOCKED_AUTHORITY`を維持する。
+
+---
+
 ## 2026-11-11 — QEB-G02.03-WINDOWS-UPDATE-ROLLBACK-INTERRUPTED-RECOVERY
 
 開始時local／`origin/main`／GitHub `main`=`46685ccef0870a9441338e44394dc5b27474d4be`。開始時recovery branch／remote tag current=`38ed69c5e0e226d0d12c10a02fe76c59a720d838`／previous=`5ab893bb220e5fdd3e9dabea6cb02b64f24c0eb9`。編集前にexpected-old照合でlocal branch／remote tagをcurrent=`46685ccef0870a9441338e44394dc5b27474d4be`／previous=`38ed69c5e0e226d0d12c10a02fe76c59a720d838`へ回転した。worktreeはmainだけ、protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未stageのまま保持。stale worktree metadataへのACL拒否は迂回せず保持した。

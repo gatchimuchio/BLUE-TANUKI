@@ -120,6 +120,8 @@ WebChat相関の選択test 1件PASS（他122件skip）、channel-webchat依存3 
 
 これはFailureReview producer/consumerの限定`WIRED` sliceであり、file.searchの既存sliceと合わせてもE04.02全体ではない。Gateway依存7 projectのbuild／typecheck、`docs:check`、`git diff --check`はPASS。日本語基底の既存移行負債76件に注意。test suite、実FailureReview往復、実browser/HTTP/provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。C08.02の明示owner規則・検証済み根拠・M receiptによる達成判定は既存実装を維持する。
 
+2026-11-12に既存read-only `google.calendar.read`／`google.drive.read` historyを同じdigest-only FailureReview経路へ追加した。検証済みComplete History、全baseline一致、baseline後の同一operation・action/input・actor/channelの成功だけを認め、結果digestをさらにhashしてCへ渡す。新しいGoogle API要求やprovider内容・metadata・credentialの投影はない。Gateway依存buildと`failure_review_runtime.test.ts` 11/11（actor／channel mismatch負例を含む）、`docs:check`、`git diff --check`はPASS。full suite、実provider、外部作用、製品全体BUILD/QC/QAはNOT_RUN。このcalendar／drive extensionだけを限定`WIRED`とし、E04.02全体へ昇格しない。
+
 ### 前段完了BUILD_BATCH — D03.01 D4 Runtimeのsession-scoped intent／response transport（限定WIRED）
 
 Blue Gatewayの専用Runtime credentialで、登録済みruntime IDとsession参照を検証し、sessionをHMAC digest scopeへ変換して単回WebSocket ticketを発行する。ticketで同じsession scopeへ接続した場合だけintentをHDSへ渡し、HDSの既存`channel_send`を同じscopeへ返す。応答経路が未接続なら`409 not_dispatched`でHDS handlerを呼ばない。HTTP `202`は入力受付だけを示す。

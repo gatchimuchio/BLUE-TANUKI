@@ -2,6 +2,12 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 直近完了BUILD_BATCH — QE_BUILD / E04.02 calendar／drive読取履歴をFailureReviewへ接続
+
+既存Complete Historyに記録された同一のread-only `google.calendar.read`／`google.drive.read`だけを、検証済みchain、完全な失敗baseline、後続履歴順、正確なoperation・action/input・actor/channel・成功result digestで照合する。条件がそろう場合だけ、既存FailureReview projectionからHDS Cへoperation名と追加hash済みresult digestを渡す。生のカレンダー／Drive内容、metadata、credential、entry ID、raw errorは渡さず、Google APIは呼び出さない。記録済み結果は原因・現在状態・外部条件解消・再開権限を証明しない。
+
+Gateway依存7 workspace project buildと`failure_review_runtime.test.ts` 11/11はPASS。actor不一致・channel不一致の負例は投影なし。`git diff --check`と`docs:check`の結果は同batchの進捗記録を参照する。全suite、実provider／credential／FailureReview往復、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このextensionだけをE04.02の限定`WIRED`とし、工程全体や製品全体完成へ拡張しない。次の独立BUILD_BATCHでは現行rev4.0とHEADからconsumerを再選定する。G09.01はD4 adapter producer→BLUE ingressの別repo権限がないため`BLOCKED_AUTHORITY`のまま保持する。
+
 ## 現在の阻害状態 — QE_BUILD / G09.01 Android導入・起動・初期設定
 
 主語はAndroid native Mobile入力・認証・仕事ID／結果producerと、Desktop BrokerおよびBLUE Gateway／C／J／M consumerである。目的はD4の既存Device Link契約を通じて一仕事を実consumerまで接続すること。rev4.0のBT-R-G09-01／02に対し、この単位は未完了であり、G09.01全体を`WIRED`または完了と扱わない。

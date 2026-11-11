@@ -359,7 +359,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
   return JSON.stringify({
     schema_version: "blue-tanuki.failure-review-result.v1",
     review: trace,
-    review_basis: "failure categories, digests, and at most a later exact read-only file.search or credential-free browser.read execution record; no raw goal, action, context, page content, or result was provided to C",
+    review_basis: "failure categories, digests, and at most a later exact read-only file.search, credential-free browser.read, gmail.read, google.calendar.read, or google.drive.read execution record; no raw goal, action, context, page content, provider content, or result payload was provided to C",
     candidate_proposals: candidate ? {
       cause_hypotheses: candidate.cause_hypotheses,
       alternative_hypotheses: candidate.alternative_hypotheses,
@@ -374,7 +374,7 @@ export function failureReviewResultContent(trace: FailureReviewAuditTrace, value
       disposition: trace.scope_disposition,
       count: trace.independent_observation_count,
       digest: trace.independent_observation_digest,
-      basis: "a later exact-goal, exact-action, exact-actor/channel file.search or credential-free browser.read success in verified Complete History; browser.read carries only origin digests, redirect status, and evidence class. Observation only, not cause proof, condition-resolution proof, or permission",
+      basis: "a later exact-goal, exact-action, exact-actor/channel file.search, credential-free browser.read, gmail.read, google.calendar.read, or google.drive.read success in verified Complete History; provider results carry only operation/result digests, and browser.read carries origin digests, redirect status, and evidence class. Observation only, not cause proof, condition-resolution proof, or permission",
     },
     review_targets: {
       counterexamples: trace.counterexample_review_target_status,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CompleteHistoryStore, FailureMemoryStore, HDSUpperController, extractFailureSignatures, failureReviewProjectionDigest } from "@blue-tanuki/hds-brain";
+import { CompleteHistoryStore, FailureMemoryStore, HDSUpperController, commandFailurePatterns, extractFailureSignatures, failureReviewProjectionDigest, sha256Hex } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, FailureReviewProjectionSchema, isGatewayInternalInboundRequest, type ExecuteFeedback, type InboundRequest } from "@blue-tanuki/protocol";
 import { prepareFailureReviewInbound } from "../src/failure_review_runtime.js";
 import { DevelopmentHandoffStore } from "../src/development_handoff_store.js";
@@ -170,6 +170,129 @@ describe("prepareFailureReviewInbound", () => {
       external_change_contribution_status: "not_assessed",
       teacher_input_contribution_status: "excluded_from_c_projection",
     });
+  });
+
+  it.each([
+    ["google.calendar.read", "tool:google.calendar.read calendar_id=primary days=1 view=events"],
+    ["google.drive.read", 'tool:google.drive.read query="trashed=false" max_results=1'],
+  ] as const)("projects only an exact later %s result digest into FailureReview", (operation, content) => {
+    const command = new HDSUpperController().decide(developerRequest(content)).command;
+    expect(command?.type).toBe("tool_call");
+    if (!command || command.type !== "tool_call") return;
+    const failurePatterns = commandFailurePatterns(command);
+    const history = new CompleteHistoryStore();
+    const baseline = history.append({
+      kind: "execution_history",
+      request_id: "google-read-failed-request",
+      command_id: "google-read-failed-command",
+      actor: "owner",
+      source: "executor",
+      timestamp: 1,
+      payload: {
+        command: { type: "tool_call", operation, payload: { tool_name: operation }, failure_patterns: failurePatterns },
+        origin_channel: "webchat",
+        status: "failed",
+        error: "provider read failed",
+      },
+    });
+    if (!baseline) throw new Error("failed Google read history fixture was not appended");
+    const signatureInput = extractFailureSignatures({ kind: "complete_history", entry: baseline })[0];
+    if (!signatureInput) throw new Error("failed Google read did not produce a failure signature");
+    const store = new FailureMemoryStore();
+    const signature = store.addSignature(signatureInput);
+    const resultDigest = "d".repeat(64);
+    history.append({
+      kind: "execution_history",
+      request_id: "google-read-later-request",
+      command_id: "google-read-later-command",
+      actor: "owner",
+      source: "executor",
+      timestamp: 2,
+      payload: {
+        command: { type: "tool_call", operation, payload: { tool_name: operation }, failure_patterns: failurePatterns },
+        origin_channel: "webchat",
+        status: "success",
+        result_present: true,
+        result_digest: resultDigest,
+      },
+    });
+
+    const prepared = prepareFailureReviewInbound(developerRequest(`failure:review ${signature.id}`), store, history) as InboundRequest;
+    const projectedResultDigest = sha256Hex(resultDigest);
+    const projection = JSON.parse(String(prepared.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
+      independent_observation_source_status: string;
+      independent_observations: Array<{ operation?: string; result_digest?: string }>;
+    };
+    expect(projection.independent_observation_source_status).toBe("verified");
+    expect(projection.independent_observations).toMatchObject([{ operation, result_digest: projectedResultDigest }]);
+    expect(JSON.stringify(projection)).not.toContain(resultDigest);
+    expect(JSON.stringify(projection)).not.toContain("google-read-later-request");
+
+    const reviewed = new HDSUpperController({ failure_memory_store: store }).decide(prepared).command;
+    expect(reviewed?.type).toBe("llm_call");
+    if (!reviewed || reviewed.type !== "llm_call") return;
+    expect(reviewed.payload.compute_context?.data_exposure.input_sources).toContain("complete_history_digest_observations");
+    expect(JSON.stringify(reviewed.payload.messages)).toContain(projectedResultDigest);
+    expect(JSON.stringify(reviewed.payload.messages)).not.toContain(resultDigest);
+    expect(JSON.stringify(reviewed.payload.messages)).not.toContain("google-read-later-request");
+    expect(JSON.stringify(reviewed.payload.messages)).not.toContain("provider read failed");
+  });
+
+  it.each([
+    ["google.calendar.read", "tool:google.calendar.read calendar_id=primary days=1 view=events", "different-owner", "webchat"],
+    ["google.drive.read", 'tool:google.drive.read query="trashed=false" max_results=1', "owner", "different-channel"],
+  ] as const)("does not project a later %s result when its actor or channel differs", (operation, content, laterActor, laterChannel) => {
+    const command = new HDSUpperController().decide(developerRequest(content)).command;
+    if (!command || command.type !== "tool_call") throw new Error("Google read fixture did not produce a tool call");
+    const failurePatterns = commandFailurePatterns(command);
+    const history = new CompleteHistoryStore();
+    const baseline = history.append({
+      kind: "execution_history",
+      request_id: "google-read-mismatch-baseline",
+      command_id: "google-read-mismatch-baseline-command",
+      actor: "owner",
+      source: "executor",
+      timestamp: 1,
+      payload: {
+        command: { type: "tool_call", operation, payload: { tool_name: operation }, failure_patterns: failurePatterns },
+        origin_channel: "webchat",
+        status: "failed",
+      },
+    });
+    if (!baseline) throw new Error("mismatched Google read baseline was not appended");
+    const signatureInput = extractFailureSignatures({ kind: "complete_history", entry: baseline })[0];
+    if (!signatureInput) throw new Error("mismatched Google read baseline did not produce a signature");
+    const store = new FailureMemoryStore();
+    const signature = store.addSignature(signatureInput);
+    history.append({
+      kind: "execution_history",
+      request_id: "google-read-mismatch-observation",
+      command_id: "google-read-mismatch-observation-command",
+      actor: laterActor,
+      source: "executor",
+      timestamp: 2,
+      payload: {
+        command: { type: "tool_call", operation, payload: { tool_name: operation }, failure_patterns: failurePatterns },
+        origin_channel: laterChannel,
+        status: "success",
+        result_present: true,
+        result_digest: "e".repeat(64),
+      },
+    });
+
+    const prepared = prepareFailureReviewInbound(developerRequest(`failure:review ${signature.id}`), store, history) as InboundRequest;
+    const projection = JSON.parse(String(prepared.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
+      independent_observation_source_status: string;
+      independent_observations: unknown[];
+    };
+    expect(projection.independent_observation_source_status).toBe("unavailable");
+    expect(projection.independent_observations).toHaveLength(0);
+    expect(JSON.stringify(projection)).not.toContain("google-read-mismatch-observation");
+
+    const reviewed = new HDSUpperController({ failure_memory_store: store }).decide(prepared).command;
+    expect(reviewed?.type).toBe("llm_call");
+    if (!reviewed || reviewed.type !== "llm_call") return;
+    expect(reviewed.payload.compute_context?.data_exposure.input_sources).not.toContain("complete_history_digest_observations");
   });
 
   it("connects an explicit projection to an HDS-issued compute command without executing it", () => {
