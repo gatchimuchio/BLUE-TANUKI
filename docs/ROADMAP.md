@@ -8,13 +8,13 @@
 
 ### 直近BUILD_BATCH — G02.01・G02.02 Windows package Setupから通常利用へ接続
 
-最新Windows Actions run `42947306975`（main SHA `1acf2c20ac185357d98e97150cb0f104dd7724f6`）はworkspace／package build・verify、初回Setup、Repair、Gateway health、WebSocket first-message、approval照会、audit chain／改ざん拒否、resident crash recovery、stop／doctor／restart／safe-modeまでPASSした。Uninstallはstatus `exit_code=0`、InstallRoot／DataRoot／registry不在まで成立したが、wrapperのpath error 2件と終了1が残りrun全体はFAIL。製品削除とwrapper終了を別々に評価する。
+最新Windows Actions run `42952073483`（main SHA `07dbc1e4b68847280f459e1e94e8f6b55f37f7d4`）はworkspace／Windows package build・verifyと隔離installed smoke全体がPASSした。Windows Server 2022上でSetup／Repair、Gateway health／first-message、approval／audit tamper拒否、crash recovery、restart／safe-modeを通り、Uninstall wrapper exit 0、status `exit_code=0`、InstallRoot／DataRoot／registryの不在、path errorなしを同一runで確認した。`workflow_dispatch`／contents read-only、secret／artifact uploadなし。これは当該hosted BUILDの限定証拠で、clean Windows Desktop・全G02・5OS・QAへ拡張しない。
 
 前段のlocal process ownership確認ではPID `17528`のworking directoryがrepo rootで、smoke installと異なるNode実行fileと一時state/session rootを使い、`--env-file`とsmoke root参照がないことを観測した。この観測に基づきLauncher process inventoryの誤所有判定を修正した。別Node／非Node command-line文字列は無視し、同一runtimeでDataRootが曖昧、絶対install entryを指す、process imageを確認できない場合はfail-closedを維持する。対象PowerShell fixture testは1件PASS／19件skip。これは前段時点の観測であり、その後のPID再利用や現在状態の主張には用いない。
 
 先行run `42917086029`ではRust channel設定不正、run `42918832218`では`tar.exe`のZIP展開失敗を確認し、channel pinとsmoke extractorを修正した。run `42920784728`では修正後の展開とSetup／Repairまで実際に到達し、Gateway healthの実起動欠陥を新たに観測した。
 
-run `42947306975`で確定したpath errorの原因は、PowerShellが実行中のInstallRoot内`.cmd`を削除した後、親CMDが削除済みbatchへ復帰しようとすること。現修正は同一CMD processでwrapperを再入し、完了／失敗時に`exit 0`／`exit 1`でCMD process自体を終了する。Windows PowerShell 5.1のsynthetic owned-install fixtureではexit 0、status `exit_code=0`、InstallRoot削除、通常Uninstall時のDataRoot保持、path errorなしを確認した。focused contract testとfixtureはPASS。次は変更をmainへpushして同じworkflowを`workflow_dispatch`し、exit／status／InstallRoot／DataRoot／registry／path errorを同一installed runで確認する。local HKCU uninstall registrationと保留中installは別consumerなので参照解決まで変更しない。workflowはread-only token scope、secret／artifact uploadなしで使い、Windows Desktop QA／release GOには読み替えない。clean Windows Desktop profileでの開発tool非依存、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、release／owner GOは未成立。
+run `42947306975`で確定した根因は、InstallRoot削除後に親CMDが削除済み`.cmd`へ復帰すること。同一CMD process内でwrapperを再入し、PowerShell完了／失敗後に`exit 0`／`exit 1`でprocess自体を終了する修正をmainへ反映した。Windows PowerShell 5.1 synthetic owned-install fixtureは成功status、InstallRoot削除、通常Uninstall時のDataRoot保持、exit 0、path errorなしでPASS。後続run `42952073483`のisolated installed smokeでもwrapper／status／InstallRoot／purge対象DataRoot／registry／path errorを同時確認してPASSした。既存のlocal HKCU uninstall registrationと保留中installは別consumerとして変更せず保持する。G02.01／G02.02の今回のinstalled consumerは限定的に`WIRED`。清浄な一般Windows環境、G02.03の更新・rollback・ユーザーデータ保持、5OS、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOは未成立。次の実装consumerはowner指定に基づきC08.02の境界中断・復帰へ移る。
 
 ### 前段BUILD_BATCH記録 — F17.03 Owner Task依頼IDの状態照合と明示的な次task切替
 
