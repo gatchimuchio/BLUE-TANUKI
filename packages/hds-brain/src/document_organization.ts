@@ -490,7 +490,8 @@ function parseMemoryVersion(value: unknown): DocumentOrganizationMemoryVersion {
 export function renderDocumentOrganizationProjection(projection: DocumentOrganizationProjection): string {
   const lines = [
     "資料整理結果",
-    `状態: ${projection.status}`,
+    `資料整理状態（引用範囲）: ${projection.status}`,
+    "目的達成判定: 未判定（この結果は引用範囲の完了のみを示す。目的達成には、owner明示規則・同一revisionの検証済み結果・M receiptのJ照合が必要）",
     `J更新版: ${projection.revision} / 計算周期: ${projection.completed_cycles}`,
     `原資料ダイジェスト: SHA-256 ${projection.source_ref.content_sha256}`,
     "引用採否:",

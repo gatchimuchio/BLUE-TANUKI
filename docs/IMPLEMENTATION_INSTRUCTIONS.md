@@ -2,6 +2,19 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 現行BUILD_BATCH — QE_BUILD / 資料整理projectionの完了表示を引用範囲へ限定
+
+主語はGatewayから利用者へ返す資料整理projectionである。目的は、projection内部の`completed`（全非空白範囲が原文引用で被覆済み）を、owner目的全体の達成と誤読させないこと。`renderDocumentOrganizationProjection`の表示を「資料整理状態（引用範囲）」に限定し、「目的達成判定: 未判定」と、owner明示規則・同一revisionの検証済み結果・M receiptをJが照合する別経路が必要であることを明記した。Gateway呼出し、status schema、J/M判定、権限・実行・記憶更新は変更していない。
+
+`pnpm --filter @blue-tanuki/hds-brain build`、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査は既存の移行負債76件を注意表示した。テスト、実served Gateway、実資料、実provider、外部作用、他OS、QE_QC／QE_QAはNOT_RUN。既存の資料本文引用保護、`used_for_authority=false`、`may_execute=false`、`may_commit_to_memory=false`を維持する。
+
+UNIT_ID: 横断出力境界（198施工単位への新規要求追加なし）
+STATUS: WIRED（既存Gateway→projection renderer経路。変更後のserved runtime表示は未確認）
+NEXT_REQUIRED_CONSUMER: 現行rev4.0と次回HEADから製品全体の未接続実consumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。
+SAFETY_STATUS: ownerの達成判定を代行せず、M・実行・権限・外部作用は変更なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始main=`1df2fda3537e92ab58689c20da2d7ea093c94c04`（開始時GitHub main一致）。編集前recovery branch／remote tagはcurrent=`1df2fda3537e92ab58689c20da2d7ea093c94c04`、previous=`4325779dcf3b8d008badaa92ba16ae4ddcc5f5c8`へ照合付きで回転済み。protected `.codex-attachments/`と`.codex-remote-attachments/`は未追跡のまま保持。
+LOCAL_ASSET_STATUS: build出力は開発用生成物として保持。新規test fixture・一時領域・外部artifactは生成していない。
+
 ## 前段完了BUILD_BATCH — QE_BUILD / G04.03 macOS更新・復旧・削除
 
 主語はmacOS x64／arm64のpackaged `BlueTanukiSetup.sh`、resident launcher／LaunchAgent、`BlueTanukiUninstall.sh`とその実consumerである。目的は、native macOS runner上の隔離installで更新失敗rollback、中断更新からの復旧、resident再起動、権限拒否、ログの読取、通常削除後のDataRoot／ConfigRoot／runtime state／ログ保持、明示Purgeを別結果として確認すること。G04.03の実装接続であり、実機QAやmacOS再起動を証明しない。
