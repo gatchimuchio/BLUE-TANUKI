@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
+### 直近完了BUILD_BATCH — F08.02 MCP fixture toolからJ OperationPlan提案
+
+loopback・credentiallessのin-process MCP fixtureから、catalogued toolと合成引数をdigest-boundの`mcp.call` OperationPlan提案へ変換し、HDS-Jへ接続した。提案はmetadataとcatalog digestだけを参照し、最大潜在effects・high／L3・`adapter=none`を固定する。HDSは候補を保存するがstepを未選択のまま保ち、reviewから実行commandを出さない。実server process、environment／credential転送、`tools/call`、外部業務作用は含まない。
+
+Protocol catalog test 4/4、Gateway MCP adapter test 4/4、Protocol／HDS-BRAIN build、Gateway typecheckはPASS。これはF08.02 `adapter-fixture`の限定`WIRED` sliceであり、実process接続、F08.02全体、全MCP互換性、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを成立させない。次はrev4.0 F08.03の専用local MCP serverで、隔離した一作用・failure・停止・disconnectの実consumerへ進む。G09.01 Android→D4→BLUEは別repo権限がないため`BLOCKED_AUTHORITY`のまま保持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
 
 Linux installed packageのライフサイクルsmokeを既存manual workflowへ接続し、`workflow_dispatch` run [`43106832686`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43106832686) で `target_os=linux`を選択して実行した。source SHA=`1dda946d070ae5287529ed984e17a339374f59fc`、Ubuntu 24.04 x64、Linux installer SHA-256=`998fcdc347fecf11323e9a937a1a44f0a2923c9ff27d8e413b1754c494e1eb34`。初期Setup／Repair／通常利用、更新失敗rollback／中断復旧、autostart Exec restart、通常Uninstallでのdata/config/runtime state/log保持、再導入、隔離rootへの明示PurgeがPASS。選択外のmacOS jobsはskip、artifact uploadなし。
 
@@ -24,7 +30,7 @@ workspace typecheck、15 project build、core fixture 98 passed／6 skipped、HD
 
 smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。managed-tree inventoryのentry蓄積を`List[object].Add`へ変更し、各entryごとの配列複製を避けつつ、個別SHA-256、reparse拒否、path正規化、最終sortを維持した。Windows 11 Home x64の修正後installed smokeは終了コード0で、Setup／Repair、通常利用、Approval／Audit tamper拒否、crash recovery、stop／doctor／restart／safe-mode、update failure rollback、rollback後の旧install／設定／DataRoot保持、中断後の復旧と更新再開、通常Uninstall後のDataRoot保持、再導入、隔離rootの明示PurgeまでPASSした。初回runの600,000ms ETIMEDOUTは修正後の単一runで再現しなかったが、原因を性能改善と断定せず広範な性能評価にも拡張しない。provider=stub、実LLM／secret／外部作用なし。HKCU Run readbackはPASSしたがWindows本体の再起動は未実施。製品全体QE_BUILDは継続し、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
-### 直近完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
+### 前段完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
 
 2026-11-11、既存WebChat/GatewayのCanvas経路を合成CからJの委任目的関係・plan step審査、Approval Gate、隔離sandbox file.write、bytes結果照合、M receipt、owner明示達成規則、Gateway再起動後の復元まで一つのtaskで通す統合testを実行しPASSした。実環境はlocalhost Gatewayと固有Temp root、synthetic backend、fixture tokenのみ。試験は1件PASS／同file内7件skip。Temp root cleanupと元path不在を確認した。
 

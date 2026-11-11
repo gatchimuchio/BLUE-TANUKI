@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getOperationDescriptor,
   getToolOperationDescriptor,
+  MCP_CALL_POTENTIAL_EFFECTS,
   OPERATION_DESCRIPTOR_REGISTRY,
   requiredCapabilitiesForSurface,
   requireOperationDescriptor,
@@ -15,6 +16,7 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "file.write",
       "file.delete",
       "file.edit",
+      "memory.personalization.stop",
       "http.fetch",
       "web.search",
       "github.read",
@@ -91,6 +93,15 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
     expect(getToolOperationDescriptor("gmail.read")?.required_capabilities).toContain(
       "secrets:GOOGLE_ACCESS_TOKEN",
     );
+  });
+
+  it("keeps MCP calls proposal-only until a separate execution adapter is implemented", () => {
+    const descriptor = getOperationDescriptor("mcp.call");
+    expect(descriptor).toBeDefined();
+    expect(descriptor?.tool_name).toBeUndefined();
+    expect(descriptor?.adapter).toBe("none");
+    expect(descriptor?.effects).toEqual([...MCP_CALL_POTENTIAL_EFFECTS]);
+    expect(descriptor?.required_capabilities).toEqual([]);
   });
 
   it("derives operator permission envelopes from the shared operation catalog", () => {

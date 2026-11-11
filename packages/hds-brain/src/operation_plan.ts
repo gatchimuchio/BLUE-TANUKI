@@ -1892,6 +1892,9 @@ export function partitionOperationPlanCheckpointForRuntime(
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  // F08 fixture proposals bind catalog/connection identity but have no execution adapter.
+  // Keep them visible to J as plans while preventing step selection from issuing a tool command.
+  if (step.operation === "mcp.call") return false;
   if (step.operation === "file.search") {
     return step.target.kind === "directory" && step.target.id.length > 0 &&
       parameters?.root === step.target.id;

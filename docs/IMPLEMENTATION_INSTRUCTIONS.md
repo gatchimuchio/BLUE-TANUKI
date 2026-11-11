@@ -2,20 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — QE_BUILD / G03.03 Linux native installed lifecycle consumer
+## 直近完了BUILD_BATCH — QE_BUILD / F08.02 MCP fixture toolからJ OperationPlan提案
 
-主語はLinux x64配布物と、Ubuntu 24.04 native runnerでSetupから常駐利用・更新復旧・Uninstallまでを消費する製品経路である。目的は、WSLの限定証拠にLinux native runnerの同一package lifecycle consumerを接続し、更新失敗rollback、中断後の復旧、状態保持、再導入、明示Purgeを実際のLinux上で確認すること。
+主語は既存のMCP catalog adapterとHDS-JのOperationPlan consumerである。目的は、カタログ化した一つのMCP toolを非権威・非実行のOperationPlan提案へ結び、実serverのprocess／environment／networkをJやBrokerのauthority経路へ取り込まないこと。
 
-GitHub Actions `workflow_dispatch` run [`43106832686`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43106832686) は `target_os=linux`、source SHA=`1dda946d070ae5287529ed984e17a339374f59fc`、Ubuntu 24.04 x64でsuccess。package SHA-256=`998fcdc347fecf11323e9a937a1a44f0a2923c9ff27d8e413b1754c494e1eb34`。Linux packaged lifecycle smokeはSetup／Repair／first message／Approval・audit tamper／crash recovery／state-root isolation／update failure rollback／interrupted update recovery／autostart Exec restart／通常Uninstall後のdata・config・state保持／reinstall／隔離rootへの明示Purgeを通過した。`linux_installed_smoke=pass`。同runのmacOS jobsはselectorでskip。
+`inspectMcpCatalog`が返すloopback専用・credentialless・metadata-only投影へ接続digestとcatalog digestを結合し、`createMcpToolCallProposal`が合成引数と一意なtool名を検査して`mcp.call`候補を作る。候補はendpoint本文を含まず、最大潜在effectsとhigh／L3、`adapter=none`を固定する。HDSはplanを保持するが、`hasConnectedPlanTarget`で`mcp.call`を未接続として扱い、step reviewから実行commandを生成しない。MCP server process起動、environment／credential転送、`tools/call`、外部業務作用は追加していない。
 
-workflowへmanual-onlyの`target_os`選択（`all`既定、`linux`、`macos`）を追加し、既定の全Unix consumer実行を維持しつつ個別OSの限定runを可能にした。Linux native smokeを既存manual workflowへ接続した。ローカルYAML parse、manual-only／read-only permission／selector検査、`git diff --check`はPASS。`docs:check`はPASS（日本語基底移行負債75件の既存注意）。初回selector導入前の全OS run `43106467701`はmacOS重複実行を避けてcancelledで閉じ、証拠に使っていない。artifact uploadなし。
+ProtocolのOperation Catalog test 4/4、Gateway `mcp_connection_client.test.ts` 4/4、Protocol build、HDS-BRAIN build、Gateway typecheckはPASS。fixture serverはin-process Streamable HTTPでmetadataだけを提供し、tool call counterは0。Gateway試験はHDSのplan:compute→合成C候補→Jの保存・未選択→plan:review拒否を確認した。registryに既存登録済みの`memory.personalization.stop`がtest期待一覧から漏れていたため、その一覧だけ現行registryへ同期した。実process／secret／provider／外部作用、全suite、全MCP互換、QE_QC／QE_QAはNOT_RUN。
 
-UNIT_ID: G03.03（Linux native installed lifecycle consumerの限定slice）
-STATUS: WIRED（Ubuntu 24.04 hosted native consumerでLinux installed lifecycle smoke PASS。実logout／login・OS reboot、複数distribution、Linux QA、G03.03全体ではない）
-NEXT_REQUIRED_CONSUMER: G09.01のAndroid native producer→D4 Adapter→BLUE ingressは別repo変更権限がないためBLOCKED_AUTHORITY。D4 main／並行worktreeは読み取りのみ。BLUE内に第二Mobile／Broker経路を作らず、次の独立consumerを現行rev4.0とHEADから選ぶ。
-SAFETY_STATUS: 合成入力とrun固有isolated rootsのみ。provider／実credential／外部作用なし。Purgeはsmoke専用rootに限定。権限・HDS authority・release条件を変更していない。
-LOCAL_ASSET_STATUS: hosted runnerのpackageとsmoke rootはrunner上で使用後cleanup、artifact uploadなし。local package/temp assetは生成していない。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除はACL拒否のため未変更・保留。
-CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`550d31ba831485f19a5d856ada00ef8d2682daf2`、復旧current／previous=`550d31ba831485f19a5d856ada00ef8d2682daf2`／`38795324b1e5d077c1160a607dfe38216f03eb7b`。tested source `1dda946d070ae5287529ed984e17a339374f59fc`をsuccess後にmainへpush。docs closure commitはこのtested SHAの子。D4-Pocketは読み取りのみ（remote／main=`8da02d7eae0ea518618e9fc322fa81dcfbbd03b3`、`C:\d4-qe-main`に並行dirty変更あり）。
+UNIT_ID: F08.02（`adapter-fixture`のtool→OperationPlan提案・非実行境界に限る）
+STATUS: WIRED（fixture catalogからJのplan保存・未接続step保護まで。MCP実server process／tools/callやF08.02全体ではない）
+NEXT_REQUIRED_CONSUMER: F08.03の`native-live`として、専用local MCP serverを設定・起動し一作用・failure・停止・disconnectまで実consumerへ接続する。process／environment／networkの隔離を明示し、合成データだけで検証する。G09.01のAndroid producer→D4 Adapter→BLUE ingressは別repo変更権限がないため`BLOCKED_AUTHORITY`のまま別経路として保持する。
+SAFETY_STATUS: in-process synthetic fixture・loopback metadata discoveryのみ。HDS-J／Approval／L3／Broker／M非権限／監査／fail-closedを維持。tool callなし、server process未起動、credential／外部providerなし。proposalは実行adapter未接続。
+LOCAL_ASSET_STATUS: test固有temp rootは終了後削除確認。Protocol／HDS build出力はignoredの開発用生成物として保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は保持。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataはfetch時のACL拒否により変更せず保留。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`df30099de61059327e7149c211dbf282eef728d1`、ahead／behind=`0/0`。local recovery branch／remote tagはcurrent=`df30099de61059327e7149c211dbf282eef728d1`、previous=`2adb334042f100f44ff5be4c4ffa5f69157d8293`。worktreeはmainのみ。protected添付2領域は未追跡・未変更。D4-Pocketは変更していない。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows DPAPI資格情報を含むDataRoot保持・再導入・Purge
 
@@ -64,7 +64,7 @@ CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`8816fd4f6f77
 
 Gateway依存7 workspace project buildと`failure_review_runtime.test.ts` 11/11はPASS。actor不一致・channel不一致の負例は投影なし。`git diff --check`と`docs:check`の結果は同batchの進捗記録を参照する。全suite、実provider／credential／FailureReview往復、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。このextensionだけをE04.02の限定`WIRED`とし、工程全体や製品全体完成へ拡張しない。次の独立BUILD_BATCHでは現行rev4.0とHEADからconsumerを再選定する。G09.01はD4 adapter producer→BLUE ingressの別repo権限がないため`BLOCKED_AUTHORITY`のまま保持する。
 
-## 現在の阻害状態 — QE_BUILD / G09.01 Android導入・起動・初期設定
+## 保留中の別経路 — QE_BUILD / G09.01 Android導入・起動・初期設定
 
 主語はAndroid native Mobile入力・認証・仕事ID／結果producerと、Desktop BrokerおよびBLUE Gateway／C／J／M consumerである。目的はD4の既存Device Link契約を通じて一仕事を実consumerまで接続すること。rev4.0のBT-R-G09-01／02に対し、この単位は未完了であり、G09.01全体を`WIRED`または完了と扱わない。
 

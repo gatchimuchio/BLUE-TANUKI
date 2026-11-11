@@ -18,6 +18,19 @@ export interface OperationDescriptor {
 
 type DescriptorInput = Omit<OperationDescriptor, "descriptor_version">;
 
+/** Maximum plausible effects of an unreviewed MCP tool proposal. */
+export const MCP_CALL_POTENTIAL_EFFECTS = Object.freeze([
+  "browser_action",
+  "credential_access",
+  "delete",
+  "external_send",
+  "process_spawn",
+  "read",
+  "schedule_change",
+  "settings_change",
+  "write",
+] as const satisfies readonly OperationEffect[]);
+
 function freezeDescriptor(input: DescriptorInput): OperationDescriptor {
   return Object.freeze({
     ...input,
@@ -403,6 +416,14 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     ["write", "delete"],
     ["tool:recovery.factory_reset", "recovery:factory_reset", "fs:write", "fs:delete"],
     15_000,
+  ),
+  operationDescriptor(
+    "mcp.call",
+    "apps/gateway/src/mcp_connection_client.ts#createMcpToolCallProposal",
+    "none",
+    MCP_CALL_POTENTIAL_EFFECTS,
+    [],
+    10_000,
   ),
   operationDescriptor(
     "llm.call",
