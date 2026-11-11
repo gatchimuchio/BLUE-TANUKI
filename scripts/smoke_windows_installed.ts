@@ -32,6 +32,31 @@ const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const UNINSTALL_TIMEOUT_MS = 60_000;
 let isolatedChildEnv: Record<string, string> = {};
 
+function smokeChildEnvironment(extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+  const system32 = path.win32.join(systemRoot, "System32");
+  const profile = isolatedChildEnv.USERPROFILE;
+  if (!profile) throw new Error("isolated Windows smoke profile is not initialized");
+  const systemDrive = process.env.SystemDrive ?? path.win32.parse(systemRoot).root.replace(/[\\/]+$/, "");
+
+  return {
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
+    SystemDrive: systemDrive || "C:",
+    ComSpec: path.win32.join(system32, "cmd.exe"),
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    PATH: [
+      system32,
+      path.win32.join(system32, "Wbem"),
+      path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"),
+    ].join(path.delimiter),
+    OS: "Windows_NT",
+    ...isolatedChildEnv,
+    BLUE_TANUKI_NO_PAUSE: "1",
+    ...extraEnv,
+  };
+}
+
 function argValue(name: string): string | undefined {
   const prefix = `${name}=`;
   for (let i = 2; i < process.argv.length; i += 1) {
@@ -66,7 +91,7 @@ function run(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: smokeChildEnvironment(extraEnv),
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -93,7 +118,7 @@ function runAllowing(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: smokeChildEnvironment(extraEnv),
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -120,7 +145,7 @@ function runExpectingStatus(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: smokeChildEnvironment(extraEnv),
     stdio: "pipe",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -341,7 +366,7 @@ async function interruptWindowsInstallerAfterRollbackMove(
 ): Promise<void> {
   const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", setupHook], {
     cwd,
-    env: { ...process.env, ...isolatedChildEnv, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    env: smokeChildEnvironment(extraEnv),
     stdio: "ignore",
     windowsHide: true,
   });
@@ -675,14 +700,12 @@ function readInstalledGatewayProcessAndListeners(
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...isolatedChildEnv,
+    env: smokeChildEnvironment({
       BLUE_TANUKI_DIAG_PID: String(pid ?? 0),
       BLUE_TANUKI_DIAG_PORT: String(port),
       BLUE_TANUKI_DIAG_NODE: expectedNodePath,
       BLUE_TANUKI_DIAG_ENV_FILE: expectedEnvFile,
-    },
+    }),
     encoding: "utf8",
     stdio: "pipe",
     timeout: 15_000,
@@ -919,6 +942,10 @@ async function main(): Promise<void> {
     LOCALAPPDATA: isolatedLocalAppData,
     TEMP: isolatedTemp,
     TMP: isolatedTemp,
+    USERPROFILE: isolatedProfile,
+    HOME: isolatedProfile,
+    HOMEDRIVE: path.win32.parse(isolatedProfile).root.replace(/[\\/]+$/, ""),
+    HOMEPATH: isolatedProfile.slice(path.win32.parse(isolatedProfile).root.replace(/[\\/]+$/, "").length),
     WEBCHAT_HOST: "127.0.0.1",
     WEBCHAT_PORT: String(smokePort),
   };

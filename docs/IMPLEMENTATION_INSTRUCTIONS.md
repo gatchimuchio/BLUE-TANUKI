@@ -2,7 +2,23 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F17.03 Canvasからsynthetic C・J・Broker・M receiptまでのローカル縦断
+## 現行BUILD_BATCH — QE_BUILD / G02.03 Windows installed smoke子process環境の秘密分離
+
+主語はWindows installed smoke runnerが起動するPowerShell／cmd／Gateway子processである。目的は、ホストのcredential・任意環境変数をinstalled productへ継承せず、run固有profile／APPDATA／LOCALAPPDATA／TEMPとWindows必須system環境だけを渡しながら、Windows installed consumerを隔離確認すること。
+
+`scripts/smoke_windows_installed.ts`に子process用allowlist環境を追加した。SystemRoot／WINDIR／SystemDrive／ComSpec／PATHEXT／system-only PATH／OSと、run固有APPDATA／LOCALAPPDATA／TEMP／TMP／USERPROFILE／HOME／HOMEDRIVE／HOMEPATHを渡す。五つのPowerShell／cmd／Node spawn siteから親`process.env`全体の継承をなくした。smokeを同じWindows hostで一回実行し、package verify、source guidance／dry-run、Setup／Repair、autostart、port-conflict拒否、Gateway health／WebSocket first-message、Approval／Audit、crash recovery、stop／doctor／restart／safe-modeはPASSした。env fileは`provider=stub`、実LLM／provider secretなし。
+
+更新失敗failpointは旧installのbackup move後に到達したが、Setup transactionが600,000msの上限を超え、runnerは`spawnSync powershell.exe ETIMEDOUT`で終了した。更新結果、後続の中断復旧、DataRoot保持Uninstallの成立証拠にはしない。finallyの明示Purgeによりrun固有InstallRoot／DataRootは不在、HKCU Uninstall／一意Run登録も不在。processは残っていない。runnerがstageを検証・削除できなかったためwork rootを意図的に保持した。`%LOCALAPPDATA%\BTsmoke\w-x8Lq7k`は10,092 files／283,305,471 bytesで、合成package／audit fixture／残留stageだけを含む。原因調査が終わるまで保持し、強制cleanupしない。
+
+対象package SHA-256=`5969d518d68a7a1fe12c7523cbef418fa67b30341fb28b5aea673c210ff8abe7`。本run前mainはlocal／origin／GitHub `4ad06ff40488b14dbd7ec5aa81829730f05dcce0`一致。編集前recovery refsはcurrent=`4ad06ff40488b14dbd7ec5aa81829730f05dcce0`／previous=`f1bfb122d795cdf19101b610ce79180cced6a100`へ照合付き回転済み。`install/windows/product/BlueTanukiSetup.ps1`と`install/windows/safe-target.ps1`は過去のWindows 2022 run `42968413273`以降変更なしである。同runのG02.03成功証拠は保持するが、今回local timeoutをPASSへ読み替えない。製品全体BUILD_COVERED／QC／QAは未成立。
+
+UNIT_ID: G02.03（Windows smoke runner環境隔離。製品update rollbackのlocal再確認は未完了）
+STATUS: WIRED（子processのallowlist環境を五つのspawn siteへ接続。local installed smokeは前半consumer PASS、update failure処理はETIMEDOUT／結果未確認）
+NEXT_REQUIRED_CONSUMER: 最新rev4.0／HEADから製品全体の次の未接続consumerを再選定する。G02.03の製品経路はWindows 2022 run `42968413273`で限定WIRED済みだが、local timeoutのhost性能根因と残留stageは必要時に調査する。timeout拡張でPASSへ寄せない。C08.03実provider、別repo変更、Rust cutover、公開・出荷判断は引き続き保留。
+SAFETY_STATUS: 子processへホストcredential類を継承しない。smokeはstub／専用Tempのみ。実ユーザーデータ・実provider・外部作用なし。失敗work rootは内容確認済み／現存processなし／registryなし／stageを含むため保留。
+LOCAL_ASSET_STATUS: `release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip` 48,409,785 bytes・SHA-256上記を検証用packageとして保持。`%LOCALAPPDATA%\BTsmoke\w-x8Lq7k` 283,305,471 bytes／10,092 filesは未解決stageを含む回復・調査用として保持。protected attachments、開発依存環境、OneDrive同期領域は変更・削除しない。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F17.03 Canvasからsynthetic C・J・Broker・M receiptまでのローカル縦断
 
 主語はWebChat Control Centerが表示するCanvas成果物と、その本文を使うowner-authenticated Task経路である。目的は、Canvas生成応答のrequest ID／MIME／UTF-8本文／SHA-256／versionへ束縛したowner意図を一回限り親Cへ送り、既存Jの委任目的関係・plan step審査、Approval Gate、隔離Broker file.write、結果照合、M receipt、ownerの明示達成規則、再起動復元まで同一taskで接続すること。
 

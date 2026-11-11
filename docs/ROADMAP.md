@@ -6,6 +6,10 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 現在の補助BUILD_BATCH — G02.03 Windows smoke runnerの子process環境隔離
+
+smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。Windows local package smokeはSetup／Repair／通常利用、approval／audit、restart／safe-modeまでPASSした。更新failpointは到達したがSetupが600,000msでETIMEDOUTとなり、更新結果・中断復旧・DataRoot保持の今回実行は未成立。cleanupで隔離InstallRoot／DataRoot／HKCU登録は不在。検証未完のstageを含むTemp root（10,092 files／283,305,471 bytes）は調査用に保持する。製品Setup／safe-targetは過去のWindows 2022 run `42968413273`以降変更なし。同runの限定PASSは維持し、今回のlocal timeoutを成功にも製品全体のFAILにも拡張しない。製品全体QE_BUILDは継続、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
 ### 直近完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
 
 2026-11-11、既存WebChat/GatewayのCanvas経路を合成CからJの委任目的関係・plan step審査、Approval Gate、隔離sandbox file.write、bytes結果照合、M receipt、owner明示達成規則、Gateway再起動後の復元まで一つのtaskで通す統合testを実行しPASSした。実環境はlocalhost Gatewayと固有Temp root、synthetic backend、fixture tokenのみ。試験は1件PASS／同file内7件skip。Temp root cleanupと元path不在を確認した。
