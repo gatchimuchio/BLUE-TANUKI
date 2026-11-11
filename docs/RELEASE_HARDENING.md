@@ -8,6 +8,7 @@ path ではない。
 ## 現在の境界
 
 - 現在の RC は signed native installer ではない。
+- macOS の one-file `.command` installer は unsigned とmanifestへ明示し、package builderはApple notary serviceへ提出しない。native macOS smokeは実installerのcode signatureとGatekeeper assessment状態を読み取り、OS保護設定を変更しない。notarization submission/ticketのライブ照会は行わず、`not_submitted_by_builder` はこのbuilderの構成記録である。
 - 現在の RC は automatic updater を持たない。
 - GitHub Actions is a manually dispatched auxiliary for eligible OS builds, artifacts, or heavy tests.
 - runtime_auto_apply_available=false。

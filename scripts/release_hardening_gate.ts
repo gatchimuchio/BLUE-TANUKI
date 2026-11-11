@@ -208,6 +208,12 @@ function assertInstallerBoundary(root: string): void {
     productInstallers,
     "signed_native_installer: false",
   );
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "macos_distribution");
+  requireIncludes(
+    "scripts/package_product_installers.ts",
+    productInstallers,
+    'notarization_submission: "not_submitted_by_builder"',
+  );
   requireIncludes(
     "scripts/package_product_installers.ts",
     productInstallers,

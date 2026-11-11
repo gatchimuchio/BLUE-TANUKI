@@ -43,6 +43,10 @@ interface ProductInstallerManifest {
     hds_authority_modified?: boolean;
     installer_autostart?: boolean;
   };
+  macos_distribution?: {
+    installer_code_signature?: string;
+    notarization_submission?: string;
+  };
 }
 
 interface ProductInstallerTarget {
@@ -181,6 +185,16 @@ function assertManifest(
   if (manifest.boundaries?.gui_shell_modified !== false) throw new Error("manifest must declare gui_shell_modified=false");
   if (manifest.boundaries?.hds_authority_modified !== false) throw new Error("manifest must declare hds_authority_modified=false");
   if (manifest.boundaries?.installer_autostart !== false) throw new Error("manifest must declare installer_autostart=false");
+  if (target.os === "macos") {
+    if (manifest.macos_distribution?.installer_code_signature !== "unsigned") {
+      throw new Error("macOS manifest must declare installer_code_signature=unsigned");
+    }
+    if (manifest.macos_distribution?.notarization_submission !== "not_submitted_by_builder") {
+      throw new Error("macOS manifest must declare notarization_submission=not_submitted_by_builder");
+    }
+  } else if (manifest.macos_distribution !== undefined) {
+    throw new Error("non-macOS manifest must not include macos_distribution status");
+  }
 }
 
 function assertNoNormalUserBuildPath(target: ProductInstallerTarget): void {
@@ -250,6 +264,10 @@ function verifyTarget(target: ProductInstallerTarget): void {
   console.log("requires_manual_nested_extraction=false");
   console.log("user_requires_node_pnpm_git=false");
   console.log("requires_source_build=false");
+  if (target.os === "macos") {
+    console.log("macos_installer_code_signature=unsigned");
+    console.log("macos_notarization_submission=not_submitted_by_builder");
+  }
 }
 
 function main(): void {

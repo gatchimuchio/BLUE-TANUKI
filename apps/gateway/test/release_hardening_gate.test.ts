@@ -77,6 +77,7 @@ async function writeFixture(opts: {
       "export const manifest = {",
       "  unsigned_installer: true,",
       "  signed_native_installer: false,",
+      '  macos_distribution: { installer_code_signature: "unsigned", notarization_submission: "not_submitted_by_builder" },',
       "  requires_node_pnpm_git_from_user: false,",
       "  requires_manual_nested_extraction: false,",
       "};",

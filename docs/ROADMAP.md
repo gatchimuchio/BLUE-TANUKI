@@ -6,9 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近BUILD_BATCH — G04.01 macOS単体配布物から導入・通常利用への接続
+### 直近BUILD_BATCH — G04.02 macOS署名・Gatekeeper保護境界
 
-C08.02は前段の完了履歴であり、限定合成C/J/M経路を`WIRED`として閉じた。G04.01ではmacOS x64／arm64のone-file `.command` installerをnative runnerでbuild／verifyし、Node／pnpmのないPATHから隔離導入・同梱Node起動・`/healthz`／`/app` HTTP 200・resident停止・一時root cleanupを通した。run `42976127050`（source SHA `9e00413cc82e99998fb87a4bfe5402deaa791566`）はLinux既存job、macOS x64、arm64が全成功。これは限定macOS BUILD consumerの`WIRED`証拠であり、署名／notarization、通常Uninstall、OS再起動、資格情報・browser/worker境界、native QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。次consumerはG04.02 macOS通常利用・保護境界。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
+G04.01ではmacOS x64／arm64のone-file `.command` installerをnative runnerでbuild／verifyし、隔離導入・同梱Node起動・`/healthz`／`/app` HTTP 200・resident停止まで確認済み。G04.02はそのpackage consumerへ署名／notarization状態の事実記録とOS保護の読取確認を結ぶ。product manifestはinstaller code signatureがunsigned、builderはnotary serviceへ未提出と明示し、package verifierがOS対象に応じて検証する。native smokeは`codesign`でinstaller自体の状態を照合し、`spctl --status`でGatekeeper assessment enabledを導入前後に読み、設定を変更しない。resident autostartの既定disabledも確認する。
+
+作業開始HEAD=`bbfd40ed6586798f53ff3ea4a9e4fd051f2f84e6`。署名／notarization資格情報、実provider、利用者秘密は使わず、コード署名・notary submission・quarantined download QAは実施しない。Gatekeeperが無効なら変更せず停止する。これはG04.02の限定QE_BUILD接続であり、G04.02全体、G04親成果、macOS QA、G04.03、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やQE_QC／QE_QA、release／owner GOを成立させない。C08.03実providerはBLUE本体の全体成立が先行するまで保留する。
 
 ### 前段BUILD_BATCH記録 — G02.03 Windows update失敗rollback・中断復旧・DataRoot保持
 

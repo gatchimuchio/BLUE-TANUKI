@@ -56,6 +56,10 @@ interface ProductInstallerManifest {
     hds_authority_modified: false;
     installer_autostart: false;
   };
+  macos_distribution?: {
+    installer_code_signature: "unsigned";
+    notarization_submission: "not_submitted_by_builder";
+  };
 }
 
 const PAYLOAD_MARKER = "__BLUE_TANUKI_INSTALLER_PAYLOAD_BASE64_BELOW__";
@@ -332,6 +336,14 @@ async function writeProductInstaller(target: ProductInstallerTarget): Promise<vo
       hds_authority_modified: false,
       installer_autostart: false,
     },
+    ...(target.os === "macos"
+      ? {
+          macos_distribution: {
+            installer_code_signature: "unsigned" as const,
+            notarization_submission: "not_submitted_by_builder" as const,
+          },
+        }
+      : {}),
   };
   await writeFile(`${target.outputPath}.sha256`, `${installerSha}  ${path.basename(target.outputPath)}\n`, "utf8");
   await writeFile(`${target.outputPath}.manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -348,6 +360,10 @@ async function writeProductInstaller(target: ProductInstallerTarget): Promise<vo
   console.log("user_requires_node_pnpm_git=false");
   console.log("requires_source_build=false");
   console.log("unsigned_installer=true");
+  if (target.os === "macos") {
+    console.log("macos_installer_code_signature=unsigned");
+    console.log("macos_notarization_submission=not_submitted_by_builder");
+  }
 }
 
 async function main(): Promise<void> {

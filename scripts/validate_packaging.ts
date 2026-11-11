@@ -362,6 +362,9 @@ function main(): void {
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_source_build: false");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "unsigned_installer: true");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "signed_native_installer: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "macos_distribution");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, 'installer_code_signature: "unsigned"');
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, 'notarization_submission: "not_submitted_by_builder"');
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-windows-x64.cmd");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-linux-x64.run");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-macos-x64.command");
@@ -403,6 +406,15 @@ function main(): void {
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "user_requires_node_pnpm_git=false");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "requires_source_build=false");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "signed_native_installer=false");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "installer_code_signature=unsigned");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "notarization_submission=not_submitted_by_builder");
+  const smokeMacosInstalled = read("scripts/smoke_macos_product_installed.sh");
+  requireIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "/usr/sbin/spctl --status");
+  requireIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "/usr/bin/codesign --display --verbose=2");
+  requireIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "resident-autostart-status");
+  requireNotIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "spctl --master-disable");
+  requireNotIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "xattr -d com.apple.quarantine");
+  requireNotIncludes("scripts/smoke_macos_product_installed.sh", smokeMacosInstalled, "csrutil disable");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "corepack");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "pnpm");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "BuildFromSource");

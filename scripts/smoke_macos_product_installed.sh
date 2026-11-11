@@ -48,6 +48,20 @@ config_root="$work_root/config"
 runtime_root="$work_root/runtime"
 bin_root="$work_root/bin"
 launcher="$install_root/BlueTanukiLauncher.sh"
+gatekeeper_before=""
+
+read_gatekeeper_status() {
+  local result
+  result=$(/usr/sbin/spctl --status 2>&1) || {
+    printf 'gatekeeper_status_read=fail detail=%s\n' "$result" >&2
+    return 1
+  }
+  case "$result" in
+    *"assessments enabled"*) printf 'enabled' ;;
+    *"assessments disabled"*) printf 'disabled' ;;
+    *) printf 'unknown' ;;
+  esac
+}
 
 cleanup() {
   status=$?
@@ -55,6 +69,16 @@ cleanup() {
   set +e
   if [[ -x "$launcher" ]]; then
     "$launcher" resident-stop >/dev/null 2>&1
+  fi
+  if [[ -n "$gatekeeper_before" ]]; then
+    gatekeeper_after=$(read_gatekeeper_status) || { status=1; gatekeeper_after=unreadable; }
+    printf 'gatekeeper_assessment_after=%s\n' "$gatekeeper_after"
+    if [[ "$gatekeeper_after" != "$gatekeeper_before" ]]; then
+      printf 'gatekeeper_assessment_changed=fail before=%s after=%s\n' "$gatekeeper_before" "$gatekeeper_after" >&2
+      status=1
+    else
+      printf 'gatekeeper_assessment_unchanged=pass\n'
+    fi
   fi
   case "$work_root" in
     "$tmp_parent"/blue-tanuki-g0401-macos.*)
@@ -75,6 +99,47 @@ trap 'exit 143' TERM
 
 mkdir -p "$home_root" "$work_root/tmp" "$bin_root"
 chmod 700 "$work_root" "$home_root" "$work_root/tmp"
+
+manifest_file="${installer}.manifest.json"
+[[ -f "$manifest_file" ]] || { printf 'product_installer_manifest_missing=fail\n' >&2; exit 1; }
+grep -Fq '"installer_code_signature": "unsigned"' "$manifest_file" || {
+  printf 'manifest_installer_code_signature=fail expected=unsigned\n' >&2
+  exit 1
+}
+grep -Fq '"notarization_submission": "not_submitted_by_builder"' "$manifest_file" || {
+  printf 'manifest_notarization_submission=fail expected=not_submitted_by_builder\n' >&2
+  exit 1
+}
+printf 'macos_notarization_submission=not_submitted_by_builder\n'
+
+gatekeeper_before=$(read_gatekeeper_status) || exit 1
+printf 'gatekeeper_assessment_before=%s\n' "$gatekeeper_before"
+[[ "$gatekeeper_before" == enabled ]] || {
+  printf 'gatekeeper_assessment_precondition=fail expected=enabled\n' >&2
+  exit 1
+}
+
+codesign_display_log="$work_root/codesign-display.log"
+codesign_verify_log="$work_root/codesign-verify.log"
+if /usr/bin/codesign --display --verbose=2 "$installer" >"$codesign_display_log" 2>&1; then
+  if /usr/bin/codesign --verify --deep --strict --verbose=2 "$installer" >"$codesign_verify_log" 2>&1; then
+    installer_code_signature=valid
+  else
+    installer_code_signature=invalid
+  fi
+elif grep -Fq 'code object is not signed at all' "$codesign_display_log"; then
+  installer_code_signature=unsigned
+else
+  cat "$codesign_display_log" >&2
+  printf 'installer_code_signature=unknown\n' >&2
+  exit 1
+fi
+printf 'macos_installer_code_signature=%s\n' "$installer_code_signature"
+[[ "$installer_code_signature" == unsigned ]] || {
+  printf 'installer_manifest_signature_mismatch=fail expected=unsigned actual=%s\n' "$installer_code_signature" >&2
+  exit 1
+}
+
 export HOME="$home_root"
 export TMPDIR="$work_root/tmp"
 export XDG_CONFIG_HOME="$work_root/xdg-config"
@@ -96,6 +161,12 @@ shasum -a 256 "$installer" | awk '{print $1}'
   --no-launch \
   --skip-doctor
 printf 'one_file_product_install_result=pass\n'
+
+"$bin_root/blue-tanuki" resident-autostart-status | grep -Fq 'autostart_status=disabled' || {
+  printf 'resident_autostart_default=fail expected=disabled\n' >&2
+  exit 1
+}
+printf 'resident_autostart_default=disabled\n'
 
 env_file="$config_root/blue-tanuki.env"
 [[ -f "$env_file" ]] || { printf 'installed_env_missing=fail\n' >&2; exit 1; }
