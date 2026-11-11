@@ -6,7 +6,7 @@
 
 主語はmacOS x64／arm64向けone-file `.command` product installer、同梱Node runtime、installed Gateway。目的は、native macOS上で単体配布物を導入し、開発用Node／pnpmなしに同梱runtimeで起動・loopback利用・停止するconsumerを実際に接続すること。既存Unix smokeは展開済みtar payloadを直接Setupへ渡すため、one-file wrapper経路のnative証拠がない。
 
-追加する`.github/workflows/macos-installed-package-build-smoke.yml`は`workflow_dispatch`だけをtriggerにし、選択SHAをcheckoutする。x64は`macos-15-intel`、arm64は`macos-15`で個別にnative payloadとproduct installerをbuild／verifyし、隔離HOMEとrun固有一時rootでone-file `.command`を起動する。installed PATHからNode／pnpmを除き、同梱Nodeのplatform／architecture、env file mode、`/healthz`・`/app`、resident停止を確認する。token権限は`contents: read`だけで、secret／artifact uploadはない。
+既存の`.github/workflows/linux-installed-package-build-smoke.yml`をUnix共通の`workflow_dispatch` workflowへ拡張し、選択SHAをcheckoutする。Linux jobは維持する。x64は`macos-15-intel`、arm64は`macos-15`で個別にnative payloadとproduct installerをbuild／verifyし、隔離HOMEとrun固有一時rootでone-file `.command`を起動する。installed PATHからNode／pnpmを除き、同梱Nodeのplatform／architecture、env file mode、`/healthz`・`/app`、resident停止を確認する。token権限は`contents: read`だけで、secret／artifact uploadはない。
 
 Windows開発環境ではnative macOS動作を検証できず、実行shell parserも備えていない。workflowを固定したbranch SHAへdispatchして両architectureのBUILD疎通を確認後、同一の成功commitだけをmainへ反映する。現時点ではActions未実行のためSTATUSはIN_PROGRESS。製品全体の実装、更新／Uninstall／OS再起動、macOS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。
 
