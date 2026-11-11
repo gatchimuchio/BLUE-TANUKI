@@ -12,7 +12,7 @@ FailureReviewのtool-scope allowlistへ既存read-only `google.calendar.read`と
 
 `corepack pnpm --filter @blue-tanuki/gateway... build`は7 workspace projectでPASS。`apps/gateway/test/failure_review_runtime.test.ts`は11/11 PASS（calendar／drive各成功producer、actor/channel不一致各負例、および既存7件を含む）。focused testはSQLite ExperimentalWarningを表示したが成功。`docs:check`、`git diff --check`はPASS。full test suite、実FailureReview往復、Google API／credential／LLM provider、外部作用、installed製品、5OS、QE_QC／QE_QAはNOT_RUN。
 
-これはE04.02のcalendar／drive history observation extensionのみを限定`WIRED`とする。E04.02全体、FailureReviewが原因や外部状態を証明すること、FailureGateによる再開、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立させない。workspace build出力は再利用用として保持し、test固有temporary fileは作成していない。次の独立作業ではrev4.0と最新HEADから未接続consumerを再選定する。G09.01はD4 adapter→BLUE ingressの別repo producerが未接続かつ限定権限外のため`BLOCKED_AUTHORITY`を維持する。
+これはE04.02のcalendar／drive history observation extensionのみを限定`WIRED`とする。E04.02全体、FailureReviewが原因や外部状態を証明すること、FailureGateによる再開、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立させない。生成物は7 workspace `dist`とWindows isolation `target`の計1,075 file／108,645,974 bytesで、稼働中のWindows build環境として保持。test固有temporary fileは作成していない。次の独立作業ではrev4.0と最新HEADから未接続consumerを再選定する。G09.01はD4 adapter→BLUE ingressの別repo producerが未接続かつ限定権限外のため`BLOCKED_AUTHORITY`を維持する。
 
 ---
 
