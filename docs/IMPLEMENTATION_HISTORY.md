@@ -2,6 +2,23 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QEB-PACKAGE-MCP-RUNTIME-CLOSURE-MACOS
+
+主語はWindows上でmacOS x64／arm64向けinstallerを作るUnix package builderである。開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0、main worktreeのみ。開始時recovery branch/tag current=`e02bb47994aa4d926ce853bbda742542059b819a`、previous=`e9a22d710c3155ade913ef83e60ad042e4f16b3a`。protected `.codex-attachments/`／`.codex-remote-attachments/`と既存WSL `packages/blue-tanuki/native/linux-isolation/target/`は作業前から存在し、未変更。
+
+従来`scripts/package_unix.ts`は`.codex-tmp/<platform>-<arch>-package`を開始時に再帰削除し、`.codex-tmp/unix-runtime-cache`にruntime archiveを置いていた。macOS x64／arm64の固定stage 2件はOneDrive reparse point領域で既存データを含み、公式Node archive cacheも同じ同期領域にあった。これらは削除・更新せず保持した。builderは`mkdtemp`でOS Temp下に一意な作業rootを確保し、同rootにpackage stageとruntime cacheを置く。これにより既存固定stageや共有cacheへ触れず、異なるrunのscratchを衝突させない。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm package:macos` | PASS：Windows host上でx64／arm64 tar installerを生成、Node archive SHAを照合。 |
+| `corepack pnpm package:macos:verify` | PASS：各architecture 3,746 entries、MCP client/core/transitive dependencyとplatform keyring entriesを確認。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。 |
+| `git diff --check`／`corepack pnpm docs:check` | PASS。 |
+| native macOS build／署名／installed runtime／shell isolation／実macOS host、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。Windowsでのpackage生成・検証に限定し、macOS runtime・製品完成の証拠とはしない。 |
+
+生成物分類：`release/macos`のx64／arm64 archive、各checksum／manifest、共通READMEの計7件・128,065,469 bytesを現在build artifactとして保持。作業用OS Temp root 2件は各3,757 entries、x64 151,504,888 bytes／arm64 148,194,221 bytesで、reparse pointのないtask-owned regular directoriesと確認後、検証を終えてWindows標準ごみ箱へ移動。元path消失、ごみ箱内に名前一致2件を確認。計299,699,109 bytesを移動し、ごみ箱の最終処分はしていない。OneDrive固定stageはx64 85,959,773 bytes／arm64 84,270,102 bytes、runtime archiveはx64 48,656,392 bytes／arm64 47,035,396 bytesで、作業前後のサイズ・更新時刻が不変。`release/macos`以外の既存protected attachments、WSL target、OneDrive reparse dataは変更なし。macOS native shell isolationは未接続・無効のまま。
+
+このBUILD_BATCHはpackage producer→archive verifierの限定`WIRED`である。macOS host runtime、installed lifecycle、shell execution、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。実装・active docsのcommit／push、recovery ref、終了時main一致は本記録確定後に照合し追記する。
+
 ## 2026-11-13 — QEB-PACKAGE-MCP-RUNTIME-CLOSURE-WINDOWS-LINUX
 
 主語は`copyAppLayout`を使うWindows／Unix package builderと、導入後にMCP clientをimportするGatewayである。開始時local／`origin/main`／GitHub `main`=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`、ahead／behind=0/0、worktreeはmainのみ。開始local recovery branch current=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`／previous=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`。remote recovery tagも直接`git ls-remote`でcurrent=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`／previous=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。

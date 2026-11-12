@@ -2,6 +2,25 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / macOS配布物のMCP runtime依存閉包と一時領域保護
+
+主語はWindows上でmacOS x64／arm64向けinstallerを作るUnix package builderである。目的は、MCP client runtimeを含む配布物を生成・検証し、作業前から存在するOneDrive同期領域やreparse pointをbuilderが削除・上書きしないようにすること。macOS実機動作やmacOS製品全体の完成を示す作業ではない。
+
+従来builderは固定された`.codex-tmp/macos-<arch>-package`を開始時に再帰削除し、共有runtime cacheも書換え得た。現物調査で固定stageがOneDrive reparse point配下の既存内容を含むと確認したため、それらには触れず、builderのstageとruntime archive cacheをWindows OS Temp下の一意な`mkdtemp` rootへ分離した。既存のOneDrive stage／cacheは作業前後でサイズ・更新時刻が不変であることを再確認した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm package:macos`／`corepack pnpm package:macos:verify` | PASS。Windows host上でmacOS x64／arm64 unsigned archiveを生成。各3,746 entries。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。MCP client closureとplatform keyring entriesをverifierで確認。 |
+| `git diff --check`／`corepack pnpm docs:check` | PASS。 |
+| macOS native build／署名／installed runtime／shell isolation／実macOS host、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。Windows上のarchive生成・静的検証だけであり、native macOS実行証拠へ拡張しない。 |
+
+UNIT_ID: macOS x64／arm64 installer package producer → archive verifier
+STATUS: WIRED（Windows host上でのpackage生成とarchive内容の検証に限定）
+NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、現行rev4.0と実物から未接続consumerを選ぶ。macOS native shell isolationは未成立であり、実行・権限・作用路として有効化しない。
+SAFETY_STATUS: 既存`.codex-tmp/macos-x64-package`（85,959,773 bytes）、`.codex-tmp/macos-arm64-package`（84,270,102 bytes）、`.codex-tmp/unix-runtime-cache/node-v22.14.0-darwin-x64.tar.gz`（48,656,392 bytes）、`node-v22.14.0-darwin-arm64.tar.gz`（47,035,396 bytes）はOneDrive reparse pointを含むため保持し、作業前後のサイズ・更新時刻不変を確認。builderは新規一意Temp配下だけを使用した。
+LOCAL_ASSET_STATUS: `release/macos`にinstaller 2件と各checksum／manifest／共通READMEの計7ファイル（128,065,469 bytes）を現在build artifactとして保持。task-owned Temp stage 2件（3,757 entriesずつ、151,504,888 bytes／148,194,221 bytes、計299,699,109 bytes）は検証後にWindowsごみ箱へ移動し、元path消失とごみ箱内の2件を確認。ごみ箱は空にしていない。protected `.codex-attachments/`／`.codex-remote-attachments/`とWSL Linux `target/`は未変更。生成したrelease artifactを公開・署名していない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0。source変更は`scripts/package_unix.ts`と本作業の現行docs記録のみ。commit/pushおよび終了時recovery refは履歴記録後に更新する。
+
 ## 完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
 
 主語は`copyAppLayout`を使うWindows／Unix package builderと、導入後にMCP接続clientをimportするGatewayである。目的は、package内の`app/node_modules`から実行されるMCP clientとそのruntime依存を閉包し、ソース開発環境のhoisted／pnpm symlinkに依存せずWindows installed Gatewayを起動できるようにすること。

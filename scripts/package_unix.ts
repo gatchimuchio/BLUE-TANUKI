@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import {
@@ -250,11 +251,6 @@ async function packageTarget(target: UnixTarget): Promise<void> {
     `blue-tanuki-${pkg.version}-${target.platform}-${target.arch}-installer.tar.gz`,
   );
   const outFile = path.resolve(argValue("--out") ?? defaultOut);
-  const workRoot = path.join(root, ".codex-tmp", `${target.platform}-${target.arch}-package`);
-  const packageRoot = path.join(workRoot, "package");
-  const appRoot = path.join(packageRoot, "app");
-  const cacheDir = path.join(root, ".codex-tmp", "unix-runtime-cache");
-
   const appTarget: NativeAppTarget = {
     platform: target.platform === "macos" ? "darwin" : "linux",
     arch: target.arch,
@@ -263,7 +259,12 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   if (!commandExists("tar")) {
     throw new Error("tar is required to create Unix installer archives");
   }
-  await rm(workRoot, { recursive: true, force: true });
+  // Existing repository staging paths may be synced or belong to another run.
+  // Create a unique OS-temp root so packaging never deletes an unverified tree.
+  const workRoot = await mkdtemp(path.join(tmpdir(), `blue-tanuki-${target.platform}-${target.arch}-package-`));
+  const packageRoot = path.join(workRoot, "package");
+  const appRoot = path.join(packageRoot, "app");
+  const cacheDir = path.join(workRoot, "runtime-cache");
   await mkdir(packageRoot, { recursive: true });
   await mkdir(path.dirname(outFile), { recursive: true });
   await copyUnixLaunchers(packageRoot, target);
@@ -351,6 +352,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   await writeFile(readmeFile, packageReadmeText(pkg.version, target), "utf8");
 
   console.log(`${target.platform}_installer=${outFile}`);
+  console.log(`package_work_root=${workRoot}`);
   console.log(`platform=${target.platform}`);
   console.log(`arch=${target.arch}`);
   console.log(`sha256=${sha256}`);

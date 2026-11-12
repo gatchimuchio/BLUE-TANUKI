@@ -6,6 +6,10 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — QE_BUILD / macOS x64・arm64配布物のMCP runtime依存閉包
+
+Unix package builderが固定されたOneDrive同期配下のstage／runtime cacheを再帰削除・書換えし得るため、作業前から存在したreparse point領域を保持し、builderの作業rootとarchive cacheをOS Temp下の一意rootへ分離した。Windows host上でmacOS x64／arm64 unsigned installerを生成し、各3,746 entriesのpackage verifierがMCP runtime closureを含めPASSした。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。実macOS host／署名／installed runtime／shell isolation、5OS QA、QE_QC／QE_QAはNOT_RUN。Temp stage 2件・299,699,109 bytesはWindowsごみ箱へ移動、`release/macos`の7 artifact・128,065,469 bytesは保持。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
 ### 直近完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
 
 package builderがMCP clientとruntime依存一式を配置せず、Windows installed Gatewayの起動が失敗する欠陥を修正した。clientを現行package.jsonの`2.4.0`に固定し、core／transitive modulesとzod v4を隔離配置する。Windows／Unix package verifierを拡張し、Windows smokeにSetup→起動health→停止だけの隔離モードを追加した。
