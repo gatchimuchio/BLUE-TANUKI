@@ -13,6 +13,14 @@ on:
           - macos
         default: all
         required: true
+      macos_scope:
+        description: Build and verify macOS packages only, or also run installed lifecycle smoke
+        type: choice
+        options:
+          - installed-lifecycle
+          - package-only
+        default: installed-lifecycle
+        required: true
 
 permissions:
   contents: read
@@ -232,6 +240,7 @@ jobs:
           pnpm exec tsx scripts/verify_product_installers.ts --platform=macos --arch=${{ matrix.arch }}
 
       - name: Install and start from the one-file installer without developer tools
+        if: ${{ (inputs.target_os == 'all' || inputs.target_os == 'macos') && inputs.macos_scope == 'installed-lifecycle' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -245,6 +254,7 @@ jobs:
           PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash scripts/smoke_macos_product_installed.sh "$artifact" "$installer" "${{ matrix.arch }}"
 
       - name: Exercise isolated macOS update, recovery, logs, and uninstall consumers
+        if: ${{ (inputs.target_os == 'all' || inputs.target_os == 'macos') && inputs.macos_scope == 'installed-lifecycle' }}
         shell: bash
         run: |
           set -euo pipefail

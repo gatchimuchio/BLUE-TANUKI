@@ -286,6 +286,9 @@ function unixSelfExtractingInstaller(
 }
 
 async function writeProductInstaller(target: ProductInstallerTarget): Promise<void> {
+  if (target.os !== "windows" && process.platform === "win32") {
+    throw new Error("Unix self-extracting installers must be built on a Unix host that preserves executable mode");
+  }
   const pkg = readPackage();
   const payload = assertPayload(target.payloadPath);
   const payloadBuffer = readFileSync(target.payloadPath);
@@ -298,6 +301,10 @@ async function writeProductInstaller(target: ProductInstallerTarget): Promise<vo
   await writeFile(target.outputPath, installerText, "utf8");
   if (target.os !== "windows") {
     await chmod(target.outputPath, 0o755);
+    const executableMode = (await stat(target.outputPath)).mode & 0o777;
+    if ((executableMode & 0o111) === 0) {
+      throw new Error("Unix self-extracting installer filesystem did not preserve executable mode");
+    }
   }
 
   const installerSha = sha256File(target.outputPath);
