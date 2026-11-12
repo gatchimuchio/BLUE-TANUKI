@@ -12,7 +12,8 @@ import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, g
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
   githubWriteTool, gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest, gmailWriteTool,
-  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+  createGmailWriteTool, LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock,
+  type GoogleWriteResponse, type GoogleWriteTarget, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDigest, githubIssueCreateTargetIdentityDigest,
   githubIssueUpdateRequestPayloadDigest, githubIssueUpdateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest, githubIssueCommentCreateTargetIdentityDigest,
@@ -442,6 +443,63 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
     private_values: [prTitle, prBody] };
 }
 
+function gmailReplyDraftCandidate(id: string, sourceMessageId: string): OperationPlan {
+  const target = { kind: "external_service" as const, id: "gmail" };
+  const parameters = { operation: "draft.create", reply_to_message_id: sourceMessageId,
+    to: "owner-selected@example.invalid", subject: "Synthetic selected source subject",
+    body_text: "Synthetic reply for the isolated fixture only." };
+  return { version: "operation-core.v1", plan_id: `gmail-reply-draft-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "create-reply-draft", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false, parameters,
+      preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "gmail-reply-draft-readback", method: "gmail_reply_draft_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v2", operation: "draft.create" } }],
+        compensation: { available: false, reason: "A created draft remains an owner-controlled provider object." } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false,
+      command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
+
+function gmailReplyDraftTransport(options: { readonly labels?: readonly string[] } = {}) {
+  const sourceMessageId = "fixture-reply-source_1";
+  const sourceThreadId = "fixture-reply-thread_1";
+  const createdDraftId = "fixture-created-reply-draft_1";
+  const createdMessageId = "fixture-created-reply-message_1";
+  const subject = "Synthetic selected source subject";
+  const calls: GoogleWriteTarget[] = [];
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    calls.push(target);
+    if (target.method === "GET" && target.path === "/gmail/v1/users/me/profile") {
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify({ emailAddress: "owner@example.invalid" }),
+        truncated: false, request_id: "fixture-profile-request" };
+    }
+    if (target.method === "GET" && target.path.includes(`/messages/${sourceMessageId}?format=metadata&`)) {
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify({ id: sourceMessageId,
+        threadId: sourceThreadId, labelIds: ["INBOX"], internalDate: "1760000000000", sizeEstimate: 128,
+        payload: { mimeType: "text/plain", headers: [
+          { name: "From", value: "sender@example.invalid" },
+          { name: "Subject", value: subject },
+          { name: "Message-ID", value: "<fixture-source@example.invalid>" },
+          { name: "References", value: "<fixture-parent@example.invalid>" },
+        ] } }), truncated: false, request_id: "fixture-source-request" };
+    }
+    if (target.method === "POST" && target.path === "/gmail/v1/users/me/drafts") {
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify({ id: createdDraftId,
+        message: { id: createdMessageId, threadId: sourceThreadId } }), truncated: false, request_id: "fixture-create-request" };
+    }
+    if (target.method === "GET" && target.path === `/gmail/v1/users/me/drafts/${createdDraftId}?format=metadata`) {
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify({ id: createdDraftId,
+        message: { id: createdMessageId, threadId: sourceThreadId, labelIds: options.labels ?? ["DRAFT"] } }),
+        truncated: false, request_id: "fixture-readback-request" };
+    }
+    throw new Error(`unexpected synthetic Gmail request: ${target.method} ${target.path}`);
+  });
+  return { request, calls, sourceMessageId, sourceThreadId, createdDraftId, createdMessageId, subject };
+}
+
 function gmailMessageSendCandidate(id: string): OperationPlan {
   const target = { kind: "external_service" as const, id: "gmail" };
   const parameters = { operation: "message.send", to: "recipient@example.invalid",
@@ -540,20 +598,21 @@ function review(hds: HDSUpperController, plan: OperationPlan, step_id: string) {
 }
 async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Promise<void>,
   planFactory: (id: string, root: string) => OperationPlan = candidate,
-  prepareWorkspace?: (workspace: string) => void) {
+  prepareWorkspace?: (workspace: string) => void,
+  ownerTask = "合成の実行結果を後続へ安全に返す") {
   const root = mkdtempSync(join(tmpdir(), "blue-result-reconcile-")); const workspace = join(root, "workspace");
   mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
   prepareWorkspace?.(workspace);
   vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
-  const context = await setup(root, workspace, planFactory);
+  const context = await setup(root, workspace, planFactory, "fixture-owner", ownerTask);
   try { await run(context); } finally {
     for (const hds of context.controllers) { hds.closeOperationPlanMemory(); hds.close(); }
     context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true });
   }
 }
 async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate,
-  owner = "fixture-owner") {
-  const context = await setupInternal(root, workspace, planFactory, owner, true);
+  owner = "fixture-owner", ownerTask = "合成の実行結果を後続へ安全に返す") {
+  const context = await setupInternal(root, workspace, planFactory, owner, true, ownerTask);
   if (!("cmd" in context)) throw new Error("prepared setup did not select an Operation Plan step");
   return context;
 }
@@ -566,7 +625,7 @@ async function setupPlanOnly(root: string, workspace: string,
 }
 
 async function setupInternal(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan,
-  owner: string, prepareReviewedStep: boolean) {
+  owner: string, prepareReviewedStep: boolean, ownerTask = "合成の実行結果を後続へ安全に返す") {
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite"); const executionEpoch = randomUUID();
   const execution = new GatewayExecutionIntentStore(executionPath, executionEpoch); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
@@ -587,7 +646,7 @@ async function setupInternal(root: string, workspace: string, planFactory: (id: 
     controllers.push(controller); return controller;
   }
   const hds = createHds();
-  const origin = request("plan:compute 合成の実行結果を後続へ安全に返す", owner);
+  const origin = request(`plan:compute ${ownerTask}`, owner);
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
   tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
   tools.register(githubWriteTool);
@@ -1095,6 +1154,144 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     });
     return plan;
   }));
+
+  it("実Gmail write adapterの合成transportで返信draftを作成・読み戻し、J/M検証後に再起動owner照会へ返す", async () => {
+    const transport = gmailReplyDraftTransport();
+    const adapter = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-only-token" }, request: transport.request });
+    const planFactory = (id: string) => {
+      vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation((args, options) =>
+        adapter.inspect_target_version!(args, options));
+      vi.spyOn(gmailWriteTool, "inspect_content_review").mockImplementation((args, options) =>
+        adapter.inspect_content_review!(args, options));
+      vi.spyOn(gmailWriteTool, "invoke").mockImplementation((args, context) => adapter.invoke(args, context));
+      return gmailReplyDraftCandidate(id, transport.sourceMessageId);
+    };
+    const ownerTask = `返信draftを作成して検証する。source message ID: ${transport.sourceMessageId}`;
+    await fixture(async (c) => {
+      const parameters = c.plan.steps[0]!.parameters!;
+      const sourceMessageIdentityDigest = createHash("sha256").update(transport.sourceMessageId, "utf8").digest("hex");
+      const contentReview = await c.executor.inspectCommandContentReview(c.cmd);
+      expect(contentReview).toMatchObject({ kind: "gmail_write_content", operation: "gmail.write.draft.create",
+        reply_source: { thread_id: transport.sourceThreadId, used_for_authority: false },
+        used_for_authority: false, may_execute: false });
+      expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+      const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+      expect(feedback.status).toBe("success");
+      expect(feedback.result).toMatchObject({ service: "gmail", operation: "draft.create", mutation_sent: true,
+        mutation_status: "confirmed", result: { draft_readback_confirmed: true, thread_confirmed: true,
+          source_message_identity_digest: sourceMessageIdentityDigest } });
+      finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+      expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+        .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+      expect(gmailWriteTool.inspect_content_review).toHaveBeenCalledTimes(1);
+      expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+      expect(transport.calls.filter((target) => target.method === "POST" && target.path === "/gmail/v1/users/me/drafts"))
+        .toHaveLength(1);
+      const createIndex = transport.calls.findIndex((target) => target.method === "POST" &&
+        target.path === "/gmail/v1/users/me/drafts");
+      const readbackIndex = transport.calls.findIndex((target) => target.method === "GET" &&
+        target.path === `/gmail/v1/users/me/drafts/${transport.createdDraftId}?format=metadata`);
+      expect(readbackIndex).toBeGreaterThan(createIndex);
+
+      const checkpoint = c.j.load()!.plans[0]!;
+      const binding = checkpoint.bindings[0]!;
+      expect(binding).toMatchObject({ status: "verified", memory_receipt: expect.objectContaining({ revision: 1 }) });
+      expect(checkpoint.results[0]?.output).toMatchObject({ result: { draft_readback_confirmed: true,
+        thread_confirmed: true, source_message_identity_digest: sourceMessageIdentityDigest } });
+      const memory = inspectMemory(c);
+      expect(memory.revision).toBe(1);
+      expect(memory.records).toHaveLength(1);
+      const receipt = (feedback.result as { result: Record<string, unknown> }).result;
+      expect(memory.records[0]).toMatchObject({ schema_version: "operation-action-result.v1",
+        operation: "gmail.write.draft.create", plan_id_digest: operationPlanDigest(c.plan.plan_id),
+        plan_binding_status: "verified", plan_validation_status: "matched",
+        source_message_identity_digest: sourceMessageIdentityDigest,
+        source_thread_identity_digest: receipt.source_thread_identity_digest,
+        created_draft_identity_digest: receipt.created_draft_identity_digest,
+        created_message_identity_digest: receipt.created_message_identity_digest,
+        label_ids_digest: operationPlanDigest(["DRAFT"]), target_identity_digest: receipt.target_identity_digest,
+        provider_state_digest: receipt.provider_state_digest, effect_observation: "reported_success",
+        result_digest: binding.result_digest, draft_readback_confirmed: true, thread_confirmed: true,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false });
+      const memoryJson = JSON.stringify(memory.records[0]);
+      for (const privateValue of [transport.sourceMessageId, transport.sourceThreadId, transport.createdDraftId,
+        transport.createdMessageId, "owner@example.invalid", "sender@example.invalid", transport.subject,
+        "Synthetic reply for the isolated fixture only.", "<fixture-source@example.invalid>"]) {
+        expect(memoryJson).not.toContain(privateValue);
+      }
+      expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+
+      c.hds.closeOperationPlanMemory();
+      const restarted = c.createHds();
+      expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+      const current = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+      const returned = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+        revision_digest: current.revision_digest, step_id: "create-reply-draft" })}`));
+      expect(returned.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+      const projection = restarted.takeOperationPlanSavedResultReturn(returned.command!);
+      expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v11",
+        operation: "gmail.write", operation_name: "draft.create", status: "verified",
+        draft_readback_confirmed: true, thread_confirmed: true,
+        source_message_identity_digest: sourceMessageIdentityDigest,
+        source_thread_identity_digest: receipt.source_thread_identity_digest,
+        created_draft_identity_digest: receipt.created_draft_identity_digest,
+        created_message_identity_digest: receipt.created_message_identity_digest,
+        label_ids_digest: operationPlanDigest(["DRAFT"]), target_identity_digest: receipt.target_identity_digest,
+        request_payload_digest: receipt.request_payload_digest, provider_state_digest: receipt.provider_state_digest,
+        memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false });
+      const projectionJson = JSON.stringify(projection);
+      for (const privateValue of [parameters.reply_to_message_id, transport.sourceMessageId, transport.sourceThreadId,
+        transport.createdDraftId, transport.createdMessageId, "owner@example.invalid", transport.subject,
+        "Synthetic reply for the isolated fixture only."]) expect(projectionJson).not.toContain(privateValue);
+      expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+    }, planFactory, undefined, ownerTask);
+  });
+
+  it("返信draftの再読込不一致はMへunknownだけを記録し、成功結果の返却を拒否する", async () => {
+    const transport = gmailReplyDraftTransport({ labels: ["INBOX"] });
+    const adapter = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-only-token" }, request: transport.request });
+    const planFactory = (id: string) => {
+      vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation((args, options) =>
+        adapter.inspect_target_version!(args, options));
+      vi.spyOn(gmailWriteTool, "inspect_content_review").mockImplementation((args, options) =>
+        adapter.inspect_content_review!(args, options));
+      vi.spyOn(gmailWriteTool, "invoke").mockImplementation((args, context) => adapter.invoke(args, context));
+      return gmailReplyDraftCandidate(id, transport.sourceMessageId);
+    };
+    const ownerTask = `返信draftを作成して検証する。source message ID: ${transport.sourceMessageId}`;
+    await fixture(async (c) => {
+      await c.executor.inspectCommandContentReview(c.cmd);
+      expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+      const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+      expect(feedback.status).toBe("failed");
+      expect(feedback.operation_core_result).toMatchObject({ action_outcome: "unknown", execution_boundary: "tool_adapter" });
+      finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+      reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch);
+      expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+      expect(transport.calls.filter((target) => target.method === "POST" && target.path === "/gmail/v1/users/me/drafts"))
+        .toHaveLength(1);
+      const binding = c.j.load()!.plans[0]!.bindings[0]!;
+      expect(binding).toMatchObject({ status: "outcome_unknown", memory_receipt: expect.any(Object) });
+      expect(c.j.load()!.plans[0]!.results).toHaveLength(0);
+      const memory = inspectMemory(c);
+      expect(memory.records).toHaveLength(1);
+      expect(memory.records).toMatchObject([{ schema_version: "operation-action-outcome.v1",
+        record_type: "action_outcome_observation", operation: "gmail.write", plan_binding_status: "outcome_unknown",
+        effect_observation: "unknown", adoption_status: "observation_only", used_as_world_truth: false,
+        used_for_authority: false, may_execute: false }]);
+      for (const privateValue of [transport.sourceMessageId, transport.sourceThreadId, transport.createdDraftId,
+        transport.createdMessageId, "owner@example.invalid", transport.subject,
+        "Synthetic reply for the isolated fixture only."]) {
+        expect(JSON.stringify(memory.records[0])).not.toContain(privateValue);
+      }
+      const current = c.j.load()!.plans[0]!;
+      const withheld = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+        revision_digest: current.revisions.at(-1)!.digest, step_id: "create-reply-draft" })}`));
+      expect(withheld.command).toBeNull();
+      expect(withheld.log.commit.reason).toContain("plan_saved_result");
+    }, planFactory, undefined, ownerTask);
+  });
 
   it("Jで検証したGmail draft.send結果だけをdigest限定でM receiptへ固定し、再起動後にOwnerへ返す", async () => fixture(async (c) => {
     const parameters = c.plan.steps[0]!.parameters!;

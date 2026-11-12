@@ -130,10 +130,13 @@ function gmailTrashFixture(options: { initialLabels?: string[]; confirmTrash?: b
 }
 
 function gmailReplyDraftFixture(options: { sourceMessageId?: string; threadId?: string; subject?: string;
-  messageHeader?: string; references?: string; createdThreadId?: string } = {}) {
+  messageHeader?: string; references?: string; createdThreadId?: string; readbackThreadId?: string;
+  readbackLabels?: readonly string[]; readbackDraftId?: string; readbackMessageId?: string } = {}) {
   const sourceMessageId = options.sourceMessageId ?? "fixture-source-message_1";
   const threadId = options.threadId ?? "fixture-thread_1";
   const subject = options.subject ?? "Synthetic selected source subject";
+  const createdDraftId = "fixture-created-draft";
+  const createdMessageId = "fixture-created-message";
   const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
     if (target.path === "/gmail/v1/users/me/profile" && target.method === "GET") {
       return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
@@ -150,13 +153,19 @@ function gmailReplyDraftFixture(options: { sourceMessageId?: string; threadId?: 
         ] } }) };
     }
     if (target.path === "/gmail/v1/users/me/drafts" && target.method === "POST") {
-      return { ...response, body: JSON.stringify({ id: "fixture-created-draft", message: {
-        id: "fixture-created-message", threadId: options.createdThreadId ?? threadId,
+      return { ...response, body: JSON.stringify({ id: createdDraftId, message: {
+        id: createdMessageId, threadId: options.createdThreadId ?? threadId,
+      } }) };
+    }
+    if (target.path === `/gmail/v1/users/me/drafts/${createdDraftId}?format=metadata` && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ id: options.readbackDraftId ?? createdDraftId, message: {
+        id: options.readbackMessageId ?? createdMessageId, threadId: options.readbackThreadId ?? threadId,
+        labelIds: options.readbackLabels ?? ["DRAFT"],
       } }) };
     }
     throw new Error(`unexpected reply draft fixture request: ${target.method} ${target.path}`);
   });
-  return { request, sourceMessageId, threadId, subject };
+  return { request, sourceMessageId, threadId, subject, createdDraftId, createdMessageId };
 }
 
 const modifyArgs = { operation: "message.modify", message_id: "fixture-message_123",
@@ -590,19 +599,43 @@ describe("Gmail write target observation", () => {
     const result = await tool.invoke(draftArgs, { command_id: "fixture-reply-draft-command",
       upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
       command_digest: "e".repeat(64), target_version_observation: observation });
-    const createRequest = fixture.request.mock.calls.at(-1)?.[0];
+    const createRequest = fixture.request.mock.calls.find(([target]) =>
+      target.method === "POST" && target.path === "/gmail/v1/users/me/drafts")?.[0];
     const createPayload = JSON.parse(createRequest?.body ?? "{}") as { message?: { raw?: string; threadId?: string } };
     const mime = Buffer.from(createPayload.message?.raw ?? "", "base64url").toString("utf8");
     expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
     expect(createRequest).toMatchObject({ method: "POST", path: "/gmail/v1/users/me/drafts" });
+    const createIndex = fixture.request.mock.calls.findIndex(([target]) => target.method === "POST");
+    const readbackIndex = fixture.request.mock.calls.findIndex(([target]) =>
+      target.method === "GET" && target.path === `/gmail/v1/users/me/drafts/${fixture.createdDraftId}?format=metadata`);
+    expect(readbackIndex).toBeGreaterThan(createIndex);
     expect(createPayload.message?.threadId).toBe(fixture.threadId);
     expect(mime).toContain(`In-Reply-To: <source@example.invalid>`);
     expect(mime).toContain(`References: <older@example.invalid> <source@example.invalid>`);
     expect(mime).toContain(`Subject: ${fixture.subject}`);
     expect(result).toMatchObject({ service: "gmail", operation: "draft.create", mutation_status: "confirmed",
-      result: { thread_confirmed: true, used_for_authority: false, may_execute: false } });
+      result: { draft_readback_confirmed: true, thread_confirmed: true,
+        label_ids_digest: operationPlanDigest(["DRAFT"]), used_for_authority: false, may_execute: false } });
     expect(JSON.stringify(result)).not.toContain(fixture.sourceMessageId);
+    expect(JSON.stringify(result)).not.toContain(fixture.createdDraftId);
+    expect(JSON.stringify(result)).not.toContain(fixture.createdMessageId);
     expect(JSON.stringify(result)).not.toContain("Synthetic reply only");
+  });
+
+  it("返信draftの作成応答後readbackがdraft ID・message ID・thread・DRAFTを確認できなければ結果不明で一回停止する", async () => {
+    const fixture = gmailReplyDraftFixture({ readbackLabels: ["INBOX"] });
+    const draftArgs = { operation: "draft.create", reply_to_message_id: fixture.sourceMessageId,
+      to: "owner-selected@example.invalid", subject: fixture.subject, body_text: "Synthetic reply" };
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(draftArgs, { command_id: "fixture-reply-draft-readback-mismatch",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64), command_digest: "e".repeat(64),
+      target_version_observation: observation })).rejects.toThrow(/readback.*outcome_unknown; do not retry automatically/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "GET" &&
+      target.path.endsWith(`/drafts/${fixture.createdDraftId}?format=metadata`))).toHaveLength(1);
   });
 
   it("返信sourceのRFC Message-ID欠落またはreview後のstate変更を作用前に拒否する", async () => {

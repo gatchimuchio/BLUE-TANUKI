@@ -2,6 +2,26 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-12 — QEB-F02.02-GMAIL-DRAFT-READBACK-J-M-RESULT-RETURN
+
+開始時local／`origin/main`／GitHub `main`=`3a554c5f89a6abb16f5cbfcef7a9fe67d0784a2b`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch current=`3a554c5f89a6abb16f5cbfcef7a9fe67d0784a2b`／previous=`40ea7d3151bb39d36a65c1f4dd1a2a6e572cd36d`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+
+既存Gmail返信`draft.create`はcreate responseのthread IDだけを根拠にし、作成後provider stateのreadbackをせず、成功結果のJ/M／再起動後owner return経路も未接続だった。HDSのissued L3 target identityが`reply_source_message_identity_digest`を欠き、J validatorもAdapterが実際に返す`gmail.googleapis.com` hostと一致していなかった。
+
+Adapterは単回の`drafts.create`後に`drafts.get?format=metadata`を実行し、同一draft ID、message identity、source thread、および正確な`DRAFT` labelを照合する。body／raw MIMEを取得しない。不一致・失敗・state不明時は`outcome_unknown`として自動再送しない。Jはreply-result validation v2でrequest／target digest、provider state digest、readback flagsとnon-authority flagsを検証する。L3 execution targetへsource identity digestを含め、成功時のみdigest-only `operation-action-result.v1`をMへ保存し、receiptとJ結果がそろえばGateway再起動後にownerへ保存済み結果を投影する。結果projectionは作成／送信を再実行せず、raw IDや本文を含めない。negative caseではMにunknown観測だけがあり、verified result返却を拒否する。旧v1 result validationは保存済み履歴の互換読取りに残すがM成功資格から除外する。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm --filter @blue-tanuki/hds-brain exec vitest run test/operation_plan_gmail_reply.test.ts` | PASS：5/5。 |
+| `corepack pnpm --filter @blue-tanuki/core exec vitest run test/gmail_write_target_version.test.ts` | PASS：28/28。 |
+| `corepack pnpm --filter @blue-tanuki/gateway exec vitest run test/execution_result_reconciliation.test.ts -t "実Gmail write adapter|再読込不一致"` | PASS：2 selected、92 skipped。名称上の「実Gmail write adapter」は実Adapter code pathを指し、provider transportはsynthetic。 |
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS：全workspace typecheck、15/15 project build。 |
+| `corepack pnpm docs:check` | PASS：docs／日本語基底／licensing gates。既存の日本語基底移行負債75件を注意表示。 |
+| `git diff --check` | PASS。 |
+| 実Gmail／OAuth credential／provider API／mailbox、draft作成・send、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+生成物分類：source／tests／active docsはGit候補。workspace buildが生成したignored `dist`等は開発環境として保持。test-owned一時物はcleanup済み。protected添付領域、実資格、別repo、OneDrive資料、外部作用に変更なし。この範囲はF02.02返信`draft.create`のreadback／J/M result-return consumerのみで、F02.02全体、実provider、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。
+
 ---
 
 ## 2026-11-12 — QEB-D03.01-D4-RUNTIME-HDS-TASK-OUTCOME-STATUS

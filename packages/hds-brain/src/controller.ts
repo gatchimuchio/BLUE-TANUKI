@@ -4138,6 +4138,7 @@ ${planControl.question}`,
         if (normalized) recipients[name] = normalized;
       }
       const messageId = command.payload.arguments.message_id;
+      const replySourceMessageId = command.payload.arguments.reply_to_message_id;
       const labelIds = (name: "add_label_ids" | "remove_label_ids"): string[] | undefined => {
         const value = command.payload.arguments[name];
         if (value === undefined) return [];
@@ -4174,7 +4175,10 @@ ${planControl.question}`,
             : undefined
         : recipients.to
           ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
-              service: "gmail", operation, recipients }) : undefined;
+              service: "gmail", operation, recipients,
+              ...(operation === "draft.create" && typeof replySourceMessageId === "string"
+                ? { reply_source_message_identity_digest: createHash("sha256").update(replySourceMessageId, "utf8").digest("hex") }
+                : {}) }) : undefined;
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.target_identity_digest !== expectedTargetIdentityDigest ||
           (operation === "message.trash" && (!observation.provider_state_digest || observation.provider_raw_digest !== undefined ||

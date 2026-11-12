@@ -1784,17 +1784,69 @@ export async function invokeGmailWrite(
         !/^[A-Za-z0-9_-]{1,512}$/.test(created.message.id) || created.message.threadId !== replySource.thread_id) {
       throw new Error("gmail.write reply draft was not confirmed in the selected thread; outcome_unknown; do not retry automatically");
     }
+    const readbackTarget: GoogleWriteTarget = {
+      service: "gmail",
+      hostname: "gmail.googleapis.com",
+      path: `/gmail/v1/users/me/drafts/${encodeURIComponent(created.id)}?format=metadata`,
+      method: "GET",
+      maxBytes: MAX_GMAIL_MESSAGE_TRASH_REVIEW_RESPONSE_BYTES,
+      token,
+    };
+    let readbackResponse: GoogleWriteResponse;
+    try {
+      assertToolExecutionNotCancelled(opts.signal, "gmail.write reply draft readback");
+      readbackResponse = await sendRequest(readbackTarget, opts.signal);
+    } catch {
+      throw new Error("gmail.write reply draft readback is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    let readback: unknown;
+    try {
+      if (!readbackResponse.ok || readbackResponse.truncated || readbackResponse.body_utf8_valid === false) {
+        throw new Error("response_unavailable");
+      }
+      readback = JSON.parse(readbackResponse.body) as unknown;
+    } catch {
+      throw new Error("gmail.write reply draft readback is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const readbackMessage = isRecord(readback) && isRecord(readback.message) ? readback.message : undefined;
+    const labelIds = readbackMessage?.labelIds;
+    if (!isRecord(readback) || readback.id !== created.id || !readbackMessage ||
+        readbackMessage.id !== created.message.id || readbackMessage.threadId !== replySource.thread_id ||
+        !Array.isArray(labelIds) || labelIds.length !== 1 ||
+        labelIds.some((label) => typeof label !== "string" || !label.trim() || label.length > 256 ||
+          /[\r\n\u0000-\u001f\u007f]/.test(label)) || new Set(labelIds).size !== labelIds.length ||
+        labelIds[0] !== "DRAFT" || "raw" in readbackMessage ||
+        isRecord(readbackMessage.payload) && (Array.isArray(readbackMessage.payload.parts) ||
+          isRecord(readbackMessage.payload.body) && typeof readbackMessage.payload.body.data === "string")) {
+      throw new Error("gmail.write reply draft readback did not confirm the selected draft and thread; outcome_unknown; do not retry automatically");
+    }
+    const accountIdentityDigest = replySourceSnapshot!.account_identity_digest;
+    const createdDraftIdentityDigest = sha256String(created.id);
+    const createdMessageIdentityDigest = sha256String(created.message.id);
+    const labelIdsDigest = operationPlanDigest([...labelIds as string[]].sort());
+    const providerStateDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.gmail-reply-draft-provider-state.v2",
+      account_identity_digest: accountIdentityDigest,
+      source_message_identity_digest: replySource.message_identity_digest,
+      source_thread_identity_digest: replySource.thread_identity_digest,
+      created_draft_identity_digest: createdDraftIdentityDigest,
+      created_message_identity_digest: createdMessageIdentityDigest,
+      label_ids_digest: labelIdsDigest,
+    });
     const result = {
-      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      account_identity_digest: accountIdentityDigest,
+      created_draft_identity_digest: createdDraftIdentityDigest,
+      created_message_identity_digest: createdMessageIdentityDigest,
+      label_ids_digest: labelIdsDigest,
+      draft_readback_confirmed: true as const,
+      may_execute: false as const,
+      provider_state_digest: providerStateDigest,
       request_payload_digest: gmailWriteRequestPayloadDigest(args),
       source_message_identity_digest: replySource.message_identity_digest,
       source_thread_identity_digest: replySource.thread_identity_digest,
-      created_draft_identity_digest: sha256String(created.id),
-      created_message_identity_digest: sha256String(created.message.id),
-      provider_state_digest: replySource.provider_state_digest,
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
       thread_confirmed: true as const,
       used_for_authority: false as const,
-      may_execute: false as const,
     };
     return {
       service: "gmail",

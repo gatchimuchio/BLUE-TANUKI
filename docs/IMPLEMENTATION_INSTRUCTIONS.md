@@ -2,6 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書き作成の読み戻し・J/M結果帰還
+
+主語は既存Gmail `draft.create` AdapterからHDS-J/Mを経て、再起動後のowner結果表示へ至る返信下書き経路である。目的は、作成応答だけを成功根拠にせず、作成した下書きのprovider状態を読み戻し、現行Jの専用validatorとdigest-only M receiptが一致する場合に限り、実行を再開せず結果をownerへ返すこと。
+
+Adapterは一回の`drafts.create`後、同じ認証状態で`drafts.get?format=metadata`を一回行い、draft ID／message ID／source threadと`DRAFT` labelを照合する。読み戻し不一致・失敗では`outcome_unknown`を記録して自動再送しない。Jは結果validation v2でrequest／target digest、`gmail.googleapis.com`のprovider state digest、読み戻し確認を再検証する。HDSのexecution-authority target identityにも`reply_source_message_identity_digest`を含め、L3 bindingの対象同一性を修正した。成功結果はIDや本文を含めずdigest-only M receiptとして保存し、Gateway再起動後のowner表示へ投影する。過去のv1 validationは履歴読取り用に残すが、成功M証拠には採用しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `packages/hds-brain/test/operation_plan_gmail_reply.test.ts` | PASS：5/5。v2結果validationとdigest束縛を確認。 |
+| `packages/blue-tanuki/test/gmail_write_target_version.test.ts` | PASS：28/28。合成transportで作成後のmetadata readback、正確な`DRAFT`状態、不一致時の単回作成・unknown停止を確認。 |
+| `apps/gateway/test/execution_result_reconciliation.test.ts` focused | PASS：2 selected、92 skipped。L3 review、実Adapter経路、J検証、M receipt、再起動後owner返却、およびreadback不一致時の返却拒否を合成環境で確認。 |
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS：全workspace typecheck、15/15 workspace projects build。 |
+| `corepack pnpm docs:check` | PASS：docs／日本語基底／licensing gates。既存の日本語基底移行負債75件を注意表示。 |
+| `git diff --check` | PASS。 |
+| 実Gmail／OAuth credential／実provider／mailbox、draft作成・send、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。合成transportを実provider証拠へ拡張しない。 |
+
+UNIT_ID: F02.02 Gmail reply `draft.create` provider readback → J validation → digest-only M receipt → restart owner result（限定consumer）
+STATUS: WIRED（成功結果とreadback mismatchを合成Gateway／Adapter経路で確認）
+NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、現行rev4.0と最新HEADから次の未接続consumerを選ぶ。実provider／credential／送信、OD-03 live作用、別repo、P13公開GO、QE_QC／QE_QAへ拡張しない。
+SAFETY_STATUS: 明示L3 review、単回作成、provider state再照合、結果不明時no-retry、J単一authority、M非権威・digest-only、再起動後も作用を再実行しない表示を維持。
+LOCAL_ASSET_STATUS: tracked source／tests／active docsをGit候補とする。build出力は開発環境として保持し、test-owned一時物はcleanup後に不在を確認する。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。実資格、実mailbox、別repo、OneDrive資料、外部作用に変更なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／`origin/main`／GitHub `main`=`3a554c5f89a6abb16f5cbfcef7a9fe67d0784a2b`、ahead／behind=0/0、worktreeはmainのみ。実装・closeout commit、push、終了時復旧refは最終Git照合で確定する。
+
 ## 完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Uninstallの動的削除対象再照合
 
 主語はWindows製品packageが導入する`BlueTanukiUninstall.ps1`と、停止中に変化し得るInstallRoot／DataRootである。目的は、Uninstall前に照合した管理対象がresident停止中に追加・差替え・reparse化された場合、対象の所有・構造を再検証し、変更を検知したらInstallRoot／DataRootを削除せずfail-closedで終了すること。通常UninstallはDataRootを保持し、明示`-PurgeData`だけがDataRootを削除対象にする。

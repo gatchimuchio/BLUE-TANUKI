@@ -28,7 +28,7 @@ function replyCandidate(requestId: string): OperationPlan {
         to: "owner-selected@example.invalid", subject: "Synthetic source subject", body_text: "Fixture reply" },
       preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{ check_id: "created-in-thread",
         method: "gmail_reply_draft_result_matches", target,
-        expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v1", operation: "draft.create" } }],
+        expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v2", operation: "draft.create" } }],
         compensation: { available: false, reason: "A created draft remains a user-owned provider object." } },
     }],
     rollback: { available: false },
@@ -90,7 +90,7 @@ describe("Operation Plan Gmail reply source binding", () => {
       check_id: "gmail-reply-source-thread-confirmed",
       method: "gmail_reply_draft_result_matches",
       target: bound.steps[0]!.target,
-      expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v1", operation: "draft.create" },
+      expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v2", operation: "draft.create" },
     }]);
   });
 
@@ -128,20 +128,32 @@ describe("Operation Plan Gmail reply source binding", () => {
       operation: "draft.create", to: parameters.to, cc: null, bcc: null, reply_to: null, from: null,
       subject: parameters.subject, body_text: parameters.body_text, attachments: [],
       reply_source_message_identity_digest: messageIdentityDigest });
+    const accountIdentityDigest = "5".repeat(64);
+    const createdDraftIdentityDigest = "1".repeat(64);
+    const createdMessageIdentityDigest = "2".repeat(64);
+    const labelIdsDigest = operationPlanDigest(["DRAFT"]);
+    const sourceThreadIdentityDigest = "4".repeat(64);
+    const providerStateDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-reply-draft-provider-state.v2",
+      account_identity_digest: accountIdentityDigest, source_message_identity_digest: messageIdentityDigest,
+      source_thread_identity_digest: sourceThreadIdentityDigest, created_draft_identity_digest: createdDraftIdentityDigest,
+      created_message_identity_digest: createdMessageIdentityDigest, label_ids_digest: labelIdsDigest });
     const result = {
-      created_draft_identity_digest: "1".repeat(64),
-      created_message_identity_digest: "2".repeat(64),
+      account_identity_digest: accountIdentityDigest,
+      created_draft_identity_digest: createdDraftIdentityDigest,
+      created_message_identity_digest: createdMessageIdentityDigest,
+      draft_readback_confirmed: true,
+      label_ids_digest: labelIdsDigest,
       may_execute: false,
-      provider_state_digest: "3".repeat(64),
+      provider_state_digest: providerStateDigest,
       request_payload_digest: requestPayloadDigest,
       source_message_identity_digest: messageIdentityDigest,
-      source_thread_identity_digest: "4".repeat(64),
+      source_thread_identity_digest: sourceThreadIdentityDigest,
       target_identity_digest: targetIdentityDigest,
       thread_confirmed: true,
       used_for_authority: false,
     };
     const output = {
-      service: "gmail", mode: "write", operation: "draft.create", api_host: "www.googleapis.com",
+      service: "gmail", mode: "write", operation: "draft.create", api_host: "gmail.googleapis.com",
       path_digest: operationPlanDigest("/gmail/v1/users/me/drafts"), method: "POST", status: 200,
       content_type: "application/json", truncated: false, google_request_id: "fixture-request",
       request_status: "ok", mutation_sent: true, mutation_status: "confirmed",
@@ -156,13 +168,13 @@ describe("Operation Plan Gmail reply source binding", () => {
       parameters,
       preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{ check_id: "created-in-thread",
         method: "gmail_reply_draft_result_matches" as const, target,
-        expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v1", operation: "draft.create" } }],
+        expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v2", operation: "draft.create" } }],
         compensation: { available: false as const, reason: "A created draft remains a user-owned provider object." } },
     };
     const validation = step.preparation.validation[0]!;
     expect(operationPlanResultValidationMatches(validation, step, output)).toBe(true);
     expect(operationPlanResultValidationMatches(validation, step,
-      { ...output, result: { ...result, thread_confirmed: false } })).toBe(false);
+      { ...output, result: { ...result, draft_readback_confirmed: false } })).toBe(false);
     expect(operationPlanResultValidationMatches(validation, step,
       { ...output, result: { ...result, source_message_identity_digest: "5".repeat(64) } })).toBe(false);
     expect(operationPlanResultValidationMatches(validation, step,

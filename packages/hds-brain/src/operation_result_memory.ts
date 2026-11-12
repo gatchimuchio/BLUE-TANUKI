@@ -149,10 +149,17 @@ export function resultMemoryEligible(b: Binding): boolean {
     if (b.status === "provider_rejected") return b.github_write_result?.mutation_status === "provider_rejected";
     return (b.status === "outcome_unknown" || b.status === "verification_failed") && !b.github_write_result;
   }
+  const replyDraftReadback = b.prepared_step.operation === "gmail.write" &&
+    b.prepared_step.parameters?.operation === "draft.create" &&
+    typeof b.prepared_step.parameters.reply_to_message_id === "string" &&
+    b.prepared_step.preparation?.validation?.length === 1 &&
+    b.prepared_step.preparation.validation[0]?.method === "gmail_reply_draft_result_matches" &&
+    isRecord(b.prepared_step.preparation.validation[0]?.expected) &&
+    b.prepared_step.preparation.validation[0]?.expected.schema_version === "blue-tanuki.gmail-reply-draft-result-validation.v2";
   if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
     b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read" ||
     b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
-      (b.prepared_step.parameters?.operation === "draft.send" ||
+      (replyDraftReadback || b.prepared_step.parameters?.operation === "draft.send" ||
         b.prepared_step.parameters?.operation === "message.send" ||
         b.prepared_step.parameters?.operation === "message.trash" ||
         b.prepared_step.parameters?.operation === "message.modify") && !!b.execution_admission?.task_identity_digest &&
@@ -340,6 +347,83 @@ export function resultObservation(p: Plan, b: Binding) {
       plan_binding_status: "verified", plan_validation_status: "matched",
       target_identity_digest: receipt.target_identity_digest,
       provider_state_digest: receipt.provider_state_digest,
+      effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
+      adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+  if (b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
+      b.prepared_step.parameters?.operation === "draft.create" &&
+      typeof b.prepared_step.parameters.reply_to_message_id === "string") {
+    if (!result) throw new Error("plan_memory_gmail_reply_draft_result_invalid");
+    const rawOutput: unknown = result.output;
+    if (!isRecord(rawOutput) || !isRecord(rawOutput.result)) {
+      throw new Error("plan_memory_gmail_reply_draft_result_invalid");
+    }
+    const output = rawOutput;
+    const receipt = rawOutput.result;
+    const validation = b.prepared_step.preparation?.validation ?? [];
+    const expected = validation.length === 1 && isRecord(validation[0]?.expected) ? validation[0]!.expected : undefined;
+    const resultKeys = ["account_identity_digest", "created_draft_identity_digest", "created_message_identity_digest",
+      "draft_readback_confirmed", "label_ids_digest", "may_execute", "provider_state_digest", "request_payload_digest",
+      "source_message_identity_digest", "source_thread_identity_digest", "target_identity_digest", "thread_confirmed",
+      "used_for_authority"];
+    const outputKeys = ["api_host", "content_type", "google_request_id", "method", "mode", "mutation_sent",
+      "mutation_status", "operation", "path_digest", "request_status", "result", "result_digest", "service",
+      "status", "truncated"];
+    const sourceMessageIdentityDigest = createHash("sha256")
+      .update(b.prepared_step.parameters.reply_to_message_id, "utf8").digest("hex");
+    const providerStateDigest = isDigest(receipt.account_identity_digest) &&
+        isDigest(receipt.source_thread_identity_digest) && isDigest(receipt.created_draft_identity_digest) &&
+        isDigest(receipt.created_message_identity_digest) && isDigest(receipt.label_ids_digest)
+      ? stableDigest({ schema_version: "blue-tanuki.gmail-reply-draft-provider-state.v2",
+        account_identity_digest: receipt.account_identity_digest,
+        source_message_identity_digest: sourceMessageIdentityDigest,
+        source_thread_identity_digest: receipt.source_thread_identity_digest,
+        created_draft_identity_digest: receipt.created_draft_identity_digest,
+        created_message_identity_digest: receipt.created_message_identity_digest,
+        label_ids_digest: receipt.label_ids_digest }) : "";
+    if (!expected || expected.schema_version !== "blue-tanuki.gmail-reply-draft-result-validation.v2" ||
+        expected.operation !== "draft.create" || validation[0]?.method !== "gmail_reply_draft_result_matches" ||
+        !hasExactKeys(receipt, resultKeys) || !hasExactKeys(output, outputKeys) ||
+        !isDigest(receipt.account_identity_digest) || !isDigest(receipt.created_draft_identity_digest) ||
+        !isDigest(receipt.created_message_identity_digest) || !isDigest(receipt.label_ids_digest) ||
+        !isDigest(receipt.provider_state_digest) || receipt.provider_state_digest !== providerStateDigest ||
+        !isDigest(receipt.request_payload_digest) || receipt.source_message_identity_digest !== sourceMessageIdentityDigest ||
+        !isDigest(receipt.source_thread_identity_digest) || !isDigest(receipt.target_identity_digest) ||
+        receipt.draft_readback_confirmed !== true || receipt.thread_confirmed !== true ||
+        receipt.used_for_authority !== false || receipt.may_execute !== false ||
+        output.service !== "gmail" || output.mode !== "write" || output.operation !== "draft.create" ||
+        output.api_host !== "gmail.googleapis.com" || output.method !== "POST" ||
+        output.path_digest !== stableDigest("/gmail/v1/users/me/drafts") || output.request_status !== "ok" ||
+        output.mutation_sent !== true || output.mutation_status !== "confirmed" ||
+        typeof output.status !== "number" || !Number.isInteger(output.status) || output.status < 200 || output.status >= 300 ||
+        output.truncated !== false || !isDigest(output.result_digest) || output.result_digest !== stableDigest(receipt) ||
+        (output.content_type !== null && typeof output.content_type !== "string") ||
+        (output.google_request_id !== null && typeof output.google_request_id !== "string")) {
+      throw new Error("plan_memory_gmail_reply_draft_result_invalid");
+    }
+    return {
+      schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      task_identity_digest: b.execution_admission?.task_identity_digest,
+      plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+      plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,
+      command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: "gmail.write.draft.create",
+      step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+      step_digest: b.step_digest, command_digest: b.command_digest,
+      operation_plan_binding_digest: b.operation_plan_binding_digest!,
+      delivery_digest: b.delivery_digest!, result_digest: b.result_digest!,
+      plan_binding_status: "verified", plan_validation_status: "matched",
+      account_identity_digest: receipt.account_identity_digest,
+      source_message_identity_digest: receipt.source_message_identity_digest,
+      source_thread_identity_digest: receipt.source_thread_identity_digest,
+      created_draft_identity_digest: receipt.created_draft_identity_digest,
+      created_message_identity_digest: receipt.created_message_identity_digest,
+      label_ids_digest: receipt.label_ids_digest,
+      target_identity_digest: receipt.target_identity_digest,
+      request_payload_digest: receipt.request_payload_digest,
+      provider_state_digest: receipt.provider_state_digest,
+      draft_readback_confirmed: true, thread_confirmed: true,
       effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
       adoption_status: "observation_only", used_as_world_truth: false,
       used_for_authority: false, may_execute: false,

@@ -500,6 +500,19 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       "現在のMailbox状態は再読込していません。この結果照会は送信を再実行しません。",
     ].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v11") {
+    return [
+      "保存済みGmail返信draft作成結果です。作成応答後のdraft再読込で同じdraft/message/threadとDRAFT状態を確認し、J/M receiptを照合済みです。",
+      `対象account identity digest: ${projection.account_identity_digest}`,
+      `返信元message identity digest: ${projection.source_message_identity_digest}`,
+      `対象thread identity digest: ${projection.source_thread_identity_digest}`,
+      `作成draft identity digest: ${projection.created_draft_identity_digest}`,
+      `作成message identity digest: ${projection.created_message_identity_digest}`,
+      `確認時provider state digest: ${projection.provider_state_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "現在のMailbox状態は再読込していません。この結果照会はdraft作成や送信を再実行しません。",
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
