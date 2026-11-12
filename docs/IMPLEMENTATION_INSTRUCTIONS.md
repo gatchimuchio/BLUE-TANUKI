@@ -21,8 +21,8 @@ BUILD_BATCH: resident-stop verification → dev Uninstall removal gate
 STATUS: WIRED（source development Uninstallとresident helperの合成実process経路のみ）
 NEXT_REQUIRED_CONSUMER: 次の独立作業は⓪→④を再実行し、rev4.0と最新HEADから未接続consumerを選ぶ。G03 installed-linux、G09 Mobile、C08.03実provider、OD-03 live作用、別repo、Rust cutover、P13公開GOへ証拠を拡張しない。
 SAFETY_STATUS: stop/autostart異常時に削除しない。PID identity不一致時に他processをsignalしない。10秒で停止を観測できないときはPID記録とinstall／dataを保持する。
-LOCAL_ASSET_STATUS: shell fixtureの`/tmp/blue-tanuki-safe-target.*`とprocessはtrap／fixture cleanup後に残存なし。ignored build outputsは保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。別repo、資格情報、OneDrive資料、owner dataへ作用なし。
-CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／`origin/main`／GitHub `main`=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`、ahead／behind=0/0。local recovery branches current=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。対象4ファイルと本closeout記録を同じBUILD_BATCHとして検証後にmainへpushし、push後のmain／復旧refs／protected差分を再照合する。
+LOCAL_ASSET_STATUS: shell fixtureの`/tmp/blue-tanuki-safe-target.*`とprocessはtrap／fixture cleanup後に残存なし。ignored build outputsは保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。commit hookは`.git/worktrees/blue-tanuki-health-2026-11-07-windows`削除時にpermission deniedを報告したがcommit自体は成功。reparse metadata／ACL／attributesを変更せず保留。別repo、資格情報、OneDrive資料、owner dataへ作用なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始時local／`origin/main`／GitHub `main`=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`、ahead／behind=0/0、worktreeはmainのみ。実装・fixture・一次記録commit=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`をGitHub `main`へpush。remote復旧tagはCAS更新済みで、一次push後 current=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`／previous=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`。この最終記録push後はlocal／origin／GitHub `main`とlocal `codex/backup-main`／remote current tagが一致し、local `codex/backup-main-prev`／remote previous tagは`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`を指す状態を直接再照合する。protected attachmentsは未追跡・未変更。
 
 ## 完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書き作成の読み戻し・J/M結果帰還
 

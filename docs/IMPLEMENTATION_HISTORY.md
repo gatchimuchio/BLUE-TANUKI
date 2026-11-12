@@ -18,9 +18,9 @@
 | `git diff --check` | PASS。 |
 | 実macOS host、native installed Linux/macOS product、実user resident/autostart/data、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
 
-生成物分類：source／test／3点セットとactive instructionの適用を説明する公開可能な施工記録をGit管理。test専用`/tmp/blue-tanuki-safe-target.*`とsynthetic processはfixture cleanup後に残存なし。ignored build outputは保持。protected attachment directoryは未追跡・未変更。別repo、credential、OneDrive資料、owner data、外部作用に変更なし。
+生成物分類：source／test／current instruction適用と施工範囲を説明する公開可能な施工記録をGit管理。test専用`/tmp/blue-tanuki-safe-target.*`とsynthetic processはfixture cleanup後に残存なし。ignored build outputは保持。protected attachment directoryは未追跡・未変更。別repo、credential、OneDrive資料、owner data、外部作用に変更なし。
 
-STATUS=`WIRED`（Linux／macOS source development Uninstallの失敗時保護とresident process stop synthetic pathに限定）。G03.01–03のinstalled-linux evidence、native macOS、製品package、安全全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。対象変更とcloseout docsを同じBUILD_BATCHとしてmainへpush後、main／local recovery branches／remote tagsを最終照合する。
+STATUS=`WIRED`（Linux／macOS source development Uninstallの失敗時保護とresident process stop synthetic pathに限定）。G03.01–03のinstalled-linux evidence、native macOS、製品package、安全全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。実装・test・一次記録commit=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`はmainへpush済み。最終記録push後、local／origin／GitHub mainおよびcurrent recovery refは最終main、previous recovery refは`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`となるよう確認する。
 
 ---
 
