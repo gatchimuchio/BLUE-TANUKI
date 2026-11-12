@@ -4316,3 +4316,26 @@ ownerが選択した達成条件（現行J正本に結び付く明示規則、�
 | 実provider／外部作用／full suite／5OS QA／QE_QC／QE_QA | NOT_RUN。 |
 
 生成資産分類：変更対象はtestとactive docs。test-owned Temp rootはfinally cleanup後にprefix再確認し、今回作成分の残存なし。15-project buildのignored `dist`／isolation outputは現行開発環境として保持。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untrackedのまま未変更。OneDrive登録・dehydrate・容量回収、別repo変更、provider credential利用、外部作用なし。このC08.02明示達成規則consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。作業開始local／origin／GitHub mainは`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`、recovery current／previousは`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`／`c8eb174d31574a01c2e92ade57d726fa5843bf50`。終端SHA／recovery refsはpush後にGitから照合する。
+
+## 2026-11-12 — QEB-F02.02-GMAIL-DIRECT-MESSAGE-SEND-RETURN
+
+作業開始時local `main`／`origin/main`／GitHub `main`=`2d3931a1e39457da19185cb7f3094d32ca037864`、ahead／behind=0/0、worktreeはmainのみ。rev4.0三点セットのowner pin、ZIP SHA-256、manifestと三文書hashは一致。開始recovery branch／remote tag current=`2d3931a1e39457da19185cb7f3094d32ca037864`、previous=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡。
+
+通常Gmail `message.send`を既存のGateway content-review／Approval Gate／Executor／HDS Operation Plan／J/M receipt／認証済みControl Centerへ接続した。owner task内のTo/Cc/Bcc/Reply-To、件名、本文、選択添付と認証mailboxをreview digestへ束縛し、account identity／provider stateをhigh/L3 no-store reviewへ表示する。承認を消費した後の作用直前にも同じmailbox・target・request digestを再照合し、send requestは一回だけ発行する。送信応答から得たmessage/threadを同一mailboxで再読込し、両identityと`SENT`を確認できた場合だけdigest-only resultを返す。不明応答、account変更、誤thread、message readback失敗、`SENT`欠落では`outcome_unknown`として停止し、自動再送しない。
+
+HDSの結果validationはcommand／target／request digestと検証済みmessage/thread/account stateを照合する。M receiptはdigestとnon-authority flagsだけで、recipient、本文、raw MIME、添付内容、provider object IDを保存しない。closed-store restart後のJ/M reconciliationからownerへ保存済み確認を一度返し、送信や現在状態の再確認はしない。HDS単一writer、Approval Gate、L3、M非権威、外部入力の非権威を維持した。
+
+| 確認 | 結果 |
+|---|---|
+| Focused Vitest | PASS：5 files／13 selected tests（296 skipped）。Gmail target/version、Gateway content review、Operation Plan candidate／target binding、verified send→M receipt→J/M restart→owner return、WebChat review renderingを合成fixtureで確認。送信前account差替え、結果不明、`SENT`欠落、thread不一致では送信を増やさない。 |
+| `node node_modules/typescript/bin/tsc -b --pretty false` | PASS（workspace TypeScript graph）。 |
+| `corepack pnpm build` | PASS（15 workspace projects）。 |
+| `corepack pnpm docs:check` | PASS。docs、日本語基底監査、license gate。既存の日本語基底移行負債75件は注意表示。 |
+| `git diff --check` | PASS。 |
+| 実Gmail credential／provider／message送信、live Gateway、full suite、5OS QA、QE_QC／QE_QA、release／owner GO | NOT_RUN。 |
+
+生成資産分類：変更はsource／tests／active docsのtracked 20 files。workspace `dist`とLinux／Windows isolation build outputsは15-project buildで生成された稼働中の開発環境として保持。served restart test fixtureはunique Temp rootを`finally`で削除し、残存なし。保護添付directoriesは未変更・未追跡で保持。他repo、OneDrive資料、credential store、実provider、外部作用には触れていない。
+
+`git fetch origin`は古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataのcleanupでPermission deniedとなったためACLを迂回しなかった。`git ls-remote`でGitHub mainと両recovery tagを独立照合し、作業開始時はmain=`2d3931a1e39457da19185cb7f3094d32ca037864`、backup current=`2d3931a1e39457da19185cb7f3094d32ca037864`、backup previous=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`を確認した。終端local／remote main、push、recovery refsはcloseout時のGit照合に従う。
+
+この通常`message.send` consumerだけを`WIRED`とする。F02.02全体、実provider接続・実送信、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、OS別QA、release／owner GOは未成立。

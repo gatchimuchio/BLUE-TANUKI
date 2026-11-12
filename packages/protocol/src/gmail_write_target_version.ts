@@ -18,7 +18,7 @@ export const GmailWriteTargetVersionObservationSchema = z.object({
   target_identity_digest: DigestSchema,
   /** draft.sendではdraft ID・raw digest・thread identityから再計算できるrequest intent digest。 */
   request_payload_digest: DigestSchema,
-  /** draft.sendでは表示・送信対象にした既存resource状態のdigest。 */
+  /** draft.sendでは既存draft状態、message.sendでは認証中Gmail account identity digest。 */
   provider_state_digest: DigestSchema.optional(),
   /** draft.sendで同一性照合するMIME raw bytesのdigest。本文そのものは保持しない。 */
   provider_raw_digest: DigestSchema.optional(),

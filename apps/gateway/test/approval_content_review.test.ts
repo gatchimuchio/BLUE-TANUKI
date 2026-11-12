@@ -5,6 +5,7 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   isGmailDraftSendReviewCommand,
+  isGmailMessageSendReviewCommand,
   isGmailMessageTrashReviewCommand,
   isGmailMessageModifyReviewCommand,
   isGmailWriteContentReviewCommand,
@@ -105,33 +106,51 @@ describe("Gmail approval content review projection", () => {
     expect(isGmailMessageModifyReviewCommand(command({ operation: "message.trash", message_id: args.message_id }))).toBe(false);
   });
 
-  it("projects the effective message fields and binds both digests", () => {
+  it("message.send review requires the exact authenticated account and payload snapshot", () => {
     const args = {
       operation: "message.send",
       to: " owner@example.test ",
       cc: "copy@example.test",
       bcc: "hidden@example.test",
-      from: "sender@example.test",
       subject: "  Review this  ",
       body_text: "  exact body\nline two  ",
     };
     const input = command(args);
     const digest = "b".repeat(64);
+    const accountEmail = "owner@example.test";
+    const accountIdentityDigest = createHash("sha256").update(accountEmail.toLowerCase(), "utf8").digest("hex");
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const reviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-send-content-review.v1",
+      command_digest: digest, target_identity_digest: gmailWriteTargetIdentityDigest(args), request_payload_digest: requestPayloadDigest,
+      account_identity_digest: accountIdentityDigest, provider_state_digest: accountIdentityDigest,
+      attachment_content_digests: [] });
+    const snapshot = { kind: "gmail_write_content" as const, command_digest: digest, request_payload_digest: requestPayloadDigest,
+      review_digest: reviewDigest, account_email: accountEmail, account_identity_digest: accountIdentityDigest,
+      provider_state_digest: accountIdentityDigest, used_for_authority: false as const, may_execute: false as const };
 
     expect(isGmailWriteContentReviewCommand(input)).toBe(true);
-    expect(projectGmailWriteContentReview(input, digest)).toEqual({
+    expect(isGmailMessageSendReviewCommand(input)).toBe(true);
+    expect(projectGmailWriteContentReview(input, digest)).toBeNull();
+    expect(projectGmailWriteContentReview(input, digest, snapshot)).toEqual({
       command_id: "cmd-content-review",
       command_digest: digest,
-      request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      kind: "gmail_write_content",
+      review_digest: reviewDigest,
+      account_email: accountEmail,
+      account_identity_digest: accountIdentityDigest,
+      provider_state_digest: accountIdentityDigest,
+      request_payload_digest: requestPayloadDigest,
       operation: "gmail.write.message.send",
       to: "owner@example.test",
       cc: "copy@example.test",
       bcc: "hidden@example.test",
-      from: "sender@example.test",
       subject: "Review this",
       body_text: "exact body\nline two",
       used_for_authority: false,
     });
+    expect(projectGmailWriteContentReview(input, digest,
+      { ...snapshot, account_email: "other@example.test" })).toBeNull();
+    expect(validateGmailWriteContentReview(input, digest, true, reviewDigest, reviewDigest, snapshot)).toBe("valid");
   });
 
   it("fails closed for unsupported payload fields and invalid binding digests", () => {

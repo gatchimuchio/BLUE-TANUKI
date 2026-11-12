@@ -261,6 +261,8 @@ export interface GmailAttachmentContentReview {
 export interface GmailWriteContentReview {
   kind: "gmail_write_content";
   operation: "gmail.write.draft.create" | "gmail.write.message.send";
+  account_email?: string;
+  account_identity_digest?: string;
   reply_source?: {
     message_id: string;
     thread_id: string;

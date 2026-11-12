@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則と検証済みJ/M根拠
+### 直近完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果帰還
+
+通常`message.send`を既存Gateway／Approval Gate／Executor／HDS-J/M／Control Centerのconsumerへ接続した。owner指定の宛先・Reply-To・件名・本文・選択添付と認証mailboxをdigestで束縛してno-store high/L3 reviewへ表示し、作用直前にaccount・要求を再照合して一回送信する。送信後は同じmailbox・返却message・threadを読み直して`SENT`を確認し、Jの結果validationとdigest-only M receipt、Gateway／J/M再起動後のowner照会までを接続した。不明・不一致・`SENT`未確認では結果不明で停止し、自動再送しない。
+
+Focused tests 13/13 PASS（5 files、296 skipped）。workspace `tsc -b`と15-project `build` PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。実Gmail／credential／送信、live Gateway、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の通常`message.send`限定consumerであり、F02.02全体・実provider接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則と検証済みJ/M根拠
 
 owner明示規則をtask identity／規則digestへ束縛し、同一revisionの一意なstep、検証済みoperation result、M receiptの一致時だけJが達成を記録する既存経路を再確認した。規則欠落・結果不一致・複数stepへの曖昧mappingはheldとなり、達成sealを作らない。達成後は同一taskの次stepを拒否し、Gateway再起動後も状態を復元する。GoalProjectionにはauthenticated owner規則のdigest参照だけを投影し、他のgoal要素はunknownを保つ。
 

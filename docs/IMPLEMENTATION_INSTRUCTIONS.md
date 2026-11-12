@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果検証とowner帰還
+
+主語はBLUE Gatewayの通常Gmail `message.send`、Approval Gate、Executor、HDS-J/M、認証済みControl Centerである。目的はowner taskに明示された宛先・Reply-To・件名・本文・選択添付と認証済みmailboxをno-storeのhigh/L3 reviewへ束縛し、一回の送信後に同じmailbox・message・threadの`SENT`状態を再読込で確認した結果だけを、検証済みOperation Plan、digest-only M receipt、再起動後のowner照会へ返すこと。
+
+Control Centerのreview digestはcommand、要求payload、添付内容digest、mailbox identity、provider stateを結ぶ。Approval Gate消費後の作用直前にmailboxと要求digestを再照合する。送信応答が不明・不正、同じmessage/threadを再読込できない、mailboxが違う、または`SENT`を確認できない場合は成功に昇格せず、結果不明として自動再送しない。Mとowner projectionには本文、raw MIME、宛先、添付内容、provider object IDを保存しない。live providerではなく合成transport fixtureの結果である。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Gmail／Gateway／HDS／WebChat focused Vitest | PASS：5 files、13 selected tests、296 skipped。content review、account／target再照合、単回send、`SENT`／thread readback、不明・不一致時のno-retry、検証済み結果からM receipt・再起動後owner returnまでを合成fixtureで確認。 |
+| `node node_modules/typescript/bin/tsc -b --pretty false` | PASS：workspace TypeScript build graph。 |
+| `corepack pnpm build` | PASS：15 workspace build projects。 |
+| `corepack pnpm docs:check` | PASS：docs／日本語基底／license gates。日本語基底の既存移行負債75件は注意表示。 |
+| `git diff --check` | PASS。 |
+| 実Gmail credential／API／送信、live Gateway、full suite、5OS QA、QE_QC／QE_QA、release／owner GO | NOT_RUN。 |
+
+UNIT_ID: F02.02（通常message.sendのレビュー済み単回送信、同一message/threadのSENT確認、J/M receiptとowner帰還の限定consumer）
+STATUS: WIRED（合成応答でOperation Plan→high/L3 no-store review→作用直前mailbox再照合→単回send→同一message/threadのSENT readback→J検証→digest-only M receipt→再起動後owner projection。実provider／live Gateway未確認）
+NEXT_REQUIRED_CONSUMER: このBUILD_BATCHを閉じた後、独立した次作業で現行rev4.0、最新HEAD、実consumerから次のproducer／consumerを選定する。F02.02全体の完成やC08.03実provider、OD-03 live外部作用へ拡張しない。
+SAFETY_STATUS: high/L3、Approval Gate、command／宛先／本文／選択添付／認証mailboxのno-store束縛、作用直前再照合、送信後account／message／thread／SENT readback、結果不明時の自動再送禁止、HDS単一writer、M非権威を維持。実credential・Gmail・送信なし。
+LOCAL_ASSET_STATUS: source／tests／active docsはGit候補。build生成のworkspace `dist`／platform isolation outputsは開発環境として保持。focused test用rootはtestのfinally／afterAllでcleanupされ、終了後の確認で今回の固有root残存なし。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。他repo／OneDrive保管操作なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`2d3931a1e39457da19185cb7f3094d32ca037864`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／remote tag current=`2d3931a1e39457da19185cb7f3094d32ca037864`、previous=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`。終端SHA・復旧ref・protected attachment状態はGit照合後に記録する。古いworktree metadataのACL拒否でfetchが失敗したため迂回せず、remote SHAは`git ls-remote`で照合した。
+
 ## 完了BUILD_BATCH — QE_BUILD / C08.02 owner達成規則と検証済みJ/M根拠の照合
 
 主語はBLUE-TANUKIのOwner Task受付からHDS-J／M、再起動後のtask状態投影までの経路。ownerの明示規則を同一taskへ束縛し、同一revisionの一意なoperation step、検証済み結果、M receiptがそろう場合だけJが達成を記録し、同一taskを停止する。規則・対象・結果・receiptの欠落、不一致、曖昧さは保留とする。GoalProjectionは規則本文ではなくauthenticated owner request由来のdigest参照だけを示し、その他の未知項目を確定しない。

@@ -5,7 +5,8 @@ import { GmailWriteTargetVersionObservationSchema, type ExecuteCommand } from "@
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import { createGmailWriteTool, type GoogleWriteResponse, type GoogleWriteTarget } from "../src/tools/google_write.js";
+import { createGmailWriteTool, gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest,
+  type GoogleWriteResponse, type GoogleWriteTarget } from "../src/tools/google_write.js";
 
 const args = {
   operation: "message.send",
@@ -22,6 +23,34 @@ const response: GoogleWriteResponse = {
   truncated: false,
   request_id: "fixture-request",
 };
+
+function gmailMessageSendFixture(options: {
+  readonly profileEmails?: readonly string[];
+  readonly sentLabels?: readonly string[];
+  readonly readbackThreadId?: string;
+  readonly throwOnSend?: boolean;
+  readonly sendResponse?: GoogleWriteResponse;
+} = {}) {
+  let profileIndex = 0;
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    if (target.method === "GET" && target.path.endsWith("/profile")) {
+      const emails = options.profileEmails ?? ["owner@example.invalid"];
+      const emailAddress = emails[Math.min(profileIndex++, emails.length - 1)]!;
+      return { ...response, body: JSON.stringify({ emailAddress }) };
+    }
+    if (target.method === "POST" && target.path.endsWith("/messages/send")) {
+      if (options.throwOnSend) throw new Error("fixture transport interruption");
+      return options.sendResponse ?? { ...response, body: JSON.stringify({ id: "fixture-sent-message_1", threadId: "fixture-thread_1" }) };
+    }
+    if (target.method === "GET" && target.path.includes("/messages/fixture-sent-message_1?")) {
+      return { ...response, body: JSON.stringify({ id: "fixture-sent-message_1",
+        threadId: options.readbackThreadId ?? "fixture-thread_1", labelIds: [...(options.sentLabels ?? ["SENT"])],
+        internalDate: "1730000000000", sizeEstimate: 128, payload: { headers: [] } }) };
+    }
+    return { ...response, ok: false, status: 404, body: "{}" };
+  });
+  return { request };
+}
 
 const draftArgs = { operation: "draft.send", draft_id: "fixture-draft" };
 const draftRaw = Buffer.from([
@@ -319,8 +348,9 @@ describe("Gmail write target observation", () => {
     expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
   });
 
-  it("credentialを読まずexact plan sourceと送信payloadのdigestを作り、同じpayloadだけstubへ渡す", async () => {
-    const request = vi.fn(async (_target: GoogleWriteTarget) => response);
+  it("account・exact payloadを承認前後で照合し、SENT readback後にdigestだけを返す", async () => {
+    const fixture = gmailMessageSendFixture();
+    const request = fixture.request;
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
     const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
       command_digest: "a".repeat(64),
@@ -333,6 +363,7 @@ describe("Gmail write target observation", () => {
     expect(observation).not.toHaveProperty("to");
     expect(observation).not.toHaveProperty("subject");
     expect(observation).not.toHaveProperty("body_text");
+    expect(observation.provider_state_digest).toMatch(/^[a-f0-9]{64}$/);
 
     const result = await tool.invoke(args, {
       command_id: "fixture-command",
@@ -341,12 +372,32 @@ describe("Gmail write target observation", () => {
       command_digest: "e".repeat(64),
       target_version_observation: observation,
     });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ service: "gmail", operation: "message.send", mutation_sent: true });
+    expect(request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/messages/send"))).toHaveLength(1);
+    expect(request.mock.calls.filter(([target]) => target.method === "GET" && target.path.endsWith("/profile"))).toHaveLength(3);
+    expect(result).toMatchObject({ service: "gmail", operation: "message.send", mutation_sent: true, mutation_status: "confirmed",
+      result: { sent_confirmed: true, sent_label_confirmed: true, used_for_authority: false, may_execute: false } });
+    expect(result).toMatchObject({ result: { target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      request_payload_digest: gmailWriteRequestPayloadDigest(args) } });
+    expect(JSON.stringify(result)).not.toContain("inspection@example.invalid");
+    expect(JSON.stringify(result)).not.toContain("fixture-sent-message_1");
+    expect(JSON.stringify(result)).not.toContain("fixture-thread_1");
+  });
+
+  it("direct-send content reviewは認証accountと現在の要求payloadを表示対象へ結ぶ", async () => {
+    const fixture = gmailMessageSendFixture();
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const review = await tool.inspect_content_review!(args, { command_digest: "a".repeat(64) });
+    expect(review).toMatchObject({ kind: "gmail_write_content", operation: "gmail.write.message.send",
+      account_email: "owner@example.invalid", request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      account_identity_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      provider_state_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      review_digest: expect.stringMatching(/^[a-f0-9]{64}$/), used_for_authority: false, may_execute: false });
+    expect(review).not.toHaveProperty("message_id");
   });
 
   it("本文・宛先の変更や観測欠落は資格情報確認・request送信より前に拒否する", async () => {
-    const request = vi.fn(async (_target: GoogleWriteTarget) => response);
+    const fixture = gmailMessageSendFixture();
+    const request = fixture.request;
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
     const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
       command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
@@ -358,11 +409,60 @@ describe("Gmail write target observation", () => {
     await expect(tool.invoke({ ...args, body_text: "changed" }, context)).rejects.toThrow(/target version changed.*request_sent=false/);
     await expect(tool.invoke(args, { ...context, target_version_observation: undefined })).rejects
       .toThrow(/target version evidence is required.*request_sent=false/);
-    expect(request).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+  });
+
+  it("送信応答が不明なら1回で停止し、自動再送しない", async () => {
+    const fixture = gmailMessageSendFixture({ throwOnSend: true });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(args, { command_id: "fixture-send-unknown", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/messages/send"))).toHaveLength(1);
+  });
+
+  it("SENT readbackが欠ける結果はoutcome_unknownのまま閉じる", async () => {
+    const fixture = gmailMessageSendFixture({ sentLabels: ["INBOX"] });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(args, { command_id: "fixture-send-unverified", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/SENT readback is unconfirmed; outcome_unknown/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/messages/send"))).toHaveLength(1);
+  });
+
+  it("送信応答と異なるthreadへのreadbackは成功にしない", async () => {
+    const fixture = gmailMessageSendFixture({ readbackThreadId: "other-thread_1" });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(args, { command_id: "fixture-send-thread-mismatch", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/SENT readback is unconfirmed; outcome_unknown/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/messages/send"))).toHaveLength(1);
+  });
+
+  it("アカウントが承認後に変わった場合は送信前に拒否する", async () => {
+    const fixture = gmailMessageSendFixture({ profileEmails: ["owner@example.invalid", "other@example.invalid"] });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(args, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(args, { command_id: "fixture-send-account-changed", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/account or content changed after review/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
   });
 
   it("標準Executor dispatchはticket内の観測をGmail adapterへ渡してからstub transportを呼ぶ", async () => {
-    const request = vi.fn(async (_target: GoogleWriteTarget) => response);
+    const fixture = gmailMessageSendFixture();
+    const request = fixture.request;
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
     const tools = new ToolRegistry();
     tools.register(tool);
@@ -397,9 +497,9 @@ describe("Gmail write target observation", () => {
     const feedback = await executor.execute(approved);
 
     expect(feedback.status).toBe("success");
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]?.[0]).toMatchObject({ service: "gmail",
-      path: "/gmail/v1/users/me/messages/send", token: "fixture-token" });
+    const sends = request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/messages/send"));
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.[0]).toMatchObject({ service: "gmail", path: "/gmail/v1/users/me/messages/send", token: "fixture-token" });
   });
 
   it("標準Executor dispatchはdraft.createの承認ticket観測をstub transportまで保つ", async () => {

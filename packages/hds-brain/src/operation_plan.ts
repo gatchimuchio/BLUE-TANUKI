@@ -291,6 +291,22 @@ export type OperationPlanSavedResultReturnProjection =
     readonly request_payload_digest: string;
     readonly provider_state_digest: string;
     readonly operation_plan_binding_digest: string;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v10";
+    readonly operation: "gmail.write";
+    readonly operation_name: "message.send";
+    readonly status: "verified";
+    readonly sent_confirmed: true;
+    readonly sent_label_confirmed: true;
+    readonly account_identity_digest: string;
+    readonly label_ids_digest: string;
+    readonly sent_message_identity_digest: string;
+    readonly thread_identity_digest: string;
+    readonly target_identity_digest: string;
+    readonly request_payload_digest: string;
+    readonly provider_state_digest: string;
+    readonly operation_plan_binding_digest: string;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -929,6 +945,52 @@ function validGmailAttachmentReference(value: unknown): boolean {
     /^[a-f0-9]{64}$/.test(value.content_sha256);
 }
 
+function gmailMessageSendPlanDigests(parameters: Record<string, unknown>): {
+  target_identity_digest: string;
+  request_payload_digest: string;
+} | undefined {
+  const to = normalizeGmailAddressList(parameters.to);
+  const subjectValue = parameters.subject;
+  const bodyValue = parameters.body_text;
+  const attachmentsValue = parameters.attachments;
+  if (!to || typeof subjectValue !== "string" || subjectValue.trim().length === 0 ||
+      subjectValue.length > 200 || /[\r\n]/.test(subjectValue) || typeof bodyValue !== "string" ||
+      bodyValue.length > 64_000 || attachmentsValue !== undefined &&
+      (!Array.isArray(attachmentsValue) || attachmentsValue.length !== 1 ||
+        !validGmailAttachmentReference(attachmentsValue[0]))) return undefined;
+  const recipients: Record<string, string> = { to };
+  for (const name of ["cc", "bcc", "reply_to"] as const) {
+    const recipient = normalizeGmailAddressList(parameters[name]);
+    if (parameters[name] !== undefined && !recipient) return undefined;
+    if (recipient) recipients[name] = recipient;
+  }
+  const subject = subjectValue.trim();
+  const encodedSubject = /^[\x20-\x7e]*$/.test(subject)
+    ? subject : `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
+  const attachments = Array.isArray(attachmentsValue) ? attachmentsValue.map((raw) => {
+    const attachment = raw as Record<string, unknown>;
+    return {
+      message_id: attachment.message_id,
+      attachment_id: attachment.attachment_id,
+      part_id: attachment.part_id,
+      part_path: attachment.part_path,
+      filename: attachment.filename,
+      mime_type: attachment.mime_type,
+      size_bytes: attachment.size_bytes,
+      content_sha256: attachment.content_sha256,
+    };
+  }) : [];
+  return {
+    target_identity_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
+      service: "gmail", operation: "message.send", recipients }),
+    request_payload_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-intent.v2",
+      operation: "message.send", to, cc: normalizeGmailAddressList(parameters.cc) ?? null,
+      bcc: normalizeGmailAddressList(parameters.bcc) ?? null,
+      reply_to: normalizeGmailAddressList(parameters.reply_to) ?? null, from: null, subject: encodedSubject,
+      body_text: bodyValue.trim().length > 0 ? bodyValue.trim() : "", attachments }),
+  };
+}
+
 function isFileSearchResultRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1363,6 +1425,49 @@ export function operationPlanResultValidationMatches(
       typeof result.label_ids_digest === "string" && /^[a-f0-9]{64}$/.test(result.label_ids_digest) &&
       typeof result.provider_state_digest === "string" && /^[a-f0-9]{64}$/.test(result.provider_state_digest) &&
       result.sent_label_confirmed === true && result.sent_confirmed === true &&
+      result.used_for_authority === false && result.may_execute === false &&
+      output.result_digest === operationPlanDigest(result) &&
+      (output.content_type === undefined || typeof output.content_type === "string") &&
+      (output.google_request_id === undefined || typeof output.google_request_id === "string");
+  }
+  if (validation.method === "gmail_message_send_result_matches") {
+    const parameters = step.parameters;
+    const digests = parameters ? gmailMessageSendPlanDigests(parameters) : undefined;
+    if (step.operation !== "gmail.write" || step.target.kind !== "external_service" || step.target.id !== "gmail" ||
+        parameters?.operation !== "message.send" || !digests || !isFileSearchResultRecord(validation.expected) ||
+        !isFileSearchResultRecord(output) || !isFileSearchResultRecord(output.result)) return false;
+    const expectedKeys = ["operation", "request_payload_digest", "schema_version", "target_identity_digest"];
+    const result = output.result;
+    const resultKeys = ["account_identity_digest", "label_ids_digest", "may_execute", "provider_state_digest",
+      "request_payload_digest", "sent_confirmed", "sent_label_confirmed", "sent_message_identity_digest",
+      "target_identity_digest", "thread_identity_digest", "used_for_authority"];
+    const outputKeys = ["api_host", "content_type", "google_request_id", "method", "mode", "mutation_sent",
+      "mutation_status", "operation", "path_digest", "request_status", "result", "result_digest", "service",
+      "status", "truncated"];
+    const path = "/gmail/v1/users/me/messages/send";
+    return Object.keys(validation.expected).sort().join(",") === expectedKeys.join(",") &&
+      validation.expected.schema_version === "blue-tanuki.gmail-message-send-result-validation.v1" &&
+      validation.expected.operation === "message.send" &&
+      validation.expected.target_identity_digest === digests.target_identity_digest &&
+      validation.expected.request_payload_digest === digests.request_payload_digest &&
+      Object.keys(output).every((key) => outputKeys.includes(key)) &&
+      ["api_host", "method", "mode", "mutation_sent", "mutation_status", "operation", "path_digest",
+        "request_status", "result", "result_digest", "service", "status", "truncated"].every((key) => Object.hasOwn(output, key)) &&
+      Object.keys(result).sort().join(",") === resultKeys.join(",") &&
+      output.service === "gmail" && output.mode === "write" && output.operation === "message.send" &&
+      output.api_host === "gmail.googleapis.com" && output.method === "POST" &&
+      output.path_digest === operationPlanDigest(path) && output.request_status === "ok" &&
+      output.mutation_sent === true && output.mutation_status === "confirmed" &&
+      typeof output.status === "number" && Number.isInteger(output.status) && output.status >= 200 && output.status < 300 &&
+      output.truncated === false && typeof output.result_digest === "string" && /^[a-f0-9]{64}$/.test(output.result_digest) &&
+      result.target_identity_digest === digests.target_identity_digest &&
+      result.request_payload_digest === digests.request_payload_digest &&
+      typeof result.account_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.account_identity_digest) &&
+      typeof result.sent_message_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.sent_message_identity_digest) &&
+      typeof result.thread_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.thread_identity_digest) &&
+      typeof result.label_ids_digest === "string" && /^[a-f0-9]{64}$/.test(result.label_ids_digest) &&
+      typeof result.provider_state_digest === "string" && /^[a-f0-9]{64}$/.test(result.provider_state_digest) &&
+      result.sent_confirmed === true && result.sent_label_confirmed === true &&
       result.used_for_authority === false && result.may_execute === false &&
       output.result_digest === operationPlanDigest(result) &&
       (output.content_type === undefined || typeof output.content_type === "string") &&
@@ -2521,6 +2626,29 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000 ||
       parameters.attachments !== undefined && (!Array.isArray(parameters.attachments) || parameters.attachments.length !== 1 ||
         !validGmailAttachmentReference(parameters.attachments[0]))) return false;
+  if (parameters.operation === "message.send") {
+    const validation = step.preparation?.validation ?? [];
+    const expected = validation[0]?.expected;
+    const digests = gmailMessageSendPlanDigests(parameters);
+    const validPermission = step.permission.risk === "high" &&
+      step.permission.approval_level === "L3_final_review" && step.permission.final_review_required &&
+      step.permission.approval_gate_required && step.permission.hds_brain_authority_required;
+    const validEffects = step.effects.length === 3 &&
+      ["external_send", "write", "credential_access"].every((effect) =>
+        step.effects.includes(effect as OperationStep["effects"][number]));
+    if (!validPermission || !validEffects || !digests || validation.length !== 1 ||
+        validation[0]!.method !== "gmail_message_send_result_matches" ||
+        operationPlanDigest(validation[0]!.target) !== operationPlanDigest(step.target) ||
+        !isFileSearchResultRecord(expected) ||
+        Object.keys(expected).sort().join(",") !== "operation,request_payload_digest,schema_version,target_identity_digest" ||
+        expected.schema_version !== "blue-tanuki.gmail-message-send-result-validation.v1" ||
+        expected.operation !== "message.send" ||
+        expected.target_identity_digest !== digests.target_identity_digest ||
+        expected.request_payload_digest !== digests.request_payload_digest ||
+        Object.keys(parameters).some((key) => !["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text",
+          "attachments"].includes(key))) return false;
+    return true;
+  }
   if (replySourceMessageId !== undefined) {
     const validation = step.preparation?.validation ?? [];
     const expected = validation[0]?.expected;
@@ -5041,6 +5169,7 @@ export class OperationPlanLedger {
     const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
     const binding = bindings.at(-1);
     const githubWrite = step.operation === "github.write";
+    const gmailMessageSend = step.operation === "gmail.write" && step.parameters?.operation === "message.send";
     const gmailDraftSend = step.operation === "gmail.write" && step.parameters?.operation === "draft.send";
     const gmailTrash = step.operation === "gmail.write" && step.parameters?.operation === "message.trash";
     const gmailModify = step.operation === "gmail.write" && step.parameters?.operation === "message.modify";
@@ -5048,7 +5177,7 @@ export class OperationPlanLedger {
       ? ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding?.status ?? "")
       : binding?.status === "verified";
     if (bindings.length !== 1 || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
-        (!githubWrite && !gmailDraftSend && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
+        (!githubWrite && !gmailMessageSend && !gmailDraftSend && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
           step.operation !== "file.write" && step.operation !== "file.delete") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
@@ -5190,6 +5319,71 @@ export class OperationPlanLedger {
         draft_provider_state_digest: sendReceipt.draft_provider_state_digest,
         thread_identity_digest: sendReceipt.thread_identity_digest,
         sent_message_identity_digest: sendReceipt.sent_message_identity_digest,
+        target_identity_digest: sendReceipt.target_identity_digest,
+        request_payload_digest: sendReceipt.request_payload_digest,
+        provider_state_digest: sendReceipt.provider_state_digest,
+        operation_plan_binding_digest: binding.operation_plan_binding_digest!,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
+    if (gmailMessageSend) {
+      const validations = step.preparation?.validation ?? [];
+      const sendOutput = result.output;
+      const sendReceipt = isFileSearchResultRecord(sendOutput) && isFileSearchResultRecord(sendOutput.result)
+        ? sendOutput.result : undefined;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
+          !hasConnectedPlanTarget(step) || validations.length !== 1 ||
+          !operationPlanResultValidationMatches(validations[0]!, step, sendOutput, binding) || !sendReceipt ||
+          typeof sendReceipt.account_identity_digest !== "string" ||
+          typeof sendReceipt.label_ids_digest !== "string" ||
+          typeof sendReceipt.sent_message_identity_digest !== "string" ||
+          typeof sendReceipt.thread_identity_digest !== "string" ||
+          typeof sendReceipt.target_identity_digest !== "string" ||
+          typeof sendReceipt.request_payload_digest !== "string" ||
+          typeof sendReceipt.provider_state_digest !== "string" ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          committedObservation.task_identity_digest !== binding.execution_admission.task_identity_digest ||
+          committedObservation.plan_id_digest !== operationPlanDigest(current.plan.plan_id) ||
+          committedObservation.plan_revision_digest !== binding.revision_digest ||
+          committedObservation.step_review_request_id !== binding.request_id ||
+          committedObservation.command_id !== binding.command_id ||
+          committedObservation.upstream_commit_hash !== binding.commit_hash ||
+          committedObservation.operation !== "gmail.write.message.send" ||
+          committedObservation.step_id_digest !== operationPlanDigest(step.step_id) ||
+          committedObservation.step_digest !== binding.step_digest ||
+          committedObservation.command_digest !== binding.command_digest ||
+          committedObservation.operation_plan_binding_digest !== binding.operation_plan_binding_digest ||
+          committedObservation.delivery_digest !== binding.delivery_digest ||
+          committedObservation.result_digest !== binding.result_digest ||
+          committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" ||
+          committedObservation.target_identity_digest !== sendReceipt.target_identity_digest ||
+          committedObservation.provider_state_digest !== sendReceipt.provider_state_digest ||
+          committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.adoption_status !== "observation_only" ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v10",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms,
+        operation: "gmail.write", operation_name: "message.send", status: "verified",
+        sent_confirmed: true, sent_label_confirmed: true,
+        account_identity_digest: sendReceipt.account_identity_digest,
+        label_ids_digest: sendReceipt.label_ids_digest,
+        sent_message_identity_digest: sendReceipt.sent_message_identity_digest,
+        thread_identity_digest: sendReceipt.thread_identity_digest,
         target_identity_digest: sendReceipt.target_identity_digest,
         request_payload_digest: sendReceipt.request_payload_digest,
         provider_state_digest: sendReceipt.provider_state_digest,

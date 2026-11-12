@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   goalCompletionRulesDigest, type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
+  gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool, LLMComputeAdapter,
   LLMRegistry, createMemoryPersonalizationStopTool, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegram";
@@ -98,10 +99,22 @@ function plan(id: string, root: string): OperationPlan {
 }
 function gmailSendPlan(id: string, parameters: OperationParameters): OperationPlan {
   const target = { kind: "external_service" as const, id: "gmail" };
-  const validation = parameters.operation === "draft.send"
-    ? { check_id: "draft-send-confirmed", method: "gmail_draft_send_result_matches" as const, target,
-      expected: { schema_version: "blue-tanuki.gmail-draft-send-result-validation.v1", operation: "draft.send" } }
-    : { check_id: "send-accepted", method: "result_equals" as const, target, expected: { mutation_status: "confirmed" } };
+  let validation: NonNullable<OperationStep["preparation"]>["validation"][number];
+  if (parameters.operation === "draft.send") {
+    validation = { check_id: "draft-send-confirmed", method: "gmail_draft_send_result_matches", target,
+      expected: { schema_version: "blue-tanuki.gmail-draft-send-result-validation.v1", operation: "draft.send" } };
+  } else if (parameters.operation === "message.send") {
+    try {
+      validation = { check_id: "send-verified", method: "gmail_message_send_result_matches", target,
+        expected: { schema_version: "blue-tanuki.gmail-message-send-result-validation.v1", operation: "message.send",
+          target_identity_digest: gmailWriteTargetIdentityDigest(parameters),
+          request_payload_digest: gmailWriteRequestPayloadDigest(parameters) } };
+    } catch {
+      validation = { check_id: "send-accepted", method: "result_equals", target, expected: { mutation_status: "confirmed" } };
+    }
+  } else {
+    validation = { check_id: "send-accepted", method: "result_equals", target, expected: { mutation_status: "confirmed" } };
+  }
   return { version: "operation-core.v1", plan_id: `gmail-plan-${id}`, request_id: id, state: "planned",
     steps: [{ step_id: "send", operation: "gmail.write", target, state: "planned",
       effects: ["external_send", "write", "credential_access"],
@@ -2223,11 +2236,22 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
     if (!operationPlanBindingDigest) throw new Error("selected Gmail plan source binding was unavailable");
     const tools = new ToolRegistry(); tools.register(gmailWriteTool);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(selected.command.payload.arguments);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(selected.command.payload.arguments);
+    const accountIdentityDigest = createHash("sha256").update("owner@example.invalid", "utf8").digest("hex");
+    const targetVersionSpy = vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation(async (_args, options) => {
+      if (!options?.command_digest || !options.operation_plan_binding_digest) throw new Error("missing fixture binding");
+      return GmailWriteTargetVersionObservationSchema.parse({ schema_version: "blue-tanuki.gmail-write-target-version.v1",
+        target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest,
+        provider_state_digest: accountIdentityDigest, command_digest: options.command_digest,
+        operation_plan_binding_digest: options.operation_plan_binding_digest, used_for_authority: false, may_execute: false });
+    });
     const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
     const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
       tools, approval_authority: authority });
     const targetObservation = GmailWriteTargetVersionObservationSchema.parse(
       await executor.inspectCommandTargetVersion(selected.command, undefined, operationPlanBindingDigest));
+    targetVersionSpy.mockRestore();
     expect(targetObservation).toMatchObject({ operation_plan_binding_digest: operationPlanBindingDigest,
       used_for_authority: false, may_execute: false });
     expect(JSON.stringify(targetObservation)).not.toContain("inspection@example.invalid");

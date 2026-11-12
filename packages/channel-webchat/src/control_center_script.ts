@@ -7670,6 +7670,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               review.provider_state_digest !== review.reply_source.provider_state_digest)) ||
             (review.operation === "gmail.write.draft.create" && review.reply_source === undefined &&
               review.provider_state_digest !== undefined) ||
+            (review.operation === "gmail.write.message.send" &&
+              (typeof review.account_email !== "string" || !review.account_email.trim() ||
+                review.account_email.length > 320 || /[\\r\\n\\u0000-\\u001f\\u007f]/.test(review.account_email) ||
+                !/^[a-f0-9]{64}$/.test(review.account_identity_digest || "") ||
+                review.provider_state_digest !== review.account_identity_digest ||
+                !/^[a-f0-9]{64}$/.test(review.review_digest || ""))) ||
             typeof review.body_text !== "string" ||
             (review.attachments !== undefined && (!Array.isArray(review.attachments) || review.attachments.some(function (attachment) {
               return !attachment || typeof attachment.filename !== "string" || typeof attachment.mime_type !== "string" ||

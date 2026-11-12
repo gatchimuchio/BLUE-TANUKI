@@ -442,6 +442,38 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
     private_values: [prTitle, prBody] };
 }
 
+function gmailMessageSendCandidate(id: string): OperationPlan {
+  const target = { kind: "external_service" as const, id: "gmail" };
+  const parameters = { operation: "message.send", to: "recipient@example.invalid",
+    subject: "Synthetic direct-send fixture", body_text: "Fixture only; never sent." };
+  const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+  const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
+  const accountIdentityDigest = createHash("sha256").update("owner@example.invalid", "utf8").digest("hex");
+  vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation(async (_args, options) => {
+    if (!options?.command_digest || !options.operation_plan_binding_digest) {
+      throw new Error("fixture Gmail message.send target observation lacked current J binding");
+    }
+    return GmailWriteTargetVersionObservationSchema.parse({ schema_version: "blue-tanuki.gmail-write-target-version.v1",
+      target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest,
+      provider_state_digest: accountIdentityDigest, command_digest: options.command_digest,
+      operation_plan_binding_digest: options.operation_plan_binding_digest, used_for_authority: false, may_execute: false });
+  });
+  return { version: "operation-core.v1", plan_id: `gmail-message-send-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "send-direct-message", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false, parameters,
+      preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "gmail-direct-send-readback", method: "gmail_message_send_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-message-send-result-validation.v1", operation: "message.send",
+            target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest } }],
+        compensation: { available: false, reason: "An accepted email send cannot be recalled." } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false,
+      command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
+
 function githubWriteCandidate(id: string, scenario = githubWriteScenario("issue.create")): OperationPlan {
   const target = { kind: "external_service" as const, id: "github" };
   return { version: "operation-core.v1", plan_id: `github-plan-${id}`, request_id: id, state: "planned",
@@ -1153,6 +1185,77 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(JSON.stringify(projection)).not.toContain("fixture-sent-message");
     expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
   }, gmailDraftSendCandidate));
+
+  it("Jで検証した通常message.send結果だけをdigest限定でM receiptへ固定し、再起動後にOwnerへ一度だけ返す", async () => fixture(async (c) => {
+    const parameters = c.plan.steps[0]!.parameters!;
+    const accountIdentityDigest = createHash("sha256").update("owner@example.invalid", "utf8").digest("hex");
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
+    const providerStateDigest = "1".repeat(64);
+    const result = {
+      account_identity_digest: accountIdentityDigest,
+      label_ids_digest: operationPlanDigest(["SENT"]),
+      may_execute: false,
+      provider_state_digest: providerStateDigest,
+      request_payload_digest: requestPayloadDigest,
+      sent_confirmed: true,
+      sent_label_confirmed: true,
+      sent_message_identity_digest: "2".repeat(64),
+      target_identity_digest: targetIdentityDigest,
+      thread_identity_digest: "3".repeat(64),
+      used_for_authority: false,
+    };
+    const output = {
+      service: "gmail", mode: "write", operation: "message.send", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest("/gmail/v1/users/me/messages/send"), method: "POST", status: 200,
+      content_type: "application/json", truncated: false, request_status: "ok", mutation_sent: true,
+      mutation_status: "confirmed", result_digest: operationPlanDigest(result), result,
+    };
+    vi.spyOn(gmailWriteTool, "invoke").mockResolvedValue(output);
+
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+
+    const checkpoint = c.j.load()!.plans[0]!;
+    const binding = checkpoint.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", memory_receipt: expect.objectContaining({ revision: 1 }) });
+    const memory = inspectMemory(c);
+    expect(memory.records).toHaveLength(1);
+    expect(memory.records[0]).toMatchObject({ schema_version: "operation-action-result.v1",
+      operation: "gmail.write.message.send", target_identity_digest: targetIdentityDigest,
+      provider_state_digest: providerStateDigest, effect_observation: "reported_success",
+      result_digest: binding.result_digest, used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const memoryJson = JSON.stringify(memory.records[0]);
+    for (const raw of ["recipient@example.invalid", "Synthetic direct-send fixture", "Fixture only; never sent.",
+      "owner@example.invalid", "2".repeat(64), "3".repeat(64)]) expect(memoryJson).not.toContain(raw);
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+    const current = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const returned = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: current.revision_digest, step_id: "send-direct-message" })}`));
+    const projection = restarted.takeOperationPlanSavedResultReturn(returned.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v10",
+      operation: "gmail.write", operation_name: "message.send", status: "verified", sent_confirmed: true,
+      sent_label_confirmed: true, account_identity_digest: accountIdentityDigest,
+      label_ids_digest: operationPlanDigest(["SENT"]), sent_message_identity_digest: "2".repeat(64),
+      thread_identity_digest: "3".repeat(64), target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest, provider_state_digest: providerStateDigest,
+      memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(projection)).not.toContain("recipient@example.invalid");
+    expect(JSON.stringify(projection)).not.toContain("Synthetic direct-send fixture");
+    expect(JSON.stringify(projection)).not.toContain("fixture-sent-message_1");
+    expect(JSON.stringify(projection)).not.toContain("fixture-thread_1");
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, gmailMessageSendCandidate));
 
   it("Jで検証したGmail label結果だけをdigest限定でM receiptへ固定し、再起動後にOwnerへ返す", async () => fixture(async (c) => {
     const messageId = "fixture-message_234";

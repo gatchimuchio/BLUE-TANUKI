@@ -28,6 +28,7 @@ import {
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
+  normalizeGmailAddressList,
   inspectExecutionResultDelivery,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   AgentDelegationContractSchema,
@@ -604,6 +605,10 @@ function approveCommandForExecution(
           !observation.provider_thread_identity_digest ||
           observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
             snapshot.payload.arguments, observation.provider_raw_digest, observation.provider_thread_identity_digest)
+        : operation === "message.send"
+          ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
+            observation.provider_thread_identity_digest !== undefined ||
+            observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)
         : operation === "message.trash" || operation === "message.modify"
           ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
             observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)
@@ -1677,6 +1682,55 @@ export class Executor {
           JSON.stringify(review.remove_labels.map((label) => label.id).sort()) !== JSON.stringify(expectedRemoveLabelIds) ||
           review.used_for_authority !== false || review.may_execute !== false) {
         throw new Error("gmail.write message.modify content review returned evidence for another command or provider state");
+      }
+      return review;
+    }
+    if (gmailOperation === "message.send") {
+      const expectedKeys = ["account_email", "account_identity_digest", "body_text", "command_digest", "kind",
+        "may_execute", "operation", "provider_state_digest", "request_payload_digest", "review_digest", "subject",
+        "to", "used_for_authority"];
+      const optionalKeys = ["attachments", "bcc", "cc", "reply_to"];
+      const args = command.payload.arguments;
+      const expectedTo = normalizeGmailAddressList(args.to);
+      const expectedCc = normalizeGmailAddressList(args.cc);
+      const expectedBcc = normalizeGmailAddressList(args.bcc);
+      const expectedReplyTo = normalizeGmailAddressList(args.reply_to);
+      const expectedSubject = typeof args.subject === "string" ? args.subject.trim() : "";
+      const expectedBody = typeof args.body_text === "string" && args.body_text.trim().length > 0
+        ? args.body_text.trim() : "";
+      const refs = Array.isArray(args.attachments) ? args.attachments as Record<string, unknown>[] : [];
+      const reviewedAttachments = "kind" in review && review.kind === "gmail_write_content"
+        ? review.attachments ?? [] : [];
+      const sameAttachments = refs.length === reviewedAttachments.length && refs.every((ref, index) => {
+        const attachment = reviewedAttachments[index];
+        return !!ref && typeof ref === "object" && attachment && attachment.filename === ref.filename && attachment.mime_type === ref.mime_type &&
+          attachment.size_bytes === ref.size_bytes && attachment.content_sha256 === ref.content_sha256 &&
+          attachment.used_for_authority === false;
+      });
+      const expectedReviewDigest = "kind" in review && review.kind === "gmail_write_content"
+        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-send-content-review.v1",
+            command_digest: operationPlanDigest(command),
+            target_identity_digest: gmailWriteTargetIdentityDigest(args),
+            request_payload_digest: gmailWriteRequestPayloadDigest(args),
+            account_identity_digest: review.account_identity_digest,
+            provider_state_digest: review.provider_state_digest,
+            attachment_content_digests: reviewedAttachments.map((attachment) => attachment.content_sha256),
+          }) : "";
+      if (!("kind" in review) || review.kind !== "gmail_write_content" ||
+          Object.keys(review).some((key) => !expectedKeys.includes(key) && !optionalKeys.includes(key)) ||
+          review.operation !== "gmail.write.message.send" || review.command_digest !== operationPlanDigest(command) ||
+          typeof review.account_email !== "string" || !review.account_email.trim() || review.account_email.length > 320 ||
+          /[\r\n\u0000-\u001f\u007f]/.test(review.account_email) ||
+          !/^[a-f0-9]{64}$/.test(review.account_identity_digest ?? "") ||
+          review.provider_state_digest !== review.account_identity_digest ||
+          createHash("sha256").update(review.account_email.trim().toLowerCase(), "utf8").digest("hex") !== review.account_identity_digest ||
+          review.request_payload_digest !== gmailWriteRequestPayloadDigest(args) ||
+          review.review_digest !== expectedReviewDigest || review.to !== expectedTo ||
+          (review.cc ?? undefined) !== expectedCc || (review.bcc ?? undefined) !== expectedBcc ||
+          (review.reply_to ?? undefined) !== expectedReplyTo || review.subject !== expectedSubject ||
+          review.body_text !== expectedBody || review.reply_source !== undefined || review.from !== undefined ||
+          !sameAttachments || review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("gmail.write message.send content review returned evidence for another account, content, or attachment");
       }
       return review;
     }

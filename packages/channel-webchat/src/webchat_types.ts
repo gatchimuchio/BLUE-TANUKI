@@ -177,7 +177,7 @@ export interface WebChatGmailApprovalContentReview {
   kind?: "gmail_write_content";
   command_id: string;
   command_digest: string;
-  /** Digest of both the command and, for draft.send, the provider snapshot shown below. */
+  /** Digest of the command and any verified provider snapshot shown below, including message.send account identity. */
   review_digest?: string;
   request_payload_digest: string;
   provider_state_digest?: string;
@@ -191,6 +191,7 @@ export interface WebChatGmailApprovalContentReview {
     used_for_authority: false;
   };
   account_email?: string;
+  account_identity_digest?: string;
   operation: "gmail.write.draft.create" | "gmail.write.message.send" | "gmail.write.draft.send";
   to: string;
   cc?: string;

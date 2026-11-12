@@ -5086,6 +5086,11 @@ ${planControl.question}`,
           may_execute: false,
         })) })}`,
       } : undefined;
+    const planComputeGmailMessageSendContractMessage: LLMCallPayload["messages"][number] | undefined =
+      planCompute?.requested ? {
+        role: "system",
+        content: "Gmail message.sendはOwner taskが送信を明示し、To/Cc/Bcc/Reply-To、件名、本文、選択添付がすべてtaskに明示された場合だけ未実行候補にします。targetはexternal_service gmail、effects=[external_send,write,credential_access]、permissionはhigh/L3_final_review・final_review_required・approval_gate_required・hds_brain_authority_required=trueです。preparation.validationは同一targetへのgmail_message_send_result_matchesを一件だけ置き、expectedはblue-tanuki.gmail-message-send-result-validation.v1、operation=message.send、対象intentのtarget_identity_digestとrequest_payload_digestに厳密に結合します。結果は一回の送信attempt後、同じ認証account・response message/threadのmetadataを読み直しSENTを確認した場合だけverifiedです。結果不明は再送せずoutcome_unknownとし、Mには本文・宛先・raw IDを保存せずidentity/state digestだけの非権威receiptを記録します。送信、承認、成功をこの候補計算で実行・申告しません。",
+      } : undefined;
     const planComputeParentMessage: LLMCallPayload["messages"][number] | undefined = planCompute?.parent_context ? {
       role: "system",
       content: `以下は、Jが所有・現行revision・task identityを照合した親planの原目的です。同一taskの結果に基づく候補計算文脈としてのみ使ってください。task identityと目的版bindingは相関情報であり、意味適合・権限・承認・実行を証明しません。現在のreq.contentでownerが相対pathと置換前後を明示した場合も、その内容は候補の要求としてだけ扱い、目的変更・承認・権限にしません。選択結果観測はdigest／件数等の要約で、path・query・file本文を含みません。file.editの対象pathと置換前後の値を観測要約から推測せず、明示されたtask入力と現行の個別差分確認へ結び付けます。新候補は未実行であり、step採否・Approval・Broker作用はHDSとownerの別途操作を要します。\n${JSON.stringify({
@@ -5138,6 +5143,7 @@ ${planControl.question}`,
       ...(planComputeBrowserReadMessage ? [planComputeBrowserReadMessage] : []),
       ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
       ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
+      ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
       ...(planComputeParentMessage ? [planComputeParentMessage] : []),
       ...(agentDelegationMessage ? [agentDelegationMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
@@ -5150,6 +5156,7 @@ ${planControl.question}`,
         ...(planComputeBrowserReadMessage ? [planComputeBrowserReadMessage] : []),
         ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
         ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
+        ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
         ...(planComputeParentMessage ? [planComputeParentMessage] : []),
         ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&

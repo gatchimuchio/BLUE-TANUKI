@@ -184,6 +184,7 @@ import {
   isGmailMessageModifyReviewCommand,
   isGmailDraftSendReviewCommand,
   isGmailWriteContentReviewCommand,
+  isGmailMessageSendReviewCommand,
   projectGmailMessageTrashContentReview,
   projectGmailMessageModifyContentReview,
   projectGmailDraftSendContentReview,
@@ -481,6 +482,17 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       `対象draft identity digest: ${projection.draft_identity_digest}`,
       `対象thread identity digest: ${projection.thread_identity_digest}`,
       `送信後message identity digest: ${projection.sent_message_identity_digest}`,
+      `確認時provider state digest: ${projection.provider_state_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "現在のMailbox状態は再読込していません。この結果照会は送信を再実行しません。",
+    ].join("\n");
+  }
+  if (projection.schema_version === "operation-plan-saved-result-return.v10") {
+    return [
+      "保存済みGmail message.send結果です。送信応答と同じmessage/threadのSENT状態を再読込で確認し、J/M receiptを照合済みです。",
+      `対象account identity digest: ${projection.account_identity_digest}`,
+      `送信後message identity digest: ${projection.sent_message_identity_digest}`,
+      `対象thread identity digest: ${projection.thread_identity_digest}`,
       `確認時provider state digest: ${projection.provider_state_digest}`,
       `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
       "現在のMailbox状態は再読込していません。この結果照会は送信を再実行しません。",
@@ -1707,6 +1719,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     approval_evaluation?: ApprovalEvaluation;
     command_digest?: string;
     expected_gmail_draft_provider_state_digest?: string;
+    expected_gmail_message_send_provider_state_digest?: string;
     expected_gmail_message_trash_provider_state_digest?: string;
     expected_gmail_message_modify_provider_state_digest?: string;
     expected_file_edit_target_version_digest?: string;
@@ -2193,6 +2206,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (opts.expected_gmail_draft_provider_state_digest &&
         observedGmailDraftStateDigest !== opts.expected_gmail_draft_provider_state_digest) {
       const reason = "gmail_draft_content_review_stale";
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
+      recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+        used_for_authority: false, may_execute: false,
+      });
+      return { status: reason };
+    }
+    if (opts.expected_gmail_message_send_provider_state_digest &&
+        (!isGmailMessageSendReviewCommand(cmd) ||
+          observedGmailDraftStateDigest !== opts.expected_gmail_message_send_provider_state_digest)) {
+      const reason = "gmail_message_send_account_review_stale";
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
       recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
         used_for_authority: false, may_execute: false,
@@ -3601,6 +3624,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       command_digest: pending.command_digest,
       ...(pending.content_review_provider_state_digest && isGmailDraftSendReviewCommand(pending.command)
         ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+      ...(pending.content_review_provider_state_digest && isGmailMessageSendReviewCommand(pending.command)
+        ? { expected_gmail_message_send_provider_state_digest: pending.content_review_provider_state_digest } : {}),
       ...(pending.content_review_provider_state_digest && isGmailMessageTrashReviewCommand(pending.command)
         ? { expected_gmail_message_trash_provider_state_digest: pending.content_review_provider_state_digest } : {}),
       ...(pending.content_review_provider_state_digest && isGmailMessageModifyReviewCommand(pending.command)
@@ -5083,7 +5108,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pending.command.payload.tool_name === "gmail.write" &&
       (Array.isArray(pending.command.payload.arguments.attachments) &&
         pending.command.payload.arguments.attachments.length > 0 ||
-        pending.command.payload.arguments.reply_to_message_id !== undefined);
+        pending.command.payload.arguments.reply_to_message_id !== undefined ||
+        isGmailMessageSendReviewCommand(pending.command));
     let verifiedSnapshot: Parameters<typeof projectGmailWriteContentReview>[2];
     if (needsVerifiedGmailWriteSnapshot) {
       try {
@@ -5099,6 +5125,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     pendingApprovals.set(command_id, {
       ...pending,
       content_review_digest: review.review_digest ?? review.command_digest,
+      ...(isGmailMessageSendReviewCommand(pending.command) && review.provider_state_digest
+        ? { content_review_provider_state_digest: review.provider_state_digest } : {}),
     });
     return review;
   }
@@ -5316,18 +5344,29 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const hasAttachments = pending.command.type === "tool_call" && pending.command.payload.tool_name === "gmail.write" &&
         Array.isArray(pending.command.payload.arguments.attachments) &&
         pending.command.payload.arguments.attachments.length > 0;
-      if (hasAttachments) {
+      const needsVerifiedSnapshot = hasAttachments || isGmailMessageSendReviewCommand(pending.command);
+      let snapshot: Parameters<typeof projectGmailWriteContentReview>[2];
+      if (needsVerifiedSnapshot) {
         try {
-          const snapshot = await executor.inspectCommandContentReview(pending.command);
-          if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_write_content") return "unavailable";
-          return validateGmailWriteContentReview(pending.command, pending.command_digest, current,
-            pending.content_review_digest, content_review_digest, snapshot);
+          const observed = await executor.inspectCommandContentReview(pending.command);
+          if (!observed || !("kind" in observed) || observed.kind !== "gmail_write_content") return "unavailable";
+          snapshot = observed;
         } catch {
           return "unavailable";
         }
       }
-      return validateGmailWriteContentReview(pending.command, pending.command_digest, current,
-        pending.content_review_digest, content_review_digest);
+      const validation = validateGmailWriteContentReview(pending.command, pending.command_digest, current,
+        pending.content_review_digest, content_review_digest, snapshot);
+      if (validation !== "valid" || !isGmailMessageSendReviewCommand(pending.command)) return validation;
+      if (!pending.content_review_provider_state_digest) return "required";
+      try {
+        const observation = await executor.inspectCommandTargetVersion(pending.command, undefined,
+          hds.getExecutionOperationPlanBindingDigest(pending.command));
+        return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
+          observation.provider_state_digest === pending.content_review_provider_state_digest ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
     }
     return "not_required";
   }

@@ -210,6 +210,43 @@ function sha256String(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+interface GmailAccountIdentitySnapshot {
+  account_email: string;
+  account_identity_digest: string;
+}
+
+async function readGmailAccountIdentity(
+  options: GoogleWriteOptions = {},
+  tokenOverride?: string,
+): Promise<GmailAccountIdentitySnapshot> {
+  const env = options.env ?? process.env;
+  const token = tokenOverride ?? googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write account review");
+  const request = options.request ?? defaultGoogleWriteRequest;
+  let response: GoogleWriteResponse;
+  try {
+    assertToolExecutionNotCancelled(options.signal, "gmail.write account review");
+    response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path: "/gmail/v1/users/me/profile",
+      method: "GET", maxBytes: DEFAULT_MAX_BYTES, token }, options.signal);
+  } catch {
+    if (options.signal?.aborted) {
+      throw new Error("gmail_account_identity_read_cancelled; request_status=not_confirmed; mutation_sent=false");
+    }
+    throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");
+  }
+  if (!response.ok || response.truncated || response.body_utf8_valid === false) {
+    throw new Error(`gmail_account_identity_unavailable; http_status=${response.status}; request_sent=false; mutation_sent=false`);
+  }
+  let profile: unknown;
+  try { profile = JSON.parse(response.body) as unknown; }
+  catch { throw new Error("gmail_account_identity_response_invalid; request_sent=false; mutation_sent=false"); }
+  if (!isRecord(profile) || typeof profile.emailAddress !== "string" || !profile.emailAddress.trim() ||
+      profile.emailAddress.trim().length > 320 || /[\r\n\u0000-\u001f\u007f]/.test(profile.emailAddress)) {
+    throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");
+  }
+  const accountEmail = profile.emailAddress.trim();
+  return { account_email: accountEmail, account_identity_digest: sha256String(accountEmail.toLowerCase()) };
+}
+
 interface GmailDraftSnapshot {
   draft_id: string;
   draft_identity_digest: string;
@@ -1286,8 +1323,8 @@ function assertSupportedGmailWriteArguments(args: Record<string, unknown>): stri
   }
   if (operation === "message.trash") gmailMessageId(args);
   if (operation === "message.modify") normalizeGmailMessageModifyArguments(args);
-  if (operation !== "draft.create" && args.attachments !== undefined) {
-    throw new Error("gmail.write attachments are supported only for draft.create; request_sent=false; mutation_sent=false");
+  if (operation !== "draft.create" && operation !== "message.send" && args.attachments !== undefined) {
+    throw new Error("gmail.write attachments are supported only for draft.create or message.send; request_sent=false; mutation_sent=false");
   }
   if (operation !== "draft.send" && operation !== "message.trash" && operation !== "message.modify") {
     gmailWriteAttachmentReferences(args);
@@ -1453,6 +1490,7 @@ export async function invokeGmailWrite(
   let draftSnapshot: GmailDraftSnapshot | undefined;
   let messageTrashSnapshot: GmailMessageMetadataSnapshot | undefined;
   let messageModifySnapshot: GmailMessageModifySnapshot | undefined;
+  let messageSendAccount: GmailAccountIdentitySnapshot | undefined;
   let replySourceSnapshot: GmailMessageMetadataSnapshot | undefined;
   let replySource: GmailReplySource | undefined;
   if (operation === "draft.send") {
@@ -1499,6 +1537,16 @@ export async function invokeGmailWrite(
         gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
       throw new Error("gmail.write message.modify target state changed after review; request_sent=false; mutation_sent=false");
     }
+  } else if (operation === "message.send") {
+    if (!expectedTargetObservation?.provider_state_digest) {
+      throw new Error("gmail.write message.send authenticated account state evidence is required; request_sent=false; mutation_sent=false");
+    }
+    messageSendAccount = await readGmailAccountIdentity(opts, token);
+    if (messageSendAccount.account_identity_digest !== expectedTargetObservation.provider_state_digest ||
+        expectedTargetObservation.request_payload_digest !== gmailWriteRequestPayloadDigest(args) ||
+        expectedTargetObservation.target_identity_digest !== gmailWriteTargetIdentityDigest(args)) {
+      throw new Error("gmail.write message.send account or content changed after review; request_sent=false; mutation_sent=false");
+    }
   } else if (operation === "draft.create" && args.reply_to_message_id !== undefined) {
     if (!expectedTargetObservation?.provider_state_digest) {
       throw new Error("gmail.write reply draft source state evidence is required; request_sent=false; mutation_sent=false");
@@ -1526,7 +1574,66 @@ export async function invokeGmailWrite(
     ...executionRequestIdentity(opts),
   };
   assertToolExecutionNotCancelled(opts.signal, "gmail.write");
-  const response = await sendRequest(target, opts.signal);
+  let response: GoogleWriteResponse;
+  if (operation === "message.send") {
+    try { response = await sendRequest(target, opts.signal); }
+    catch {
+      throw new Error("gmail.write message.send request result is unknown; outcome_unknown; do not retry automatically");
+    }
+    if (!response.ok) {
+      throw new Error("gmail.write message.send provider response is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    let sentMessage: unknown;
+    try {
+      if (response.truncated || response.body_utf8_valid === false) throw new Error("response_unavailable");
+      sentMessage = JSON.parse(response.body) as unknown;
+    } catch {
+      throw new Error("gmail.write message.send response is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    if (!messageSendAccount || !isRecord(sentMessage) || typeof sentMessage.id !== "string" ||
+        !/^[A-Za-z0-9_-]{1,512}$/.test(sentMessage.id) || typeof sentMessage.threadId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,512}$/.test(sentMessage.threadId)) {
+      throw new Error("gmail.write message.send response identity is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const confirmed = await readGmailMessageMetadataSnapshot({ operation: "message.trash", message_id: sentMessage.id },
+      opts, token).catch(() => null);
+    if (!confirmed || confirmed.account_identity_digest !== messageSendAccount.account_identity_digest ||
+        confirmed.message_identity_digest !== sha256String(sentMessage.id) ||
+        confirmed.thread_identity_digest !== sha256String(sentMessage.threadId) || !confirmed.label_ids.includes("SENT")) {
+      throw new Error("gmail.write message.send SENT readback is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const result = {
+      account_identity_digest: messageSendAccount.account_identity_digest,
+      label_ids_digest: operationPlanDigest(confirmed.label_ids),
+      provider_state_digest: confirmed.state_digest,
+      request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      sent_confirmed: true as const,
+      sent_label_confirmed: true as const,
+      sent_message_identity_digest: confirmed.message_identity_digest,
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      thread_identity_digest: confirmed.thread_identity_digest,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      service: "gmail",
+      mode: "write",
+      operation,
+      api_host: target.hostname,
+      path_digest: sha256Hex(target.path),
+      method: target.method,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      google_request_id: response.request_id,
+      request_status: "ok",
+      mutation_sent: true,
+      mutation_status: "confirmed",
+      result_digest: sha256Hex(result),
+      result,
+    };
+  }
+  response = await sendRequest(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
   if (operation === "draft.send") {
     let sentMessage: unknown;
@@ -1843,6 +1950,13 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
     }
     observation.request_payload_digest = snapshot.request_payload_digest;
     observation.provider_state_digest = snapshot.state_digest;
+  } else if (operation === "message.send") {
+    const account = await readGmailAccountIdentity({
+      ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.request ? { request: options.request } : {}),
+    });
+    observation.request_payload_digest = gmailWriteRequestPayloadDigest(args);
+    observation.provider_state_digest = account.account_identity_digest;
   } else if (operation === "draft.create" && args.reply_to_message_id !== undefined) {
     const snapshot = await readGmailMessageMetadataSnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
@@ -1875,6 +1989,10 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
         observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
       : operation === "message.modify"
         ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
+          observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
+      : operation === "message.send"
+        ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
+          observation.provider_thread_identity_digest === undefined &&
           observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
       : operation === "draft.create" && args.reply_to_message_id !== undefined
         ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
@@ -4698,7 +4816,12 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         };
         return review;
       }
-      const resolved = await resolveGmailWriteAttachments(args, effectiveOptions);
+      const sendAccountToken = operation === "message.send"
+        ? googleToken(effectiveOptions.env ?? process.env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write")
+        : undefined;
+      const resolved = await resolveGmailWriteAttachments(args, effectiveOptions, sendAccountToken);
+      const sendAccount = operation === "message.send"
+        ? await readGmailAccountIdentity(effectiveOptions, sendAccountToken) : undefined;
       const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
       const attachments: GmailAttachmentContentReview[] = resolved.map((attachment) => ({
         filename: attachment.filename,
@@ -4725,20 +4848,33 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
           used_for_authority: false,
         };
       }
-      const reviewDigest = operationPlanDigest({
-        schema_version: "blue-tanuki.gmail-write-content-review.v2",
-        command_digest: commandDigest,
-        request_payload_digest: requestPayloadDigest,
-        attachment_content_digests: attachments.map((attachment) => attachment.content_sha256),
-        ...(replySourceReview ? {
-          reply_source_message_identity_digest: sha256String(replySourceReview.message_id),
-          reply_source_thread_identity_digest: sha256String(replySourceReview.thread_id),
-          provider_state_digest: replyProviderStateDigest,
-        } : {}),
-      });
+      const reviewDigest = operation === "message.send"
+        ? operationPlanDigest({
+            schema_version: "blue-tanuki.gmail-message-send-content-review.v1",
+            command_digest: commandDigest,
+            target_identity_digest: gmailWriteTargetIdentityDigest(args),
+            request_payload_digest: requestPayloadDigest,
+            account_identity_digest: sendAccount!.account_identity_digest,
+            provider_state_digest: sendAccount!.account_identity_digest,
+            attachment_content_digests: attachments.map((attachment) => attachment.content_sha256),
+          })
+        : operationPlanDigest({
+            schema_version: "blue-tanuki.gmail-write-content-review.v2",
+            command_digest: commandDigest,
+            request_payload_digest: requestPayloadDigest,
+            attachment_content_digests: attachments.map((attachment) => attachment.content_sha256),
+            ...(replySourceReview ? {
+              reply_source_message_identity_digest: sha256String(replySourceReview.message_id),
+              reply_source_thread_identity_digest: sha256String(replySourceReview.thread_id),
+              provider_state_digest: replyProviderStateDigest,
+            } : {}),
+          });
       const review: GmailWriteContentReview = {
         kind: "gmail_write_content",
         operation: operation === "draft.create" ? "gmail.write.draft.create" : "gmail.write.message.send",
+        ...(sendAccount ? { account_email: sendAccount.account_email,
+          account_identity_digest: sendAccount.account_identity_digest,
+          provider_state_digest: sendAccount.account_identity_digest } : {}),
         to: safeAddressList(args, "to", true)!,
         ...(safeAddressList(args, "cc") ? { cc: safeAddressList(args, "cc") } : {}),
         ...(safeAddressList(args, "bcc") ? { bcc: safeAddressList(args, "bcc") } : {}),
@@ -4765,7 +4901,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
       const observation = assertGmailWriteTargetVersion(args, context.target_version_observation);
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
         command_digest: context.command_digest, signal: context.signal },
-      operation === "draft.send" || operation === "message.trash" || operation === "message.modify" ||
+      operation === "message.send" || operation === "draft.send" || operation === "message.trash" || operation === "message.modify" ||
         operation === "draft.create" && args.reply_to_message_id !== undefined ? observation : undefined);
     },
   };

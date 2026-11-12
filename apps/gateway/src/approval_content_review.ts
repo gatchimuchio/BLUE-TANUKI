@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { normalizeGmailAddressList, type ExecuteCommand } from "@blue-tanuki/protocol";
@@ -36,6 +37,12 @@ export function isGmailDraftSendReviewCommand(command: ExecuteCommand): boolean 
   return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
     typeof command.payload.arguments.operation === "string" &&
     command.payload.arguments.operation.trim().toLowerCase() === "draft.send";
+}
+
+export function isGmailMessageSendReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
+    typeof command.payload.arguments.operation === "string" &&
+    command.payload.arguments.operation.trim().toLowerCase() === "message.send";
 }
 
 export function isGmailMessageTrashReviewCommand(command: ExecuteCommand): boolean {
@@ -358,6 +365,8 @@ export function projectGmailWriteContentReview(
     command_digest: string;
     request_payload_digest: string;
     review_digest: string;
+    account_email?: string;
+    account_identity_digest?: string;
     attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
       used_for_authority: false }[];
     reply_source?: { message_id: string; thread_id: string; from?: string; subject: string;
@@ -400,12 +409,45 @@ export function projectGmailWriteContentReview(
     let attachmentProjection: {
       kind?: "gmail_write_content";
       review_digest?: string;
+      account_email?: string;
+      account_identity_digest?: string;
       attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
         used_for_authority: false }[];
       reply_source?: { message_id: string; thread_id: string; from?: string; subject: string;
         provider_state_digest: string; used_for_authority: false };
       provider_state_digest?: string;
     } = {};
+    if (operation === "message.send") {
+      const accountEmail = verifiedSnapshot?.account_email;
+      const accountIdentityDigest = verifiedSnapshot?.account_identity_digest;
+      const providerStateDigest = verifiedSnapshot?.provider_state_digest;
+      if (!verifiedSnapshot || verifiedSnapshot.kind !== "gmail_write_content" ||
+          verifiedSnapshot.command_digest !== commandDigest ||
+          verifiedSnapshot.request_payload_digest !== requestPayloadDigest ||
+          verifiedSnapshot.used_for_authority !== false || verifiedSnapshot.may_execute !== false ||
+          typeof accountEmail !== "string" || !accountEmail.trim() || accountEmail.length > 320 ||
+          /[\r\n\u0000-\u001f\u007f]/.test(accountEmail) ||
+          !/^[a-f0-9]{64}$/.test(accountIdentityDigest ?? "") || providerStateDigest !== accountIdentityDigest ||
+          !/^[a-f0-9]{64}$/.test(verifiedSnapshot.review_digest)) return null;
+      const expectedAccountIdentityDigest = createHash("sha256").update(accountEmail.trim().toLowerCase(), "utf8").digest("hex");
+      const attachmentDigests = (verifiedSnapshot.attachments ?? []).map((attachment) => attachment.content_sha256);
+      if (attachmentReferences.length === 0 && (verifiedSnapshot.attachments?.length ?? 0) !== 0) return null;
+      const expectedReviewDigest = operationPlanDigest({
+        schema_version: "blue-tanuki.gmail-message-send-content-review.v1",
+        command_digest: commandDigest,
+        target_identity_digest: gmailWriteTargetIdentityDigest(args),
+        request_payload_digest: requestPayloadDigest,
+        account_identity_digest: accountIdentityDigest,
+        provider_state_digest: providerStateDigest,
+        attachment_content_digests: attachmentDigests,
+      });
+      if (expectedAccountIdentityDigest !== accountIdentityDigest || verifiedSnapshot.review_digest !== expectedReviewDigest) return null;
+      attachmentProjection = { kind: "gmail_write_content", review_digest: verifiedSnapshot.review_digest,
+        account_email: accountEmail.trim(), account_identity_digest: accountIdentityDigest,
+        provider_state_digest: providerStateDigest,
+        ...(verifiedSnapshot.attachments && verifiedSnapshot.attachments.length > 0
+          ? { attachments: verifiedSnapshot.attachments } : {}) };
+    }
     if (attachmentReferences.length > 0) {
       if (!verifiedSnapshot || verifiedSnapshot.kind !== "gmail_write_content" ||
           verifiedSnapshot.command_digest !== commandDigest || verifiedSnapshot.request_payload_digest !== requestPayloadDigest ||
@@ -420,8 +462,8 @@ export function projectGmailWriteContentReview(
           attachment.used_for_authority === false;
       });
       if (!sameExactAttachments) return null;
-      attachmentProjection = { kind: "gmail_write_content", review_digest: verifiedSnapshot.review_digest,
-        attachments: verifiedSnapshot.attachments };
+      attachmentProjection = { ...attachmentProjection, kind: "gmail_write_content",
+        review_digest: verifiedSnapshot.review_digest, attachments: verifiedSnapshot.attachments };
     }
     const replySourceMessageId = args.reply_to_message_id;
     if (replySourceMessageId !== undefined) {
@@ -439,7 +481,8 @@ export function projectGmailWriteContentReview(
         provider_state_digest: source.provider_state_digest,
         review_digest: verifiedSnapshot.review_digest,
       };
-    } else if (verifiedSnapshot?.reply_source !== undefined || verifiedSnapshot?.provider_state_digest !== undefined) {
+    } else if (operation === "draft.create" &&
+        (verifiedSnapshot?.reply_source !== undefined || verifiedSnapshot?.provider_state_digest !== undefined)) {
       return null;
     }
     return {
@@ -448,6 +491,8 @@ export function projectGmailWriteContentReview(
       ...attachmentProjection,
       request_payload_digest: requestPayloadDigest,
       operation: operation === "draft.create" ? "gmail.write.draft.create" : "gmail.write.message.send",
+      ...(attachmentProjection.account_email ? { account_email: attachmentProjection.account_email } : {}),
+      ...(attachmentProjection.account_identity_digest ? { account_identity_digest: attachmentProjection.account_identity_digest } : {}),
       to,
       ...(cc ? { cc } : {}),
       ...(bcc ? { bcc } : {}),
