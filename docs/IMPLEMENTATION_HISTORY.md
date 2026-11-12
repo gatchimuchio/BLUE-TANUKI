@@ -2,6 +2,28 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QEB-G04-MACOS-INSTALLED-LIFECYCLE
+
+主語はmacOS x64／arm64の製品Setup、installed Gateway／Control Centerと既存の手動Actions lifecycle smokeである。開始local／origin／GitHub main=4b4f25b7b5becf06c245124b5b64594f3e9dc897、ahead／behind=0/0、worktreeはmainのみ。対象はowner指定rev5.0、工程QE_BUILD、製品全体SYSTEM_SHAPED=false／BUILD_COVERED=false。開始recovery branch／remote tag current=4b4f25b7b5becf06c245124b5b64594f3e9dc897／previous=7b84ed33872a2631d3351964a109042365c7d196。protected .codex-attachments/、.codex-remote-attachments/、Linux isolation target/は開始前から存在し、保持した。
+
+既存GitHub Actions workflowをworkflow_dispatchで起動し、target=macos、scope=installed-lifecycle、入力commit=4b4f25b7b5becf06c245124b5b64594f3e9dc897へ固定した。run [#14](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958)はSuccess、47m39s。macOS x64 [job](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958/job/131486338920)はSuccess、47m32s。macOS arm64 [job](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958/job/131486338509)はSuccess、30m12s。Linux jobはskip、Actions artifact uploadはない。
+
+| installed lifecycle smoke | 結果 |
+|---|---|
+| Setup、bundled Node、doctor、environment保持Repair、autostart status／enable、port conflict拒否 | x64／arm64 PASS。 |
+| GatewayとGUI起動、health、stub providerを使うsynthetic WebSocket first message | x64／arm64 PASS。実LLM・credential・外部作用なし。 |
+| system／approval／audit／crash-recovery／restart／safe-mode確認 | x64／arm64 PASS。これは対象smoke内の限定証拠で、製品全体QC／QAやowner GOではない。 |
+| 注入されたupdate失敗のrollback、およびupdate途中中断後の旧app recovery／resume | x64／arm64 PASS。 |
+| 隔離smokeのsynthetic owner data／configを通常Uninstall後に保持、再導入後も保持、明示Purge後に対象data／logsを除去 | x64／arm64 PASS。 |
+| macOS host reboot、owner実機QA、署名／notarization、実developer account、full test suite、Linux installed lifecycle、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+| docs:check／git diff --check | PASS。日本語基底の移行負債75件は残存。 |
+
+生成資産分類：GitHub Actions artifactはuploadされず、runner内で作られた一時lifecycle stateはjob scopeに限定。今回新規に取得・生成したローカルfileなし。rev5.0 ZIPは作業入力として既存のDownloadsにあり移動・変更していない。protected attachment directories、WSL Linux target、他worktree／branchは未変更。外部provider、owner端末、D4-Pocket／MINIDORA、公開・出荷・署名資格へ作用なし。
+
+この単位はrev5.0 QE_BUILDのmacOS x64／arm64 hosted installed consumerに限定したWIREDである。macOS owner端末QA、再起動証拠、署名／notarization、Linux native installed lifecycle、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開・出荷GOを示さない。検証に使った正確なsource SHAは4b4f25b7b5becf06c245124b5b64594f3e9dc897。このcloseoutは実装ではなく、すでに成立したActions evidenceを作業状態と履歴へ記録する文書更新である。closeoutをmainへpush後、local／origin／GitHub mainとrecovery二世代を直接再照合する。
+
+---
+
 ## 2026-11-13 — QEB-WINDOWS-IEXPRESS-INSTALLED-STARTUP
 
 主語はWindows x64 IExpress EXE、埋込Setup CMD、既存の隔離installed smoke consumerである。目的は、選択ZIPとEXE内包ZIPをhashで一致させ、EXEから抽出した実CMDで隔離InstallRoot／DataRootへSetupを通し、installed Gatewayの起動・health・停止と正規Uninstall cleanupまで結ぶこと。通常GUI/default launch、全Windows lifecycle、製品全体の成立は対象外。

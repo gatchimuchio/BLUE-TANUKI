@@ -2,7 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 完了BUILD_BATCH — QE_BUILD / Windows x64 IExpress EXE → 隔離Setup → Gateway起動・停止
+## 完了BUILD_BATCH — QE_BUILD / rev5.0 G04 macOS x64／arm64 installed lifecycle
+
+主語はmacOS x64／arm64の製品Setup、installed Gateway／Control Center、既存の手動Actions lifecycle smokeである。目的は、固定したmain commitから両architectureのSetup・起動・仕事疎通・update recovery・通常Uninstall時のowner data保持・再導入・明示Purgeまでを既存consumerへ通すこと。これはQE_BUILD内のmacOS hosted runner証拠であり、実owner端末QA、製品全体のQC／QA、完成・公開判定ではない。
+
+GitHub Actions run [#14](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958) は既存workflowを手動workflow_dispatchで起動し、target=macos、scope=installed-lifecycle、対象SHA=4b4f25b7b5becf06c245124b5b64594f3e9dc897を使用。x64 [job](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958/job/131486338920) とarm64 [job](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958/job/131486338509) は両方success、Linux jobはskip、artifact uploadなし。
+
+| macOS hosted lifecycle smoke | 結果 |
+|---|---|
+| x64／arm64のSetup、bundled Node、doctor、既存environmentを保つRepair、autostart状態・有効化、port conflict拒否 | PASS |
+| Gateway／GUI起動、health、synthetic WebSocket first message、approval／audit／crash recovery／restart／safe-mode | PASS。providerはstub、credential／実provider／外部作用なし。 |
+| 注入update失敗のrollback、意図的中断後の旧app recoveryとresume | PASS |
+| 隔離smokeのsynthetic owner data／configを通常Uninstall後に保持、再導入後も保持、明示Purgeで対象data／logsを除去 | PASS |
+| docs:check／git diff --check | PASS。日本語基底の移行負債75件は残存。 |
+| macOS host reboot、owner実機QA、署名／notarization、実developer account、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / G04 macOS x64／arm64 hosted installed lifecycle consumer
+- **STATUS:** WIRED（両architectureのhosted lifecycle smoke限定。owner端末・製品全体へ拡張しない）
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再実施し、rev5.0と最新実物からP2全体成立に必要な次consumerを選ぶ。
+- **SAFETY_STATUS:** HDS authority、Approval、owner端末のdata／credential、実provider、外部作用、別repo、署名資格、公開／出荷判断へ変更なし。workflowは合成providerを使用しartifactをuploadしていない。
+- **LOCAL_ASSET_STATUS:** workflow artifactを取得せず、今回のrunで新規ローカル成果物なし。作業前からあるprotected .codex-attachments/、.codex-remote-attachments/、Linux isolation target/は保持・未変更。
+- **GIT_STATUS:** 開始local／origin／GitHub main=4b4f25b7b5becf06c245124b5b64594f3e9dc897、ahead／behind=0/0。workflowはこのSHAを固定使用。recovery current=4b4f25b7b5becf06c245124b5b64594f3e9dc897／previous=7b84ed33872a2631d3351964a109042365c7d196。closeout記録の最終main／復旧refはpush後に再照合する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Windows x64 IExpress EXE → 隔離Setup → Gateway起動・停止
 
 主語はWindows x64の単一EXE配布入口、埋込Setup CMD、既存の隔離installed smokeである。目的は、生成済みEXEの埋込CMDとZIPを照合したうえで、そのCMDから隔離InstallRoot／DataRootへSetupを通し、installed Gatewayの起動・health・停止、正規Uninstallと隔離状態の回収まで実consumerへ接続すること。通常のGUI起動・default launch、全lifecycle、製品全体の完成判定はこの単位に含めない。
 
