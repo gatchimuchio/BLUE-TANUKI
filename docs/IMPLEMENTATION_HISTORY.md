@@ -2,6 +2,44 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QEB-WINDOWS-IEXPRESS-SINGLE-FILE
+
+現行rev5.0に沿い、Windows向けdistribution entrypointへIExpress self-extracting `.exe`を追加した。主語はWindows x64 installer package builderとverifier、目的は一つのEXEからSetup commandと製品ZIPを内包した配布candidateを作り、署名・実Setupを伴わない抽出検証で内部のhash bindingを確かめること。製品全体の導入・runtime・completion判定は対象外。
+
+`package:windows`はZIP payloadと既存CMD wrapperを再検査し、IExpress `.exe`、manifest、SHA-256 sidecarを生成する。生成時にOneDrive checkout内の`release/windows`へ書かないため、`BLUE_TANUKI_WINDOWS_ARTIFACT_DIR`による非OneDrive出力を追加し、未指定でOneDrive checkoutを検出した場合は停止する。Windows package stageとruntime cacheはOS Tempの一意directoryへ分離した。`package:windows:verify`にEXEのPE/CAB、SHA／manifest、Setup commandの抽出、embedded ZIPのsize／SHA照合を加えた。EXE verifierはSetup commandを起動しない。release source bundle producer／verifier、installer docs、静的validatorもsingle-file EXEを参照する。
+
+実装時に既存確認器の契約ずれも直した。GitHub Actions policy parserが`workflow_dispatch.inputs`のnested keyをtriggerとして誤認し、Windows Uninstall docsの日本語保持規則を英語fixtureで検査していた。parserはtrigger block直下のみを検査し、保持規則は「登録済みDataRootの内容は保持する」を確認する。Windows installer説明の禁止文は対象pathと同じ行へ配置し、既存テストの行単位検査に適合させた。移行台帳は変更した英語文書7件のhashだけ更新し、75件の日本語移行負債はそのまま維持した。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm typecheck`／`build`／`package:windows` | PASS（Windows x64 host）。 |
+| `package:windows:verify` | PASS。ZIP 3,553 entries。ZIP SHA-256=`4d5459784bfbaefe9c2b4126c1b75e08e27b25da9cee7f9cae3503b1e6d68ce1`、CMD=`ae295b7a3ba11da3e0b9c07e7af5b993e6b84859aaa3cc860e78f728bf128dd5`、EXE=`a58658f54d086073bfaa4512082906dfb12f37bc78ae9d596f7e3f26c71e6133`。`single_file_extraction=PASS`、`setup_execution=NOT_RUN`。 |
+| `install/installer/test/windows_product_installer.test.ts` | PASS 21/21。初回runは行折返しのfixtureで1件FAILしたため、禁止文を同一行に整え、21件を再実行してPASS。 |
+| `validate:packaging`／`validate:release-hardening`／`docs:check`／`git diff --check` | PASS。Actionsはmanual `workflow_dispatch`限定。日本語基底の移行負債75件は通常監査の注意として残存。 |
+| `release:bundle --dry-run` | PASS。product installer listにWindows EXEを含む。archive生成／実archive verifyはOneDrive `release`／`.codex-tmp`のreparse point保護のためNOT_RUN。 |
+| EXE Setup起動、isolated installed smoke、full suite、Actions実行、全OS QA、QE_QC／QE_QA | NOT_RUN。署名なしcandidate、public distribution HOLD。 |
+
+## 生成資産・保護状態
+
+| 資産 | 件数・容量 | 分類 |
+|---|---:|---|
+| `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-windows-artifacts-rev5-20261113` | 10 files・174,749,451 bytes | 保持。検証用candidateとZIP／CMD／EXE sidecar、manifest、README。 |
+| Windows app/package build `dist` | 14 directories・1,073 files・12,934,512 bytes | 開発用に保持。 |
+| 既存Linux isolation `target` | 31 files・10,462,590 bytes | 開発用・未追跡資産として保持。 |
+| 一意Windows package／IExpress／verify staging | 残存0 | 成功時cleanupを確認。 |
+| OneDrive `release/windows`の既存ZIP／manifest／sidecar／README | 4 files | 開始時SHAと一致。未変更・保持。 |
+| `.codex-attachments/`／`.codex-remote-attachments/` | 2 directories | 保護。stage／変更なし。 |
+| `.git/worktrees/blue-tanuki-health-2026-11-07-windows` | stale metadata | fetch／commit cleanupでPermission denied。ACL・属性・metadataを変更せず保留。 |
+
+OneDrive出力の開始時SHA-256はZIP=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、manifest=`0996b5213f3c2e21e6ee43659836ed4734ad5c4ddb2e07644ff01e677b21c2a2`、sidecar=`3088b1f42eb0486e0cfbe0e96e83042135801f749cc85662b4552fb23283ea50`、README=`2dbcc31386c58b89498f574916fb5da3da7393753ecda9b842673f1d1d7c6806`。4件すべて同一hashを再確認した。
+
+implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`は`aa83a56278e4ca954e430928cd243d77330f1dcf`から`main`へfast-forward push済み。local／`origin/main`／GitHub `main`が一致し、実装commit直後の復旧refはcurrent=`2ea5ad78625956872268f5d65c57af2351ad4851`、previous=`aa83a56278e4ca954e430928cd243d77330f1dcf`。このcloseout記録のpush後にcurrentを最終main、previousをimplementation commitへ更新する。
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows x64 IExpress single-file producer → extraction-only verifier
+- **STATUS:** WIRED（EXE生成と内容抽出・hash照合まで。Setup／installed consumer未接続）
+- **NEXT_REQUIRED_CONSUMER:** EXEをisolated InstallRoot／DataRootで実行し、既存Windows installed smokeのSetup・起動・保持・Uninstallへ接続。
+- **PRODUCT_STATE:** QE_BUILD。製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO`。HDS authority、Approval、利用者data、秘密、実provider、外部作用、別repo、公開配布に変更なし。
+
 ## 2026-11-13 — QEB-PACKAGE-MCP-RUNTIME-CLOSURE-MACOS
 
 主語はWindows上でmacOS x64／arm64向けinstallerを作るUnix package builderである。開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0、main worktreeのみ。開始時recovery branch/tag current=`e02bb47994aa4d926ce853bbda742542059b819a`、previous=`e9a22d710c3155ade913ef83e60ad042e4f16b3a`。protected `.codex-attachments/`／`.codex-remote-attachments/`と既存WSL `packages/blue-tanuki/native/linux-isolation/target/`は作業前から存在し、未変更。

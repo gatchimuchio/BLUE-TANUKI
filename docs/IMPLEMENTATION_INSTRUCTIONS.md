@@ -2,6 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
+
+主語はWindows x64のinstaller package builderとIExpress verifier。目的は、通常利用者が一つの`.exe`からWindows Setupを開始できるpackageを生成し、そのEXEからSetup commandと埋め込みZIPが改変なく抽出されることを検証すること。Setup実行・製品導入・runtime成立をこの工程へ含めない。
+
+`package:windows`はWindows ZIP／CMDを既存payloadとして生成・検証した後、IExpress `.exe`とmanifest／SHA-256 sidecarを追加する。OneDrive checkoutからの生成物は`BLUE_TANUKI_WINDOWS_ARTIFACT_DIR`で非OneDriveの出力先へ置き、builder stage／runtime cacheはOS Tempの一意directoryで処理する。release source bundleにもEXEとbuild／verify sourceを登録した。署名なし候補は配布保留をmanifest・README・verifier出力へ明示した。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| Windows `typecheck`／`build`／`package:windows` | PASS。 |
+| `package:windows:verify` | PASS。ZIP 3,553 entries、CMD payload binding、IExpress PE/CAB、EXE SHA／manifest、Setup command抽出、埋め込みZIP hashを確認。EXE `a58658f54d086073bfaa4512082906dfb12f37bc78ae9d596f7e3f26c71e6133`。 |
+| focused `windows_product_installer.test.ts` | PASS 21/21。 |
+| `validate:packaging`／`validate:release-hardening`／`docs:check`／`git diff --check` | PASS。日本語基底移行負債75件は残存し、strict監査は未成立。manual `workflow_dispatch`限定。 |
+| release bundle dry-run | PASS。Windows EXEがproduct installer manifestの対象に含まれることを確認。archive生成・archive verifierはOneDrive `release`／`.codex-tmp`のreparse point保護のため未実行。 |
+| EXE Setup実行・isolated install／runtime smoke、full suite、全OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+local asset classification: `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-windows-artifacts-rev5-20261113`に10 files・174,749,451 bytesを保持。ZIP=`4d5459784bfbaefe9c2b4126c1b75e08e27b25da9cee7f9cae3503b1e6d68ce1`、CMD=`ae295b7a3ba11da3e0b9c07e7af5b993e6b84859aaa3cc860e78f728bf128dd5`、EXE=`a58658f54d086073bfaa4512082906dfb12f37bc78ae9d596f7e3f26c71e6133`。package／IExpress／verifierの成功時一時stageは残存なし。`pnpm build`の開発出力14 `dist` directories（1,073 files・12,934,512 bytes）と既存Linux isolation `target`（31 files・10,462,590 bytes）は保持。OneDrive `release/windows`の開始時に記録した4 artifactsはhash一致。保護添付directoryは未stage、未変更。古いworktree metadataの削除はPermission deniedで保留し、ACL・metadataを変更していない。
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows x64 IExpress single-file producer → extraction-only verifier
+- **STATUS:** WIRED（EXE生成と内容抽出・hash照合まで。Setup／installed consumerは未接続）
+- **NEXT_REQUIRED_CONSUMER:** EXEを隔離InstallRoot／DataRootで実行し、既存Windows installed smokeのSetup・起動・保持・Uninstall consumerへ接続する。
+- **SAFETY_STATUS:** HDS authority、Approval、秘密、owner data、外部provider／作用、別repo、公開・配布は変更なし。署名なし・public distribution HOLD。製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO`を維持。
+- **GIT_STATUS:** implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`をmainへpush済み。closeout文書commit後の最終mainと復旧refを別途照合する。
+
 ## 完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64／arm64単体Setup生成・検証
 
 主語はmacOS x64／arm64のarchiveと単体Setupを作るpackage builderである。目的は、macOS実行属性を保った製品installerを両architectureで生成・検証し、Windows hostが実行属性を保持できない条件で無効なUnix installerを成功扱いしないこと。製品の導入・常用・runtime・shell isolation全体の成立を示す作業ではない。
