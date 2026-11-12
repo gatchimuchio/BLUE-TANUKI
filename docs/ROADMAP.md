@@ -6,6 +6,12 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
+
+package builderがMCP clientとruntime依存一式を配置せず、Windows installed Gatewayの起動が失敗する欠陥を修正した。clientを現行package.jsonの`2.4.0`に固定し、core／transitive modulesとzod v4を隔離配置する。Windows／Unix package verifierを拡張し、Windows smokeにSetup→起動health→停止だけの隔離モードを追加した。
+
+Windows package verifier（3,549 entries）とWindows installed `--startup-only` smokeがPASS。Linux isolation binaryはWSL Ubuntu 24.04で生成し、Linux package verifierも3,750 entriesでPASS。Windows ZIP SHA-256=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、Linux tar.gz SHA-256=`a855bcba57a8be87498eadcf50d83ae60f43004aaf0cbc742753a4656ae56b58`。native Linux／macOS runtime、full lifecycle、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とする。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
 ### 直近完了BUILD_BATCH — QE_BUILD / CR-0 Linux・macOS開発用Uninstall停止確認
 
 Linux／macOSの開発用source Uninstallでresident停止の終了コードを握りつぶさず、停止またはautostart解除の失敗時にinstall／launcher／dataを保持する。resident管理scriptの欠落、PID不正、別processとのPID衝突、SIGTERM後の終了未確認もfail-closedとする。resident helperは対象PIDのcommand signatureを照合し、SIGTERM後最大10秒待ってからPID記録を除去する。製品package版UninstallとG03 installed-linuxの実証範囲は変更しない。

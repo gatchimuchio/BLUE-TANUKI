@@ -67,6 +67,28 @@ const RUNTIME_PACKAGES = [
   { rel: "packages/operator-developer", module: "@blue-tanuki/operator-developer" },
 ] as const;
 
+const MCP_CLIENT_VERSION = "2.4.0";
+const MCP_CLIENT_NODE_MODULES = `node_modules/.pnpm/@modelcontextprotocol+client@${MCP_CLIENT_VERSION}/node_modules`;
+const MCP_RUNTIME_EXTERNAL_MODULES: readonly {
+  name: string;
+  candidates: readonly string[];
+  destination?: string;
+}[] = [
+  { name: "@modelcontextprotocol/client", candidates: ["apps/gateway/node_modules/@modelcontextprotocol/client"] },
+  { name: "@modelcontextprotocol/core", candidates: [`${MCP_CLIENT_NODE_MODULES}/@modelcontextprotocol/core`] },
+  { name: "cross-spawn", candidates: [`${MCP_CLIENT_NODE_MODULES}/cross-spawn`] },
+  { name: "eventsource", candidates: [`${MCP_CLIENT_NODE_MODULES}/eventsource`] },
+  { name: "eventsource-parser", candidates: [`${MCP_CLIENT_NODE_MODULES}/eventsource-parser`] },
+  { name: "jose", candidates: [`${MCP_CLIENT_NODE_MODULES}/jose`] },
+  { name: "pkce-challenge", candidates: [`${MCP_CLIENT_NODE_MODULES}/pkce-challenge`] },
+  { name: "MCP zod v4", candidates: [`${MCP_CLIENT_NODE_MODULES}/zod`], destination: "@modelcontextprotocol/node_modules/zod" },
+  { name: "path-key", candidates: ["node_modules/.pnpm/cross-spawn@7.0.6/node_modules/path-key"] },
+  { name: "shebang-command", candidates: ["node_modules/.pnpm/cross-spawn@7.0.6/node_modules/shebang-command"] },
+  { name: "which", candidates: ["node_modules/.pnpm/cross-spawn@7.0.6/node_modules/which"] },
+  { name: "shebang-regex", candidates: ["node_modules/.pnpm/shebang-command@2.0.0/node_modules/shebang-regex"] },
+  { name: "isexe", candidates: ["node_modules/.pnpm/which@2.0.2/node_modules/isexe"] },
+];
+
 const ROOT_TEXT_FILES = [
   "package.json",
   "pnpm-workspace.yaml",
@@ -183,7 +205,12 @@ async function copyWorkspaceModuleFixed(rel: string, moduleName: string, appRoot
   await copyDir(path.join(root, rel, "dist"), path.join(destDir, "dist"));
 }
 
-async function copyExternalModule(name: string, candidates: readonly string[], appRoot: string): Promise<void> {
+async function copyExternalModule(
+  name: string,
+  candidates: readonly string[],
+  appRoot: string,
+  destinationName = name,
+): Promise<void> {
   let source: string | null = null;
   for (const rel of candidates) {
     const candidate = path.join(root, rel);
@@ -196,7 +223,7 @@ async function copyExternalModule(name: string, candidates: readonly string[], a
     throw new Error(`missing runtime dependency: ${name}`);
   }
   const real = await import("node:fs/promises").then((fs) => fs.realpath(source!));
-  const dest = path.join(appRoot, "node_modules", name);
+  const dest = path.join(appRoot, "node_modules", ...destinationName.split("/"));
   await copyDir(real, dest);
 }
 
@@ -337,6 +364,13 @@ export async function copyAppLayout(
   const gatewayPackage = JSON.parse(
     readFileSync(path.join(root, "apps/gateway/package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
+  const mcpClientVersion = gatewayPackage.dependencies?.["@modelcontextprotocol/client"];
+  if (mcpClientVersion !== MCP_CLIENT_VERSION) {
+    throw new Error(`apps/gateway/package.json must pin @modelcontextprotocol/client to ${MCP_CLIENT_VERSION} until its packaged runtime closure is updated`);
+  }
+  for (const module of MCP_RUNTIME_EXTERNAL_MODULES) {
+    await copyExternalModule(module.name, module.candidates, appRoot, module.destination);
+  }
   const keyringVersion = gatewayPackage.dependencies?.["@napi-rs/keyring"];
   if (!keyringVersion || !/^\d+\.\d+\.\d+$/.test(keyringVersion)) {
     throw new Error("apps/gateway/package.json must pin @napi-rs/keyring to an exact version");

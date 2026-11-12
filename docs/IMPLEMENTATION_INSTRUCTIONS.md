@@ -2,6 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
+
+主語は`copyAppLayout`を使うWindows／Unix package builderと、導入後にMCP接続clientをimportするGatewayである。目的は、package内の`app/node_modules`から実行されるMCP clientとそのruntime依存を閉包し、ソース開発環境のhoisted／pnpm symlinkに依存せずWindows installed Gatewayを起動できるようにすること。
+
+Windows installed smokeで`@modelcontextprotocol/client`の未同梱によりGateway起動が失敗する根因を確認した。builderは現行`apps/gateway`のMCP clientを`2.4.0`に固定し、client／core、transitive module群とMCP用zod v4をBLUEのroot zod v3と分離してpackageへコピーする。Windows／Unix両verifierはentrypointと依存package群を必須化する。Windows smoke runnerにはSetup→Gateway start／health→stopを行う`--startup-only`を追加し、既存`finally`の隔離Purgeで後片付けする。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm package:windows`／`package:windows:verify` | PASS。installer ZIP SHA-256=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、3,549 entries。 |
+| Windows installed `--startup-only` smoke | PASS。隔離Setup、Gateway health応答、launcher stop後の停止確認、既存finally Purgeとregistry後状態を確認。provider=stub、実provider／credential／外部作用なし。 |
+| WSL Ubuntu 24.04 Linux isolation binary build、`corepack pnpm package:linux`／`package:linux:verify` | PASS。Linux tar.gz SHA-256=`a855bcba57a8be87498eadcf50d83ae60f43004aaf0cbc742753a4656ae56b58`、3,750 entries。WSLはLinux用buildにのみ使用し、ソース編集やnative Linux runtime証拠には使っていない。 |
+| `git diff --check` | PASS。 |
+| Windows full installed lifecycle、native Linux runtime、macOS package／runtime、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。限定起動確認とpackage verifierを対象外へ拡張しない。 |
+
+UNIT_ID: Windows installed Gateway startup／OS-shared package runtime dependency closure（限定consumer）
+STATUS: WIRED（Windows installed Gateway起動とLinux archive内容まで）
+NEXT_REQUIRED_CONSUMER: Windows installed update／recovery／通常Uninstallでの保持を含む未接続consumerは、次の独立作業で⓪→④を再実行し現行rev4.0と実物から選ぶ。
+SAFETY_STATUS: 変更前のinstalled smokeはSetup後に欠落MCP clientで停止したが、隔離cleanupは成功し install／DataRootとregistry状態を復元。修正版ではstub Gatewayだけを起動し、health確認後に停止。owner data、資格情報、外部provider、別repoへ作用なし。
+LOCAL_ASSET_STATUS: Windows ZIP（51,886,120 bytes）とLinux tar.gz（49,032,580 bytes）および各manifest／checksum／READMEを生成物として保持。WSL build由来`packages/blue-tanuki/native/linux-isolation/target`は44 entries／10,462,590 bytesで、OneDrive同期領域への削除伝播を避け保留。`.codex-tmp/windows-install-entrypoint/install.log`は79 bytesだがOneDrive reparse pointのため保留。`git fetch origin`のpruneで既存`.git/worktrees/blue-tanuki-health-2026-11-07-windows`の削除がpermission deniedとなったため、metadata／ACL／attributesを変更せず保留。smokeの隔離rootはcleanup後に残存なし。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`、ahead／behind=0/0、worktreeはmainのみ。開始復旧branch current=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`／previous=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`、remote復旧tagも同値。実装・記録のmain反映後、local／origin／GitHub mainと両復旧refを再照合して追記する。
+
 ## 完了BUILD_BATCH — QE_BUILD / CR-0 Linux・macOS開発用Uninstall停止確認
 
 主語はLinux／macOSの開発用source Uninstallと、それが呼び出すresident管理scriptである。目的は、resident停止が失敗・未確認・対象不明の場合に、install／launcher／dataを削除しないこと。

@@ -2,6 +2,31 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QEB-PACKAGE-MCP-RUNTIME-CLOSURE-WINDOWS-LINUX
+
+主語は`copyAppLayout`を使うWindows／Unix package builderと、導入後にMCP clientをimportするGatewayである。開始時local／`origin/main`／GitHub `main`=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`、ahead／behind=0/0、worktreeはmainのみ。開始local recovery branch current=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`／previous=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`。remote recovery tagも直接`git ls-remote`でcurrent=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`／previous=`e5afe23b3c2b57db98a85ee021e35fb4e0e3bca3`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+
+修正前のWindows packageではGateway起動時に`apps/gateway/dist/mcp_connection_client.js`から`@modelcontextprotocol/client`をresolveできなかった。失敗したinstaller ZIP SHA-256=`3ebbfaab8f036ccfc590d69f88183ddd5dac256ab9a6eb8009b14d94831eb857`。隔離Setup／Repairは通過し、startup failure後の既存cleanupでInstallRoot／DataRootが消失、uninstall／autostart registryはfalse／falseへ戻った。再調査でgatewayが`2.4.0`にpinしたMCP client本体とproduction dependency closureを手動package builderが省いていたと特定した。
+
+`scripts/package_windows.ts`へclient 2.4.0のruntime closureを追加し、versionが変化してpackage closure未更新の場合はbuilderをfail-closedにした。MCP依存のzod v4は`@modelcontextprotocol/node_modules/zod`へ配置し、既存root zod v3と分ける。Windows／Unix verifierにMCP client／core entrypoint、zod v4、transitive module manifestsを追加した。`scripts/smoke_windows_installed.ts --startup-only`は隔離Setup後にGateway healthを待ち、launcher stopと停止を確認して既存finally cleanupへ進む。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm package:windows`／`corepack pnpm package:windows:verify` | PASS：Windows ZIP 3,549 entries、SHA-256=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`。 |
+| Windows installed startup-only smoke | PASS：preflightに既存Gatewayなし、uninstall／autostart registry false。隔離Setup、installed Gateway health、launcher stop後のhealth unreachable、finally Purge、registry false／false。synthetic provider stubを使用しcredential／外部作用なし。 |
+| `wsl.exe --distribution Ubuntu-24.04 ... build-linux-isolation.mjs` | PASS：Linux isolation release binaryをWSL内でbuild。WSL内でソース編集は行わず、この結果をnative Linux runtime証拠として扱わない。 |
+| `corepack pnpm package:linux`／`corepack pnpm package:linux:verify` | PASS：Linux tar.gz 3,750 entries、SHA-256=`a855bcba57a8be87498eadcf50d83ae60f43004aaf0cbc742753a4656ae56b58`。 |
+| `git diff --check`／文書gate | PASS。 |
+| Windows full lifecycle、native installed Linux、macOS package／runtime、full test suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+STATUS=`WIRED`（Windows installed Gateway startup consumerとLinux archive closureの限定範囲）。Windows／Linux full lifecycle、macOS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。
+
+生成物分類：release Windows ZIP（51,886,120 bytes）とLinux tar.gz（49,032,580 bytes）、各manifest／checksum／READMEはこの作業の現在build artifactとして保持。WSLが生成した`packages/blue-tanuki/native/linux-isolation/target`は44 entries／10,462,590 bytesで、OneDrive同期領域からの削除伝播を避け保留。`.codex-tmp/windows-install-entrypoint/install.log`は79 bytesだが`ReparsePoint`属性のため保留。`git fetch origin`のpruneで既存`.git/worktrees/blue-tanuki-health-2026-11-07-windows`の削除がpermission deniedとなったため、metadata／ACL／attributesを変更せず保留。隔離installed smoke rootはcleanup後に残存なし。protected attachment directoryは未追跡・未変更。別repo、実資格、実provider、owner data、外部作用に変更なし。
+
+実装・作業記録commitとcloseout commitを`main`へfast-forward push後、local／`origin/main`／GitHub `main`、ahead／behind、復旧branch current／previousとremote recovery tagを再照合する。実装push後にcurrent recovery refをそのcommit、previousを開始`main`へ更新し、closeout push後にcurrentを最終`main`、previousを実装commitへ更新する。
+
+---
+
 ## 2026-11-12 — QEB-CR0-UNIX-DEV-UNINSTALL-RESIDENT-STOP
 
 主語はLinux／macOSの開発用source Uninstallと`install/resident/blue-tanuki-resident.sh`。開始local／`origin/main`／GitHub `main`=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`、ahead／behind=0/0、worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。開始local recovery branch current=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。remote tagはdirect `ls-remote`でcurrent=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。

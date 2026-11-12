@@ -1153,6 +1153,43 @@ async function main(): Promise<void> {
     console.log("installer_zip_setup_result=pass");
 
     const envFile = path.join(dataRoot, "blue-tanuki.env");
+    if (process.argv.includes("--startup-only")) {
+      setEnvFileValue(envFile, "WEBCHAT_HOST", isolatedChildEnv.WEBCHAT_HOST!);
+      setEnvFileValue(envFile, "WEBCHAT_PORT", isolatedChildEnv.WEBCHAT_PORT!);
+      const env = parseEnvFile(envFile);
+      const port = env.WEBCHAT_PORT ?? "8787";
+      const portNumber = Number.parseInt(port, 10);
+      if (!Number.isInteger(portNumber) || portNumber <= 0) {
+        throw new Error(`WEBCHAT_PORT is invalid in installed smoke env file: ${port}`);
+      }
+      run("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        launcher,
+        "start",
+      ], installRoot, "startup-only launcher start", 120_000, isolatedProductEnv);
+      stopped = false;
+      const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
+      if (!healthReady) {
+        await reportInstalledGatewayStartupFailure(installRoot, dataRoot, portNumber, env, [work, installRoot, dataRoot, isolatedTemp]);
+        throw new Error("installed gateway healthz did not become ready in startup-only smoke");
+      }
+      console.log("installed_gateway_startup_result=pass");
+      run("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        launcher,
+        "stop",
+      ], installRoot, "startup-only launcher stop", 60_000, isolatedProductEnv);
+      stopped = true;
+      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+        throw new Error("installed gateway remained reachable after startup-only smoke stop");
+      }
+      console.log("windows_installed_startup_smoke=pass");
+      return;
+    }
     const envBeforeRepair = parseEnvFile(envFile);
     run("cmd.exe", [
       "/d",
