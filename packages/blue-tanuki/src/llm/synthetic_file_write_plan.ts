@@ -5,6 +5,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { isSecretLikeRelativePath, sandboxRootFromEnv } from "../tools/file_safety.js";
+import { SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE } from "../tools/shell_exec_profile.js";
 import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "./base.js";
 
 export const SYNTHETIC_FILE_WRITE_PLAN_BACKEND = "synthetic-file-write-plan";
@@ -15,7 +16,6 @@ const SYNTHETIC_FILE_WRITE_REPLAN_TASK = "同じtaskの検証済み結果を踏�
 const SYNTHETIC_FILE_WRITE_OWNER_OBSERVATION_REPLAN_TASK = "ownerが現在状態のdigest-only observationを候補計算の文脈として明示選択しました。元のfile.write実行は結果不明のまま維持し、その実行成功や目的達成を推定せず、次の未実行候補だけを作成してください。";
 export const SYNTHETIC_FILE_EDIT_TEST_VERIFY_TASK_PREFIX = "sandbox内の指定した相対パスのテキストファイルを編集し、同じsandbox内で固定の隔離testを実行してから同じpathをfile.searchで再読してください。testは回復経路確認のため決定的に失敗します。編集JSON: ";
 export const SYNTHETIC_FILE_EDIT_TEST_RECOVERY_REPLAN_TASK = "同じtaskのsame-workspace test失敗を受け、ownerが現在状態を確認した上で、新しい逆編集候補だけを作成してください。未実行candidateとし、編集の自動復元やowner承認なしの作用は行わないでください。";
-const SYNTHETIC_FILE_EDIT_TEST_EXIT_CODE = 23;
 const SYNTHETIC_FILE_CONTENT = "BLUE-TANUKI synthetic create-only operation completed.\n";
 const SYNTHETIC_CREATE_TASK_PREFIX = "次の内容で新しいテキストファイルを作成してください。\nファイル名: ";
 const SYNTHETIC_CANVAS_ARTIFACT_USER_PREFIX = "Untrusted Canvas artifact data (JSON):\n";
@@ -831,7 +831,7 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
         adapter_is_authority: false,
         command_generated_by_adapter_only: true,
         parameters: {
-          cmd: "node", args: ["-e", `process.exitCode = ${SYNTHETIC_FILE_EDIT_TEST_EXIT_CODE}`],
+          execution_profile: SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
           cwd: ".", timeout_ms: 15_000, max_bytes: 64_000,
           same_workspace_as_file_root: true, summary_only: true,
         },

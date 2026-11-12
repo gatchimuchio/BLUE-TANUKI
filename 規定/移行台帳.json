@@ -80,7 +80,7 @@
     { "path": "docs/WINDOWS_PACKAGING_AUDIT.md", "sha256": "9b24d88d3cf1b305e52d9ccc718b513251d63beeb2cb8d3112ecda64e3c26b34" },
     { "path": "install/installer/README.md", "sha256": "dc9f60104885990e8c04e24ce531d35e53ede393f3c2e3ac0475128376883bd0" },
     { "path": "install/README.md", "sha256": "b1cbaa3c50c8389bcb6dcf71e532f7c516b4b7c36186dea92343b483669b3775" },
-    { "path": "install/resident/README.md", "sha256": "046735e01d4d3e7f38b2bdf9d5b30d7d3e27a7e69d626914f772aef23543a7f4" },
+    { "path": "install/resident/README.md", "sha256": "15bcc04f6925c7502fc87fd6bb46a5f9cc250dae4e661dae5c4fbe6dd5f691ec" },
     { "path": "QUICKSTART.md", "sha256": "5d9d649c59e794347d0a7deac7d073e7aa19a197f20b4bc10fae146a81058b17" },
     { "path": "SECURITY.md", "sha256": "baceac4793d2a4695d6b4758d3dc23df831ff10c3b2a5641a21989fbaea2d94b" },
     { "path": "TROUBLESHOOTING.md", "sha256": "309932d01e591c923fb648533bf99bb5c8a418d626a098e18c4bfa64a724fd0c" }

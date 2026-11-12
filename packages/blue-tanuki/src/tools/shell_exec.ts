@@ -7,6 +7,10 @@ import { requireToolOperationDescriptor, ShellExecTargetVersionObservationSchema
   type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { Tool, ToolContext, ToolExecutionLifecycleObservation } from "./registry.js";
 import { isSecretLikeRelativePath, sandboxRootFromEnv } from "./file_safety.js";
+import {
+  SYNTHETIC_FILE_EDIT_TEST_FAILURE_EXIT_CODE,
+  SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
+} from "./shell_exec_profile.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -62,8 +66,7 @@ export async function invokeShellExec(
   const shellRoot = await shellRootFromEnv(env);
   await assertSameFileWorkspaceWhenRequested(args, env, shellRoot);
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
-  const cmd = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
-  const argv = shellArgs(args);
+  const { cmd, argv } = resolveShellCommand(args, env);
   validateShellCommand(cmd, argv);
   const timeoutMs = positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
@@ -196,8 +199,7 @@ export async function inspectShellExecTargetVersion(
   if (sameWorkspace && args.summary_only !== true) {
     throw new Error("same-workspace shell.exec requires summary_only=true so captured output is not returned");
   }
-  const command = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
-  const argv = shellArgs(args);
+  const { cmd: command, argv } = resolveShellCommand(args, env);
   validateShellCommand(command, argv);
   positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   positiveIntArg(args, "max_bytes", 64_000, 512_000);
@@ -543,6 +545,35 @@ function validateShellCommand(cmd: string, argv: readonly string[]): void {
       throw new Error(`shell.exec argument denied by destructive-argument policy: ${arg}`);
     }
   }
+}
+
+function resolveShellCommand(
+  args: Record<string, unknown>,
+  env: Readonly<Env>,
+): { readonly cmd: string; readonly argv: string[] } {
+  if (!Object.hasOwn(args, "execution_profile")) {
+    return {
+      cmd: stringArg(args, "cmd", false) ?? stringArg(args, "command")!,
+      argv: shellArgs(args),
+    };
+  }
+  if (args.execution_profile !== SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE) {
+    throw new Error("shell.exec execution profile is unsupported");
+  }
+  if (Object.hasOwn(args, "cmd") || Object.hasOwn(args, "command") || Object.hasOwn(args, "args")) {
+    throw new Error("shell.exec execution profile cannot be combined with raw command fields");
+  }
+  if (envValue(env, "BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND") !== "true" ||
+      envValue(env, "NODE_ENV") === "production" || process.env.NODE_ENV === "production") {
+    throw new Error("shell.exec synthetic execution profile is disabled outside its development opt-in");
+  }
+  if (process.platform === "win32") {
+    return { cmd: "cmd.exe", argv: ["/d", "/c", "exit", String(SYNTHETIC_FILE_EDIT_TEST_FAILURE_EXIT_CODE)] };
+  }
+  if (process.platform === "linux") {
+    return { cmd: "sh", argv: ["-c", `exit ${SYNTHETIC_FILE_EDIT_TEST_FAILURE_EXIT_CODE}`] };
+  }
+  throw new Error("shell.exec synthetic execution profile is unavailable on this platform");
 }
 
 function shellArgs(args: Record<string, unknown>): string[] {

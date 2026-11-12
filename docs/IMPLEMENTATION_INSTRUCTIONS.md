@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / synthetic same-workspace edit-test adapter profile
+
+主語はOperationPlanからshell execution adapterへ渡る、開発用の固定失敗test profileである。目的は、plannerへraw commandを持たせず、編集後test・同一Workspace再読取・失敗時の再計画経路で必要な`shell.exec` consumerを成立させること。対象は`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/blue-tanuki/src/tools/shell_exec.ts`とそのadapter contract／限定testである。
+
+synthetic backendは`cmd`／`args`を含めず、固定profile IDだけをOperationPlanへ出す。shell execution adapterは、その一つの既知profileだけを明示的なsynthetic backend opt-in下かつ非productionで受け、Windows `cmd.exe`／Linux `sh`から終了コード23を返す固定processへ変換する。unknown profile、opt-in不在、production、profileとraw commandの併記は拒否する。既存のraw-command拒否、shell L3、Brokerのroot/cwd照合、same-workspace、summary-only、native process isolationを維持する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| core `typecheck`／`git diff --check` | PASS。 |
+| `pnpm docs:check` | PASS。前工程で変更済みの`install/resident/README.md`の登録hashだけを移行台帳へ同期し、移行負債75件は維持。 |
+| Operation Coreのclosed profile受理／raw command拒否 | PASS：選択した2 test。 |
+| profile opt-in／unknown／raw command併記の拒否 | PASS：選択した2 test。 |
+| Windows native isolation profile smoke | PASS：exit code 23、process tree empty、出力本文なし。これはshell adapter単体の検査で、GatewayのHDS／Approval／Broker全経路証拠ではない。 |
+| Gateway全経路、Linux native isolation、full suite、5OS実機／QA、QE_QC／QE_QA | 未実行。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / synthetic same-workspace edit-test adapter profile
+- **STATUS:** WIRED（OperationPlan schemaとWindows shell adapterの固定profile接続。Gateway全経路は未確認）
+- **NEXT_REQUIRED_CONSUMER:** 最新mainとrev5.0からP2の全域consumerを再選定し、局所QAへ移らず製品全体のC/J/M／OS入口結線を進める。
+- **SAFETY_STATUS:** profileは任意command実行機能ではない。raw command fieldは従来どおり拒否。HDS authority／L3／Approval／Broker／M、実provider、外部作用、他repo、公開・出荷境界に変更なし。
+- **LOCAL_ASSET_STATUS:** 選択testが作成した専用Temp directoryはtest終了時に除去。profile processはprocess tree emptyを確認。既存のprotected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は維持・未変更。
+- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`8233761b3b533d707e39932e6e442886a4a75c5a`、ahead／behind=0/0。開始recovery current／previous=`8233761b3b533d707e39932e6e442886a4a75c5a`／`063c18c81262962d785ee86dca4a3d6f5ff7b948`、remote tagも一致。closeout push後はlocal／`origin/main`／GitHub `main`を一致させ、recovery current=final main、previous=開始mainとする。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / Windows portable resident PID ownership and stop confirmation
 
 主語はWindows portable installerのresident helper、目的は記録PIDをBLUE-TANUKI Gatewayと照合してから状態表示・停止し、PID再利用による無関係なprocess操作を拒否すること。対象は`install/resident/blue-tanuki-resident.ps1`であり、既存product launcher、HDS authority、Approval、Gateway運転契約は変更していない。

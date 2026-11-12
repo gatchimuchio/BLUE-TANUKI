@@ -9,6 +9,7 @@ import { buildOperationCoreApprovalTrace } from "../src/operation_core.js";
 import { MemorySessionStore } from "../src/sessions/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
+import { SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE } from "../src/tools/shell_exec_profile.js";
 
 const stubUpstream = {
   frame_goal: "g",
@@ -246,6 +247,52 @@ describe("Executor Operation Core planner output boundary", () => {
       status: "rejected",
       planner_output_used_for_authority: false,
     });
+  });
+
+  it("accepts a closed shell adapter profile while preserving the raw-command boundary", async () => {
+    const plan = operationPlan();
+    plan.steps[0] = {
+      step_id: "step-1",
+      operation: "shell.exec",
+      target: { kind: "workspace", id: "workspace:synthetic" },
+      state: "planned",
+      effects: ["process_spawn", "read", "write", "delete", "external_send", "credential_access", "settings_change"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        hds_brain_authority_required: true,
+        approval_gate_required: true,
+      },
+      adapter: "shell",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: true,
+      parameters: {
+        execution_profile: SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
+        cwd: ".",
+        timeout_ms: 15_000,
+        max_bytes: 64_000,
+        same_workspace_as_file_root: true,
+        summary_only: true,
+      },
+    };
+    plan.raw_command_policy.command_generation_location = "execution_adapter_only";
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new FixedBackend(JSON.stringify(plan)),
+      tools: new ToolRegistry(),
+    });
+
+    const feedback = await exec.execute(approved(llmCmd("plan a fixed synthetic test")));
+
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toMatchObject({ operation_core: {
+      status: "valid_plan",
+      planner_output_used_for_authority: false,
+      adapter_registry: {
+        steps: [{ adapter: "shell", command_generation_location: "execution_adapter_only" }],
+      },
+    } });
   });
 
   it("fails closed when Operation Core planner JSON does not match OperationPlanSchema", async () => {

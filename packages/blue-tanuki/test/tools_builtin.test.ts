@@ -57,6 +57,7 @@ import {
 } from "../src/tools/builtin.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
+import { SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE } from "../src/tools/shell_exec_profile.js";
 import { inspectGoogleDriveWriteTargetVersion } from "../src/tools/google_write.js";
 
 const ctx = {
@@ -2670,6 +2671,93 @@ describe("built-in tools", () => {
       invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }, { env: {} }),
     ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
   });
+
+  it("shell.exec resolves only the fixed development-only synthetic test profile", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-synthetic-profile-"));
+    const env = shellTestEnv(root, {
+      BLUE_TANUKI_FILE_ROOT: root,
+      BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND: "true",
+      NODE_ENV: "test",
+    });
+    const args = {
+      execution_profile: SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
+      cwd: ".",
+      timeout_ms: 15_000,
+      max_bytes: 64_000,
+      same_workspace_as_file_root: true,
+      summary_only: true,
+    };
+    try {
+      const observation = await inspectShellExecTargetVersion(args, {
+        env,
+        command_digest: "f".repeat(64),
+      });
+      expect(observation).toMatchObject({
+        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      await expect(inspectShellExecTargetVersion(args, {
+        env: { ...env, BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND: "false" },
+        command_digest: "f".repeat(64),
+      })).rejects.toThrow(/disabled outside its development opt-in/);
+      await expect(inspectShellExecTargetVersion({ ...args, execution_profile: "unrecognized" }, {
+        env,
+        command_digest: "f".repeat(64),
+      })).rejects.toThrow(/execution profile is unsupported/);
+      await expect(inspectShellExecTargetVersion({ ...args, cmd: "node" }, {
+        env,
+        command_digest: "f".repeat(64),
+      })).rejects.toThrow(/cannot be combined with raw command fields/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec runs the fixed synthetic failure through Windows isolation and returns only a summary",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-synthetic-failure-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const env = shellTestEnv(root, {
+        BLUE_TANUKI_FILE_ROOT: root,
+        BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND: "true",
+        NODE_ENV: "test",
+      });
+      const args = {
+        execution_profile: SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
+        cwd: ".",
+        timeout_ms: 15_000,
+        max_bytes: 64_000,
+        same_workspace_as_file_root: true,
+        summary_only: true,
+      };
+      try {
+        const targetVersionObservation = await inspectShellExecTargetVersion(args, {
+          env,
+          command_digest: "e".repeat(64),
+        });
+        const result = await invokeShellExec(args, {
+          env,
+          nativeProviderPath: providerPath,
+          targetVersionObservation,
+        }) as Record<string, unknown>;
+        expect(result).toMatchObject({
+          exit_code: 23,
+          signal: null,
+          timed_out: false,
+          output_included: false,
+          process_tree_empty: true,
+        });
+        expect(result).not.toHaveProperty("stdout");
+        expect(result).not.toHaveProperty("stderr");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("shell.exec binds an explicitly requested same-workspace command to the file sandbox", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-same-workspace-"));
