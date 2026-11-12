@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / F02.01 Gmail読取identity・信頼境界のAdapter確認
+
+主語はBLUEの既存`gmail.read` production Adapter `invokeGmailRead`である。目的はsynthetic Gmail応答から認証mailbox、message／thread、recipient header claims、添付identityを正しく識別し、メールsubject／snippet／recipient／添付metadataを未信頼データのまま分離すること。人間ownerとmailboxの対応や宛先claimの真実性は確定しない。本文・raw MIME・添付bytesは結果に含めず、本文bytesを含むfull metadata応答はfail-closedに拒否する。
+
+既存Adapterのproducerは既に接続されていたため、別wrapperや新規経路は作らず、実際に使う`invokeGmailRead`へ合成transport fixtureを追加した。正例はprofile由来mailboxとmessage／thread／attachment identity、To/Cc/Bcc/Reply-Toの未検証claim、subject／snippetの未信頼flag、body-free resultを確認する。負例はmessage-part `body.data`の混入を拒否し、read-onlyでmutationなしを確認する。この確認はAdapter fixtureの範囲で、Gateway runtimeやGoogle provider接続の証明ではない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| `packages/blue-tanuki/test/google_read_gmail.test.ts` | PASS：2/2 tests。mailbox／message／thread／attachment identity、未信頼recipient claimsとsnippet、本文不在、予期しないbody bytesの拒否を合成transportで確認。 |
+| `corepack pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `corepack pnpm --filter @blue-tanuki/core build` | PASS：Windows／Linux isolation outputsとcore package。 |
+| `corepack pnpm docs:check` | PASS：docs／日本語基底／license gates。日本語基底の既存移行負債75件は注意表示。 |
+| `git diff --check` | PASS。 |
+| Gateway process、実Google provider／credential／mailbox、外部作用、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+UNIT_ID: F02.01（Gmail read Adapter fixtureでmailbox／message／thread／attachment identityと未信頼メール内容を区別する限定producer確認）
+STATUS: WIRED（production `invokeGmailRead`にsynthetic transportを通し、recipient claims／subject／snippet／attachment metadataを非権威として返却。Gatewayの通常C/J/M縦断経路は未確認）
+NEXT_REQUIRED_CONSUMER: この単位を閉じた後、現行rev4.0と最新HEAD・実consumerから次のBUILD_BATCHを選定する。実provider、ライブ外部作用、別repo変更、QE_QC／QE_QAへ拡張しない。
+SAFETY_STATUS: `gmail.read` read-only、mutationなし、human-owner relationとrecipient claimsは未検証、メール内容から目的・承認・権限を生成しない、unexpected body bytesを拒否、本文／raw MIME／添付bytesを返さない。
+LOCAL_ASSET_STATUS: 新規Adapter fixture testのみ。test固有一時資産なし。core build生成のignored `dist`／Windows・Linux isolation outputsは開発環境として保持。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。provider credential・外部作用・OneDrive保管操作なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／remote tag current=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`、previous=`41c59cc56e26e14f821093c935b2d08b89f394b5`。閉包時にcommit／push後のlocal・remote main、二世代recovery refs、保護添付状態を再照合する。
+
 ## 完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果検証とowner帰還
 
 主語はBLUE Gatewayの通常Gmail `message.send`、Approval Gate、Executor、HDS-J/M、認証済みControl Centerである。目的はowner taskに明示された宛先・Reply-To・件名・本文・選択添付と認証済みmailboxをno-storeのhigh/L3 reviewへ束縛し、一回の送信後に同じmailbox・message・threadの`SENT`状態を再読込で確認した結果だけを、検証済みOperation Plan、digest-only M receipt、再起動後のowner照会へ返すこと。

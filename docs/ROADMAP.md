@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果帰還
+### 直近完了BUILD_BATCH — QE_BUILD / F02.01 Gmail read Adapter identity・信頼境界確認
+
+既存`invokeGmailRead`へsynthetic transportを通し、profile由来mailbox、message／thread／attachment identity、To/Cc/Bcc/Reply-To claimsを確認した。recipient claims、subject、snippet、attachment metadataは非信頼データ、human-owner relationは未確認とし、本文／raw MIME／添付bytesは返さない。unexpected message-part body bytesは拒否する。focused Adapter tests 2/2、core typecheck/build PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。Gateway runtime／実Google provider・credential、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定producerだけを`WIRED`とし、F02.01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果帰還
 
 通常`message.send`を既存Gateway／Approval Gate／Executor／HDS-J/M／Control Centerのconsumerへ接続した。owner指定の宛先・Reply-To・件名・本文・選択添付と認証mailboxをdigestで束縛してno-store high/L3 reviewへ表示し、作用直前にaccount・要求を再照合して一回送信する。送信後は同じmailbox・返却message・threadを読み直して`SENT`を確認し、Jの結果validationとdigest-only M receipt、Gateway／J/M再起動後のowner照会までを接続した。不明・不一致・`SENT`未確認では結果不明で停止し、自動再送しない。
 

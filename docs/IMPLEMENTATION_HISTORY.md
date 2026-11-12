@@ -4339,3 +4339,23 @@ HDSの結果validationはcommand／target／request digestと検証済みmessage
 `git fetch origin`とcommit時cleanupは古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataへのPermission deniedで完了しなかったためACLを迂回しなかった。commit本体は成功した。`git ls-remote`でGitHub mainと両recovery tagを独立照合し、作業開始時はmain=`2d3931a1e39457da19185cb7f3094d32ca037864`、backup current=`2d3931a1e39457da19185cb7f3094d32ca037864`、backup previous=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`を確認した。implementation commit=`41c59cc56e26e14f821093c935b2d08b89f394b5`を通常fast-forward pushし、push直後のlocal／origin／GitHub main一致を確認した。競合検出付きtag updateとlocal branch update後、current／previous recovery refは`41c59cc56e26e14f821093c935b2d08b89f394b5`／`2d3931a1e39457da19185cb7f3094d32ca037864`へ揃った。closeout文書push後の終端SHA／refsは最終Git照合結果として報告する。
 
 この通常`message.send` consumerだけを`WIRED`とする。F02.02全体、実provider接続・実送信、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、OS別QA、release／owner GOは未成立。
+
+## 2026-11-12 — QEB-F02.01-GMAIL-READ-IDENTITY-TRUST-BOUNDARY
+
+作業開始時local `main`／`origin/main`／GitHub `main`=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／remote tag current=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`、previous=`41c59cc56e26e14f821093c935b2d08b89f394b5`。rev4.0 ZIP／manifest／三文書hashは唯一の現行pinと一致。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡。
+
+現行rev4.0のF02.01正例／負例を`packages/blue-tanuki/src/tools/google_read.ts#invokeGmailRead`で照合した。既存Adapterは`include_attachment_metadata=true`時、`gmail.users.getProfile`由来のmailbox、message／thread、MIME part／attachment identityを読み、To/Cc/Bcc/Reply-Toは`source=untrusted_message_headers`／`verified=false`として返す。subject、from、snippet、attachment metadataも非権威で、human-owner relationshipは`not_verified`。本文bytes／rawは返さず、unexpected message-part body dataはfail-closed拒否するため、新しい経路やwrapperを追加しなかった。
+
+不足していたproduction Adapterの合成transport証拠を`packages/blue-tanuki/test/google_read_gmail.test.ts`へ追加した。正例ではmailbox／message／thread／attachment identity、recipient claims、subject／snippetのuntrusted flags、body-free output、`mutation_sent=false`を確認。負例ではresponseに`body.data`を注入し、結果返却前の拒否を確認した。test-only synthetic tokenを使い、実provider／credential／Gateway／外部作用は使用していない。
+
+| 確認 | 結果 |
+|---|---|
+| Gmail read Adapter focused Vitest | PASS：1 file／2 tests（正例1、body bytes拒否1）。 |
+| `corepack pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `corepack pnpm --filter @blue-tanuki/core build` | PASS：core package、Windows／Linux isolation outputs。 |
+| `corepack pnpm docs:check`／`git diff --check` | 実行後の結果を記録する。 |
+| Gateway runtime／実Google provider・mailbox／credential／外部作用、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+生成資産分類：tracked source変更なし。新規fixture testとactive docsをGit候補とする。testは一時rootを作らず、buildで更新されたignored core `dist`／Windows／Linux isolation outputsは稼働中の開発環境として保持。protected attachmentsは未変更・未追跡。OneDrive、別repo、credential store、実provider、外部作用へアクセスしていない。このF02.01 Adapter fixture sliceだけを`WIRED`とし、Gateway／J/M全縦断やF02.01／F02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
+
+終端main／commit・push／復旧refsはcloseout時にGitから照合する。ACL拒否の古いworktree metadataは変更せず、保護を迂回しない。
