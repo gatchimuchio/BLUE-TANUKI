@@ -133,12 +133,14 @@ import type {
   WebChatMemoryPersonalizationStopContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
+  WebChatD4RuntimeTaskOutcome,
   WebChatAuthorityTraceItem,
   WebChatEvidenceControlContext,
   WebChatHistoryReplayFilter,
   WebChatHistorySnapshot,
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
+import { projectD4RuntimeTaskOutcome } from "./d4_runtime_task_outcome.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -3855,7 +3857,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
       owner_task_submission_store: ownerTaskSubmissionStore,
       ...(d4RuntimeToken && d4RuntimeId
-        ? { d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId } }
+        ? {
+            d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId },
+            onD4RuntimeIntentTaskOutcome: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeTaskOutcome> => {
+              try {
+                return projectD4RuntimeTaskOutcome(hds.getRuntimeSnapshot().operation_plans, request_id);
+              } catch {
+                return projectD4RuntimeTaskOutcome(undefined, request_id);
+              }
+            },
+          }
         : {}),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
         source_command_id?: string }) =>

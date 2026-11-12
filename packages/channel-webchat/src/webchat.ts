@@ -66,6 +66,7 @@ import {
 
 import type {
   WebChatAboutSurface,
+  WebChatD4RuntimeTaskOutcome,
   WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
@@ -326,6 +327,57 @@ function d4RuntimeIntentPayloadDigest(token: string, runtimeId: string, sessionI
     .update("blue-tanuki.d4-runtime.intent-submission-payload.v1\0", "utf8")
     .update(JSON.stringify([runtimeId, sessionId, intent]), "utf8")
     .digest("hex");
+}
+
+function normalizeD4RuntimeTaskOutcome(value: unknown): WebChatD4RuntimeTaskOutcome {
+  const invalid: WebChatD4RuntimeTaskOutcome = {
+    status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
+  };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return invalid;
+  const outcome = value as Record<string, unknown>;
+  const allowedKeys = ["status", "reason_code", "completion_evidence", "used_for_authority", "may_execute"];
+  if (Object.keys(outcome).some((key) => !allowedKeys.includes(key)) ||
+      outcome.used_for_authority !== false || outcome.may_execute !== false) return invalid;
+  if (outcome.status === "unknown" && ["projection_unavailable", "projection_ambiguous", "projection_invalid"].includes(String(outcome.reason_code)) &&
+      outcome.completion_evidence === undefined) {
+    return { status: "unknown", reason_code: outcome.reason_code as WebChatD4RuntimeTaskOutcome["reason_code"],
+      used_for_authority: false, may_execute: false };
+  }
+  if (outcome.status === "in_progress" && outcome.reason_code === "completion_pending" &&
+      outcome.completion_evidence === undefined) {
+    return { status: "in_progress", reason_code: "completion_pending", used_for_authority: false, may_execute: false };
+  }
+  if (outcome.status === "held" && outcome.reason_code === "completion_held" &&
+      outcome.completion_evidence === undefined) {
+    return { status: "held", reason_code: "completion_held", used_for_authority: false, may_execute: false };
+  }
+  const evidence = outcome.completion_evidence;
+  if (outcome.status !== "achieved" || outcome.reason_code !== "goal_completion_rules_satisfied" ||
+      typeof evidence !== "object" || evidence === null || Array.isArray(evidence)) return invalid;
+  const completionEvidence = evidence as Record<string, unknown>;
+  const evidenceKeys = ["rules_digest", "evidence_digest", "rule_count", "satisfied_rule_count", "used_for_authority", "may_execute"];
+  if (Object.keys(completionEvidence).length !== evidenceKeys.length ||
+      Object.keys(completionEvidence).some((key) => !evidenceKeys.includes(key)) ||
+      typeof completionEvidence.rules_digest !== "string" || !/^[a-f0-9]{64}$/iu.test(completionEvidence.rules_digest) ||
+      typeof completionEvidence.evidence_digest !== "string" || !/^[a-f0-9]{64}$/iu.test(completionEvidence.evidence_digest) ||
+      typeof completionEvidence.rule_count !== "number" || !Number.isInteger(completionEvidence.rule_count) ||
+      completionEvidence.rule_count < 1 || completionEvidence.rule_count > 64 ||
+      completionEvidence.satisfied_rule_count !== completionEvidence.rule_count ||
+      completionEvidence.used_for_authority !== false || completionEvidence.may_execute !== false) return invalid;
+  return {
+    status: "achieved",
+    reason_code: "goal_completion_rules_satisfied",
+    completion_evidence: {
+      rules_digest: completionEvidence.rules_digest.toLowerCase(),
+      evidence_digest: completionEvidence.evidence_digest.toLowerCase(),
+      rule_count: completionEvidence.rule_count,
+      satisfied_rule_count: completionEvidence.satisfied_rule_count as number,
+      used_for_authority: false,
+      may_execute: false,
+    },
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 function isDirectToolShortcutContent(content: string): boolean {
@@ -1581,13 +1633,22 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           submission_id: parsed.data.submission_id,
           scope_digest: scopeDigest,
         });
+        const taskOutcome = status && this.opts.onD4RuntimeIntentTaskOutcome
+          ? normalizeD4RuntimeTaskOutcome(await this.opts.onD4RuntimeIntentTaskOutcome({ request_id: status.request_id }).catch(() => ({
+              status: "unknown" as const,
+              reason_code: "projection_unavailable" as const,
+              used_for_authority: false as const,
+              may_execute: false as const,
+            })))
+          : undefined;
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
         res.end(JSON.stringify(status
-          ? { found: true, request_id: status.request_id, state: status.state }
+          ? { found: true, request_id: status.request_id, state: status.state,
+              ...(taskOutcome ? { task_outcome: taskOutcome } : {}) }
           : { found: false }));
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });

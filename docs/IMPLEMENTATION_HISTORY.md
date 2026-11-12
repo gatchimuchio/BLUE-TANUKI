@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-11-12 — QEB-D03.01-D4-RUNTIME-HDS-TASK-OUTCOME-STATUS
+
+開始時local／`origin/main`／GitHub `main`=`8359d86fb368dacbf0b622777d4b808b41c93e78`、ahead／behind=0/0。worktreeはmainのみ。local recovery branchとremote tagのcurrent=`8359d86fb368dacbf0b622777d4b808b41c93e78`、previous=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。stale worktree metadataに対する`git fetch`のACL拒否は迂回せず、remote main／tagは直接照合した。
+
+認証済みWebChat D4 Runtime statusへ、同一request ID・D4 actor digest・WebChat channel digestを一意照合したHDS Operation Planのtask outcomeを追加した。明示goal ruleの全件充足、同一評価のrules/evidence digest、整合する件数、non-authority flagsを満たす場合のみ`achieved`とし、pendingは`in_progress`、Jのholdは`held`、不在・曖昧・不正projectionは`unknown`とする。dispatch callback状態とは別フィールドで、本文・receipt IDを返さない。status routeのallow-list sanitizerも不正・追加projection fieldsを拒否する。D4 repository、実credential、provider、実作用、公開物は変更していない。
+
+| 確認 | 結果 |
+|---|---|
+| WebChat D4 Runtime status focused test | PASS：1 selected、同file 132 skipped。dispatch stateとの分離とraw field非漏えいを確認。 |
+| Gateway task-outcome projector tests | PASS：3/3。request/actor/channel束縛、achievement根拠、pending/held、missing/ambiguous/invalidを確認。 |
+| channel-webchat typecheck/build、Gateway typecheck/build | PASS。 |
+| `pnpm docs:check`、`git diff --check` | PASS。 |
+| full Gateway served HDS task、D4 adapter producer、全workspace suite、provider/credential/外部作用、Android/iOS実機、5OS QA、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+生成物分類：tracked source／test／docsをGit候補とした。ignored channel-webchat `dist`は開発出力として保持。test固有一時資産なし。protected添付領域、D4 workspace、OneDrive資料は変更なし。このBLUE status projectionだけを限定`WIRED` sliceとし、D03.01／G09.01全体や`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。D4 adapter consumerは未接続であり、別repo変更には独立した限定委任が必要。
+
+---
+
 ## 2026-11-12 — QEB-F02.02-GMAIL-OWNER-SELECTED-REPLY-SOURCE
 
 開始時local／`origin/main`／GitHub `main`=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／tag current=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、previous=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。

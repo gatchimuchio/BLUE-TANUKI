@@ -2,6 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime statusへのJ/M task outcome接続
+
+主語はBLUE Gatewayの認証済みD4 Runtime status endpointと、HDS-J/Mがrequest IDごとに返すOperation Plan `task_outcome`である。目的は、dispatch状態の`handler_returned`をgoal達成と誤認させず、同じruntime/session/submissionに束縛した状態照会へ、検証済みの達成・進行・保留状態をcontent-freeで追加すること。
+
+`POST /runtime/intent/status`は従来のdispatch stateを維持したうえで、HDS projection内のrequest ID、D4 Runtime actor digest、WebChat channel digestが一意一致したtaskだけを照合する。`achieved`はHDSが返すJ評価が明示規則を全件満たし、rules/evidence digestと件数が整合し、`used_for_authority=false`／`may_execute=false`である場合だけ返す。HDS plan不在・曖昧・不正は`unknown`、pendingは`in_progress`、古い評価を含むJのholdは`held`とする。task本文、規則本文、結果本文、M receipt IDは返さない。dispatch state、goal outcome、結果本文の配送は別状態のままである。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `packages/channel-webchat/test/webchat.test.ts` D4 Runtime経路 | PASS：1 selected test（同file 132 skipped）。statusのdispatch stateとJ/M task outcomeを別々に返し、不正な拡張projectionのraw fieldを捨てることを確認。 |
+| `apps/gateway/test/d4_runtime_task_outcome.test.ts` | PASS：3/3。request/actor/channel束縛、achievement digestとrule count、pending/held、missing/ambiguous/invalidのunknownを確認。 |
+| channel-webchat／Gateway typecheck、channel-webchat build、`git diff --check` | PASS。 |
+| Gateway served full task、D4 Adapter producer/consumer、Android実機、全suite、実provider／credential／外部作用、5OS QA、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+このBLUE status projectionだけを`WIRED`とする。D03.01／G09.01全体、D4との実接続、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。D4別repoは読み取りのみで、Android/iOSコード、provider credential、外部作用、公開を変更していない。
+
+NEXT_REQUIRED_CONSUMER: D4 `blue_tanuki_adapter` producerは未接続のまま。別repo変更は対象・委任が独立に成立するまで行わず、現行rev4.0と最新HEADから次のBLUE-owned実consumerを選ぶ。
+SAFETY_STATUS: 同一session scope、専用bearer、runtime ID、request ID、HDS owner/channel digest照合を維持。HDS outcomeは表示用projectionであり、権限・Approval・実行・配信確認へ使わない。達成不明はunknown/held。
+LOCAL_ASSET_STATUS: channel-webchat source/test、Gateway projector/test、active指示・進捗記録をGit管理候補とした。channel-webchatのignored `dist` build outputは開発環境として保持。test固有temp assetなし。protected attachment directoriesは未追跡・未変更。D4 workspace／OneDrive資料に変更なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／origin／GitHub `main`=`8359d86fb368dacbf0b622777d4b808b41c93e78`、ahead／behind=0/0。fetchはstale worktree metadata削除時のACL拒否を報告したが、remote `main`／復旧tagは直接照合済み。既存local recovery branchesとremote tags current／previousは編集前にHEAD／直前mainと一致。
+
 ## 完了BUILD_BATCH — QE_BUILD / F02.02 owner選択済みGmail identityから返信draft候補へのJ内束縛
 
 主語はHDS-Jの`OperationPlanLedger.retainCandidate`と、既存のowner選択済み`gmail.read` identity経路である。目的は、ownerが読取結果から選択したmessage identity digestを、Cの候補返却後にJが同じowner／channel／task／revisionの未期限・検証済みread resultと照合し、返信draft候補のsource message IDへ内部束縛すること。C入力、Control Center projection、M receiptへraw provider IDやメール内容を渡さない。候補は単一の`gmail.write draft.create`だけを許し、添付を拒否し、返信draftのthread確認付きresult validationへ置き換える。

@@ -26,6 +26,7 @@ import {
   type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
   type WebChatOwnerTaskSubmissionStore,
+  type WebChatD4RuntimeTaskOutcome,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
   AOTANU_ASSET_ROUTE_PREFIX,
@@ -186,6 +187,7 @@ async function setup(
       owner_token?: string;
       webhook_token?: string;
       d4_runtime_intent?: { token: string; runtime_id: string };
+      onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
       maintenance_token?: string;
       resume_approval_tokens?: false;
       resume_approval_token_ttl_ms?: number;
@@ -216,6 +218,7 @@ async function setup(
     owner_token: opts.owner_token,
     webhook_token: opts.webhook_token,
     d4_runtime_intent: opts.d4_runtime_intent,
+    onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -3911,8 +3914,18 @@ describe("WebChatChannel — HTTP inbound", () => {
   });
 
   it("routes authenticated D4 Runtime intent to HDS with opaque session scope and limited actor", async () => {
+    let taskOutcome: WebChatD4RuntimeTaskOutcome = {
+      status: "in_progress",
+      reason_code: "completion_pending",
+      used_for_authority: false,
+      may_execute: false,
+    };
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      onD4RuntimeIntentTaskOutcome: async ({ request_id }) => {
+        expect(request_id).toMatch(/^[0-9a-f-]{36}$/iu);
+        return taskOutcome;
+      },
     });
     let ws: WebSocket | undefined;
     let finishHandler!: () => void;
@@ -3973,7 +3986,35 @@ describe("WebChatChannel — HTTP inbound", () => {
         submission_id: D4_SUBMISSION_ID_1,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(status.status).toBe(200);
-      expect(status.body).toEqual({ found: true, request_id: requestId, state: "dispatching" });
+      expect(status.body).toEqual({ found: true, request_id: requestId, state: "dispatching", task_outcome: {
+        status: "in_progress", reason_code: "completion_pending", used_for_authority: false, may_execute: false,
+      } });
+      taskOutcome = {
+        status: "achieved",
+        reason_code: "goal_completion_rules_satisfied",
+        completion_evidence: {
+          rules_digest: "a".repeat(64),
+          evidence_digest: "b".repeat(64),
+          rule_count: 1,
+          satisfied_rule_count: 1,
+          used_for_authority: false,
+          may_execute: false,
+        },
+        used_for_authority: false,
+        may_execute: false,
+        raw_result: "must-not-leak",
+      } as unknown as WebChatD4RuntimeTaskOutcome;
+      const invalidProjection = await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        submission_id: D4_SUBMISSION_ID_1,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(invalidProjection.body).toMatchObject({
+        found: true,
+        task_outcome: { status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false },
+      });
+      expect(JSON.stringify(invalidProjection.body)).not.toContain("must-not-leak");
+      taskOutcome = { status: "in_progress", reason_code: "completion_pending", used_for_authority: false, may_execute: false };
       const otherSessionStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", {
         runtime_id: "blue_tanuki",
         session_id: "another-session",
@@ -3983,12 +4024,26 @@ describe("WebChatChannel — HTTP inbound", () => {
 
       finishHandler();
       await new Promise((resolve) => setTimeout(resolve, 30));
+      taskOutcome = {
+        status: "achieved",
+        reason_code: "goal_completion_rules_satisfied",
+        completion_evidence: {
+          rules_digest: "a".repeat(64),
+          evidence_digest: "b".repeat(64),
+          rule_count: 1,
+          satisfied_rule_count: 1,
+          used_for_authority: false,
+          may_execute: false,
+        },
+        used_for_authority: false,
+        may_execute: false,
+      };
       const returned = await postJson(runtimeCtx.port, "/runtime/intent/status", {
         runtime_id: "blue_tanuki",
         session_id: "session-1234-abcd",
         submission_id: D4_SUBMISSION_ID_1,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
-      expect(returned.body).toEqual({ found: true, request_id: requestId, state: "handler_returned" });
+      expect(returned.body).toEqual({ found: true, request_id: requestId, state: "handler_returned", task_outcome: taskOutcome });
 
       const received = runtimeCtx.received[0]!;
       const sessionDigest = createHmac("sha256", D4_RUNTIME_TOKEN)
