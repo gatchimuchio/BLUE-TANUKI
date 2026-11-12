@@ -23,7 +23,7 @@ STATUS: WIRED（Linux systemd／XDG・macOS LaunchAgentのexact ownership、変�
 NEXT_REQUIRED_CONSUMER: owner回答で確定したC08.02達成条件「現行J正本へ結び付いた明示規則＋同一revisionの検証済み結果＋M receipt」を現行main・J consumerで再照合する。条件を満たす既存経路は重複実装せず、欠落・曖昧を保留する。
 SAFETY_STATUS: autostartは従来どおりopt-in。unowned／modified／symlink entriesは非操作・保持。legacy bytesは解除時の正確な所有確認に限って認識し、enableで置換しない。
 LOCAL_ASSET_STATUS: source、fixture、Vitest、active docsをGit候補とした。WSL fixture／parser用Temp資産はtrap終了時に削除済み。ignored build outputsは変更なし。protected attachmentsは未追跡・未変更で保持。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub `main`=`22367111c50b187129de89b3e8753c8d3a1bc57b`、ahead／behind=0/0。開始recovery branch／remote tag current=`22367111c50b187129de89b3e8753c8d3a1bc57b`、previous=`8359d86fb368dacbf0b622777d4b808b41c93e78`。closeout後のSHA／復旧refはGit終端照合結果を追記する。
+CURRENT_HEAD_AND_DIRTY_OWNER: source／test／active docsのimplementation commit=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`をGitHub `main`へfast-forward pushした。終端local／`origin/main`／GitHub `main`=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`で一致、ahead／behind=0/0、worktreeはmainのみ。local recovery branch／remote tag current=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`、previous=`22367111c50b187129de89b3e8753c8d3a1bc57b`を旧値照合付きで回転した。commit後処理で既存`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のcleanupがPermission deniedとなったためmetadata／ACLは保持し、`git ls-remote`でremoteを照合した。protected attachmentsは未追跡・未変更。closeout文書push後は終端SHA／recovery refsを再照合する。
 
 ## 完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime statusへのJ/M task outcome接続
 
