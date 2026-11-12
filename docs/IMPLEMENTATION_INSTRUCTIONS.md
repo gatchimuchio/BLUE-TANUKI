@@ -2,6 +2,24 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Uninstallの動的削除対象再照合
+
+主語はWindows製品packageが導入する`BlueTanukiUninstall.ps1`と、停止中に変化し得るInstallRoot／DataRootである。目的は、Uninstall前に照合した管理対象がresident停止中に追加・差替え・reparse化された場合、対象の所有・構造を再検証し、変更を検知したらInstallRoot／DataRootを削除せずfail-closedで終了すること。通常UninstallはDataRootを保持し、明示`-PurgeData`だけがDataRootを削除対象にする。
+
+現行mainには停止後のInstallRoot managed inventory再検証とPurge DataRoot再検証が接続済みだった。追加実装はせず、Windows上のfocused fixtureで製品Uninstall wrapper／PowerShell経路を再実行した。synthetic launcherが停止中にInstallRootへfileを追加する正例と、Purge対象へjunctionを作る負例がともにexit 1で止まり、InstallRoot／DataRoot／外部sentinelが保持され、fixture cleanupも成功した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `install/installer/test/windows_product_installer.test.ts` focused | PASS：1 selected test、20 skipped。`windows_dynamic_uninstall.ps1`がowned product fixtureのwrapper／Uninstall scriptを実行し、dynamic InstallRoot変更・DataRoot reparseを検知して削除を止めることを確認。 |
+| 実installed product、ownerのInstallRoot／DataRoot、OS reboot、native installed QA、G02.03全体、全suite、QE_QC／QE_QA | NOT_RUN。隔離fixtureをinstalled productや実ユーザーデータの証拠にしない。 |
+
+UNIT_ID: G02.03 Windows product Uninstall dynamic-target protection（限定producer／consumer確認）
+STATUS: WIRED（packaged Uninstall code pathと動的target再照合fixtureは存在し、現Windows hostで1/1 PASS）
+NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、rev4.0と最新HEADから全体接続距離・未接続consumer・安全危険度で選ぶ。Windows dynamic-targetは再観測済み。C08.03実provider、OD-03 live外部作用、D4／MINIDORA別repo変更、P13公開GOへ拡張しない。
+SAFETY_STATUS: 所有marker／managed inventory／InstallRoot identity／reparse拒否を維持し、停止後に対象が変化したら削除を中断する。通常UninstallはDataRootを保持し、Purgeは全量完全削除の明示経路に限定。
+LOCAL_ASSET_STATUS: dynamic fixtureの一時InstallRoot／DataRoot／外部sentinel／status fileはtest内cleanup PASS。残存 fixture rootなし。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。実ユーザーデータ、provider credential、別repo、OneDrive資料に作用なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`98149ea42a2e5fcbaa34d5cb93e3f33b8ce767e2`、ahead／behind=0/0、worktreeはmainのみ。closeout文書push後のHEAD・復旧refは最終照合して報告する。
+
 ## 完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則・検証済みJ/M根拠と復旧の再同期
 
 主語はowner task受付からHDS-J／M、再起動後の状態投影までの同一task経路である。ownerが指定した明示規則が現行J正本・task・目的digestへ結合され、同一revision上の一意なoperation step、検証済み結果、対応するM receiptがそろう場合だけJが達成sealを記録し、同一taskを停止する。規則・対象・結果・receiptの欠落、不一致、曖昧さ、M revision変更は達成にせず保留する。引用範囲の`completed`はowner目的の達成を意味しない。
