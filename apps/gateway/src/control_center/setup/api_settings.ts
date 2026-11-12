@@ -24,6 +24,7 @@ import {
   type BlueTanukiSetupConfig,
   type SetupProviderKind,
 } from "../../setup_config.js";
+import { parseLoopbackMcpEndpoint } from "../../mcp_endpoint.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -218,6 +219,17 @@ export function applySettingsPatch(
     if (host !== undefined) config.webchat.host = host;
     const port = optionalIntField(webchat, "port");
     if (port !== undefined) config.webchat.port = port;
+  }
+  if (isRecord(body.integrations) && isRecord(body.integrations.mcp) &&
+      Object.hasOwn(body.integrations.mcp, "endpoint")) {
+    const endpoint = body.integrations.mcp.endpoint;
+    if (endpoint === null || (typeof endpoint === "string" && endpoint.trim().length === 0)) {
+      config.mcp.endpoint = undefined;
+    } else if (typeof endpoint === "string") {
+      config.mcp.endpoint = parseLoopbackMcpEndpoint(endpoint.trim()).href;
+    } else {
+      throw new Error("mcp.endpoint must be a credentialless loopback HTTP endpoint or empty");
+    }
   }
   if (isRecord(body.paths)) {
     const paths = body.paths;

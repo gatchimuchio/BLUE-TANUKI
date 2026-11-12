@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  getOperationDescriptor, inspectOperationCommandExecutionResult,
+  getOperationDescriptor, inspectOperationCommandExecutionResult, MCP_CALL_POTENTIAL_EFFECTS,
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointEnvelopeSchema,
   OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationJsonValue, type OperationPlan,
@@ -1203,6 +1203,34 @@ export function operationPlanResultValidationMatches(
   if (validation.method === "github_write_result_matches") {
     return githubWriteResultMatches(validation, step, output, binding);
   }
+  if (validation.method === "mcp_call_result_matches") {
+    if (step.operation !== "mcp.call" || !step.parameters ||
+        !isFileSearchResultRecord(validation.expected) || !isFileSearchResultRecord(output) ||
+        !binding?.operation_plan_binding_digest || !binding.executor_command_digest) return false;
+    const parameters = step.parameters;
+    const expected = validation.expected;
+    const expectedArgumentsDigest = operationPlanDigest(parameters.arguments ?? null);
+    const expectedKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
+      "schema_version", "tool_name"];
+    const outputKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
+      "may_execute", "result", "result_digest", "schema_version", "source_is_untrusted", "tool_name",
+      "used_for_authority"];
+    const outputResult = OperationJsonValueSchema.safeParse(output.result);
+    return Object.keys(expected).sort().join(",") === expectedKeys.join(",") &&
+      expected.schema_version === "blue-tanuki.mcp-call-result-validation.v1" &&
+      expected.connection_digest === parameters.connection_digest &&
+      expected.catalog_digest === parameters.catalog_digest && expected.tool_name === parameters.tool_name &&
+      expected.input_schema_sha256 === parameters.input_schema_sha256 &&
+      expected.arguments_sha256 === expectedArgumentsDigest &&
+      Object.keys(output).sort().join(",") === outputKeys.join(",") &&
+      output.schema_version === "blue-tanuki.mcp-call-result.v1" &&
+      output.connection_digest === expected.connection_digest && output.catalog_digest === expected.catalog_digest &&
+      output.tool_name === expected.tool_name && output.input_schema_sha256 === expected.input_schema_sha256 &&
+      output.arguments_sha256 === expected.arguments_sha256 && typeof output.result_digest === "string" &&
+      /^[a-f0-9]{64}$/.test(output.result_digest) && outputResult.success &&
+      operationPlanDigest(output.result) === output.result_digest && output.source_is_untrusted === true &&
+      output.used_for_authority === false && output.may_execute === false;
+  }
   if (validation.method === "result_equals") {
     return operationPlanDigest(validation.expected) === operationPlanDigest(output);
   }
@@ -1712,7 +1740,7 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
           operationPlanDigest(result.target) !== operationPlanDigest(binding.prepared_step.target) ||
           !binding.prepared_step.preparation?.validation.length ||
           !binding.prepared_step.preparation.validation.every((validation) =>
-            operationPlanResultValidationMatches(validation, binding.prepared_step, result.output))) {
+            operationPlanResultValidationMatches(validation, binding.prepared_step, result.output, binding))) {
         throw new Error("plan_checkpoint_result_mismatch");
       }
     }
@@ -1892,9 +1920,37 @@ export function partitionOperationPlanCheckpointForRuntime(
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
-  // F08 fixture proposals bind catalog/connection identity but have no execution adapter.
-  // Keep them visible to J as plans while preventing step selection from issuing a tool command.
-  if (step.operation === "mcp.call") return false;
+  if (step.operation === "mcp.call") {
+    if (step.adapter !== "external_api" || step.target.kind !== "external_service" || !parameters ||
+        parameters.profile !== "native-live" || typeof parameters.connection_digest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(parameters.connection_digest) ||
+        step.target.id !== `mcp:${parameters.connection_digest}` || typeof parameters.catalog_digest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(parameters.catalog_digest) || typeof parameters.tool_name !== "string" ||
+        parameters.tool_name.length < 1 || parameters.tool_name.length > 200 || parameters.tool_name.trim() !== parameters.tool_name ||
+        /[\u0000-\u001f\u007f]/.test(parameters.tool_name) || typeof parameters.input_schema_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(parameters.input_schema_sha256) || !isFileSearchResultRecord(parameters.arguments) ||
+        containsMcpSensitiveKey(parameters.arguments) || Buffer.byteLength(JSON.stringify(parameters.arguments), "utf8") > 64 * 1024 ||
+        step.effects.length !== MCP_CALL_POTENTIAL_EFFECTS.length ||
+        [...step.effects].sort().join(",") !== [...MCP_CALL_POTENTIAL_EFFECTS].sort().join(",") ||
+        step.permission.risk !== "high" || step.permission.approval_level !== "L3_final_review" ||
+        !step.permission.final_review_required || !step.permission.approval_gate_required ||
+        !step.permission.hds_brain_authority_required || step.command_generated_by_adapter_only ||
+        Object.keys(parameters).sort().join(",") !== "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name") return false;
+    const preparation = step.preparation;
+    if (!preparation || preparation.depends_on.length !== 0 || preparation.bindings.length !== 0 ||
+        preparation.preconditions.length !== 0 || preparation.compensation.available || preparation.validation.length !== 1) return false;
+    const validation = preparation.validation[0]!;
+    const expected = validation.expected;
+    const argumentsDigest = operationPlanDigest(parameters.arguments);
+    return validation.method === "mcp_call_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") ===
+        "arguments_sha256,catalog_digest,connection_digest,input_schema_sha256,schema_version,tool_name" &&
+      expected.schema_version === "blue-tanuki.mcp-call-result-validation.v1" &&
+      expected.connection_digest === parameters.connection_digest && expected.catalog_digest === parameters.catalog_digest &&
+      expected.tool_name === parameters.tool_name && expected.input_schema_sha256 === parameters.input_schema_sha256 &&
+      expected.arguments_sha256 === argumentsDigest;
+  }
   if (step.operation === "file.search") {
     return step.target.kind === "directory" && step.target.id.length > 0 &&
       parameters?.root === step.target.id;
@@ -2124,6 +2180,16 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         !validGmailAttachmentReference(parameters.attachments[0]))) return false;
   return Object.keys(parameters).every((key) =>
     ["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text", "attachments"].includes(key));
+}
+
+function containsMcpSensitiveKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsMcpSensitiveKey);
+  if (!isFileSearchResultRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => {
+    const normalized = key.replace(/[A-Z]/gu, (letter) => `_${letter}`).toLowerCase().replace(/[^a-z0-9]/gu, "");
+    return ["access", "refresh", "token", "secret", "password", "credential", "authorization", "apikey",
+      "privatekey", "bearer"].some((part) => normalized.includes(part)) || containsMcpSensitiveKey(nested);
+  });
 }
 
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */

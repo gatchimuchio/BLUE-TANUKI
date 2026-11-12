@@ -50,6 +50,7 @@ import { createFileSearchWorker } from "./file_search_worker.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
+import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -189,6 +190,7 @@ async function runCliWithExecutionStore(
 
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
+  registerMcpCallToolFromEnvironment(tools, process.env);
   plugins.registerTools(tools);
   const runtimeSchedules = await RuntimeScheduleManager.open({ env: process.env });
   for (const tool of runtimeSchedules.tools()) tools.register(tool);

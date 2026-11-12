@@ -417,12 +417,12 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     ["tool:recovery.factory_reset", "recovery:factory_reset", "fs:write", "fs:delete"],
     15_000,
   ),
-  operationDescriptor(
+  toolDescriptor(
     "mcp.call",
-    "apps/gateway/src/mcp_connection_client.ts#createMcpToolCallProposal",
-    "none",
+    "apps/gateway/src/mcp_connection_client.ts#createMcpCallTool",
+    "external_api",
     MCP_CALL_POTENTIAL_EFFECTS,
-    [],
+    ["tool:mcp.call"],
     10_000,
   ),
   operationDescriptor(

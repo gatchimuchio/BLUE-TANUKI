@@ -368,6 +368,15 @@ function operationTargetForCommand(command: ExecuteCommand): OperationTarget {
   }
   if (command.type === "tool_call") {
     const tool = command.payload.tool_name;
+    if (tool === "mcp.call") {
+      const digest = command.payload.arguments.connection_digest;
+      return {
+        kind: "external_service",
+        id: typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest) ? bounded(`mcp:${digest}`) : "mcp:unbound",
+        display_name: "MCP server (identity withheld)",
+        scope: "mcp_server",
+      };
+    }
     if (tool === "shell.exec") return { kind: "runtime", id: "tool:shell.exec", scope: "shell_adapter" };
     if (tool === "browser.automation" || tool === "browser.snapshot") {
       return { kind: "browser", id: bounded(`tool:${tool}`), scope: "browser_adapter" };

@@ -24,6 +24,7 @@ import {
   GitHubWriteTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
+  McpCallTargetVersionObservationSchema,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
@@ -642,6 +643,19 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "mcp.call") {
+      const observation = McpCallTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      if (!hds_binding?.operation_plan_binding_digest || args.profile !== "native-live" ||
+          typeof args.connection_digest !== "string" || typeof args.catalog_digest !== "string" ||
+          typeof args.tool_name !== "string" || typeof args.input_schema_sha256 !== "string" ||
+          observation.connection_digest !== args.connection_digest || observation.catalog_digest !== args.catalog_digest ||
+          observation.tool_name !== args.tool_name || observation.input_schema_sha256 !== args.input_schema_sha256 ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest) {
+        throw new Error("Executor approval rejected: mcp.call target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "memory.personalization.stop") {
       const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const args = snapshot.payload.arguments;
@@ -726,6 +740,11 @@ function approveCommandForExecution(
       (!hds_binding?.operation_plan_binding_digest ||
         target_version_observation?.schema_version !== "blue-tanuki.memory-personalization-target-version.v1")) {
     throw new Error("Executor approval rejected: memory.personalization.stop requires an Operation Plan-bound target version observation");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "mcp.call" &&
+      (!hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.mcp-call-target-version.v1")) {
+    throw new Error("Executor approval rejected: mcp.call requires an Operation Plan-bound target version observation");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
@@ -851,6 +870,24 @@ export class Executor {
     if (command.type !== "tool_call") return undefined;
     if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
       throw new Error("Broker target version resolver received an invalid operation plan binding");
+    }
+    if (command.payload.tool_name === "mcp.call") {
+      if (!operationPlanBindingDigest) throw new Error("mcp.call requires a selected Operation Plan binding");
+      const tool = this.deps.tools.get("mcp.call");
+      if (!tool?.inspect_target_version) throw new Error("mcp.call target version resolver is not connected");
+      const observation = McpCallTargetVersionObservationSchema.parse(await tool.inspect_target_version(
+        command.payload.arguments,
+        { operation_plan_binding_digest: operationPlanBindingDigest, command_digest: operationPlanDigest(command) },
+      ));
+      const args = command.payload.arguments;
+      if (args.profile !== "native-live" || observation.connection_digest !== args.connection_digest ||
+          observation.catalog_digest !== args.catalog_digest || observation.tool_name !== args.tool_name ||
+          observation.input_schema_sha256 !== args.input_schema_sha256 ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+        throw new Error("mcp.call target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
     }
     if (command.payload.tool_name === "github.write") {
       const operation = command.payload.arguments.operation;
@@ -2030,6 +2067,7 @@ export class Executor {
         upstream_commit_hash: commit_hash,
         idempotency_key: record.ticket.command_key,
         command_digest: record.ticket.command_digest,
+        operation_plan_command_digest: operationPlanDigest(command),
         target_version_observation: record.target_version_observation,
         signal: controller.signal,
         on_execution_lifecycle: observeLifecycle,

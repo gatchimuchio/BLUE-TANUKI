@@ -8,6 +8,7 @@ import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation
   type GoogleDriveTrashTargetVersionObservation,
   type GitHubWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
@@ -16,7 +17,8 @@ export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation 
   GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |
   GoogleDrivePermissionCreateTargetVersionObservation | GoogleDrivePublicLinkCreateTargetVersionObservation |
   GoogleDriveTrashTargetVersionObservation |
-  GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation;
+  GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation |
+  McpCallTargetVersionObservation;
 
 /** No-store projection of one exact, plan-bound GitHub issue.create payload. */
 export interface GitHubIssueCreateContentReview {
@@ -645,6 +647,8 @@ export interface ToolContext {
   idempotency_key?: string;
   /** Digest of the exact approved command; adapters may bind external receipts to it. */
   command_digest?: string;
+  /** HDS semantic digest of the exact selected command, distinct from the Executor ticket digest. */
+  operation_plan_command_digest?: string;
   /** 実行権限を与えず、HDS発行commandへ結ぶBroker観測。 */
   target_version_observation?: BrokerTargetVersionObservation;
   signal?: AbortSignal;

@@ -315,6 +315,7 @@ export const OperationStepPreparationSchema = z.object({
   validation: z.array(z.object({
     check_id: z.string().min(1).max(200),
     method: z.enum(["result_equals", "revision_equals", "file_search_result_matches", "file_edit_result_matches",
+      "mcp_call_result_matches",
       "shell_exec_result_matches", "github_write_result_matches"]),
     target: OperationTargetSchema,
     expected: OperationJsonValueSchema,
@@ -456,7 +457,11 @@ export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): Operat
     if (!operationDescriptor) {
       return { kind: "rejected", reason: `operation descriptor registry does not contain operation: ${step.operation}` };
     }
-    if (step.adapter !== operationDescriptor.adapter) {
+    const fixtureMcpProposal = step.operation === "mcp.call" && step.adapter === "none" &&
+      step.parameters?.profile === "adapter-fixture" &&
+      step.parameters?.source_is_untrusted === true && step.parameters?.used_for_authority === false &&
+      step.parameters?.may_execute === false;
+    if (step.adapter !== operationDescriptor.adapter && !fixtureMcpProposal) {
       return {
         kind: "rejected",
         reason:

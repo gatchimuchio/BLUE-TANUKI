@@ -15,6 +15,7 @@ export * from "./file_write_target_version.js";
 export * from "./file_delete_target_version.js";
 export * from "./file_edit_target_version.js";
 export * from "./memory_personalization_target_version.js";
+export * from "./mcp_call_target_version.js";
 export * from "./shell_exec_target_version.js";
 export * from "./gmail_write_target_version.js";
 export * from "./google_calendar_write_target_version.js";

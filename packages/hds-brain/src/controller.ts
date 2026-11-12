@@ -38,6 +38,7 @@ import {
   FileDeleteTargetVersionObservationSchema,
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
+  McpCallTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
   ShellExecTargetVersionObservationSchema,
   normalizeGmailAddressList,
@@ -3794,6 +3795,20 @@ ${planControl.question}`,
           observation.entry_hash !== args.entry_hash ||
           observation.target_identity_digest !== memoryPersonalizationTargetIdentityDigest(args.reference, args.entry_hash)) {
         throw new Error("HDS memory.personalization.stop target version does not match the issued command or Operation Plan source");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (command.type === "tool_call" && command.payload.tool_name === "mcp.call") {
+      if (!operation_plan_binding_digest || brokerTargetVersionObservation === undefined) {
+        throw new Error("HDS mcp.call requires an Operation Plan-bound target version observation");
+      }
+      const observation = McpCallTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const args = command.payload.arguments;
+      if (args.profile !== "native-live" || args.connection_digest !== observation.connection_digest ||
+          args.catalog_digest !== observation.catalog_digest || args.tool_name !== observation.tool_name ||
+          args.input_schema_sha256 !== observation.input_schema_sha256 ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+        throw new Error("HDS mcp.call target version does not match the issued command or Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "google.calendar.write") {

@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — F08.02 MCP fixture toolからJ OperationPlan提案
+### 直近施工BUILD_BATCH — F08.03 MCP専用serverのnative-live接続
 
-loopback・credentiallessのin-process MCP fixtureから、catalogued toolと合成引数をdigest-boundの`mcp.call` OperationPlan提案へ変換し、HDS-Jへ接続した。提案はmetadataとcatalog digestだけを参照し、最大潜在effects・high／L3・`adapter=none`を固定する。HDSは候補を保存するがstepを未選択のまま保ち、reviewから実行commandを出さない。実server process、environment／credential転送、`tools/call`、外部業務作用は含まない。
+credentialless loopback MCP endpointを既存Connections設定画面とBLUE_TANUKI_MCP_ENDPOINTへ結び、native-live候補をHDS OperationPlan、J選択、High/L3、Broker target再照合、Executor、digest付き非権威receiptへ接続した。実SDK server専用processに対し合成note一作用、server側failureのunknown/no-retry、dispatch前disconnectの無作用拒否、停止／別process再起動後の再接続を確認した。Gateway設定画面はendpointの保存、無効値非表示、未検証状態、起動と再起動の次行動を示す。server processはowner管理のtrusted local serviceであり、Gatewayは起動・停止・live probeをしない。
 
-Protocol catalog test 4/4、Gateway MCP adapter test 4/4、Protocol／HDS-BRAIN build、Gateway typecheckはPASS。これはF08.02 `adapter-fixture`の限定`WIRED` sliceであり、実process接続、F08.02全体、全MCP互換性、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを成立させない。次はrev4.0 F08.03の専用local MCP serverで、隔離した一作用・failure・停止・disconnectの実consumerへ進む。G09.01 Android→D4→BLUEは別repo権限がないため`BLOCKED_AUTHORITY`のまま保持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Gateway対象試験20/20、typecheck、Protocol catalog test 4/4、Protocol／HDS-BRAIN／core buildはPASS。これはF08.03の限定WIRED sliceであり、既存MCP定義のmigration、Gateway稼働中のhealth/disconnect表示、process管理、全MCP互換、実資格／provider／外部業務作用、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAを成立させない。次consumerは設定migrationと稼働中接続状態／disconnectのowner向け復旧表示。G09.01 Android→D4→BLUEは別repo権限がないためBLOCKED_AUTHORITYのまま保持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 前段完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
 

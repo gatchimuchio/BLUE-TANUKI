@@ -16,6 +16,7 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "file.write",
       "file.delete",
       "file.edit",
+      "mcp.call",
       "memory.personalization.stop",
       "http.fetch",
       "web.search",
@@ -95,13 +96,13 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
     );
   });
 
-  it("keeps MCP calls proposal-only until a separate execution adapter is implemented", () => {
+  it("routes native MCP calls through the registered external adapter after HDS selection", () => {
     const descriptor = getOperationDescriptor("mcp.call");
     expect(descriptor).toBeDefined();
-    expect(descriptor?.tool_name).toBeUndefined();
-    expect(descriptor?.adapter).toBe("none");
+    expect(descriptor?.tool_name).toBe("mcp.call");
+    expect(descriptor?.adapter).toBe("external_api");
     expect(descriptor?.effects).toEqual([...MCP_CALL_POTENTIAL_EFFECTS]);
-    expect(descriptor?.required_capabilities).toEqual([]);
+    expect(descriptor?.required_capabilities).toEqual(["tool:mcp.call"]);
   });
 
   it("derives operator permission envelopes from the shared operation catalog", () => {

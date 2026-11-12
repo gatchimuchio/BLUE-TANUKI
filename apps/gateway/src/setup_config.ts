@@ -50,6 +50,10 @@ export interface SetupPathConfig {
   failure_memory_file?: string;
 }
 
+export interface SetupMcpConfig {
+  endpoint?: string;
+}
+
 export interface BlueTanukiSetupConfig {
   schema_version: 1;
   llm: SetupLlmConfig;
@@ -67,6 +71,7 @@ export interface BlueTanukiSetupConfig {
     dry_run: boolean;
     live_execution: boolean;
   };
+  mcp: SetupMcpConfig;
   webchat: SetupWebChatConfig;
   paths: SetupPathConfig;
   settings: {
@@ -188,6 +193,7 @@ export function createDefaultSetupConfig(
       dry_run: true,
       live_execution: false,
     },
+    mcp: {},
     webchat: {
       host: "127.0.0.1",
       port: 8787,
@@ -228,6 +234,7 @@ export function validateSetupConfig(
   config.composio ??= { dry_run: true, live_execution: false };
   config.composio.dry_run = config.composio.dry_run !== false;
   config.composio.live_execution = config.composio.live_execution === true;
+  config.mcp ??= {};
   // Legacy schema-v1 setup files did not persist a dedicated runtime state root.
   config.paths.state_root ??= path.resolve(config.paths.session_dir, "..");
   config.paths.failure_memory_dir ??= path.join(path.resolve(config.paths.session_dir), "failure-memory");
@@ -446,6 +453,7 @@ export function setupConfigFromEnv(
   config.composio.api_base_url = env.COMPOSIO_API_BASE_URL;
   config.composio.dry_run = parseOptionalBool(env.COMPOSIO_DRY_RUN) ?? true;
   config.composio.live_execution = parseOptionalBool(env.COMPOSIO_LIVE_EXECUTION) ?? false;
+  config.mcp.endpoint = env.BLUE_TANUKI_MCP_ENDPOINT;
 
   return validateSetupConfig(config);
 }
@@ -570,6 +578,7 @@ export function setupConfigToEnv(
   }
   env.COMPOSIO_DRY_RUN = config.composio.dry_run ? "true" : "false";
   env.COMPOSIO_LIVE_EXECUTION = config.composio.live_execution ? "true" : "false";
+  if (config.mcp.endpoint !== undefined) env.BLUE_TANUKI_MCP_ENDPOINT = config.mcp.endpoint;
 
   return env;
 }
@@ -637,6 +646,7 @@ export function renderSetupEnvFile(
     "COMPOSIO_API_BASE_URL",
     "COMPOSIO_DRY_RUN",
     "COMPOSIO_LIVE_EXECUTION",
+    "BLUE_TANUKI_MCP_ENDPOINT",
   ]) {
     addEnvLine(lines, key, env[key]);
   }

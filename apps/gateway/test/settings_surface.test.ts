@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vm from "node:vm";
 import { LLMComputeAdapter, LLM_COMPUTE_PROFILE, type ComputeRequest, type LLMRequest } from "@blue-tanuki/core";
 import { PluginRuntime } from "../src/plugin_loader.js";
 import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
@@ -144,6 +145,12 @@ describe("settings surface", () => {
     });
     expect(snapshot.integrations.openrouter.configured).toBe(true);
     expect(snapshot.integrations.openrouter.used_for_authority).toBe(false);
+    expect(snapshot.integrations.mcp).toMatchObject({
+      status: "not_configured",
+      endpoint: null,
+      live_connection_checked: false,
+      used_for_authority: false,
+    });
     expect(snapshot.integrations.composio.configured).toBe(true);
     expect(snapshot.integrations.composio.dry_run).toBe(false);
     expect(snapshot.integrations.composio.live_execution_enabled).toBe(true);
@@ -239,6 +246,36 @@ describe("settings surface", () => {
     expect(html).toContain("This is configuration status only. It does not test Slack connectivity");
   });
 
+  it("shows MCP endpoint setup and recovery guidance without probing or starting a server", () => {
+    const configured = buildSettingsSnapshot({
+      BLUE_TANUKI_MCP_ENDPOINT: "http://127.0.0.1:43123/mcp",
+    }, runtime()).integrations.mcp;
+    expect(configured).toMatchObject({
+      status: "configured_unverified",
+      endpoint: "http://127.0.0.1:43123/mcp",
+      live_connection_checked: false,
+      used_for_authority: false,
+    });
+    expect(configured.next_action).toContain("restart Gateway");
+
+    const invalid = buildSettingsSnapshot({
+      BLUE_TANUKI_MCP_ENDPOINT: "http://user:secret@127.0.0.1/mcp?token=secret",
+    }, runtime()).integrations.mcp;
+    expect(invalid).toMatchObject({ status: "invalid_endpoint", endpoint: null, live_connection_checked: false });
+    expect(JSON.stringify(invalid)).not.toContain("secret");
+
+    const html = renderSettingsHtml();
+    expect(html).toContain('id="mcp-endpoint"');
+    expect(html).toContain('id="mcp-status"');
+    expect(html).toContain('id="mcp-next-action"');
+    expect(html).toContain("does not launch processes or test connectivity");
+    const scriptStart = html.indexOf("<script>") + "<script>".length;
+    const scriptEnd = html.indexOf("</script>", scriptStart);
+    expect(scriptStart).toBeGreaterThan("<script>".length - 1);
+    expect(scriptEnd).toBeGreaterThan(scriptStart);
+    expect(() => new vm.Script(html.slice(scriptStart, scriptEnd))).not.toThrow();
+  });
+
   it("writes settings updates back to BLUE_TANUKI_ENV_FILE", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-"));
     try {
@@ -265,6 +302,7 @@ describe("settings surface", () => {
             dry_run: "false",
             live_execution: "true",
           },
+          integrations: { mcp: { endpoint: "http://127.0.0.1:43123/mcp" } },
           webchat: { host: "127.0.0.1", port: "8877" },
           approval: { mode: "ask_every_time" },
           paths: { file_root: path.join(dir, "files"), shell_root: path.join(dir, "files") },
@@ -305,6 +343,7 @@ describe("settings surface", () => {
       expect(raw).toContain("COMPOSIO_USER_ID=owner-local");
       expect(raw).toContain("COMPOSIO_DRY_RUN=false");
       expect(raw).toContain("COMPOSIO_LIVE_EXECUTION=true");
+      expect(raw).toContain("BLUE_TANUKI_MCP_ENDPOINT=http://127.0.0.1:43123/mcp");
       expect(raw).toContain("WEBCHAT_PORT=8877");
       expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
       expect(parseEnvFile(raw).values.BLUE_TANUKI_SHELL_ROOT).toBe(path.resolve(dir, "files"));
@@ -317,6 +356,22 @@ describe("settings surface", () => {
         { platform: "linux" },
       );
       expect(await fs.readFile(envFile, "utf8")).not.toContain("BLUE_TANUKI_SHELL_ROOT=");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe MCP settings without changing the saved environment", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-mcp-"));
+    try {
+      const envFile = path.join(dir, "blue-tanuki.env");
+      const config = createDefaultSetupConfig({ base_dir: path.join(dir, "data") });
+      await fs.writeFile(envFile, renderSetupEnvFile(config), "utf8");
+      const before = await fs.readFile(envFile, "utf8");
+      await expect(updateSettingsEnvFile({
+        integrations: { mcp: { endpoint: "https://mcp.example.test/server" } },
+      }, { BLUE_TANUKI_ENV_FILE: envFile })).rejects.toThrow("mcp_endpoint_must_be_credentialless_loopback_streamable_http");
+      expect(await fs.readFile(envFile, "utf8")).toBe(before);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

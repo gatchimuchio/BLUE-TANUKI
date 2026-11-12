@@ -27,6 +27,7 @@ import {
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { llmSecretStorageStatus } from "./secret_store.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
+import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -78,6 +79,13 @@ export interface SettingsSnapshot {
       app_token_set: boolean;
       inbound_grants: "deny_all" | "invalid" | "configured";
       preview_only: true;
+      live_connection_checked: false;
+      used_for_authority: false;
+      next_action: string;
+    };
+    mcp: {
+      status: "not_configured" | "configured_unverified" | "invalid_endpoint";
+      endpoint: string | null;
       live_connection_checked: false;
       used_for_authority: false;
       next_action: string;
@@ -235,6 +243,20 @@ export function buildSettingsSnapshot(
           : slackStatus === "inbound_denied"
             ? "Inbound is deny-all. Add exact owner-maintained grants only if Slack inbound is intended."
             : "Configuration is present but unverified. Use an approved dedicated Slack test workspace to check connect, receive, reply, recovery, and disconnect.";
+  const mcpEndpointRaw = envValue(env, "BLUE_TANUKI_MCP_ENDPOINT");
+  let mcpStatus: SettingsSnapshot["integrations"]["mcp"]["status"] = "not_configured";
+  let mcpEndpoint: string | null = null;
+  let mcpNextAction = "Set a credentialless loopback Streamable HTTP endpoint, start its dedicated local MCP server, then restart Gateway. No connection has been tested.";
+  if (mcpEndpointRaw) {
+    try {
+      mcpEndpoint = parseLoopbackMcpEndpoint(mcpEndpointRaw).href;
+      mcpStatus = "configured_unverified";
+      mcpNextAction = "Start this dedicated local MCP server and restart Gateway. This page has not checked connectivity; select one catalogued tool through an Operation Plan and inspect its High/L3 review before use.";
+    } catch {
+      mcpStatus = "invalid_endpoint";
+      mcpNextAction = "The stored endpoint is invalid and is hidden. Replace it with a credentialless 127.0.0.1 or ::1 HTTP/HTTPS endpoint without userinfo, query, or fragment, then restart Gateway.";
+    }
+  }
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
@@ -273,6 +295,13 @@ export function buildSettingsSnapshot(
         live_connection_checked: false,
         used_for_authority: false,
         next_action: slackNextAction,
+      },
+      mcp: {
+        status: mcpStatus,
+        endpoint: mcpEndpoint,
+        live_connection_checked: false,
+        used_for_authority: false,
+        next_action: mcpNextAction,
       },
       openrouter: {
         configured: Boolean(
@@ -719,6 +748,12 @@ export function renderSettingsHtml(): string {
             <label>Composio disconnect
               <input id="composio-clear-api-key" type="checkbox">
             </label>
+            <label>MCP loopback Streamable HTTP endpoint
+              <input id="mcp-endpoint" autocomplete="off" placeholder="http://127.0.0.1:3000/mcp">
+            </label>
+            <label>MCP setup status
+              <input id="mcp-status" readonly>
+            </label>
             <label>Composio status
               <input id="composio-status" readonly>
             </label>
@@ -743,6 +778,8 @@ export function renderSettingsHtml(): string {
           </div>
           <p id="slack-next-action" role="status"></p>
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
+          <p id="mcp-next-action" role="status"></p>
+          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. Start and stop the dedicated local server in its own trusted service; this settings page does not launch processes or test connectivity. Saving requires a Gateway restart. Every selected tool still uses HDS and High/L3 review.</p>
         </section>
         <section id="tab-paths">
           <h2>Paths</h2>
@@ -819,6 +856,9 @@ export function renderSettingsHtml(): string {
       slackAppTokenStatus: document.querySelector("#slack-app-token-status"),
       slackInboundGrantsStatus: document.querySelector("#slack-inbound-grants-status"),
       slackNextAction: document.querySelector("#slack-next-action"),
+      mcpEndpoint: document.querySelector("#mcp-endpoint"),
+      mcpStatus: document.querySelector("#mcp-status"),
+      mcpNextAction: document.querySelector("#mcp-next-action"),
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
@@ -903,6 +943,9 @@ export function renderSettingsHtml(): string {
       fields.slackAppTokenStatus.value = snapshot.integrations.slack.app_token_set ? "configured; value hidden" : "not set";
       fields.slackInboundGrantsStatus.value = snapshot.integrations.slack.inbound_grants.replaceAll("_", " ");
       fields.slackNextAction.textContent = snapshot.integrations.slack.next_action;
+      fields.mcpEndpoint.value = snapshot.integrations.mcp.endpoint || "";
+      fields.mcpStatus.value = snapshot.integrations.mcp.status.replaceAll("_", " ");
+      fields.mcpNextAction.textContent = snapshot.integrations.mcp.next_action;
       fields.host.value = snapshot.webchat.host;
       fields.port.value = snapshot.webchat.port;
       fields.fileRoot.value = snapshot.paths.file_root;
@@ -970,6 +1013,7 @@ export function renderSettingsHtml(): string {
         llm,
         approval: { mode: fields.approvalMode.value },
         composio,
+        integrations: { mcp: { endpoint: fields.mcpEndpoint.value } },
         webchat: { host: fields.host.value, port: fields.port.value },
         paths: {
           file_root: fields.fileRoot.value,

@@ -1,14 +1,68 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HDSUpperController, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { fileURLToPath } from "node:url";
+import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, prepareOperationPlan } from "@blue-tanuki/protocol";
 import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
-import { BLUE_TANUKI_MCP_PROTOCOL_VERSION, createMcpToolCallProposal, inspectMcpCatalog } from "../src/mcp_connection_client.js";
+import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+import { BLUE_TANUKI_MCP_PROTOCOL_VERSION, createMcpToolCallProposal, inspectMcpCatalog,
+  registerMcpCallToolFromEnvironment } from "../src/mcp_connection_client.js";
+
+const MCP_LIVE_FIXTURE_PATH = fileURLToPath(new URL("./fixtures/mcp_live_process_server.mjs", import.meta.url));
+
+async function startMcpLiveFixture(root: string, port = 0): Promise<{
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly endpoint: string;
+}> {
+  const child = spawn(process.execPath, [MCP_LIVE_FIXTURE_PATH, root, String(port)], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: Object.fromEntries(["SystemRoot", "WINDIR", "PATH", "TEMP", "TMP"]
+      .flatMap((name) => process.env[name] ? [[name, process.env[name]!] as const] : [])),
+  });
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("mcp_live_fixture_start_timeout"));
+    }, 10_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      const match = /(?:^|\r?\n)READY (http:\/\/127\.0\.0\.1:\d+\/mcp)(?:\r?\n|$)/u.exec(stdout);
+      if (!match) return;
+      clearTimeout(timeout);
+      resolve({ child, endpoint: match[1]! });
+    });
+    child.once("error", (error) => { clearTimeout(timeout); reject(error); });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`mcp_live_fixture_exit_before_ready:${code ?? signal ?? "unknown"}:${stderr.slice(-200)}`));
+    });
+  });
+}
+
+async function stopMcpLiveFixture(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.stdin.end("STOP\n");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([exited, new Promise<void>((resolve) => { timeout = setTimeout(resolve, 2_000); })]);
+  if (timeout) clearTimeout(timeout);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill();
+    await exited;
+  }
+}
 
 describe("MCP catalog adapter", () => {
   let closeHandler: (() => Promise<void>) | undefined;
@@ -210,5 +264,132 @@ describe("MCP catalog adapter", () => {
       await rm(stateRoot, { recursive: true, force: true });
     }
   });
+
+  it("selects one MCP SDK process call through HDS, Broker target binding, L3 and Executor; failure is not retried", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-mcp-native-live-"));
+    const outputRoot = join(root, "server-output");
+    await mkdir(outputRoot);
+    let live = await startMcpLiveFixture(outputRoot);
+
+    const executeOne = async (endpoint: string, note: string, beforeDispatch?: () => Promise<void>) => {
+      const requestId = randomUUID();
+      const catalog = await inspectMcpCatalog({ endpoint, fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
+      const proposal = createMcpToolCallProposal({
+        plan_id: `mcp-live-${requestId}`,
+        request_id: requestId,
+        step_id: "mcp-live-action",
+        catalog,
+        tool_name: "write_synthetic_note",
+        arguments: { note },
+        profile: "native-live",
+      });
+      const state = new OperationPlanStateStore(join(root, `plan-${requestId}.sqlite`));
+      const hds = new HDSUpperController({ operation_plan_state: state });
+      const tools = new ToolRegistry();
+      registerMcpCallToolFromEnvironment(tools, { BLUE_TANUKI_MCP_ENDPOINT: endpoint });
+      const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+      const executor = new Executor({
+        approval_authority: authority,
+        llm: { name: "mcp-test-only", call: async () => ({ content: "", model: "mcp-test-only", tokens_used: 0 }) },
+        tools,
+      });
+      try {
+        const computeRequest = createGatewayInternalInboundRequest({
+          id: requestId,
+          channel: "webchat",
+          user: "fixture-owner",
+          content: `Write one synthetic MCP note: ${note}`,
+          timestamp: Date.now(),
+          goal_criteria: {
+            schema_version: "blue-tanuki.goal-criteria.v1",
+            criteria: [{ criterion_ref: `mcp-note-${requestId}`, criterion_kind: "objective",
+              tool_relations: [{ tool_name: "mcp.call", relation: "supports" }] }],
+          },
+          metadata: {
+            "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.actor_kind": "owner",
+            "blue_tanuki.trust_level": "owner",
+            "blue_tanuki.process_kind": "chat",
+            "blue_tanuki.operator_surface": "developer",
+            "blue_tanuki.operation_core.version": "operation-core.v1",
+            "blue_tanuki.operation_core.request_id": requestId,
+          },
+        });
+        const compute = hds.decide(computeRequest);
+        if (compute.command?.type !== "llm_call") throw new Error("HDS did not issue the plan candidate request");
+        hds.onFeedback({ command_id: compute.command.id, status: "success",
+          result: { content: "Synthetic local MCP candidate.", operation_core: { status: "valid_plan", plan: proposal.plan } },
+          metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+        const stored = hds.getRuntimeSnapshot().operation_plans.plans[0];
+        if (!stored) throw new Error("HDS did not retain the MCP plan candidate");
+        const reviewed = hds.decide(createGatewayInternalInboundRequest({
+          id: randomUUID(), channel: "webchat", user: "fixture-owner",
+          content: `plan:review ${JSON.stringify({ plan_id: stored.plan_id, revision_digest: stored.revision_digest,
+            step_id: operationPlanDigest("mcp-live-action") })}`,
+          timestamp: Date.now(),
+          metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.operator_surface": "developer" },
+        }));
+        const command = reviewed.command;
+        if (command?.type !== "tool_call" || command.payload.tool_name !== "mcp.call") {
+          throw new Error(`HDS did not select the native MCP action: ${reviewed.log.commit.reason}`);
+        }
+        const approval = evaluateApproval(command, [], { actor: "fixture-owner", default_mode: "full_access" });
+        expect(approval.final_review_required).toBe(true);
+        expect(approval.context.risk).toBe("high");
+        const planBinding = hds.getExecutionOperationPlanBindingDigest(command);
+        if (!planBinding) throw new Error("HDS did not provide the selected Operation Plan binding");
+        const targetVersion = await executor.inspectCommandTargetVersion(command, undefined, planBinding);
+        if (!targetVersion) throw new Error("Executor did not observe the configured MCP target");
+        const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);
+        const approved = authority.approve(command, {
+          source: "human_final_review", decision: "approve", approved_by: "fixture-owner", approved_at_ms: Date.now(),
+          upstream_commit_hash: command.upstream_decision.commit_hash, operation: approval.context.operation,
+          risk: approval.risk, final_review_required: true, reason: "synthetic local MCP test approval",
+        }, executorCommandDigest(command), hdsBinding, targetVersion);
+        expect(hds.beginOperationPlanAttempt(command)).toBe(true);
+        await beforeDispatch?.();
+        const feedback = await executor.execute(approved);
+        finalizeCommandOutput({ hds, command, feedback, target_surface: "channel",
+          request_id: command.upstream_decision.request_id ?? null });
+        return feedback;
+      } finally {
+        hds.closeOperationPlanMemory();
+        hds.close();
+        state.close();
+      }
+    };
+
+    try {
+      const success = await executeOne(live.endpoint, "synthetic-success");
+      expect(success.status, success.error).toBe("success");
+      expect(success.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
+        tool_name: "write_synthetic_note", source_is_untrusted: true, used_for_authority: false, may_execute: false });
+      expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
+      expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("1");
+
+      const failed = await executeOne(live.endpoint, "fail");
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe("mcp_call_outcome_unknown");
+      expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("2");
+      expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
+
+      const disconnected = await executeOne(live.endpoint, "synthetic-disconnected",
+        async () => stopMcpLiveFixture(live.child));
+      expect(disconnected.status).toBe("failed");
+      expect(disconnected.error).toBe("mcp_call_preflight_failed");
+      expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("2");
+      expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
+
+      live = await startMcpLiveFixture(outputRoot);
+      const restarted = await executeOne(live.endpoint, "synthetic-after-restart");
+      expect(restarted.status).toBe("success");
+      expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-after-restart");
+      expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("1");
+    } finally {
+      await stopMcpLiveFixture(live.child);
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 
 });

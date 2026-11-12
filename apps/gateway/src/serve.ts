@@ -73,6 +73,7 @@ import { GatewayLineEventStore } from "./line_event_store.js";
 import { GatewayWebChatOwnerTaskStore } from "./webchat_owner_task_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
+import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { buildAuditLog } from "./audit_config.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
@@ -932,6 +933,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
+  registerMcpCallToolFromEnvironment(tools, process.env);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
   let gatewayShuttingDown = false;
