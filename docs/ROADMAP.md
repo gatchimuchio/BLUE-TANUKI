@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近施工BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
+### 直近完了BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
 
 既存Gmail `draft.send`に、レビュー済みthread IDの送信要求、作用直前draft state再照合、送信後account／thread／`SENT` readback、HDS result validation、digest-only M receipt、再起動後owner projectionを接続した。結果不明・thread不一致・`SENT`未確認では停止し、自動再送しない。送信を示すowner projectionはdigestだけを表示し、本文・raw MIME・provider IDを出さない。
 
-Focused tests 8/8 PASS（4 files、157 skipped）。全workspace typecheck、15-project build、`docs:check`、終端`git diff --check` PASS。日本語基底ゲートは既存移行負債75件を注意表示、license gate PASS。初回の広範runはGateway runtime内の7件の既存5／10秒timeoutで停止したため判定に用いず、対象を絞ったrerunを最終証拠とする。実Gmail credential／API／送信、live Gateway、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、`message.send`、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次のBUILD_BATCHはowner選択済みC08.02の明示達成規則と検証済み根拠／M receiptを、現行rev4.0と最新HEADから再構成する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Focused tests 8/8 PASS（4 files、157 skipped）。全workspace typecheck、15-project build、`docs:check`、終端`git diff --check` PASS。日本語基底ゲートは既存移行負債75件を注意表示、license gate PASS。初回の広範runはGateway runtime内の7件の既存5／10秒timeoutで停止したため判定に用いず、対象を絞ったrerunを最終証拠とする。実Gmail credential／API／送信、live Gateway、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。実装commit `76d99e28d8f80adb850599a4d2bb1cf21e556975`は`c8eb174d31574a01c2e92ade57d726fa5843bf50`から`main`へfast-forward push済み。これはF02.02の限定`WIRED`consumerであり、`message.send`、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次のBUILD_BATCHはowner選択済みC08.02の明示達成規則と検証済み根拠／M receiptを、現行rev4.0と最新HEADから再構成する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
 

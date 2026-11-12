@@ -2,7 +2,7 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
+## 完了BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
 
 主語はBLUE Gatewayの既存Gmail `draft.send`／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的はownerが選択した既存draft一件をthread-boundのno-store L3 review後に一度だけ送信し、送信後の再読込で同じthreadの`SENT`状態を検証した結果だけを、J/M receiptと再起動後のowner照会へ返すこと。通常の`message.send`、live provider／実送信、F02.02全体、製品全体の完成とは扱わない。
 
@@ -21,7 +21,7 @@ STATUS: WIRED（合成応答でOperation Plan→high/L3→draft state再照合�
 NEXT_REQUIRED_CONSUMER: owner選択済みC08.02の達成規則consumerを次の独立作業として現行rev4.0と最新HEADから再構成する。現行J正本に結び付く明示規則と検証済み結果・M receiptが揃う場合だけ達成し、規則・根拠の欠落または曖昧さはpendingとする。C08.03実provider、OD-03 live外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。
 SAFETY_STATUS: high/L3、Approval Gate、thread-bound request、作用直前draft state再照合、thread／account／SENT readback、結果不明時の自動再送禁止、J/M非権威receiptを維持。実credential・Gmail・送信なし。
 LOCAL_ASSET_STATUS: source／tests／active docsはGit候補。`pnpm build`のworkspace `dist`／isolation outputは再生成済み開発環境として保持。focused rerunはtest-owned rootをfinallyで削除。中断済みfixture root `C:\Users\ohira\AppData\Local\Temp\blue-result-reconcile-S0D8tE`（1 directory／5 files／159,749 bytes、synthetic SQLite・workspaceのみ）は非稼働・reparseなしを確認してWindows標準Recycle Binへ移動し、元path不在と収容を確認した。同prefixの他5 rootはこのbatch開始前から存在し、別run所有のため保持。`.codex-attachments/`／`.codex-remote-attachments/`は保護・未変更。他repo変更なし。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、ahead／behind=0/0、worktreeはmainのみ。開始復旧branch／tag current=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、previous=`133fc7163b0caedd229e88fba3ce39dad3d74c31`。終端SHA／復旧ref／dirty状態はcommit・push後に再照合する。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、ahead／behind=0/0、worktreeはmainのみ。実装commit `76d99e28d8f80adb850599a4d2bb1cf21e556975`をfast-forward pushし、push直後のlocal main／`origin/main`／GitHub `main`一致を確認。`git fetch`／commit時に古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のcleanupがPermission deniedとなったため保持し、直接`git ls-remote`でremoteを照合した。attachment directoriesは未追跡・未stageのまま保護。開始復旧branch／tag current=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、previous=`133fc7163b0caedd229e88fba3ce39dad3d74c31`。最終closeout refsと終端状態は閉包時に再照合する。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
 
