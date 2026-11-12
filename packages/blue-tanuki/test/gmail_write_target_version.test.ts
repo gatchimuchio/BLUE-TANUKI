@@ -38,9 +38,40 @@ const draftRaw = Buffer.from([
   "合成本文だけを使う。",
 ].join("\r\n")).toString("base64url");
 
-function draftReadResponse(path: string, raw = draftRaw, messageId = "fixture-message-v1"): GoogleWriteResponse {
+function draftReadResponse(path: string, raw = draftRaw, messageId = "fixture-message-v1",
+  threadId = "fixture-thread_1"): GoogleWriteResponse {
   if (path.endsWith("/profile")) return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
-  return { ...response, body: JSON.stringify({ id: "fixture-draft", message: { id: messageId, raw } }) };
+  return { ...response, body: JSON.stringify({ id: "fixture-draft", message: { id: messageId, threadId, raw } }) };
+}
+
+function gmailDraftSendFixture(options: { raw?: string; draftThreadId?: string; responseThreadId?: string;
+  readbackThreadId?: string; sentLabels?: readonly string[] } = {}) {
+  const draftThreadId = options.draftThreadId ?? "fixture-thread_1";
+  const sentMessageId = "fixture-sent-message_1";
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    if (target.path === "/gmail/v1/users/me/profile" && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
+    }
+    if (target.path.endsWith("/drafts/fixture-draft?format=raw") && target.method === "GET") {
+      return draftReadResponse(target.path, options.raw ?? draftRaw, "fixture-draft-message_1", draftThreadId);
+    }
+    if (target.path === "/gmail/v1/users/me/drafts/send" && target.method === "POST") {
+      return { ...response, body: JSON.stringify({ id: sentMessageId,
+        threadId: options.responseThreadId ?? draftThreadId }) };
+    }
+    if (target.path.includes(`/messages/${sentMessageId}?format=metadata&`) && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ id: sentMessageId,
+        threadId: options.readbackThreadId ?? options.responseThreadId ?? draftThreadId,
+        labelIds: options.sentLabels ?? ["INBOX", "SENT"], internalDate: "1760000000000", sizeEstimate: 128,
+        payload: { mimeType: "text/plain", headers: [
+          { name: "From", value: "owner@example.invalid" },
+          { name: "To", value: "recipient@example.invalid" },
+          { name: "Subject", value: "Synthetic sent draft" },
+        ] } }) };
+    }
+    throw new Error(`unexpected draft.send fixture request: ${target.method} ${target.path}`);
+  });
+  return { request, sentMessageId, draftThreadId };
 }
 
 const trashArgs = { operation: "message.trash", message_id: "fixture-message_123" };
@@ -542,8 +573,7 @@ describe("Gmail write target observation", () => {
   });
 
   it("draft.sendは認証account・可変draft version・MIME全体をresume内容確認とtarget observationへ結ぶ", async () => {
-    const request = vi.fn(async (target: GoogleWriteTarget) =>
-      draftReadResponse(target.path));
+    const { request, draftThreadId } = gmailDraftSendFixture();
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
     const review = await tool.inspect_content_review!(draftArgs);
     expect(review).toMatchObject({ account_email: "owner@example.invalid", from: "owner@example.invalid",
@@ -557,7 +587,9 @@ describe("Gmail write target observation", () => {
       command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
     }));
     expect(observation).toMatchObject({ provider_state_digest: review.provider_state_digest,
-      provider_raw_digest: review.provider_raw_digest, command_digest: "a".repeat(64),
+      provider_raw_digest: review.provider_raw_digest,
+      provider_thread_identity_digest: createHash("sha256").update(draftThreadId, "utf8").digest("hex"),
+      command_digest: "a".repeat(64),
       operation_plan_binding_digest: "b".repeat(64), used_for_authority: false, may_execute: false });
     expect(JSON.stringify(observation)).not.toContain("recipient@example.invalid");
     expect(JSON.stringify(observation)).not.toContain("合成本文だけ");
@@ -565,10 +597,27 @@ describe("Gmail write target observation", () => {
     const result = await tool.invoke(draftArgs, { command_id: "fixture-draft-send-command",
       upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
       command_digest: "e".repeat(64), target_version_observation: observation });
-    expect(result).toMatchObject({ service: "gmail", operation: "draft.send", mutation_sent: true });
-    const sendTarget = request.mock.calls.at(-1)?.[0];
+    expect(result).toMatchObject({ service: "gmail", operation: "draft.send", mutation_sent: true,
+      mutation_status: "confirmed", result: { sent_confirmed: true, sent_label_confirmed: true } });
+    const sendTarget = request.mock.calls.find(([target]) => target.method === "POST")?.[0];
     expect(sendTarget).toMatchObject({ method: "POST", path: "/gmail/v1/users/me/drafts/send" });
-    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw: draftRaw } });
+    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw: draftRaw, threadId: draftThreadId } });
+    expect(JSON.stringify(result)).not.toContain("fixture-sent-message_1");
+    expect(JSON.stringify(result)).not.toContain(draftThreadId);
+  });
+
+  it.each([
+    ["response thread mismatch", { responseThreadId: "fixture-other-thread" }],
+    ["SENT readback missing", { sentLabels: ["INBOX"] }],
+  ] as const)("draft.sendの%sは結果不明として単回で停止する", async (_name, fixtureOptions) => {
+    const { request } = gmailDraftSendFixture(fixtureOptions);
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const observation = await tool.inspect_target_version!(draftArgs, { command_digest: "a".repeat(64) });
+    await expect(tool.invoke(draftArgs, { command_id: "fixture-draft-send-unknown",
+      upstream_commit_hash: "c".repeat(40), idempotency_key: "d".repeat(64), command_digest: "e".repeat(64),
+      target_version_observation: observation })).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/drafts/send")))
+      .toHaveLength(1);
   });
 
   it("添付付きdraft.sendは実MIMEの添付名・種類・size・hashを表示し、確認した同じrawだけを送る", async () => {
@@ -603,8 +652,7 @@ describe("Gmail write target observation", () => {
       attachmentBase64Lines,
       "--" + boundary + "--",
     ].join("\r\n"), "utf8").toString("base64url");
-    const request = vi.fn(async (target: GoogleWriteTarget) =>
-      draftReadResponse(target.path, raw));
+    const { request, draftThreadId } = gmailDraftSendFixture({ raw });
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
     const review = await tool.inspect_content_review!(draftArgs);
     expect(review).toMatchObject({
@@ -639,7 +687,7 @@ describe("Gmail write target observation", () => {
       command_digest: "e".repeat(64), target_version_observation: observation });
     expect(result).toMatchObject({ service: "gmail", operation: "draft.send", mutation_sent: true });
     const sendTarget = request.mock.calls.find(([target]) => target.method === "POST")?.[0];
-    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw } });
+    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw, threadId: draftThreadId } });
   });
 
   it("同じdraftへの並列sendを直列化し、先行送信後の古い期待版を二重送信しない", async () => {
@@ -653,7 +701,12 @@ describe("Gmail write target observation", () => {
       }
       if (target.method === "POST" && target.path.endsWith("/drafts/send")) {
         draftSent = true;
-        return response;
+        return { ...response, body: JSON.stringify({ id: "fixture-sent-message_1", threadId: "fixture-thread_1" }) };
+      }
+      if (target.path.includes("/messages/fixture-sent-message_1?format=metadata&")) {
+        return { ...response, body: JSON.stringify({ id: "fixture-sent-message_1", threadId: "fixture-thread_1",
+          labelIds: ["INBOX", "SENT"], internalDate: "1760000000000", sizeEstimate: 128,
+          payload: { mimeType: "text/plain", headers: [{ name: "From", value: "owner@example.invalid" }] } }) };
       }
       return response;
     });

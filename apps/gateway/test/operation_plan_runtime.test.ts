@@ -98,14 +98,17 @@ function plan(id: string, root: string): OperationPlan {
 }
 function gmailSendPlan(id: string, parameters: OperationParameters): OperationPlan {
   const target = { kind: "external_service" as const, id: "gmail" };
+  const validation = parameters.operation === "draft.send"
+    ? { check_id: "draft-send-confirmed", method: "gmail_draft_send_result_matches" as const, target,
+      expected: { schema_version: "blue-tanuki.gmail-draft-send-result-validation.v1", operation: "draft.send" } }
+    : { check_id: "send-accepted", method: "result_equals" as const, target, expected: { mutation_status: "confirmed" } };
   return { version: "operation-core.v1", plan_id: `gmail-plan-${id}`, request_id: id, state: "planned",
     steps: [{ step_id: "send", operation: "gmail.write", target, state: "planned",
       effects: ["external_send", "write", "credential_access"],
       permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
         hds_brain_authority_required: true, approval_gate_required: true },
       adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false, parameters,
-      preparation: { depends_on: [], bindings: [], preconditions: [],
-        validation: [{ check_id: "send-accepted", method: "result_equals", target, expected: { mutation_status: "confirmed" } }],
+      preparation: { depends_on: [], bindings: [], preconditions: [], validation: [validation],
         compensation: { available: false, reason: "external send cannot be recalled" } } }],
     rollback: { available: false },
     raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
@@ -2292,9 +2295,11 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       schema_version: "blue-tanuki.gmail-write-target-version.v1",
       target_identity_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
         service: "gmail", operation: "draft.send", draft_id: "fixture-draft-id" }),
-      request_payload_digest: gmailDraftSendRequestPayloadDigest({ operation: "draft.send", draft_id: "fixture-draft-id" }, "d".repeat(64)),
+      request_payload_digest: gmailDraftSendRequestPayloadDigest({ operation: "draft.send", draft_id: "fixture-draft-id" },
+        "d".repeat(64), "e".repeat(64)),
       provider_state_digest: "c".repeat(64),
-      provider_raw_digest: "d".repeat(64), command_digest: operationPlanDigest(selected.command),
+      provider_raw_digest: "d".repeat(64), provider_thread_identity_digest: "e".repeat(64),
+      command_digest: operationPlanDigest(selected.command),
       operation_plan_binding_digest: operationPlanBindingDigest, used_for_authority: false, may_execute: false,
     });
     const binding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);

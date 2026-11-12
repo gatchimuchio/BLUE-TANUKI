@@ -4289,3 +4289,13 @@ native runnerでpackage verification、developer toolsなしの隔離Setup／bun
 Gmailの既存`draft.send`で添付付きMIME draftをレビューできず送信reviewが拒否されるconsumer gapを修正した。対応MIMEを`multipart/mixed`の`text/plain`＋最大5添付に限定し、添付bytesはprocess内でhash化、Gateway L3 no-store reviewにはファイル名・MIME type・size・SHA-256のみを渡す。review digestへprovider raw digestと添付情報を結び、既存の作用直前再照合後に同一raw MIMEを一度送る経路を維持した。直接`message.send`添付、未知形式、HTML、nested multipart、制限超過、raw／encoded headerの制御文字を拒否する。Control Centerの添付由来表示を明確にし、script template内の既存escape欠陥を修正した。
 
 core typecheck／build、Gateway／WebChat関連typecheck／build、Gmail 11/11、Gateway review 4/4、WebChat review 1/1、Control Center safety／syntax 1/1、`git diff --check`はPASS。focused WebChat testは各々同一fileの131件をskip。初回Control Center safety testは既存template escape defectでraw control charactersを検出したため、正しいescaping修正後に再実行してPASSした。全workspace suite、実Gmail credential／API／送信、外部作用、QE_QC／QE_QAはNOT_RUN。F02.02全体は未成立。作業開始local／origin／GitHub main=`ab2e96f4e6585289fa51ded1c994f80b98785619`。protected attachment directoriesは保持。
+
+## 2026-11-12 QE_BUILD — F02.02 既存Gmail draft.send結果検証とowner帰還
+
+既存Gmail `draft.send`の単一draft consumerを、review済みthread IDの送信、作用直前state再照合、送信後のaccount／thread／`SENT` readback、HDS Operation Plan結果検証、digest-only M receipt、J/M再起動後のowner projectionまで接続した。結果不明・thread不一致・`SENT`未確認では成功にせず、自動再送しない。結果projectionではbody、raw MIME、provider IDを出さない。high/L3、Approval Gate、HDS単一writer、M非権威を維持した。実Gmail credential／API／送信は使用していない。
+
+Focused command `corepack pnpm exec vitest run packages/blue-tanuki/test/gmail_write_target_version.test.ts packages/hds-brain/test/operation_plan_gmail_reply.test.ts apps/gateway/test/operation_plan_runtime.test.ts apps/gateway/test/execution_result_reconciliation.test.ts -t "draft.send" --maxWorkers=1 --minWorkers=1` は4 files／8 passed／157 skipped。全workspace `corepack pnpm typecheck` と15-project `corepack pnpm build` はPASS。`corepack pnpm docs:check`、日本語基底監査（既存移行負債75件の注意表示、gate PASS）、license gate、`git diff --check`もPASS。初回広範runはGateway runtime内の既存5／10秒timeout 7件で停止し、対象を絞ったrerunを最終判定とした。初回focused integrationでM保存契約が省略可能な`google_request_id`の存在を誤要求する欠陥を検出・是正し、focused rerunでPASSした。GitHub push結果は閉包記録で追記する。
+
+このconsumerのみ`WIRED`とする。`message.send`、F02.02全体、実provider、live Gateway、全workspace suite、5OS QA、QE_QC／QE_QA、公開・出荷GOは未成立／NOT_RUN。次consumerはowner選択済みC08.02の明示達成規則・検証済み結果・M receiptの接続を、最新正本から再構成する。
+
+asset closure：buildで再生成された14 workspace `dist`は稼働中の開発環境として保持。最終focused runの固有Temp rootはfinally cleanupされ、再確認で残存なし。先行の中断runのtest-owned synthetic root 1 directory／5 files／159,749 bytesはWindows標準Recycle Binへ移動し、元path不在・Recycle Bin itemを確認した。同prefixの既存root 5件（11/9〜11/12 13:48）は別run所有としてこのbatchでは保持。保護attachment directoriesは変更していない。

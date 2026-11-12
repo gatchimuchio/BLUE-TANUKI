@@ -2,7 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
+## 現行BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
+
+主語はBLUE Gatewayの既存Gmail `draft.send`／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的はownerが選択した既存draft一件をthread-boundのno-store L3 review後に一度だけ送信し、送信後の再読込で同じthreadの`SENT`状態を検証した結果だけを、J/M receiptと再起動後のowner照会へ返すこと。通常の`message.send`、live provider／実送信、F02.02全体、製品全体の完成とは扱わない。
+
+draft metadataのaccount／draft message／thread／raw MIME digestと要求digestを結び、作用直前に同じdraft stateを再照合する。`drafts.send`にはreview済みthread IDを渡す。送信応答のthreadが異なる、送信後の`SENT`／thread／account確認が成立しない、または結果が不明な場合は成功へ昇格せず`outcome_unknown`として停止し、自動再送しない。本文、raw MIME、実provider object IDはMに保存せずdigestだけをreceipt・owner projectionへ返す。L3、Approval Gate、HDS単一writer、M非権威を維持する。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| focused Gmail／Gateway／HDS tests | PASS：4 files、8 selected tests（157 skipped）。thread拘束、結果検証、単回停止、M receipt、再起動後owner projectionを合成fixtureで確認。 |
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS：全workspace typecheck、15 build projects。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS：docs／日本語基底監査／license gate。既存の日本語基底移行負債75件は注意表示。 |
+| 広範な初回test run | NOT_ESTABLISHED：Gateway runtime全体に含まれる7件の既存5／10秒timeoutで停止し、対象外testを完走しなかった。最終判定には使わず、上記focused selectorを再実行してPASS。 |
+| 全workspace suite、実Gmail credential／API／送信、live Gateway／owner browser、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+UNIT_ID: F02.02（既存draft.sendのthread確認付き単回送信結果をJ/M／ownerへ帰還する限定consumer）
+STATUS: WIRED（合成応答でOperation Plan→high/L3→draft state再照合→単回send→送信後readback→J検証→digest-only M receipt→再起動後owner projection。実provider／live Gateway未確認）
+NEXT_REQUIRED_CONSUMER: owner選択済みC08.02の達成規則consumerを次の独立作業として現行rev4.0と最新HEADから再構成する。現行J正本に結び付く明示規則と検証済み結果・M receiptが揃う場合だけ達成し、規則・根拠の欠落または曖昧さはpendingとする。C08.03実provider、OD-03 live外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。
+SAFETY_STATUS: high/L3、Approval Gate、thread-bound request、作用直前draft state再照合、thread／account／SENT readback、結果不明時の自動再送禁止、J/M非権威receiptを維持。実credential・Gmail・送信なし。
+LOCAL_ASSET_STATUS: source／tests／active docsはGit候補。`pnpm build`のworkspace `dist`／isolation outputは再生成済み開発環境として保持。focused rerunはtest-owned rootをfinallyで削除。中断済みfixture root `C:\Users\ohira\AppData\Local\Temp\blue-result-reconcile-S0D8tE`（1 directory／5 files／159,749 bytes、synthetic SQLite・workspaceのみ）は非稼働・reparseなしを確認してWindows標準Recycle Binへ移動し、元path不在と収容を確認した。同prefixの他5 rootはこのbatch開始前から存在し、別run所有のため保持。`.codex-attachments/`／`.codex-remote-attachments/`は保護・未変更。他repo変更なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、ahead／behind=0/0、worktreeはmainのみ。開始復旧branch／tag current=`c8eb174d31574a01c2e92ade57d726fa5843bf50`、previous=`133fc7163b0caedd229e88fba3ce39dad3d74c31`。終端SHA／復旧ref／dirty状態はcommit・push後に再照合する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
 
 主語はBLUE Gatewayの既存Gmail `draft.create`／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的はOwnerが明示したsource message IDへ返信下書きを結び、同じGmail thread内に作成された結果だけを既存のL3・J/M経路へ返すこと。通常下書き、送信、F02.02全体、実provider成立または製品全体の完成とは扱わない。
 

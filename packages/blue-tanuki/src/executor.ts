@@ -601,8 +601,9 @@ function approveCommandForExecution(
       const operation = String(snapshot.payload.arguments.operation);
       const payloadMismatch = operation === "draft.send"
         ? !observation.provider_state_digest || !observation.provider_raw_digest ||
+          !observation.provider_thread_identity_digest ||
           observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
-            snapshot.payload.arguments, observation.provider_raw_digest)
+            snapshot.payload.arguments, observation.provider_raw_digest, observation.provider_thread_identity_digest)
         : operation === "message.trash" || operation === "message.modify"
           ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
             observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)
@@ -972,8 +973,9 @@ export class Executor {
       const operation = String(command.payload.arguments.operation);
       const payloadMismatch = operation === "draft.send"
         ? !observation.provider_state_digest || !observation.provider_raw_digest ||
+          !observation.provider_thread_identity_digest ||
           observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
-            command.payload.arguments, observation.provider_raw_digest)
+            command.payload.arguments, observation.provider_raw_digest, observation.provider_thread_identity_digest)
         : operation === "message.trash" || operation === "message.modify"
           ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
             observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments)

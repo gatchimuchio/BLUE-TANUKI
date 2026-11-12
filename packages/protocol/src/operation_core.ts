@@ -315,7 +315,7 @@ export const OperationStepPreparationSchema = z.object({
   validation: z.array(z.object({
     check_id: z.string().min(1).max(200),
     method: z.enum(["result_equals", "revision_equals", "file_search_result_matches", "file_edit_result_matches",
-      "gmail_reply_draft_result_matches", "gmail_message_trash_result_matches", "gmail_message_modify_result_matches", "mcp_call_result_matches",
+      "gmail_reply_draft_result_matches", "gmail_draft_send_result_matches", "gmail_message_trash_result_matches", "gmail_message_modify_result_matches", "mcp_call_result_matches",
       "shell_exec_result_matches", "github_write_result_matches"]),
     target: OperationTargetSchema,
     expected: OperationJsonValueSchema,

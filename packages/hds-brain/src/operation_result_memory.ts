@@ -152,7 +152,8 @@ export function resultMemoryEligible(b: Binding): boolean {
   if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
     b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read" ||
     b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
-      (b.prepared_step.parameters?.operation === "message.trash" ||
+      (b.prepared_step.parameters?.operation === "draft.send" ||
+        b.prepared_step.parameters?.operation === "message.trash" ||
         b.prepared_step.parameters?.operation === "message.modify") && !!b.execution_admission?.task_identity_digest &&
       !!b.operation_plan_binding_digest && !!b.delivery_digest && !!b.result_digest &&
       b.result_observed_at_ms !== undefined;
@@ -212,6 +213,78 @@ export function resultObservation(p: Plan, b: Binding) {
       command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: b.operation,
       delivery_digest: b.delivery_digest, result_digest: b.result_digest,
       plan_binding_status: "verified", plan_validation_status: "matched",
+      effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
+      adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+  if (b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
+      b.prepared_step.parameters?.operation === "draft.send") {
+    const rawOutput: unknown = result.output;
+    if (!isRecord(rawOutput) || !isRecord(rawOutput.result)) {
+      throw new Error("plan_memory_gmail_draft_send_result_invalid");
+    }
+    const output = rawOutput;
+    const receipt = rawOutput.result;
+    const draftId = b.prepared_step.parameters.draft_id;
+    const draftIdentityDigest = typeof draftId === "string"
+      ? createHash("sha256").update(draftId, "utf8").digest("hex") : "";
+    const targetIdentityDigest = stableDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
+      service: "gmail", operation: "draft.send", draft_id: draftId });
+    const resultKeys = ["account_identity_digest", "draft_identity_digest", "draft_message_identity_digest",
+      "draft_provider_state_digest", "label_ids_digest", "may_execute", "provider_raw_digest",
+      "provider_state_digest", "request_payload_digest", "sent_confirmed", "sent_label_confirmed",
+      "sent_message_identity_digest", "target_identity_digest", "thread_identity_digest", "used_for_authority"];
+    const outputKeys = ["api_host", "method", "mode", "mutation_sent",
+      "mutation_status", "operation", "path_digest", "request_status", "result", "result_digest", "service",
+      "status", "truncated"];
+    const providerRawDigest = receipt.provider_raw_digest;
+    const threadIdentityDigest = receipt.thread_identity_digest;
+    const accountIdentityDigest = receipt.account_identity_digest;
+    const messageIdentityDigest = receipt.draft_message_identity_digest;
+    const expectedRequestDigest = typeof draftId === "string" && isDigest(providerRawDigest) && isDigest(threadIdentityDigest)
+      ? stableDigest({ schema_version: "blue-tanuki.gmail-draft-send-payload.v2", draft_id: draftId,
+        provider_raw_digest: providerRawDigest, thread_identity_digest: threadIdentityDigest }) : "";
+    const expectedDraftStateDigest = isDigest(accountIdentityDigest) && isDigest(messageIdentityDigest) &&
+        isDigest(threadIdentityDigest) && isDigest(providerRawDigest)
+      ? stableDigest({ schema_version: "blue-tanuki.gmail-draft-provider-state.v2",
+        account_identity_digest: accountIdentityDigest, draft_identity_digest: draftIdentityDigest,
+        message_identity_digest: messageIdentityDigest, thread_identity_digest: threadIdentityDigest,
+        raw_digest: providerRawDigest }) : "";
+    const expectedPath = "/gmail/v1/users/me/drafts/send";
+    if (typeof draftId !== "string" || !draftId.trim() || draftId !== draftId.trim() || draftId.length > 256 ||
+        /[\r\n]/.test(draftId) || !hasExactKeys(receipt, resultKeys) ||
+        !hasExactKeys(output, outputKeys, ["content_type", "google_request_id"]) ||
+        receipt.target_identity_digest !== targetIdentityDigest || receipt.draft_identity_digest !== draftIdentityDigest ||
+        !isDigest(accountIdentityDigest) || !isDigest(messageIdentityDigest) || !isDigest(providerRawDigest) ||
+        !isDigest(threadIdentityDigest) || receipt.request_payload_digest !== expectedRequestDigest ||
+        receipt.draft_provider_state_digest !== expectedDraftStateDigest ||
+        !isDigest(receipt.sent_message_identity_digest) || !isDigest(receipt.label_ids_digest) ||
+        !isDigest(receipt.provider_state_digest) || receipt.sent_label_confirmed !== true || receipt.sent_confirmed !== true ||
+        receipt.used_for_authority !== false || receipt.may_execute !== false ||
+        output.service !== "gmail" || output.mode !== "write" || output.operation !== "draft.send" ||
+        output.api_host !== "gmail.googleapis.com" || output.method !== "POST" ||
+        output.path_digest !== stableDigest(expectedPath) || output.request_status !== "ok" ||
+        output.mutation_sent !== true || output.mutation_status !== "confirmed" ||
+        typeof output.status !== "number" || !Number.isInteger(output.status) || output.status < 200 || output.status >= 300 ||
+        output.truncated !== false || !isDigest(output.result_digest) || output.result_digest !== stableDigest(receipt) ||
+        (output.content_type !== undefined && typeof output.content_type !== "string") ||
+        (output.google_request_id !== undefined && typeof output.google_request_id !== "string")) {
+      throw new Error("plan_memory_gmail_draft_send_result_invalid");
+    }
+    return {
+      schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      task_identity_digest: b.execution_admission?.task_identity_digest,
+      plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+      plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,
+      command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: "gmail.write.draft.send",
+      step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+      step_digest: b.step_digest, command_digest: b.command_digest,
+      operation_plan_binding_digest: b.operation_plan_binding_digest!,
+      delivery_digest: b.delivery_digest!, result_digest: b.result_digest!,
+      plan_binding_status: "verified", plan_validation_status: "matched",
+      target_identity_digest: receipt.target_identity_digest,
+      provider_state_digest: receipt.provider_state_digest,
       effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
       adoption_status: "observation_only", used_as_world_truth: false,
       used_for_authority: false, may_execute: false,

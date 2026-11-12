@@ -4185,10 +4185,12 @@ ${planControl.question}`,
           (operation === "message.modify" && (!observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
             observation.request_payload_digest !== modifyPayloadDigest)) ||
           (operation === "draft.send" && (!observation.provider_state_digest || !observation.provider_raw_digest ||
+            !observation.provider_thread_identity_digest ||
             observation.request_payload_digest !== operationPlanDigest({
-              schema_version: "blue-tanuki.gmail-draft-send-payload.v1",
+              schema_version: "blue-tanuki.gmail-draft-send-payload.v2",
               draft_id: typeof draftId === "string" ? draftId.trim() : "",
               provider_raw_digest: observation.provider_raw_digest,
+              thread_identity_digest: observation.provider_thread_identity_digest,
             })))) {
         throw new Error("HDS gmail.write target version does not match the issued command");
       }

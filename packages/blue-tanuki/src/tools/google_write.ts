@@ -212,6 +212,11 @@ function sha256String(value: string): string {
 
 interface GmailDraftSnapshot {
   draft_id: string;
+  draft_identity_digest: string;
+  message_identity_digest: string;
+  thread_id: string;
+  thread_identity_digest: string;
+  account_identity_digest: string;
   raw: string;
   state_digest: string;
   raw_digest: string;
@@ -878,6 +883,8 @@ async function readGmailDraftSnapshot(
   const resource = await get(`/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}?format=raw`);
   if (!isRecord(resource) || resource.id !== draftId || !isRecord(resource.message) ||
       typeof resource.message.id !== "string" || !resource.message.id.trim() ||
+      typeof resource.message.threadId !== "string" || !resource.message.threadId.trim() ||
+      resource.message.threadId.length > 512 || /[\s/?#\\\u0000-\u001f\u007f]/.test(resource.message.threadId) ||
       typeof resource.message.raw !== "string") {
     throw new Error("gmail_draft_resource_invalid; request_sent=false; mutation_sent=false");
   }
@@ -885,16 +892,26 @@ async function readGmailDraftSnapshot(
   const content = decodeGmailDraftMime(raw);
   const rawDigest = sha256String(raw);
   const accountIdentityDigest = sha256String(accountEmail.toLowerCase());
+  const draftIdentityDigest = sha256String(draftId);
+  const messageIdentityDigest = sha256String(resource.message.id);
+  const threadIdentityDigest = sha256String(resource.message.threadId);
   const stateDigest = operationPlanDigest({
-    schema_version: "blue-tanuki.gmail-draft-provider-state.v1",
+    schema_version: "blue-tanuki.gmail-draft-provider-state.v2",
     account_identity_digest: accountIdentityDigest,
-    draft_id: draftId,
-    message_id: resource.message.id,
+    draft_identity_digest: draftIdentityDigest,
+    message_identity_digest: messageIdentityDigest,
+    thread_identity_digest: threadIdentityDigest,
     raw_digest: rawDigest,
   });
-  const requestPayloadDigest = gmailDraftSendRequestPayloadDigest({ operation: "draft.send", draft_id: draftId }, rawDigest);
+  const requestPayloadDigest = gmailDraftSendRequestPayloadDigest(
+    { operation: "draft.send", draft_id: draftId }, rawDigest, threadIdentityDigest);
   return {
     draft_id: draftId,
+    draft_identity_digest: draftIdentityDigest,
+    message_identity_digest: messageIdentityDigest,
+    thread_id: resource.message.threadId,
+    thread_identity_digest: threadIdentityDigest,
+    account_identity_digest: accountIdentityDigest,
     raw,
     state_digest: stateDigest,
     raw_digest: rawDigest,
@@ -1446,6 +1463,7 @@ export async function invokeGmailWrite(
     draftSnapshot = await readGmailDraftSnapshot(args, opts, token);
     if (draftSnapshot.state_digest !== expectedTargetObservation.provider_state_digest ||
         draftSnapshot.raw_digest !== expectedTargetObservation.provider_raw_digest ||
+        draftSnapshot.thread_identity_digest !== expectedTargetObservation.provider_thread_identity_digest ||
         draftSnapshot.request_payload_digest !== expectedTargetObservation.request_payload_digest ||
         gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
       throw new Error("gmail.write draft.send content or provider version changed; request_sent=false; mutation_sent=false");
@@ -1494,7 +1512,7 @@ export async function invokeGmailWrite(
       throw new Error("gmail.write reply draft source changed after review; request_sent=false; mutation_sent=false");
     }
   }
-  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, attachments, replySource);
+  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, draftSnapshot?.thread_id, attachments, replySource);
   const { path, body } = builtRequest;
 
   const target = {
@@ -1510,6 +1528,62 @@ export async function invokeGmailWrite(
   assertToolExecutionNotCancelled(opts.signal, "gmail.write");
   const response = await sendRequest(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
+  if (operation === "draft.send") {
+    let sentMessage: unknown;
+    try {
+      if (response.truncated || response.body_utf8_valid === false) throw new Error("response_unavailable");
+      sentMessage = JSON.parse(response.body) as unknown;
+    } catch {
+      throw new Error("gmail.write draft.send result is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    if (!draftSnapshot || !isRecord(sentMessage) || typeof sentMessage.id !== "string" ||
+        sentMessage.id.length === 0 || sentMessage.id.length > 512 || !/^[A-Za-z0-9_-]+$/.test(sentMessage.id) ||
+        sentMessage.threadId !== draftSnapshot.thread_id) {
+      throw new Error("gmail.write draft.send response did not identify the reviewed thread; outcome_unknown; do not retry automatically");
+    }
+    const confirmed = await readGmailMessageMetadataSnapshot({ operation: "message.trash", message_id: sentMessage.id },
+      opts, token).catch(() => null);
+    if (!confirmed || confirmed.account_identity_digest !== draftSnapshot.account_identity_digest ||
+        confirmed.message_identity_digest !== sha256String(sentMessage.id) ||
+        confirmed.thread_identity_digest !== draftSnapshot.thread_identity_digest ||
+        !confirmed.label_ids.includes("SENT")) {
+      throw new Error("gmail.write draft.send postcondition is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const result = {
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      draft_identity_digest: draftSnapshot.draft_identity_digest,
+      draft_message_identity_digest: draftSnapshot.message_identity_digest,
+      account_identity_digest: draftSnapshot.account_identity_digest,
+      provider_raw_digest: draftSnapshot.raw_digest,
+      thread_identity_digest: draftSnapshot.thread_identity_digest,
+      draft_provider_state_digest: draftSnapshot.state_digest,
+      request_payload_digest: draftSnapshot.request_payload_digest,
+      sent_message_identity_digest: confirmed.message_identity_digest,
+      label_ids_digest: operationPlanDigest(confirmed.label_ids),
+      provider_state_digest: confirmed.state_digest,
+      sent_label_confirmed: true as const,
+      sent_confirmed: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      service: "gmail",
+      mode: "write",
+      operation,
+      api_host: target.hostname,
+      path_digest: sha256Hex(target.path),
+      method: target.method,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      google_request_id: response.request_id,
+      request_status: "ok",
+      mutation_sent: true,
+      mutation_status: "confirmed",
+      result_digest: sha256Hex(result),
+      result,
+    };
+  }
   if (operation === "message.trash") {
     const confirmed = await readGmailMessageMetadataSnapshot(args, opts, token).catch(() => null);
     if (!messageTrashSnapshot || !confirmed || confirmed.message_identity_digest !== messageTrashSnapshot.message_identity_digest ||
@@ -1674,14 +1748,17 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
 }
 
 /** draft.sendの正確なrequest intentをdraft IDとprovider MIME digestで束ねる。MIME本文は保持しない。 */
-export function gmailDraftSendRequestPayloadDigest(args: Record<string, unknown>, rawDigest: string): string {
-  if (assertSupportedGmailWriteArguments(args) !== "draft.send" || !/^[a-f0-9]{64}$/.test(rawDigest)) {
+export function gmailDraftSendRequestPayloadDigest(args: Record<string, unknown>, rawDigest: string,
+  threadIdentityDigest: string): string {
+  if (assertSupportedGmailWriteArguments(args) !== "draft.send" || !/^[a-f0-9]{64}$/.test(rawDigest) ||
+      !/^[a-f0-9]{64}$/.test(threadIdentityDigest)) {
     throw new Error("gmail_target_version_operation_unsupported");
   }
   return operationPlanDigest({
-    schema_version: "blue-tanuki.gmail-draft-send-payload.v1",
+    schema_version: "blue-tanuki.gmail-draft-send-payload.v2",
     draft_id: stringArg(args, "draft_id")!,
     provider_raw_digest: rawDigest,
+    thread_identity_digest: threadIdentityDigest,
   });
 }
 
@@ -1742,6 +1819,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
     observation.request_payload_digest = snapshot.request_payload_digest;
     observation.provider_state_digest = snapshot.state_digest;
     observation.provider_raw_digest = snapshot.raw_digest;
+    observation.provider_thread_identity_digest = snapshot.thread_identity_digest;
   } else if (operation === "message.trash") {
     const snapshot = await readGmailMessageMetadataSnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
@@ -1789,7 +1867,9 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
   const operationPayloadMatches = operation === "draft.send"
     ? !!observation.provider_state_digest && !!observation.provider_raw_digest &&
-      observation.request_payload_digest === gmailDraftSendRequestPayloadDigest(args, observation.provider_raw_digest)
+      !!observation.provider_thread_identity_digest &&
+      observation.request_payload_digest === gmailDraftSendRequestPayloadDigest(args, observation.provider_raw_digest,
+        observation.provider_thread_identity_digest)
     : operation === "message.trash"
       ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
         observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
@@ -1809,6 +1889,7 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
 function gmailWriteRequest(
   args: Record<string, unknown>,
   draftRaw?: string,
+  draftThreadId?: string,
   attachments: readonly GmailResolvedWriteAttachment[] = [],
   replySource?: GmailReplySource,
 ): { path: string; body?: string } {
@@ -1829,9 +1910,11 @@ function gmailWriteRequest(
         ...(normalized.remove_label_ids.length > 0 ? { removeLabelIds: normalized.remove_label_ids } : {}),
       }) };
   }
-  if (!draftRaw) throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");
+  if (!draftRaw || !draftThreadId) {
+    throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");
+  }
   return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({
-    id: stringArg(args, "draft_id")!, message: { raw: draftRaw },
+    id: stringArg(args, "draft_id")!, message: { raw: draftRaw, threadId: draftThreadId },
   }) };
 }
 

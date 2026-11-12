@@ -105,4 +105,66 @@ describe("Operation Plan Gmail reply source binding", () => {
     expect(operationPlanResultValidationMatches(validation, step,
       { ...output, result: { ...result, message_id: "raw-provider-id" } })).toBe(false);
   });
+
+  it("accepts a draft.send result only when the exact draft, reviewed bytes, thread, and SENT readback are digest-bound", () => {
+    const target = { kind: "external_service" as const, id: "gmail" };
+    const draftId = "fixture-existing-draft";
+    const providerRawDigest = "1".repeat(64);
+    const threadIdentityDigest = "2".repeat(64);
+    const accountIdentityDigest = "3".repeat(64);
+    const draftMessageIdentityDigest = "4".repeat(64);
+    const draftIdentityDigest = createHash("sha256").update(draftId, "utf8").digest("hex");
+    const targetIdentityDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
+      service: "gmail", operation: "draft.send", draft_id: draftId });
+    const requestPayloadDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-draft-send-payload.v2",
+      draft_id: draftId, provider_raw_digest: providerRawDigest, thread_identity_digest: threadIdentityDigest });
+    const draftProviderStateDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-draft-provider-state.v2",
+      account_identity_digest: accountIdentityDigest, draft_identity_digest: draftIdentityDigest,
+      message_identity_digest: draftMessageIdentityDigest, thread_identity_digest: threadIdentityDigest,
+      raw_digest: providerRawDigest });
+    const result = {
+      account_identity_digest: accountIdentityDigest,
+      draft_identity_digest: draftIdentityDigest,
+      draft_message_identity_digest: draftMessageIdentityDigest,
+      draft_provider_state_digest: draftProviderStateDigest,
+      label_ids_digest: "5".repeat(64),
+      may_execute: false,
+      provider_raw_digest: providerRawDigest,
+      provider_state_digest: "6".repeat(64),
+      request_payload_digest: requestPayloadDigest,
+      sent_confirmed: true,
+      sent_label_confirmed: true,
+      sent_message_identity_digest: "7".repeat(64),
+      target_identity_digest: targetIdentityDigest,
+      thread_identity_digest: threadIdentityDigest,
+      used_for_authority: false,
+    };
+    const output = {
+      service: "gmail", mode: "write", operation: "draft.send", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest("/gmail/v1/users/me/drafts/send"), method: "POST", status: 200,
+      content_type: "application/json", truncated: false, google_request_id: "fixture-request",
+      request_status: "ok", mutation_sent: true, mutation_status: "confirmed",
+      result_digest: operationPlanDigest(result), result,
+    };
+    const step: OperationStep = {
+      step_id: "send-existing-draft", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters: { operation: "draft.send", draft_id: draftId },
+      preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{ check_id: "sent-readback",
+        method: "gmail_draft_send_result_matches", target,
+        expected: { schema_version: "blue-tanuki.gmail-draft-send-result-validation.v1", operation: "draft.send" } }],
+        compensation: { available: false, reason: "An accepted email send cannot be recalled." } },
+    };
+    const validation = step.preparation!.validation[0]!;
+    expect(operationPlanResultValidationMatches(validation, step, output)).toBe(true);
+    expect(operationPlanResultValidationMatches(validation, step,
+      { ...output, result: { ...result, sent_label_confirmed: false } })).toBe(false);
+    expect(operationPlanResultValidationMatches(validation, step,
+      { ...output, result: { ...result, thread_identity_digest: "8".repeat(64) } })).toBe(false);
+    expect(operationPlanResultValidationMatches(validation, step,
+      { ...output, result: { ...result, provider_message_id: "raw-provider-id" } })).toBe(false);
+  });
 });
