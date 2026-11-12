@@ -2,6 +2,28 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-12 — QEB-CR0-UNIX-DEV-UNINSTALL-RESIDENT-STOP
+
+主語はLinux／macOSの開発用source Uninstallと`install/resident/blue-tanuki-resident.sh`。開始local／`origin/main`／GitHub `main`=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`、ahead／behind=0/0、worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。開始local recovery branch current=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。remote tagはdirect `ls-remote`でcurrent=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。
+
+従来のLinux／macOS開発用Uninstallはresident-stopの失敗を`|| true`で握りつぶし、resident-autostart-disable失敗も確認せずinstall／launcher削除へ進めた。resident helperはPID内容を検証せず任意PIDへkillし得て、kill失敗を無視し、終了未確認でもPID fileを除去していた。これは製品package版Uninstallとは別のsource development path。
+
+修正後、Uninstallは停止・autostart解除のnonzeroを保持し、停止異常時に次の処理・削除へ進まない。resident managerがない場合、install rootまたはPID recordが存在すれば削除を拒否する。resident helperはPIDが正の数字であること、`ps`のprocess commandがBLUE Gatewayの同一`ENV_FILE`を持つことを確認してSIGTERMを送り、終了を最大10秒観測する。PID不一致・不正値・状態観測不能・signal失敗・timeoutではPID fileを保持する。
+
+| 確認 | 結果 |
+|---|---|
+| WSL Ubuntu 24.04 `sh -n`：resident helper、両開発用Uninstall、`safe_target_unix.sh` | PASS。 |
+| WSL `safe_target_unix.sh` | PASS：`unix_target_guard=pass`。両OS scriptのmissing manager／stop error／autostart errorをPURGE下で実行し、保護対象保持・順序を確認。Resident helperではNode test processを正常停止、無関係`sleep` PIDを拒否して継続、`-1` PIDを拒否、SIGTERM無視processを10秒でtimeoutしてPID recordを保持することを確認。 |
+| `corepack pnpm exec vitest run install/installer/test/resident_integration.test.ts install/installer/test/source_entrypoints.test.ts` | PASS：2 files／14 tests。 |
+| `git diff --check` | PASS。 |
+| 実macOS host、native installed Linux/macOS product、実user resident/autostart/data、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+生成物分類：source／test／3点セットとactive instructionの適用を説明する公開可能な施工記録をGit管理。test専用`/tmp/blue-tanuki-safe-target.*`とsynthetic processはfixture cleanup後に残存なし。ignored build outputは保持。protected attachment directoryは未追跡・未変更。別repo、credential、OneDrive資料、owner data、外部作用に変更なし。
+
+STATUS=`WIRED`（Linux／macOS source development Uninstallの失敗時保護とresident process stop synthetic pathに限定）。G03.01–03のinstalled-linux evidence、native macOS、製品package、安全全体、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。対象変更とcloseout docsを同じBUILD_BATCHとしてmainへpush後、main／local recovery branches／remote tagsを最終照合する。
+
+---
+
 ## 2026-11-12 — QEB-F02.02-GMAIL-DRAFT-READBACK-J-M-RESULT-RETURN
 
 開始時local／`origin/main`／GitHub `main`=`3a554c5f89a6abb16f5cbfcef7a9fe67d0784a2b`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch current=`3a554c5f89a6abb16f5cbfcef7a9fe67d0784a2b`／previous=`40ea7d3151bb39d36a65c1f4dd1a2a6e572cd36d`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。

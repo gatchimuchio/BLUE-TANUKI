@@ -8,11 +8,14 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/blue-tanuki-safe-target.XXXXXX")
 LIFECYCLE_GATEWAY_PID=
 LIFECYCLE_WATCHDOG_PID=
 LIFECYCLE_UNRELATED_PID=
+RESIDENT_SHUTDOWN_UNOWNED_PID=
+RESIDENT_SHUTDOWN_OWNED_PID=
 cleanup_tmp_root() {
-  for process_id in "$LIFECYCLE_GATEWAY_PID" "$LIFECYCLE_WATCHDOG_PID" "$LIFECYCLE_UNRELATED_PID"; do
+  for process_id in "$LIFECYCLE_GATEWAY_PID" "$LIFECYCLE_WATCHDOG_PID" "$LIFECYCLE_UNRELATED_PID" "$RESIDENT_SHUTDOWN_UNOWNED_PID"; do
     case "$process_id" in ''|*[!0-9]*) continue ;; esac
     kill -TERM "$process_id" 2>/dev/null || true
   done
+  case "$RESIDENT_SHUTDOWN_OWNED_PID" in ''|*[!0-9]*) ;; *) kill -KILL "$RESIDENT_SHUTDOWN_OWNED_PID" 2>/dev/null || true ;; esac
   rm -rf -- "$TMP_ROOT"
 }
 trap cleanup_tmp_root EXIT HUP INT TERM
@@ -171,6 +174,205 @@ run_dry_uninstall() {
 
 run_dry_uninstall "linux-uninstall" "$REPO_ROOT/install/linux/uninstall.sh" linux
 run_dry_uninstall "macos-uninstall" "$REPO_ROOT/install/macos/uninstall.sh" macos
+
+run_development_uninstall_guard() {
+  platform=$1
+  failure_point=$2
+  fixture_home="$TMP_ROOT/dev-uninstall-$platform-$failure_point"
+  case "$platform" in
+    linux)
+      install_root="$fixture_home/.local/share/blue-tanuki/app"
+      data_root="$fixture_home/.local/share/blue-tanuki"
+      config_root="$fixture_home/.config/blue-tanuki"
+      uninstall_script="$REPO_ROOT/install/linux/uninstall.sh"
+      ;;
+    macos)
+      install_root="$fixture_home/Library/Application Support/BlueTanuki/app"
+      data_root="$fixture_home/Library/Application Support/BlueTanuki"
+      config_root=
+      uninstall_script="$REPO_ROOT/install/macos/uninstall.sh"
+      ;;
+    *) exit 122 ;;
+  esac
+  bin_root="$fixture_home/.local/bin"
+  launcher="$bin_root/blue-tanuki"
+  resident_script="$install_root/install/resident/blue-tanuki-resident.sh"
+  control_log="$TMP_ROOT/dev-uninstall-$platform-$failure_point.calls"
+  output="$TMP_ROOT/dev-uninstall-$platform-$failure_point.out"
+  mkdir -p "$install_root/install/resident" "$data_root" "$bin_root"
+  if [ -n "$config_root" ]; then mkdir -p "$config_root"; fi
+  printf 'app fixture\n' > "$install_root/app.txt"
+  printf 'user data fixture\n' > "$data_root/user.txt"
+  printf 'launcher fixture\n' > "$launcher"
+  if [ -n "$config_root" ]; then printf 'config fixture\n' > "$config_root/blue-tanuki.env"; fi
+  cat > "$resident_script" <<'RESIDENT_FIXTURE'
+#!/usr/bin/env sh
+printf '%s\n' "$1" >> "$UNINSTALL_CONTROL_LOG"
+case "${UNINSTALL_FAILURE_POINT:-}:$1" in
+  stop:resident-stop) exit 31 ;;
+  autostart:resident-autostart-disable) exit 32 ;;
+esac
+RESIDENT_FIXTURE
+  if [ "$failure_point" = "missing" ]; then rm -f -- "$resident_script"; fi
+
+  if (
+    HOME="$fixture_home" \
+    INSTALL_ROOT="$install_root" \
+    DATA_ROOT="$data_root" \
+    CONFIG_ROOT="${config_root:-$fixture_home/config}" \
+    BIN_ROOT="$bin_root" \
+    PURGE=1 \
+    UNINSTALL_CONTROL_LOG="$control_log" \
+    UNINSTALL_FAILURE_POINT="$failure_point" \
+    sh "$uninstall_script"
+  ) > "$output" 2>&1; then
+    cat "$output" >&2
+    echo "$platform development uninstaller continued after $failure_point failure" >&2
+    exit 123
+  fi
+
+  case "$failure_point" in
+    missing)
+      grep -Fq "resident shutdown cannot be confirmed" "$output" || { cat "$output" >&2; exit 124; }
+      [ ! -e "$control_log" ] || exit 125
+      ;;
+    stop)
+      grep -Fq "resident shutdown was not confirmed" "$output" || { cat "$output" >&2; exit 124; }
+      [ "$(cat "$control_log")" = "resident-stop" ] || exit 125
+      ;;
+    autostart)
+      grep -Fq "resident autostart could not be disabled" "$output" || { cat "$output" >&2; exit 126; }
+      [ "$(cat "$control_log")" = "resident-stop
+resident-autostart-disable" ] || exit 127
+      ;;
+    *) exit 128 ;;
+  esac
+
+  [ -d "$install_root" ] && [ -f "$install_root/app.txt" ] || exit 129
+  if [ "$failure_point" = "missing" ]; then
+    [ ! -e "$resident_script" ] || exit 130
+  else
+    [ -f "$resident_script" ] || exit 130
+  fi
+  [ -f "$launcher" ] || exit 130
+  [ -f "$data_root/user.txt" ] || exit 131
+  if [ -n "$config_root" ]; then [ -f "$config_root/blue-tanuki.env" ] || exit 132; fi
+}
+
+for uninstall_platform in linux macos; do
+  run_development_uninstall_guard "$uninstall_platform" missing
+  run_development_uninstall_guard "$uninstall_platform" stop
+  run_development_uninstall_guard "$uninstall_platform" autostart
+done
+
+run_development_resident_stop_checks() {
+  resident_home="$TMP_ROOT/dev-resident-stop"
+  resident_install="$resident_home/app"
+  resident_data="$resident_home/data"
+  resident_env="$resident_home/config/blue-tanuki.env"
+  resident_launcher="$resident_home/bin/blue-tanuki"
+  resident_manager="$REPO_ROOT/install/resident/blue-tanuki-resident.sh"
+  resident_pid_file="$resident_data/blue-tanuki.pid"
+  mkdir -p "$resident_install/apps/gateway/dist" "$resident_install/install/resident" \
+    "$resident_data" "$(dirname -- "$resident_env")" "$(dirname -- "$resident_launcher")"
+  : > "$resident_env"
+  cat > "$resident_install/apps/gateway/dist/main.js" <<'NODE'
+setInterval(() => {}, 1000);
+NODE
+
+  run_resident_manager() {
+    INSTALL_ROOT="$resident_install" ENV_FILE="$resident_env" DATA_ROOT="$resident_data" \
+      LAUNCHER="$resident_launcher" sh "$resident_manager" "$@"
+  }
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "resident stop runtime check requires node" >&2
+    exit 133
+  fi
+
+  if ! run_resident_manager resident-start > "$TMP_ROOT/dev-resident-start.out" 2>&1; then
+    cat "$TMP_ROOT/dev-resident-start.out" >&2
+    echo "development resident fixture did not start" >&2
+    exit 134
+  fi
+  live_pid=$(cat "$resident_pid_file")
+  case "$live_pid" in ''|*[!0-9]*) exit 135 ;; esac
+  sleep 1
+  live_command=$(ps -p "$live_pid" -o command= 2>/dev/null) || live_command=
+  case "$live_command" in *"apps/gateway/dist/main.js --serve --env-file $resident_env"*) ;; *) exit 135 ;; esac
+  if ! run_resident_manager resident-stop > "$TMP_ROOT/dev-resident-stop.out" 2>&1; then
+    cat "$TMP_ROOT/dev-resident-stop.out" >&2
+    echo "development resident stop did not confirm a real process exit" >&2
+    exit 136
+  fi
+  grep -Fq "resident_status=stopped pid=$live_pid" "$TMP_ROOT/dev-resident-stop.out" || exit 137
+  [ ! -e "$resident_pid_file" ] || exit 138
+  if kill -0 "$live_pid" 2>/dev/null; then
+    live_state=$(ps -p "$live_pid" -o stat= 2>/dev/null || true)
+    case "$live_state" in *Z*) ;; *) exit 139 ;; esac
+  fi
+
+  sleep 60 &
+  RESIDENT_SHUTDOWN_UNOWNED_PID=$!
+  printf '%s\n' "$RESIDENT_SHUTDOWN_UNOWNED_PID" > "$resident_pid_file"
+  if run_resident_manager resident-stop > "$TMP_ROOT/dev-resident-unowned-stop.out" 2>&1; then
+    echo "development resident stop signaled a PID not owned by BLUE-TANUKI" >&2
+    exit 140
+  fi
+  grep -Fq "does not identify this BLUE-TANUKI gateway" "$TMP_ROOT/dev-resident-unowned-stop.out" || {
+    cat "$TMP_ROOT/dev-resident-unowned-stop.out" >&2
+    exit 141
+  }
+  [ "$(cat "$resident_pid_file")" = "$RESIDENT_SHUTDOWN_UNOWNED_PID" ] || exit 142
+  kill -0 "$RESIDENT_SHUTDOWN_UNOWNED_PID" 2>/dev/null || exit 143
+  kill -TERM "$RESIDENT_SHUTDOWN_UNOWNED_PID" 2>/dev/null || exit 144
+  wait "$RESIDENT_SHUTDOWN_UNOWNED_PID" 2>/dev/null || true
+  RESIDENT_SHUTDOWN_UNOWNED_PID=
+  rm -f -- "$resident_pid_file"
+
+  printf '%s\n' '-1' > "$resident_pid_file"
+  if run_resident_manager resident-stop > "$TMP_ROOT/dev-resident-invalid-stop.out" 2>&1; then
+    echo "development resident stop accepted a non-positive PID" >&2
+    exit 145
+  fi
+  grep -Fq "PID file is invalid" "$TMP_ROOT/dev-resident-invalid-stop.out" || exit 146
+  [ "$(cat "$resident_pid_file")" = "-1" ] || exit 147
+  rm -f -- "$resident_pid_file"
+
+  cat > "$resident_install/apps/gateway/dist/main.js" <<'NODE'
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+NODE
+  if ! run_resident_manager resident-start > "$TMP_ROOT/dev-resident-ignore-term-start.out" 2>&1; then
+    cat "$TMP_ROOT/dev-resident-ignore-term-start.out" >&2
+    echo "resident timeout fixture did not start" >&2
+    exit 148
+  fi
+  RESIDENT_SHUTDOWN_OWNED_PID=$(cat "$resident_pid_file")
+  sleep 1
+  timeout_command=$(ps -p "$RESIDENT_SHUTDOWN_OWNED_PID" -o command= 2>/dev/null) || timeout_command=
+  case "$timeout_command" in *"apps/gateway/dist/main.js --serve --env-file $resident_env"*) ;; *) exit 148 ;; esac
+  cat "$resident_install/apps/gateway/dist/main.js" > "$TMP_ROOT/dev-resident-ignore-term-source.out"
+  ps -p "$RESIDENT_SHUTDOWN_OWNED_PID" -o pid=,stat=,command= > "$TMP_ROOT/dev-resident-ignore-term-before.out" 2>&1 || true
+  if run_resident_manager resident-stop > "$TMP_ROOT/dev-resident-timeout-stop.out" 2>&1; then
+    cat "$TMP_ROOT/dev-resident-ignore-term-start.out" "$TMP_ROOT/dev-resident-ignore-term-source.out" \
+      "$TMP_ROOT/dev-resident-ignore-term-before.out" "$TMP_ROOT/dev-resident-timeout-stop.out" >&2
+    tail -n 40 "$resident_data/logs/blue-tanuki.err.log" >&2 || true
+    echo "development resident stop reported success while its process ignored SIGTERM" >&2
+    exit 149
+  fi
+  grep -Fq "did not stop within 10 seconds" "$TMP_ROOT/dev-resident-timeout-stop.out" || {
+    cat "$TMP_ROOT/dev-resident-timeout-stop.out" >&2
+    exit 150
+  }
+  [ "$(cat "$resident_pid_file")" = "$RESIDENT_SHUTDOWN_OWNED_PID" ] || exit 151
+  kill -0 "$RESIDENT_SHUTDOWN_OWNED_PID" 2>/dev/null || exit 152
+  kill -KILL "$RESIDENT_SHUTDOWN_OWNED_PID" 2>/dev/null || exit 153
+  RESIDENT_SHUTDOWN_OWNED_PID=
+  rm -f -- "$resident_pid_file"
+}
+
+run_development_resident_stop_checks
 
 PRODUCT_HOME="$TMP_ROOT/product-home"
 PRODUCT_INSTALL="$PRODUCT_HOME/.local/share/blue-tanuki/app"

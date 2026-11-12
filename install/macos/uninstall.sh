@@ -65,9 +65,21 @@ if [ -f "$RESIDENT_SCRIPT" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     echo "Would stop resident gateway and disable resident autostart."
   else
-    INSTALL_ROOT="$INSTALL_ROOT" ENV_FILE="$ENV_FILE" DATA_ROOT="$DATA_ROOT" LAUNCHER="$LAUNCHER" sh "$RESIDENT_SCRIPT" resident-stop || true
-    INSTALL_ROOT="$INSTALL_ROOT" ENV_FILE="$ENV_FILE" DATA_ROOT="$DATA_ROOT" LAUNCHER="$LAUNCHER" sh "$RESIDENT_SCRIPT" resident-autostart-disable
+    if INSTALL_ROOT="$INSTALL_ROOT" ENV_FILE="$ENV_FILE" DATA_ROOT="$DATA_ROOT" LAUNCHER="$LAUNCHER" sh "$RESIDENT_SCRIPT" resident-stop; then
+      :
+    else
+      stop_exit_code=$?
+      fail "Refusing to uninstall because resident shutdown was not confirmed. No install, launcher, or user data root was removed. exit_code=$stop_exit_code"
+    fi
+    if INSTALL_ROOT="$INSTALL_ROOT" ENV_FILE="$ENV_FILE" DATA_ROOT="$DATA_ROOT" LAUNCHER="$LAUNCHER" sh "$RESIDENT_SCRIPT" resident-autostart-disable; then
+      :
+    else
+      autostart_exit_code=$?
+      fail "Refusing to uninstall because resident autostart could not be disabled. The install, launcher, and data root were preserved. exit_code=$autostart_exit_code"
+    fi
   fi
+elif [ "$DRY_RUN" != "1" ] && { [ -e "$INSTALL_ROOT" ] || [ -e "$DATA_ROOT/blue-tanuki.pid" ]; }; then
+  fail "Refusing to uninstall because resident shutdown cannot be confirmed; the resident manager is missing. No install, launcher, or user data root was removed."
 fi
 
 remove_target "$INSTALL_ROOT" "app"

@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / CR-0 Linux・macOS開発用Uninstall停止確認
+
+主語はLinux／macOSの開発用source Uninstallと、それが呼び出すresident管理scriptである。目的は、resident停止が失敗・未確認・対象不明の場合に、install／launcher／dataを削除しないこと。
+
+Uninstallはresident停止とautostart解除の終了コードを検査する。停止失敗時はautostart解除へ進まず、削除も行わない。管理scriptが欠落していてinstall rootまたはresident PID記録が存在する場合もfail-closedにする。resident helperはPIDの正値・形式、`ps`で観測した`apps/gateway/dist/main.js --serve --env-file <同一ENV_FILE>`のcommand signatureを照合し、一致するprocessだけへSIGTERMを送る。最大10秒終了を待ち、終了を観測してからPID記録を除去する。不正PID、別process、signal失敗、状態観測不能、終了timeoutではPID記録を保持してnonzero終了する。製品packageの別Uninstall実装は変更していない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| WSL Ubuntu 24.04 `sh -n`：resident／Linux Uninstall／macOS Uninstall／Unix fixture | PASS。 |
+| WSL `install/installer/test/safe_target_unix.sh` | PASS：`unix_target_guard=pass`。Linux／macOS各scriptで管理script欠落、停止失敗、autostart解除失敗を注入し、PURGE指定下でもinstall／launcher／user dataが残り、停止失敗後にautostartを呼ばないことを確認。resident実processの停止成功、無関係PID拒否、不正PID保持、SIGTERM無視processの10秒timeoutとPID保持も確認。 |
+| `corepack pnpm exec vitest run install/installer/test/resident_integration.test.ts install/installer/test/source_entrypoints.test.ts` | PASS：2 files／14 tests。Windows上のsource entrypoint testはUnix実行確認をskipするため、実shell fixtureは上記WSL実行で確認。 |
+| `git diff --check` | PASS。 |
+| 実macOS host、native installed Linux／macOS product、実ユーザーのresident／autostart／data、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。WSL fixtureをnative OS／installed productの証拠に拡張しない。 |
+
+UNIT_ID: CR-0 safety interrupt — Linux/macOS development source Uninstall
+BUILD_BATCH: resident-stop verification → dev Uninstall removal gate
+STATUS: WIRED（source development Uninstallとresident helperの合成実process経路のみ）
+NEXT_REQUIRED_CONSUMER: 次の独立作業は⓪→④を再実行し、rev4.0と最新HEADから未接続consumerを選ぶ。G03 installed-linux、G09 Mobile、C08.03実provider、OD-03 live作用、別repo、Rust cutover、P13公開GOへ証拠を拡張しない。
+SAFETY_STATUS: stop/autostart異常時に削除しない。PID identity不一致時に他processをsignalしない。10秒で停止を観測できないときはPID記録とinstall／dataを保持する。
+LOCAL_ASSET_STATUS: shell fixtureの`/tmp/blue-tanuki-safe-target.*`とprocessはtrap／fixture cleanup後に残存なし。ignored build outputsは保持。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。別repo、資格情報、OneDrive資料、owner dataへ作用なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始local／`origin/main`／GitHub `main`=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`、ahead／behind=0/0。local recovery branches current=`be142fc59bc1c7b3aadcd4483a5660f710fe6302`／previous=`eeb3b06970e7346e152a050c48232f2ed724ee95`。対象4ファイルと本closeout記録を同じBUILD_BATCHとして検証後にmainへpushし、push後のmain／復旧refs／protected差分を再照合する。
+
 ## 完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書き作成の読み戻し・J/M結果帰還
 
 主語は既存Gmail `draft.create` AdapterからHDS-J/Mを経て、再起動後のowner結果表示へ至る返信下書き経路である。目的は、作成応答だけを成功根拠にせず、作成した下書きのprovider状態を読み戻し、現行Jの専用validatorとdigest-only M receiptが一致する場合に限り、実行を再開せず結果をownerへ返すこと。

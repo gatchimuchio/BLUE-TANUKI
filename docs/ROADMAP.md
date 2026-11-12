@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの読み戻し・J/M結果帰還
+### 直近完了BUILD_BATCH — QE_BUILD / CR-0 Linux・macOS開発用Uninstall停止確認
+
+Linux／macOSの開発用source Uninstallでresident停止の終了コードを握りつぶさず、停止またはautostart解除の失敗時にinstall／launcher／dataを保持する。resident管理scriptの欠落、PID不正、別processとのPID衝突、SIGTERM後の終了未確認もfail-closedとする。resident helperは対象PIDのcommand signatureを照合し、SIGTERM後最大10秒待ってからPID記録を除去する。製品package版UninstallとG03 installed-linuxの実証範囲は変更しない。
+
+WSL Ubuntu 24.04で4 shell fileの`sh -n`、`safe_target_unix.sh`（`unix_target_guard=pass`）、resident／source entrypointのfocused Vitest 14/14、`git diff --check`がPASS。管理script欠落・停止失敗・autostart解除失敗、無関係PID・不正PID、実synthetic Node processのstop／10秒timeoutを確認した。fixture root／processはcleanup後残存なし。native macOS／installed Linux・macOS、実利用者データ、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。このsource development consumerだけを`WIRED`とする。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの読み戻し・J/M結果帰還
 
 既存Gmail `draft.create`の一回作用後に`drafts.get?format=metadata`を行い、作成したdraft／message identity、source thread、`DRAFT` stateを照合するconsumerを接続した。Jのv2結果validator、L3 target identity、digest-only M receipt、Gateway再起動後のowner結果表示も束ねた。不一致・読戻し失敗時は`outcome_unknown`として停止し、自動再送・成功表示をしない。合成transport focused testsは3 filesで35件PASS（HDS 5、Adapter 28、Gateway 2 selected／92 skipped）。workspace typecheck、15-project build、`docs:check`、`git diff --check`の最終値は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。実Gmail／credential／draft作成・send、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerだけを`WIRED`とし、F02.02全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は示さない。
 

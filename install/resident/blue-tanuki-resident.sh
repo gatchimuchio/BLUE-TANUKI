@@ -68,13 +68,65 @@ resident_stop() {
     echo "resident_status=stopped"
     return
   fi
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    echo "resident_status=stopped pid=$pid"
-  else
+
+  case "$pid" in
+    *[!0-9]*|"") fail "resident PID file is invalid; preserving it and refusing to signal a process." ;;
+    *[1-9]*) ;;
+    *) fail "resident PID file is invalid; preserving it and refusing to signal a process." ;;
+  esac
+
+  process_command=$(ps -p "$pid" -o command= 2>/dev/null) || process_command=
+  process_state=$(ps -p "$pid" -o stat= 2>/dev/null) || process_state=
+  if [ -z "$process_command" ]; then
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "resident process exists but its identity could not be inspected; preserving its PID file."
+    fi
     echo "resident_status=stale pid=$pid"
+    rm -f -- "$PID_FILE"
+    return
   fi
+  case "$process_state" in
+    *Z*)
+      echo "resident_status=stale pid=$pid"
+      rm -f -- "$PID_FILE"
+      return
+      ;;
+  esac
+
+  expected_command="apps/gateway/dist/main.js --serve --env-file $ENV_FILE"
+  case "$process_command" in
+    *"$expected_command"*) ;;
+    *) fail "resident PID does not identify this BLUE-TANUKI gateway; leaving the process and PID file untouched." ;;
+  esac
+
+  kill -TERM "$pid" 2>/dev/null || fail "resident process could not be signaled; preserving its PID file."
+  attempt=0
+  while :; do
+    process_command=$(ps -p "$pid" -o command= 2>/dev/null) || process_command=
+    process_state=$(ps -p "$pid" -o stat= 2>/dev/null) || process_state=
+    if [ -z "$process_command" ]; then
+      if kill -0 "$pid" 2>/dev/null; then
+        fail "resident process exists but its shutdown state could not be inspected; preserving its PID file."
+      fi
+      break
+    fi
+    case "$process_state" in
+      *Z*) break ;;
+    esac
+    case "$process_command" in
+      *"$expected_command"*) ;;
+      *) fail "resident process identity changed during shutdown; preserving its PID file." ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || fail "resident process shutdown could not be confirmed; preserving its PID file."
+    if [ "$attempt" -ge 10 ]; then
+      fail "resident process did not stop within 10 seconds; preserving its PID file."
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
   rm -f -- "$PID_FILE"
+  echo "resident_status=stopped pid=$pid"
 }
 
 resident_status() {
