@@ -2,6 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows配布ZIP内Uninstallの動的対象再検証
+
+Windows packageを現行HEADから新規生成し、配布ZIP内のUninstall wrapper／安全helper／Uninstall scriptを使って、停止後にInstallRootへ追加が生じる場合と、明示Purge中にDataRootがjunctionへ差し替わる場合のfail-closedを実際に確認した。前段で追加した保護がsourceだけでなくWindows配布ZIPにも含まれることを検証した限定consumerである。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| `pnpm package:windows` | PASS：version `1.0.0-rc.1`、Windows x64 installer ZIPを生成。ZIP SHA-256=`a1b14a71a1c1f30ddebe3c1a4aaccda5e8e3271c919925c6e6d93e0d20897d14`。 |
+| `pnpm package:windows:verify` | PASS：2,553 entries。 |
+| 配布ZIP内Uninstallの同一性 | PASS：source／package展開物の`BlueTanukiUninstall.ps1` SHA-256は双方`E3A088A39C25F70FB0462E524EE2F632D5F4561C66AC8C3811C928BACC9BC2F0`。 |
+| 配布ZIP内Uninstallの動的対象harness | PASS：`dynamic_install_change_result`、`dynamic_data_reparse_result`、`dynamic_fixture_cleanup`。InstallRoot、DataRoot、outside sentinelの保持を確認。 |
+| `smoke:windows-installed`全体 | NOT_ESTABLISHED：初回Setup／Repair、Gateway／WebSocket、監査、再起動永続性、crash recovery、stop／restart／Safe Modeは進行した。`installed Windows update failure rollback`が10分の`INSTALLER_TRANSACTION_TIMEOUT_MS`を超えて`spawnSync powershell.exe ETIMEDOUT`となり、update rollback以降を判定できなかった。cleanupはInstallRoot／DataRoot／HKCU登録を除去したが、timeoutで残ったstageがあり、smokeは失敗終了。原因は未確定で、製品のupdate rollback成功とは扱わない。 |
+| LLM/provider／外部業務作用 | NOT_RUN：providerは`stub`、実資格・外部writeなし。 |
+
+UNIT_ID: G02.03（Windows配布ZIP内Uninstallの停止後動的対象検査に限る）
+STATUS: WIRED（生成ZIP内の実Uninstall wrapper／helper／scriptで限定harnessを通過。G02.03全体は未成立）
+FULL_INSTALLED_SMOKE: NOT_ESTABLISHED（update failure rollbackのtransaction timeout。停止条件や期待値を緩和しない）
+NEXT_REQUIRED_CONSUMER: G02.03残余とrev4.0の未接続consumerを次の独立作業開始時に現行正本・HEADから選定する。長時間installed smokeの未成立を成功へ読み替えない。
+SAFETY_STATUS: 配布ZIP内で停止後InstallRoot追加とDataRoot junction差替えを削除開始前に拒否し、全sentinelを保持。timeout後のInstallRoot／DataRoot／registryは不在、active smoke processはなし。外部作用・実資格・HDS権限境界に変更なし。
+LOCAL_ASSET_STATUS: failed smokeの固有`%LOCALAPPDATA%\BTsmoke\w-sZv2aE`（10,116 files／284,297,535 bytes）、一時package出力（4 files／48,470,286 bytes）、検査用harness copy 2件（合計19,198 bytes）は内容・非稼働を確認してWindows標準ごみ箱へ移動。元path不在とごみ箱内名称を確認。他の既存ごみ箱項目は変更なし。`.codex-tmp\windows-package-installed-smoke-0ca7186cad2b40b2ba29151081330ce1`はOneDrive同期領域の削除伝播を避けて保留（2,558 files／76,339,993 bytes）。protected attachmentsは保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: このbatch開始local／origin／GitHub main=`1f00b894a34eebdf62f6ad2d5b70135e818d07f2`、ahead／behind=0/0。開始local recovery branch current／previous=`1f00b894a34eebdf62f6ad2d5b70135e818d07f2`／`995a1d708e4f852ecaf5b640f701216cef6e0c8d`、remote recovery tag current／previousも同じSHA。worktreeはmainのみ。他branch・protected attachmentは未変更。
+
 ## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows Uninstall動的対象の停止後再検証
 
 Windows製品Uninstallのresident停止後に実行する最終安全検査を補強した。通常Uninstallは既存のInstallRoot inventoryを再検査し、明示`-PurgeData`ではさらにDataRootの所有・構造をアプリファイル除去前に再検査する。停止中に対象が変化した場合はfail-closedで終了し、インストールファイルとユーザーデータを保持する。Setup、通常保持、Purge範囲、HDS権限、provider接続、release状態は変更しない。
