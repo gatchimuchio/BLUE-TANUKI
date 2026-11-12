@@ -2,6 +2,27 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD Linux x64 installed lifecycle on current main
+
+主語はLinux x64 installer、installed Gateway／Control Centerと既存の手動Actions consumerである。rev5.0 QE_BUILD中に、最新main sourceからのpackage build／verifyを含む導入後経路を再実行し、P2全体成立に必要な限定consumer証拠を記録する。これは製品全体SYSTEM_SHAPED／BUILD_COVERED、Linux distribution別QA、QE_QC／QE_QA、owner GOではない。製品コードの変更はなく、既存workflow／smokeのみを使用した。
+
+GitHub Actions run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)は`workflow_dispatch`、`target_os=linux`、source SHA=`37ca041caa573956b3181f11b51032123df2175f`、run interval 2026-11-12 22:05:20Z–22:11:45Z（6分25秒）、overall success。Linux job [131526056630](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235/job/131526056630) success、選択外macOS jobはskip。Ubuntu 24.04.5 LTS x86_64、image `ubuntu-24.04` version `20261111.370.1`、kernel `7.0.0-1017-azure`、glibc 2.39。Node.js 22.23.3、Rust 1.95.0、pnpm 9.12.0。生成installer `blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz` SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。
+
+| hosted installed consumer | 結果 |
+|---|---|
+| Linux source entrypoint／build-from-source、package build・verify、runtime hash／manifest、archive Setup | PASS。 |
+| bundled Node／Gateway／Control Center起動、healthz／app HTTP 200、resident停止 | PASS。node／pnpm／gitのない利用PATHも確認し、`user_requires_node_pnpm_git=false`。 |
+| installed Repair、port conflict拒否、logs／GUI／synthetic first message、Approval、audit tamper拒否、crash recovery、runtime-state isolation、restart／safe mode／doctor | PASS。provider=`stub`、実LLM／credential／外部作用なし。 |
+| update失敗rollback、Setup shell中断後のupdate復旧・再開、autostart Exec restart | PASS。 |
+| 合成DataRoot／ConfigRoot／runtime state／logsを通常Uninstall後に保持、同じisolated rootへ再導入、明示Purge | PASS。 |
+| terminal markers | `linux_installed_smoke=pass`、`update_failure_rollback_result=pass`、`interrupted_update_recovery_result=pass`、`autostart_exec_restart_result=pass`、`normal_uninstall_retention_result=pass`、`reinstall_after_retention_result=pass`、`purge_removed_logs_result=pass`。 |
+
+DoctorはPASSしたが、runnerではLinux isolationに必要な構成要素（provider／bubblewrap／systemd user manager／cgroup limits）のいずれかが利用できず、`shell.exec`は無効・fail-closedと報告した。したがってshell isolationの稼働は証明しない。workflowは`contents: read`、manual `workflow_dispatch`のみ。Actions artifactは0件。test用の`/tmp/blue-tanuki-g0301-linux.*` rootはscriptのprefix-bound `trap cleanup`で除去。ローカルへartifact等の新規生成・取得なし。protected attachments／既存Linux `target/`／他worktreeは未変更。複数distribution、実OS login／reboot、system service／Secret Service、owner実機、real provider／credential、full suite、全OS QA、製品全体QC／QAはNOT_RUN。
+
+closeout documentation更新後の`docs:check`／`git diff --check`はPASS。日本語基底の移行負債75件は既存注意として維持した。この単位の状態はLinux hosted installed consumer限定の`WIRED`。P2全体、5OS実装、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開・出荷判断に拡張しない。run開始local／origin／GitHub main=`37ca041caa573956b3181f11b51032123df2175f`、recovery current／previous=`37ca041caa573956b3181f11b51032123df2175f`／`4b4f25b7b5becf06c245124b5b64594f3e9dc897`。closeout記録push後に最終HEADと復旧refsを再照合する。
+
+---
+
 ## 2026-11-13 — QEB-G04-MACOS-INSTALLED-LIFECYCLE
 
 主語はmacOS x64／arm64の製品Setup、installed Gateway／Control Centerと既存の手動Actions lifecycle smokeである。開始local／origin／GitHub main=4b4f25b7b5becf06c245124b5b64594f3e9dc897、ahead／behind=0/0、worktreeはmainのみ。対象はowner指定rev5.0、工程QE_BUILD、製品全体SYSTEM_SHAPED=false／BUILD_COVERED=false。開始recovery branch／remote tag current=4b4f25b7b5becf06c245124b5b64594f3e9dc897／previous=7b84ed33872a2631d3351964a109042365c7d196。protected .codex-attachments/、.codex-remote-attachments/、Linux isolation target/は開始前から存在し、保持した。

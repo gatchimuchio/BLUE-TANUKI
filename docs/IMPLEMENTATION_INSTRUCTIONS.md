@@ -2,6 +2,30 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / rev5.0 Linux x64 hosted installed lifecycle consumer（最新main）
+
+主語はLinux x64の製品installer、installed Gateway／Control Center、既存の手動Actions lifecycle consumerである。目的は、最新main SHAからpackageを生成・検証し、隔離環境のSetup・通常仕事・Repair・update rollback／中断復旧・通常Uninstall時の合成状態保持・再導入・明示Purgeまでをconsumerへ通すこと。これはQE_BUILDのhosted Linux証拠であり、特定distributionのinstalled QA、owner実機、製品全体のQC／QA・完成判定ではない。
+
+既存workflowを`workflow_dispatch`でtarget=`linux`に限定。run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)はsource SHA=`37ca041caa573956b3181f11b51032123df2175f`でsuccess（6分25秒）。Ubuntu 24.04.5 LTS／x86_64、runner image `ubuntu-24.04` version `20261111.370.1`、kernel `7.0.0-1017-azure`、glibc 2.39。Linux job [131526056630](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235/job/131526056630) success、macOS jobはselectorによりskip。installer SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。
+
+| hosted Linux lifecycle smoke | 結果 |
+|---|---|
+| source entrypoint／package build・manifest・runtime検証／Setup | PASS。workflowのNode.js 22.23.3、Rust 1.95.0、pnpm 9.12.0でbuildし、隔離rootへ導入。 |
+| bundled runtime／Gateway・Control Center起動、synthetic first message、Repair、port conflict、Approval／Audit／crash recovery、stop／restart／safe mode | PASS。healthz／appはHTTP 200。providerはstub、資格情報・実provider・外部作用なし。 |
+| update失敗rollback／中断update復旧・再開／通常Uninstall後の合成DataRoot・ConfigRoot・runtime state保持／再導入／明示Purge | PASS。 |
+| doctor | PASS。ただしrunnerではLinux isolationに必要な構成要素（provider／bubblewrap／systemd user manager／cgroup limits）のいずれかが利用できず、`shell.exec`は無効のままfail-closed。Linux isolationの稼働証拠ではない。 |
+| artifact／ローカル生成物 | GitHub Actions artifactは0件。隔離runner rootは専用prefix確認付き`trap cleanup`で除去。ローカルへの新規生成・取得なし。 |
+| docs:check／git diff --check | PASS。日本語基底の移行負債75件は残存。 |
+| 複数distribution、OS login／reboot、実system service／Secret Service、owner実機QA、実provider／資格情報、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Linux x64 hosted installed lifecycle consumer on current main
+- **STATUS:** WIRED（このUbuntu 24.04.5 hosted smoke限定。Linux全distributionや製品全体へ拡張しない）
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再実施し、rev5.0と最新実物からP2全体成立に必要な次consumerを選ぶ。
+- **SAFETY_STATUS:** synthetic isolated stateのみ。HDS authority、Approval、owner data／資格情報、実provider、外部作用、別repo、署名資格、公開／出荷判断へ変更なし。
+- **LOCAL_ASSET_STATUS:** Actions artifactなし、今回取得・生成したローカルfileなし。runnerの`/tmp/blue-tanuki-g0301-linux.*`はcleanup済み。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
+- **PRODUCT_STATE:** QE_BUILD継続。`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、P13 `PENDING_OWNER_GO`。C08.03実provider、OD-03 live external action、別repo変更は引き続き保留。
+- **GIT_STATUS:** run開始時local／origin／GitHub `main`=`37ca041caa573956b3181f11b51032123df2175f`、ahead／behind=0/0。開始recovery current／previous=`37ca041caa573956b3181f11b51032123df2175f`／`4b4f25b7b5becf06c245124b5b64594f3e9dc897`。closeout commit／push後の最終HEADと二世代refは終了時に再照合する。
+
 ## 完了BUILD_BATCH — QE_BUILD / rev5.0 G04 macOS x64／arm64 installed lifecycle
 
 主語はmacOS x64／arm64の製品Setup、installed Gateway／Control Center、既存の手動Actions lifecycle smokeである。目的は、固定したmain commitから両architectureのSetup・起動・仕事疎通・update recovery・通常Uninstall時のowner data保持・再導入・明示Purgeまでを既存consumerへ通すこと。これはQE_BUILD内のmacOS hosted runner証拠であり、実owner端末QA、製品全体のQC／QA、完成・公開判定ではない。
