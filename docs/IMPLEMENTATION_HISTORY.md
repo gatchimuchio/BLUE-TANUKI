@@ -37,7 +37,7 @@ OneDrive既存artifact hashはZIP=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2
 - **STATUS:** WIRED（Windows installed startup consumer限定。通常GUI/default launchとfull lifecycleは未確認）
 - **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再実施し、rev5.0と最新HEADからP2全体成立に必要なconsumerを再選定。
 - **PRODUCT_STATE:** QE_BUILD。`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO`。HDS authority、Approval、owner data、secret、実provider／外部作用、別repo、public distributionへ変更なし。
-- **GIT_STATUS:** 実装・closeout commitとGitHub main／local recovery refは、この作業単位のpush完了後に追記する。
+- **GIT_STATUS:** 開始local／origin／GitHub `main`=`f9550b5e01e6867c78895402e57b83e636470fd9`、ahead／behind=0/0。実装commit=`7b84ed33872a2631d3351964a109042365c7d196`をGitHub `main`へfast-forward pushし、local／remote `main`を一致させた。実装push直後にlocal recovery branch／remote tagをcurrent=`7b84ed33872a2631d3351964a109042365c7d196`／previous=`f9550b5e01e6867c78895402e57b83e636470fd9`へCAS更新。commit hookのstale worktree metadata cleanupはPermission deniedで失敗したが、metadata／ACL／attributesを変更せず保持。closeout docs commit後は最終HEAD／refsを直接照合する。
 
 ## 2026-11-13 — QEB-WINDOWS-IEXPRESS-SINGLE-FILE
 

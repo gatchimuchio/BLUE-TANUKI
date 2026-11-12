@@ -22,6 +22,7 @@ local assets: 非OneDrive artifact directory `C:\Users\ohira\AppData\Local\Temp\
 - **STATUS:** WIRED（このWindows installed consumer限定。通常GUI/default launchと全lifecycleは未確認）
 - **NEXT_REQUIRED_CONSUMER:** 次の独立作業開始時に⓪→④を再実施し、最新rev5.0と実物からP2全体成立に必要な次consumerを再選定する。
 - **SAFETY_STATUS:** HDS authority、Approval、owner data、秘密、実provider／外部作用、別repo、release／owner GOへ変更なし。隔離smokeだけで作成した製品状態を正規Uninstall経由で除去。
+- **GIT_STATUS:** 開始local／origin／GitHub `main`=`f9550b5e01e6867c78895402e57b83e636470fd9`、ahead／behind=0/0。実装commit=`7b84ed33872a2631d3351964a109042365c7d196`を`main`へpush。実装push直後にrecovery current=`7b84ed3`／previous=`f9550b5`をCAS更新。closeout docs commit後の最終HEAD／refsは報告時に直接照合する。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
 
