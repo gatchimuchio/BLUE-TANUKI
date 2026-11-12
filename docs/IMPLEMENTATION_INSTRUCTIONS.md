@@ -2,7 +2,25 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F08.03 MCP実行観測のConnections設定consumer
+## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows Uninstall動的対象の停止後再検証
+
+Windows製品Uninstallのresident停止後に実行する最終安全検査を補強した。通常Uninstallは既存のInstallRoot inventoryを再検査し、明示`-PurgeData`ではさらにDataRootの所有・構造をアプリファイル除去前に再検査する。停止中に対象が変化した場合はfail-closedで終了し、インストールファイルとユーザーデータを保持する。Setup、通常保持、Purge範囲、HDS権限、provider接続、release状態は変更しない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Windows動的Uninstall harness | PASS：停止中のInstallRoot追加を検出し、InstallRoot／DataRootを保持。明示Purge中にDataRoot内へ外部向けjunctionが作られた場合も、削除開始前に拒否し、InstallRoot／DataRoot／outside sentinelを保持。 |
+| 対象Vitest | PASS：専用case 1件。 |
+| `pnpm docs:check`／`git diff --check` | PASS。 |
+| 全installer suite／全workspace suite／installed package再生成／他OS／QE_QC／QE_QA | NOT_RUN。 |
+
+UNIT_ID: G02.03（Windows Uninstallの停止後動的対象再検証に限る）
+STATUS: WIRED（停止後のInstallRoot inventoryと、`-PurgeData`時のDataRoot所有・構造検査を実除去前に接続。G02.03全体は未成立）
+NEXT_REQUIRED_CONSUMER: G02.03の残余とrev4.0の未接続producer／consumerを次の独立作業開始時に最新HEADから選定する。Windows全lifecycle、他OS、5OS全体の成立へ拡張しない。
+SAFETY_STATUS: 非PurgeではDataRootを変更しない。Purge対象の停止中変更はアプリ削除前に拒否。外部sentinelを保持し、結果不明の再実行を追加しない。
+LOCAL_ASSET_STATUS: ソース・専用harness・Vitest・現行状態文書・利用者向けUninstall説明はGit候補。成功harnessの一時rootとstatus fileは消失確認済み。以前の失敗試行由来のTemp root 2件（56 files／229,110 bytes）はjunctionを除去し、outside sentinel保持を確認した後、Windows標準ごみ箱へ移動済み。protected attachment directoriesは保持。D4-Pocket／ミニドラは変更なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub main=`995a1d708e4f852ecaf5b640f701216cef6e0c8d`、ahead／behind=0/0。作業開始local recovery branch current／previous=`995a1d708e4f852ecaf5b640f701216cef6e0c8d`／`9d47d9309c2cf4b004a6dc5617dce3e5a5069512`、remote recovery tag current／previousも同じSHA。worktreeはmainのみ。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F08.03 MCP実行観測のConnections設定consumer
 
 主語はBLUE GatewayのMCP Adapter、process-local観測store、認証済みConnections SettingsSurfaceである。目的は、通常のJ選択・High/L3・Broker／Executor経路から実際に観測したcatalog到達、tool dispatch、MCP応答、結果不明を、ownerが既存「Load」で読める次行動へ接続すること。
 

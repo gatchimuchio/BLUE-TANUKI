@@ -39,3 +39,5 @@ DataRootも除去する場合は、登録済みのuninstallerへ`-PurgeData`を�
 ## 保護
 
 uninstallerは、広いuser directory、filesystem root、または所有を確認できないpathを削除対象にしない。通常のアンインストールで秘密やaudit記録を黙って削除しない。Purge時はDataRootの所有・構造を検証し、検証できない場合はdataを保持して停止する。
+
+常駐runtimeの停止中に対象構造が変わった場合、実ファイルの除去を始める直前に再検査して停止する。明示`-PurgeData`ではInstallRootに加えてDataRootも再検査し、DataRootが変化していればapp filesとuser dataの両方を保持して失敗を返す。停止後の状態を確認し、原因が解消した場合に利用者が再実行する。

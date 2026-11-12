@@ -485,6 +485,20 @@ describe("Windows product installer package", () => {
     }
   });
 
+  it("rechecks dynamic install and purge targets after resident shutdown", () => {
+    const command = findPowerShell();
+    const harness = join(root, "install/installer/test/windows_dynamic_uninstall.ps1");
+    if (process.platform !== "win32" || !command) {
+      expect(read("install/installer/test/windows_dynamic_uninstall.ps1")).toContain("dynamic_data_reparse_result=pass");
+      return;
+    }
+    const result = runPowerShellFile(command, harness, [], root);
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("dynamic_install_change_result=pass");
+    expect(`${result.stdout}\n${result.stderr}`).toContain("dynamic_data_reparse_result=pass");
+    expect(`${result.stdout}\n${result.stderr}`).toContain("dynamic_fixture_cleanup=pass");
+  });
+
   it("does not dot-source an environment-selected safety helper that differs from the install copy", () => {
     const command = findPowerShell();
     if (!command) {

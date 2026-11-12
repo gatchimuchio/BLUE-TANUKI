@@ -314,6 +314,11 @@ if (Test-Path -LiteralPath $launcher -PathType Leaf) {
 try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
   Fail "Refusing to remove product files because the installed inventory changed. No files were removed. $($_.Exception.Message)"
 }
+if ($PurgeData) {
+  try { [void](Assert-ManagedWindowsProductData -DataRoot $dataRootResolved -InstallRoot $installRootResolved) } catch {
+    Fail "Refusing to remove product files because the requested user-data purge target changed. No files were removed. $($_.Exception.Message)"
+  }
+}
 Remove-Target $installRootResolved 'installed app'
 Remove-ManagedShortcuts $installRootResolved
 Remove-ManagedUninstallRegistration $installRootResolved
