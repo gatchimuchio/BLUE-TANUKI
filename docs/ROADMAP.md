@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / macOS x64・arm64配布物のMCP runtime依存閉包
+### 直近完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64・arm64単体Setup生成
+
+Windows hostで`.command`の実行属性が失われ、product verifierが拒否する欠陥を閉じた。Windowsから非Windows installerを要求した場合の事前guardと、Unix hostでの`chmod`後mode確認を追加。manual `workflow_dispatch`の`package-only` scopeでMac x64／arm64のnative build、archive／single-file Setup verifierがPASSした（run #13、attempt 2、SHA=`83393469f2766d63589007b6118575e4ff251af1`）。archiveは両arch 3,740 entries、x64 archive／Setup SHA-256=`6fe7c6d6533ff5f984d2d53da70eefba73ee3772d7302c21cef3b428bfe22f27`／`70df5c9b6c1826e88b7b4f2ec7c683a8c6e74dabcec223a933f25890692c4b02`、arm64=`dd4f36f9815fb60670bd3c7f44d5db6c1aa577728776b1b62d2a99ab8156ab88`／`2267a3b49f2d85ba15da9db9e88d2a4ea59fafb91cc2f5a443dd996a6b11b59d`。install lifecycle、署名・notarization、shell isolation、runtime、5OS QA、QE_QC／QE_QAはNOT_RUN。Windows生成の不正な6 artifact（173,001,743 bytes）はOneDrive同期状態不明のため保持・保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / macOS x64・arm64配布物のMCP runtime依存閉包
 
 Unix package builderが固定されたOneDrive同期配下のstage／runtime cacheを再帰削除・書換えし得るため、作業前から存在したreparse point領域を保持し、builderの作業rootとarchive cacheをOS Temp下の一意rootへ分離した。Windows host上でmacOS x64／arm64 unsigned installerを生成し、各3,746 entriesのpackage verifierがMCP runtime closureを含めPASSした。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。実macOS host／署名／installed runtime／shell isolation、5OS QA、QE_QC／QE_QAはNOT_RUN。Temp stage 2件・299,699,109 bytesはWindowsごみ箱へ移動、`release/macos`の7 artifact・128,065,469 bytesは保持。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

@@ -4497,3 +4497,35 @@ status／disableは現在生成形式と、以前のresident helperが出力し�
 ownerがC08.02達成条件として選択した「現行J正本に結び付いた明示規則＋同一revisionの検証済み結果＋M receipt。欠落・曖昧は保留」を次工程基準に記録した。C08.02には独立判定器を追加せず、既存J/M経路を現行mainで再照合する。
 
 implementation commit=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`をGitHub `main`へfast-forward push済み。local／`origin/main`／GitHub mainは同SHAで一致し、recovery branch／tag current／previous=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`／`22367111c50b187129de89b3e8753c8d3a1bc57b`。既存stale worktree metadata cleanupはPermission deniedで失敗したためACLを迂回せず、remote refsは直接照合した。protected attachmentsは未追跡・未変更。WSL一時fixture／parser資産はtrap cleanup済み。closeout documentation commit／push後に最終main／recovery refsを再照合する。
+## 2026-11-13 — G04.01 macOS x64／arm64 native archive・single-file Setup verifier接続
+
+主語はmacOS x64／arm64のpackage producerとproduct Setup verifierである。開始時local／origin/main／GitHub main=9a20133a864d5c2a070cc0acde54a124af2d10ec、main worktreeのみ。既存protected .codex-attachments／.codex-remote-attachments、WSL由来packages/blue-tanuki/native/linux-isolation/target、古いworktree metadataは作業前から存在し、変更しなかった。
+
+Windows hostではchmod 0755がUnix実行属性を永続化できず、既存product verifierはx64／arm64 .commandを「installer is not executable」で拒否した。scripts/package_product_installers.tsに、Windows hostから非Windows targetを求められた時はpayload読出し・出力前に失敗するguardと、Unix hostでchmodした後の0o111 mode-bit assertionを加えた。Windows host guardを実行し、expected non-zeroで出力へ未接触、既存2 commandのhash不変を確認した。Windows verifierが拒否した既存出力はOneDrive sync pathにあり、sync状態を確定できないため保管／削除／移動を行わず保留した。
+
+既存workflow .github/workflows/linux-installed-package-build-smoke.ymlにmanual workflow_dispatch input macos_scopeを追加した。既定installed-lifecycleは従来動作を保ち、package-onlyはnative package build・verifierを実行し、install／startとupdate／recovery／uninstallのinstalled smokeをskipする。triggerはworkflow_dispatchのみ、permissionは既存のcontents: read、artifact uploadはない。
+
+GitHub Actions run #13（https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43261840868）は一時branch codex/blue-macos-product-package、source SHA=83393469f2766d63589007b6118575e4ff251af1に固定してtarget_os=macos、macos_scope=package-onlyで実行した。attempt 1ではx64がsuccess、Linuxはskip、arm64 hosted runner取得が複数回失敗し、capacity constraintのannotation付きでworkflowがfailure終了した。失敗jobのarm64だけを同じcommitでrerunしattempt 2でsuccess。x64を再実行せず、arm64とLinux以外の入力・ソースは変更していない。
+
+| 確認 | 結果 |
+|---|---|
+| macOS x64 native job | PASS。matrix runner macos-15-intel、OS macOS 15.7.9。workspace依存をfrozen lockfileでinstallしpnpm build、Mac x64 archive build／verifier、single-file product Setup build／verifierを実行。archive 3,740 entries、SHA-256=6fe7c6d6533ff5f984d2d53da70eefba73ee3772d7302c21cef3b428bfe22f27。Setup SHA-256=70df5c9b6c1826e88b7b4f2ec7c683a8c6e74dabcec223a933f25890692c4b02。 |
+| macOS arm64 native job | PASS。runner image macos-15-arm64。workspace依存をfrozen lockfileでinstallしpnpm build、Mac arm64 archive build／verifier、single-file product Setup build／verifierを実行。archive 3,740 entries、SHA-256=dd4f36f9815fb60670bd3c7f44d5db6c1aa577728776b1b62d2a99ab8156ab88。Setup SHA-256=2267a3b49f2d85ba15da9db9e88d2a4ea59fafb91cc2f5a443dd996a6b11b59d。 |
+| workflow境界 | PASS。attempt 2 workflow conclusion=success、Linux job=skipped。install／startおよびupdate／recovery／uninstall smokeはpackage-onlyによりskipped。署名なし・notarization submitなし。 |
+| workflow YAML／git diff --check／corepack pnpm docs:check | PASS。PyYAML 6.0.3でtriggerがworkflow_dispatchのみであること、Mac package-only選択肢とlifecycle step gateをparseして確認。 |
+| macOS product install／gateway runtime／shell isolation／signature/notarization／owner実機利用、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。package build／verifierをinstalled-product、runtime、quality evidenceへ拡張しない。 |
+
+Local generated asset classification:
+
+| asset | bytes | SHA-256 | disposition |
+|---|---:|---|---|
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-x64.command | 87,601,425 | 00943a4ebf0dc031b9b65f9246b6dfed77866e03c2f865fdf4d84bbcd910e402 | invalid executable-mode output; OneDrive sync state unknown; retain/hold |
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-x64.command.manifest.json | 1,313 | d4d0ca1eabeeebd3dc6f49e8c232a04c5b1f786f95bd7bb9e53b4f51ac997809 | belongs to invalid output; retain/hold |
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-x64.command.sha256 | 111 | 98b9c7004efef8e313ab489dc4958dc5a2460541bb5816abac63e5c531146ae2 | belongs to invalid output; retain/hold |
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-arm64.command | 85,397,460 | d1a763a8c7e855d0d5507458cf7126c7d9faf4810bef0265b3cc327ba7c73ffd | invalid executable-mode output; OneDrive sync state unknown; retain/hold |
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-arm64.command.manifest.json | 1,321 | 851764ca16f285f46921a20d0b35e45933606afd19368f15343f937406479574 | belongs to invalid output; retain/hold |
+| release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-arm64.command.sha256 | 113 | e8617c4ee4dea80f44dd42b0b6e422c9bd8288587033f72172797c0ff7d6d5ed | belongs to invalid output; retain/hold |
+
+The six Windows outputs total 173,001,743 bytes. They were not overwritten, moved to Recycle Bin, or deleted. Existing macOS archive/checksum/manifest/readme artifacts in release/macos were left unchanged and retained. GitHub runner outputs were ephemeral; the workflow uploaded no artifacts. Protected attachments and the existing WSL target directory were unchanged.
+
+The verified implementation commit 83393469f2766d63589007b6118575e4ff251af1 was fast-forwarded to main only after exact-SHA run #13 attempt 2 passed. The temporary Actions branch was deleted locally and remotely after the run closed. Recovery refs were CAS-updated before closeout documentation: current=83393469f2766d63589007b6118575e4ff251af1, previous=9a20133a864d5c2a070cc0acde54a124af2d10ec. On closeout push, local／origin/main／GitHub main and recovery refs were rechecked; final recovery current points to final main, previous points to implementation commit 83393469f2766d63589007b6118575e4ff251af1. A stale .git/worktrees/blue-tanuki-health-2026-11-07-windows cleanup attempt returned Permission denied; it and its ACL/metadata were left unchanged.

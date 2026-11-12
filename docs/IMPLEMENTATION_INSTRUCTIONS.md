@@ -2,24 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 完了BUILD_BATCH — QE_BUILD / macOS配布物のMCP runtime依存閉包と一時領域保護
+## 完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64／arm64単体Setup生成・検証
 
-主語はWindows上でmacOS x64／arm64向けinstallerを作るUnix package builderである。目的は、MCP client runtimeを含む配布物を生成・検証し、作業前から存在するOneDrive同期領域やreparse pointをbuilderが削除・上書きしないようにすること。macOS実機動作やmacOS製品全体の完成を示す作業ではない。
+主語はmacOS x64／arm64のarchiveと単体Setupを作るpackage builderである。目的は、macOS実行属性を保った製品installerを両architectureで生成・検証し、Windows hostが実行属性を保持できない条件で無効なUnix installerを成功扱いしないこと。製品の導入・常用・runtime・shell isolation全体の成立を示す作業ではない。
 
-従来builderは固定された`.codex-tmp/macos-<arch>-package`を開始時に再帰削除し、共有runtime cacheも書換え得た。現物調査で固定stageがOneDrive reparse point配下の既存内容を含むと確認したため、それらには触れず、builderのstageとruntime archive cacheをWindows OS Temp下の一意な`mkdtemp` rootへ分離した。既存のOneDrive stage／cacheは作業前後でサイズ・更新時刻が不変であることを再確認した。
+Windows上で作った`.command`は`chmod`後も実行属性が保持されず、product verifierが`installer is not executable`で両architectureとも拒否した。`scripts/package_product_installers.ts`はWindows hostから非Windows installerを要求された時点で書き込み前に停止し、Unix hostでは`chmod`後に実行mode bitを確認する。既存の不正出力は同一hashで残り、OneDrive同期状態を確定できないため移動・削除せず保留した。
+
+GitHub Actionsの既存workflowへ`workflow_dispatch`入力`macos_scope=package-only`を追加し、Mac native build・archive verifier・単体installer verifierだけを走らせる。選択時はinstall／start、update／recovery／uninstall smokeをskipする。automation trigger、artifact upload、公開は追加していない。
 
 | QE_BUILD限定確認 | 結果 |
 |---|---|
-| `corepack pnpm package:macos`／`corepack pnpm package:macos:verify` | PASS。Windows host上でmacOS x64／arm64 unsigned archiveを生成。各3,746 entries。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。MCP client closureとplatform keyring entriesをverifierで確認。 |
-| `git diff --check`／`corepack pnpm docs:check` | PASS。 |
-| macOS native build／署名／installed runtime／shell isolation／実macOS host、full suite、5OS QA、QE_QC／QE_QA | NOT_RUN。Windows上のarchive生成・静的検証だけであり、native macOS実行証拠へ拡張しない。 |
+| Windows host guard | PASS。Windows上でのmacOS installer要求は書き込み前に拒否し、既存2つの`.command`のSHA-256が不変。以前の出力はverifierで`installer is not executable`と確認。 |
+| macOS x64 runner build・archive／product verifier | PASS。archive 3,740 entries、SHA-256=`6fe7c6d6533ff5f984d2d53da70eefba73ee3772d7302c21cef3b428bfe22f27`。単体Setup SHA-256=`70df5c9b6c1826e88b7b4f2ec7c683a8c6e74dabcec223a933f25890692c4b02`。 |
+| macOS arm64 runner build・archive／product verifier | PASS。archive 3,740 entries、SHA-256=`dd4f36f9815fb60670bd3c7f44d5db6c1aa577728776b1b62d2a99ab8156ab88`。単体Setup SHA-256=`2267a3b49f2d85ba15da9db9e88d2a4ea59fafb91cc2f5a443dd996a6b11b59d`。 |
+| GitHub Actions [run #13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43261840868) | PASS、attempt 2、固定commit=`83393469f2766d63589007b6118575e4ff251af1`。target=`macos`、scope=`package-only`。attempt 1はarm64 hosted runner取得失敗、failed jobだけ同一SHAで再実行。x64は再実行せずsuccess、Linuxはskip。 |
+| YAML parse／`git diff --check`／`corepack pnpm docs:check` | PASS。 |
+| install／start、update／recovery／uninstall smoke、署名／notarization、shell isolation、実Macでのowner環境利用、full suite、5OS QA、QE_QC／QE_QA | install lifecycle stepsは意図どおりskip。その他はNOT_RUN。生成物はunsigned・未notarized。 |
 
-UNIT_ID: macOS x64／arm64 installer package producer → archive verifier
-STATUS: WIRED（Windows host上でのpackage生成とarchive内容の検証に限定）
-NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、現行rev4.0と実物から未接続consumerを選ぶ。macOS native shell isolationは未成立であり、実行・権限・作用路として有効化しない。
-SAFETY_STATUS: 既存`.codex-tmp/macos-x64-package`（85,959,773 bytes）、`.codex-tmp/macos-arm64-package`（84,270,102 bytes）、`.codex-tmp/unix-runtime-cache/node-v22.14.0-darwin-x64.tar.gz`（48,656,392 bytes）、`node-v22.14.0-darwin-arm64.tar.gz`（47,035,396 bytes）はOneDrive reparse pointを含むため保持し、作業前後のサイズ・更新時刻不変を確認。builderは新規一意Temp配下だけを使用した。
-LOCAL_ASSET_STATUS: `release/macos`にinstaller 2件と各checksum／manifest／共通READMEの計7ファイル（128,065,469 bytes）を現在build artifactとして保持。task-owned Temp stage 2件（3,757 entriesずつ、151,504,888 bytes／148,194,221 bytes、計299,699,109 bytes）は検証後にWindowsごみ箱へ移動し、元path消失とごみ箱内の2件を確認。ごみ箱は空にしていない。protected `.codex-attachments/`／`.codex-remote-attachments/`とWSL Linux `target/`は未変更。生成したrelease artifactを公開・署名していない。
-CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0。実装・一次記録commit=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`を`main`へfast-forward pushし、remote recovery refをCASでcurrent=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`／previous=`e02bb47994aa4d926ce853bbda742542059b819a`へ回転した。closeout記録commitもpushし、終了時local／`origin/main`／GitHub `main`一致、ahead／behind=0/0、recovery current=最終main／previous=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`を再照合する。
+UNIT_ID: G04.01 macOS x64／arm64 native package producer → archive verifier → single-file product installer verifier
+STATUS: WIRED（両Mac runnerでのpackage生成とverifierに限定）
+NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、現行rev4.0から未成立の実consumerを選ぶ。macOS shell isolationは未接続・無効のまま維持し、architecture choiceが設計され検証されるまで有効化しない。
+SAFETY_STATUS: HDS authority、Approval、監査、owner GO、実credential、実利用者データ、別repo、外部作用、署名資格へ変更なし。未署名installerを公開していない。
+LOCAL_ASSET_STATUS: task-owned Windows生成物6件（計173,001,743 bytes、2 architectureの`.command`／manifest／checksum）はrelease directory内で保持・保留。Windows product verifierの拒否を確認し、後段host guardは既存出力へ未接触。OneDrive同期状態が未確認のため削除・移動しない。hash一覧は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録。前段で生成済みのMac archive／READMEは未変更で保持。`.codex-attachments/`／`.codex-remote-attachments/`／WSL Linux `target/`、古いworktree metadataは未変更。GitHub Actions artifact uploadなし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`9a20133a864d5c2a070cc0acde54a124af2d10ec`。検証済み実装commit=`83393469f2766d63589007b6118575e4ff251af1`をfast-forward pushし、Actionsはこの正確なSHAをcheckout。単位close時local／`origin/main`／GitHub `main`をcloseout記録commitへ一致させ、recovery current=最終main／previous=実装commitにする。temp Actions branchはrun閉鎖後にlocal／remote双方で削除済み。古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows`へのcommit hook cleanupはPermission deniedで失敗したため保護を迂回せず保持。
 
 ## 完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
 
