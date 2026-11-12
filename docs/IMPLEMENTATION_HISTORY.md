@@ -33,7 +33,7 @@
 
 OneDrive出力の開始時SHA-256はZIP=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、manifest=`0996b5213f3c2e21e6ee43659836ed4734ad5c4ddb2e07644ff01e677b21c2a2`、sidecar=`3088b1f42eb0486e0cfbe0e96e83042135801f749cc85662b4552fb23283ea50`、README=`2dbcc31386c58b89498f574916fb5da3da7393753ecda9b842673f1d1d7c6806`。4件すべて同一hashを再確認した。
 
-implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`は`aa83a56278e4ca954e430928cd243d77330f1dcf`から`main`へfast-forward push済み。local／`origin/main`／GitHub `main`が一致し、実装commit直後の復旧refはcurrent=`2ea5ad78625956872268f5d65c57af2351ad4851`、previous=`aa83a56278e4ca954e430928cd243d77330f1dcf`。このcloseout記録のpush後にcurrentを最終main、previousをimplementation commitへ更新する。
+implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`は`aa83a56278e4ca954e430928cd243d77330f1dcf`から`main`へfast-forward push済み。closeout記録もmainへpushし、最終local／`origin/main`／GitHub `main`と復旧ref二世代を再照合した。復旧ref currentは最終main、previousはその直前mainを指す。
 
 - **UNIT_ID:** rev5.0 QE_BUILD / Windows x64 IExpress single-file producer → extraction-only verifier
 - **STATUS:** WIRED（EXE生成と内容抽出・hash照合まで。Setup／installed consumer未接続）

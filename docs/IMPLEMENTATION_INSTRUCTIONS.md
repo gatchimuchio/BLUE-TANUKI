@@ -23,7 +23,7 @@ local asset classification: `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-windo
 - **STATUS:** WIRED（EXE生成と内容抽出・hash照合まで。Setup／installed consumerは未接続）
 - **NEXT_REQUIRED_CONSUMER:** EXEを隔離InstallRoot／DataRootで実行し、既存Windows installed smokeのSetup・起動・保持・Uninstall consumerへ接続する。
 - **SAFETY_STATUS:** HDS authority、Approval、秘密、owner data、外部provider／作用、別repo、公開・配布は変更なし。署名なし・public distribution HOLD。製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO`を維持。
-- **GIT_STATUS:** implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`をmainへpush済み。closeout文書commit後の最終mainと復旧refを別途照合する。
+- **GIT_STATUS:** implementation commit `2ea5ad78625956872268f5d65c57af2351ad4851`とcloseout記録をmainへpush済み。closeout後にlocal／`origin/main`／GitHub `main`と復旧ref二世代を照合した。
 
 ## 完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64／arm64単体Setup生成・検証
 
