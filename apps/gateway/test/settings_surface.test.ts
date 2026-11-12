@@ -8,6 +8,7 @@ import { PluginRuntime } from "../src/plugin_loader.js";
 import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
 import { parseEnvFile } from "../src/env_file.js";
 import { buildLLMBackendFromEnv } from "../src/llm_config.js";
+import { McpRuntimeObservationStore } from "../src/mcp_connection_observation.js";
 import {
   buildSettingsSnapshot,
   createWebChatSettingsSurface,
@@ -268,12 +269,53 @@ describe("settings surface", () => {
     expect(html).toContain('id="mcp-endpoint"');
     expect(html).toContain('id="mcp-status"');
     expect(html).toContain('id="mcp-next-action"');
+    expect(html).toContain('id="mcp-runtime-connection"');
+    expect(html).toContain('id="mcp-runtime-call"');
+    expect(html).toContain("Runtime observations are process-local results from normal MCP use");
     expect(html).toContain("does not launch processes or test connectivity");
     const scriptStart = html.indexOf("<script>") + "<script>".length;
     const scriptEnd = html.indexOf("</script>", scriptStart);
     expect(scriptStart).toBeGreaterThan("<script>".length - 1);
     expect(scriptEnd).toBeGreaterThan(scriptStart);
     expect(() => new vm.Script(html.slice(scriptStart, scriptEnd))).not.toThrow();
+  });
+
+  it("keeps MCP runtime observations endpoint-bound and non-authoritative", () => {
+    const observations = new McpRuntimeObservationStore();
+    const endpoint = "http://127.0.0.1:43123/mcp-status-test";
+    observations.recordCatalogReachable(endpoint);
+    observations.recordDispatchStarted(endpoint);
+    observations.recordOutcomeUnknown(endpoint);
+
+    const current = observations.snapshot(endpoint);
+    expect(current).toMatchObject({
+      connection: { state: "catalog_reachable" },
+      last_call: { state: "outcome_unknown" },
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(current.connection.observed_at).toBeTruthy();
+    expect(current.last_call.observed_at).toBeTruthy();
+    const displayed = buildSettingsSnapshot({ BLUE_TANUKI_MCP_ENDPOINT: endpoint }, runtime(), observations).integrations.mcp;
+    expect(displayed.runtime_observation).toMatchObject({
+      connection: { state: "catalog_reachable" },
+      last_call: { state: "outcome_unknown" },
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(displayed.runtime_observation.next_action).toContain("Do not retry automatically");
+    expect(JSON.stringify(displayed.runtime_observation)).not.toContain(endpoint);
+    const otherEndpoint = buildSettingsSnapshot({
+      BLUE_TANUKI_MCP_ENDPOINT: "http://127.0.0.1:43124/mcp-status-test",
+    }, runtime(), observations).integrations.mcp.runtime_observation;
+    expect(otherEndpoint).toMatchObject({
+      connection: { state: "not_observed", observed_at: null },
+      last_call: { state: "not_observed", observed_at: null },
+    });
+    expect(observations.snapshot("http://127.0.0.1:43124/mcp-status-test")).toMatchObject({
+      connection: { state: "not_observed", observed_at: null },
+      last_call: { state: "not_observed", observed_at: null },
+    });
   });
 
   it("writes settings updates back to BLUE_TANUKI_ENV_FILE", async () => {

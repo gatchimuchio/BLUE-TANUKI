@@ -6,11 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近施工BUILD_BATCH — F08.03 MCP専用serverのnative-live接続
+### 直近施工BUILD_BATCH — QE_BUILD / F08.03 MCP runtime観測のConnections設定consumer
 
-credentialless loopback MCP endpointを既存Connections設定画面とBLUE_TANUKI_MCP_ENDPOINTへ結び、native-live候補をHDS OperationPlan、J選択、High/L3、Broker target再照合、Executor、digest付き非権威receiptへ接続した。実SDK server専用processに対し合成note一作用、server側failureのunknown/no-retry、dispatch前disconnectの無作用拒否、停止／別process再起動後の再接続を確認した。Gateway設定画面はendpointの保存、無効値非表示、未検証状態、起動と再起動の次行動を示す。server processはowner管理のtrusted local serviceであり、Gatewayは起動・停止・live probeをしない。
+実MCPの通常経路から、catalog到達・dispatch中・応答受領・結果不明をendpoint digestに束縛したprocess-local observationへ接続し、認証済みConnections SettingsSnapshot／Loadでownerへ表示する。設定画面は通信probeもserver起動もしない。結果不明は自動再送せず、対象とserver evidenceを確認する案内を出す。response受領を外部作用完了の証明にはしない。endpoint、tool名、arguments、response body、raw errorは保存・表示しない。
 
-Gateway対象試験20/20、typecheck、Protocol catalog test 4/4、Protocol／HDS-BRAIN／core buildはPASS。これはF08.03の限定WIRED sliceであり、既存MCP定義のmigration、Gateway稼働中のhealth/disconnect表示、process管理、全MCP互換、実資格／provider／外部業務作用、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAを成立させない。次consumerは設定migrationと稼働中接続状態／disconnectのowner向け復旧表示。G09.01 Android→D4→BLUEは別repo権限がないためBLOCKED_AUTHORITYのまま保持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Gateway対象試験21/21（SettingsSurface 16、実SDK MCP process 5）、Gateway typecheck、`git diff --check`はPASS。現行repoには`BLUE_TANUKI_MCP_ENDPOINT`以外の既存server定義・移行元を確認できなかったため、移行形式を推測で追加しない。これはF08.03の限定WIRED sliceであり、永続復旧、health monitoring、process管理、全MCP互換、実資格／provider／外部業務作用、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAを成立させない。G09.01 Android→D4→BLUEは別repo権限がないためBLOCKED_AUTHORITYを維持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 前段完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
 

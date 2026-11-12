@@ -12,6 +12,7 @@ import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprot
 import { z } from "zod/v4";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+import { mcpRuntimeObservationStore } from "../src/mcp_connection_observation.js";
 import { BLUE_TANUKI_MCP_PROTOCOL_VERSION, createMcpToolCallProposal, inspectMcpCatalog,
   registerMcpCallToolFromEnvironment } from "../src/mcp_connection_client.js";
 
@@ -365,12 +366,19 @@ describe("MCP catalog adapter", () => {
       expect(success.status, success.error).toBe("success");
       expect(success.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
         tool_name: "write_synthetic_note", source_is_untrusted: true, used_for_authority: false, may_execute: false });
+      expect(mcpRuntimeObservationStore.snapshot(live.endpoint)).toMatchObject({
+        connection: { state: "catalog_reachable" },
+        last_call: { state: "response_received" },
+        used_for_authority: false,
+        may_execute: false,
+      });
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("1");
 
       const failed = await executeOne(live.endpoint, "fail");
       expect(failed.status).toBe("failed");
       expect(failed.error).toBe("mcp_call_outcome_unknown");
+      expect(mcpRuntimeObservationStore.snapshot(live.endpoint).last_call.state).toBe("outcome_unknown");
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("2");
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
 
@@ -378,12 +386,20 @@ describe("MCP catalog adapter", () => {
         async () => stopMcpLiveFixture(live.child));
       expect(disconnected.status).toBe("failed");
       expect(disconnected.error).toBe("mcp_call_preflight_failed");
+      expect(mcpRuntimeObservationStore.snapshot(live.endpoint)).toMatchObject({
+        connection: { state: "preflight_failed" },
+        last_call: { state: "outcome_unknown" },
+      });
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("2");
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
 
       live = await startMcpLiveFixture(outputRoot);
       const restarted = await executeOne(live.endpoint, "synthetic-after-restart");
       expect(restarted.status).toBe("success");
+      expect(mcpRuntimeObservationStore.snapshot(live.endpoint)).toMatchObject({
+        connection: { state: "catalog_reachable" },
+        last_call: { state: "response_received" },
+      });
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-after-restart");
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("1");
     } finally {

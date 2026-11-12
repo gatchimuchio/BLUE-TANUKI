@@ -6,6 +6,7 @@ import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSche
   McpCallTargetVersionObservationSchema, requireToolOperationDescriptor,
   type OperationPlan, type McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
+import { mcpRuntimeObservationStore } from "./mcp_connection_observation.js";
 
 export const BLUE_TANUKI_MCP_PROTOCOL_VERSION = "2026-07-28" as const;
 export const BLUE_TANUKI_MCP_TRANSPORT = "streamable_http" as const;
@@ -362,9 +363,12 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         throw new Error("mcp_operation_plan_binding_required");
       }
       let client: Client | undefined;
+      let catalogObserved = false;
       try {
         client = await connect();
         const catalog = await projectMcpCatalog(client, getEndpoint());
+        mcpRuntimeObservationStore.recordCatalogReachable(getEndpoint());
+        catalogObserved = true;
         const candidate = parseMcpCallArguments(args);
         assertCandidateMatchesCatalog(candidate, catalog);
         return McpCallTargetVersionObservationSchema.parse({
@@ -380,6 +384,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           may_execute: false,
         } satisfies McpCallTargetVersionObservation);
       } catch (error) {
+        if (!catalogObserved && endpoint) mcpRuntimeObservationStore.recordPreflightFailed(endpoint);
         throw safeMcpFailure(error, "mcp_target_version_unavailable");
       } finally {
         await client?.close().catch(() => undefined);
@@ -399,9 +404,12 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       if (ctx.signal?.aborted) throw new Error("mcp_call_cancelled_before_dispatch");
       let client: Client | undefined;
       let dispatchStarted = false;
+      let catalogObserved = false;
       try {
         client = await connect(ctx.signal);
         const catalog = await projectMcpCatalog(client, getEndpoint());
+        mcpRuntimeObservationStore.recordCatalogReachable(getEndpoint());
+        catalogObserved = true;
         assertCandidateMatchesCatalog(candidate, catalog);
         if (catalog.catalog_digest !== observation.data.catalog_digest ||
             catalog.connection_digest !== observation.data.connection_digest) {
@@ -409,6 +417,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         }
         if (ctx.signal?.aborted) throw new McpAdapterError("mcp_call_cancelled_before_dispatch");
         dispatchStarted = true;
+        mcpRuntimeObservationStore.recordDispatchStarted(getEndpoint());
         const result = await client.callTool({ name: candidate.tool_name, arguments: candidate.arguments });
         if (result.isError === true) throw new McpAdapterError("mcp_server_reported_tool_failure");
         const parsedResult = OperationJsonValueSchema.safeParse(result);
@@ -417,6 +426,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         }
         const resultBytes = Buffer.byteLength(JSON.stringify(parsedResult.data), "utf8");
         if (resultBytes > MAX_TOOL_RESULT_BYTES) throw new McpAdapterError("mcp_tool_result_too_large");
+        mcpRuntimeObservationStore.recordResponseReceived(getEndpoint());
         return {
           schema_version: "blue-tanuki.mcp-call-result.v1",
           connection_digest: candidate.connection_digest,
@@ -431,7 +441,11 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           may_execute: false,
         };
       } catch (error) {
-        if (dispatchStarted) throw new Error("mcp_call_outcome_unknown");
+        if (dispatchStarted) {
+          mcpRuntimeObservationStore.recordOutcomeUnknown(getEndpoint());
+          throw new Error("mcp_call_outcome_unknown");
+        }
+        if (!catalogObserved && endpoint) mcpRuntimeObservationStore.recordPreflightFailed(endpoint);
         throw safeMcpFailure(error, "mcp_call_preflight_failed");
       } finally {
         await client?.close().catch(() => undefined);

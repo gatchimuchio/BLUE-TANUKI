@@ -28,15 +28,41 @@ import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { llmSecretStorageStatus } from "./secret_store.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
+import { mcpRuntimeObservationStore, type McpRuntimeObservationSnapshot,
+  type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 
 type Env = Record<string, string | undefined>;
 
 export interface SettingsSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   plugins: PluginRuntime;
+  mcpRuntimeObservations?: McpRuntimeObservationStore;
 }
 
 export interface SettingsEnvFileUpdateOptions extends SettingsSecretStorageOptions {}
+
+function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
+  switch (observation.last_call.state) {
+    case "outcome_unknown":
+      return "The last MCP call may have taken effect, but its outcome is unknown. Do not retry automatically. Inspect the target and service evidence before making a new reviewed decision.";
+    case "dispatching":
+      return "The last MCP call is in progress or its response has not been observed. Do not retry until its outcome is known.";
+    case "response_received":
+      break;
+    case "not_observed":
+      break;
+  }
+  if (observation.connection.state === "preflight_failed") {
+    return "The latest MCP preflight failed before tool dispatch. Check the owner-managed local service and endpoint, then use a fresh Operation Plan.";
+  }
+  if (observation.last_call.state === "response_received") {
+    return "The MCP server returned a valid response. This is not independent proof of an external effect; inspect the operation receipt and target state.";
+  }
+  if (observation.connection.state === "catalog_reachable") {
+    return "The MCP catalog was reachable at the recorded time. This is not a live health monitor; use Load to refresh after a normal runtime call.";
+  }
+  return "No MCP runtime observation is available in this Gateway process. This page does not probe the endpoint.";
+}
 
 export interface SettingsSnapshot {
   schema_version: 1;
@@ -89,6 +115,7 @@ export interface SettingsSnapshot {
       live_connection_checked: false;
       used_for_authority: false;
       next_action: string;
+      runtime_observation: McpRuntimeObservationSnapshot & { next_action: string };
     };
     openrouter: {
       configured: boolean;
@@ -201,6 +228,7 @@ function apiKeySet(env: Env, provider: SetupProviderKind): boolean {
 export function buildSettingsSnapshot(
   env: Env,
   plugins: PluginRuntime,
+  mcpObservations: McpRuntimeObservationStore = mcpRuntimeObservationStore,
 ): SettingsSnapshot {
   const config = setupConfigFromEnv(env);
   const composio = composioStatus(env);
@@ -251,12 +279,14 @@ export function buildSettingsSnapshot(
     try {
       mcpEndpoint = parseLoopbackMcpEndpoint(mcpEndpointRaw).href;
       mcpStatus = "configured_unverified";
-      mcpNextAction = "Start this dedicated local MCP server and restart Gateway. This page has not checked connectivity; select one catalogued tool through an Operation Plan and inspect its High/L3 review before use.";
+      mcpNextAction = "The endpoint is configured. This page does not probe connectivity. If settings changed, restart Gateway; otherwise use the last runtime observation below and select tools only through an Operation Plan with High/L3 review.";
     } catch {
       mcpStatus = "invalid_endpoint";
       mcpNextAction = "The stored endpoint is invalid and is hidden. Replace it with a credentialless 127.0.0.1 or ::1 HTTP/HTTPS endpoint without userinfo, query, or fragment, then restart Gateway.";
     }
   }
+  const mcpRuntimeObservation = mcpObservations.snapshot(mcpEndpoint ?? undefined);
+  const mcpRuntimeNextAction = describeMcpRuntimeObservation(mcpRuntimeObservation);
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
@@ -302,6 +332,7 @@ export function buildSettingsSnapshot(
         live_connection_checked: false,
         used_for_authority: false,
         next_action: mcpNextAction,
+        runtime_observation: { ...mcpRuntimeObservation, next_action: mcpRuntimeNextAction },
       },
       openrouter: {
         configured: Boolean(
@@ -394,7 +425,7 @@ export function createWebChatSettingsSurface(
     html: renderSettingsHtml,
     getSnapshot: async () => {
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
-      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins);
+      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, opts.mcpRuntimeObservations);
     },
     update: async (body) => updateSettingsEnvFile(body, env),
     verifyLlm: async (body) => verifyLlmProvisioning(body, env, opts.plugins),
@@ -754,6 +785,12 @@ export function renderSettingsHtml(): string {
             <label>MCP setup status
               <input id="mcp-status" readonly>
             </label>
+            <label>MCP last catalog observation
+              <input id="mcp-runtime-connection" readonly>
+            </label>
+            <label>MCP last call observation
+              <input id="mcp-runtime-call" readonly>
+            </label>
             <label>Composio status
               <input id="composio-status" readonly>
             </label>
@@ -779,6 +816,8 @@ export function renderSettingsHtml(): string {
           <p id="slack-next-action" role="status"></p>
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
+          <p id="mcp-runtime-next-action" role="status"></p>
+          <p class="muted">Runtime observations are process-local results from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
           <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. Start and stop the dedicated local server in its own trusted service; this settings page does not launch processes or test connectivity. Saving requires a Gateway restart. Every selected tool still uses HDS and High/L3 review.</p>
         </section>
         <section id="tab-paths">
@@ -859,6 +898,9 @@ export function renderSettingsHtml(): string {
       mcpEndpoint: document.querySelector("#mcp-endpoint"),
       mcpStatus: document.querySelector("#mcp-status"),
       mcpNextAction: document.querySelector("#mcp-next-action"),
+      mcpRuntimeConnection: document.querySelector("#mcp-runtime-connection"),
+      mcpRuntimeCall: document.querySelector("#mcp-runtime-call"),
+      mcpRuntimeNextAction: document.querySelector("#mcp-runtime-next-action"),
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
@@ -946,6 +988,12 @@ export function renderSettingsHtml(): string {
       fields.mcpEndpoint.value = snapshot.integrations.mcp.endpoint || "";
       fields.mcpStatus.value = snapshot.integrations.mcp.status.replaceAll("_", " ");
       fields.mcpNextAction.textContent = snapshot.integrations.mcp.next_action;
+      const runtimeObservation = snapshot.integrations.mcp.runtime_observation;
+      fields.mcpRuntimeConnection.value = runtimeObservation.connection.state.replaceAll("_", " ") +
+        (runtimeObservation.connection.observed_at ? " at " + runtimeObservation.connection.observed_at : "");
+      fields.mcpRuntimeCall.value = runtimeObservation.last_call.state.replaceAll("_", " ") +
+        (runtimeObservation.last_call.observed_at ? " at " + runtimeObservation.last_call.observed_at : "");
+      fields.mcpRuntimeNextAction.textContent = runtimeObservation.next_action;
       fields.host.value = snapshot.webchat.host;
       fields.port.value = snapshot.webchat.port;
       fields.fileRoot.value = snapshot.paths.file_root;

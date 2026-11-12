@@ -2,31 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近施工BUILD_BATCH — QE_BUILD / F08.03 MCP専用serverのnative-live接続
+## 直近施工BUILD_BATCH — QE_BUILD / F08.03 MCP実行観測のConnections設定consumer
 
-主語はBLUE GatewayのMCP Adapter・owner設定面・HDS-J／OperationPlan・Executorである。目的は、ownerが指定した専用loopback MCP serverのcatalogと一つのtool作用を既存のJ採否・High/L3 review・Broker target再照合・結果検証へ接続し、失敗・停止・切断後も非冪等作用を再送しないこと。
+主語はBLUE GatewayのMCP Adapter、process-local観測store、認証済みConnections SettingsSurfaceである。目的は、通常のJ選択・High/L3・Broker／Executor経路から実際に観測したcatalog到達、tool dispatch、MCP応答、結果不明を、ownerが既存「Load」で読める次行動へ接続すること。
 
-Gatewayの設定済みBLUE_TANUKI_MCP_ENDPOINTだけを接続先として使う。URLはcredentiallessな127.0.0.1／::1のHTTP/HTTPSに限定し、userinfo・query・fragment・redirect・認証header/cookie転送を拒否する。Connections設定画面はendpointの保存・無効値非表示・未検証状態・起動／再起動の次行動を示すが、network probeやserver process起動は行わない。実serverの起動・停止は試験専用の子processが担当し、製品はowner管理のtrusted local serviceへの接続に限定する。
+観測はloopback endpointのhashで対象を束縛し、状態と時刻だけを現Gateway process内で保持する。endpoint、tool名、arguments、response body、raw errorは保持・表示しない。SettingsSnapshotは設定statusとは別に最終runtime observationを返し、結果不明なら自動再送禁止と対象・service evidence確認を案内する。MCP応答受領は外部作用の独立検証ではない。表示は現在接続中のhealth保証やHDS権限として使わない。
 
-native-live提案をHDSへ渡し、Jのplan選択からHigh/L3を維持してExecutorへ接続した。target observationは接続・catalog・tool schema・OperationPlan commandとbindingへ結合し、作用直前にcatalogを再取得して照合する。成功結果はdigestと非権威flagを持つreceiptとして返し、checkpoint保存・再読込時にも同じbindingで結果を検証する。作用開始後のserver errorはoutcome unknownとして一回で停止し、切断が作用前ならbounded preflight failureで拒否する。
-
-合成noteだけを使うSDK MCP server専用processで、catalog discovery、HDS plan:compute→plan:review選択→High/L3 approval→Executor経由の一回の書込み、server error一回・no retry、承認後／dispatch前のdisconnect・副作用なし、server停止／再起動後の再接続・成功を確認した。serverは127.0.0.1にbindし、書込み先はtest-owned temp rootのみ。接続設定UIはcredentialless loopbackのみを保存し、runtime接続済みと偽らない。
+設定画面GET／Loadはnetwork probeやserver起動を行わない。MCP接続・切断は通常runtime呼出しだけで観測する。既存ソースでは`BLUE_TANUKI_MCP_ENDPOINT`を読む単一endpoint設定を確認し、旧server定義の保存・移行元は見つからなかったため、推測した移行形式を追加しない。process management、実資格・provider、外部業務作用は対象外。
 
 | QE_BUILD必要最小確認 | 結果 |
 |---|---|
-| Gateway MCP実process試験 | PASS 5/5。成功1作用、MCP errorはoutcome unknown・再送なし、dispatch前disconnectはpreflight failure・作用数不変、別process再起動後の再接続成功。 |
-| Gateway SettingsSurface試験 | PASS 15/15。endpoint保存、loopback制約、userinfo/queryを含む無効値の非表示、未検証statusと次行動。 |
+| Gateway MCP実SDK process | PASS 5/5。通常の成功、server error後のoutcome unknown、dispatch前disconnect、別process再起動後の状態遷移。合成noteの隔離rootのみ。 |
+| Gateway SettingsSurface | PASS 16/16。endpoint別観測、非権威flag、結果不明の復旧案内、無効endpointの非表示、HTML script parse。 |
 | Gateway typecheck | PASS。 |
-| Protocol Operation Catalog test | PASS 4/4。 |
-| Protocol／HDS-BRAIN／core build | PASS。 |
+| `pnpm docs:check` | PASS。 |
+| `git diff --check` | PASS。 |
 | 全workspace suite／全MCP互換／実資格・provider／外部業務作用／全OS／QE_QC／QE_QA | NOT_RUN。 |
 
-UNIT_ID: F08.03（専用loopback MCP serverのnative-live単一tool接続と切断・再起動経路に限る）
-STATUS: WIRED（実SDK server processからJ選択・High/L3・Broker/Executorへ一作用を結び、失敗・切断・再接続を確認。F08.03／BT-R-F08-08全体ではない）
-NEXT_REQUIRED_CONSUMER: owner-facing設定の移行・既存server定義の回復、および稼働中Gatewayの接続状態／disconnect後の次行動を表示するconsumer。現行設定画面はenv保存と未検証表示であり、MCP process管理・live health probe・移行は実装していない。
-SAFETY_STATUS: env未設定時はdisabled。loopback／credentialless／bounded request-response／High-L3／単回試行／結果unknown停止を維持。合成テストserverは起動・停止し、実provider・資格・実データ・外部業務作用は未使用。
-LOCAL_ASSET_STATUS: run固有MCP test temp rootはfinally cleanup後に消失確認。server child processは終了確認。変更ソース・設定画面・fixtureはGit候補。既存ignored build環境は保持。protected添付2領域は保持。stale worktree metadataはfetch時のACL拒否で未変更・保留。
-CURRENT_HEAD_AND_DIRTY_OWNER: 編集開始local／origin／GitHub main=77bee6c9d61d2b02879b414a9401920f8ac275d5、ahead／behind=0/0。編集開始復旧branch／remote tag current／previous=77bee6c9d61d2b02879b414a9401920f8ac275d5／df30099de61059327e7149c211dbf282eef728d1。worktreeはmainのみ。protected添付2領域は未追跡・未変更。D4-Pocket／ミニドラは変更していない。
+UNIT_ID: F08.03（runtimeの最終観測をowner設定consumerへ表示する限定slice）
+STATUS: WIRED（実MCP処理→process-local observation→認証済みSettingsSnapshot／Load。F08.03とBT-R-F08-08全体は未成立）
+NEXT_REQUIRED_CONSUMER: repoに存在しない旧MCP設定の移行元は未確認。移行を再開する条件は、対象・version・sourceが特定できる実在設定の発見。runtime observationはGateway再起動で消えるprocess-local表示であり、永続復旧／health monitoring／一覧履歴は未実装。
+SAFETY_STATUS: probe・process起動なし。状態storeはendpoint digest・状態・時刻のみ。High/L3、単回実行、結果不明で停止、used_for_authority=false／may_execute=falseを維持。
+LOCAL_ASSET_STATUS: 合成MCP child processを終了。test-owned temp rootをfinally削除し消失確認。変更ソース／test／active docsはGit候補。既存ignored build環境とprotected添付2領域を保持。D4-Pocket／ミニドラは読み書きしていない。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub main=`9d47d9309c2cf4b004a6dc5617dce3e5a5069512`、ahead／behind=0/0。作業開始local backup branch／remote backup tag current／previous=`9d47d9309c2cf4b004a6dc5617dce3e5a5069512`／`77bee6c9d61d2b02879b414a9401920f8ac275d5`。worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows DPAPI資格情報を含むDataRoot保持・再導入・Purge
 
