@@ -4393,3 +4393,21 @@ HDSの結果validationはcommand／target／request digestと検証済みmessage
 生成資産分類：tracked source変更なし。新規fixture testとactive docsをGit候補とする。testは一時rootを作らず、buildで更新されたignored core `dist`／Windows／Linux isolation outputsは稼働中の開発環境として保持。protected attachmentsは未変更・未追跡。OneDrive、別repo、credential store、実provider、外部作用へアクセスしていない。このF02.01 Adapter fixture sliceだけを`WIRED`とし、Gateway／J/M全縦断やF02.01／F02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。
 
 終端main／commit・push／復旧refsはcloseout時にGitから照合する。ACL拒否の古いworktree metadataは変更せず、保護を迂回しない。
+## 2026-11-12 — Linux／macOS開発用resident autostart所有保護
+
+開発用resident helperは、Linux systemd unit／XDG autostart、macOS LaunchAgentを既存内容の照合なしに書き換え・削除し得た。共通Unix target guardに現行renderer、exact-content ownership判定、特殊文字を処理するsystemd／Desktop Entry escapingを集約し、同一directory stage＋no-clobber作成へ変更した。macOS plistはXML escape後の全体一致で判定する。
+
+status／disableは現在生成形式と、以前のresident helperが出力したlegacy形式の完全一致だけを管理対象とする。symlink、変更済み、他者の同名entryは保持し、そのentryへのsystemd／launchctl操作を行わない。Linux／macOS開発用Uninstallはautostart disable失敗を無視せず、app root削除前に停止する。installerのautostart既定動作、製品Setup経路、HDS authority、Approval、実作用は変更していない。
+
+| 確認 | 結果 |
+|---|---|
+| `source_entrypoints.test.ts`／`resident_integration.test.ts`／`product_installers.test.ts` | PASS：3 files／19 tests。 |
+| WSL Ubuntu 24.04 `sh -n`／`resident_autostart_ownership.sh` | PASS。current／legacy entry、user-owned／modified fileの保護、systemd disable failure時のUninstall停止とapp／data／config／launcher保持。 |
+| WSL `systemd-analyze verify` | PASS：空白、`&`、`%`、`$`、backslash、quoteを含む生成serviceを解析。 |
+| Python plistlib | PASS：同様の特殊文字を含む生成LaunchAgentをparse。 |
+| `safe_target_unix.sh` | PASS：既存Unix target guard fixture。 |
+| native macOS／Linux runtime、desktop login／reboot、実launchd／systemd user manager | NOT_RUN。 |
+
+ownerがC08.02達成条件として選択した「現行J正本に結び付いた明示規則＋同一revisionの検証済み結果＋M receipt。欠落・曖昧は保留」を次工程基準に記録した。C08.02には独立判定器を追加せず、既存J/M経路を現行mainで再照合する。
+
+開始local／`origin/main`／GitHub main=`22367111c50b187129de89b3e8753c8d3a1bc57b`で一致、開始recovery refs current／previous=`22367111c50b187129de89b3e8753c8d3a1bc57b`／`8359d86fb368dacbf0b622777d4b808b41c93e78`。protected attachmentsは未追跡・未変更。WSL一時fixture／parser資産はtrap cleanup済み。commit・push・終端復旧refはcloseout時に追記する。

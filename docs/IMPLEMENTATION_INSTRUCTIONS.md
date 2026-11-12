@@ -2,6 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / Linux・macOS開発用resident autostart所有保護
+
+主語はLinux／macOS開発用resident helperと各OSのcurrent-user autostart entry、および開発用Uninstallである。目的は、明示autostart操作が同名のuser-owned／変更済みfileを上書き・停止・削除せず、管理対象を正確に識別して安全に解除すること。
+
+Linux systemd user unit／XDG autostartとmacOS LaunchAgentの作成は共有Unix target guardへ集約し、同じdirectory内のstageとno-clobber作成を使う。status／disableは通常版または以前のresident helperが生成したexact legacy bytesだけをBLUE-TANUKI所有と判定する。symlink、改変済み、他者作成のentryは保持し、対象サービスに対するsystemd／launchctl操作を行わない。新規enableは既存fileを置換しない。autostart disableが失敗した場合、Linux／macOS開発用Uninstallはapp root削除へ進まない。installerによる自動起動の既定値は変更していない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Windows focused Vitest | PASS：`source_entrypoints.test.ts`／`resident_integration.test.ts`／`product_installers.test.ts`、3 files／19 tests。 |
+| WSL Ubuntu 24.04 shell検査 | PASS：resident helper、shared guard、Linux／macOS Uninstall、所有保護fixtureの`sh -n`と`resident_autostart_ownership.sh`。current／legacy managed entry、unowned／modified entry保持、systemd disable失敗時のUninstall停止を確認。 |
+| systemd／plist parser | PASS：特殊文字を含む生成serviceを`systemd-analyze verify`で解析し、plistlibで生成LaunchAgentを読み取り。 |
+| 既存Unix target guard fixture | PASS：`safe_target_unix.sh`。 |
+| 実Linux／macOS desktop session、login／reboot、native launchd／systemd稼働 | NOT_RUN。WSLのfixture／parser確認をnative OS QAへ読み替えない。 |
+
+この開発用helperの安全補修だけを局所`WIRED`とする。製品Setup／Uninstall全体、5OS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。
+
+UNIT_ID: Development resident autostart ownership guard（現行rev4.0の198施工単位への独立対応は未割当）
+STATUS: WIRED（Linux systemd／XDG・macOS LaunchAgentのexact ownership、変更／非所有file保持、disable失敗時の開発用Uninstall停止をWSL synthetic fixtureで確認）
+NEXT_REQUIRED_CONSUMER: owner回答で確定したC08.02達成条件「現行J正本へ結び付いた明示規則＋同一revisionの検証済み結果＋M receipt」を現行main・J consumerで再照合する。条件を満たす既存経路は重複実装せず、欠落・曖昧を保留する。
+SAFETY_STATUS: autostartは従来どおりopt-in。unowned／modified／symlink entriesは非操作・保持。legacy bytesは解除時の正確な所有確認に限って認識し、enableで置換しない。
+LOCAL_ASSET_STATUS: source、fixture、Vitest、active docsをGit候補とした。WSL fixture／parser用Temp資産はtrap終了時に削除済み。ignored build outputsは変更なし。protected attachmentsは未追跡・未変更で保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub `main`=`22367111c50b187129de89b3e8753c8d3a1bc57b`、ahead／behind=0/0。開始recovery branch／remote tag current=`22367111c50b187129de89b3e8753c8d3a1bc57b`、previous=`8359d86fb368dacbf0b622777d4b808b41c93e78`。closeout後のSHA／復旧refはGit終端照合結果を追記する。
+
 ## 完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime statusへのJ/M task outcome接続
 
 主語はBLUE Gatewayの認証済みD4 Runtime status endpointと、HDS-J/Mがrequest IDごとに返すOperation Plan `task_outcome`である。目的は、dispatch状態の`handler_returned`をgoal達成と誤認させず、同じruntime/session/submissionに束縛した状態照会へ、検証済みの達成・進行・保留状態をcontent-freeで追加すること。

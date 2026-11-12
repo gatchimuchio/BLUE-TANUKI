@@ -128,6 +128,268 @@ is_managed_macos_autostart_entry() {
     cmp -s "$bt_autostart_file" -
 }
 
+render_managed_dev_macos_autostart_entry() {
+  bt_dev_macos_root=$1
+  bt_dev_macos_env=$2
+  bt_dev_macos_node=$3
+  bt_dev_macos_stdout=$4
+  bt_dev_macos_stderr=$5
+  assert_absolute_single_line_path "development macOS install root" "$bt_dev_macos_root"
+  assert_absolute_single_line_path "development macOS env file" "$bt_dev_macos_env"
+  assert_absolute_single_line_path "development macOS Node executable" "$bt_dev_macos_node"
+  assert_absolute_single_line_path "development macOS stdout log" "$bt_dev_macos_stdout"
+  assert_absolute_single_line_path "development macOS stderr log" "$bt_dev_macos_stderr"
+  bt_dev_macos_node_xml=$(xml_escape_text "$bt_dev_macos_node") ||
+    safe_target_fail "development macOS Node path could not be encoded"
+  bt_dev_macos_gateway_xml=$(xml_escape_text "$bt_dev_macos_root/apps/gateway/dist/main.js") ||
+    safe_target_fail "development macOS Gateway path could not be encoded"
+  bt_dev_macos_root_xml=$(xml_escape_text "$bt_dev_macos_root") ||
+    safe_target_fail "development macOS install root could not be encoded"
+  bt_dev_macos_env_xml=$(xml_escape_text "$bt_dev_macos_env") ||
+    safe_target_fail "development macOS env path could not be encoded"
+  bt_dev_macos_stdout_xml=$(xml_escape_text "$bt_dev_macos_stdout") ||
+    safe_target_fail "development macOS stdout path could not be encoded"
+  bt_dev_macos_stderr_xml=$(xml_escape_text "$bt_dev_macos_stderr") ||
+    safe_target_fail "development macOS stderr path could not be encoded"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.blue-tanuki.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$bt_dev_macos_node_xml</string>
+    <string>$bt_dev_macos_gateway_xml</string>
+    <string>--serve</string>
+    <string>--env-file</string>
+    <string>$bt_dev_macos_env_xml</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$bt_dev_macos_root_xml</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>$bt_dev_macos_stdout_xml</string>
+  <key>StandardErrorPath</key>
+  <string>$bt_dev_macos_stderr_xml</string>
+</dict>
+</plist>
+EOF
+}
+
+render_legacy_managed_dev_macos_autostart_entry() {
+  bt_dev_macos_root=$1
+  bt_dev_macos_env=$2
+  bt_dev_macos_node=$3
+  bt_dev_macos_stdout=$4
+  bt_dev_macos_stderr=$5
+  assert_absolute_single_line_path "legacy development macOS install root" "$bt_dev_macos_root"
+  assert_absolute_single_line_path "legacy development macOS env file" "$bt_dev_macos_env"
+  assert_absolute_single_line_path "legacy development macOS Node executable" "$bt_dev_macos_node"
+  assert_absolute_single_line_path "legacy development macOS stdout log" "$bt_dev_macos_stdout"
+  assert_absolute_single_line_path "legacy development macOS stderr log" "$bt_dev_macos_stderr"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.blue-tanuki.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$bt_dev_macos_node</string>
+    <string>$bt_dev_macos_root/apps/gateway/dist/main.js</string>
+    <string>--serve</string>
+    <string>--env-file</string>
+    <string>$bt_dev_macos_env</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$bt_dev_macos_root</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>$bt_dev_macos_stdout</string>
+  <key>StandardErrorPath</key>
+  <string>$bt_dev_macos_stderr</string>
+</dict>
+</plist>
+EOF
+}
+
+is_managed_dev_macos_autostart_entry() {
+  bt_dev_macos_file=$1
+  [ -f "$bt_dev_macos_file" ] && [ ! -L "$bt_dev_macos_file" ] || return 1
+  if render_managed_dev_macos_autostart_entry "$2" "$3" "$4" "$5" "$6" |
+      cmp -s "$bt_dev_macos_file" -; then
+    return 0
+  fi
+  render_legacy_managed_dev_macos_autostart_entry "$2" "$3" "$4" "$5" "$6" |
+    cmp -s "$bt_dev_macos_file" -
+}
+
+systemd_unit_quote() {
+  bt_dev_systemd_value=$1
+  assert_absolute_single_line_path "systemd path value" "$bt_dev_systemd_value"
+  bt_dev_systemd_quoted=$(printf '%s' "$bt_dev_systemd_value" | sed \
+    -e 's/[\\]/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/%/%%/g') || safe_target_fail "systemd path value could not be encoded"
+  printf '"%s"' "$bt_dev_systemd_quoted"
+}
+
+systemd_path_value_escape() {
+  bt_dev_systemd_value=$1
+  assert_absolute_single_line_path "systemd path value" "$bt_dev_systemd_value"
+  bt_dev_systemd_tab=$(printf '\t')
+  bt_dev_systemd_escaped=$(printf '%s' "$bt_dev_systemd_value" | sed \
+    -e 's/[\\]/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/ /\\s/g' \
+    -e "s/$bt_dev_systemd_tab/\\\\t/g" \
+    -e 's/%/%%/g') || safe_target_fail "systemd path value could not be encoded"
+  printf '%s' "$bt_dev_systemd_escaped"
+}
+
+systemd_exec_quote() {
+  bt_dev_systemd_value=$1
+  assert_absolute_single_line_path "systemd executable argument" "$bt_dev_systemd_value"
+  bt_dev_systemd_quoted=$(printf '%s' "$bt_dev_systemd_value" | sed \
+    -e 's/[\\]/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/\$/$$/g' \
+    -e 's/%/%%/g') || safe_target_fail "systemd executable argument could not be encoded"
+  printf '"%s"' "$bt_dev_systemd_quoted"
+}
+
+render_managed_dev_linux_systemd_user_service() {
+  bt_dev_systemd_root=$1
+  bt_dev_systemd_env=$2
+  bt_dev_systemd_node=$3
+  assert_absolute_single_line_path "development Linux install root" "$bt_dev_systemd_root"
+  assert_absolute_single_line_path "development Linux env file" "$bt_dev_systemd_env"
+  assert_absolute_single_line_path "development Linux Node executable" "$bt_dev_systemd_node"
+  bt_dev_systemd_working=$(systemd_path_value_escape "$bt_dev_systemd_root") ||
+    safe_target_fail "development Linux working directory could not be encoded"
+  bt_dev_systemd_environment=$(systemd_unit_quote "$bt_dev_systemd_env") ||
+    safe_target_fail "development Linux env path could not be encoded"
+  bt_dev_systemd_node_command=$(systemd_exec_quote "$bt_dev_systemd_node") ||
+    safe_target_fail "development Linux Node command could not be encoded"
+  bt_dev_systemd_gateway_command=$(systemd_exec_quote "$bt_dev_systemd_root/apps/gateway/dist/main.js") ||
+    safe_target_fail "development Linux Gateway command could not be encoded"
+  bt_dev_systemd_env_argument=$(systemd_exec_quote "$bt_dev_systemd_env") ||
+    safe_target_fail "development Linux env argument could not be encoded"
+  cat <<EOF
+# Managed by BLUE-TANUKI development resident helper v1
+[Unit]
+Description=BLUE-TANUKI Gateway resident app
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$bt_dev_systemd_working
+Environment=BLUE_TANUKI_ENV_FILE=$bt_dev_systemd_environment
+ExecStart=$bt_dev_systemd_node_command $bt_dev_systemd_gateway_command --serve --env-file $bt_dev_systemd_env_argument
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+render_legacy_managed_dev_linux_systemd_user_service() {
+  bt_dev_systemd_root=$1
+  bt_dev_systemd_env=$2
+  bt_dev_systemd_node=$3
+  assert_absolute_single_line_path "legacy development Linux install root" "$bt_dev_systemd_root"
+  assert_absolute_single_line_path "legacy development Linux env path" "$bt_dev_systemd_env"
+  assert_absolute_single_line_path "legacy development Linux Node executable" "$bt_dev_systemd_node"
+  cat <<EOF
+[Unit]
+Description=BLUE-TANUKI Gateway resident app
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$bt_dev_systemd_root
+Environment=BLUE_TANUKI_ENV_FILE=$bt_dev_systemd_env
+ExecStart=$bt_dev_systemd_node apps/gateway/dist/main.js --serve --env-file $bt_dev_systemd_env
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+is_managed_dev_linux_systemd_user_service() {
+  bt_dev_systemd_file=$1
+  [ -f "$bt_dev_systemd_file" ] && [ ! -L "$bt_dev_systemd_file" ] || return 1
+  if render_managed_dev_linux_systemd_user_service "$2" "$3" "$4" |
+      cmp -s "$bt_dev_systemd_file" -; then
+    return 0
+  fi
+  render_legacy_managed_dev_linux_systemd_user_service "$2" "$3" "$4" |
+    cmp -s "$bt_dev_systemd_file" -
+}
+
+desktop_exec_quote() {
+  bt_dev_desktop_value=$1
+  assert_absolute_single_line_path "Linux desktop executable argument" "$bt_dev_desktop_value"
+  bt_dev_desktop_quoted=$(printf '%s' "$bt_dev_desktop_value" | sed \
+    -e 's/[\\]/\\\\/g' \
+    -e 's/"/\\"/g' \
+    -e 's/`/\\`/g' \
+    -e 's/\$/\\$/g' \
+    -e 's/%/%%/g') || safe_target_fail "Linux desktop executable argument could not be encoded"
+  printf '"%s"' "$bt_dev_desktop_quoted"
+}
+
+render_managed_dev_linux_xdg_autostart_entry() {
+  bt_dev_desktop_launcher=$1
+  bt_dev_desktop_exec=$(desktop_exec_quote "$bt_dev_desktop_launcher") ||
+    safe_target_fail "development Linux launcher could not be encoded"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Start BLUE-TANUKI resident gateway
+Exec=$bt_dev_desktop_exec resident-start
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+}
+
+render_legacy_managed_dev_linux_xdg_autostart_entry() {
+  bt_dev_desktop_launcher=$1
+  assert_absolute_single_line_path "legacy development Linux launcher path" "$bt_dev_desktop_launcher"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Start BLUE-TANUKI resident gateway
+Exec=$bt_dev_desktop_launcher resident-start
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+}
+
+is_managed_dev_linux_xdg_autostart_entry() {
+  bt_dev_desktop_file=$1
+  [ -f "$bt_dev_desktop_file" ] && [ ! -L "$bt_dev_desktop_file" ] || return 1
+  if render_managed_dev_linux_xdg_autostart_entry "$2" | cmp -s "$bt_dev_desktop_file" -; then
+    return 0
+  fi
+  render_legacy_managed_dev_linux_xdg_autostart_entry "$2" |
+    cmp -s "$bt_dev_desktop_file" -
+}
+
 write_managed_external_file() {
   bt_external_target=$1
   bt_external_label=$2

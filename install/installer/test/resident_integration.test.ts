@@ -33,13 +33,17 @@ describe("resident application integration", () => {
   it("keeps autostart explicit and current-user scoped", () => {
     const ps = read("install/resident/blue-tanuki-resident.ps1");
     const sh = read("install/resident/blue-tanuki-resident.sh");
+    const unixGuard = read("install/unix/safe-target.sh");
 
     expect(ps).toContain("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
     expect(ps).toContain("resident-autostart-enable");
     expect(ps).toContain("resident-autostart-disable");
     expect(sh).toContain("LaunchAgents");
     expect(sh).toContain("systemctl --user");
-    expect(sh).toContain("X-GNOME-Autostart-enabled=true");
+    expect(sh).toContain("write_managed_external_file");
+    expect(sh).toContain("is_managed_dev_linux_systemd_user_service");
+    expect(sh).toContain("is_managed_dev_linux_xdg_autostart_entry");
+    expect(unixGuard).toContain("X-GNOME-Autostart-enabled=true");
     expect(sh).toContain("resident-autostart-enable");
     expect(sh).toContain("resident-autostart-disable");
   });

@@ -242,6 +242,17 @@ describe("source and release-bundle install entrypoints", () => {
     expect(result.status).toBe(0);
   });
 
+  it("preserves user-owned Linux and macOS development autostart entries", () => {
+    if (process.platform === "win32") return;
+
+    const result = spawnSync("sh", [join(root, "install/installer/test/resident_autostart_ownership.sh")], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(`${result.stdout}\n${result.stderr}`).toContain("resident_autostart_ownership=pass");
+    expect(result.status).toBe(0);
+  });
+
   it("includes OS-specific root entrypoints in release-bundle policy", () => {
     const create = read("scripts/create_release_bundle.ts");
     const verify = read("scripts/verify_release_bundle.ts");
