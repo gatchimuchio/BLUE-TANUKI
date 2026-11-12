@@ -4299,3 +4299,20 @@ Focused command `corepack pnpm exec vitest run packages/blue-tanuki/test/gmail_w
 このconsumerのみ`WIRED`とする。`message.send`、F02.02全体、実provider、live Gateway、全workspace suite、5OS QA、QE_QC／QE_QA、公開・出荷GOは未成立／NOT_RUN。次consumerはowner選択済みC08.02の明示達成規則・検証済み結果・M receiptの接続を、最新正本から再構成する。
 
 asset closure：buildで再生成された14 workspace `dist`は稼働中の開発環境として保持。最終focused runの固有Temp rootはfinally cleanupされ、再確認で残存なし。先行の中断runのtest-owned synthetic root 1 directory／5 files／159,749 bytesはWindows標準Recycle Binへ移動し、元path不在・Recycle Bin itemを確認した。同prefixの既存root 5件（11/9〜11/12 13:48）は別run所有としてこのbatchでは保持。保護attachment directoriesは変更していない。
+
+## 2026-11-12 QE_BUILD — C08.02 明示達成規則・検証済み結果／M receipt照合の確認
+
+ownerが選択した達成条件（現行J正本に結び付く明示規則、同一revisionの検証済み結果、M receipt）を、最新rev4.0 pinと作業開始HEAD `a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`の現物から再確認した。Owner Task inputはGateway internal authentication境界を通り、JのOperation Planへtask identity／goal／規則digestを束縛する。GoalProjectionは規則本文を出さずdigest参照だけを持ち、他のgoal項目をunknownに保つ。J assessmentはruleごとの一意なstep、同一revisionのverified result、値一致、検証済みM receiptを照合する。欠落・不一致・曖昧mappingはheldでsealなし、全規則一致後は同一taskを止め、再起動後も状態を復元する。現行実装が既に結合されていたため新しいruntime経路は追加しなかった。
+
+不足していた曖昧step mappingの否定証拠を`apps/gateway/test/operation_plan_runtime.test.ts`へ追加し、同一規則に二つのfile.search stepが合致した後も`goal_completion_rule_target_ambiguous`で保留し、達成sealを作らないことを検証した。既存の一致／不一致ケースを同一testへ維持した。
+
+| 確認 | 結果 |
+|---|---|
+| HDS J/M rule assessment | PASS：3 tests（一致達成、不一致保留、曖昧step mapping保留。47 skipped）。synthetic file root、Gateway execution authority、同一revision結果、M receiptを通過。 |
+| Served Gateway owner task | PASS：1 selected test（7 skipped）。規則欠落のheld、一致規則＋M receipt後のachieved、Gateway restart後の同一task状態を確認。synthetic local file.searchのみ。 |
+| WebChat owner form／GoalProjection | PASS：owner form transmission 1 selected test（132 skipped）、GoalProjection 5 tests。owner規則の送信とowner風外部metadataの拒否を確認。 |
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS：全workspace型検査、15 projects。typecheckが除去したignored `dist`はbuildで再生成した。 |
+| `corepack pnpm docs:check`／`git diff --check` | PASS：documentation／日本語基底／license gates、差分check。日本語基底の既存移行負債75件は注意表示。 |
+| 実provider／外部作用／full suite／5OS QA／QE_QC／QE_QA | NOT_RUN。 |
+
+生成資産分類：変更対象はtestとactive docs。test-owned Temp rootはfinally cleanup後にprefix再確認し、今回作成分の残存なし。15-project buildのignored `dist`／isolation outputは現行開発環境として保持。`.codex-attachments/`／`.codex-remote-attachments/`はprotected untrackedのまま未変更。OneDrive登録・dehydrate・容量回収、別repo変更、provider credential利用、外部作用なし。このC08.02明示達成規則consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。作業開始local／origin／GitHub mainは`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`、recovery current／previousは`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`／`c8eb174d31574a01c2e92ade57d726fa5843bf50`。終端SHA／recovery refsはpush後にGitから照合する。

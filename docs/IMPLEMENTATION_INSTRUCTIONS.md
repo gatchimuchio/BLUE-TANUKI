@@ -2,6 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / C08.02 owner達成規則と検証済みJ/M根拠の照合
+
+主語はBLUE-TANUKIのOwner Task受付からHDS-J／M、再起動後のtask状態投影までの経路。ownerの明示規則を同一taskへ束縛し、同一revisionの一意なoperation step、検証済み結果、M receiptがそろう場合だけJが達成を記録し、同一taskを停止する。規則・対象・結果・receiptの欠落、不一致、曖昧さは保留とする。GoalProjectionは規則本文ではなくauthenticated owner request由来のdigest参照だけを示し、その他の未知項目を確定しない。
+
+現行HEADにはこのproducer／consumer経路が既に接続されていたため、並行する評価器は追加せず、owner入力からJ/M判定までの実物を検査した。既存の一致ケースを維持し、同一規則が複数stepへ一致する境界を負例へ追加した。これは実装成立全体や製品完成ではなく、C08.02の明示達成規則consumerに対する限定`WIRED`確認である。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| HDS J/M operation-plan test | PASS：`operation_plan_runtime.test.ts`の一致・不一致・曖昧mapping 3件（同file 47件skip）。全stepのverified resultとM receiptを通し、曖昧mappingではsealなしのheldを確認。 |
+| served Gateway owner task path | PASS：`document_organization_entry.test.ts`の選択process test 1件（7件skip）。規則欠落はheld、一致規則はverified M receipt後にachieved、Gateway再起動後も同一taskの達成状態を復元。 |
+| owner入力／projection | PASS：WebChat task form 1件、GoalProjection 5件。owner規則を送信し、外部owner風metadataでは規則参照を作らないことを確認。 |
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS：全workspace型検査、15-project build。型検査が消去したignored `dist`はbuildで再生成し、開発環境として保持。 |
+| `corepack pnpm docs:check` | PASS：documentation／日本語基底／license gates。既存の日本語基底移行負債75件は注意表示。 |
+| `git diff --check` | PASS。 |
+| 実provider／live外部作用、full suite、5OS QA、QE_QC／QE_QA、release／owner GO | NOT_RUN。 |
+
+UNIT_ID: C08.02（owner明示達成規則、同一revisionのverified result／M receipt、達成後停止と不成立時保留の限定consumer）
+STATUS: WIRED（owner入力→authenticated rule digest→Jの一意step／結果値／receipt照合→達成sealまたはheld→再起動後状態。served synthetic Gateway／file.searchのみ）
+NEXT_REQUIRED_CONSUMER: 次の独立単位で現行rev4.0と最新HEADから、外部provider・live外部作用・別repo変更に依存しない最も未接続のproducer／consumerを再選定する。
+SAFETY_STATUS: J単一writer、Approval Gate、M非権威、rule digestとtask／revision結合、結果不明・不一致・欠落・曖昧時fail-closedを維持。規則は実行権限、公開、出荷判断を付与しない。
+LOCAL_ASSET_STATUS: 変更対象はruntime testと施工状態／roadmap／履歴文書。test-owned temporary rootはfinally cleanupされ、再確認時にこのtest固有prefixの残存なし。build `dist`は再生成・保持。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。他repo・OneDrive保管操作なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／remote tag current=`a7882d9b16308889500f84fd6b80cc8b3d1c7a8d`、previous=`c8eb174d31574a01c2e92ade57d726fa5843bf50`。protected attachment directoriesは未追跡・未変更。終端SHA／復旧refはGit照合後に更新する。
+
 ## 完了BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
 
 主語はBLUE Gatewayの既存Gmail `draft.send`／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的はownerが選択した既存draft一件をthread-boundのno-store L3 review後に一度だけ送信し、送信後の再読込で同じthreadの`SENT`状態を検証した結果だけを、J/M receiptと再起動後のowner照会へ返すこと。通常の`message.send`、live provider／実送信、F02.02全体、製品全体の完成とは扱わない。

@@ -170,9 +170,14 @@ function goalGovernanceConfig() {
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
   it.each([
-    { label: "matching rule", expectedLine: "blue", expectedStatus: "achieved" as const },
-    { label: "mismatching rule", expectedLine: "not-blue", expectedStatus: "held" as const },
-  ])("assesses explicit completion from verified J/M evidence ($label)", async ({ expectedLine, expectedStatus }) => {
+    { label: "matching rule", expectedLine: "blue", expectedStatus: "achieved" as const,
+      expectedReasonCode: "goal_completion_rules_satisfied" as const, stepIds: ["search"] as const },
+    { label: "mismatching rule", expectedLine: "not-blue", expectedStatus: "held" as const,
+      expectedReasonCode: "goal_completion_result_mismatch" as const, stepIds: ["search"] as const },
+    { label: "ambiguous step mapping", expectedLine: "blue", expectedStatus: "held" as const,
+      expectedReasonCode: "goal_completion_rule_target_ambiguous" as const, stepIds: ["search", "independent"] as const },
+  ])("assesses explicit completion from verified J/M evidence ($label)", async ({ expectedLine, expectedStatus,
+    expectedReasonCode, stepIds }) => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-completion-"));
     const workspace = join(root, "workspace"); await mkdir(workspace);
     await writeFile(join(workspace, "blue.txt"), "blue\n", "utf8");
@@ -195,7 +200,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
       const origin = request("plan:compute find blue", "fixture-owner", undefined, rules);
       const candidate = plan(origin.id, workspace);
-      candidate.steps = [candidate.steps[0]!];
+      candidate.steps = candidate.steps.filter((step) => stepIds.some((stepId) => stepId === step.step_id));
       const executor = rig(hds, candidate);
       const initial = hds.decide(origin);
       if (!initial.command) throw new Error("completion-rule plan did not reach C");
@@ -203,39 +208,41 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         status: "referenced", rules_digest: rulesDigest, rule_count: 1, source_ref: origin.id,
       });
       await executor.run(initial.command);
-      const selected = review(hds, candidate, "search");
-      if (!selected.command) throw new Error("explicitly selected search did not reach the executor");
-      const bindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
-      if (!bindingDigest) throw new Error("current J plan binding was unavailable");
       const tools = new ToolRegistry(); tools.register(fileSearchTool);
       const targetResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
         tools, approval_authority: createExecutorApprovalAuthority() });
-      const targetObservation = await targetResolver.inspectCommandTargetVersion(selected.command,
-        { BLUE_TANUKI_FILE_ROOT: workspace }, bindingDigest);
-      if (!targetObservation) throw new Error("file.search target resolver returned no observation");
-      const executionBinding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
       const executionEpoch = randomUUID();
       executionStore = new GatewayExecutionIntentStore(join(root, "execution-intents.sqlite"), executionEpoch);
       const authority = createExecutorApprovalAuthority({ execution_store: executionStore,
         execution_epoch: executionEpoch, require_hds_execution_binding: true });
-      const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
-      const approved = authority.approve(selected.command, {
-        source: approval.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
-        approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
-        operation: approval.context.operation, risk: approval.risk,
-        final_review_required: approval.final_review_required, reason: "synthetic goal completion evidence fixture",
-      }, executorCommandDigest(selected.command), executionBinding, targetObservation);
-      const admission = executionAdmissionForCommand(selected.command, authority.receipt(approved));
-      expect(hds.beginOperationPlanAttempt(selected.command, admission)).toBe(true);
       const searchExecutor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
         tools, approval_authority: authority,
         file_search_worker: createFileSearchWorker({ execution_epoch: executionEpoch,
           env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }) });
-      const feedback = await searchExecutor.execute(approved, { save_result_delivery: true });
-      expect(feedback.status).toBe("success");
-      expect(reconcileExecutionResults(hds, executionStore, executionEpoch)).toMatchObject({ adopted: 1, deferred: 0 });
-      finalizeCommandOutput({ hds, command: selected.command, feedback,
-        request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      for (const stepId of stepIds) {
+        const selected = review(hds, candidate, stepId);
+        if (!selected.command) throw new Error(`explicitly selected ${stepId} did not reach the executor`);
+        const bindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+        if (!bindingDigest) throw new Error("current J plan binding was unavailable");
+        const targetObservation = await targetResolver.inspectCommandTargetVersion(selected.command,
+          { BLUE_TANUKI_FILE_ROOT: workspace }, bindingDigest);
+        if (!targetObservation) throw new Error("file.search target resolver returned no observation");
+        const executionBinding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
+        const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+        const approved = authority.approve(selected.command, {
+          source: approval.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
+          approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+          operation: approval.context.operation, risk: approval.risk,
+          final_review_required: approval.final_review_required, reason: "synthetic goal completion evidence fixture",
+        }, executorCommandDigest(selected.command), executionBinding, targetObservation);
+        const admission = executionAdmissionForCommand(selected.command, authority.receipt(approved));
+        expect(hds.beginOperationPlanAttempt(selected.command, admission)).toBe(true);
+        const feedback = await searchExecutor.execute(approved, { save_result_delivery: true });
+        expect(feedback.status).toBe("success");
+        expect(reconcileExecutionResults(hds, executionStore, executionEpoch)).toMatchObject({ adopted: 1, deferred: 0 });
+        finalizeCommandOutput({ hds, command: selected.command, feedback,
+          request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      }
       expect(executionStore.verifyEvents()).toBe(true);
       expect(hds.reconcileOperationPlanMemory()).toBe(true);
 
@@ -259,17 +266,17 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
           .toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied" });
       } else {
-        expect(assessed.task_outcome).toMatchObject({ status: "held", reason_code: "goal_completion_result_mismatch",
-          goal_assessment: { status: "held", reason_code: "result_mismatch", rule_count: 1, satisfied_rule_count: 0 },
+        expect(assessed.task_outcome).toMatchObject({ status: "held", reason_code: expectedReasonCode,
+          goal_assessment: { status: "held", reason_code: expectedReasonCode === "goal_completion_rule_target_ambiguous"
+            ? "rule_target_ambiguous" : "result_mismatch", rule_count: 1, satisfied_rule_count: 0 },
           used_for_authority: false, may_execute: false });
         expect(store.load()?.plans[0]?.goal_completion_assessment).toBeUndefined();
       }
 
       hds.closeOperationPlanMemory();
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome).toMatchObject(expectedStatus === "achieved"
-        ? { status: "achieved", reason_code: "goal_completion_rules_satisfied" }
-        : { status: "held", reason_code: "goal_completion_result_mismatch" });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
+        .toMatchObject({ status: expectedStatus, reason_code: expectedReasonCode });
       if (expectedStatus === "achieved") {
         const afterRestart = review(hds, candidate, "search");
         expect(afterRestart.command).toBeNull();
