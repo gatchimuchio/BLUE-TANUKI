@@ -278,7 +278,7 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     return `google-drive:${createHash("sha256").update(args.file_id, "utf8").digest("hex")}`;
   }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
-      ["draft.create", "message.send", "draft.send"].includes(String(args.operation))) {
+      ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(args.operation))) {
     return `gmail:${observation.target_identity_digest}`;
   }
   if (tool_name === "github.write" && observation?.schema_version === "blue-tanuki.github-write-target-version.v1") {
@@ -596,13 +596,16 @@ function approveCommandForExecution(
         operationPlanDigest(snapshot), hds_binding?.operation_plan_binding_digest);
       target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
-        ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
+        ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const operation = String(snapshot.payload.arguments.operation);
       const payloadMismatch = operation === "draft.send"
         ? !observation.provider_state_digest || !observation.provider_raw_digest ||
           observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
             snapshot.payload.arguments, observation.provider_raw_digest)
+        : operation === "message.trash" || operation === "message.modify"
+          ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
+            observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)
         : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments);
       if (observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.target_identity_digest !== gmailWriteTargetIdentityDigest(snapshot.payload.arguments) ||
@@ -678,7 +681,7 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: HDS target version binding does not match evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "gmail.write" &&
-      ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation)) &&
+      ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(snapshot.payload.arguments.operation)) &&
       target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
   }
@@ -954,7 +957,7 @@ export class Executor {
       return Object.freeze(observation);
     }
     if (command.payload.tool_name === "gmail.write" &&
-        ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
+        ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("gmail.write");
       if (tool !== gmailWriteTool || !tool.inspect_target_version) {
         throw new Error("gmail.write target version resolver requires the registered built-in adapter");
@@ -971,6 +974,9 @@ export class Executor {
         ? !observation.provider_state_digest || !observation.provider_raw_digest ||
           observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
             command.payload.arguments, observation.provider_raw_digest)
+        : operation === "message.trash" || operation === "message.modify"
+          ? !observation.provider_state_digest || observation.provider_raw_digest !== undefined ||
+            observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments)
         : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments);
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.target_identity_digest !== gmailWriteTargetIdentityDigest(command.payload.arguments) ||
@@ -1595,7 +1601,9 @@ export class Executor {
     }
     if (command.payload.tool_name !== "gmail.write") return undefined;
     const gmailOperation = command.payload.arguments.operation;
-    if (gmailOperation !== "draft.send" && gmailOperation !== "draft.create" && gmailOperation !== "message.send") return undefined;
+    if (gmailOperation !== "draft.send" && gmailOperation !== "draft.create" &&
+        gmailOperation !== "message.send" && gmailOperation !== "message.trash" &&
+        gmailOperation !== "message.modify") return undefined;
     const tool = this.deps.tools.get("gmail.write");
     if (tool !== gmailWriteTool || !tool.inspect_content_review) {
       throw new Error("gmail.write content review requires the registered built-in adapter");
@@ -1604,6 +1612,72 @@ export class Executor {
       ...(env ? { env } : {}),
       command_digest: operationPlanDigest(command),
     });
+    if (gmailOperation === "message.trash") {
+      const expectedKeys = ["account_email", "command_digest", "internal_date", "kind", "label_ids", "may_execute",
+        "message_id", "operation", "provider_state_digest", "request_payload_digest", "review_digest", "size_estimate",
+        "target_identity_digest", "thread_id", "used_for_authority"];
+      const optionalKeys = ["cc", "date", "from", "subject", "to"];
+      const expectedReviewDigest = "kind" in review && review.kind === "gmail_message_trash"
+        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-trash-review.v1",
+            command_digest: operationPlanDigest(command), target_identity_digest: review.target_identity_digest,
+            request_payload_digest: review.request_payload_digest, provider_state_digest: review.provider_state_digest })
+        : "";
+      if (!("kind" in review) || review.kind !== "gmail_message_trash" ||
+          Object.keys(review).some((key) => !expectedKeys.includes(key) && !optionalKeys.includes(key)) ||
+          review.operation !== "gmail.write.message.trash" || review.command_digest !== operationPlanDigest(command) ||
+          review.message_id !== command.payload.arguments.message_id ||
+          review.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments) ||
+          review.target_identity_digest !== gmailWriteTargetIdentityDigest(command.payload.arguments) ||
+          !/^[a-f0-9]{64}$/.test(review.provider_state_digest) || review.review_digest !== expectedReviewDigest ||
+          !review.account_email.trim() || !review.thread_id.trim() ||
+          !Array.isArray(review.label_ids) || review.label_ids.includes("TRASH") ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("gmail.write message.trash content review returned evidence for another command or provider state");
+      }
+      return review;
+    }
+    if (gmailOperation === "message.modify") {
+      const expectedKeys = ["account_email", "add_labels", "command_digest", "current_labels", "kind", "may_execute",
+        "message_id", "operation", "provider_state_digest", "remove_labels", "request_payload_digest", "review_digest",
+        "target_identity_digest", "thread_id", "used_for_authority"];
+      const optionalKeys = ["cc", "date", "from", "subject", "to"];
+      const expectedAddLabelIds = Array.isArray(command.payload.arguments.add_label_ids)
+        ? [...command.payload.arguments.add_label_ids as string[]].sort() : [];
+      const expectedRemoveLabelIds = Array.isArray(command.payload.arguments.remove_label_ids)
+        ? [...command.payload.arguments.remove_label_ids as string[]].sort() : [];
+      const expectedReviewDigest = "kind" in review && review.kind === "gmail_message_modify"
+        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-review.v1",
+            command_digest: operationPlanDigest(command), target_identity_digest: review.target_identity_digest,
+            request_payload_digest: review.request_payload_digest, provider_state_digest: review.provider_state_digest })
+        : "";
+      const validLabel = (label: unknown, types: readonly ("system" | "user")[]): label is { id: string; name: string; type: "system" | "user" } =>
+        Boolean(label) && typeof (label as { id?: unknown }).id === "string" &&
+          typeof (label as { name?: unknown }).name === "string" && typeof (label as { type?: unknown }).type === "string" &&
+          (types as readonly string[]).includes((label as { type: string }).type) &&
+          (label as { id: string }).id.length > 0 && (label as { id: string }).id.length <= 256 &&
+          (label as { name: string }).name.length > 0 && (label as { name: string }).name.length <= 512 &&
+          !/[\r\n\u0000-\u001f\u007f]/.test((label as { name: string }).name);
+      const validLabels = (labels: unknown, type: "system" | "user"): labels is { id: string; name: string; type: "system" | "user" }[] =>
+        Array.isArray(labels) && labels.length <= 100 && labels.every((label) => validLabel(label, [type]));
+      const validCurrentLabels = (labels: unknown): labels is { id: string; name: string; type: "system" | "user" }[] =>
+        Array.isArray(labels) && labels.length <= 100 && labels.every((label) => validLabel(label, ["system", "user"]));
+      if (!("kind" in review) || review.kind !== "gmail_message_modify" ||
+          Object.keys(review).some((key) => !expectedKeys.includes(key) && !optionalKeys.includes(key)) ||
+          review.operation !== "gmail.write.message.modify" || review.command_digest !== operationPlanDigest(command) ||
+          review.message_id !== command.payload.arguments.message_id || !review.account_email.trim() || !review.thread_id.trim() ||
+          !/^[a-f0-9]{64}$/.test(review.provider_state_digest) ||
+          review.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments) ||
+          review.target_identity_digest !== gmailWriteTargetIdentityDigest(command.payload.arguments) ||
+          review.review_digest !== expectedReviewDigest ||
+          !validCurrentLabels(review.current_labels) ||
+          !validLabels(review.add_labels, "user") || !validLabels(review.remove_labels, "user") ||
+          JSON.stringify(review.add_labels.map((label) => label.id).sort()) !== JSON.stringify(expectedAddLabelIds) ||
+          JSON.stringify(review.remove_labels.map((label) => label.id).sort()) !== JSON.stringify(expectedRemoveLabelIds) ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("gmail.write message.modify content review returned evidence for another command or provider state");
+      }
+      return review;
+    }
     if (gmailOperation !== "draft.send") {
       if (!("kind" in review) || review.kind !== "gmail_write_content" ||
           review.command_digest !== operationPlanDigest(command) ||

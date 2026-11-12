@@ -2,28 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F02.02 添付付きGmail draft.sendレビューconsumer
+## 現行BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modifyと検証済み結果帰還
 
-主語はBLUE Gatewayの既存Gmail `draft.send`、draft内容review、認証済みno-store review面である。目的は既存draftに含まれる添付を、L3の内容確認と作用直前の再照合を通して送信可能にすること。新規添付を含む`draft.create`既存経路の送信時consumerを接続する限定sliceで、Gmail全操作やF02.02全体は完了として扱わない。
+主語はBLUE Gatewayの既存Gmail write／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的は単一messageの復元可能なTrash移動と既存user label変更を、no-store L3確認、作用前再照合、provider後状態の検証、digest限定M receipt、再起動後のowner帰還まで既存writerへ接続すること。Gmail全操作、実provider成立、F02.02全体または製品全体の完成とは扱わない。
 
-Gmail raw responseを厳格なMIME subsetとして解析し、`multipart/mixed`内の先頭`text/plain`と最大5添付（各5 MiB、合計8 MiB）だけを受け付ける。添付bytesはprocess内で解析し、review projectionにはfilename、MIME type、byte size、SHA-256だけを渡す。Gateway review digestはraw MIME digestと添付情報を束縛し、確認後も既存の正確なraw MIMEを送る。直接`message.send`への添付引数、未知のMIME形式、nested multipart、HTML、過大入力、raw／encoded header内の制御文字は拒否する。Control Centerの表示を既存draftの添付と選択元添付で区別し、生成scriptに制御文字が漏れる既存escape欠陥も修正した。
+`message.trash`は正確な単一message IDとmetadata stateを確認し、本文／raw MIMEを取得せず、既にTrashの対象やreview後の状態変化を拒否する。L3確認後に対象stateを再照合して一回だけTrashへ移し、再読込で`TRASH`を確認する。`message.modify`は単一messageの既存user labelだけを追加・除去し、system label、Trash、thread単位操作を拒否する。両操作とも対象・要求・provider stateをreview digestへ束縛し、provider後状態を再読込して一致を検証する。結果不明時は自動再送しない。実結果はJのplan／request digestに束縛し、M receiptはdigestと検証状態だけを保持する。合成Gateway経路でJ/M再起動後に同一owner taskへ返す。
 
 | QE_BUILD必要最小確認 | 結果 |
 |---|---|
-| core typecheck／build | PASS。 |
-| Gmail対象test | PASS：11/11。添付review、digest、情報非露出、応答上限、同一raw MIME送信を含む。 |
-| Gateway review test | PASS：4/4。添付metadataの投影とhash変更時のdigest変化を確認。 |
-| WebChat attachment review test | PASS：1/1（同file内131件skip）。resume認証済みno-store reviewを確認。 |
-| Control Center script安全・構文test | PASS：1/1（同file内131件skip）。raw control characterなし、script parse成功。 |
-| core／Gateway／WebChat build、関連typecheck、`git diff --check` | PASS。 |
-| 全workspace suite、実Gmail credential／API／送信、外部作用、他OS QA、QE_QC／QE_QA | NOT_RUN。ownerの既存指示に従いprovider試験は行っていない。 |
+| focused Gmail／Gateway／WebChat tests | PASS：4 files、10 selected tests。Trash／label対象・digest review、検証済みlabel result→M receipt→restart→owner return、generated script safety／parseを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS：全workspace typecheck、15 build projects。 |
+| `pnpm docs:check` | PASS。日本語基底監査はPASS、既存移行負債75件を注意表示。 |
+| `git diff --check` | PASS（実装差分確認時）。 |
+| 全workspace test suite、実Gmail credential／API／外部作用、他OS QA、QE_QC／QE_QA | NOT_RUN。実providerを使わず合成応答だけで確認した。 |
 
-UNIT_ID: F02.02（添付付き既存`draft.send` review consumerに限る）
-STATUS: WIRED（raw draft→添付metadata/hash→Gateway L3 review digest→WebChat no-store review。実provider／実送信は未確認）
-NEXT_REQUIRED_CONSUMER: F02.02の残りを現行rev4.0から再照合する。Gmail delete／labelの未接続操作と、合成Gateway実経路から検証済みresult・M receipt・owner帰還までのconsumerを確認し、既存writerへ次の実consumerを接続する。
-SAFETY_STATUS: L3 review、provider stateの再照合、review digest拘束、外部作用一回の既存境界を維持。添付内容をreview projection、audit、memoryへ出さない。実資格・実送信・外部作用なし。
-LOCAL_ASSET_STATUS: source／tests／本状態文書／roadmap／履歴はGit候補。buildのignored `dist`とisolation出力は現在の開発環境として保持。focused testの一時資産は残存なし。`.codex-attachments/`と`.codex-remote-attachments/`は保護対象として未変更。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub main=`ab2e96f4e6585289fa51ded1c994f80b98785619`。作業treeはmain上で、このbatchの7 tracked source/test差分と2 protected untracked attachment directoryを確認して保持した。閉包時のSHA／ref／dirty状態はGitから再照合する。
+UNIT_ID: F02.02（単一messageのTrash／user label変更と結果帰還の限定consumer）
+STATUS: WIRED（no-store L3 review→再照合→単回provider request→状態再読込→J/M receipt→再起動後owner return。provider実接続は未確認）
+NEXT_REQUIRED_CONSUMER: このBUILD_BATCHを閉じた後、次の独立作業開始で現行rev4.0と最新HEADから未接続producer／consumerを選定する。実provider／credential、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。
+SAFETY_STATUS: high/L3とApproval Gate、単一message対象、no-store表示、対象・要求・provider state digest拘束、作用前の再照合、後状態検証、結果不明時の自動再送禁止を維持。本文／raw MIME、label値、message IDをM receiptへ保存しない。実資格・実Gmail／外部作用なし。
+LOCAL_ASSET_STATUS: ソース／tests／本状態文書／roadmap／履歴をGit候補として保持。buildのignored `dist`／isolation出力は現行開発環境として保持。focused test一時資産は残存なし。`.codex-attachments/`と`.codex-remote-attachments/`は保護対象として未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／origin／GitHub main=`b47018e5418027b193cdb850c75c26757b85b441`、ahead／behind=0/0、worktreeはmainのみ。作業treeのF02.02差分と2 protected untracked attachment directoryを維持。閉包時のremote/local SHA・復旧ref・dirty状態はGitから再照合する。
 
 ## 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows配布ZIP内Uninstallの動的対象再検証
 

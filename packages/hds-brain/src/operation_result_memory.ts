@@ -10,6 +10,31 @@ type Binding = Plan["bindings"][number];
 type ShellExecObservation = NonNullable<OperationPlanCheckpoint["shell_exec_result_observations"]>[number];
 const BROWSER_READ_CONTEXT_MAX_CHARS = 8_000;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isRecord(value)) return `{${Object.entries(value).filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
+function stableDigest(value: unknown): string {
+  return createHash("sha256").update(stableJson(value), "utf8").digest("hex");
+}
+
+function hasExactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+  return required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+}
+
+function isDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
 interface BrowserReadResultObservation {
   readonly schema_version: "browser-read-result-observation.v1";
   readonly record_type: "browser_read_observation";
@@ -125,7 +150,12 @@ export function resultMemoryEligible(b: Binding): boolean {
     return (b.status === "outcome_unknown" || b.status === "verification_failed") && !b.github_write_result;
   }
   if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
-    b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read";
+    b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read" ||
+    b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
+      (b.prepared_step.parameters?.operation === "message.trash" ||
+        b.prepared_step.parameters?.operation === "message.modify") && !!b.execution_admission?.task_identity_digest &&
+      !!b.operation_plan_binding_digest && !!b.delivery_digest && !!b.result_digest &&
+      b.result_observed_at_ms !== undefined;
   return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
 }
 
@@ -182,6 +212,126 @@ export function resultObservation(p: Plan, b: Binding) {
       command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: b.operation,
       delivery_digest: b.delivery_digest, result_digest: b.result_digest,
       plan_binding_status: "verified", plan_validation_status: "matched",
+      effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
+      adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+  if (b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
+      b.prepared_step.parameters?.operation === "message.trash") {
+    const rawOutput: unknown = result.output;
+    if (!isRecord(rawOutput)) {
+      throw new Error("plan_memory_gmail_message_trash_result_invalid");
+    }
+    const rawReceipt = rawOutput.result;
+    if (!isRecord(rawReceipt)) throw new Error("plan_memory_gmail_message_trash_result_invalid");
+    const output = rawOutput;
+    const receipt = rawReceipt;
+    const messageId = b.prepared_step.parameters.message_id;
+    const messageIdentityDigest = typeof messageId === "string"
+      ? createHash("sha256").update(messageId, "utf8").digest("hex") : "";
+    const targetIdentityDigest = stableDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v5",
+      service: "gmail", operation: "message.trash", message_identity_digest: messageIdentityDigest });
+    const resultKeys = ["label_ids_digest", "may_execute", "message_identity_digest", "provider_state_digest",
+      "target_identity_digest", "thread_identity_digest", "trash_confirmed", "used_for_authority"];
+    const outputKeys = ["api_host", "method", "mode", "mutation_sent", "mutation_status", "operation", "path_digest",
+      "request_status", "result", "result_digest", "service", "status", "truncated"];
+    if (typeof messageId !== "string" || messageId.length === 0 || !messageIdentityDigest ||
+        !hasExactKeys(receipt, resultKeys) || !hasExactKeys(output, outputKeys,
+      ["content_type", "google_request_id"]) ||
+        receipt.message_identity_digest !== messageIdentityDigest || receipt.target_identity_digest !== targetIdentityDigest ||
+        !isDigest(receipt.thread_identity_digest) || !isDigest(receipt.label_ids_digest) ||
+        !isDigest(receipt.provider_state_digest) || receipt.trash_confirmed !== true ||
+        receipt.used_for_authority !== false || receipt.may_execute !== false ||
+        output.service !== "gmail" || output.mode !== "write" || output.operation !== "message.trash" ||
+        output.api_host !== "gmail.googleapis.com" || output.method !== "POST" ||
+        output.path_digest !== stableDigest(`/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/trash`) ||
+        output.request_status !== "ok" || output.mutation_sent !== true || output.mutation_status !== "confirmed" ||
+        typeof output.status !== "number" || !Number.isInteger(output.status) || output.status < 200 || output.status >= 300 ||
+        output.truncated !== false || !isDigest(output.result_digest) || output.result_digest !== stableDigest(receipt) ||
+        (output.content_type !== undefined && typeof output.content_type !== "string") ||
+        (output.google_request_id !== undefined && typeof output.google_request_id !== "string")) {
+      throw new Error("plan_memory_gmail_message_trash_result_invalid");
+    }
+    return {
+      schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      task_identity_digest: b.execution_admission?.task_identity_digest,
+      plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+      plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,
+      command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: "gmail.write.message.trash",
+      step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+      step_digest: b.step_digest, command_digest: b.command_digest,
+      operation_plan_binding_digest: b.operation_plan_binding_digest!,
+      delivery_digest: b.delivery_digest!, result_digest: b.result_digest!,
+      plan_binding_status: "verified", plan_validation_status: "matched",
+      target_identity_digest: receipt.target_identity_digest,
+      provider_state_digest: receipt.provider_state_digest,
+      effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
+      adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+  if (b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
+      b.prepared_step.parameters?.operation === "message.modify") {
+    const rawOutput: unknown = result.output;
+    if (!isRecord(rawOutput)) throw new Error("plan_memory_gmail_message_modify_result_invalid");
+    const rawReceipt = rawOutput.result;
+    if (!isRecord(rawReceipt)) throw new Error("plan_memory_gmail_message_modify_result_invalid");
+    const output = rawOutput;
+    const receipt = rawReceipt;
+    const parameters = b.prepared_step.parameters;
+    const messageId = parameters.message_id;
+    const labels = (value: unknown): string[] | undefined => {
+      if (value === undefined) return [];
+      if (!Array.isArray(value) || value.length > 20 || value.some((label) => typeof label !== "string" ||
+          label.length === 0 || label.length > 256 || !/^[A-Za-z0-9_-]+$/.test(label))) return undefined;
+      return new Set(value).size === value.length ? [...value as string[]].sort() : undefined;
+    };
+    const addLabelIds = labels(parameters.add_label_ids);
+    const removeLabelIds = labels(parameters.remove_label_ids);
+    const messageIdentityDigest = typeof messageId === "string"
+      ? createHash("sha256").update(messageId, "utf8").digest("hex") : "";
+    const targetIdentityDigest = stableDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v6",
+      service: "gmail", operation: "message.modify", message_identity_digest: messageIdentityDigest });
+    const resultKeys = ["added_label_ids_digest", "label_ids_digest", "labels_confirmed", "may_execute",
+      "message_identity_digest", "provider_state_digest", "removed_label_ids_digest", "target_identity_digest",
+      "thread_identity_digest", "used_for_authority"];
+    const outputKeys = ["api_host", "method", "mode", "mutation_sent", "mutation_status", "operation", "path_digest",
+      "request_status", "result", "result_digest", "service", "status", "truncated"];
+    const expectedPath = typeof messageId === "string"
+      ? `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/modify` : "";
+    if (typeof messageId !== "string" || messageId.length === 0 || !addLabelIds || !removeLabelIds ||
+        (addLabelIds.length === 0 && removeLabelIds.length === 0) ||
+        addLabelIds.some((label) => removeLabelIds.includes(label)) ||
+        !hasExactKeys(receipt, resultKeys) || !hasExactKeys(output, outputKeys, ["content_type", "google_request_id"]) ||
+        receipt.message_identity_digest !== messageIdentityDigest || receipt.target_identity_digest !== targetIdentityDigest ||
+        receipt.added_label_ids_digest !== stableDigest(addLabelIds) || receipt.removed_label_ids_digest !== stableDigest(removeLabelIds) ||
+        !isDigest(receipt.label_ids_digest) || !isDigest(receipt.thread_identity_digest) ||
+        !isDigest(receipt.provider_state_digest) || receipt.labels_confirmed !== true ||
+        receipt.used_for_authority !== false || receipt.may_execute !== false ||
+        output.service !== "gmail" || output.mode !== "write" || output.operation !== "message.modify" ||
+        output.api_host !== "gmail.googleapis.com" || output.method !== "POST" ||
+        output.path_digest !== stableDigest(expectedPath) || output.request_status !== "ok" || output.mutation_sent !== true ||
+        output.mutation_status !== "confirmed" || typeof output.status !== "number" || !Number.isInteger(output.status) ||
+        output.status < 200 || output.status >= 300 || output.truncated !== false || !isDigest(output.result_digest) ||
+        output.result_digest !== stableDigest(receipt) ||
+        (output.content_type !== undefined && typeof output.content_type !== "string") ||
+        (output.google_request_id !== undefined && typeof output.google_request_id !== "string")) {
+      throw new Error("plan_memory_gmail_message_modify_result_invalid");
+    }
+    return {
+      schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      task_identity_digest: b.execution_admission?.task_identity_digest,
+      plan_id_digest: createHash("sha256").update(JSON.stringify(p.revisions[0]!.plan.plan_id), "utf8").digest("hex"),
+      plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,
+      command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: "gmail.write.message.modify",
+      step_id_digest: createHash("sha256").update(JSON.stringify(b.step_id), "utf8").digest("hex"),
+      step_digest: b.step_digest, command_digest: b.command_digest,
+      operation_plan_binding_digest: b.operation_plan_binding_digest!,
+      delivery_digest: b.delivery_digest!, result_digest: b.result_digest!,
+      plan_binding_status: "verified", plan_validation_status: "matched",
+      target_identity_digest: receipt.target_identity_digest,
+      provider_state_digest: receipt.provider_state_digest,
       effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
       adoption_status: "observation_only", used_as_world_truth: false,
       used_for_authority: false, may_execute: false,

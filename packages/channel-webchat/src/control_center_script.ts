@@ -7515,6 +7515,137 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "対象・所有者・ゴミ箱移動を再確認";
           return;
         }
+        if (review.kind === "gmail_message_trash") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validText = function (value, max) {
+            return typeof value === "string" && value.length <= max && !/[\\r\\n\\u0000-\\u001f\\u007f]/.test(value);
+          };
+          const allowedKeys = ["kind", "command_id", "command_digest", "review_digest", "target_identity_digest",
+            "request_payload_digest", "provider_state_digest", "operation", "account_email", "message_id", "thread_id",
+            "from", "to", "cc", "subject", "date", "internal_date", "size_estimate", "label_ids",
+            "used_for_authority", "may_execute"];
+          if (Object.keys(review).some(function (key) { return !allowedKeys.includes(key); }) ||
+              review.command_id !== commandId || review.operation !== "gmail.write.message.trash" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.target_identity_digest) || !isDigest(review.request_payload_digest) ||
+              !isDigest(review.provider_state_digest) || !validText(review.account_email, 320) ||
+              !/^[A-Za-z0-9_-]{1,512}$/.test(review.message_id || "") ||
+              !validText(review.thread_id, 512) || !/^\d{1,16}$/.test(review.internal_date || "") ||
+              !Number.isSafeInteger(review.size_estimate) || review.size_estimate < 0 ||
+              !Array.isArray(review.label_ids) || review.label_ids.length > 100 ||
+              review.label_ids.some(function (label) { return !validText(label, 256); }) ||
+              [review.from, review.to, review.cc, review.subject, review.date].some(function (value) {
+                return value !== undefined && !validText(value, 4096);
+              }) || review.label_ids.includes("TRASH")) {
+            throw new Error("Gmailのゴミ箱移動対象がこの承認要求へ結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "選択したGmailメッセージ1件をゴミ箱へ移動（復元可能）";
+          view.appendChild(heading);
+          [
+            ["アカウント", review.account_email],
+            ["メッセージID", review.message_id],
+            ["スレッドID", review.thread_id],
+            ["送信元", review.from],
+            ["宛先", review.to],
+            ["CC", review.cc],
+            ["件名", review.subject],
+            ["日時", review.date || review.internal_date],
+            ["現在のラベル", review.label_ids.join(", ") || "なし"],
+            ["サイズ概算", String(review.size_estimate) + " bytes"]
+          ].forEach(function (field) {
+            if (field[1] === undefined) return;
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は対象メッセージをGmailのゴミ箱へ移し、完全削除しません。本文とraw MIMEは表示・保存しません。確認後と作用直前に同じ対象・provider状態を再照合し、結果不明時に自動再送しません。確認内容は保存されず、確認表示自体は権限を持ちません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " +
+            review.review_digest + " | provider state digest: " + review.provider_state_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "対象メッセージとゴミ箱移動を再確認";
+          return;
+        }
+        if (review.kind === "gmail_message_modify") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validText = function (value, max) {
+            return typeof value === "string" && value.length <= max && !/[\\r\\n\\u0000-\\u001f\\u007f]/.test(value);
+          };
+          const validLabels = function (value, types, max) {
+            return Array.isArray(value) && value.length <= max && value.every(function (label) {
+              return label && typeof label === "object" && /^[A-Za-z0-9_-]{1,256}$/.test(label.id || "") &&
+                validText(label.name, 512) && label.name.trim().length > 0 && types.includes(label.type);
+            }) && new Set(value.map(function (label) { return label.id; })).size === value.length;
+          };
+          const allowedKeys = ["kind", "command_id", "command_digest", "review_digest", "target_identity_digest",
+            "request_payload_digest", "provider_state_digest", "operation", "account_email", "message_id", "thread_id",
+            "from", "to", "cc", "subject", "date", "current_labels", "add_labels", "remove_labels",
+            "used_for_authority", "may_execute"];
+          if (Object.keys(review).some(function (key) { return !allowedKeys.includes(key); }) ||
+              review.command_id !== commandId || review.operation !== "gmail.write.message.modify" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.target_identity_digest) || !isDigest(review.request_payload_digest) ||
+              !isDigest(review.provider_state_digest) || !validText(review.account_email, 320) ||
+              !/^[A-Za-z0-9_-]{1,512}$/.test(review.message_id || "") || !validText(review.thread_id, 512) ||
+              !validLabels(review.current_labels, ["system", "user"], 100) ||
+              !validLabels(review.add_labels, ["user"], 20) || !validLabels(review.remove_labels, ["user"], 20) ||
+              [review.from, review.to, review.cc, review.subject, review.date].some(function (value) {
+                return value !== undefined && !validText(value, 4096);
+              })) {
+            throw new Error("Gmailのラベル変更対象がこの承認要求へ結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "選択したGmailメッセージ1件のユーザーラベルを変更";
+          view.appendChild(heading);
+          [
+            ["アカウント", review.account_email],
+            ["メッセージID", review.message_id],
+            ["スレッドID", review.thread_id],
+            ["送信元", review.from],
+            ["宛先", review.to],
+            ["CC", review.cc],
+            ["件名", review.subject],
+            ["日時", review.date],
+            ["現在のラベル", review.current_labels.map(function (label) { return label.name + " [" + label.type + "]"; }).join(", ") || "なし"],
+            ["追加", review.add_labels.map(function (label) { return label.name; }).join(", ") || "なし"],
+            ["削除", review.remove_labels.map(function (label) { return label.name; }).join(", ") || "なし"]
+          ].forEach(function (field) {
+            if (field[1] === undefined) return;
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は単一メッセージの既存ユーザーラベルだけを変更します。システムラベル、Trash、本文、raw MIMEは扱いません。確認後と作用直前に同じ対象・ラベル状態を再照合し、結果不明時に自動再送しません。確認表示は保存されず、権限を持ちません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " +
+            review.review_digest + " | provider state digest: " + review.provider_state_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "対象メッセージとラベル変更を再確認";
+          return;
+        }
         if (review.command_id !== commandId ||
             (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create" &&
               review.operation !== "gmail.write.draft.send") ||

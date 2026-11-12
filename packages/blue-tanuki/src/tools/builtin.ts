@@ -177,6 +177,7 @@ export {
   invokeGmailWrite,
   gmailDraftSendRequestPayloadDigest,
   gmailWriteRequestPayloadDigest,
+  gmailWriteTargetIdentityDigest,
   invokeGoogleCalendarWrite,
   googleCalendarCreateEventId,
   googleCalendarWriteRequestPayloadDigest,

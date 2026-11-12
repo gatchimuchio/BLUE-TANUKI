@@ -21,7 +21,8 @@ import { invokeGoogleCalendarRead, MAX_CALENDAR_EVENT_ATTENDEES, MAX_GMAIL_ATTAC
   readGmailAttachmentContent, readGoogleCalendarEventTarget,
   type GoogleCalendarEventTargetSnapshot } from "./google_read.js";
 import { assertToolExecutionNotCancelled, type GmailAttachmentContentReview, type GmailDraftContentReview,
-  type GmailWriteContentReview, type GoogleCalendarEventCreateContentReview,
+  type GmailWriteContentReview, type GmailMessageTrashContentReview, type GoogleCalendarEventCreateContentReview,
+  type GmailMessageModifyContentReview,
   type GoogleCalendarEventUpdateContentReview, type GoogleCalendarEventDeleteContentReview,
   type GoogleCalendarEventInviteContentReview, type GoogleDriveFileCreateContentReview,
   type GoogleDriveFileUpdateContentReview, type GoogleDrivePermissionCreateContentReview,
@@ -144,6 +145,7 @@ const MAX_GMAIL_WRITE_ATTACHMENTS = 5;
 const MAX_GMAIL_WRITE_ATTACHMENTS_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_GMAIL_DRAFT_MIME_BYTES = 16 * 1024 * 1024;
 const MAX_GMAIL_DRAFT_REVIEW_RESPONSE_BYTES = Math.ceil(MAX_GMAIL_DRAFT_MIME_BYTES * 4 / 3) + 64_000;
+const MAX_GMAIL_MESSAGE_TRASH_REVIEW_RESPONSE_BYTES = 64_000;
 const MAX_GMAIL_DRAFT_MIME_LINES = 300_000;
 const GMAIL_WRITE_ATTACHMENT_RESPONSE_MAX_BYTES = Math.ceil(MAX_GMAIL_ATTACHMENT_BYTES * 4 / 3) + 64_000;
 const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,webViewLink,parents,driveId,version,headRevisionId,shared,trashed";
@@ -215,6 +217,78 @@ interface GmailDraftSnapshot {
   raw_digest: string;
   request_payload_digest: string;
   content_review: GmailDraftContentReview;
+}
+
+interface GmailMessageMetadataSnapshot {
+  account_email: string;
+  account_identity_digest: string;
+  message_id: string;
+  message_identity_digest: string;
+  thread_id: string;
+  thread_identity_digest: string;
+  label_ids: readonly string[];
+  internal_date: string;
+  size_estimate: number;
+  headers: Readonly<{ from?: string; to?: string; cc?: string; subject?: string; date?: string }>;
+  state_digest: string;
+  request_payload_digest: string;
+}
+
+interface GmailLabelMetadata {
+  id: string;
+  name: string;
+  type: "system" | "user";
+}
+
+interface GmailMessageModifySnapshot extends GmailMessageMetadataSnapshot {
+  label_catalog: readonly GmailLabelMetadata[];
+  current_labels: readonly GmailLabelMetadata[];
+  add_labels: readonly (GmailLabelMetadata & { type: "user" })[];
+  remove_labels: readonly (GmailLabelMetadata & { type: "user" })[];
+  label_catalog_digest: string;
+}
+
+function gmailMessageModifyLabelIds(args: Record<string, unknown>, field: "add_label_ids" | "remove_label_ids"): string[] {
+  const raw = args[field];
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 20) {
+    throw new Error(`gmail.write ${field} must be a list of at most twenty exact user label IDs; mutation_sent=false`);
+  }
+  const labels = raw.map((value) => {
+    if (typeof value !== "string" || value !== value.trim() || value.length > 256 ||
+        !/^[A-Za-z0-9_-]+$/.test(value)) {
+      throw new Error(`gmail.write ${field} contains an invalid label ID; mutation_sent=false`);
+    }
+    return value;
+  });
+  if (new Set(labels).size !== labels.length) {
+    throw new Error(`gmail.write ${field} contains duplicate label IDs; mutation_sent=false`);
+  }
+  return [...labels].sort();
+}
+
+function normalizeGmailMessageModifyArguments(args: Record<string, unknown>): {
+  operation: "message.modify";
+  message_id: string;
+  add_label_ids: string[];
+  remove_label_ids: string[];
+} {
+  if (operationArg(args, ["message.modify"]) !== "message.modify") {
+    throw new Error("gmail.write only supports a distinct message.modify label operation; mutation_sent=false");
+  }
+  const allowed = new Set(["operation", "message_id", "add_label_ids", "remove_label_ids"]);
+  if (Object.keys(args).some((key) => !allowed.has(key))) {
+    throw new Error("gmail.write message.modify contains unsupported fields; mutation_sent=false");
+  }
+  const messageId = gmailMessageId(args);
+  const addLabelIds = gmailMessageModifyLabelIds(args, "add_label_ids");
+  const removeLabelIds = gmailMessageModifyLabelIds(args, "remove_label_ids");
+  if (addLabelIds.length === 0 && removeLabelIds.length === 0 ||
+      addLabelIds.some((label) => removeLabelIds.includes(label))) {
+    throw new Error("gmail.write message.modify requires non-overlapping label changes; mutation_sent=false");
+  }
+  return { operation: "message.modify", message_id: messageId,
+    add_label_ids: addLabelIds, remove_label_ids: removeLabelIds };
 }
 
 function decodeMimeHeaderValue(value: string): string {
@@ -834,6 +908,185 @@ async function readGmailDraftSnapshot(
   };
 }
 
+function gmailMessageId(args: Record<string, unknown>): string {
+  const messageId = stringArg(args, "message_id")!;
+  if (messageId.length > 512 || messageId !== messageId.trim() || !/^[A-Za-z0-9_-]+$/.test(messageId)) {
+    throw new Error("gmail_message_id_invalid; request_sent=false; mutation_sent=false");
+  }
+  return messageId;
+}
+
+async function readGmailMessageMetadataSnapshot(
+  args: Record<string, unknown>,
+  options: GoogleWriteOptions = {},
+  tokenOverride?: string,
+): Promise<GmailMessageMetadataSnapshot> {
+  const messageId = gmailMessageId(args);
+  const env = options.env ?? process.env;
+  const token = tokenOverride ?? googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"],
+    "gmail.write message.trash review");
+  const request = options.request ?? defaultGoogleWriteRequest;
+  const get = async (path: string, maxBytes = MAX_GMAIL_MESSAGE_TRASH_REVIEW_RESPONSE_BYTES): Promise<unknown> => {
+    let response: GoogleWriteResponse;
+    try {
+      assertToolExecutionNotCancelled(options.signal, "gmail.write message.trash target review");
+      response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path, method: "GET", maxBytes, token },
+        options.signal);
+    } catch {
+      if (options.signal?.aborted) {
+        throw new Error("gmail_message_metadata_read_cancelled; request_status=not_confirmed; mutation_sent=false");
+      }
+      throw new Error("gmail_message_metadata_read_unavailable; request_sent=false; mutation_sent=false");
+    }
+    if (!response.ok || response.truncated || response.body_utf8_valid === false) {
+      throw new Error(`gmail_message_metadata_read_unavailable; http_status=${response.status}; request_sent=false; mutation_sent=false`);
+    }
+    try { return JSON.parse(response.body) as unknown; }
+    catch { throw new Error("gmail_message_metadata_read_response_invalid; request_sent=false; mutation_sent=false"); }
+  };
+
+  const profile = await get("/gmail/v1/users/me/profile", DEFAULT_MAX_BYTES);
+  if (!isRecord(profile) || typeof profile.emailAddress !== "string" || !profile.emailAddress.trim() ||
+      profile.emailAddress.trim().length > 320 || /[\r\n\u0000-\u001f\u007f]/.test(profile.emailAddress)) {
+    throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");
+  }
+  const accountEmail = profile.emailAddress.trim();
+  const metadataHeaders = ["From", "To", "Cc", "Subject", "Date"]
+    .map((header) => `metadataHeaders=${header}`).join("&");
+  const resource = await get(`/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=metadata&${metadataHeaders}`);
+  if (!isRecord(resource) || resource.id !== messageId || typeof resource.threadId !== "string" ||
+      !resource.threadId.trim() || resource.threadId.length > 512 || /[\s/?#\\\u0000-\u001f\u007f]/.test(resource.threadId) ||
+      "raw" in resource || !Array.isArray(resource.labelIds) || resource.labelIds.length > 100 ||
+      resource.labelIds.some((label) => typeof label !== "string" || !label.trim() || label.length > 256 ||
+        /[\r\n\u0000-\u001f\u007f]/.test(label)) ||
+      typeof resource.internalDate !== "string" || !/^\d{1,16}$/.test(resource.internalDate) ||
+      !Number.isSafeInteger(Number(resource.internalDate)) ||
+      typeof resource.sizeEstimate !== "number" || !Number.isSafeInteger(resource.sizeEstimate) || resource.sizeEstimate < 0 ||
+      !isRecord(resource.payload) || !Array.isArray(resource.payload.headers) || resource.payload.headers.length > 32 ||
+      Array.isArray(resource.payload.parts) ||
+      isRecord(resource.payload.body) && typeof resource.payload.body.data === "string") {
+    throw new Error("gmail_message_metadata_invalid; request_sent=false; mutation_sent=false");
+  }
+  const labels = resource.labelIds as string[];
+  if (new Set(labels).size !== labels.length) {
+    throw new Error("gmail_message_metadata_invalid; request_sent=false; mutation_sent=false");
+  }
+  const allowedHeaders = new Set(["from", "to", "cc", "subject", "date"]);
+  const headers: Record<string, string> = {};
+  for (const rawHeader of resource.payload.headers) {
+    if (!isRecord(rawHeader) || typeof rawHeader.name !== "string" || typeof rawHeader.value !== "string" ||
+        rawHeader.name.length > 80 || /[\r\n\u0000-\u001f\u007f]/.test(rawHeader.name)) {
+      throw new Error("gmail_message_metadata_invalid; request_sent=false; mutation_sent=false");
+    }
+    const name = rawHeader.name.trim().toLowerCase();
+    if (!allowedHeaders.has(name)) continue;
+    const value = rawHeader.value.trim();
+    if (value.length > 4_096 || /[\r\n\u0000-\u001f\u007f]/.test(value)) {
+      throw new Error("gmail_message_metadata_invalid; request_sent=false; mutation_sent=false");
+    }
+    headers[name] = headers[name] ? `${headers[name]}, ${value}` : value;
+  }
+  const accountIdentityDigest = sha256String(accountEmail.toLowerCase());
+  const messageIdentityDigest = sha256String(messageId);
+  const threadIdentityDigest = sha256String(resource.threadId);
+  const labelIds = [...labels].sort();
+  const internalDate = resource.internalDate;
+  const sizeEstimate = resource.sizeEstimate;
+  const headerDigests = Object.fromEntries(Object.entries(headers).sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => [name, sha256String(value)]));
+  const stateDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-metadata-provider-state.v1",
+    account_identity_digest: accountIdentityDigest, message_identity_digest: messageIdentityDigest,
+    thread_identity_digest: threadIdentityDigest, label_ids: labelIds, internal_date: internalDate,
+    size_estimate: sizeEstimate, header_digests: headerDigests });
+  return {
+    account_email: accountEmail,
+    account_identity_digest: accountIdentityDigest,
+    message_id: messageId,
+    message_identity_digest: messageIdentityDigest,
+    thread_id: resource.threadId,
+    thread_identity_digest: threadIdentityDigest,
+    label_ids: labelIds,
+    internal_date: internalDate,
+    size_estimate: sizeEstimate,
+    headers: {
+      ...(headers.from ? { from: headers.from } : {}),
+      ...(headers.to ? { to: headers.to } : {}),
+      ...(headers.cc ? { cc: headers.cc } : {}),
+      ...(headers.subject ? { subject: headers.subject } : {}),
+      ...(headers.date ? { date: headers.date } : {}),
+    },
+    state_digest: stateDigest,
+    request_payload_digest: gmailWriteRequestPayloadDigest(args),
+  };
+}
+
+async function readGmailMessageModifySnapshot(
+  args: Record<string, unknown>,
+  options: GoogleWriteOptions = {},
+  tokenOverride?: string,
+): Promise<GmailMessageModifySnapshot> {
+  const normalized = normalizeGmailMessageModifyArguments(args);
+  const base = await readGmailMessageMetadataSnapshot(args, options, tokenOverride);
+  const token = tokenOverride ?? googleToken(options.env ?? process.env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"],
+    "gmail.write message.modify review");
+  const request = options.request ?? defaultGoogleWriteRequest;
+  let response: GoogleWriteResponse;
+  try {
+    assertToolExecutionNotCancelled(options.signal, "gmail.write message.modify label catalog review");
+    response = await request({ service: "gmail", hostname: "gmail.googleapis.com",
+      path: "/gmail/v1/users/me/labels", method: "GET", maxBytes: 2_000_000, token }, options.signal);
+  } catch {
+    if (options.signal?.aborted) {
+      throw new Error("gmail_message_modify_label_catalog_cancelled; request_status=not_confirmed; mutation_sent=false");
+    }
+    throw new Error("gmail_message_modify_label_catalog_unavailable; request_sent=false; mutation_sent=false");
+  }
+  if (!response.ok || response.truncated || response.body_utf8_valid === false) {
+    throw new Error(`gmail_message_modify_label_catalog_unavailable; http_status=${response.status}; request_sent=false; mutation_sent=false`);
+  }
+  let value: unknown;
+  try { value = JSON.parse(response.body) as unknown; }
+  catch { throw new Error("gmail_message_modify_label_catalog_invalid; request_sent=false; mutation_sent=false"); }
+  if (!isRecord(value) || !Array.isArray(value.labels) || value.labels.length > 10_000) {
+    throw new Error("gmail_message_modify_label_catalog_invalid; request_sent=false; mutation_sent=false");
+  }
+  const labelCatalog = value.labels.map((entry): GmailLabelMetadata => {
+    if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id.trim() || entry.id.length > 256 ||
+        !/^[A-Za-z0-9_-]+$/.test(entry.id) || typeof entry.name !== "string" || !entry.name.trim() ||
+        entry.name.length > 512 || /[\r\n\u0000-\u001f\u007f]/.test(entry.name) ||
+        (entry.type !== "system" && entry.type !== "user")) {
+      throw new Error("gmail_message_modify_label_catalog_invalid; request_sent=false; mutation_sent=false");
+    }
+    return { id: entry.id, name: entry.name, type: entry.type };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  if (new Set(labelCatalog.map((label) => label.id)).size !== labelCatalog.length) {
+    throw new Error("gmail_message_modify_label_catalog_invalid; request_sent=false; mutation_sent=false");
+  }
+  const byId = new Map(labelCatalog.map((label) => [label.id, label]));
+  const currentLabels = base.label_ids.map((id) => {
+    const label = byId.get(id);
+    if (!label) throw new Error("gmail_message_modify_current_label_unavailable; mutation_sent=false");
+    return label;
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  const requireUserLabel = (id: string): GmailLabelMetadata & { type: "user" } => {
+    const label = byId.get(id);
+    if (!label || label.type !== "user") {
+      throw new Error("gmail.write message.modify only supports existing user labels; system labels use their distinct operation; mutation_sent=false");
+    }
+    return { id: label.id, name: label.name, type: "user" as const };
+  };
+  const selected = [...normalized.add_label_ids, ...normalized.remove_label_ids].map(requireUserLabel)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const addLabels = normalized.add_label_ids.map(requireUserLabel).sort((a, b) => a.id.localeCompare(b.id));
+  const removeLabels = normalized.remove_label_ids.map(requireUserLabel).sort((a, b) => a.id.localeCompare(b.id));
+  const labelCatalogDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-labels.v1",
+    selected_labels: selected });
+  const stateDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-provider-state.v1",
+    base_provider_state_digest: base.state_digest, label_catalog_digest: labelCatalogDigest });
+  return { ...base, state_digest: stateDigest, label_catalog: labelCatalog, current_labels: currentLabels,
+    add_labels: addLabels, remove_labels: removeLabels, label_catalog_digest: labelCatalogDigest };
+}
+
 function googleWriteResponseError(toolName: string, response: GoogleWriteResponse): Error {
   let message = "";
   try {
@@ -939,10 +1192,14 @@ async function resolveGmailWriteAttachments(
 }
 
 function assertSupportedGmailWriteArguments(args: Record<string, unknown>): string {
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
   const supported = operation === "draft.send"
     ? new Set(["operation", "draft_id", "max_bytes"])
-    : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "attachments", "max_bytes"]);
+    : operation === "message.trash"
+      ? new Set(["operation", "message_id"])
+      : operation === "message.modify"
+        ? new Set(["operation", "message_id", "add_label_ids", "remove_label_ids"])
+        : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "attachments", "max_bytes"]);
   const unsupported = Object.keys(args).filter((key) => !supported.has(key));
   if (unsupported.length > 0) {
     const attachmentArgument = unsupported.some((key) => /attachment|file/i.test(key));
@@ -953,10 +1210,14 @@ function assertSupportedGmailWriteArguments(args: Record<string, unknown>): stri
   if (operation !== "draft.send" && args.body !== undefined && args.body_text !== undefined) {
     throw new Error("gmail.write body and body_text are ambiguous; request_sent=false; mutation_sent=false");
   }
+  if (operation === "message.trash") gmailMessageId(args);
+  if (operation === "message.modify") normalizeGmailMessageModifyArguments(args);
   if (operation !== "draft.create" && args.attachments !== undefined) {
     throw new Error("gmail.write attachments are supported only for draft.create; request_sent=false; mutation_sent=false");
   }
-  if (operation !== "draft.send") gmailWriteAttachmentReferences(args);
+  if (operation !== "draft.send" && operation !== "message.trash" && operation !== "message.modify") {
+    gmailWriteAttachmentReferences(args);
+  }
   return operation;
 }
 
@@ -1092,27 +1353,61 @@ function mutationResult(
 export async function invokeGmailWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
-  expectedDraftObservation?: GmailWriteTargetVersionObservation,
+  expectedTargetObservation?: GmailWriteTargetVersionObservation,
 ): Promise<unknown> {
   const operation = assertSupportedGmailWriteArguments(args);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write");
   const sendRequest = opts.request ?? defaultGoogleWriteRequest;
-  const attachments = operation === "draft.send" ? [] : await resolveGmailWriteAttachments(args, { ...opts, env }, token);
+  const attachments = operation === "draft.send" || operation === "message.trash" || operation === "message.modify"
+    ? [] : await resolveGmailWriteAttachments(args, { ...opts, env }, token);
 
   let draftSnapshot: GmailDraftSnapshot | undefined;
+  let messageTrashSnapshot: GmailMessageMetadataSnapshot | undefined;
+  let messageModifySnapshot: GmailMessageModifySnapshot | undefined;
   if (operation === "draft.send") {
-    if (!expectedDraftObservation || expectedDraftObservation.provider_state_digest === undefined ||
-        expectedDraftObservation.provider_raw_digest === undefined) {
+    if (!expectedTargetObservation || expectedTargetObservation.provider_state_digest === undefined ||
+        expectedTargetObservation.provider_raw_digest === undefined) {
       throw new Error("gmail.write draft.send target state evidence is required; request_sent=false; mutation_sent=false");
     }
     draftSnapshot = await readGmailDraftSnapshot(args, opts, token);
-    if (draftSnapshot.state_digest !== expectedDraftObservation.provider_state_digest ||
-        draftSnapshot.raw_digest !== expectedDraftObservation.provider_raw_digest ||
-        draftSnapshot.request_payload_digest !== expectedDraftObservation.request_payload_digest ||
-        gmailWriteTargetIdentityDigest(args) !== expectedDraftObservation.target_identity_digest) {
+    if (draftSnapshot.state_digest !== expectedTargetObservation.provider_state_digest ||
+        draftSnapshot.raw_digest !== expectedTargetObservation.provider_raw_digest ||
+        draftSnapshot.request_payload_digest !== expectedTargetObservation.request_payload_digest ||
+        gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
       throw new Error("gmail.write draft.send content or provider version changed; request_sent=false; mutation_sent=false");
+    }
+  } else if (operation === "message.trash") {
+    if (!expectedTargetObservation || !expectedTargetObservation.provider_state_digest) {
+      throw new Error("gmail.write message.trash target state evidence is required; request_sent=false; mutation_sent=false");
+    }
+    messageTrashSnapshot = await readGmailMessageMetadataSnapshot(args, opts, token);
+    if (messageTrashSnapshot.label_ids.includes("TRASH")) {
+      throw new Error("gmail.write message.trash target is already in Trash; request_sent=false; mutation_sent=false");
+    }
+    if (messageTrashSnapshot.state_digest !== expectedTargetObservation.provider_state_digest ||
+        messageTrashSnapshot.request_payload_digest !== expectedTargetObservation.request_payload_digest ||
+        gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
+      throw new Error("gmail.write message.trash target state changed after review; request_sent=false; mutation_sent=false");
+    }
+  } else if (operation === "message.modify") {
+    if (!expectedTargetObservation || !expectedTargetObservation.provider_state_digest) {
+      throw new Error("gmail.write message.modify target state evidence is required; request_sent=false; mutation_sent=false");
+    }
+    messageModifySnapshot = await readGmailMessageModifySnapshot(args, opts, token);
+    if (messageModifySnapshot.label_ids.includes("TRASH")) {
+      throw new Error("gmail.write message.modify cannot change labels on a message in Trash; use the distinct trash operation; mutation_sent=false");
+    }
+    const currentLabelIds = new Set(messageModifySnapshot.label_ids);
+    if (messageModifySnapshot.add_labels.some((label) => currentLabelIds.has(label.id)) ||
+        messageModifySnapshot.remove_labels.some((label) => !currentLabelIds.has(label.id))) {
+      throw new Error("gmail.write message.modify requested label state is already satisfied; mutation_sent=false");
+    }
+    if (messageModifySnapshot.state_digest !== expectedTargetObservation.provider_state_digest ||
+        messageModifySnapshot.request_payload_digest !== expectedTargetObservation.request_payload_digest ||
+        gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
+      throw new Error("gmail.write message.modify target state changed after review; request_sent=false; mutation_sent=false");
     }
   }
   const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, attachments);
@@ -1125,12 +1420,92 @@ export async function invokeGmailWrite(
     method: "POST" as const,
     maxBytes,
     token,
-    body,
+    ...(body !== undefined ? { body } : {}),
     ...executionRequestIdentity(opts),
   };
   assertToolExecutionNotCancelled(opts.signal, "gmail.write");
   const response = await sendRequest(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
+  if (operation === "message.trash") {
+    const confirmed = await readGmailMessageMetadataSnapshot(args, opts, token).catch(() => null);
+    if (!messageTrashSnapshot || !confirmed || confirmed.message_identity_digest !== messageTrashSnapshot.message_identity_digest ||
+        confirmed.account_identity_digest !== messageTrashSnapshot.account_identity_digest ||
+        confirmed.thread_identity_digest !== messageTrashSnapshot.thread_identity_digest ||
+        !confirmed.label_ids.includes("TRASH")) {
+      throw new Error("gmail.write message.trash postcondition is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const result = {
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      message_identity_digest: confirmed.message_identity_digest,
+      thread_identity_digest: confirmed.thread_identity_digest,
+      label_ids_digest: operationPlanDigest(confirmed.label_ids),
+      provider_state_digest: confirmed.state_digest,
+      trash_confirmed: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      service: "gmail",
+      mode: "write",
+      operation,
+      api_host: target.hostname,
+      path_digest: sha256Hex(target.path),
+      method: target.method,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      google_request_id: response.request_id,
+      request_status: "ok",
+      mutation_sent: true,
+      mutation_status: "confirmed",
+      result_digest: sha256Hex(result),
+      result,
+    };
+  }
+  if (operation === "message.modify") {
+    const confirmed = await readGmailMessageModifySnapshot(args, opts, token).catch(() => null);
+    const normalized = normalizeGmailMessageModifyArguments(args);
+    const expectedLabels = new Set(messageModifySnapshot?.label_ids ?? []);
+    for (const label of normalized.remove_label_ids) expectedLabels.delete(label);
+    for (const label of normalized.add_label_ids) expectedLabels.add(label);
+    if (!messageModifySnapshot || !confirmed ||
+        confirmed.message_identity_digest !== messageModifySnapshot.message_identity_digest ||
+        confirmed.account_identity_digest !== messageModifySnapshot.account_identity_digest ||
+        confirmed.thread_identity_digest !== messageModifySnapshot.thread_identity_digest ||
+        confirmed.label_catalog_digest !== messageModifySnapshot.label_catalog_digest ||
+        operationPlanDigest(confirmed.label_ids) !== operationPlanDigest([...expectedLabels].sort())) {
+      throw new Error("gmail.write message.modify postcondition is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    const result = {
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      message_identity_digest: confirmed.message_identity_digest,
+      thread_identity_digest: confirmed.thread_identity_digest,
+      added_label_ids_digest: operationPlanDigest(normalized.add_label_ids),
+      removed_label_ids_digest: operationPlanDigest(normalized.remove_label_ids),
+      label_ids_digest: operationPlanDigest(confirmed.label_ids),
+      provider_state_digest: confirmed.state_digest,
+      labels_confirmed: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      service: "gmail",
+      mode: "write",
+      operation,
+      api_host: target.hostname,
+      path_digest: sha256Hex(target.path),
+      method: target.method,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      google_request_id: response.request_id,
+      request_status: "ok",
+      mutation_sent: true,
+      mutation_status: "confirmed",
+      result_digest: sha256Hex(result),
+      result,
+    };
+  }
   return mutationResult("gmail.write", "gmail", operation, target, response);
 }
 
@@ -1138,6 +1513,16 @@ export async function invokeGmailWrite(
 export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): string {
   const operation = assertSupportedGmailWriteArguments(args);
   if (operation === "draft.send") throw new Error("gmail_target_version_operation_unsupported");
+  if (operation === "message.trash") {
+    return operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-trash-intent.v1",
+      operation, message_identity_digest: sha256String(gmailMessageId(args)) });
+  }
+  if (operation === "message.modify") {
+    const normalized = normalizeGmailMessageModifyArguments(args);
+    return operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-intent.v1",
+      operation, message_identity_digest: sha256String(normalized.message_id),
+      add_label_ids: normalized.add_label_ids, remove_label_ids: normalized.remove_label_ids });
+  }
   const subject = encodedSubject(stringArg(args, "subject")!);
   const bodyText = stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "";
   if (Buffer.byteLength(bodyText, "utf8") > MAX_CONTENT_BYTES) {
@@ -1177,6 +1562,15 @@ export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): s
     return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
       service: "gmail", operation, draft_id: stringArg(args, "draft_id")! });
   }
+  if (operation === "message.trash") {
+    return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v5",
+      service: "gmail", operation, message_identity_digest: sha256String(gmailMessageId(args)) });
+  }
+  if (operation === "message.modify") {
+    const normalized = normalizeGmailMessageModifyArguments(args);
+    return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v6",
+      service: "gmail", operation, message_identity_digest: sha256String(normalized.message_id) });
+  }
   const recipients: Record<string, string> = { to: safeAddressList(args, "to", true)! };
   for (const name of ["cc", "bcc", "reply_to"] as const) {
     const recipient = safeAddressList(args, name);
@@ -1196,7 +1590,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
     throw new Error("gmail.write target resolver requires an exact HDS command digest");
   }
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
   const observation: Record<string, unknown> = {
     schema_version: "blue-tanuki.gmail-write-target-version.v1",
     target_identity_digest: gmailWriteTargetIdentityDigest(args),
@@ -1214,6 +1608,29 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
     observation.request_payload_digest = snapshot.request_payload_digest;
     observation.provider_state_digest = snapshot.state_digest;
     observation.provider_raw_digest = snapshot.raw_digest;
+  } else if (operation === "message.trash") {
+    const snapshot = await readGmailMessageMetadataSnapshot(args, {
+      ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.request ? { request: options.request } : {}),
+    });
+    if (snapshot.label_ids.includes("TRASH")) {
+      throw new Error("gmail.write message.trash target is already in Trash; request_sent=false; mutation_sent=false");
+    }
+    observation.request_payload_digest = snapshot.request_payload_digest;
+    observation.provider_state_digest = snapshot.state_digest;
+  } else if (operation === "message.modify") {
+    const snapshot = await readGmailMessageModifySnapshot(args, {
+      ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.request ? { request: options.request } : {}),
+    });
+    const currentLabelIds = new Set(snapshot.label_ids);
+    if (snapshot.label_ids.includes("TRASH") ||
+        snapshot.add_labels.some((label) => currentLabelIds.has(label.id)) ||
+        snapshot.remove_labels.some((label) => !currentLabelIds.has(label.id))) {
+      throw new Error("gmail.write message.modify target already has the requested label state or is in Trash; request_sent=false; mutation_sent=false");
+    }
+    observation.request_payload_digest = snapshot.request_payload_digest;
+    observation.provider_state_digest = snapshot.state_digest;
   } else {
     observation.request_payload_digest = gmailWriteRequestPayloadDigest(args);
   }
@@ -1224,12 +1641,18 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
   let observation: GmailWriteTargetVersionObservation;
   try { observation = GmailWriteTargetVersionObservationSchema.parse(value); }
   catch { throw new Error("gmail.write target version evidence is required; request_sent=false; mutation_sent=false"); }
-  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
-  if (observation.target_identity_digest !== gmailWriteTargetIdentityDigest(args) ||
-      (operation === "draft.send"
-        ? !observation.provider_state_digest || !observation.provider_raw_digest
-          || observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(args, observation.provider_raw_digest)
-        : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(args))) {
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
+  const operationPayloadMatches = operation === "draft.send"
+    ? !!observation.provider_state_digest && !!observation.provider_raw_digest &&
+      observation.request_payload_digest === gmailDraftSendRequestPayloadDigest(args, observation.provider_raw_digest)
+    : operation === "message.trash"
+      ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
+        observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
+      : operation === "message.modify"
+        ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
+          observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
+      : observation.request_payload_digest === gmailWriteRequestPayloadDigest(args);
+  if (observation.target_identity_digest !== gmailWriteTargetIdentityDigest(args) || !operationPayloadMatches) {
     throw new Error("gmail.write target version changed; request_sent=false; mutation_sent=false");
   }
   return observation;
@@ -1239,10 +1662,21 @@ function gmailWriteRequest(
   args: Record<string, unknown>,
   draftRaw?: string,
   attachments: readonly GmailResolvedWriteAttachment[] = [],
-): { path: string; body: string } {
+): { path: string; body?: string } {
   const operation = assertSupportedGmailWriteArguments(args);
   if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args, attachments) } }) };
   if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args, attachments) }) };
+  if (operation === "message.trash") {
+    return { path: `/gmail/v1/users/me/messages/${encodeURIComponent(gmailMessageId(args))}/trash` };
+  }
+  if (operation === "message.modify") {
+    const normalized = normalizeGmailMessageModifyArguments(args);
+    return { path: `/gmail/v1/users/me/messages/${encodeURIComponent(normalized.message_id)}/modify`,
+      body: jsonBody({
+        ...(normalized.add_label_ids.length > 0 ? { addLabelIds: normalized.add_label_ids } : {}),
+        ...(normalized.remove_label_ids.length > 0 ? { removeLabelIds: normalized.remove_label_ids } : {}),
+      }) };
+  }
   if (!draftRaw) throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");
   return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({
     id: stringArg(args, "draft_id")!, message: { raw: draftRaw },
@@ -3960,6 +4394,75 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         ...options,
         ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
       };
+      if (operation === "message.trash") {
+        const snapshot = await readGmailMessageMetadataSnapshot(args, effectiveOptions);
+        if (snapshot.label_ids.includes("TRASH")) {
+          throw new Error("gmail.write message.trash target is already in Trash; content_review=unavailable");
+        }
+        const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+        const reviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-trash-review.v1",
+          command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+          request_payload_digest: snapshot.request_payload_digest, provider_state_digest: snapshot.state_digest });
+        const review: GmailMessageTrashContentReview = {
+          kind: "gmail_message_trash",
+          operation: "gmail.write.message.trash",
+          account_email: snapshot.account_email,
+          message_id: snapshot.message_id,
+          thread_id: snapshot.thread_id,
+          ...(snapshot.headers.from ? { from: snapshot.headers.from } : {}),
+          ...(snapshot.headers.to ? { to: snapshot.headers.to } : {}),
+          ...(snapshot.headers.cc ? { cc: snapshot.headers.cc } : {}),
+          ...(snapshot.headers.subject ? { subject: snapshot.headers.subject } : {}),
+          ...(snapshot.headers.date ? { date: snapshot.headers.date } : {}),
+          internal_date: snapshot.internal_date,
+          size_estimate: snapshot.size_estimate,
+          label_ids: snapshot.label_ids,
+          target_identity_digest: targetIdentityDigest,
+          request_payload_digest: snapshot.request_payload_digest,
+          provider_state_digest: snapshot.state_digest,
+          command_digest: commandDigest,
+          review_digest: reviewDigest,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        return review;
+      }
+      if (operation === "message.modify") {
+        const snapshot = await readGmailMessageModifySnapshot(args, effectiveOptions);
+        const currentLabelIds = new Set(snapshot.label_ids);
+        if (snapshot.label_ids.includes("TRASH") ||
+            snapshot.add_labels.some((label) => currentLabelIds.has(label.id)) ||
+            snapshot.remove_labels.some((label) => !currentLabelIds.has(label.id))) {
+          throw new Error("gmail.write message.modify target is in Trash or already has the requested label state; content_review=unavailable");
+        }
+        const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+        const reviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-review.v1",
+          command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+          request_payload_digest: snapshot.request_payload_digest, provider_state_digest: snapshot.state_digest });
+        const review: GmailMessageModifyContentReview = {
+          kind: "gmail_message_modify",
+          operation: "gmail.write.message.modify",
+          account_email: snapshot.account_email,
+          message_id: snapshot.message_id,
+          thread_id: snapshot.thread_id,
+          ...(snapshot.headers.from ? { from: snapshot.headers.from } : {}),
+          ...(snapshot.headers.to ? { to: snapshot.headers.to } : {}),
+          ...(snapshot.headers.cc ? { cc: snapshot.headers.cc } : {}),
+          ...(snapshot.headers.subject ? { subject: snapshot.headers.subject } : {}),
+          ...(snapshot.headers.date ? { date: snapshot.headers.date } : {}),
+          current_labels: snapshot.current_labels,
+          add_labels: snapshot.add_labels,
+          remove_labels: snapshot.remove_labels,
+          target_identity_digest: targetIdentityDigest,
+          request_payload_digest: snapshot.request_payload_digest,
+          provider_state_digest: snapshot.state_digest,
+          command_digest: commandDigest,
+          review_digest: reviewDigest,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        return review;
+      }
       const resolved = await resolveGmailWriteAttachments(args, effectiveOptions);
       const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
       const attachments: GmailAttachmentContentReview[] = resolved.map((attachment) => ({
@@ -3999,10 +4502,11 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
           typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
         throw new Error("gmail.write requires an approved Executor identity; mutation_sent=false");
       }
-      const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+      const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
       const observation = assertGmailWriteTargetVersion(args, context.target_version_observation);
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
-        command_digest: context.command_digest, signal: context.signal }, operation === "draft.send" ? observation : undefined);
+        command_digest: context.command_digest, signal: context.signal },
+      operation === "draft.send" || operation === "message.trash" || operation === "message.modify" ? observation : undefined);
     },
   };
 }

@@ -1,7 +1,9 @@
-import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
+import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { normalizeGmailAddressList, type ExecuteCommand } from "@blue-tanuki/protocol";
 import type {
+  WebChatGmailMessageTrashContentReview,
+  WebChatGmailMessageModifyContentReview,
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
 } from "@blue-tanuki/channel-webchat";
@@ -33,6 +35,228 @@ export function isGmailDraftSendReviewCommand(command: ExecuteCommand): boolean 
   return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
     typeof command.payload.arguments.operation === "string" &&
     command.payload.arguments.operation.trim().toLowerCase() === "draft.send";
+}
+
+export function isGmailMessageTrashReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
+    typeof command.payload.arguments.operation === "string" &&
+    command.payload.arguments.operation.trim().toLowerCase() === "message.trash";
+}
+
+export function projectGmailMessageTrashContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  snapshot: {
+    kind: "gmail_message_trash";
+    operation: "gmail.write.message.trash";
+    account_email: string;
+    message_id: string;
+    thread_id: string;
+    from?: string;
+    to?: string;
+    cc?: string;
+    subject?: string;
+    date?: string;
+    internal_date: string;
+    size_estimate: number;
+    label_ids: readonly string[];
+    target_identity_digest: string;
+    request_payload_digest: string;
+    provider_state_digest: string;
+    command_digest: string;
+    review_digest: string;
+    used_for_authority: false;
+    may_execute: false;
+  },
+): WebChatGmailMessageTrashContentReview | null {
+  if (!isGmailMessageTrashReviewCommand(command) || command.type !== "tool_call" ||
+      !/^[a-f0-9]{64}$/.test(commandDigest)) return null;
+  const args = command.payload.arguments;
+  if (Object.keys(args).some((key) => !["operation", "message_id"].includes(key)) ||
+      typeof args.message_id !== "string" || args.message_id !== snapshot.message_id ||
+      snapshot.kind !== "gmail_message_trash" || snapshot.operation !== "gmail.write.message.trash" ||
+      snapshot.command_digest !== commandDigest || snapshot.used_for_authority !== false || snapshot.may_execute !== false ||
+      !snapshot.account_email.trim() || snapshot.account_email.length > 320 ||
+      !snapshot.thread_id.trim() || snapshot.thread_id.length > 512 ||
+      !/^[a-f0-9]{64}$/.test(snapshot.target_identity_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.request_payload_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.provider_state_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.review_digest) ||
+      !/^\d{1,16}$/.test(snapshot.internal_date) || !Number.isSafeInteger(Number(snapshot.internal_date)) ||
+      !Number.isSafeInteger(snapshot.size_estimate) || snapshot.size_estimate < 0 ||
+      !Array.isArray(snapshot.label_ids) || snapshot.label_ids.length > 100 ||
+      snapshot.label_ids.some((label) => typeof label !== "string" || !label.trim() || label.length > 256 ||
+        /[\r\n\u0000-\u001f\u007f]/.test(label)) || snapshot.label_ids.includes("TRASH") ||
+      [snapshot.account_email, snapshot.message_id, snapshot.thread_id, snapshot.from, snapshot.to,
+        snapshot.cc, snapshot.subject, snapshot.date].some((value) => value !== undefined &&
+          (typeof value !== "string" || value.length > 4_096 || /[\r\n\u0000-\u001f\u007f]/.test(value)))) return null;
+  try {
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+    const expectedReviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-trash-review.v1",
+      command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest, provider_state_digest: snapshot.provider_state_digest });
+    if (snapshot.request_payload_digest !== requestPayloadDigest ||
+        snapshot.target_identity_digest !== targetIdentityDigest || snapshot.review_digest !== expectedReviewDigest) return null;
+    return {
+      kind: "gmail_message_trash",
+      command_id: command.id,
+      command_digest: commandDigest,
+      review_digest: expectedReviewDigest,
+      target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest,
+      provider_state_digest: snapshot.provider_state_digest,
+      operation: "gmail.write.message.trash",
+      account_email: snapshot.account_email,
+      message_id: snapshot.message_id,
+      thread_id: snapshot.thread_id,
+      ...(snapshot.from ? { from: snapshot.from } : {}),
+      ...(snapshot.to ? { to: snapshot.to } : {}),
+      ...(snapshot.cc ? { cc: snapshot.cc } : {}),
+      ...(snapshot.subject ? { subject: snapshot.subject } : {}),
+      ...(snapshot.date ? { date: snapshot.date } : {}),
+      internal_date: snapshot.internal_date,
+      size_estimate: snapshot.size_estimate,
+      label_ids: [...snapshot.label_ids],
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function validateGmailMessageTrashContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  current: boolean,
+  revealedDigest: string | undefined,
+  submittedDigest: string | undefined,
+  snapshot: Parameters<typeof projectGmailMessageTrashContentReview>[2],
+): WebChatApprovalContentReviewValidation {
+  if (!isGmailMessageTrashReviewCommand(command)) return "not_required";
+  if (!current || !/^[a-f0-9]{64}$/.test(commandDigest)) return "stale";
+  const projection = projectGmailMessageTrashContentReview(command, commandDigest, snapshot);
+  if (!projection) return "unavailable";
+  if (!revealedDigest || !submittedDigest) return "required";
+  return revealedDigest === projection.review_digest && submittedDigest === projection.review_digest
+    ? "valid" : "stale";
+}
+
+export function isGmailMessageModifyReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
+    typeof command.payload.arguments.operation === "string" &&
+    command.payload.arguments.operation.trim().toLowerCase() === "message.modify";
+}
+
+export function projectGmailMessageModifyContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  snapshot: {
+    kind: "gmail_message_modify";
+    operation: "gmail.write.message.modify";
+    account_email: string;
+    message_id: string;
+    thread_id: string;
+    from?: string;
+    to?: string;
+    cc?: string;
+    subject?: string;
+    date?: string;
+    current_labels: readonly { id: string; name: string; type: "system" | "user" }[];
+    add_labels: readonly { id: string; name: string; type: "user" }[];
+    remove_labels: readonly { id: string; name: string; type: "user" }[];
+    target_identity_digest: string;
+    request_payload_digest: string;
+    provider_state_digest: string;
+    command_digest: string;
+    review_digest: string;
+    used_for_authority: false;
+    may_execute: false;
+  },
+): WebChatGmailMessageModifyContentReview | null {
+  if (!isGmailMessageModifyReviewCommand(command) || command.type !== "tool_call" ||
+      !/^[a-f0-9]{64}$/.test(commandDigest)) return null;
+  const args = command.payload.arguments;
+  const isLabel = (label: { id: string; name: string; type: "system" | "user" }, types: readonly string[]) =>
+    !!label && typeof label.id === "string" && label.id.length > 0 && label.id.length <= 256 &&
+    /^[A-Za-z0-9_-]+$/.test(label.id) && typeof label.name === "string" && label.name.length > 0 &&
+    label.name.length <= 512 && !/[\r\n\u0000-\u001f\u007f]/.test(label.name) && types.includes(label.type);
+  if (Object.keys(args).some((key) => !["operation", "message_id", "add_label_ids", "remove_label_ids"].includes(key)) ||
+      typeof args.message_id !== "string" || args.message_id !== snapshot.message_id ||
+      snapshot.kind !== "gmail_message_modify" || snapshot.operation !== "gmail.write.message.modify" ||
+      snapshot.command_digest !== commandDigest || snapshot.used_for_authority !== false || snapshot.may_execute !== false ||
+      !snapshot.account_email.trim() || snapshot.account_email.length > 320 ||
+      !snapshot.thread_id.trim() || snapshot.thread_id.length > 512 ||
+      !/^[a-f0-9]{64}$/.test(snapshot.target_identity_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.request_payload_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.provider_state_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.review_digest) ||
+      !Array.isArray(snapshot.current_labels) || snapshot.current_labels.length > 100 ||
+      !snapshot.current_labels.every((label) => isLabel(label, ["system", "user"])) ||
+      !Array.isArray(snapshot.add_labels) || snapshot.add_labels.length > 20 ||
+      !snapshot.add_labels.every((label) => isLabel(label, ["user"])) ||
+      !Array.isArray(snapshot.remove_labels) || snapshot.remove_labels.length > 20 ||
+      !snapshot.remove_labels.every((label) => isLabel(label, ["user"])) ||
+      new Set(snapshot.current_labels.map((label) => label.id)).size !== snapshot.current_labels.length ||
+      [snapshot.account_email, snapshot.message_id, snapshot.thread_id, snapshot.from, snapshot.to,
+        snapshot.cc, snapshot.subject, snapshot.date].some((value) => value !== undefined &&
+          (typeof value !== "string" || value.length > 4_096 || /[\r\n\u0000-\u001f\u007f]/.test(value)))) return null;
+  try {
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+    const addIds = Array.isArray(args.add_label_ids) ? [...args.add_label_ids as string[]].sort() : [];
+    const removeIds = Array.isArray(args.remove_label_ids) ? [...args.remove_label_ids as string[]].sort() : [];
+    const expectedReviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-review.v1",
+      command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest, provider_state_digest: snapshot.provider_state_digest });
+    if (snapshot.request_payload_digest !== requestPayloadDigest ||
+        snapshot.target_identity_digest !== targetIdentityDigest || snapshot.review_digest !== expectedReviewDigest ||
+        JSON.stringify(snapshot.add_labels.map((label) => label.id).sort()) !== JSON.stringify(addIds) ||
+        JSON.stringify(snapshot.remove_labels.map((label) => label.id).sort()) !== JSON.stringify(removeIds)) return null;
+    return {
+      kind: "gmail_message_modify",
+      command_id: command.id,
+      command_digest: commandDigest,
+      review_digest: expectedReviewDigest,
+      target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest,
+      provider_state_digest: snapshot.provider_state_digest,
+      operation: "gmail.write.message.modify",
+      account_email: snapshot.account_email,
+      message_id: snapshot.message_id,
+      thread_id: snapshot.thread_id,
+      ...(snapshot.from ? { from: snapshot.from } : {}),
+      ...(snapshot.to ? { to: snapshot.to } : {}),
+      ...(snapshot.cc ? { cc: snapshot.cc } : {}),
+      ...(snapshot.subject ? { subject: snapshot.subject } : {}),
+      ...(snapshot.date ? { date: snapshot.date } : {}),
+      current_labels: [...snapshot.current_labels],
+      add_labels: [...snapshot.add_labels],
+      remove_labels: [...snapshot.remove_labels],
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function validateGmailMessageModifyContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  current: boolean,
+  revealedDigest: string | undefined,
+  submittedDigest: string | undefined,
+  snapshot: Parameters<typeof projectGmailMessageModifyContentReview>[2],
+): WebChatApprovalContentReviewValidation {
+  if (!isGmailMessageModifyReviewCommand(command)) return "not_required";
+  if (!current || !/^[a-f0-9]{64}$/.test(commandDigest)) return "stale";
+  const projection = projectGmailMessageModifyContentReview(command, commandDigest, snapshot);
+  if (!projection) return "unavailable";
+  if (!revealedDigest || !submittedDigest) return "required";
+  return revealedDigest === projection.review_digest && submittedDigest === projection.review_digest
+    ? "valid" : "stale";
 }
 
 /** Project only a supported provider snapshot; raw MIME and credentials stay inside the Gmail adapter. */

@@ -46,6 +46,8 @@ export {
   type WebChatAboutSurface,
   type WebChatUpdateSurface,
   type WebChatRecoverySurface,
+  type WebChatGmailMessageTrashContentReview,
+  type WebChatGmailMessageModifyContentReview,
   type WebChatOperatorSurface,
   type WebChatOperatorSurfaces,
 } from "./webchat_types.js";

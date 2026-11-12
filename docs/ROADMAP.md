@@ -6,9 +6,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近施工BUILD_BATCH — QE_BUILD / F02.02 添付付きGmail draft.sendレビューconsumer
+### 直近施工BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modify結果帰還consumer
 
-既存Gmail draft送信reviewに、添付を含む厳格な`multipart/mixed`内容の解析・metadata/hash投影・Gateway digest拘束・WebChat no-store表示を接続した。添付bytesはreview projectionへ出さず、L3 review後にprovider stateと正確なraw MIMEを再照合する。選択元添付と既存draft内添付の表示を分け、Control Center生成scriptのraw control characterも除去した。core／Gateway／WebChatの型検査・buildと対象testはPASS。実Gmail／credential／送信、全workspace suite、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、F02.02全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次consumerはF02.02のGmail delete／label未接続操作と、合成Gateway結果から検証済みresult／M receipt／owner帰還までをrev4.0と再照合して選ぶ。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+既存Gmail write／Approval Gate／Executor／HDS-J/M／Control Centerへ単一messageのTrash移動と既存user label変更を接続した。本文／raw MIMEをreview・Mへ出さず、high/L3 no-store確認、作用前の対象状態再照合、単回provider request、後状態の再読込、結果不明時の自動再送禁止を維持する。synthetic Gateway経路では検証済み結果、digest限定M receipt、J/M再起動、owner帰還まで確認した。focused test 10件、workspace typecheck、15-project build、`docs:check`、`git diff --check`はPASS。全workspace suite、実Gmail／credential／外部作用、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、provider実接続、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次の独立batchは現行rev4.0と最新HEADから選定する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F08.03 MCP runtime観測のConnections設定consumer
 

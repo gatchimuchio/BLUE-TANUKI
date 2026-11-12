@@ -276,6 +276,54 @@ export interface GmailWriteContentReview {
   may_execute: false;
 }
 
+/** No-store projection of the exact existing Gmail message selected for a reversible Trash move. */
+export interface GmailMessageTrashContentReview {
+  kind: "gmail_message_trash";
+  operation: "gmail.write.message.trash";
+  account_email: string;
+  message_id: string;
+  thread_id: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  internal_date: string;
+  size_estimate: number;
+  label_ids: readonly string[];
+  target_identity_digest: string;
+  request_payload_digest: string;
+  provider_state_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+/** No-store, exact-message review for adding/removing existing user labels. */
+export interface GmailMessageModifyContentReview {
+  kind: "gmail_message_modify";
+  operation: "gmail.write.message.modify";
+  account_email: string;
+  message_id: string;
+  thread_id: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  current_labels: readonly { id: string; name: string; type: "system" | "user" }[];
+  add_labels: readonly { id: string; name: string; type: "user" }[];
+  remove_labels: readonly { id: string; name: string; type: "user" }[];
+  target_identity_digest: string;
+  request_payload_digest: string;
+  provider_state_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** Exact plan-bound replacement diff revealed only through the authenticated owner-review endpoint. */
 export interface FileEditDiffContentReview {
   path: string;
@@ -607,7 +655,9 @@ export interface GoogleDriveFileTrashContentReview {
   may_execute: false;
 }
 
-export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | FileEditDiffContentReview | FileDeleteTargetContentReview |
+export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | GmailMessageTrashContentReview |
+  GmailMessageModifyContentReview |
+  FileEditDiffContentReview | FileDeleteTargetContentReview |
   MemoryPersonalizationStopContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |

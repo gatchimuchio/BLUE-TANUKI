@@ -11,7 +11,8 @@ import WebSocket from "ws";
 import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
-  githubWriteTool, LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+  githubWriteTool, gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest, gmailWriteTool,
+  LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDigest, githubIssueCreateTargetIdentityDigest,
   githubIssueUpdateRequestPayloadDigest, githubIssueUpdateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest, githubIssueCommentCreateTargetIdentityDigest,
@@ -19,7 +20,8 @@ import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDig
   githubPullRequestCreateRequestPayloadDigest, githubPullRequestCreateTargetIdentityDigest,
   githubCodePushRequestPayloadDigest, githubCodePushTargetIdentityDigest,
   githubReleaseDraftCreateRequestPayloadDigest, githubReleaseDraftCreateTargetIdentityDigest,
-  GitHubWriteTargetVersionObservationSchema, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
+  GitHubWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema, memoryCommitContentDigest,
+  type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
@@ -156,6 +158,47 @@ function fileEditCandidate(id: string): OperationPlan {
         validation: [{ check_id: "edited-note", method: "result_equals", target, expected: output }],
         compensation: { available: false, reason: "an in-place edit requires a newly reviewed edit to restore" } } }],
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
+function gmailTrashCandidate(id: string): OperationPlan {
+  const target = { kind: "external_service" as const, id: "gmail" };
+  return { version: "operation-core.v1", plan_id: `gmail-trash-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "trash-message", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters: { operation: "message.trash", message_id: "fixture-message_123" },
+      preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "gmail-trash-confirmed", method: "gmail_message_trash_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-message-trash-result-validation.v1", operation: "message.trash" } }],
+        compensation: { available: false, reason: "Owner can restore the message from Gmail Trash." } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false,
+      command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
+function gmailMessageModifyCandidate(id: string): OperationPlan {
+  const target = { kind: "external_service" as const, id: "gmail" };
+  const parameters = { operation: "message.modify", message_id: "fixture-message_234",
+    add_label_ids: ["Label_2"], remove_label_ids: ["Label_1"] };
+  const messageIdentityDigest = createHash("sha256").update(parameters.message_id, "utf8").digest("hex");
+  const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+  const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
+  return { version: "operation-core.v1", plan_id: `gmail-message-modify-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "modify-message-labels", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters, preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "gmail-message-labels-confirmed", method: "gmail_message_modify_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-message-modify-result-validation.v1", operation: "message.modify",
+            message_identity_digest: messageIdentityDigest, target_identity_digest: targetIdentityDigest,
+            request_payload_digest: requestPayloadDigest, added_label_ids_digest: operationPlanDigest(["Label_2"]),
+            removed_label_ids_digest: operationPlanDigest(["Label_1"]) } }],
+        compensation: { available: false, reason: "Owner may restore the prior user-label set with a separately reviewed operation." } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false,
+      command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
 type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" |
@@ -478,6 +521,7 @@ async function setupInternal(root: string, workspace: string, planFactory: (id: 
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
   tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
   tools.register(githubWriteTool);
+  tools.register(gmailWriteTool);
   // HDS and approval share a monotonic wall-clock floor; the executor worker still observes the real host clock.
   // Executor rollback/expiry behavior is covered by execution_intent_runtime.test.ts.
   let approvalMonotonicMs = 0;
@@ -883,6 +927,208 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     for (const raw of [c.workspace, "notes.txt", "synthetic delete target"]) expect(memoryJson).not.toContain(raw);
     expect(c.execution.pendingResults()).toHaveLength(0);
   }, fileDeleteCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic delete target\n")));
+
+  it("Jが確認したGmail trash結果だけをdigest限定でM receiptへ固定し、再起動後にOwnerへ返す", async () => fixture(async (c) => {
+    const messageId = "fixture-message_123";
+    const messageIdentityDigest = createHash("sha256").update(messageId, "utf8").digest("hex");
+    const providerStateDigest = "b".repeat(64);
+    const threadIdentityDigest = "c".repeat(64);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(c.plan.steps[0]!.parameters!);
+    const result = {
+      target_identity_digest: targetIdentityDigest,
+      message_identity_digest: messageIdentityDigest,
+      thread_identity_digest: threadIdentityDigest,
+      label_ids_digest: operationPlanDigest(["INBOX", "TRASH"]),
+      provider_state_digest: providerStateDigest,
+      trash_confirmed: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const output = {
+      service: "gmail", mode: "write", operation: "message.trash", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest(`/gmail/v1/users/me/messages/${messageId}/trash`), method: "POST", status: 200,
+      content_type: "application/json", truncated: false, request_status: "ok", mutation_sent: true,
+      mutation_status: "confirmed", result_digest: operationPlanDigest(result), result,
+    };
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(0);
+
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toEqual(output);
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+
+    const checkpoint = c.j.load()!.plans[0]!;
+    const binding = checkpoint.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", memory_receipt: expect.objectContaining({ revision: 1 }) });
+    expect(checkpoint.results[0]?.output).toEqual(output);
+    const memory = inspectMemory(c);
+    expect(memory).toMatchObject({ revision: 1 });
+    expect(memory.records).toHaveLength(1);
+    expect(memory.records[0]).toMatchObject({ schema_version: "operation-action-result.v1",
+      operation: "gmail.write.message.trash", plan_id_digest: operationPlanDigest(c.plan.plan_id),
+      plan_binding_status: "verified", plan_validation_status: "matched", target_identity_digest: targetIdentityDigest,
+      provider_state_digest: providerStateDigest, effect_observation: "reported_success", result_digest: binding.result_digest,
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const memoryJson = JSON.stringify(memory.records[0]);
+    for (const privateValue of [messageId, "owner@example.invalid", "Synthetic review subject", "private message body"]) {
+      expect(memoryJson).not.toContain(privateValue);
+    }
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+    const current = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const returned = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: current.revision_digest, step_id: "trash-message" })}`));
+    expect(returned.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+    const projection = restarted.takeOperationPlanSavedResultReturn(returned.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v7",
+      operation: "gmail.write", operation_name: "message.trash", status: "verified", trash_confirmed: true,
+      message_identity_digest: messageIdentityDigest, target_identity_digest: targetIdentityDigest,
+      provider_state_digest: providerStateDigest, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(projection)).not.toContain(messageId);
+    expect(JSON.stringify(projection)).not.toContain("Synthetic review subject");
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, (id) => {
+    const plan = gmailTrashCandidate(id);
+    const parameters = plan.steps[0]!.parameters!;
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
+    vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation(async (args, options) => {
+      if (!options?.command_digest || !options.operation_plan_binding_digest) {
+        throw new Error("fixture Gmail target observation lacked current J binding");
+      }
+      return GmailWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.gmail-write-target-version.v1", target_identity_digest: targetIdentityDigest,
+        request_payload_digest: requestPayloadDigest, provider_state_digest: "b".repeat(64),
+        command_digest: options.command_digest, operation_plan_binding_digest: options.operation_plan_binding_digest,
+        used_for_authority: false, may_execute: false,
+      });
+    });
+    const messageIdentityDigest = createHash("sha256").update(String(parameters.message_id), "utf8").digest("hex");
+    const fixtureResult = {
+      target_identity_digest: targetIdentityDigest, message_identity_digest: messageIdentityDigest,
+      thread_identity_digest: "c".repeat(64), label_ids_digest: operationPlanDigest(["INBOX", "TRASH"]),
+      provider_state_digest: "b".repeat(64), trash_confirmed: true, used_for_authority: false, may_execute: false,
+    };
+    vi.spyOn(gmailWriteTool, "invoke").mockResolvedValue({
+      service: "gmail", mode: "write", operation: "message.trash", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest(`/gmail/v1/users/me/messages/${String(parameters.message_id)}/trash`), method: "POST", status: 200,
+      content_type: "application/json", truncated: false, request_status: "ok", mutation_sent: true,
+      mutation_status: "confirmed", result_digest: operationPlanDigest(fixtureResult), result: fixtureResult,
+    });
+    return plan;
+  }));
+
+  it("Jで検証したGmail label結果だけをdigest限定でM receiptへ固定し、再起動後にOwnerへ返す", async () => fixture(async (c) => {
+    const messageId = "fixture-message_234";
+    const messageIdentityDigest = createHash("sha256").update(messageId, "utf8").digest("hex");
+    const providerStateDigest = "d".repeat(64);
+    const threadIdentityDigest = "e".repeat(64);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(c.plan.steps[0]!.parameters!);
+    const addedLabelIdsDigest = operationPlanDigest(["Label_2"]);
+    const removedLabelIdsDigest = operationPlanDigest(["Label_1"]);
+    const result = {
+      target_identity_digest: targetIdentityDigest,
+      message_identity_digest: messageIdentityDigest,
+      thread_identity_digest: threadIdentityDigest,
+      added_label_ids_digest: addedLabelIdsDigest,
+      removed_label_ids_digest: removedLabelIdsDigest,
+      label_ids_digest: operationPlanDigest(["INBOX", "Label_2"]),
+      provider_state_digest: providerStateDigest,
+      labels_confirmed: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const output = {
+      service: "gmail", mode: "write", operation: "message.modify", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest(`/gmail/v1/users/me/messages/${messageId}/modify`), method: "POST", status: 200,
+      content_type: "application/json", truncated: false, request_status: "ok", mutation_sent: true,
+      mutation_status: "confirmed", result_digest: operationPlanDigest(result), result,
+    };
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(0);
+
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toEqual(output);
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id, target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+
+    const checkpoint = c.j.load()!.plans[0]!;
+    const binding = checkpoint.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", memory_receipt: expect.objectContaining({ revision: 1 }) });
+    expect(checkpoint.results[0]?.output).toEqual(output);
+    const memory = inspectMemory(c);
+    expect(memory).toMatchObject({ revision: 1 });
+    expect(memory.records).toHaveLength(1);
+    expect(memory.records[0]).toMatchObject({ schema_version: "operation-action-result.v1",
+      operation: "gmail.write.message.modify", plan_id_digest: operationPlanDigest(c.plan.plan_id),
+      plan_binding_status: "verified", plan_validation_status: "matched", target_identity_digest: targetIdentityDigest,
+      provider_state_digest: providerStateDigest, effect_observation: "reported_success", result_digest: binding.result_digest,
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const memoryJson = JSON.stringify(memory.records[0]);
+    for (const privateValue of [messageId, "owner@example.invalid", "Current project", "Label_2", "Label_1"]) {
+      expect(memoryJson).not.toContain(privateValue);
+    }
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+    const current = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const returned = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: current.revision_digest, step_id: "modify-message-labels" })}`));
+    expect(returned.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+    const projection = restarted.takeOperationPlanSavedResultReturn(returned.command!);
+    expect(projection).toMatchObject({ schema_version: "operation-plan-saved-result-return.v8",
+      operation: "gmail.write", operation_name: "message.modify", status: "verified", labels_confirmed: true,
+      message_identity_digest: messageIdentityDigest, target_identity_digest: targetIdentityDigest,
+      added_label_ids_digest: addedLabelIdsDigest, removed_label_ids_digest: removedLabelIdsDigest,
+      provider_state_digest: providerStateDigest, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(projection)).not.toContain(messageId);
+    expect(JSON.stringify(projection)).not.toContain("Current project");
+    expect(gmailWriteTool.invoke).toHaveBeenCalledTimes(1);
+  }, (id) => {
+    const plan = gmailMessageModifyCandidate(id);
+    const parameters = plan.steps[0]!.parameters!;
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
+    vi.spyOn(gmailWriteTool, "inspect_target_version").mockImplementation(async (_args, options) => {
+      if (!options?.command_digest || !options.operation_plan_binding_digest) {
+        throw new Error("fixture Gmail target observation lacked current J binding");
+      }
+      return GmailWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.gmail-write-target-version.v1", target_identity_digest: targetIdentityDigest,
+        request_payload_digest: requestPayloadDigest, provider_state_digest: "d".repeat(64),
+        command_digest: options.command_digest, operation_plan_binding_digest: options.operation_plan_binding_digest,
+        used_for_authority: false, may_execute: false,
+      });
+    });
+    const messageIdentityDigest = createHash("sha256").update(String(parameters.message_id), "utf8").digest("hex");
+    const fixtureResult = {
+      target_identity_digest: targetIdentityDigest, message_identity_digest: messageIdentityDigest,
+      thread_identity_digest: "e".repeat(64), added_label_ids_digest: operationPlanDigest(["Label_2"]),
+      removed_label_ids_digest: operationPlanDigest(["Label_1"]), label_ids_digest: operationPlanDigest(["INBOX", "Label_2"]),
+      provider_state_digest: "d".repeat(64), labels_confirmed: true, used_for_authority: false, may_execute: false,
+    };
+    vi.spyOn(gmailWriteTool, "invoke").mockResolvedValue({
+      service: "gmail", mode: "write", operation: "message.modify", api_host: "gmail.googleapis.com",
+      path_digest: operationPlanDigest(`/gmail/v1/users/me/messages/${String(parameters.message_id)}/modify`),
+      method: "POST", status: 200, content_type: "application/json", truncated: false, request_status: "ok",
+      mutation_sent: true, mutation_status: "confirmed", result_digest: operationPlanDigest(fixtureResult), result: fixtureResult,
+    });
+    return plan;
+  }));
 
   it("Operation Planから実行したfile.edit結果をJ/Mへ返し、明示選択後に非権威観測としてCへ渡す", async () => fixture(async (c) => {
     const operationPlanBindingDigest = c.hds.getExecutionOperationPlanBindingDigest(c.cmd);

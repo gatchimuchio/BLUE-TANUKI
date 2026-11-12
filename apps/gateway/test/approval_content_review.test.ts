@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
+import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "@blue-tanuki/core";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   isGmailDraftSendReviewCommand,
+  isGmailMessageTrashReviewCommand,
+  isGmailMessageModifyReviewCommand,
   isGmailWriteContentReviewCommand,
   projectGmailDraftSendContentReview,
+  projectGmailMessageTrashContentReview,
+  projectGmailMessageModifyContentReview,
   projectGmailWriteContentReview,
   validateGmailDraftSendContentReview,
+  validateGmailMessageTrashContentReview,
+  validateGmailMessageModifyContentReview,
   validateGmailWriteContentReview,
 } from "../src/approval_content_review.js";
 
@@ -25,6 +32,78 @@ function command(arguments_: Record<string, unknown>): ExecuteCommand {
 }
 
 describe("Gmail approval content review projection", () => {
+  it("message.trash review is exact-target, state, and command bound", () => {
+    const args = { operation: "message.trash", message_id: "fixture-message_1" };
+    const input = command(args);
+    const commandDigest = "a".repeat(64);
+    const providerStateDigest = "b".repeat(64);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+    const reviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-trash-review.v1",
+      command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest, provider_state_digest: providerStateDigest });
+    const snapshot = {
+      kind: "gmail_message_trash" as const, operation: "gmail.write.message.trash" as const,
+      account_email: "owner@example.test", message_id: args.message_id, thread_id: "fixture-thread_1",
+      from: "sender@example.test", to: "owner@example.test", subject: "Synthetic subject",
+      internal_date: "1760000000000", size_estimate: 128, label_ids: ["INBOX"],
+      target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest,
+      provider_state_digest: providerStateDigest, command_digest: commandDigest, review_digest: reviewDigest,
+      used_for_authority: false as const, may_execute: false as const,
+    };
+    const projection = projectGmailMessageTrashContentReview(input, commandDigest, snapshot);
+
+    expect(isGmailMessageTrashReviewCommand(input)).toBe(true);
+    expect(projection).toMatchObject({ kind: "gmail_message_trash", operation: "gmail.write.message.trash",
+      command_digest: commandDigest, review_digest: reviewDigest, message_id: args.message_id, subject: "Synthetic subject",
+      label_ids: ["INBOX"], used_for_authority: false, may_execute: false });
+    expect(validateGmailMessageTrashContentReview(input, commandDigest, true, undefined, undefined, snapshot)).toBe("required");
+    expect(validateGmailMessageTrashContentReview(input, commandDigest, true, reviewDigest, reviewDigest, snapshot)).toBe("valid");
+    expect(validateGmailMessageTrashContentReview(input, commandDigest, false, reviewDigest, reviewDigest, snapshot)).toBe("stale");
+    expect(projectGmailMessageTrashContentReview(input, commandDigest, { ...snapshot, message_id: "other-message" })).toBeNull();
+    expect(projectGmailMessageTrashContentReview(command({ ...args, extra: "unexpected" }), commandDigest, snapshot)).toBeNull();
+    expect(isGmailMessageTrashReviewCommand(command({ operation: "message.send", message_id: args.message_id }))).toBe(false);
+  });
+
+  it("message.modify review binds one message and the exact add/remove user-label set", () => {
+    const args = { operation: "message.modify", message_id: "fixture-message_2",
+      add_label_ids: ["Label_2"], remove_label_ids: ["Label_1"] };
+    const input = command(args);
+    const commandDigest = "a".repeat(64);
+    const providerStateDigest = "b".repeat(64);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const targetIdentityDigest = gmailWriteTargetIdentityDigest(args);
+    const reviewDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-message-modify-review.v1",
+      command_digest: commandDigest, target_identity_digest: targetIdentityDigest,
+      request_payload_digest: requestPayloadDigest, provider_state_digest: providerStateDigest });
+    const snapshot = {
+      kind: "gmail_message_modify" as const, operation: "gmail.write.message.modify" as const,
+      account_email: "owner@example.test", message_id: args.message_id, thread_id: "fixture-thread_2",
+      from: "sender@example.test", to: "owner@example.test", subject: "Synthetic label subject",
+      current_labels: [{ id: "INBOX", name: "Inbox", type: "system" as const },
+        { id: "Label_1", name: "Old project", type: "user" as const }],
+      add_labels: [{ id: "Label_2", name: "Current project", type: "user" as const }],
+      remove_labels: [{ id: "Label_1", name: "Old project", type: "user" as const }],
+      target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest,
+      provider_state_digest: providerStateDigest, command_digest: commandDigest, review_digest: reviewDigest,
+      used_for_authority: false as const, may_execute: false as const,
+    };
+    const projection = projectGmailMessageModifyContentReview(input, commandDigest, snapshot);
+
+    expect(isGmailMessageModifyReviewCommand(input)).toBe(true);
+    expect(projection).toMatchObject({ kind: "gmail_message_modify", operation: "gmail.write.message.modify",
+      command_digest: commandDigest, review_digest: reviewDigest, message_id: args.message_id,
+      add_labels: [{ id: "Label_2", name: "Current project" }],
+      remove_labels: [{ id: "Label_1", name: "Old project" }], used_for_authority: false, may_execute: false });
+    expect(validateGmailMessageModifyContentReview(input, commandDigest, true, undefined, undefined, snapshot)).toBe("required");
+    expect(validateGmailMessageModifyContentReview(input, commandDigest, true, reviewDigest, reviewDigest, snapshot)).toBe("valid");
+    expect(validateGmailMessageModifyContentReview(input, commandDigest, false, reviewDigest, reviewDigest, snapshot)).toBe("stale");
+    expect(projectGmailMessageModifyContentReview(input, commandDigest,
+      { ...snapshot, add_labels: [{ id: "OtherLabel", name: "Other", type: "user" }] })).toBeNull();
+    expect(projectGmailMessageModifyContentReview(command({ ...args, extra: "unexpected" }), commandDigest, snapshot)).toBeNull();
+    expect(isGmailMessageModifyReviewCommand(command({ operation: "message.trash", message_id: args.message_id }))).toBe(false);
+  });
+
   it("projects the effective message fields and binds both digests", () => {
     const args = {
       operation: "message.send",

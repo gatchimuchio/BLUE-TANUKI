@@ -201,6 +201,54 @@ export interface WebChatGmailApprovalContentReview {
   used_for_authority: false;
 }
 
+export interface WebChatGmailMessageTrashContentReview {
+  kind: "gmail_message_trash";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  target_identity_digest: string;
+  request_payload_digest: string;
+  provider_state_digest: string;
+  operation: "gmail.write.message.trash";
+  account_email: string;
+  message_id: string;
+  thread_id: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  internal_date: string;
+  size_estimate: number;
+  label_ids: readonly string[];
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface WebChatGmailMessageModifyContentReview {
+  kind: "gmail_message_modify";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  target_identity_digest: string;
+  request_payload_digest: string;
+  provider_state_digest: string;
+  operation: "gmail.write.message.modify";
+  account_email: string;
+  message_id: string;
+  thread_id: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  date?: string;
+  current_labels: readonly { id: string; name: string; type: "system" | "user" }[];
+  add_labels: readonly { id: string; name: string; type: "user" }[];
+  remove_labels: readonly { id: string; name: string; type: "user" }[];
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatFileEditDiffContentReview {
   kind: "file_edit_diff";
   command_id: string;
@@ -920,7 +968,9 @@ export interface WebChatGitHubReleaseDraftCreateContentReview {
   may_execute: false;
 }
 
-export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
+export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
+  WebChatGmailMessageModifyContentReview |
+  WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |

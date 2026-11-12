@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-11-12 — QEB-F02.02-GMAIL-TRASH-LABEL-RESULT-RETURN
+
+開始時local／`origin/main`／GitHub `main`=`b47018e5418027b193cdb850c75c26757b85b441`、ahead／behind=0/0、worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+
+Gmailの`message.trash`と`message.modify`を既存write／L3 review／Executor／HDS-J/M／Control Centerへ接続した。Trashは単一messageの復元可能移動、modifyは既存user labelのみを対象とし、system label、Trash上message、thread-wide mutationを拒否する。双方でtarget／request／provider stateをreview digestへ束縛し、作用直前に再照合、作用後にprovider stateを再読込する。不一致・結果不明時に自動再送せず、review本文／raw MIMEやmessage ID／label値をMへ保存しない。M receiptはdigest限定で、合成Gateway経路のJ/M再起動後owner returnまで確認した。
+
+focused Vitestは4 files／10 selected tests PASS（Gmail target/version 6、Gateway content review 2、verified result→M receipt→restart→owner return 1、Control Center script safety／parse 1）。`pnpm typecheck` PASS、`pnpm build` PASS（15 projects）、`pnpm docs:check` PASS（日本語基底の既存移行負債75件を注意表示、license PASS）、`git diff --check` PASS。全workspace suite、実Gmail／credential／provider、外部作用、他OS QA、QE_QC／QE_QAはNOT_RUN。
+
+生成物分類：tracked source／tests／active docsはGit候補。ignored `dist`／Rust isolation build outputは稼働中の開発環境として保持。focused testsの一時資産は残存なし。protected attachment directoriesは保持。他repoは未変更。
+
 ## 2026-11-12 — QEB-G02.03-WINDOWS-DPAPI-UNINSTALL-RETENTION
 
 開始時local／`origin/main`／GitHub `main`=`102808ce80ad91bca63397a8db0c27b7a2a7c230`。開始recovery branch／remote tag current／previous=`102808ce80ad91bca63397a8db0c27b7a2a7c230`／`9fb57175e854df0cdc2f968018d891a6acf83dcb`。BLUE worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。D4-Pocketは読み取りのみ。

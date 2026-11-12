@@ -43,7 +43,221 @@ function draftReadResponse(path: string, raw = draftRaw, messageId = "fixture-me
   return { ...response, body: JSON.stringify({ id: "fixture-draft", message: { id: messageId, raw } }) };
 }
 
+const trashArgs = { operation: "message.trash", message_id: "fixture-message_123" };
+function gmailTrashFixture(options: { initialLabels?: string[]; confirmTrash?: boolean } = {}) {
+  let labels = [...(options.initialLabels ?? ["INBOX"])];
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    if (target.path === "/gmail/v1/users/me/profile" && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
+    }
+    if (target.path.includes("?format=metadata&") && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ id: trashArgs.message_id, threadId: "fixture-thread_1",
+        labelIds: labels, internalDate: "1760000000000", sizeEstimate: 128,
+        payload: { mimeType: "text/plain", headers: [
+          { name: "From", value: "sender@example.invalid" },
+          { name: "To", value: "owner@example.invalid" },
+          { name: "Subject", value: "Synthetic review subject" },
+          { name: "Date", value: "Mon, 12 Nov 2026 00:00:00 +0000" },
+        ] } }) };
+    }
+    if (target.path.endsWith("/trash") && target.method === "POST") {
+      if (options.confirmTrash !== false) labels = [...labels, "TRASH"];
+      return { ...response, body: JSON.stringify({ id: trashArgs.message_id, threadId: "fixture-thread_1", labelIds: labels }) };
+    }
+    throw new Error(`unexpected fixture request: ${target.method} ${target.path}`);
+  });
+  return { request, getLabels: () => [...labels] };
+}
+
+const modifyArgs = { operation: "message.modify", message_id: "fixture-message_123",
+  add_label_ids: ["Label_2"], remove_label_ids: ["Label_1"] };
+function gmailModifyFixture(options: { initialLabels?: string[]; confirmModify?: boolean } = {}) {
+  let labels = [...(options.initialLabels ?? ["INBOX", "Label_1"] )];
+  const labelCatalog = [
+    { id: "INBOX", name: "Inbox", type: "system" },
+    { id: "Label_1", name: "Old project", type: "user" },
+    { id: "Label_2", name: "Current project", type: "user" },
+    { id: "STARRED", name: "Starred", type: "system" },
+  ];
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    if (target.path === "/gmail/v1/users/me/profile" && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
+    }
+    if (target.path === "/gmail/v1/users/me/labels" && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ labels: labelCatalog }) };
+    }
+    if (target.path.includes("?format=metadata&") && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ id: modifyArgs.message_id, threadId: "fixture-thread_1",
+        labelIds: labels, internalDate: "1760000000000", sizeEstimate: 128,
+        payload: { mimeType: "text/plain", headers: [
+          { name: "From", value: "sender@example.invalid" },
+          { name: "To", value: "owner@example.invalid" },
+          { name: "Subject", value: "Synthetic label review subject" },
+          { name: "Date", value: "Mon, 12 Nov 2026 00:00:00 +0000" },
+        ] } }) };
+    }
+    if (target.path.endsWith("/modify") && target.method === "POST") {
+      if (options.confirmModify !== false) {
+        const body = JSON.parse(target.body ?? "{}") as { addLabelIds?: string[]; removeLabelIds?: string[] };
+        labels = [...new Set([...labels.filter((id) => !body.removeLabelIds?.includes(id)), ...(body.addLabelIds ?? [])])].sort();
+      }
+      return { ...response, body: JSON.stringify({ id: modifyArgs.message_id, threadId: "fixture-thread_1", labelIds: labels }) };
+    }
+    throw new Error(`unexpected fixture request: ${target.method} ${target.path}`);
+  });
+  return { request, getLabels: () => [...labels], setLabels: (next: string[]) => { labels = [...next]; } };
+}
+
 describe("Gmail write target observation", () => {
+  it("message.modifyは既存ユーザーラベルだけをL3確認用snapshotへ結び、単一messageをreadbackする", async () => {
+    const fixture = gmailModifyFixture();
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const commandDigest = "a".repeat(64);
+    const planDigest = "b".repeat(64);
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(modifyArgs, {
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest,
+    }));
+    const review = await tool.inspect_content_review!(modifyArgs, {
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest,
+    });
+    expect(review).toMatchObject({ kind: "gmail_message_modify", operation: "gmail.write.message.modify",
+      message_id: modifyArgs.message_id, subject: "Synthetic label review subject",
+      current_labels: [{ id: "INBOX", name: "Inbox", type: "system" }, { id: "Label_1", name: "Old project", type: "user" }],
+      add_labels: [{ id: "Label_2", name: "Current project", type: "user" }],
+      remove_labels: [{ id: "Label_1", name: "Old project", type: "user" }],
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(observation)).not.toContain(modifyArgs.message_id);
+    expect(JSON.stringify(observation)).not.toContain("Current project");
+    expect(JSON.stringify(review)).not.toContain("raw");
+
+    const result = await tool.invoke(modifyArgs, { command_id: "fixture-message-modify-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation });
+
+    const mutations = fixture.request.mock.calls.filter(([target]) => target.method === "POST");
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]?.[0]).toMatchObject({ service: "gmail", hostname: "gmail.googleapis.com",
+      path: "/gmail/v1/users/me/messages/fixture-message_123/modify", method: "POST", token: "fixture-token" });
+    expect(JSON.parse(mutations[0]?.[0].body ?? "{}")).toEqual({ addLabelIds: ["Label_2"], removeLabelIds: ["Label_1"] });
+    expect(fixture.getLabels()).toEqual(["INBOX", "Label_2"]);
+    expect(result).toMatchObject({ service: "gmail", operation: "message.modify", mutation_sent: true,
+      mutation_status: "confirmed", result: { labels_confirmed: true, used_for_authority: false, may_execute: false } });
+    expect(JSON.stringify(result)).not.toContain(modifyArgs.message_id);
+    expect(JSON.stringify(result)).not.toContain("Current project");
+    expect(JSON.stringify(result)).not.toContain("Label_2");
+  });
+
+  it("message.modifyは承認後の状態変化、no-op、system labelをmutation前に拒否する", async () => {
+    const fixture = gmailModifyFixture();
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(modifyArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    fixture.setLabels(["INBOX", "Label_1", "STARRED"]);
+    await expect(tool.invoke(modifyArgs, { command_id: "fixture-message-modify-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/target state changed after review.*mutation_sent=false/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+
+    const noopFixture = gmailModifyFixture({ initialLabels: ["INBOX", "Label_1", "Label_2"] });
+    const noopTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: noopFixture.request });
+    await expect(noopTool.inspect_target_version!(modifyArgs, { command_digest: "f".repeat(64) }))
+      .rejects.toThrow(/already has the requested label state/);
+
+    const systemArgs = { ...modifyArgs, add_label_ids: ["STARRED"], remove_label_ids: undefined };
+    const systemTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: noopFixture.request });
+    await expect(systemTool.inspect_target_version!(systemArgs, { command_digest: "f".repeat(64) }))
+      .rejects.toThrow(/only supports existing user labels/);
+    expect(noopFixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+  });
+
+  it("message.modifyのreadback不一致をoutcome_unknownとして閉じ、自動再送しない", async () => {
+    const fixture = gmailModifyFixture({ confirmModify: false });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(modifyArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(modifyArgs, { command_id: "fixture-message-modify-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
+  });
+
+  it("message.trashはmetadataと明示対象を結び、1回のPOST後にTRASHを再読込確認する", async () => {
+    const fixture = gmailTrashFixture();
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const commandDigest = "a".repeat(64);
+    const planDigest = "b".repeat(64);
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(trashArgs, {
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest,
+    }));
+    const review = await tool.inspect_content_review!(trashArgs, {
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest,
+    });
+    expect(review).toMatchObject({ kind: "gmail_message_trash", operation: "gmail.write.message.trash",
+      message_id: trashArgs.message_id, subject: "Synthetic review subject", label_ids: ["INBOX"],
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(observation)).not.toContain(trashArgs.message_id);
+    expect(JSON.stringify(review)).not.toContain("raw");
+
+    const result = await tool.invoke(trashArgs, { command_id: "fixture-trash-command", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation });
+
+    expect(fixture.request).toHaveBeenCalledTimes(9);
+    const mutations = fixture.request.mock.calls.filter(([target]) => target.method === "POST");
+    expect(mutations).toHaveLength(1);
+    expect(mutations[0]?.[0]).toMatchObject({ service: "gmail", hostname: "gmail.googleapis.com",
+      path: "/gmail/v1/users/me/messages/fixture-message_123/trash", method: "POST", token: "fixture-token" });
+    expect(mutations[0]?.[0]).not.toHaveProperty("body");
+    expect(fixture.getLabels()).toContain("TRASH");
+    expect(result).toMatchObject({ service: "gmail", operation: "message.trash", mutation_sent: true,
+      mutation_status: "confirmed", result: { trash_confirmed: true, used_for_authority: false, may_execute: false } });
+    expect(JSON.stringify(result)).not.toContain(trashArgs.message_id);
+    expect(JSON.stringify(result)).not.toContain("Synthetic review subject");
+  });
+
+  it("message.trashは観測後の状態変化と既存TrashをPOST前に拒否する", async () => {
+    // The fixture state is intentionally changed through its backing API on a subsequent target read.
+    const changedFixture = gmailTrashFixture();
+    const changedTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: changedFixture.request });
+    const changedObservation = GmailWriteTargetVersionObservationSchema.parse(await changedTool.inspect_target_version!(trashArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    const staleRequest = vi.fn(async (target: GoogleWriteTarget) => {
+      if (target.path.includes("?format=metadata&") && target.method === "GET") {
+        return { ...response, body: JSON.stringify({ id: trashArgs.message_id, threadId: "fixture-thread_1",
+          labelIds: ["INBOX", "STARRED"], internalDate: "1760000000000", sizeEstimate: 128,
+          payload: { mimeType: "text/plain", headers: [] } }) };
+      }
+      return changedFixture.request(target);
+    });
+    const staleTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: staleRequest });
+    await expect(staleTool.invoke(trashArgs, { command_id: "fixture-trash-command", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: changedObservation }))
+      .rejects.toThrow(/target state changed.*mutation_sent=false/);
+    expect(staleRequest.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+
+    const trashedFixture = gmailTrashFixture({ initialLabels: ["INBOX", "TRASH"] });
+    const trashedTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: trashedFixture.request });
+    await expect(trashedTool.inspect_target_version!(trashArgs, { command_digest: "f".repeat(64) }))
+      .rejects.toThrow(/already in Trash/);
+    expect(trashedFixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+  });
+
+  it("message.trashのpost-read不一致をunknownとして閉じ、自動再送しない", async () => {
+    const fixture = gmailTrashFixture({ confirmTrash: false });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(trashArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(trashArgs, { command_id: "fixture-trash-command", upstream_commit_hash: "c".repeat(64),
+      idempotency_key: "d".repeat(64), command_digest: "e".repeat(64), target_version_observation: observation }))
+      .rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
+  });
+
   it("credentialを読まずexact plan sourceと送信payloadのdigestを作り、同じpayloadだけstubへ渡す", async () => {
     const request = vi.fn(async (_target: GoogleWriteTarget) => response);
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
