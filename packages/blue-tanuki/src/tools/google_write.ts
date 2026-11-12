@@ -142,6 +142,9 @@ const DEFAULT_MAX_CONTENT_BYTES = 64_000;
 const MAX_CONTENT_BYTES = 512_000;
 const MAX_GMAIL_WRITE_ATTACHMENTS = 5;
 const MAX_GMAIL_WRITE_ATTACHMENTS_TOTAL_BYTES = 8 * 1024 * 1024;
+const MAX_GMAIL_DRAFT_MIME_BYTES = 16 * 1024 * 1024;
+const MAX_GMAIL_DRAFT_REVIEW_RESPONSE_BYTES = Math.ceil(MAX_GMAIL_DRAFT_MIME_BYTES * 4 / 3) + 64_000;
+const MAX_GMAIL_DRAFT_MIME_LINES = 300_000;
 const GMAIL_WRITE_ATTACHMENT_RESPONSE_MAX_BYTES = Math.ceil(MAX_GMAIL_ATTACHMENT_BYTES * 4 / 3) + 64_000;
 const DRIVE_FIELDS = "id,name,mimeType,modifiedTime,webViewLink,parents,driveId,version,headRevisionId,shared,trashed";
 
@@ -226,7 +229,9 @@ function decodeMimeHeaderValue(value: string): string {
       throw new Error("gmail_draft_header_encoding_unsupported");
     }
   });
-  if (decoded.includes("=?")) throw new Error("gmail_draft_header_encoding_unsupported");
+  if (decoded.includes("=?") || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(decoded)) {
+    throw new Error("gmail_draft_header_encoding_unsupported");
+  }
   return decoded;
 }
 
@@ -237,11 +242,227 @@ function decodeQuotedPrintable(value: string): Buffer {
   return Buffer.from(unescaped, "binary");
 }
 
+function splitMimeParameterSegments(value: string, label: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (character === ";" && !quoted) {
+      segments.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (quoted || escaped) throw new Error(label + "_parameters_invalid");
+  segments.push(value.slice(start).trim());
+  return segments;
+}
+
+function parseMimeParameterValue(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("\"")) {
+    if (!trimmed.endsWith("\"") || trimmed.length < 2) throw new Error(label + "_parameters_invalid");
+    let output = "";
+    for (let index = 1; index < trimmed.length - 1; index += 1) {
+      const character = trimmed[index]!;
+      if (character === "\\") {
+        index += 1;
+        const escaped = trimmed[index];
+        if (escaped === undefined || /[\r\n\u0000-\u001f\u007f]/.test(escaped)) {
+          throw new Error(label + "_parameters_invalid");
+        }
+        output += escaped;
+      } else if (character === "\"" || /[\r\n\u0000-\u001f\u007f]/.test(character)) {
+        throw new Error(label + "_parameters_invalid");
+      } else {
+        output += character;
+      }
+    }
+    return output;
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
+    return trimmed.slice(1, -1);
+  }
+  if (!/^[\x21-\x7e]+$/.test(trimmed) || /[;"]/.test(trimmed)) {
+    throw new Error(label + "_parameters_invalid");
+  }
+  return trimmed;
+}
+
+function parseMimeParameterizedValue(value: string, label: string): {
+  token: string;
+  parameters: Map<string, string>;
+} {
+  const segments = splitMimeParameterSegments(value, label);
+  const token = segments.shift()?.trim();
+  if (!token || /[\s\u0000-\u001f\u007f]/.test(token)) throw new Error(label + "_value_invalid");
+  const parameters = new Map<string, string>();
+  for (const segment of segments) {
+    const separator = segment.indexOf("=");
+    if (separator <= 0) throw new Error(label + "_parameters_invalid");
+    const name = segment.slice(0, separator).trim().toLowerCase();
+    if (!/^[a-z0-9!#$&*^_.+-]+$/.test(name) || parameters.has(name)) {
+      throw new Error(label + "_parameters_invalid");
+    }
+    parameters.set(name, parseMimeParameterValue(segment.slice(separator + 1), label));
+  }
+  return { token: token.toLowerCase(), parameters };
+}
+
+function parseGmailMimeHeaders(
+  lines: readonly string[],
+  supportedHeaders: ReadonlySet<string>,
+  label: string,
+): Map<string, string[]> {
+  if (lines.length > 64 || lines.some((line) => line.length > 8_192) ||
+      lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0) > 64_000) {
+    throw new Error(label + "_size_unsupported");
+  }
+  const unfolded: string[] = [];
+  for (const line of lines) {
+    if (/^[ \t]/.test(line)) {
+      const previous = unfolded.at(-1);
+      if (!previous) throw new Error(label + "_invalid");
+      unfolded[unfolded.length - 1] = previous + " " + line.trim();
+    } else {
+      unfolded.push(line);
+    }
+  }
+  const headers = new Map<string, string[]>();
+  for (const line of unfolded) {
+    const match = /^([A-Za-z0-9-]+):[ \t]*(.*)$/.exec(line);
+    if (!match) throw new Error(label + "_invalid");
+    const name = match[1]!.toLowerCase();
+    if (!supportedHeaders.has(name)) throw new Error(label + "_unsupported");
+    const headerValue = match[2]!.trim();
+    headers.set(name, [...(headers.get(name) ?? []), decodeMimeHeaderValue(headerValue)]);
+  }
+  return headers;
+}
+
+function singleMimeHeader(headers: ReadonlyMap<string, readonly string[]>, name: string, label: string): string | undefined {
+  const values = headers.get(name);
+  if (!values?.length) return undefined;
+  if (values.length !== 1) throw new Error(label + "_ambiguous");
+  return values[0];
+}
+
+function decodeGmailMimeBase64(value: string, maxDecodedBytes: number, label: string): Buffer {
+  const compact = value.replace(/[\r\n\t ]/g, "");
+  if (compact.length > Math.ceil(maxDecodedBytes * 4 / 3) + 4 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
+    throw new Error(label + "_unsupported");
+  }
+  const bytes = Buffer.from(compact, "base64");
+  if (bytes.length > maxDecodedBytes || bytes.toString("base64") !== compact) {
+    throw new Error(label + "_unsupported");
+  }
+  return bytes;
+}
+
+function decodeGmailDraftTextBody(bodySource: string, charsetName: string, transferEncoding: string): string {
+  let bodyBytes: Buffer;
+  if (transferEncoding === "base64") {
+    bodyBytes = decodeGmailMimeBase64(bodySource, MAX_CONTENT_BYTES, "gmail_draft_body_encoding");
+  } else if (transferEncoding === "quoted-printable") {
+    if (Buffer.byteLength(bodySource, "utf8") > MAX_CONTENT_BYTES * 3) {
+      throw new Error("gmail_draft_content_size_unsupported");
+    }
+    bodyBytes = decodeQuotedPrintable(bodySource);
+  } else if (["7bit", "8bit", "binary"].includes(transferEncoding)) {
+    bodyBytes = Buffer.from(bodySource, "utf8");
+  } else {
+    throw new Error("gmail_draft_body_encoding_unsupported");
+  }
+  if (bodyBytes.length > MAX_CONTENT_BYTES) throw new Error("gmail_draft_content_size_unsupported");
+  try { return new TextDecoder(charsetName, { fatal: true }).decode(bodyBytes); }
+  catch { throw new Error("gmail_draft_body_charset_unsupported"); }
+}
+
+function splitGmailMultipartMixed(bodySource: string, boundary: string): { headerLines: string[]; body: string }[] {
+  let lineCount = 1;
+  for (let index = 0; index < bodySource.length; index += 1) {
+    if (bodySource.charCodeAt(index) === 10 && ++lineCount > MAX_GMAIL_DRAFT_MIME_LINES) {
+      throw new Error("gmail_draft_mime_line_count_unsupported");
+    }
+  }
+  const lines = bodySource.split(/\r?\n/);
+  const delimiter = "--" + boundary;
+  const closingDelimiter = delimiter + "--";
+  if (lines[0] !== delimiter) throw new Error("gmail_draft_multipart_preamble_unsupported");
+  const parts: { headerLines: string[]; body: string }[] = [];
+  let index = 1;
+  while (index < lines.length) {
+    const headerLines: string[] = [];
+    let headerBytes = 0;
+    while (index < lines.length && lines[index] !== "") {
+      const line = lines[index]!;
+      if (line.startsWith(delimiter) || headerLines.length >= 64) {
+        throw new Error("gmail_draft_mime_part_headers_invalid");
+      }
+      headerLines.push(line);
+      headerBytes += Buffer.byteLength(line, "utf8");
+      if (headerBytes > 64_000 || line.length > 8_192) throw new Error("gmail_draft_mime_part_headers_invalid");
+      index += 1;
+    }
+    if (headerLines.length === 0 || index >= lines.length) throw new Error("gmail_draft_mime_part_headers_invalid");
+    index += 1;
+    const bodyLines: string[] = [];
+    while (index < lines.length && lines[index] !== delimiter && lines[index] !== closingDelimiter) {
+      if (lines[index]!.startsWith(delimiter)) throw new Error("gmail_draft_multipart_delimiter_invalid");
+      bodyLines.push(lines[index]!);
+      index += 1;
+    }
+    if (index >= lines.length) throw new Error("gmail_draft_multipart_terminator_missing");
+    parts.push({ headerLines, body: bodyLines.join("\r\n") });
+    if (parts.length > MAX_GMAIL_WRITE_ATTACHMENTS + 1) throw new Error("gmail_draft_attachment_count_unsupported");
+    const currentDelimiter = lines[index++]!;
+    if (currentDelimiter === closingDelimiter) {
+      if (lines.slice(index).some((line) => line !== "")) throw new Error("gmail_draft_multipart_epilogue_unsupported");
+      return parts;
+    }
+  }
+  throw new Error("gmail_draft_multipart_terminator_missing");
+}
+
+function gmailDraftAttachmentFilename(parameters: ReadonlyMap<string, string>): string {
+  if ([...parameters.keys()].some((name) => name !== "filename" && name !== "filename*")) {
+    throw new Error("gmail_draft_attachment_filename_parameters_unsupported");
+  }
+  const extended = parameters.get("filename*");
+  let filename = parameters.get("filename");
+  if (extended !== undefined) {
+    const match = /^UTF-8''((?:[A-Za-z0-9_.~-]|%[a-f0-9]{2})*)$/i.exec(extended);
+    if (!match) throw new Error("gmail_draft_attachment_filename_encoding_unsupported");
+    try { filename = decodeURIComponent(match[1]!); }
+    catch { throw new Error("gmail_draft_attachment_filename_encoding_unsupported"); }
+  }
+  if (!filename || filename.length > 256 || /[\r\n\u0000-\u001f\u007f]/.test(filename)) {
+    throw new Error("gmail_draft_attachment_filename_invalid");
+  }
+  return filename;
+}
+
 function decodeGmailDraftMime(raw: string): Omit<GmailDraftContentReview, "account_email" | "provider_state_digest" |
   "provider_raw_digest" | "request_payload_digest"> {
-  if (!/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("gmail_draft_raw_message_invalid");
+  if (!/^[A-Za-z0-9_-]+$/.test(raw) || raw.length > Math.ceil(MAX_GMAIL_DRAFT_MIME_BYTES * 4 / 3)) {
+    throw new Error("gmail_draft_raw_message_invalid");
+  }
   const bytes = Buffer.from(raw, "base64url");
-  if (!bytes.length || bytes.length > MAX_CONTENT_BYTES || bytes.toString("base64url") !== raw) {
+  if (!bytes.length || bytes.length > MAX_GMAIL_DRAFT_MIME_BYTES || bytes.toString("base64url") !== raw) {
     throw new Error("gmail_draft_raw_message_invalid");
   }
   let message: string;
@@ -255,8 +476,13 @@ function decodeGmailDraftMime(raw: string): Omit<GmailDraftContentReview, "accou
   const separatorLength = message.startsWith("\r\n\r\n", separator) ? 4 : 2;
   const headerText = message.slice(0, separator);
   const bodySource = message.slice(separator + separatorLength);
+  if (Buffer.byteLength(headerText, "utf8") > 64_000) throw new Error("gmail_draft_mime_headers_size_unsupported");
+  const headerLines = headerText.split(/\r?\n/);
+  if (headerLines.length > 64 || headerLines.some((line) => line.length > 8_192)) {
+    throw new Error("gmail_draft_mime_headers_size_unsupported");
+  }
   const unfolded: string[] = [];
-  for (const line of headerText.split(/\r?\n/)) {
+  for (const line of headerLines) {
     if (/^[ \t]/.test(line)) {
       const previous = unfolded.at(-1);
       if (!previous) throw new Error("gmail_draft_mime_headers_invalid");
@@ -288,41 +514,81 @@ function decodeGmailDraftMime(raw: string): Omit<GmailDraftContentReview, "accou
     throw new Error("gmail_draft_mime_version_unsupported");
   }
   const contentType = single("content-type") ?? "text/plain; charset=utf-8";
-  const contentTypeParts = contentType.split(";").map((part) => part.trim());
-  const mediaType = contentTypeParts.shift()?.toLowerCase();
-  const charsetParams = contentTypeParts.filter((part) => /^charset\s*=/i.test(part));
-  if (mediaType !== "text/plain" || charsetParams.length !== contentTypeParts.length || charsetParams.length > 1) {
-    throw new Error("gmail_draft_mime_content_unsupported");
-  }
+  const parsedContentType = parseMimeParameterizedValue(contentType, "gmail_draft_mime_content");
   const disposition = single("content-disposition");
-  if (disposition !== undefined && disposition.toLowerCase() !== "inline") {
-    throw new Error("gmail_draft_mime_content_unsupported");
-  }
-  const charset = charsetParams.length === 1
-    ? /^charset\s*=\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^;\s]+))$/i.exec(charsetParams[0]!)
-    : null;
-  if (charsetParams.length === 1 && !charset) throw new Error("gmail_draft_mime_content_unsupported");
-  const charsetName = (charset?.[1] ?? charset?.[2] ?? charset?.[3] ?? "utf-8").toLowerCase();
   const transferEncoding = (single("content-transfer-encoding") ?? "7bit").toLowerCase();
-  let bodyBytes: Buffer;
-  if (transferEncoding === "base64") {
-    const compact = bodySource.replace(/[\r\n\t ]/g, "");
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
-      throw new Error("gmail_draft_body_encoding_unsupported");
-    }
-    bodyBytes = Buffer.from(compact, "base64");
-    if (bodyBytes.toString("base64") !== compact) throw new Error("gmail_draft_body_encoding_unsupported");
-  } else if (transferEncoding === "quoted-printable") {
-    bodyBytes = decodeQuotedPrintable(bodySource);
-  } else if (["7bit", "8bit", "binary"].includes(transferEncoding)) {
-    bodyBytes = Buffer.from(bodySource, "utf8");
-  } else {
-    throw new Error("gmail_draft_body_encoding_unsupported");
-  }
-  if (bodyBytes.length > MAX_CONTENT_BYTES) throw new Error("gmail_draft_content_size_unsupported");
   let bodyText: string;
-  try { bodyText = new TextDecoder(charsetName, { fatal: true }).decode(bodyBytes); }
-  catch { throw new Error("gmail_draft_body_charset_unsupported"); }
+  const attachments: GmailAttachmentContentReview[] = [];
+  if (parsedContentType.token === "multipart/mixed") {
+    const boundary = parsedContentType.parameters.get("boundary");
+    if (parsedContentType.parameters.size !== 1 || !boundary ||
+        !/^[A-Za-z0-9'()+_,./:=?-]{1,70}$/.test(boundary) ||
+        single("content-transfer-encoding") !== undefined || disposition !== undefined) {
+      throw new Error("gmail_draft_multipart_parameters_unsupported");
+    }
+    const parts = splitGmailMultipartMixed(bodySource, boundary);
+    if (parts.length < 1 || parts.length > MAX_GMAIL_WRITE_ATTACHMENTS + 1) {
+      throw new Error("gmail_draft_multipart_parts_unsupported");
+    }
+    let decodedBody: string | undefined;
+    let totalAttachmentBytes = 0;
+    const partHeadersAllowed = new Set(["content-type", "content-disposition", "content-transfer-encoding"]);
+    for (const [partIndex, part] of parts.entries()) {
+      const partHeaders = parseGmailMimeHeaders(part.headerLines, partHeadersAllowed, "gmail_draft_mime_part_headers");
+      const partSingle = (name: string): string | undefined =>
+        singleMimeHeader(partHeaders, name, "gmail_draft_mime_part_header");
+      const partContentTypeValue = partSingle("content-type");
+      if (!partContentTypeValue) throw new Error("gmail_draft_mime_part_content_type_missing");
+      const partContentType = parseMimeParameterizedValue(partContentTypeValue, "gmail_draft_mime_part_content");
+      const partDispositionValue = partSingle("content-disposition");
+      const partDisposition = partDispositionValue
+        ? parseMimeParameterizedValue(partDispositionValue, "gmail_draft_mime_part_disposition") : undefined;
+      const partTransferEncoding = partSingle("content-transfer-encoding")?.toLowerCase();
+      if (partIndex === 0 && partContentType.token === "text/plain" &&
+          (!partDisposition || partDisposition.token === "inline" && partDisposition.parameters.size === 0)) {
+        if (decodedBody !== undefined || partTransferEncoding !== "base64" ||
+            [...partContentType.parameters.keys()].some((name) => name !== "charset") ||
+            partContentType.parameters.size > 1) {
+          throw new Error("gmail_draft_mime_text_part_unsupported");
+        }
+        const charsetName = (partContentType.parameters.get("charset") ?? "utf-8").toLowerCase();
+        decodedBody = decodeGmailDraftTextBody(part.body, charsetName, partTransferEncoding);
+        continue;
+      }
+      const mimeType = partContentType.token;
+      if (!partDisposition || partDisposition.token !== "attachment" || partTransferEncoding !== "base64" ||
+          mimeType.startsWith("multipart/") || mimeType.length > 200 ||
+          !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mimeType)) {
+        throw new Error("gmail_draft_mime_attachment_unsupported");
+      }
+      const filename = gmailDraftAttachmentFilename(partDisposition.parameters);
+      const attachmentBytes = decodeGmailMimeBase64(part.body, MAX_GMAIL_ATTACHMENT_BYTES,
+        "gmail_draft_attachment_encoding");
+      totalAttachmentBytes += attachmentBytes.length;
+      if (attachments.length >= MAX_GMAIL_WRITE_ATTACHMENTS ||
+          totalAttachmentBytes > MAX_GMAIL_WRITE_ATTACHMENTS_TOTAL_BYTES) {
+        throw new Error("gmail_draft_attachment_size_unsupported");
+      }
+      attachments.push({
+        filename,
+        mime_type: mimeType,
+        size_bytes: attachmentBytes.length,
+        content_sha256: createHash("sha256").update(attachmentBytes).digest("hex"),
+        used_for_authority: false,
+      });
+    }
+    if (decodedBody === undefined) throw new Error("gmail_draft_mime_text_part_missing");
+    bodyText = decodedBody;
+  } else {
+    if (parsedContentType.token !== "text/plain" ||
+        [...parsedContentType.parameters.keys()].some((name) => name !== "charset") ||
+        parsedContentType.parameters.size > 1 ||
+        (disposition !== undefined && disposition.toLowerCase() !== "inline")) {
+      throw new Error("gmail_draft_mime_content_unsupported");
+    }
+    const charsetName = (parsedContentType.parameters.get("charset") ?? "utf-8").toLowerCase();
+    bodyText = decodeGmailDraftTextBody(bodySource, charsetName, transferEncoding);
+  }
   const from = single("from");
   if (!from) throw new Error("gmail_draft_sender_unresolved");
   const to = single("to");
@@ -337,6 +603,7 @@ function decodeGmailDraftMime(raw: string): Omit<GmailDraftContentReview, "accou
     ...(single("reply-to") ? { reply_to: single("reply-to") } : {}),
     subject: single("subject") ?? "",
     body_text: bodyText,
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
 
@@ -504,16 +771,17 @@ async function readGmailDraftSnapshot(
 ): Promise<GmailDraftSnapshot> {
   const draftId = stringArg(args, "draft_id")!;
   if (draftId.length > 256 || /[\r\n]/.test(draftId)) throw new Error("gmail_draft_id_invalid");
-  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const maxBytes = positiveIntArg(args, "max_bytes", MAX_GMAIL_DRAFT_REVIEW_RESPONSE_BYTES,
+    MAX_GMAIL_DRAFT_REVIEW_RESPONSE_BYTES);
   const env = options.env ?? process.env;
   const token = tokenOverride ?? googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write draft review");
   const request = options.request ?? defaultGoogleWriteRequest;
-  const get = async (path: string): Promise<unknown> => {
+  const get = async (path: string, requestMaxBytes = maxBytes): Promise<unknown> => {
     let response: GoogleWriteResponse;
     try {
       assertToolExecutionNotCancelled(options.signal, "gmail.write draft review");
       response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path, method: "GET",
-        maxBytes, token }, options.signal);
+        maxBytes: requestMaxBytes, token }, options.signal);
     } catch {
       if (options.signal?.aborted) {
         throw new Error("gmail_draft_read_cancelled; request_status=not_confirmed; mutation_sent=false");
@@ -526,7 +794,7 @@ async function readGmailDraftSnapshot(
     try { return JSON.parse(response.body) as unknown; }
     catch { throw new Error("gmail_draft_read_response_invalid; request_sent=false; mutation_sent=false"); }
   };
-  const profile = await get("/gmail/v1/users/me/profile");
+  const profile = await get("/gmail/v1/users/me/profile", DEFAULT_MAX_BYTES);
   if (!isRecord(profile) || typeof profile.emailAddress !== "string" || !profile.emailAddress.trim() ||
       profile.emailAddress.trim().length > 320 || /[\r\n]/.test(profile.emailAddress)) {
     throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");

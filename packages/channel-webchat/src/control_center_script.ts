@@ -7228,7 +7228,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "google_drive_public_link_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const validOptionalString = function (value, max) {
-            return value === null || (typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value));
+            return value === null || (typeof value === "string" && value.length <= max && !/[\\u0000-\\u001f\\u007f]/.test(value));
           };
           const validPermissions = Array.isArray(review.permissions) && review.permissions.length > 0 &&
             review.permissions.length <= 500 && review.permissions.every(function (permission) {
@@ -7576,7 +7576,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(attachments);
         } else {
           const attachmentHeading = document.createElement("strong");
-          attachmentHeading.textContent = "Exact source attachments";
+          attachmentHeading.textContent = review.operation === "gmail.write.draft.send"
+            ? "Attachments in existing draft" : "Exact source attachments";
           view.appendChild(attachmentHeading);
           review.attachments.forEach(function (attachment) {
             const item = document.createElement("p");

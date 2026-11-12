@@ -243,6 +243,7 @@ export interface GmailDraftContentReview {
   reply_to?: string;
   subject: string;
   body_text: string;
+  attachments?: readonly GmailAttachmentContentReview[];
   provider_state_digest: string;
   provider_raw_digest: string;
   request_payload_digest: string;

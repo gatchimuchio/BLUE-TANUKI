@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { approvalContextFromCommand, finalReviewRequired, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { GmailWriteTargetVersionObservationSchema, type ExecuteCommand } from "@blue-tanuki/protocol";
@@ -244,6 +245,77 @@ describe("Gmail write target observation", () => {
     expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw: draftRaw } });
   });
 
+  it("添付付きdraft.sendは実MIMEの添付名・種類・size・hashを表示し、確認した同じrawだけを送る", async () => {
+    const attachmentBytes = Buffer.from("synthetic attachment bytes", "utf8");
+    const attachmentFilename = "報告書.pdf";
+    const attachmentFilenameExtended = encodeURIComponent(attachmentFilename).replace(/[!'()*]/g,
+      (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase());
+    const attachmentBase64 = attachmentBytes.toString("base64");
+    const attachmentBase64Lines = attachmentBase64.match(/.{1,76}/g)?.join("\r\n") ?? "";
+    const bodyBase64 = Buffer.from("Exact attached draft body", "utf8").toString("base64");
+    const boundary = "=_blue_tanuki_" + "f".repeat(40);
+    const raw = Buffer.from([
+      "From: owner@example.invalid",
+      "To: recipient@example.invalid",
+      "Cc: copy@example.invalid",
+      "Bcc: blind@example.invalid",
+      "Reply-To: replies@example.invalid",
+      "Subject: Attached draft",
+      "MIME-Version: 1.0",
+      "Content-Type: multipart/mixed; boundary=\"" + boundary + "\"",
+      "",
+      "--" + boundary,
+      "Content-Type: text/plain; charset=\"UTF-8\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      bodyBase64,
+      "--" + boundary,
+      "Content-Type: application/pdf",
+      "Content-Transfer-Encoding: base64",
+      "Content-Disposition: attachment; filename=\"report-__.pdf\"; filename*=UTF-8''" + attachmentFilenameExtended,
+      "",
+      attachmentBase64Lines,
+      "--" + boundary + "--",
+    ].join("\r\n"), "utf8").toString("base64url");
+    const request = vi.fn(async (target: GoogleWriteTarget) =>
+      draftReadResponse(target.path, raw));
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const review = await tool.inspect_content_review!(draftArgs);
+    expect(review).toMatchObject({
+      account_email: "owner@example.invalid",
+      to: "recipient@example.invalid",
+      cc: "copy@example.invalid",
+      bcc: "blind@example.invalid",
+      reply_to: "replies@example.invalid",
+      subject: "Attached draft",
+      body_text: "Exact attached draft body",
+      attachments: [{
+        filename: attachmentFilename,
+        mime_type: "application/pdf",
+        size_bytes: attachmentBytes.length,
+        content_sha256: createHash("sha256").update(attachmentBytes).digest("hex"),
+        used_for_authority: false,
+      }],
+    });
+    expect(JSON.stringify(review)).not.toContain(attachmentBytes.toString("utf8"));
+    expect(JSON.stringify(review)).not.toContain(attachmentBase64);
+
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    const draftReadTarget = request.mock.calls.find(([target]) => target.path.endsWith("?format=raw"))?.[0];
+    expect(draftReadTarget?.maxBytes).toBeGreaterThan(512_000);
+    expect(JSON.stringify(observation)).not.toContain(attachmentFilename);
+    expect(JSON.stringify(observation)).not.toContain(attachmentBase64);
+
+    const result = await tool.invoke(draftArgs, { command_id: "fixture-attached-draft-send",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation });
+    expect(result).toMatchObject({ service: "gmail", operation: "draft.send", mutation_sent: true });
+    const sendTarget = request.mock.calls.find(([target]) => target.method === "POST")?.[0];
+    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw } });
+  });
+
   it("同じdraftへの並列sendを直列化し、先行送信後の古い期待版を二重送信しない", async () => {
     let draftSent = false;
     const request = vi.fn(async (target: GoogleWriteTarget) => {
@@ -324,10 +396,12 @@ describe("Gmail write target observation", () => {
     expect(request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
   });
 
-  it("HTML、multipart、添付、送信元不明のdraftは内容を推定せず審査不能にする", async () => {
+  it("HTML、未対応multipart、制御文字入りheader、送信元不明のdraftは審査不能にする", async () => {
     for (const rawText of [
       "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: text/html\r\n\r\n<b>hidden</b>",
       "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x",
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\rBcc: hidden@example.invalid\r\n\r\nbody",
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\n =?UTF-8?B?DQpCY2M6IGhpZGRlbkBleGFtcGxlLmludmFsaWQ=?=\r\n\r\nbody",
       "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nX-Unreviewed-Action: enabled\r\nContent-Type: text/plain\r\n\r\nbody",
       "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: text/plain; format=flowed\r\n\r\nbody",
       "To: recipient@example.invalid\r\nContent-Type: text/plain\r\n\r\nno sender",

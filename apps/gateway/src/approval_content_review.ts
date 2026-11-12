@@ -48,6 +48,13 @@ export function projectGmailDraftSendContentReview(
     reply_to?: string;
     subject: string;
     body_text: string;
+    attachments?: readonly {
+      filename: string;
+      mime_type: string;
+      size_bytes: number;
+      content_sha256: string;
+      used_for_authority: false;
+    }[];
     provider_state_digest: string;
     provider_raw_digest: string;
     request_payload_digest: string;
@@ -59,11 +66,28 @@ export function projectGmailDraftSendContentReview(
       !/^[a-f0-9]{64}$/.test(snapshot.request_payload_digest) ||
       !snapshot.account_email || !snapshot.from || typeof snapshot.subject !== "string" ||
       typeof snapshot.body_text !== "string") return null;
+  const attachments = snapshot.attachments ?? [];
+  let totalAttachmentBytes = 0;
+  if (!Array.isArray(attachments) || attachments.length > 5 || attachments.some((attachment) => {
+    if (!attachment || typeof attachment.filename !== "string" || !attachment.filename ||
+        attachment.filename.length > 256 || /[\r\n\u0000-\u001f\u007f]/.test(attachment.filename) ||
+        typeof attachment.mime_type !== "string" || attachment.mime_type.length > 200 ||
+        !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(attachment.mime_type) ||
+        !Number.isSafeInteger(attachment.size_bytes) || attachment.size_bytes < 0 ||
+        attachment.size_bytes > 5 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(attachment.content_sha256) ||
+        attachment.used_for_authority !== false) return true;
+    totalAttachmentBytes += attachment.size_bytes;
+    return totalAttachmentBytes > 8 * 1024 * 1024;
+  })) return null;
   const reviewDigest = operationPlanDigest({
-    schema_version: "blue-tanuki.gmail-draft-content-review.v1",
+    schema_version: "blue-tanuki.gmail-draft-content-review.v2",
     command_digest: commandDigest,
     provider_state_digest: snapshot.provider_state_digest,
+    provider_raw_digest: snapshot.provider_raw_digest,
     request_payload_digest: snapshot.request_payload_digest,
+    attachments: attachments.map(({ filename, mime_type, size_bytes, content_sha256 }) => ({
+      filename, mime_type, size_bytes, content_sha256,
+    })),
   });
   return {
     kind: "gmail_write_content",
@@ -82,6 +106,7 @@ export function projectGmailDraftSendContentReview(
     ...(snapshot.reply_to ? { reply_to: snapshot.reply_to } : {}),
     subject: snapshot.subject,
     body_text: snapshot.body_text,
+    ...(attachments.length > 0 ? { attachments } : {}),
     used_for_authority: false,
   };
 }

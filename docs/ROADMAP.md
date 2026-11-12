@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近施工BUILD_BATCH — QE_BUILD / F08.03 MCP runtime観測のConnections設定consumer
+### 直近施工BUILD_BATCH — QE_BUILD / F02.02 添付付きGmail draft.sendレビューconsumer
+
+既存Gmail draft送信reviewに、添付を含む厳格な`multipart/mixed`内容の解析・metadata/hash投影・Gateway digest拘束・WebChat no-store表示を接続した。添付bytesはreview projectionへ出さず、L3 review後にprovider stateと正確なraw MIMEを再照合する。選択元添付と既存draft内添付の表示を分け、Control Center生成scriptのraw control characterも除去した。core／Gateway／WebChatの型検査・buildと対象testはPASS。実Gmail／credential／送信、全workspace suite、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、F02.02全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次consumerはF02.02のGmail delete／label未接続操作と、合成Gateway結果から検証済みresult／M receipt／owner帰還までをrev4.0と再照合して選ぶ。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F08.03 MCP runtime観測のConnections設定consumer
 
 実MCPの通常経路から、catalog到達・dispatch中・応答受領・結果不明をendpoint digestに束縛したprocess-local observationへ接続し、認証済みConnections SettingsSnapshot／Loadでownerへ表示する。設定画面は通信probeもserver起動もしない。結果不明は自動再送せず、対象とserver evidenceを確認する案内を出す。response受領を外部作用完了の証明にはしない。endpoint、tool名、arguments、response body、raw errorは保存・表示しない。
 

@@ -138,6 +138,13 @@ describe("Gmail approval content review projection", () => {
       reply_to: "replies@example.test",
       subject: "Existing subject",
       body_text: "Existing exact body",
+      attachments: [{
+        filename: "report.txt",
+        mime_type: "text/plain",
+        size_bytes: 12,
+        content_sha256: "5".repeat(64),
+        used_for_authority: false,
+      }],
       provider_state_digest: "1".repeat(64),
       provider_raw_digest: "2".repeat(64),
       request_payload_digest: "3".repeat(64),
@@ -156,10 +163,35 @@ describe("Gmail approval content review projection", () => {
       provider_state_digest: "1".repeat(64),
       provider_raw_digest: "2".repeat(64),
       request_payload_digest: "3".repeat(64),
+      attachments: [{
+        filename: "report.txt",
+        mime_type: "text/plain",
+        size_bytes: 12,
+        content_sha256: "5".repeat(64),
+        used_for_authority: false,
+      }],
       used_for_authority: false,
     });
     expect(providerReview?.review_digest).toMatch(/^[a-f0-9]{64}$/);
     const reviewDigest = providerReview?.review_digest;
+    const changedAttachmentReview = projectGmailDraftSendContentReview(unsupported, digest, {
+      account_email: "owner@example.test",
+      from: "sender@example.test",
+      to: "recipient@example.test",
+      subject: "Existing subject",
+      body_text: "Existing exact body",
+      provider_state_digest: "1".repeat(64),
+      provider_raw_digest: "2".repeat(64),
+      request_payload_digest: "3".repeat(64),
+      attachments: [{
+        filename: "report.txt",
+        mime_type: "text/plain",
+        size_bytes: 12,
+        content_sha256: "6".repeat(64),
+        used_for_authority: false,
+      }],
+    });
+    expect(changedAttachmentReview?.review_digest).not.toBe(reviewDigest);
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, reviewDigest)).toBe("valid");
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, "4".repeat(64))).toBe("stale");
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, undefined, reviewDigest)).toBe("required");
