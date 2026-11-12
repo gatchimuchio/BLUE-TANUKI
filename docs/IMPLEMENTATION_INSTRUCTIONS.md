@@ -2,6 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / shell.exec Doctor readiness projection
+
+主語はGateway Doctorの`shell.exec`準備状態projectionとRemediationである。目的は、native isolation providerの有無と`BLUE_TANUKI_SHELL_ROOT`設定の有無を区別し、利用者に対して実際の停止理由と次の設定操作を正確に示すこと。Doctorは秘密やroot pathを読出・表示せず、shell commandも起動しない。
+
+providerが存在しても専用root未設定なら`shell.exec`がdisabledであることを明記する。root設定済みの場合も値を開示せず「未検査」とし、各呼出しでroot・lifecycle制御を再検証することを示す。provider不足時は、root設定だけで有効化できないことと、Linuxで必要なbubblewrap／user systemd／cgroup v2 controlsをRemediationへ表示する。CONFIG.mdは日本語移行負債登録中のため変更せず、Doctor／Remediationとこのactive recordの範囲へ説明を置いた。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/gateway build` | PASS：Gateway TypeScript build。 |
+| `git diff --check` | PASS。 |
+| Doctor／Remediation runtime、shell.exec execution、test suite | NOT_RUN。 |
+| Shell execution authority／Broker／Approval policy、native provider、root値の検査・表示 | 変更なし。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / shell.exec Doctor readiness projection
+- **STATUS:** WIRED（Doctor→Remediationへの構成状態射影。runtime未確認）
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業でrev5.0と最新実物からP2全体施工に必要なconsumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。
+- **SAFETY_STATUS:** HDS authority、L3、Broker、command execution、秘密、外部作用、別repo、公開／出荷判断に変更なし。
+- **LOCAL_ASSET_STATUS:** 既存ignored build outputは保持。test専用一時assetなし。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
+- **GIT_STATUS:** 編集開始local／`origin/main`／GitHub `main`=`74760dd7496ad4dc5326a9a966ffd8df6b16a3fe`で一致、ahead／behind=0/0。local recovery branch current／previous=`74760dd7496ad4dc5326a9a966ffd8df6b16a3fe`／`01267a1722a862018cf64ac84e806863d2be233c`、remote backup tag current／previousも同SHA。closeout時にcommit／push後のSHAとrefを再照合する。
+
 ## 完了BUILD_BATCH — QE_BUILD / rev5.0 Linux x64 hosted installed lifecycle consumer（最新main）
 
 主語はLinux x64の製品installer、installed Gateway／Control Center、既存の手動Actions lifecycle consumerである。目的は、最新main SHAからpackageを生成・検証し、隔離環境のSetup・通常仕事・Repair・update rollback／中断復旧・通常Uninstall時の合成状態保持・再導入・明示Purgeまでをconsumerへ通すこと。これはQE_BUILDのhosted Linux証拠であり、特定distributionのinstalled QA、owner実機、製品全体のQC／QA・完成判定ではない。

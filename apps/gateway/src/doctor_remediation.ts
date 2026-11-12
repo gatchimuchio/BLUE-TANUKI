@@ -179,10 +179,18 @@ export function remediationFor(check: CheckDraft): Remediation {
   }
 
   if (check.id === "shell_root") {
+    const providerInstalled = check.detail.includes("provider is installed");
+    const rootConfigured = check.detail.includes("BLUE_TANUKI_SHELL_ROOT is configured but not inspected");
     return {
       cause: check.detail,
-      impact: "shell.exec is unavailable and every invocation fails closed before process creation.",
-      next_action: "No environment setting enables shell.exec. Install or restore the OS isolation provider and its required resource/process-tree controls; unavailable isolation never falls back to host execution.",
+      impact: providerInstalled && rootConfigured
+        ? "Doctor has not launched a command or inspected the configured root; each shell.exec invocation still validates the root and OS controls and may fail closed."
+        : "shell.exec is unavailable and every invocation fails closed before process creation.",
+      next_action: providerInstalled
+        ? rootConfigured
+          ? "No setup change is indicated. Doctor does not inspect the configured directory or launch a command; if invocation fails, review its fail-closed diagnostic and rerun pnpm run doctor."
+          : "Set BLUE_TANUKI_SHELL_ROOT to a dedicated non-secret directory in Control Center Settings to enable the workspace boundary. Leave it unset to keep shell.exec disabled; there is no host-execution fallback."
+        : "Restore or install the native isolation provider and its OS resource/process-tree controls (Linux requires bubblewrap, a user systemd manager, and cgroup v2 cpu/memory/pids controllers). Then configure a dedicated non-secret BLUE_TANUKI_SHELL_ROOT in Control Center Settings if shell.exec is intended; unavailable isolation never falls back to host execution.",
       doc_ref: "CONFIG.md#Shell-exec-tool",
       safe_to_ignore: true,
     };

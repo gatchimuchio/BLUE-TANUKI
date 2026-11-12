@@ -1030,7 +1030,9 @@ async function checkFileRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
   }
 }
 
-async function checkShellRoot(): Promise<CheckDraft> {
+async function checkShellRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
+  const shellRootConfigured = typeof env.BLUE_TANUKI_SHELL_ROOT === "string" &&
+    env.BLUE_TANUKI_SHELL_ROOT.trim().length > 0;
   if (!(await shellExecIsolationProviderAvailable())) {
     const reason = process.platform === "win32"
       ? "Windows AppContainer provider is not installed"
@@ -1041,7 +1043,7 @@ async function checkShellRoot(): Promise<CheckDraft> {
       id: "shell_root",
       level: "warn",
       label: "shell.exec isolation",
-      detail: `disabled: ${reason}`,
+      detail: `disabled: ${reason}; ${shellRootConfigured ? "configured root is not inspected" : "BLUE_TANUKI_SHELL_ROOT is unset"}`,
     };
   }
   const provider = process.platform === "linux"
@@ -1051,8 +1053,9 @@ async function checkShellRoot(): Promise<CheckDraft> {
     id: "shell_root",
     level: "warn",
     label: "shell.exec isolation",
-    detail:
-      `${provider} is installed; doctor does not launch a command or inspect the configured root, and each invocation still enforces its own root and lifecycle checks`,
+    detail: shellRootConfigured
+      ? `${provider} is installed; BLUE_TANUKI_SHELL_ROOT is configured but not inspected, and each invocation still validates its root and lifecycle controls`
+      : `${provider} is installed; shell.exec remains disabled until BLUE_TANUKI_SHELL_ROOT is configured, and doctor does not launch a command`,
   };
 }
 
@@ -1405,7 +1408,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   draftChecks.push(await checkSessionDir(env));
   draftChecks.push(await checkAuditDir(env));
   draftChecks.push(await checkFileRoot(env));
-  draftChecks.push(await checkShellRoot());
+  draftChecks.push(await checkShellRoot(env));
   draftChecks.push(await checkBundledManifests(opts.manifest_root));
   draftChecks.push(await checkCompatibilityMatrix(opts.manifest_root));
   draftChecks.push(await checkDistributionReadiness(opts.distribution_root));

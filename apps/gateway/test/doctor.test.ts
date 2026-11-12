@@ -888,7 +888,7 @@ describe("runDoctor — shell isolation state", () => {
     expect(c?.level).toBe("warn");
     if ((process.platform === "win32" || process.platform === "linux") && (await shellExecIsolationProviderAvailable())) {
       expect(c?.detail).toContain("provider is installed");
-      expect(c?.detail).not.toContain("disabled");
+      expect(c?.detail).toContain("shell.exec remains disabled until BLUE_TANUKI_SHELL_ROOT is configured");
     } else {
       expect(c?.detail).toContain("disabled");
     }
@@ -904,6 +904,7 @@ describe("runDoctor — shell isolation state", () => {
     expect(c?.level).toBe("warn");
     if ((process.platform === "win32" || process.platform === "linux") && (await shellExecIsolationProviderAvailable())) {
       expect(c?.detail).toContain("provider is installed");
+      expect(c?.detail).toContain("BLUE_TANUKI_SHELL_ROOT is configured but not inspected");
     } else {
       expect(c?.detail).toContain("disabled");
     }
