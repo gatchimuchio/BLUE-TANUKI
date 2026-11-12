@@ -12,14 +12,16 @@
 |---|---|
 | Windows PowerShell AST parser | PASS：resident helper構文解析。 |
 | `git diff --check` | PASS。 |
-| resident実processの所有拒否／停止、Windows installed smoke、installer tests | 未実行。 |
+| Windows synthetic process owner-denial smoke | PASS：無関係PowerShell PIDをexit 2で拒否し、process継続とPID record保持を確認。 |
+| Windows synthetic owned-process lifecycle smoke | PASS：隔離Node processを所有Gatewayとして認識し、process handle停止・終了待ちの後にPID recordが消えることを確認。 |
+| Windows installed smoke、installer tests | 未実行。 |
 | product launcher、OS常駐設定、自動起動、owner data、外部作用 | 変更なし。 |
 
 - **UNIT_ID:** rev5.0 QE_BUILD / Windows portable resident PID ownership and stop confirmation
-- **STATUS:** WIRED（既存portable resident start/status/stop commandへ接続。実process smokeは未確認）
+- **STATUS:** WIRED（既存portable resident start/status/stop commandへ接続。isolated synthetic process smokeは確認済み、installed製品は未確認）
 - **NEXT_REQUIRED_CONSUMER:** rev5.0と最新mainからP2全体BUILDの次consumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA未成立。
 - **SAFETY_STATUS:** process identityが不明・不一致ならsignalせずPID recordを保持。C/J/M authority、Approval Gate、秘密、実provider、外部作用、別repo、release／owner GOに変更なし。
-- **LOCAL_ASSET_STATUS:** 作業由来一時資産なし。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
+- **LOCAL_ASSET_STATUS:** 作業用Temp root 4件をWindowsごみ箱へ移動（元:`C:\Users\ohira\AppData\Local\Temp\blue-tanuki-resident-pid-negative-019c083cc8594a0198ef1eaddfb8bcc0`、`...negative-5509b45cb4ab43a28f699878e94b8b39`、`...negative-9343c8cbcd044b4c85f713d3e0b3e508`、`...positive-adc1c83804a842f9adf600f65ec98ed7`。4 root／7 files／52 bytes、owner最終処分待ち）。各元pathの消失とごみ箱内収容を確認。synthetic PowerShell／Node processは停止確認済み。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
 - **GIT_STATUS:** 開始local／GitHub `main`=`6a86ce05ca644c53fcbef4b73510d10a1006581d`、追跡先と一致。開始recovery current／previous=`6a86ce05ca644c53fcbef4b73510d10a1006581d`／`74760dd7496ad4dc5326a9a966ffd8df6b16a3fe`、remote backup tagも同SHA。closeout時に最終SHA／refsを再照合する。
 
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / shell.exec Doctor readiness projection

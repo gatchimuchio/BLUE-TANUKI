@@ -13,7 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Fail($Message) {
-  Write-Error $Message
+  Write-Error $Message -ErrorAction Continue
   exit 2
 }
 
