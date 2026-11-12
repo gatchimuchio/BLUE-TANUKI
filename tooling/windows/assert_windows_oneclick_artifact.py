@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static audit for the BLUE-TANUKI Windows one-click installer artifact."""
+"""Static audit for the BLUE-TANUKI Windows installer payload ZIP."""
 
 from __future__ import annotations
 
@@ -280,18 +280,18 @@ def main(argv: list[str]) -> int:
     try:
         zip_path, actual_sha = audit(path_arg)
     except AuditError as exc:
-        print("windows_oneclick_artifact_audit=fail", file=sys.stderr)
+        print("windows_payload_artifact_audit=fail", file=sys.stderr)
         print(f"reason={exc}", file=sys.stderr)
         return 1
     except zipfile.BadZipFile as exc:
-        print("windows_oneclick_artifact_audit=fail", file=sys.stderr)
+        print("windows_payload_artifact_audit=fail", file=sys.stderr)
         print(f"reason=bad installer zip: {exc}", file=sys.stderr)
         return 1
 
-    print("windows_oneclick_artifact_audit=pass")
+    print("windows_payload_artifact_audit=pass")
     print(f"installer_zip_path={zip_path}")
     print(f"installer_zip_sha256={actual_sha}")
-    print("source_zip_returned_as_user_artifact=false")
+    print("source_zip_returned_as_windows_payload=false")
     print("user_requires_node_pnpm_git=false")
     print("normal_install_invokes_corepack=false")
     print("normal_install_invokes_pnpm=false")

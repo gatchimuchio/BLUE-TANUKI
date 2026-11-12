@@ -50,6 +50,12 @@ The Defender / SmartScreen check verifies packaged SHA-256 and unsigned-package
 guidance. It does not claim Microsoft SmartScreen reputation, code signing, or a
 signed native installer.
 
+`pnpm package:windows:verify` separately checks the IExpress `.exe` by extracting
+its embedded setup command into a temporary directory and binding that command
+and embedded ZIP to the manifest hashes. This extraction check does not run the
+setup command. The installed-app smoke below still uses the verified payload
+ZIP path, so it is not evidence that the `.exe` launched or installed correctly.
+
 The source-tree guidance check verifies that direct execution of
 `install/windows/product/BlueTanukiSetup.cmd` from source does not expose raw
 package-layout errors and points the operator to the packaged installer zip or

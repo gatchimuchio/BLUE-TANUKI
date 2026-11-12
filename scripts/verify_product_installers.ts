@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { fileURLToPath } from "node:url";
 import { readPackage, root, sha256File } from "./package_windows.ts";
 
@@ -75,12 +76,15 @@ function hasArg(name: string): boolean {
 
 function targetsFromArgs(): ProductInstallerTarget[] {
   const version = readPackage().version;
+  const requestedPlatform = argValue("--platform") ?? "all";
+  const includeWindows = hasArg("--all") || requestedPlatform === "windows" || requestedPlatform === "all";
+  const windowsDir = includeWindows ? windowsArtifactDir(root) : path.join(root, "release/windows");
   const windows: ProductInstallerTarget = {
     os: "windows",
     arch: "x64",
     packageType: "windows-x64-self-extracting-cmd-installer",
-    installerPath: path.join(root, "release/windows", `BlueTanukiSetup-${version}-windows-x64.cmd`),
-    payloadPath: path.join(root, "release/windows", `blue-tanuki-${version}-windows-x64-installer.zip`),
+    installerPath: path.join(windowsDir, `BlueTanukiSetup-${version}-windows-x64.cmd`),
+    payloadPath: path.join(windowsDir, `blue-tanuki-${version}-windows-x64-installer.zip`),
   };
   const linux: ProductInstallerTarget = {
     os: "linux",

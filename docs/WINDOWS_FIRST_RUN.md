@@ -1,21 +1,22 @@
 # Windows First Run
 
-This first-run path is for the unsigned Windows installer package, not source
-development.
+This first-run path describes the unsigned Windows `.exe` installer candidate,
+not source development. Public distribution remains held pending signing and
+owner release GO.
 
-Normal Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`.
+Normal Windows users should not run source builds. Obtain
+`BlueTanukiSetup-<version>-windows-x64.exe` with its matching `.sha256` sidecar
+and manifest. The ZIP is payload/recovery; do not manually extract it for the
+normal install path.
 
 ## Before Install
 
-The Windows package is unsigned. Before running `BlueTanukiSetup.cmd` from the
-extracted installer folder, verify the
-zip digest against the release `.sha256` sidecar:
+The Windows package is unsigned. Before running the `.exe`, verify its digest
+against the matching release `.sha256` sidecar:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
-Get-Content .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
+Get-FileHash -Algorithm SHA256 .\BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe
+Get-Content .\BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe.sha256
 ```
 
 If SmartScreen warns, continue only after the SHA-256 digest matches the
@@ -23,7 +24,7 @@ sidecar. A mismatch means the package must not be run.
 
 ## First Launch
 
-1. Install with `BlueTanukiSetup.cmd` from the extracted installer folder.
+1. Run the verified `.exe`; IExpress extracts the setup command and payload, then starts packaged setup.
 2. Start `BLUE-TANUKI` from the Start Menu.
 3. The launcher starts the local resident gateway.
 4. The browser opens `http://127.0.0.1:8787/app`.

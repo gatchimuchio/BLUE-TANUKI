@@ -833,11 +833,11 @@ describe("Windows product installer package", () => {
     expect(uninstaller).toContain("BlueTanukiUninstall-[A-Za-z0-9-]+\\.status$");
   });
 
-  it("ships a deterministic Windows one-click artifact audit gate", () => {
+  it("ships a deterministic Windows payload artifact audit gate", () => {
     const audit = read("tooling/windows/assert_windows_oneclick_artifact.py");
     expect(audit).toContain("blue-tanuki-*-windows-x64-installer.zip");
-    expect(audit).toContain("windows_oneclick_artifact_audit=pass");
-    expect(audit).toContain("source_zip_returned_as_user_artifact=false");
+    expect(audit).toContain("windows_payload_artifact_audit=pass");
+    expect(audit).toContain("source_zip_returned_as_windows_payload=false");
     expect(audit).toContain("user_requires_node_pnpm_git=false");
     expect(audit).toContain("normal_install_invokes_corepack=false");
     expect(audit).toContain("normal_install_invokes_pnpm=false");

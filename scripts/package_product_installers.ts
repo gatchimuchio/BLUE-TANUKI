@@ -7,6 +7,7 @@ import {
   root,
   sha256File,
 } from "./package_windows.ts";
+import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 type ProductInstallerKind =
   | "windows-x64-self-extracting-cmd-installer"
@@ -121,12 +122,15 @@ function statSyncSize(file: string): number {
 function targetsFromArgs(): ProductInstallerTarget[] {
   const pkg = readPackage();
   const version = pkg.version;
+  const requestedPlatform = argValue("--platform") ?? "all";
+  const includeWindows = hasArg("--all") || requestedPlatform === "windows" || requestedPlatform === "all";
+  const windowsDir = includeWindows ? windowsArtifactDir(root) : path.join(root, "release/windows");
   const windows: ProductInstallerTarget = {
     os: "windows",
     arch: "x64",
     packageType: "windows-x64-self-extracting-cmd-installer",
-    payloadPath: path.join(root, "release/windows", `blue-tanuki-${version}-windows-x64-installer.zip`),
-    outputPath: path.join(root, "release/windows", `BlueTanukiSetup-${version}-windows-x64.cmd`),
+    payloadPath: path.join(windowsDir, `blue-tanuki-${version}-windows-x64-installer.zip`),
+    outputPath: path.join(windowsDir, `BlueTanukiSetup-${version}-windows-x64.cmd`),
   };
   const linux: ProductInstallerTarget = {
     os: "linux",

@@ -138,6 +138,10 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/licensing_gate.ts",
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
+  "scripts/windows_short_path.ts",
+  "scripts/windows_artifact_dir.ts",
+  "scripts/package_windows_iexpress.ts",
+  "scripts/verify_windows_iexpress.ts",
   "scripts/smoke_windows_installed.ts",
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
@@ -305,6 +309,11 @@ function windowsInstallerArtifactPaths(version: string): string[] {
   ];
 }
 
+function windowsExeArtifactPaths(version: string): string[] {
+  const exe = `release/windows/BlueTanukiSetup-${version}-windows-x64.exe`;
+  return [exe, `${exe}.sha256`, `${exe}.manifest.json`];
+}
+
 function unixInstallerArtifactPaths(version: string): string[] {
   const linux = `release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz`;
   const macosX64 = `release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz`;
@@ -325,14 +334,12 @@ function unixInstallerArtifactPaths(version: string): string[] {
 }
 
 function productInstallerArtifactPaths(version: string): string[] {
-  const windows = `release/windows/BlueTanukiSetup-${version}-windows-x64.cmd`;
+  const windows = windowsExeArtifactPaths(version);
   const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
   const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
   const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
   return [
-    windows,
-    `${windows}.sha256`,
-    `${windows}.manifest.json`,
+    ...windows,
     linux,
     `${linux}.sha256`,
     `${linux}.manifest.json`,

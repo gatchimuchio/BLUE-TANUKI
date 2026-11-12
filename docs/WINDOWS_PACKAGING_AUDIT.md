@@ -10,8 +10,20 @@ This audit records the current Windows packaging boundary.
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe.sha256
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe.manifest.json
 release/windows/README_INSTALL_WINDOWS.txt
 ```
+
+The unsigned IExpress `.exe` is the intended one-file entrypoint. Its cabinet
+contains the generated setup command, which embeds and verifies the ZIP payload.
+The ZIP remains a recovery/build artifact; normal users do not manually unpack
+it. Public distribution is held pending signing and owner release GO.
+
+`BLUE_TANUKI_WINDOWS_ARTIFACT_DIR` can select a local artifact directory. The
+builder rejects a OneDrive path; use a fresh path under Windows Temp when the
+checkout is synchronized.
 
 The package contains:
 
@@ -26,7 +38,11 @@ The package contains:
 
 ## Verification
 
-`pnpm package:windows:verify` checks:
+`pnpm package:windows:verify` checks the ZIP payload, its generated setup
+command, and the IExpress `.exe`. The `.exe` verifier extracts only the embedded
+command into a fresh temporary folder; it does not run setup or install the app.
+It then checks the executable PE/CAB structure, manifest, SHA-256, extracted
+command hash, and embedded ZIP hash/size. The command verifier checks:
 
 - required installer entries,
 - required runtime package entries,
@@ -45,8 +61,8 @@ The package contains:
 - HDS authority not modified,
 - autostart disabled by default.
 
-`python tooling/windows/assert_windows_oneclick_artifact.py .` is the
-deterministic Ubuntu-side static artifact audit. It requires exactly one
+`python tooling/windows/assert_windows_oneclick_artifact.py .` audits the
+payload ZIP on Ubuntu. It requires exactly one
 `blue-tanuki-<version>-windows-x64-installer.zip` under `release/windows/`,
 verifies the `.sha256` sidecar, manifest boundary fields, bundled Windows Node
 runtime, built app output, launcher/runtime/app directories, and confirms the
@@ -76,11 +92,11 @@ The user does not run:
 - repository PowerShell setup scripts,
 - Node.js installers.
 
-Source zip is developer source. End users should receive the installer zip from
-GitHub Releases or `release/windows/`. Normal Windows users should not run
-source builds. Download `blue-tanuki-<version>-windows-x64-installer.zip`,
-extract it, and run `BlueTanukiSetup.cmd`. Do not run `install/windows/product/BlueTanukiSetup.cmd`
-from the source tree.
+Source zip is developer source. The intended Windows user artifact is
+`BlueTanukiSetup-<version>-windows-x64.exe` with its matching SHA-256 and
+manifest. The ZIP is the payload/recovery artifact and remains available for the
+source-root helper. Normal Windows users should not run source builds or
+manually extract the ZIP. Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
 
 Root `INSTALL_WINDOWS.cmd` may use a verified local installer zip or download
 and verify the matching GitHub Release asset. If neither path verifies, it fails
@@ -106,11 +122,14 @@ intent only.
 - The package is unsigned.
 - SmartScreen continuation requires operator-side SHA-256 verification against
   the `.sha256` sidecar.
-- It is a zip-delivered installer package, not a signed MSI/EXE.
+- The IExpress `.exe` is unsigned and is not a signed native MSI/EXE.
+- The `.exe` extraction verifier does not execute setup; installed runtime
+  smoke must be run separately on Windows.
 - Windows runtime install smoke must be run on Windows.
-- GitHub Releases for Windows users must attach the installer zip, `.sha256`,
-  `.manifest.json`, and `README_INSTALL_WINDOWS.txt`; source zip alone is not
-  the end-user Windows artifact.
+- GitHub Releases for Windows users must attach the `.exe`, its `.sha256` and
+  `.manifest.json`, plus the payload ZIP and its matching sidecars and
+  `README_INSTALL_WINDOWS.txt`; source zip alone is not the end-user Windows
+  artifact.
 - The official source release bundle includes generated `release/windows/`,
   `release/linux/`, and `release/macos/` installer artifacts when produced by
   `pnpm release:bundle`.

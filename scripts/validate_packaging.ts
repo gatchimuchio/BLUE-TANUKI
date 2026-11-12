@@ -162,7 +162,10 @@ function main(): void {
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "%LOCALAPPDATA%\\Programs\\BlueTanuki");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "%APPDATA%\\BlueTanuki");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Autostart is not enabled");
-  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "not a signed MSI/EXE");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "unsigned IExpress self-extracting package");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "not a\nsigned native MSI/EXE");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "BlueTanukiSetup-<version>-windows-x64.exe");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Public distribution remains on hold");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Get-FileHash");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Repair / Reinstall");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "INSTALL_WINDOWS.cmd");
@@ -186,10 +189,12 @@ function main(): void {
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, ".sha256");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "README_INSTALL_WINDOWS.txt");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "Source zip is developer source");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "BlueTanukiSetup-<version>-windows-x64.exe");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "does not run setup or install the app");
 
   const windowsUninstall = read("docs/WINDOWS_UNINSTALL.md");
   requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "Uninstall\\BlueTanuki");
-  requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "User data retained");
+  requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "登録済みDataRootの内容は保持する");
   requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "PurgeData");
 
   const guidedInstallerReadme = read("install/installer/README.md");
@@ -296,13 +301,16 @@ function main(): void {
     packageWindows,
     "packages/blue-tanuki/dist/native/blue-tanuki-windows-isolation.exe",
   );
-  requireIncludes("scripts/package_windows.ts", packageWindows, "--work-root must be a child of .codex-tmp");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "--work-root must be a child of the OS temporary directory");
   requireIncludes("scripts/package_windows.ts", packageWindows, "requires_node_pnpm_git_from_user: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "installer_autostart: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "README_INSTALL_WINDOWS.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "const shaFile = `${outFile}.sha256`");
   requireIncludes("scripts/package_windows.ts", packageWindows, "SHASUMS256.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "runtime_sha256_verified=true");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "BlueTanukiSetup-${version}-windows-x64.exe");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "not approved for public distribution");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "windowsArtifactDir(root)");
   requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-APACHE-2.0");
   requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-CC-BY-4.0");
   requireIncludes("scripts/package_windows.ts", packageWindows, "NOTICE");
@@ -316,12 +324,12 @@ function main(): void {
   requireIncludes(
     "tooling/windows/assert_windows_oneclick_artifact.py",
     windowsOneclickAudit,
-    "windows_oneclick_artifact_audit=pass",
+    "windows_payload_artifact_audit=pass",
   );
   requireIncludes(
     "tooling/windows/assert_windows_oneclick_artifact.py",
     windowsOneclickAudit,
-    "source_zip_returned_as_user_artifact=false",
+    "source_zip_returned_as_windows_payload=false",
   );
   requireIncludes(
     "tooling/windows/assert_windows_oneclick_artifact.py",
@@ -335,6 +343,20 @@ function main(): void {
   );
   requireIncludes("tooling/windows/assert_windows_oneclick_artifact.py", windowsOneclickAudit, "zipfile.ZipFile");
   requireNotIncludes("tooling/windows/assert_windows_oneclick_artifact.py", windowsOneclickAudit, "shell=True");
+
+  const windowsIExpressPackage = read("scripts/package_windows_iexpress.ts");
+  requireIncludes("scripts/package_windows_iexpress.ts", windowsIExpressPackage, "windows-x64-iexpress-self-extracting-exe-installer");
+  requireIncludes("scripts/package_windows_iexpress.ts", windowsIExpressPackage, "Windows IExpress");
+  requireIncludes("scripts/package_windows_iexpress.ts", windowsIExpressPackage, "sourceCmdManifest.payload");
+  requireIncludes("scripts/package_windows_iexpress.ts", windowsIExpressPackage, "public_distribution=HOLD_owner_GO_and_signing_required");
+  const windowsIExpressVerify = read("scripts/verify_windows_iexpress.ts");
+  requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "single_file_extraction=PASS");
+  requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "setup_execution=NOT_RUN");
+  requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "embeddedZip.length");
+  requireIncludes("scripts/windows_short_path.ts", read("scripts/windows_short_path.ts"), "GetShortPathName");
+  const windowsArtifactDirectory = read("scripts/windows_artifact_dir.ts");
+  requireIncludes("scripts/windows_artifact_dir.ts", windowsArtifactDirectory, "BLUE_TANUKI_WINDOWS_ARTIFACT_DIR");
+  requireIncludes("scripts/windows_artifact_dir.ts", windowsArtifactDirectory, "local, non-OneDrive directory");
 
   const packageUnix = read("scripts/package_unix.ts");
   requireIncludes("scripts/package_unix.ts", packageUnix, "linux-x64-tar-installer");
@@ -570,7 +592,9 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
-  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/BlueTanukiSetup-${version}-windows-x64.cmd");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "BlueTanukiSetup-${version}-windows-x64.exe");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_windows_iexpress.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_windows_iexpress.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/BlueTanukiSetup-${version}-macos-arm64.command");
@@ -641,7 +665,9 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
-  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/BlueTanukiSetup-${version}-windows-x64.cmd");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/BlueTanukiSetup-${version}-windows-x64.exe");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/package_windows_iexpress.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_iexpress.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-arm64.command");
@@ -777,6 +803,8 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
   requireIncludes("package.json", packageJson, "\"package:windows\"");
   requireIncludes("package.json", packageJson, "\"package:windows:verify\"");
+  requireIncludes("package.json", packageJson, "scripts/package_windows_iexpress.ts");
+  requireIncludes("package.json", packageJson, "scripts/verify_windows_iexpress.ts");
   requireIncludes("package.json", packageJson, "\"package:linux\"");
   requireIncludes("package.json", packageJson, "\"package:linux:verify\"");
   requireIncludes("package.json", packageJson, "\"package:macos\"");

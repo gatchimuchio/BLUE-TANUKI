@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as https from "node:https";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 interface PackageJson {
   version: string;
@@ -498,18 +500,24 @@ export function sha256File(file: string): string {
 
 function windowsReadmeInstallText(version: string): string {
   const archive = `blue-tanuki-${version}-windows-x64-installer.zip`;
+  const installer = `BlueTanukiSetup-${version}-windows-x64.exe`;
   return [
     "BLUE-TANUKI Windows install",
     "",
-    "Normal Windows users should not run source builds. Download this installer zip, extract it, and run BlueTanukiSetup.cmd.",
+    "Normal Windows users should not run source builds. The user-facing single-file installer is the unsigned IExpress .exe.",
     "",
-    "1. Extract the installer zip.",
-    "2. Run BlueTanukiSetup.cmd from the extracted installer folder.",
-    "3. Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree.",
-    "4. If Microsoft Defender SmartScreen appears, verify the SHA-256 sidecar first, then choose More info > Run anyway only when the hash matches.",
+    `Installer: ${installer}`,
+    `1. Verify ${installer} against its matching .sha256 sidecar and .manifest.json.`,
+    `2. Double-click ${installer}; it extracts its embedded setup and payload and starts the packaged installer.`,
+    `3. The payload/recovery archive is ${archive}; normal install does not require manual extraction.`,
+    "4. Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree.",
+    "5. This installer is unsigned and is not approved for public distribution; signing and owner release GO are pending.",
+    "6. If Microsoft Defender SmartScreen appears, verify the SHA-256 sidecar first, then continue only for the matching artifact.",
     "",
-    `Installer zip: ${archive}`,
+    `Payload/recovery zip: ${archive}`,
     `SHA-256 sidecar: ${archive}.sha256`,
+    `Manifest: ${archive}.manifest.json`,
+    `Single-file installer sidecars: ${installer}.sha256 and ${installer}.manifest.json`,
     "",
   ].join("\n");
 }
@@ -517,14 +525,15 @@ function windowsReadmeInstallText(version: string): string {
 async function main(): Promise<void> {
   const pkg = readPackage();
   const nodeVersion = argValue("--node-version") ?? DEFAULT_NODE_VERSION;
-  const defaultOut = path.join(root, "release/windows", `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
+  const artifactDir = windowsArtifactDir(root);
+  const defaultOut = path.join(artifactDir, `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
   const outFile = path.resolve(argValue("--out") ?? defaultOut);
-  const tempRoot = path.join(root, ".codex-tmp");
+  assertBuilt({ platform: "win32", arch: "x64" });
+  const tempRoot = path.resolve(tmpdir());
   const requestedWorkRoot = argValue("--work-root");
-  const workRoot = path.resolve(
-    root,
-    requestedWorkRoot ?? path.join(".codex-tmp", "windows-package"),
-  );
+  const workRoot = requestedWorkRoot
+    ? path.resolve(root, requestedWorkRoot)
+    : await mkdtemp(path.join(tempRoot, "blue-tanuki-windows-package-"));
   const workRootRelative = path.relative(tempRoot, workRoot);
   if (
     workRootRelative.length === 0 ||
@@ -532,98 +541,108 @@ async function main(): Promise<void> {
     workRootRelative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(workRootRelative)
   ) {
-    throw new Error("--work-root must be a child of .codex-tmp");
+    if (!requestedWorkRoot) await rm(workRoot, { recursive: true, force: true });
+    throw new Error("--work-root must be a child of the OS temporary directory");
   }
   if (requestedWorkRoot && existsSync(workRoot)) {
     throw new Error("--work-root already exists; choose a new temporary directory");
   }
   const packageRoot = path.join(workRoot, "package");
   const appRoot = path.join(packageRoot, "app");
-  const cacheDir = path.join(root, ".codex-tmp/windows-runtime-cache");
+  const cacheDir = path.join(workRoot, "runtime-cache");
 
-  assertBuilt({ platform: "win32", arch: "x64" });
-  await rm(workRoot, { recursive: true, force: true });
-  await mkdir(packageRoot, { recursive: true });
-  await mkdir(path.dirname(outFile), { recursive: true });
-  await copyProductLaunchers(packageRoot);
-  await copyAppLayout(appRoot, { platform: "win32", arch: "x64" }, workRoot);
+  let completed = false;
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await mkdir(path.dirname(outFile), { recursive: true });
+    await copyProductLaunchers(packageRoot);
+    await copyAppLayout(appRoot, { platform: "win32", arch: "x64" }, workRoot);
 
-  const runtime = await downloadNodeRuntime(nodeVersion, cacheDir);
-  await mkdir(path.join(packageRoot, "runtime"), { recursive: true });
-  await cp(runtime.zipPath, path.join(packageRoot, "runtime", runtime.file), { force: true });
+    const runtime = await downloadNodeRuntime(nodeVersion, cacheDir);
+    await mkdir(path.join(packageRoot, "runtime"), { recursive: true });
+    await cp(runtime.zipPath, path.join(packageRoot, "runtime", runtime.file), { force: true });
 
-  const manifest: WindowsInstallerManifest = {
-    schema_version: 1,
-    name: "blue-tanuki",
-    version: pkg.version,
-    package_type: "windows-x64-zip-installer",
-    created_at: new Date().toISOString(),
-    node_runtime: {
-      bundled: true,
-      version: nodeVersion,
-      archive: runtime.file,
-      source: runtime.url,
-      sha256: runtime.sha256,
-      shasums_source: runtime.shasumsUrl,
-    },
-    user_experience: {
-      requires_node_pnpm_git_from_user: false,
-      creates_start_menu_shortcuts: true,
-      optional_desktop_shortcut: true,
-      autostart_enabled_by_default: false,
-      uninstall_registered: true,
-      gui_entry: "http://127.0.0.1:8787/app",
-    },
-    windows_locations: {
-      install_root: "%LOCALAPPDATA%\\Programs\\BlueTanuki",
-      data_root: "%APPDATA%\\BlueTanuki",
-      logs: "%APPDATA%\\BlueTanuki\\logs",
-      env_file: "%APPDATA%\\BlueTanuki\\blue-tanuki.env",
-    },
-    boundaries: {
-      unsigned_installer: true,
-      secrets_included: false,
-      gui_shell_modified: false,
-      hds_authority_modified: false,
-      installer_autostart: false,
-    },
-  };
-  await writeFile(path.join(packageRoot, "windows-installer-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-
-  await rm(outFile, { force: true });
-  zipDirectory(packageRoot, outFile);
-  const sha256 = sha256File(outFile);
-  const archiveStat = await stat(outFile);
-  const legacyBase = outFile.slice(0, -".zip".length);
-  const shaFile = `${outFile}.sha256`;
-  const manifestFile = `${outFile}.manifest.json`;
-  await rm(`${legacyBase}.sha256`, { force: true });
-  await rm(`${legacyBase}.manifest.json`, { force: true });
-  await writeFile(shaFile, `${sha256}  ${path.basename(outFile)}\n`, "utf8");
-  await writeFile(
-    manifestFile,
-    `${JSON.stringify({
-      ...manifest,
-      archive: {
-        file: path.basename(outFile),
-        size_bytes: archiveStat.size,
-        sha256,
+    const manifest: WindowsInstallerManifest = {
+      schema_version: 1,
+      name: "blue-tanuki",
+      version: pkg.version,
+      package_type: "windows-x64-zip-installer",
+      created_at: new Date().toISOString(),
+      node_runtime: {
+        bundled: true,
+        version: nodeVersion,
+        archive: runtime.file,
+        source: runtime.url,
+        sha256: runtime.sha256,
+        shasums_source: runtime.shasumsUrl,
       },
-      sha256_file: `${path.basename(outFile)}.sha256`,
-    }, null, 2)}\n`,
-    "utf8",
-  );
-  const readmeInstall = path.join(path.dirname(outFile), "README_INSTALL_WINDOWS.txt");
-  await writeFile(readmeInstall, windowsReadmeInstallText(pkg.version), "utf8");
-  console.log(`windows_installer=${outFile}`);
-  console.log(`sha256=${sha256}`);
-  console.log(`sha256_file=${shaFile}`);
-  console.log(`manifest_file=${manifestFile}`);
-  console.log(`windows_install_readme=${readmeInstall}`);
-  console.log("unsigned_installer=true");
-  console.log("bundled_node_runtime=true");
-  console.log("runtime_sha256_verified=true");
-  console.log("user_requires_node_pnpm_git=false");
+      user_experience: {
+        requires_node_pnpm_git_from_user: false,
+        creates_start_menu_shortcuts: true,
+        optional_desktop_shortcut: true,
+        autostart_enabled_by_default: false,
+        uninstall_registered: true,
+        gui_entry: "http://127.0.0.1:8787/app",
+      },
+      windows_locations: {
+        install_root: "%LOCALAPPDATA%\\Programs\\BlueTanuki",
+        data_root: "%APPDATA%\\BlueTanuki",
+        logs: "%APPDATA%\\BlueTanuki\\logs",
+        env_file: "%APPDATA%\\BlueTanuki\\blue-tanuki.env",
+      },
+      boundaries: {
+        unsigned_installer: true,
+        secrets_included: false,
+        gui_shell_modified: false,
+        hds_authority_modified: false,
+        installer_autostart: false,
+      },
+    };
+    await writeFile(path.join(packageRoot, "windows-installer-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    await rm(outFile, { force: true });
+    zipDirectory(packageRoot, outFile);
+    const sha256 = sha256File(outFile);
+    const archiveStat = await stat(outFile);
+    const legacyBase = outFile.slice(0, -".zip".length);
+    const shaFile = `${outFile}.sha256`;
+    const manifestFile = `${outFile}.manifest.json`;
+    await rm(`${legacyBase}.sha256`, { force: true });
+    await rm(`${legacyBase}.manifest.json`, { force: true });
+    await writeFile(shaFile, `${sha256}  ${path.basename(outFile)}\n`, "utf8");
+    await writeFile(
+      manifestFile,
+      `${JSON.stringify({
+        ...manifest,
+        archive: {
+          file: path.basename(outFile),
+          size_bytes: archiveStat.size,
+          sha256,
+        },
+        sha256_file: `${path.basename(outFile)}.sha256`,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const readmeInstall = path.join(path.dirname(outFile), "README_INSTALL_WINDOWS.txt");
+    await writeFile(readmeInstall, windowsReadmeInstallText(pkg.version), "utf8");
+    console.log(`windows_installer=${outFile}`);
+    console.log(`sha256=${sha256}`);
+    console.log(`sha256_file=${shaFile}`);
+    console.log(`manifest_file=${manifestFile}`);
+    console.log(`windows_install_readme=${readmeInstall}`);
+    console.log("unsigned_installer=true");
+    console.log("bundled_node_runtime=true");
+    console.log("runtime_sha256_verified=true");
+    console.log("user_requires_node_pnpm_git=false");
+    completed = true;
+  } catch (error) {
+    console.error(`Windows package staging retained for diagnosis: ${workRoot}`);
+    throw error;
+  } finally {
+    if (completed && existsSync(workRoot)) {
+      await rm(workRoot, { recursive: true, force: true });
+    }
+  }
 }
 
 const invoked = process.argv[1] ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) : false;

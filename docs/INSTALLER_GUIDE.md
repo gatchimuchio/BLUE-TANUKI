@@ -33,8 +33,10 @@ Each package bundles Node.js through the verified payload and installs
 BLUE-TANUKI without asking the end user to run Node.js, Corepack, pnpm, Git,
 shell/PowerShell setup scripts, nested extraction, or repository commands.
 
-Normal Windows users should not run source builds. Download
-`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The
+Normal Windows users should not run source builds. The intended one-file entry
+is `BlueTanukiSetup-<version>-windows-x64.exe`; verify its `.sha256` sidecar
+before running it. The current unsigned candidate is held from public
+distribution pending signing and owner release GO. The
 `blue-tanuki-<version>-windows-x64-installer.zip` artifact is payload/recovery.
 
 Normal macOS users should not run source builds. Download
@@ -139,8 +141,8 @@ provider, endpoint, model, and API key, then verify again.
 - The installer does not provide an automatic updater.
 - The installer is a guided first-run path, not a verified 5-minute setup
   guarantee.
-- The Windows normal-user package is an unsigned single-file command installer.
-  It is not a signed native installer package such as MSI/EXE, but it does
+- The Windows normal-user package candidate is an unsigned IExpress single-file
+  `.exe`, not a signed native installer package such as MSI/EXE. It does
   provide internally verified payload extraction, bundled runtime install,
   Start Menu shortcuts, Control Center launch, Doctor shortcut, logs shortcut,
   and current-user uninstall.

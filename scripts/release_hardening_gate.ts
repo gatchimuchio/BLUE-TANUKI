@@ -88,6 +88,11 @@ function assertManualDispatchOnly(lines: readonly string[], file: string): void 
   for (let index = onIndex + 1; index < onEnd; index += 1) {
     const line = lines[index]!;
     if (isBlankOrComment(line)) continue;
+    const indentation = line.match(/^ */)?.[0].length ?? 0;
+    if (indentation > 2) continue;
+    if (indentation !== 2) {
+      workflowPolicyFailure(file, "unsupported trigger syntax; use a block mapping with workflow_dispatch only");
+    }
     const match = /^  ([A-Za-z0-9_-]+)\s*:\s*(?:#.*)?$/.exec(line);
     if (!match) {
       workflowPolicyFailure(file, "unsupported trigger syntax; use a block mapping with workflow_dispatch only");

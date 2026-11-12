@@ -7,6 +7,7 @@ import {
   PRODUCT_SCOPE_CORE_RELEASE_PATHS,
   PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS,
 } from "../packages/protocol/src/product_scope_contract.js";
+import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 interface PackageJson {
   version: string;
@@ -137,6 +138,10 @@ const REQUIRED_PATHS = [
   "scripts/licensing_gate.ts",
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
+  "scripts/windows_short_path.ts",
+  "scripts/windows_artifact_dir.ts",
+  "scripts/package_windows_iexpress.ts",
+  "scripts/verify_windows_iexpress.ts",
   "scripts/smoke_windows_installed.ts",
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
@@ -148,6 +153,14 @@ const REQUIRED_PATHS = [
 ] as const;
 
 const INSTALLER_PATHS = PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS;
+
+function artifactSourcePath(rel: string): string {
+  const windowsPrefix = "release/windows/";
+  if (rel.startsWith(windowsPrefix)) {
+    return path.join(windowsArtifactDir(root), rel.slice(windowsPrefix.length));
+  }
+  return path.join(root, rel);
+}
 
 const CORE_ROOT_TSCONFIG_REFERENCES = [
   "./packages/protocol",
@@ -260,8 +273,14 @@ function windowsInstallerArtifactPaths(version: string): string[] {
   ];
 }
 
+function windowsExeArtifactPaths(version: string): string[] {
+  const exe = `release/windows/BlueTanukiSetup-${version}-windows-x64.exe`;
+  return [exe, `${exe}.sha256`, `${exe}.manifest.json`];
+}
+
 function hasWindowsInstallerArtifacts(version: string): boolean {
-  return windowsInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
+  return [...windowsInstallerArtifactPaths(version), ...windowsExeArtifactPaths(version)]
+    .every((rel) => existsSync(artifactSourcePath(rel)));
 }
 
 function unixInstallerArtifactPaths(version: string): string[] {
@@ -288,14 +307,12 @@ function hasUnixInstallerArtifacts(version: string): boolean {
 }
 
 function productInstallerArtifactPaths(version: string): string[] {
-  const windows = `release/windows/BlueTanukiSetup-${version}-windows-x64.cmd`;
+  const windows = windowsExeArtifactPaths(version);
   const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
   const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
   const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
   return [
-    windows,
-    `${windows}.sha256`,
-    `${windows}.manifest.json`,
+    ...windows,
     linux,
     `${linux}.sha256`,
     `${linux}.manifest.json`,
@@ -309,7 +326,7 @@ function productInstallerArtifactPaths(version: string): string[] {
 }
 
 function hasProductInstallerArtifacts(version: string): boolean {
-  return productInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
+  return productInstallerArtifactPaths(version).every((rel) => existsSync(artifactSourcePath(rel)));
 }
 
 function runWorkspaceCommand(args: readonly string[], label: string): void {
@@ -329,8 +346,8 @@ function ensureWindowsInstallerArtifacts(version: string): void {
   console.log("[release] Windows installer artifacts missing; generating first-class release artifacts");
   runWorkspaceCommand(["package:windows"], "pnpm package:windows");
   runWorkspaceCommand(["package:windows:verify"], "pnpm package:windows:verify");
-  for (const rel of windowsInstallerArtifactPaths(version)) {
-    if (!existsSync(path.join(root, rel))) {
+  for (const rel of [...windowsInstallerArtifactPaths(version), ...windowsExeArtifactPaths(version)]) {
+    if (!existsSync(artifactSourcePath(rel))) {
       throw new Error(
         `release bundle missing Windows installer artifact after package generation: ${rel}`,
       );
@@ -344,7 +361,7 @@ function ensureUnixInstallerArtifacts(version: string): void {
   runWorkspaceCommand(["package:unix"], "pnpm package:unix");
   runWorkspaceCommand(["package:unix:verify"], "pnpm package:unix:verify");
   for (const rel of unixInstallerArtifactPaths(version)) {
-    if (!existsSync(path.join(root, rel))) {
+    if (!existsSync(artifactSourcePath(rel))) {
       throw new Error(
         `release bundle missing Linux/macOS installer artifact after package generation: ${rel}`,
       );
@@ -360,7 +377,7 @@ function ensureProductInstallerArtifacts(version: string): void {
   runWorkspaceCommand(["package:installers"], "pnpm package:installers");
   runWorkspaceCommand(["package:installers:verify"], "pnpm package:installers:verify");
   for (const rel of productInstallerArtifactPaths(version)) {
-    if (!existsSync(path.join(root, rel))) {
+    if (!existsSync(artifactSourcePath(rel))) {
       throw new Error(
         `release bundle missing product installer artifact after package generation: ${rel}`,
       );
@@ -406,7 +423,7 @@ async function copyIncluded(staging: string): Promise<void> {
 
 async function copyWindowsInstallerArtifacts(staging: string, version: string): Promise<void> {
   for (const rel of windowsInstallerArtifactPaths(version)) {
-    const src = path.join(root, rel);
+    const src = artifactSourcePath(rel);
     const dest = path.join(staging, rel);
     await mkdir(path.dirname(dest), { recursive: true });
     await cp(src, dest, { force: true });
@@ -424,7 +441,7 @@ async function copyUnixInstallerArtifacts(staging: string, version: string): Pro
 
 async function copyProductInstallerArtifacts(staging: string, version: string): Promise<void> {
   for (const rel of productInstallerArtifactPaths(version)) {
-    const src = path.join(root, rel);
+    const src = artifactSourcePath(rel);
     const dest = path.join(staging, rel);
     await mkdir(path.dirname(dest), { recursive: true });
     await cp(src, dest, { force: true });

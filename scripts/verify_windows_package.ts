@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { fileURLToPath } from "node:url";
 
 interface ExternalManifest {
@@ -134,7 +135,7 @@ function argValue(name: string): string | undefined {
 
 function defaultArtifact(): string {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as { version: string };
-  return path.join(root, "release/windows", `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
+  return path.join(windowsArtifactDir(root), `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
 }
 
 function sha256File(file: string): string {
@@ -269,15 +270,18 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
   const actualSha = sha256File(archive);
   const sidecarSha = readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
   if (sidecarSha !== actualSha) throw new Error("sha256 sidecar does not match artifact");
-  assertManifest(readManifest(manifestFile), archive, actualSha);
+  const manifest = readManifest(manifestFile);
+  assertManifest(manifest, archive, actualSha);
   const installReadme = readFileSync(installReadmeFile, "utf8");
   for (const needle of [
     "Normal Windows users should not run source builds",
-    "Extract the installer zip",
-    "Run BlueTanukiSetup.cmd",
+    `BlueTanukiSetup-${manifest.version}-windows-x64.exe`,
+    "Double-click",
+    "payload/recovery archive",
+    "not approved for public distribution",
     "Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree",
     "SHA-256",
-    "Run anyway",
+    "SmartScreen",
   ]) {
     if (!installReadme.includes(needle)) {
       throw new Error(`README_INSTALL_WINDOWS.txt missing required text: ${needle}`);

@@ -58,13 +58,15 @@ pnpm validate:japanese-base -- --strict
 
 ## 技術RCを試す — インストール
 
-GitHub Release から対象 OS の single-file installer を取得する。
+owner release GO後に公開された対象 OS の single-file installer を取得する。
 
 | OS | 実行物 |
 |---|---|
-| Windows | `BlueTanukiSetup-<version>-windows-x64.cmd` |
+| Windows | `BlueTanukiSetup-<version>-windows-x64.exe` |
 | macOS | `BlueTanukiSetup-<version>-macos-<arch>.command` |
 | Linux | `BlueTanukiSetup-<version>-linux-x64.run` |
+
+Windows `.exe` は現在 unsigned の施工候補であり、公開・出荷保留中。
 
 installer は埋込み payload を検証・展開して BLUE-TANUKI を導入し、resident app と `http://127.0.0.1:8787/app` を開く。通常利用者が Node.js、Corepack、pnpm、Git、source build を準備することは想定しない。
 

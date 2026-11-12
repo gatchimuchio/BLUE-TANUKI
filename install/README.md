@@ -10,16 +10,16 @@ There are three distinct paths:
    Node, Corepack, pnpm, Git, source builds, setup scripts, nested extraction,
    or repository commands manually.
 
-The repository does not build signed native packages yet. The product packages
-are unsigned installer packages, not signed native installer packages such as
-signed MSI/EXE/DMG/DEB/RPM.
+The repository does not build signed native packages yet. Windows uses an
+unsigned IExpress self-extracting `.exe`; macOS/Linux use portable command
+installers. These are not signed native MSI/EXE/DMG/DEB/RPM packages.
 
 ## One-click entrypoints
 
 Use the single-file packaged installer entrypoint for every normal user path:
 
 ```text
-Windows: BlueTanukiSetup-<version>-windows-x64.cmd
+Windows: BlueTanukiSetup-<version>-windows-x64.exe
 macOS:   BlueTanukiSetup-<version>-macos-<arch>.command
 Linux:   BlueTanukiSetup-<version>-linux-x64.run
 ```
@@ -27,7 +27,8 @@ Linux:   BlueTanukiSetup-<version>-linux-x64.run
 Normal Windows, macOS, and Linux users should not run source builds. The
 single-file installer verifies its embedded payload/recovery archive, extracts
 it internally, installs BLUE-TANUKI, launches the resident app, and opens
-`http://127.0.0.1:8787/app`. It does not require user-installed Node.js,
+`http://127.0.0.1:8787/app`. The Windows `.exe` contains the setup command and
+payload, so normal installation needs no manual nested extraction. It does not require user-installed Node.js,
 Corepack, pnpm, Git, manual nested extraction, or source-build troubleshooting.
 
 The source-root entrypoints (`INSTALL_WINDOWS.cmd`, `INSTALL_MACOS.command`,
@@ -93,7 +94,9 @@ Artifacts:
 
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
-release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe.sha256
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.exe.manifest.json
 release/linux/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz
 release/linux/BlueTanukiSetup-1.0.0-rc.1-linux-x64.run
 release/macos/blue-tanuki-1.0.0-rc.1-macos-x64-installer.tar.gz
@@ -114,9 +117,10 @@ User flow:
 
 Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
 Normal Windows users should not run source builds. Download
-`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The
+`BlueTanukiSetup-<version>-windows-x64.exe` and run it. The
 `blue-tanuki-<version>-windows-x64-installer.zip` artifact remains available as
-payload/recovery.
+payload/recovery. The current unsigned candidate is held from public
+distribution pending signing and owner release GO.
 
 Normal macOS users should not run source builds. Download
 `BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The

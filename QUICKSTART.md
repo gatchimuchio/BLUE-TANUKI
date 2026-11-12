@@ -8,12 +8,12 @@ Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.m
 
 ## 1. OS別一発起動 entrypoint
 
-GitHub Release から OS に合う single-file installer を取得して実行する。
-This is the normal user path.
+owner release GO後に公開された OS別 single-file installer を取得して実行する。
+Windows `.exe` は現在 unsigned の施工候補で、公開・出荷保留中。
 
 | OS | 実行するもの |
 | --- | --- |
-| Windows | `BlueTanukiSetup-<version>-windows-x64.cmd` |
+| Windows | `BlueTanukiSetup-<version>-windows-x64.exe` |
 | macOS | `BlueTanukiSetup-<version>-macos-<arch>.command` |
 | Linux | `BlueTanukiSetup-<version>-linux-x64.run` |
 
@@ -47,20 +47,20 @@ sh ./INSTALL_LINUX.sh --build-from-source
 
 ## 2. Platform installer packages
 
-Windows 一般ユーザー向けの経路は single-file installer package である。Normal
-Windows users should not run source builds. Download
-`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. source tree 内の
+Windows 一般ユーザー向けの候補経路は unsigned single-file `.exe` である。Normal
+Windows users should not run source builds. Obtain
+`BlueTanukiSetup-<version>-windows-x64.exe`, verify its `.sha256` sidecar, and run it. source tree 内の
 `install/windows/product/BlueTanukiSetup.cmd` は直接実行しない。
 
 ```text
-1. BlueTanukiSetup-<version>-windows-x64.cmd を取得
+1. BlueTanukiSetup-<version>-windows-x64.exe と一致する `.sha256` / manifest を取得・確認
 2. double-click
-3. installer が payload/recovery zip を内部展開して install
+3. IExpress が埋め込み setup command を展開し、payload/recovery zip を内部展開して install
 4. BLUE-TANUKI が起動
 5. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
 ```
 
-`INSTALL_WINDOWS.cmd` は `release/windows/*windows-x64-installer.zip` があれば
+この unsigned package は公開・出荷保留中であり、owner release GOを示さない。`INSTALL_WINDOWS.cmd` は `release/windows/*windows-x64-installer.zip` があれば
 それを検証して packaged setup を実行する。zip がなければ matching GitHub
 Release の Windows installer asset と `.sha256` / `.manifest.json` を取得・検証する。
 検証できない場合は「source zip ではなく Windows installer zip を使う」と
