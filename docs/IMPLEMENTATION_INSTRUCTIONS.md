@@ -15,7 +15,7 @@
 | owner-auth Gateway task integration | PASS：owner規則なしの保留／明示規則によるJ/M検証と停止、Canvas `file.write` 一回作用・receipt・Gateway再起動復元の2件。 |
 | `corepack pnpm build` | PASS：15 workspace projects。 |
 | `corepack pnpm docs:check` | PASS：docs／日本語基底／licensing gates。日本語基底の既存移行負債75件を検出。 |
-| `git diff --check` | closeout時に実行する。 |
+| `git diff --check` | PASS。 |
 | 実provider／実LLM／外部作用、全suite、native 5OS、QE_QC／QE_QA、公開・release／owner GO | NOT_RUN／対象外。合成fixture結果を実providerや製品全体へ拡張しない。 |
 
 UNIT_ID: C08.02（owner明示達成規則、同一revision verified result／M receipt、達成後停止・不成立時保留、再起動後復旧の限定consumer）
@@ -23,7 +23,7 @@ STATUS: WIRED（J/M operation-plan、owner-auth Gateway file.write、C08.02 kill
 NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、rev4.0の優先基準と実callsiteから再選定する。現行指示の高リスク未観測事項であるWindows製品Setup→Uninstall動的対象経路を最初に照合し、未接続consumerが現物にあればその一経路へ限定する。
 SAFETY_STATUS: HDS-J単一writer、Approval Gate、L3、M非権威、owner認証済み規則digest、同一task／revision／step／result／receipt束縛、欠落・曖昧時fail-closed、達成後停止を維持。
 LOCAL_ASSET_STATUS: test-owned C08.02／Canvas temp rootsはtest cleanupで削除済み。`corepack pnpm build`が生成したignored `dist`／platform build outputsは開発環境として保持。provider credential、外部作用、別repo、OneDrive資料操作なし。`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更で保持。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`1728ff07b430211de09d5fbc4b7be40f281e15cd`、ahead／behind=0/0。closeout push後の正確なHEAD・復旧refは下段で更新する。保護添付は未stage・未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 実装／test commit=`37c558be737fd1225850da7bb3671181f25993ef`をpushした時点でlocal／`origin/main`／GitHub `main`一致、ahead／behind=0/0。復旧refはCAS更新しcurrent=`37c558be737fd1225850da7bb3671181f25993ef`、previous=`1728ff07b430211de09d5fbc4b7be40f281e15cd`を確認。closeout記録の追加commit後は最終HEAD／復旧refが進むため、その値は最終報告で照合する。commit成功後に旧`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のmetadata cleanupがPermission deniedを返したが、metadata／ACLを保持して処理を迂回せず、GitHub main pushとremote ref照合は成功した。`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
 
 ## 完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime statusへのJ/M task outcome接続
 
