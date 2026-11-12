@@ -7658,6 +7658,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (review.cc !== undefined && typeof review.cc !== "string") ||
             (review.bcc !== undefined && typeof review.bcc !== "string") ||
             (review.reply_to !== undefined && typeof review.reply_to !== "string") ||
+            (review.reply_source !== undefined && (!review.reply_source ||
+              review.operation !== "gmail.write.draft.create" ||
+              !/^[A-Za-z0-9_-]{1,512}$/.test(review.reply_source.message_id || "") ||
+              !/^[A-Za-z0-9_-]{1,512}$/.test(review.reply_source.thread_id || "") ||
+              typeof review.reply_source.subject !== "string" || review.reply_source.subject !== review.subject ||
+              (review.reply_source.from !== undefined && (typeof review.reply_source.from !== "string" ||
+                review.reply_source.from.length > 998 || /[\\r\\n\\u0000-\\u001f\\u007f]/.test(review.reply_source.from))) ||
+              review.reply_source.used_for_authority !== false ||
+              !/^[a-f0-9]{64}$/.test(review.reply_source.provider_state_digest || "") ||
+              review.provider_state_digest !== review.reply_source.provider_state_digest)) ||
+            (review.operation === "gmail.write.draft.create" && review.reply_source === undefined &&
+              review.provider_state_digest !== undefined) ||
             typeof review.body_text !== "string" ||
             (review.attachments !== undefined && (!Array.isArray(review.attachments) || review.attachments.some(function (attachment) {
               return !attachment || typeof attachment.filename !== "string" || typeof attachment.mime_type !== "string" ||
@@ -7668,12 +7680,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         view.replaceChildren();
         const heading = document.createElement("strong");
-        heading.textContent = review.operation === "gmail.write.draft.create"
-          ? "Exact Gmail draft to be created (not sent)"
+        heading.textContent = review.reply_source
+          ? "Exact Gmail reply draft to be created (not sent)"
+          : review.operation === "gmail.write.draft.create"
+            ? "Exact Gmail draft to be created (not sent)"
           : review.operation === "gmail.write.draft.send"
             ? "Exact existing Gmail draft to be sent"
             : "Exact outgoing message";
         view.appendChild(heading);
+        if (review.reply_source) {
+          const source = document.createElement("p");
+          source.textContent = "Replying in selected Gmail thread " + review.reply_source.thread_id +
+            " from message " + review.reply_source.message_id +
+            (review.reply_source.from ? " | source sender: " + review.reply_source.from : "") +
+            " | source subject: " + review.reply_source.subject;
+          view.appendChild(source);
+        }
         if (review.account_email) {
           const account = document.createElement("p");
           account.textContent = "Authenticated Gmail account: " + review.account_email;

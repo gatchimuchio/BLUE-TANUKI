@@ -5068,11 +5068,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!pending || !isGmailWriteContentReviewCommand(pending.command) ||
         executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command)) return null;
-    const hasAttachments = pending.command.type === "tool_call" && pending.command.payload.tool_name === "gmail.write" &&
-      Array.isArray(pending.command.payload.arguments.attachments) &&
-      pending.command.payload.arguments.attachments.length > 0;
+    const needsVerifiedGmailWriteSnapshot = pending.command.type === "tool_call" &&
+      pending.command.payload.tool_name === "gmail.write" &&
+      (Array.isArray(pending.command.payload.arguments.attachments) &&
+        pending.command.payload.arguments.attachments.length > 0 ||
+        pending.command.payload.arguments.reply_to_message_id !== undefined);
     let verifiedSnapshot: Parameters<typeof projectGmailWriteContentReview>[2];
-    if (hasAttachments) {
+    if (needsVerifiedGmailWriteSnapshot) {
       try {
         const snapshot = await executor.inspectCommandContentReview(pending.command);
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_write_content") return null;

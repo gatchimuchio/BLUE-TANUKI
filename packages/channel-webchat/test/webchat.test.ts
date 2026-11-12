@@ -3018,6 +3018,73 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 });
 
+describe("WebChat Gmail reply draft review", () => {
+  it("renders the exact selected source message and thread in the no-store L3 review", async () => {
+    const commandId = "gmail-reply-draft-command";
+    const review = {
+      kind: "gmail_write_content",
+      command_id: commandId,
+      command_digest: "a".repeat(64),
+      review_digest: "b".repeat(64),
+      request_payload_digest: "c".repeat(64),
+      provider_state_digest: "d".repeat(64),
+      operation: "gmail.write.draft.create",
+      reply_source: { message_id: "fixture-source-message_1", thread_id: "fixture-thread_1",
+        from: "sender@example.test", subject: "Synthetic selected source subject",
+        provider_state_digest: "d".repeat(64), used_for_authority: false },
+      to: "owner-selected@example.test",
+      subject: "Synthetic selected source subject",
+      body_text: "Synthetic reply body",
+      used_for_authority: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName,
+      textContent: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view :
+        selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const run = new Script(`
+      async function runReview() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        const document = {
+          querySelectorAll() { return [reviewCard]; },
+          createElement(tagName) { return makeNode(tagName); },
+        };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await reviewApprovalContent("${commandId}", reviewButton);
+      }
+      runReview();
+    `);
+    const button = { textContent: "Review exact content" };
+    await run.runInNewContext({ reviewState: state, reviewCard: card, reviewData: review, makeNode,
+      reviewButton: button });
+    const text = view.children.map((child) => String(child.textContent ?? "")).join("\n");
+    expect(text).toContain("Exact Gmail reply draft to be created (not sent)");
+    expect(text).toContain("fixture-thread_1");
+    expect(text).toContain("fixture-source-message_1");
+    expect(text).toContain("sender@example.test");
+    expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
+    expect(approve.disabled).toBe(false);
+  });
+});
+
 describe("Aotanu mascot runtime mapper", () => {
   it("maps runtime snapshots to display-only mascot states", () => {
     expect(mapRuntimeSnapshotToAotanuMascotState({
@@ -5489,8 +5556,13 @@ describe("WebChatChannel — approval API", () => {
         reviewContent: async (command_id) => command_id === "cmd-draft-review" ? {
           command_id,
           command_digest: digest,
+          review_digest: "f".repeat(64),
           request_payload_digest: "e".repeat(64),
+          provider_state_digest: "1".repeat(64),
           operation: "gmail.write.draft.create",
+          reply_source: { message_id: "fixture-source-message_1", thread_id: "fixture-thread_1",
+            from: "sender@example.test", subject: "synthetic draft subject",
+            provider_state_digest: "1".repeat(64), used_for_authority: false },
           to: "recipient@example.test",
           subject: "synthetic draft subject",
           body_text: draftBody,
@@ -5513,6 +5585,10 @@ describe("WebChatChannel — approval API", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toMatchObject({
         operation: "gmail.write.draft.create",
+        reply_source: { message_id: "fixture-source-message_1", thread_id: "fixture-thread_1",
+          from: "sender@example.test", subject: "synthetic draft subject",
+          provider_state_digest: "1".repeat(64), used_for_authority: false },
+        provider_state_digest: "1".repeat(64),
         to: "recipient@example.test",
         subject: "synthetic draft subject",
         body_text: draftBody,

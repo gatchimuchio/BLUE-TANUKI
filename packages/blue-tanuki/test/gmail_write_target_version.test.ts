@@ -69,6 +69,36 @@ function gmailTrashFixture(options: { initialLabels?: string[]; confirmTrash?: b
   return { request, getLabels: () => [...labels] };
 }
 
+function gmailReplyDraftFixture(options: { sourceMessageId?: string; threadId?: string; subject?: string;
+  messageHeader?: string; references?: string; createdThreadId?: string } = {}) {
+  const sourceMessageId = options.sourceMessageId ?? "fixture-source-message_1";
+  const threadId = options.threadId ?? "fixture-thread_1";
+  const subject = options.subject ?? "Synthetic selected source subject";
+  const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+    if (target.path === "/gmail/v1/users/me/profile" && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
+    }
+    if (target.path.includes(`/messages/${sourceMessageId}?format=metadata&`) && target.method === "GET") {
+      return { ...response, body: JSON.stringify({ id: sourceMessageId, threadId, labelIds: ["INBOX"],
+        internalDate: "1760000000000", sizeEstimate: 128,
+        payload: { mimeType: "text/plain", headers: [
+          { name: "From", value: "sender@example.invalid" },
+          { name: "Subject", value: subject },
+          ...(options.messageHeader === undefined ? [{ name: "Message-ID", value: "<source@example.invalid>" }] :
+            [{ name: "Message-ID", value: options.messageHeader }]),
+          { name: "References", value: options.references ?? "<older@example.invalid>" },
+        ] } }) };
+    }
+    if (target.path === "/gmail/v1/users/me/drafts" && target.method === "POST") {
+      return { ...response, body: JSON.stringify({ id: "fixture-created-draft", message: {
+        id: "fixture-created-message", threadId: options.createdThreadId ?? threadId,
+      } }) };
+    }
+    throw new Error(`unexpected reply draft fixture request: ${target.method} ${target.path}`);
+  });
+  return { request, sourceMessageId, threadId, subject };
+}
+
 const modifyArgs = { operation: "message.modify", message_id: "fixture-message_123",
   add_label_ids: ["Label_2"], remove_label_ids: ["Label_1"] };
 function gmailModifyFixture(options: { initialLabels?: string[]; confirmModify?: boolean } = {}) {
@@ -407,6 +437,88 @@ describe("Gmail write target observation", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0]?.[0]).toMatchObject({ path: "/gmail/v1/users/me/drafts", token: "fixture-token" });
     expect(result).toMatchObject({ service: "gmail", operation: "draft.create", mutation_sent: true });
+  });
+
+  it("返信draftはOwner選択messageのstate・thread・RFC返信headerをL3確認と単回作成へ結ぶ", async () => {
+    const fixture = gmailReplyDraftFixture();
+    const draftArgs = { operation: "draft.create", reply_to_message_id: fixture.sourceMessageId,
+      to: "owner-selected@example.invalid", subject: fixture.subject,
+      body_text: "Synthetic reply only; fixture transport cannot reach Gmail." };
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const commandDigest = "a".repeat(64);
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+      command_digest: commandDigest, operation_plan_binding_digest: "b".repeat(64),
+    }));
+    const review = await tool.inspect_content_review!(draftArgs, { command_digest: commandDigest });
+    expect(review).toMatchObject({ kind: "gmail_write_content", operation: "gmail.write.draft.create",
+      reply_source: { message_id: fixture.sourceMessageId, thread_id: fixture.threadId,
+        from: "sender@example.invalid", subject: fixture.subject, used_for_authority: false },
+      provider_state_digest: observation.provider_state_digest, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(review)).not.toContain("<source@example.invalid>");
+
+    const result = await tool.invoke(draftArgs, { command_id: "fixture-reply-draft-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation });
+    const createRequest = fixture.request.mock.calls.at(-1)?.[0];
+    const createPayload = JSON.parse(createRequest?.body ?? "{}") as { message?: { raw?: string; threadId?: string } };
+    const mime = Buffer.from(createPayload.message?.raw ?? "", "base64url").toString("utf8");
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
+    expect(createRequest).toMatchObject({ method: "POST", path: "/gmail/v1/users/me/drafts" });
+    expect(createPayload.message?.threadId).toBe(fixture.threadId);
+    expect(mime).toContain(`In-Reply-To: <source@example.invalid>`);
+    expect(mime).toContain(`References: <older@example.invalid> <source@example.invalid>`);
+    expect(mime).toContain(`Subject: ${fixture.subject}`);
+    expect(result).toMatchObject({ service: "gmail", operation: "draft.create", mutation_status: "confirmed",
+      result: { thread_confirmed: true, used_for_authority: false, may_execute: false } });
+    expect(JSON.stringify(result)).not.toContain(fixture.sourceMessageId);
+    expect(JSON.stringify(result)).not.toContain("Synthetic reply only");
+  });
+
+  it("返信sourceのRFC Message-ID欠落またはreview後のstate変更を作用前に拒否する", async () => {
+    const missingHeader = gmailReplyDraftFixture({ messageHeader: "" });
+    const missingArgs = { operation: "draft.create", reply_to_message_id: missingHeader.sourceMessageId,
+      to: "owner-selected@example.invalid", subject: missingHeader.subject, body_text: "Synthetic reply" };
+    const missingTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: missingHeader.request });
+    await expect(missingTool.inspect_content_review!(missingArgs, { command_digest: "a".repeat(64) })).rejects.toThrow(/reply source headers/);
+    expect(missingHeader.request.mock.calls.some(([target]) => target.method === "POST")).toBe(false);
+
+    let sourceSubject = "Synthetic selected source subject";
+    const changing = gmailReplyDraftFixture();
+    const request = vi.fn(async (target: GoogleWriteTarget): Promise<GoogleWriteResponse> => {
+      const reply = await changing.request(target);
+      if (target.path.includes("?format=metadata&") && target.method === "GET" && sourceSubject !== changing.subject) {
+        const body = JSON.parse(reply.body) as { payload: { headers: { name: string; value: string }[] } };
+        body.payload.headers.find((header) => header.name === "Subject")!.value = sourceSubject;
+        return { ...reply, body: JSON.stringify(body) };
+      }
+      return reply;
+    });
+    const changingArgs = { operation: "draft.create", reply_to_message_id: changing.sourceMessageId,
+      to: "owner-selected@example.invalid", subject: changing.subject, body_text: "Synthetic reply" };
+    const changingTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await changingTool.inspect_target_version!(changingArgs, {
+      command_digest: "b".repeat(64), operation_plan_binding_digest: "c".repeat(64),
+    }));
+    await changingTool.inspect_content_review!(changingArgs, { command_digest: "b".repeat(64) });
+    sourceSubject = "Changed after review";
+    await expect(changingTool.invoke(changingArgs, { command_id: "fixture-reply-stale-command",
+      upstream_commit_hash: "d".repeat(64), idempotency_key: "e".repeat(64), command_digest: "f".repeat(64),
+      target_version_observation: observation })).rejects.toThrow(/source changed after review/);
+    expect(request.mock.calls.some(([target]) => target.method === "POST")).toBe(false);
+  });
+
+  it("Gmailが別threadを返した返信draft結果は結果不明として一回で停止する", async () => {
+    const fixture = gmailReplyDraftFixture({ createdThreadId: "fixture-other-thread" });
+    const draftArgs = { operation: "draft.create", reply_to_message_id: fixture.sourceMessageId,
+      to: "owner-selected@example.invalid", subject: fixture.subject, body_text: "Synthetic reply" };
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request: fixture.request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    await expect(tool.invoke(draftArgs, { command_id: "fixture-reply-wrong-thread",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64), command_digest: "e".repeat(64),
+      target_version_observation: observation })).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(fixture.request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(1);
   });
 
   it("draft.createの宛先・本文変更や観測欠落をcredential・requestの前に拒否する", async () => {

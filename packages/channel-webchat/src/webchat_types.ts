@@ -182,6 +182,14 @@ export interface WebChatGmailApprovalContentReview {
   request_payload_digest: string;
   provider_state_digest?: string;
   provider_raw_digest?: string;
+  reply_source?: {
+    message_id: string;
+    thread_id: string;
+    from?: string;
+    subject: string;
+    provider_state_digest: string;
+    used_for_authority: false;
+  };
   account_email?: string;
   operation: "gmail.write.draft.create" | "gmail.write.message.send" | "gmail.write.draft.send";
   to: string;

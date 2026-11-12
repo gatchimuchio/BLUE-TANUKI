@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
@@ -274,5 +275,47 @@ describe("Gmail approval content review projection", () => {
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, reviewDigest)).toBe("valid");
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, "4".repeat(64))).toBe("stale");
     expect(validateGmailDraftSendContentReview(unsupported, digest, true, undefined, reviewDigest)).toBe("required");
+  });
+
+  it("reply draft projection requires the verified source message, exact thread, and provider state", () => {
+    const args = { operation: "draft.create", reply_to_message_id: "fixture-source-message_1",
+      to: "owner-selected@example.test", subject: "Selected thread subject", body_text: "Synthetic reply body" };
+    const input = command(args);
+    const commandDigest = "a".repeat(64);
+    const providerStateDigest = "b".repeat(64);
+    const requestPayloadDigest = gmailWriteRequestPayloadDigest(args);
+    const identityDigest = (value: string) => createHash("sha256").update(value).digest("hex");
+    const reviewDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.gmail-write-content-review.v2",
+      command_digest: commandDigest,
+      request_payload_digest: requestPayloadDigest,
+      attachment_content_digests: [],
+      reply_source_message_identity_digest: identityDigest(args.reply_to_message_id),
+      reply_source_thread_identity_digest: identityDigest("fixture-thread_1"),
+      provider_state_digest: providerStateDigest,
+    });
+    const snapshot = {
+      kind: "gmail_write_content" as const,
+      command_digest: commandDigest,
+      request_payload_digest: requestPayloadDigest,
+      review_digest: reviewDigest,
+      reply_source: { message_id: args.reply_to_message_id, thread_id: "fixture-thread_1",
+        from: "sender@example.test", subject: args.subject, provider_state_digest: providerStateDigest,
+        used_for_authority: false as const },
+      provider_state_digest: providerStateDigest,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+
+    const projection = projectGmailWriteContentReview(input, commandDigest, snapshot);
+    expect(projection).toMatchObject({ operation: "gmail.write.draft.create", reply_source: {
+      message_id: args.reply_to_message_id, thread_id: "fixture-thread_1", subject: args.subject,
+      provider_state_digest: providerStateDigest, used_for_authority: false,
+    }, provider_state_digest: providerStateDigest, used_for_authority: false });
+    expect(projectGmailWriteContentReview(input, commandDigest)).toBeNull();
+    expect(projectGmailWriteContentReview(input, commandDigest,
+      { ...snapshot, reply_source: { ...snapshot.reply_source, message_id: "another-message" } })).toBeNull();
+    expect(projectGmailWriteContentReview(input, commandDigest,
+      { ...snapshot, reply_source: { ...snapshot.reply_source, subject: "another thread" } })).toBeNull();
   });
 });

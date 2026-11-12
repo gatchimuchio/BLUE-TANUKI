@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   getOperationDescriptor, inspectOperationCommandExecutionResult, MCP_CALL_POTENTIAL_EFFECTS,
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointEnvelopeSchema,
@@ -1227,6 +1228,71 @@ export function operationPlanResultValidationMatches(
   if (validation.method === "github_write_result_matches") {
     return githubWriteResultMatches(validation, step, output, binding);
   }
+  if (validation.method === "gmail_reply_draft_result_matches") {
+    const parameters = step.parameters;
+    const sourceMessageId = parameters?.reply_to_message_id;
+    const normalizedTo = normalizeGmailAddressList(parameters?.to);
+    const subject = parameters?.subject;
+    const bodyText = parameters?.body_text;
+    if (step.operation !== "gmail.write" || step.target.kind !== "external_service" || step.target.id !== "gmail" ||
+        parameters?.operation !== "draft.create" || typeof sourceMessageId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,512}$/.test(sourceMessageId) || !normalizedTo || typeof subject !== "string" ||
+        typeof bodyText !== "string" || parameters.attachments !== undefined ||
+        !isFileSearchResultRecord(validation.expected) || !isFileSearchResultRecord(output)) return false;
+    const expectedKeys = ["operation", "schema_version"];
+    if (Object.keys(validation.expected).sort().join(",") !== expectedKeys.join(",") ||
+        validation.expected.schema_version !== "blue-tanuki.gmail-reply-draft-result-validation.v1" ||
+        validation.expected.operation !== "draft.create") return false;
+    const messageIdentityDigest = createHash("sha256").update(sourceMessageId, "utf8").digest("hex");
+    const recipients: Record<string, string> = { to: normalizedTo };
+    for (const name of ["cc", "bcc", "reply_to"] as const) {
+      const recipient = normalizeGmailAddressList(parameters[name]);
+      if (recipient) recipients[name] = recipient;
+    }
+    const targetIdentityDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
+      service: "gmail", operation: "draft.create", recipients,
+      reply_source_message_identity_digest: messageIdentityDigest });
+    const encodedSubject = /^[\x20-\x7e]*$/.test(subject)
+      ? subject : `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
+    const requestPayloadDigest = operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-intent.v2",
+      operation: "draft.create", to: normalizedTo,
+      cc: normalizeGmailAddressList(parameters.cc) ?? null,
+      bcc: normalizeGmailAddressList(parameters.bcc) ?? null,
+      reply_to: normalizeGmailAddressList(parameters.reply_to) ?? null,
+      from: null,
+      subject: encodedSubject,
+      body_text: bodyText,
+      attachments: [],
+      reply_source_message_identity_digest: messageIdentityDigest });
+    const result = output.result;
+    const resultKeys = ["created_draft_identity_digest", "created_message_identity_digest", "may_execute",
+      "provider_state_digest", "request_payload_digest", "source_message_identity_digest",
+      "source_thread_identity_digest", "target_identity_digest", "thread_confirmed", "used_for_authority"];
+    const outputKeys = ["api_host", "content_type", "google_request_id", "method", "mode", "mutation_sent",
+      "mutation_status", "operation", "path_digest", "request_status", "result", "result_digest", "service",
+      "status", "truncated"];
+    const path = "/gmail/v1/users/me/drafts";
+    return Object.keys(output).every((key) => outputKeys.includes(key)) &&
+      ["api_host", "method", "mode", "mutation_sent", "mutation_status", "operation", "path_digest",
+        "request_status", "result", "result_digest", "service", "status", "truncated"].every((key) => Object.hasOwn(output, key)) &&
+      output.service === "gmail" && output.mode === "write" && output.operation === "draft.create" &&
+      output.api_host === "www.googleapis.com" && output.method === "POST" &&
+      output.path_digest === operationPlanDigest(path) && output.request_status === "ok" &&
+      output.mutation_sent === true && output.mutation_status === "confirmed" &&
+      typeof output.status === "number" && Number.isInteger(output.status) && output.status >= 200 && output.status < 300 &&
+      output.truncated === false && typeof output.result_digest === "string" && /^[a-f0-9]{64}$/.test(output.result_digest) &&
+      isFileSearchResultRecord(result) && Object.keys(result).sort().join(",") === resultKeys.join(",") &&
+      result.target_identity_digest === targetIdentityDigest && result.request_payload_digest === requestPayloadDigest &&
+      result.source_message_identity_digest === messageIdentityDigest &&
+      typeof result.source_thread_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.source_thread_identity_digest) &&
+      typeof result.created_draft_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.created_draft_identity_digest) &&
+      typeof result.created_message_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.created_message_identity_digest) &&
+      typeof result.provider_state_digest === "string" && /^[a-f0-9]{64}$/.test(result.provider_state_digest) &&
+      result.thread_confirmed === true && result.used_for_authority === false && result.may_execute === false &&
+      output.result_digest === operationPlanDigest(result) &&
+      (output.content_type === undefined || typeof output.content_type === "string") &&
+      (output.google_request_id === undefined || typeof output.google_request_id === "string");
+  }
   if (validation.method === "gmail_message_trash_result_matches") {
     if (step.operation !== "gmail.write" || step.parameters?.operation !== "message.trash" ||
         step.target.kind !== "external_service" || step.target.id !== "gmail" || !step.parameters.message_id ||
@@ -2356,15 +2422,35 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
   }
   const recipients = ["to", "cc", "bcc", "reply_to"] as const;
   const normalizedTo = normalizeGmailAddressList(parameters.to);
+  const replySourceMessageId = parameters.reply_to_message_id;
   if ((parameters.operation !== "message.send" && parameters.operation !== "draft.create") || !normalizedTo ||
+      replySourceMessageId !== undefined && (parameters.operation !== "draft.create" ||
+        typeof replySourceMessageId !== "string" || replySourceMessageId !== replySourceMessageId.trim() ||
+        replySourceMessageId.length > 512 || !/^[A-Za-z0-9_-]+$/.test(replySourceMessageId)) ||
       recipients.slice(1).some((name) => parameters[name] !== undefined && !normalizeGmailAddressList(parameters[name])) ||
       typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
       parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||
       typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000 ||
       parameters.attachments !== undefined && (!Array.isArray(parameters.attachments) || parameters.attachments.length !== 1 ||
         !validGmailAttachmentReference(parameters.attachments[0]))) return false;
+  if (replySourceMessageId !== undefined) {
+    const validation = step.preparation?.validation ?? [];
+    const expected = validation[0]?.expected;
+    const validPermission = step.permission.risk === "high" &&
+      step.permission.approval_level === "L3_final_review" && step.permission.final_review_required &&
+      step.permission.approval_gate_required && step.permission.hds_brain_authority_required;
+    const validEffects = step.effects.length === 3 &&
+      ["external_send", "write", "credential_access"].every((effect) =>
+        step.effects.includes(effect as OperationStep["effects"][number]));
+    if (parameters.attachments !== undefined || !validPermission || !validEffects || validation.length !== 1 ||
+        validation[0]!.method !== "gmail_reply_draft_result_matches" ||
+        operationPlanDigest(validation[0]!.target) !== operationPlanDigest(step.target) ||
+        !isFileSearchResultRecord(expected) || Object.keys(expected).sort().join(",") !== "operation,schema_version" ||
+        expected.schema_version !== "blue-tanuki.gmail-reply-draft-result-validation.v1" ||
+        expected.operation !== "draft.create") return false;
+  }
   return Object.keys(parameters).every((key) =>
-    ["operation", "to", "cc", "bcc", "reply_to", "subject", "body_text", "attachments"].includes(key));
+    ["operation", "to", "cc", "bcc", "reply_to", "reply_to_message_id", "subject", "body_text", "attachments"].includes(key));
 }
 
 function containsMcpSensitiveKey(value: unknown): boolean {
@@ -3591,6 +3677,14 @@ export class OperationPlanLedger {
           selected.revision_digest !== parentPlanReference.revision_digest || plan.steps.length !== 1 ||
           plan.steps[0]!.operation !== "gmail.write" || plan.steps[0]!.parameters?.operation !== "draft.create") {
         throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
+      }
+    }
+    for (const step of plan.steps) {
+      const replySourceMessageId = step.operation === "gmail.write" && step.parameters?.operation === "draft.create"
+        ? step.parameters.reply_to_message_id : undefined;
+      if (replySourceMessageId !== undefined &&
+          (typeof replySourceMessageId !== "string" || !retainedTaskGoal.includes(replySourceMessageId))) {
+        throw new Error("plan_gmail_reply_source_message_id_must_be_explicit_in_owner_task");
       }
     }
     const selectedGmailAttachmentObservations = verifiedComputeSourceObservations?.filter((observation) =>

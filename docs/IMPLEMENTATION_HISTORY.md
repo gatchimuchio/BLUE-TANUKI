@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-11-12 — QEB-F02.02-GMAIL-THREAD-REPLY-DRAFT
+
+開始時local／`origin/main`／GitHub `main`=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／tag current=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、previous=`b47018e5418027b193cdb850c75c26757b85b441`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+
+既存Gmail `draft.create`へ、owner task内に完全一致で書かれた`reply_to_message_id`からsource metadataを取得して選択threadへ結ぶconsumerを追加した。metadata readは本文／raw MIMEを取得せず、RFC `Message-ID`欠落・不正、曖昧な`References`、Subject不一致は作用前に拒否する。target／request payload digestにsource message identityを含め、provider stateには認証mailbox／message／thread identity、version相当metadataと許可header digestを束ねる。返信要求は同じSubject、RFC `In-Reply-To`／`References`、Gmail Draft APIのsource `threadId`を使う。
+
+Gatewayはreply sourceを含むverified content reviewを取得してから投影する。no-store L3画面はsource message／thread／sender／Subjectと送信されない正確なdraft内容を表示する。Executorはsource identity／state／review digestを検査し、toolは作用直前に同じprovider stateを読み直す。作成応答が同じthreadのdraft／message identityを返さない場合は結果不明として自動再送しない。HDS Operation Planは返信専用結果validationで宛先・本文・source identityからrequest／target digestを再計算し、provider state digest、thread確認、created identitiesはdigest形状とnon-authority flagsだけを受理する。M向けresultにraw MIME、RFC Message-ID、provider object IDを含めない。
+
+| 確認 | 結果 |
+|---|---|
+| Focused Vitest | PASS：4 files／32 selected tests（Gmail 20、Gateway 7、HDS 2、WebChat 3）。誤thread応答のresult-unknown／no-retryも確認。 |
+| `corepack pnpm typecheck` | PASS：全workspace。 |
+| `corepack pnpm build` | PASS：15 workspace projects。 |
+| generated Control Center script parse／raw-control safety | PASS。 |
+| `pnpm docs:check` | PASS：日本語基底監査PASS（既存移行負債75件を注意表示）、license PASS。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実Gmail／credential／API、draft作成／送信、live Gateway、owner browser、QE_QC／QE_QA | NOT_RUN。合成transportだけを使用。 |
+
+生成物分類：ソース／tests／active docsはGit候補。ignored `dist`／Windows・Linux isolation outputsは開発環境として保持。focused testsの一時資産は残存なし。protected添付領域、別repo、実provider、外部作用は未変更。F02.02 thread-aware draft.create consumerだけを`WIRED`とし、provider実接続、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを成立させない。
+
 ## 2026-11-12 — QEB-F02.02-GMAIL-TRASH-LABEL-RESULT-RETURN
 
 開始時local／`origin/main`／GitHub `main`=`b47018e5418027b193cdb850c75c26757b85b441`、ahead／behind=0/0、worktreeはmainのみ。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。

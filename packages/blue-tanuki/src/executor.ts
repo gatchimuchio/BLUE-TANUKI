@@ -1685,6 +1685,38 @@ export class Executor {
           !/^[a-f0-9]{64}$/.test(review.review_digest) || review.used_for_authority !== false || review.may_execute !== false) {
         throw new Error("gmail.write content review returned evidence for another command or attachment content");
       }
+      const replySourceMessageId = command.payload.arguments.reply_to_message_id;
+      if (replySourceMessageId === undefined) {
+        if (review.reply_source !== undefined || review.provider_state_digest !== undefined) {
+          throw new Error("gmail.write content review returned an unrequested reply source");
+        }
+      } else {
+        const source = review.reply_source;
+        const validFrom = source?.from === undefined || typeof source.from === "string" && source.from.length <= 998 &&
+          !/[\r\n\u0000-\u001f\u007f]/.test(source.from);
+        if (gmailOperation !== "draft.create" || typeof replySourceMessageId !== "string" || !source ||
+            source.message_id !== replySourceMessageId || !/^[A-Za-z0-9_-]{1,512}$/.test(source.message_id) ||
+            !/^[A-Za-z0-9_-]{1,512}$/.test(source.thread_id) || source.subject !== command.payload.arguments.subject ||
+            source.subject !== review.subject || source.used_for_authority !== false || !validFrom ||
+            !/^[a-f0-9]{64}$/.test(source.provider_state_digest) ||
+            review.provider_state_digest !== source.provider_state_digest) {
+          throw new Error("gmail.write reply content review is not bound to the selected source message");
+        }
+        const attachmentDigests = Array.isArray(review.attachments)
+          ? review.attachments.map((attachment) => attachment.content_sha256) : [];
+        const expectedReviewDigest = operationPlanDigest({
+          schema_version: "blue-tanuki.gmail-write-content-review.v2",
+          command_digest: operationPlanDigest(command),
+          request_payload_digest: gmailWriteRequestPayloadDigest(command.payload.arguments),
+          attachment_content_digests: attachmentDigests,
+          reply_source_message_identity_digest: createHash("sha256").update(source.message_id).digest("hex"),
+          reply_source_thread_identity_digest: createHash("sha256").update(source.thread_id).digest("hex"),
+          provider_state_digest: source.provider_state_digest,
+        });
+        if (review.review_digest !== expectedReviewDigest) {
+          throw new Error("gmail.write reply content review digest does not bind the selected provider state");
+        }
+      }
       return review;
     }
     return "diff" in review ? undefined : review;

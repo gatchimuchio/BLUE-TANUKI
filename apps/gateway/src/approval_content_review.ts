@@ -14,6 +14,7 @@ const GMAIL_WRITE_ARGUMENTS = new Set([
   "cc",
   "bcc",
   "reply_to",
+  "reply_to_message_id",
   "from",
   "subject",
   "body_text",
@@ -359,6 +360,9 @@ export function projectGmailWriteContentReview(
     review_digest: string;
     attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
       used_for_authority: false }[];
+    reply_source?: { message_id: string; thread_id: string; from?: string; subject: string;
+      provider_state_digest: string; used_for_authority: false };
+    provider_state_digest?: string;
     used_for_authority: false;
     may_execute: false;
   },
@@ -398,6 +402,9 @@ export function projectGmailWriteContentReview(
       review_digest?: string;
       attachments?: readonly { filename: string; mime_type: string; size_bytes: number; content_sha256: string;
         used_for_authority: false }[];
+      reply_source?: { message_id: string; thread_id: string; from?: string; subject: string;
+        provider_state_digest: string; used_for_authority: false };
+      provider_state_digest?: string;
     } = {};
     if (attachmentReferences.length > 0) {
       if (!verifiedSnapshot || verifiedSnapshot.kind !== "gmail_write_content" ||
@@ -415,6 +422,25 @@ export function projectGmailWriteContentReview(
       if (!sameExactAttachments) return null;
       attachmentProjection = { kind: "gmail_write_content", review_digest: verifiedSnapshot.review_digest,
         attachments: verifiedSnapshot.attachments };
+    }
+    const replySourceMessageId = args.reply_to_message_id;
+    if (replySourceMessageId !== undefined) {
+      const source = verifiedSnapshot?.reply_source;
+      if (operation !== "draft.create" || typeof replySourceMessageId !== "string" || !source ||
+          source.message_id !== replySourceMessageId || source.used_for_authority !== false ||
+          source.provider_state_digest !== verifiedSnapshot.provider_state_digest ||
+          !/^[A-Za-z0-9_-]{1,512}$/.test(source.thread_id) || typeof source.subject !== "string" ||
+          source.subject !== subject || !/^[a-f0-9]{64}$/.test(source.provider_state_digest) ||
+          !/^[a-f0-9]{64}$/.test(verifiedSnapshot.review_digest)) return null;
+      attachmentProjection = {
+        ...attachmentProjection,
+        kind: "gmail_write_content",
+        reply_source: source,
+        provider_state_digest: source.provider_state_digest,
+        review_digest: verifiedSnapshot.review_digest,
+      };
+    } else if (verifiedSnapshot?.reply_source !== undefined || verifiedSnapshot?.provider_state_digest !== undefined) {
+      return null;
     }
     return {
       command_id: command.id,

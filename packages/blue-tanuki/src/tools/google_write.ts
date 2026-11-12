@@ -229,7 +229,8 @@ interface GmailMessageMetadataSnapshot {
   label_ids: readonly string[];
   internal_date: string;
   size_estimate: number;
-  headers: Readonly<{ from?: string; to?: string; cc?: string; subject?: string; date?: string }>;
+  headers: Readonly<{ from?: string; to?: string; cc?: string; subject?: string; date?: string;
+    message_id?: string; references?: string }>;
   state_digest: string;
   request_payload_digest: string;
 }
@@ -921,7 +922,8 @@ async function readGmailMessageMetadataSnapshot(
   options: GoogleWriteOptions = {},
   tokenOverride?: string,
 ): Promise<GmailMessageMetadataSnapshot> {
-  const messageId = gmailMessageId(args);
+  const messageId = args.reply_to_message_id === undefined
+    ? gmailMessageId(args) : stringArg(args, "reply_to_message_id")!;
   const env = options.env ?? process.env;
   const token = tokenOverride ?? googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"],
     "gmail.write message.trash review");
@@ -951,7 +953,7 @@ async function readGmailMessageMetadataSnapshot(
     throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");
   }
   const accountEmail = profile.emailAddress.trim();
-  const metadataHeaders = ["From", "To", "Cc", "Subject", "Date"]
+  const metadataHeaders = ["From", "To", "Cc", "Subject", "Date", "Message-ID", "References"]
     .map((header) => `metadataHeaders=${header}`).join("&");
   const resource = await get(`/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=metadata&${metadataHeaders}`);
   if (!isRecord(resource) || resource.id !== messageId || typeof resource.threadId !== "string" ||
@@ -971,7 +973,7 @@ async function readGmailMessageMetadataSnapshot(
   if (new Set(labels).size !== labels.length) {
     throw new Error("gmail_message_metadata_invalid; request_sent=false; mutation_sent=false");
   }
-  const allowedHeaders = new Set(["from", "to", "cc", "subject", "date"]);
+  const allowedHeaders = new Set(["from", "to", "cc", "subject", "date", "message-id", "references"]);
   const headers: Record<string, string> = {};
   for (const rawHeader of resource.payload.headers) {
     if (!isRecord(rawHeader) || typeof rawHeader.name !== "string" || typeof rawHeader.value !== "string" ||
@@ -1014,9 +1016,57 @@ async function readGmailMessageMetadataSnapshot(
       ...(headers.cc ? { cc: headers.cc } : {}),
       ...(headers.subject ? { subject: headers.subject } : {}),
       ...(headers.date ? { date: headers.date } : {}),
+      ...(headers["message-id"] ? { message_id: headers["message-id"] } : {}),
+      ...(headers.references ? { references: headers.references } : {}),
     },
     state_digest: stateDigest,
     request_payload_digest: gmailWriteRequestPayloadDigest(args),
+  };
+}
+
+interface GmailReplySource {
+  message_id: string;
+  message_identity_digest: string;
+  thread_id: string;
+  thread_identity_digest: string;
+  subject: string;
+  from?: string;
+  in_reply_to: string;
+  references: string;
+  provider_state_digest: string;
+}
+
+function safeRfcMessageId(value: string): string | null {
+  const normalized = value.trim();
+  return normalized.length <= 998 && /^<[^<>\s@]+@[^<>\s@]+>$/.test(normalized) ? normalized : null;
+}
+
+function gmailReplySource(snapshot: GmailMessageMetadataSnapshot): GmailReplySource {
+  const messageId = snapshot.headers.message_id ? safeRfcMessageId(snapshot.headers.message_id) : null;
+  const subject = snapshot.headers.subject?.trim();
+  if (!messageId || !subject || subject.length > 200 || /[\r\n\u0000-\u001f\u007f]/.test(subject)) {
+    throw new Error("gmail reply source headers are unavailable or unsupported; mutation_sent=false");
+  }
+  const rawReferences = snapshot.headers.references?.trim() ?? "";
+  const references = rawReferences ? rawReferences.split(/\s+/) : [];
+  if (references.length > 19 || references.some((value) => safeRfcMessageId(value) !== value)) {
+    throw new Error("gmail reply source References header is unsupported; mutation_sent=false");
+  }
+  if (references.at(-1) !== messageId) references.push(messageId);
+  const referencesHeader = references.join(" ");
+  if (referencesHeader.length > 2_048) {
+    throw new Error("gmail reply References header exceeds the supported bound; mutation_sent=false");
+  }
+  return {
+    message_id: snapshot.message_id,
+    message_identity_digest: snapshot.message_identity_digest,
+    thread_id: snapshot.thread_id,
+    thread_identity_digest: snapshot.thread_identity_digest,
+    subject,
+    ...(snapshot.headers.from ? { from: snapshot.headers.from } : {}),
+    in_reply_to: messageId,
+    references: referencesHeader,
+    provider_state_digest: snapshot.state_digest,
   };
 }
 
@@ -1193,13 +1243,20 @@ async function resolveGmailWriteAttachments(
 
 function assertSupportedGmailWriteArguments(args: Record<string, unknown>): string {
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"]);
+  const replySourceMessageId = args.reply_to_message_id;
+  if (replySourceMessageId !== undefined && (operation !== "draft.create" ||
+      typeof replySourceMessageId !== "string" || replySourceMessageId !== replySourceMessageId.trim() ||
+      replySourceMessageId.length > 512 || !/^[A-Za-z0-9_-]+$/.test(replySourceMessageId))) {
+    throw new Error("gmail.write reply_to_message_id is supported only as one exact draft.create source message; mutation_sent=false");
+  }
   const supported = operation === "draft.send"
     ? new Set(["operation", "draft_id", "max_bytes"])
     : operation === "message.trash"
       ? new Set(["operation", "message_id"])
       : operation === "message.modify"
         ? new Set(["operation", "message_id", "add_label_ids", "remove_label_ids"])
-        : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "attachments", "max_bytes"]);
+        : new Set(["operation", "to", "cc", "bcc", "reply_to", "from", "subject", "body_text", "body", "attachments",
+          "reply_to_message_id", "max_bytes"]);
   const unsupported = Object.keys(args).filter((key) => !supported.has(key));
   if (unsupported.length > 0) {
     const attachmentArgument = unsupported.some((key) => /attachment|file/i.test(key));
@@ -1271,9 +1328,17 @@ function encodedMimeFilename(filename: string): string {
   return `filename="${fallback}"; filename*=UTF-8''${extended}`;
 }
 
-function encodedMimeMessage(args: Record<string, unknown>, attachments: readonly GmailResolvedWriteAttachment[] = []): string {
+function encodedMimeMessage(
+  args: Record<string, unknown>,
+  attachments: readonly GmailResolvedWriteAttachment[] = [],
+  replySource?: GmailReplySource,
+): string {
   const to = safeAddressList(args, "to", true)!;
-  const subject = encodedSubject(stringArg(args, "subject")!);
+  const suppliedSubject = stringArg(args, "subject")!;
+  if (replySource && suppliedSubject !== replySource.subject) {
+    throw new Error("gmail reply draft subject changed from the selected source thread; mutation_sent=false");
+  }
+  const subject = encodedSubject(replySource?.subject ?? suppliedSubject);
   const bodyText = stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "";
   if (Buffer.byteLength(bodyText, "utf8") > MAX_CONTENT_BYTES) {
     throw new Error("gmail.write body exceeds the content bound; mutation_sent=false");
@@ -1283,6 +1348,11 @@ function encodedMimeMessage(args: Record<string, unknown>, attachments: readonly
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
   ];
+  if (replySource) {
+    headers.splice(2, 0,
+      `In-Reply-To: ${safeHeaderValue(replySource.in_reply_to, "in_reply_to")}`,
+      `References: ${safeHeaderValue(replySource.references, "references")}`);
+  }
   const cc = safeAddressList(args, "cc");
   if (cc) headers.splice(1, 0, `Cc: ${safeHeaderValue(cc, "cc")}`);
   const bcc = safeAddressList(args, "bcc");
@@ -1366,6 +1436,8 @@ export async function invokeGmailWrite(
   let draftSnapshot: GmailDraftSnapshot | undefined;
   let messageTrashSnapshot: GmailMessageMetadataSnapshot | undefined;
   let messageModifySnapshot: GmailMessageModifySnapshot | undefined;
+  let replySourceSnapshot: GmailMessageMetadataSnapshot | undefined;
+  let replySource: GmailReplySource | undefined;
   if (operation === "draft.send") {
     if (!expectedTargetObservation || expectedTargetObservation.provider_state_digest === undefined ||
         expectedTargetObservation.provider_raw_digest === undefined) {
@@ -1409,8 +1481,20 @@ export async function invokeGmailWrite(
         gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
       throw new Error("gmail.write message.modify target state changed after review; request_sent=false; mutation_sent=false");
     }
+  } else if (operation === "draft.create" && args.reply_to_message_id !== undefined) {
+    if (!expectedTargetObservation?.provider_state_digest) {
+      throw new Error("gmail.write reply draft source state evidence is required; request_sent=false; mutation_sent=false");
+    }
+    replySourceSnapshot = await readGmailMessageMetadataSnapshot(args, opts, token);
+    replySource = gmailReplySource(replySourceSnapshot);
+    if (stringArg(args, "subject") !== replySource.subject ||
+        replySource.provider_state_digest !== expectedTargetObservation.provider_state_digest ||
+        replySourceSnapshot.request_payload_digest !== expectedTargetObservation.request_payload_digest ||
+        gmailWriteTargetIdentityDigest(args) !== expectedTargetObservation.target_identity_digest) {
+      throw new Error("gmail.write reply draft source changed after review; request_sent=false; mutation_sent=false");
+    }
   }
-  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, attachments);
+  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw, attachments, replySource);
   const { path, body } = builtRequest;
 
   const target = {
@@ -1506,6 +1590,49 @@ export async function invokeGmailWrite(
       result,
     };
   }
+  if (operation === "draft.create" && replySource) {
+    let created: unknown;
+    try {
+      if (response.truncated || response.body_utf8_valid === false) throw new Error("response_unavailable");
+      created = JSON.parse(response.body);
+    } catch {
+      throw new Error("gmail.write reply draft result is unconfirmed; outcome_unknown; do not retry automatically");
+    }
+    if (!isRecord(created) || typeof created.id !== "string" || !/^[A-Za-z0-9_-]{1,512}$/.test(created.id) ||
+        !isRecord(created.message) || typeof created.message.id !== "string" ||
+        !/^[A-Za-z0-9_-]{1,512}$/.test(created.message.id) || created.message.threadId !== replySource.thread_id) {
+      throw new Error("gmail.write reply draft was not confirmed in the selected thread; outcome_unknown; do not retry automatically");
+    }
+    const result = {
+      target_identity_digest: gmailWriteTargetIdentityDigest(args),
+      request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      source_message_identity_digest: replySource.message_identity_digest,
+      source_thread_identity_digest: replySource.thread_identity_digest,
+      created_draft_identity_digest: sha256String(created.id),
+      created_message_identity_digest: sha256String(created.message.id),
+      provider_state_digest: replySource.provider_state_digest,
+      thread_confirmed: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      service: "gmail",
+      mode: "write",
+      operation,
+      api_host: target.hostname,
+      path_digest: sha256Hex(target.path),
+      method: target.method,
+      status: response.status,
+      content_type: response.content_type,
+      truncated: response.truncated,
+      google_request_id: response.request_id,
+      request_status: "ok",
+      mutation_sent: true,
+      mutation_status: "confirmed",
+      result_digest: sha256Hex(result),
+      result,
+    };
+  }
   return mutationResult("gmail.write", "gmail", operation, target, response);
 }
 
@@ -1529,6 +1656,7 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
     throw new Error("gmail.write body exceeds the content bound; mutation_sent=false");
   }
   const from = stringArg(args, "from", false);
+  const replySourceMessageId = args.reply_to_message_id;
   return operationPlanDigest({
     schema_version: "blue-tanuki.gmail-write-intent.v2",
     operation,
@@ -1540,6 +1668,8 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
     subject,
     body_text: bodyText,
     attachments: gmailWriteAttachmentReferences(args),
+    ...(typeof replySourceMessageId === "string"
+      ? { reply_source_message_identity_digest: sha256String(replySourceMessageId) } : {}),
   });
 }
 
@@ -1576,8 +1706,12 @@ export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): s
     const recipient = safeAddressList(args, name);
     if (recipient) recipients[name] = recipient;
   }
+  const replySourceMessageId = args.reply_to_message_id;
   return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
-    service: "gmail", operation, recipients });
+    service: "gmail", operation, recipients,
+    ...(typeof replySourceMessageId === "string"
+      ? { reply_source_message_identity_digest: sha256String(replySourceMessageId) } : {}),
+  });
 }
 
 async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
@@ -1631,6 +1765,17 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
     }
     observation.request_payload_digest = snapshot.request_payload_digest;
     observation.provider_state_digest = snapshot.state_digest;
+  } else if (operation === "draft.create" && args.reply_to_message_id !== undefined) {
+    const snapshot = await readGmailMessageMetadataSnapshot(args, {
+      ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.request ? { request: options.request } : {}),
+    });
+    const replySource = gmailReplySource(snapshot);
+    if (stringArg(args, "subject") !== replySource.subject) {
+      throw new Error("gmail reply draft subject must match the selected source thread; mutation_sent=false");
+    }
+    observation.request_payload_digest = snapshot.request_payload_digest;
+    observation.provider_state_digest = replySource.provider_state_digest;
   } else {
     observation.request_payload_digest = gmailWriteRequestPayloadDigest(args);
   }
@@ -1651,6 +1796,9 @@ function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unk
       : operation === "message.modify"
         ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
           observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
+      : operation === "draft.create" && args.reply_to_message_id !== undefined
+        ? !!observation.provider_state_digest && observation.provider_raw_digest === undefined &&
+          observation.request_payload_digest === gmailWriteRequestPayloadDigest(args)
       : observation.request_payload_digest === gmailWriteRequestPayloadDigest(args);
   if (observation.target_identity_digest !== gmailWriteTargetIdentityDigest(args) || !operationPayloadMatches) {
     throw new Error("gmail.write target version changed; request_sent=false; mutation_sent=false");
@@ -1662,9 +1810,13 @@ function gmailWriteRequest(
   args: Record<string, unknown>,
   draftRaw?: string,
   attachments: readonly GmailResolvedWriteAttachment[] = [],
+  replySource?: GmailReplySource,
 ): { path: string; body?: string } {
   const operation = assertSupportedGmailWriteArguments(args);
-  if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args, attachments) } }) };
+  if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: {
+    raw: encodedMimeMessage(args, attachments, replySource),
+    ...(replySource ? { threadId: replySource.thread_id } : {}),
+  } }) };
   if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args, attachments) }) };
   if (operation === "message.trash") {
     return { path: `/gmail/v1/users/me/messages/${encodeURIComponent(gmailMessageId(args))}/trash` };
@@ -4472,11 +4624,34 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         content_sha256: attachment.content_sha256,
         used_for_authority: false,
       }));
+      let replySourceReview: GmailWriteContentReview["reply_source"];
+      let replyProviderStateDigest: string | undefined;
+      if (args.reply_to_message_id !== undefined) {
+        const snapshot = await readGmailMessageMetadataSnapshot(args, effectiveOptions);
+        const source = gmailReplySource(snapshot);
+        if (stringArg(args, "subject") !== source.subject) {
+          throw new Error("gmail reply draft subject must match the selected source thread; content_review=unavailable");
+        }
+        replyProviderStateDigest = source.provider_state_digest;
+        replySourceReview = {
+          message_id: snapshot.message_id,
+          thread_id: snapshot.thread_id,
+          ...(source.from ? { from: source.from } : {}),
+          subject: source.subject,
+          provider_state_digest: source.provider_state_digest,
+          used_for_authority: false,
+        };
+      }
       const reviewDigest = operationPlanDigest({
         schema_version: "blue-tanuki.gmail-write-content-review.v2",
         command_digest: commandDigest,
         request_payload_digest: requestPayloadDigest,
         attachment_content_digests: attachments.map((attachment) => attachment.content_sha256),
+        ...(replySourceReview ? {
+          reply_source_message_identity_digest: sha256String(replySourceReview.message_id),
+          reply_source_thread_identity_digest: sha256String(replySourceReview.thread_id),
+          provider_state_digest: replyProviderStateDigest,
+        } : {}),
       });
       const review: GmailWriteContentReview = {
         kind: "gmail_write_content",
@@ -4486,6 +4661,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         ...(safeAddressList(args, "bcc") ? { bcc: safeAddressList(args, "bcc") } : {}),
         ...(safeAddressList(args, "reply_to") ? { reply_to: safeAddressList(args, "reply_to") } : {}),
         ...(stringArg(args, "from", false) ? { from: stringArg(args, "from", false) } : {}),
+        ...(replySourceReview ? { reply_source: replySourceReview, provider_state_digest: replyProviderStateDigest } : {}),
         subject: stringArg(args, "subject")!,
         body_text: stringArg(args, "body_text", false) ?? stringArg(args, "body", false) ?? "",
         ...(attachments.length > 0 ? { attachments } : {}),
@@ -4506,7 +4682,8 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
       const observation = assertGmailWriteTargetVersion(args, context.target_version_observation);
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
         command_digest: context.command_digest, signal: context.signal },
-      operation === "draft.send" || operation === "message.trash" || operation === "message.modify" ? observation : undefined);
+      operation === "draft.send" || operation === "message.trash" || operation === "message.modify" ||
+        operation === "draft.create" && args.reply_to_message_id !== undefined ? observation : undefined);
     },
   };
 }

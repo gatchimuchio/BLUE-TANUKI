@@ -6,7 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近施工BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modify結果帰還consumer
+### 直近施工BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
+
+既存Gmail `draft.create`にOwner明示source message IDを使ったthread-aware返信draft consumerを接続した。HDSはhigh/L3、明示宛先、source IDのowner task明記、thread-confirmed結果検証を要求する。Adapterはmetadataだけからsource thread／Subject／RFC `Message-ID`／`References`を束縛し、同じSubjectとGmail `threadId`、RFC返信headerを持つ下書き一件だけを作る。Control Centerのresume-authenticated no-store reviewにsource identityとthreadを表示し、Mへはdigest限定resultだけを返す。結果不明・source state変化・thread不一致では自動再送しない。
+
+Focused tests 32/32 PASS（Gmail target/version、Gateway review projection、HDS owner-ID/result validation、WebChat review route／Control Center rendererを合成fixtureで確認。誤thread応答の自動再送禁止も確認）。workspace typecheck、15-project build、generated script parse／safety、`docs:check`はPASS（日本語基底の既存移行負債75件を注意表示、license PASS）。`git diff --check`は終端確認でPASS。実Gmail／credential／送信、live Gateway、full suite、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、通常下書き・送信全体、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。C08.03実provider、OD-03外部作用、D4／ミニドラ別repo変更、P13公開GOの保留を維持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modify結果帰還consumer
 
 既存Gmail write／Approval Gate／Executor／HDS-J/M／Control Centerへ単一messageのTrash移動と既存user label変更を接続した。本文／raw MIMEをreview・Mへ出さず、high/L3 no-store確認、作用前の対象状態再照合、単回provider request、後状態の再読込、結果不明時の自動再送禁止を維持する。synthetic Gateway経路では検証済み結果、digest限定M receipt、J/M再起動、owner帰還まで確認した。focused test 10件、workspace typecheck、15-project build、`docs:check`、`git diff --check`はPASS。全workspace suite、実Gmail／credential／外部作用、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、provider実接続、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次の独立batchは現行rev4.0と最新HEADから選定する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 

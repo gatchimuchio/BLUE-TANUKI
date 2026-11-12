@@ -2,7 +2,30 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modifyと検証済み結果帰還
+## 現行BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
+
+主語はBLUE Gatewayの既存Gmail `draft.create`／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的はOwnerが明示したsource message IDへ返信下書きを結び、同じGmail thread内に作成された結果だけを既存のL3・J/M経路へ返すこと。通常下書き、送信、F02.02全体、実provider成立または製品全体の完成とは扱わない。
+
+`reply_to_message_id`はowner task内に完全一致で明記された単一Gmail message IDだけを受け入れる。HDS Operation Planは`draft.create`一件・high/L3・既存Approval Gateを要求し、返信draft専用の結果検証規則を持つ。返信sourceは`format=metadata`で読み、本文／raw MIMEを取得しない。正当なRFC `Message-ID`がなければ停止し、source `threadId`、Subject、`References`をprovider state digestへ結ぶ。Subjectはsourceと完全一致させ、MIMEに`In-Reply-To`／`References`、Gmail draft作成要求に正確な`threadId`を設定する。宛先はOperation Planの明示値だけを使い、From／Reply-Toから補わない。
+
+resume-authenticated no-store L3 reviewはsource message ID／thread ID／sender／Subject、宛先、本文、provider state digestを表示する。作用直前に同一source stateを再照合し、Gmail応答のdraft／message identityとthread一致を検査する。結果はsource／thread／created object／provider stateのdigestだけとし、thread確認なし、状態差異、結果不明時は停止して自動再送しない。実資格・実Gmail・送信は使わない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| focused Gmail／Gateway／HDS／WebChat tests | PASS：4 files、32 selected tests。返信MIME／thread binding、source state stale／Message-ID欠落拒否、誤thread応答時の単回結果不明、L3 projection、HDS owner-ID／result digest validation、Control Center／no-store reviewを合成transportで確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS：全workspace typecheck、15 build projects。 |
+| Control Center generated script parse／safety | PASS：source review表示test、script全体parse／raw control-character検査。 |
+| `pnpm docs:check`／`git diff --check` | PASS：日本語基底監査PASS、既存移行負債75件を注意表示、license PASS。 |
+| 全workspace suite、実Gmail credential／API、実送信、owner browser、QE_QC／QE_QA | NOT_RUN。実providerを使わず合成応答だけで確認した。 |
+
+UNIT_ID: F02.02（Owner明示sourceのthread-aware draft.create限定consumer）
+STATUS: WIRED（合成応答でOperation Plan→L3 no-store review→作用前source state照合→thread確認付きdraft作成→digest結果検証のコード経路。実provider／live Gateway未確認）
+NEXT_REQUIRED_CONSUMER: 次の独立作業開始時に現行rev4.0と最新HEADからF02.02の残る通常Gmail consumerを選ぶ。C08.03実provider、外部送信、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOへ拡張しない。
+SAFETY_STATUS: high/L3、Approval Gate、HDS-J/M、no-store、明示recipient、Owner task内の完全一致source ID、Subject一致、RFC `Message-ID`／thread拘束、作用直前state再照合、thread確認、digest限定result、結果不明時の再送禁止を維持。本文／raw MIME／RFC `Message-ID`／provider object IDをM receiptへ保存しない。実credential・Gmail・送信なし。
+LOCAL_ASSET_STATUS: source／tests／本状態文書／roadmap／進捗／履歴はGit候補として保持。workspace buildのignored `dist`／Windows・Linux isolation出力は開発環境として保持。focused testの一時資産は残存なし。`.codex-attachments/`と`.codex-remote-attachments/`は保護対象として未変更。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、ahead／behind=0/0、worktreeはmainのみ。開始復旧branch／tag current=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、previous=`b47018e5418027b193cdb850c75c26757b85b441`。protected attachment directoriesは未追跡・未変更。終端SHA・復旧refはcommit／push後にGitから再照合する。
+
+## 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modifyと検証済み結果帰還
 
 主語はBLUE Gatewayの既存Gmail write／Approval Gate／Executor／HDS-J/M／認証済みControl Centerである。目的は単一messageの復元可能なTrash移動と既存user label変更を、no-store L3確認、作用前再照合、provider後状態の検証、digest限定M receipt、再起動後のowner帰還まで既存writerへ接続すること。Gmail全操作、実provider成立、F02.02全体または製品全体の完成とは扱わない。
 
