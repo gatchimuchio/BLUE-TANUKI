@@ -17,7 +17,7 @@
 
 生成物分類：`release/macos`のx64／arm64 archive、各checksum／manifest、共通READMEの計7件・128,065,469 bytesを現在build artifactとして保持。作業用OS Temp root 2件は各3,757 entries、x64 151,504,888 bytes／arm64 148,194,221 bytesで、reparse pointのないtask-owned regular directoriesと確認後、検証を終えてWindows標準ごみ箱へ移動。元path消失、ごみ箱内に名前一致2件を確認。計299,699,109 bytesを移動し、ごみ箱の最終処分はしていない。OneDrive固定stageはx64 85,959,773 bytes／arm64 84,270,102 bytes、runtime archiveはx64 48,656,392 bytes／arm64 47,035,396 bytesで、作業前後のサイズ・更新時刻が不変。`release/macos`以外の既存protected attachments、WSL target、OneDrive reparse dataは変更なし。macOS native shell isolationは未接続・無効のまま。
 
-このBUILD_BATCHはpackage producer→archive verifierの限定`WIRED`である。macOS host runtime、installed lifecycle、shell execution、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。実装・active docsのcommit／push、recovery ref、終了時main一致は本記録確定後に照合し追記する。
+このBUILD_BATCHはpackage producer→archive verifierの限定`WIRED`である。macOS host runtime、installed lifecycle、shell execution、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、release／owner GOを示さない。実装・一次記録commit=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`をGitHub `main`へfast-forward pushし、remote/local recovery branch／tagをcurrent=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`／previous=`e02bb47994aa4d926ce853bbda742542059b819a`へCAS回転した。closeout記録commitを含む終了時はlocal／`origin/main`／GitHub `main`が一致し、ahead／behind=0/0、recovery current=最終main／previous=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`となることを直接再照合する。
 
 ## 2026-11-13 — QEB-PACKAGE-MCP-RUNTIME-CLOSURE-WINDOWS-LINUX
 

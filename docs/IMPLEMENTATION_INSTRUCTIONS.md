@@ -19,7 +19,7 @@ STATUS: WIRED（Windows host上でのpackage生成とarchive内容の検証に�
 NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、現行rev4.0と実物から未接続consumerを選ぶ。macOS native shell isolationは未成立であり、実行・権限・作用路として有効化しない。
 SAFETY_STATUS: 既存`.codex-tmp/macos-x64-package`（85,959,773 bytes）、`.codex-tmp/macos-arm64-package`（84,270,102 bytes）、`.codex-tmp/unix-runtime-cache/node-v22.14.0-darwin-x64.tar.gz`（48,656,392 bytes）、`node-v22.14.0-darwin-arm64.tar.gz`（47,035,396 bytes）はOneDrive reparse pointを含むため保持し、作業前後のサイズ・更新時刻不変を確認。builderは新規一意Temp配下だけを使用した。
 LOCAL_ASSET_STATUS: `release/macos`にinstaller 2件と各checksum／manifest／共通READMEの計7ファイル（128,065,469 bytes）を現在build artifactとして保持。task-owned Temp stage 2件（3,757 entriesずつ、151,504,888 bytes／148,194,221 bytes、計299,699,109 bytes）は検証後にWindowsごみ箱へ移動し、元path消失とごみ箱内の2件を確認。ごみ箱は空にしていない。protected `.codex-attachments/`／`.codex-remote-attachments/`とWSL Linux `target/`は未変更。生成したrelease artifactを公開・署名していない。
-CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0。source変更は`scripts/package_unix.ts`と本作業の現行docs記録のみ。commit/pushおよび終了時recovery refは履歴記録後に更新する。
+CURRENT_HEAD_AND_DIRTY_OWNER: 開始時local／`origin/main`／GitHub `main`=`e02bb47994aa4d926ce853bbda742542059b819a`、ahead／behind=0/0。実装・一次記録commit=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`を`main`へfast-forward pushし、remote recovery refをCASでcurrent=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`／previous=`e02bb47994aa4d926ce853bbda742542059b819a`へ回転した。closeout記録commitもpushし、終了時local／`origin/main`／GitHub `main`一致、ahead／behind=0/0、recovery current=最終main／previous=`d4f26fecadf4a30056e6ac5d87bb9a06146cf210`を再照合する。
 
 ## 完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
 
