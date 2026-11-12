@@ -2,28 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 完了BUILD_BATCH — QE_BUILD / Linux・macOS開発用resident autostart所有保護
+## 完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則・検証済みJ/M根拠と復旧の再同期
 
-主語はLinux／macOS開発用resident helperと各OSのcurrent-user autostart entry、および開発用Uninstallである。目的は、明示autostart操作が同名のuser-owned／変更済みfileを上書き・停止・削除せず、管理対象を正確に識別して安全に解除すること。
+主語はowner task受付からHDS-J／M、再起動後の状態投影までの同一task経路である。ownerが指定した明示規則が現行J正本・task・目的digestへ結合され、同一revision上の一意なoperation step、検証済み結果、対応するM receiptがそろう場合だけJが達成sealを記録し、同一taskを停止する。規則・対象・結果・receiptの欠落、不一致、曖昧さ、M revision変更は達成にせず保留する。引用範囲の`completed`はowner目的の達成を意味しない。
 
-Linux systemd user unit／XDG autostartとmacOS LaunchAgentの作成は共有Unix target guardへ集約し、同じdirectory内のstageとno-clobber作成を使う。status／disableは通常版または以前のresident helperが生成したexact legacy bytesだけをBLUE-TANUKI所有と判定する。symlink、改変済み、他者作成のentryは保持し、対象サービスに対するsystemd／launchctl操作を行わない。新規enableは既存fileを置換しない。autostart disableが失敗した場合、Linux／macOS開発用Uninstallはapp root削除へ進まない。installerによる自動起動の既定値は変更していない。
+現行mainにこのproducer／consumer経路は存在していた。調査でC08.02復旧E2Eの表示期待値だけが旧契約（`状態: completed/held`）のまま残っていたため、引用範囲状態と`目的達成判定: 未判定`を区別する期待値へ修正した。評価器や別authority経路は追加せず、C08.02の限定consumer接続を再確認した。
 
 | QE_BUILD限定確認 | 結果 |
 |---|---|
-| Windows focused Vitest | PASS：`source_entrypoints.test.ts`／`resident_integration.test.ts`／`product_installers.test.ts`、3 files／19 tests。 |
-| WSL Ubuntu 24.04 shell検査 | PASS：resident helper、shared guard、Linux／macOS Uninstall、所有保護fixtureの`sh -n`と`resident_autostart_ownership.sh`。current／legacy managed entry、unowned／modified entry保持、systemd disable失敗時のUninstall停止を確認。 |
-| systemd／plist parser | PASS：特殊文字を含む生成serviceを`systemd-analyze verify`で解析し、plistlibで生成LaunchAgentを読み取り。 |
-| 既存Unix target guard fixture | PASS：`safe_target_unix.sh`。 |
-| 実Linux／macOS desktop session、login／reboot、native launchd／systemd稼働 | NOT_RUN。WSLのfixture／parser確認をnative OS QAへ読み替えない。 |
+| `apps/gateway/test/operation_plan_runtime.test.ts` focused | PASS：明示規則一致、結果不一致、rule-to-step曖昧の3ケース。J/M根拠がそろう一致だけ達成し、達成後同taskの実行候補を拒否。 |
+| `apps/gateway/test/document_organization_entry.test.ts` C08.02 E2E | PASS：process kill／restart復旧の正・負2件。J引用範囲の再開後完了はowner目的未判定と表示し、M変更時はholdしてCを再呼出ししない。 |
+| owner-auth Gateway task integration | PASS：owner規則なしの保留／明示規則によるJ/M検証と停止、Canvas `file.write` 一回作用・receipt・Gateway再起動復元の2件。 |
+| `corepack pnpm build` | PASS：15 workspace projects。 |
+| `corepack pnpm docs:check` | PASS：docs／日本語基底／licensing gates。日本語基底の既存移行負債75件を検出。 |
+| `git diff --check` | closeout時に実行する。 |
+| 実provider／実LLM／外部作用、全suite、native 5OS、QE_QC／QE_QA、公開・release／owner GO | NOT_RUN／対象外。合成fixture結果を実providerや製品全体へ拡張しない。 |
 
-この開発用helperの安全補修だけを局所`WIRED`とする。製品Setup／Uninstall全体、5OS QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAへ拡張しない。
-
-UNIT_ID: Development resident autostart ownership guard（現行rev4.0の198施工単位への独立対応は未割当）
-STATUS: WIRED（Linux systemd／XDG・macOS LaunchAgentのexact ownership、変更／非所有file保持、disable失敗時の開発用Uninstall停止をWSL synthetic fixtureで確認）
-NEXT_REQUIRED_CONSUMER: owner回答で確定したC08.02達成条件「現行J正本へ結び付いた明示規則＋同一revisionの検証済み結果＋M receipt」を現行main・J consumerで再照合する。条件を満たす既存経路は重複実装せず、欠落・曖昧を保留する。
-SAFETY_STATUS: autostartは従来どおりopt-in。unowned／modified／symlink entriesは非操作・保持。legacy bytesは解除時の正確な所有確認に限って認識し、enableで置換しない。
-LOCAL_ASSET_STATUS: source、fixture、Vitest、active docsをGit候補とした。WSL fixture／parser用Temp資産はtrap終了時に削除済み。ignored build outputsは変更なし。protected attachmentsは未追跡・未変更で保持。
-CURRENT_HEAD_AND_DIRTY_OWNER: source／test／active docsのimplementation commit=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`をGitHub `main`へfast-forward pushした。終端local／`origin/main`／GitHub `main`=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`で一致、ahead／behind=0/0、worktreeはmainのみ。local recovery branch／remote tag current=`86acd8cfa01d15e50c2813e8d61a321cb51bd98d`、previous=`22367111c50b187129de89b3e8753c8d3a1bc57b`を旧値照合付きで回転した。commit後処理で既存`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のcleanupがPermission deniedとなったためmetadata／ACLは保持し、`git ls-remote`でremoteを照合した。protected attachmentsは未追跡・未変更。closeout文書push後は終端SHA／recovery refsを再照合する。
+UNIT_ID: C08.02（owner明示達成規則、同一revision verified result／M receipt、達成後停止・不成立時保留、再起動後復旧の限定consumer）
+STATUS: WIRED（J/M operation-plan、owner-auth Gateway file.write、C08.02 kill/restart経路を合成・隔離環境で確認）
+NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、rev4.0の優先基準と実callsiteから再選定する。現行指示の高リスク未観測事項であるWindows製品Setup→Uninstall動的対象経路を最初に照合し、未接続consumerが現物にあればその一経路へ限定する。
+SAFETY_STATUS: HDS-J単一writer、Approval Gate、L3、M非権威、owner認証済み規則digest、同一task／revision／step／result／receipt束縛、欠落・曖昧時fail-closed、達成後停止を維持。
+LOCAL_ASSET_STATUS: test-owned C08.02／Canvas temp rootsはtest cleanupで削除済み。`corepack pnpm build`が生成したignored `dist`／platform build outputsは開発環境として保持。provider credential、外部作用、別repo、OneDrive資料操作なし。`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更で保持。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`1728ff07b430211de09d5fbc4b7be40f281e15cd`、ahead／behind=0/0。closeout push後の正確なHEAD・復旧refは下段で更新する。保護添付は未stage・未変更。
 
 ## 完了BUILD_BATCH — QE_BUILD / D03.01 D4 Runtime statusへのJ/M task outcome接続
 

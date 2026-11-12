@@ -171,7 +171,7 @@ describe("document organization ordinary entries", () => {
     // keep the outer test budget above it so parallel-load failures retain diagnostics.
   }, 90_000);
 
-  it("BT-U-C08.02-P-E2E: resumes after a process kill from confirmed J spans and stops after completion", async () => {
+  it("BT-U-C08.02-P-E2E: resumes after a process kill from confirmed J spans and stops after quote coverage", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0802-positive-"));
     const auditDir = join(tempRoot, "audit");
     const historyFile = join(tempRoot, "complete-history.jsonl");
@@ -230,7 +230,8 @@ describe("document organization ordinary entries", () => {
       try {
         const resumed = await runChild([gatewayEntry, "--organize", restartSource], resumedEnv);
         const resumedOutput = extractProjection(resumed.stdout.join(""));
-        expect(resumedOutput).toContain("状態: completed");
+        expect(resumedOutput).toContain("資料整理状態（引用範囲）: completed");
+        expect(resumedOutput).toContain("目的達成判定: 未判定");
         expect(resumedOutput).toContain("C08_PRIVATE_RESTART_SOURCE:決定事項は青。");
         expect(resumedOutput).toContain(secondQuote);
         expect(resumedOutput).toContain("再起動復旧済み範囲");
@@ -238,7 +239,7 @@ describe("document organization ordinary entries", () => {
         expect(providerTwoPrompts[0]).toContain(`"start":0,"end":${firstQuote.length}`);
 
         const repeated = await runChild([gatewayEntry, "--organize", restartSource], resumedEnv);
-        expect(extractProjection(repeated.stdout.join(""))).toContain("状態: completed");
+        expect(extractProjection(repeated.stdout.join(""))).toContain("資料整理状態（引用範囲）: completed");
         expect(providerTwoCalls).toBe(1);
         expect(readFileSync(memoryFile, "utf8")).toBe(memoryBeforeRestart);
 
@@ -316,7 +317,8 @@ describe("document organization ordinary entries", () => {
       try {
         const held = await runChild([gatewayEntry, "--organize", changedSource], resumedEnv);
         const heldOutput = extractProjection(held.stdout.join(""));
-        expect(heldOutput).toContain("状態: held");
+        expect(heldOutput).toContain("資料整理状態（引用範囲）: held");
+        expect(heldOutput).toContain("目的達成判定: 未判定");
         expect(heldOutput).toContain("memory_state_changed");
         expect(heldOutput).toContain("再起動復旧済み範囲");
         expect(providerTwoCalls).toBe(0);
