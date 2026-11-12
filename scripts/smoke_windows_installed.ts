@@ -22,6 +22,7 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { resolveSecretMaterial, storeLlmApiKeySecret } from "../apps/gateway/src/secret_store.ts";
 import { verifyWindowsPackage } from "./verify_windows_package.ts";
+import { verifyAndExtractWindowsIExpressCommand } from "./windows_iexpress.ts";
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const INSTALLER_TRANSACTION_TIMEOUT_MS = 600_000;
@@ -939,6 +940,14 @@ async function receiveFirstMessage(
 
 async function main(): Promise<void> {
   const artifact = path.resolve(argValue("--artifact") ?? defaultArtifact());
+  const iexpressExeArg = argValue("--iexpress-exe");
+  if (process.argv.includes("--iexpress-exe") && !iexpressExeArg) {
+    throw new Error("--iexpress-exe requires a Windows IExpress installer path");
+  }
+  if (iexpressExeArg && process.platform !== "win32") {
+    throw new Error("--iexpress-exe installed smoke must run on Windows");
+  }
+  const iexpressExe = iexpressExeArg ? path.resolve(iexpressExeArg) : undefined;
   logStep("verify installer package");
   verifyWindowsPackage(artifact);
   logStep("done verify installer package");
@@ -1025,6 +1034,8 @@ async function main(): Promise<void> {
       "-File",
       path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
       "-DryRun",
+      "-WorkRoot",
+      path.join(work, "root-entrypoint-default-dry-run"),
       "-NoLaunch",
     ], work, 0, "root source entrypoint default dry-run", 60_000);
     if (!rootEntrypointDefaultDryRun.includes("Repository root:")) {
@@ -1137,20 +1148,37 @@ async function main(): Promise<void> {
     ]);
     console.log("defender_smartscreen_guidance_result=pass");
 
+    let setupCommand = path.join(packageDir, "BlueTanukiSetup.cmd");
+    if (iexpressExe) {
+      const pkg = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as { version?: string };
+      if (!pkg.version) throw new Error("package.json version is missing for IExpress smoke");
+      logStep("verify and extract IExpress command payload");
+      const iexpress = verifyAndExtractWindowsIExpressCommand(
+        iexpressExe,
+        artifact,
+        path.join(work, "iexpress"),
+        pkg.version,
+      );
+      setupCommand = iexpress.commandPath;
+      console.log(`iexpress_installer_sha256=${iexpress.installerSha256}`);
+      console.log(`iexpress_bootstrapper_sha256=${iexpress.bootstrapperSha256}`);
+      console.log("iexpress_extraction_result=pass");
+    }
+
     launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
     setupAttempted = true;
     run("cmd.exe", [
       "/d",
       "/s",
       "/c",
-      path.join(packageDir, "BlueTanukiSetup.cmd"),
+      setupCommand,
       "-InstallRoot",
       installRoot,
       "-DataRoot",
       dataRoot,
       "-NoLaunch",
-    ], packageDir, "installer setup", 600_000, isolatedProductEnv);
-    console.log("installer_zip_setup_result=pass");
+    ], packageDir, iexpressExe ? "IExpress embedded Setup" : "installer setup", 600_000, isolatedProductEnv);
+    console.log(iexpressExe ? "iexpress_embedded_setup_result=pass" : "installer_zip_setup_result=pass");
 
     const envFile = path.join(dataRoot, "blue-tanuki.env");
     if (process.argv.includes("--startup-only")) {

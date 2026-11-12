@@ -2,6 +2,43 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QEB-WINDOWS-IEXPRESS-INSTALLED-STARTUP
+
+主語はWindows x64 IExpress EXE、埋込Setup CMD、既存の隔離installed smoke consumerである。目的は、選択ZIPとEXE内包ZIPをhashで一致させ、EXEから抽出した実CMDで隔離InstallRoot／DataRootへSetupを通し、installed Gatewayの起動・health・停止と正規Uninstall cleanupまで結ぶこと。通常GUI/default launch、全Windows lifecycle、製品全体の成立は対象外。
+
+IExpress manifest／PE-CAB／sidecar／抽出CMD／embedded ZIP照合を`verifyAndExtractWindowsIExpressCommand`へ集約した。standalone verifierとsmoke runnerで共有し、smokeは`--iexpress-exe`を受け取った場合にだけEXEの実CMDを初回Setupへ使う。既存のprocess／uninstall registry preflight、隔離した`APPDATA`／`LOCALAPPDATA`／`TEMP`、startup-only Gateway health／stop、finally内の正規Uninstall／registry後確認を維持した。
+
+再検査で、smoke内部のroot entrypoint default dry-runが既定WorkRootを使い、`.codex-tmp/windows-install-entrypoint/install.log`のreparse pointを再初期化する副作用を確認した。初回smokeは同ファイルを79-byteの開始記録で更新した。二回目のsmoke前後はSHA-256=`374457099b707771a78bb753f04fdb5b2fbc0dca4341a9ee4ef992d1df9fd043`、更新時刻が不変。smoke dry-runへtask-owned `WorkRoot`を渡し、reparse先への再書込みを防ぐ変更を加えた。最初の更新前内容は記録されていないため推測復元せず、対象は保留のまま保持する。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS。typecheckが一度削除した生成`dist`はbuildで復元し、開始時と同じ14 directories／1,073 files／12,934,512 bytesを確認。 |
+| `package:windows:verify` | PASS。ZIP 3,553 entries、ZIP SHA-256=`4d5459784bfbaefe9c2b4126c1b75e08e27b25da9cee7f9cae3503b1e6d68ce1`、CMD SHA-256=`ae295b7a3ba11da3e0b9c07e7af5b993e6b84859aaa3cc860e78f728bf128dd5`、EXE SHA-256=`a58658f54d086073bfaa4512082906dfb12f37bc78ae9d596f7e3f26c71e6133`。standalone extraction PASS。 |
+| Windows `smoke:windows-installed --iexpress-exe ... --startup-only` | 2回PASS。前後にreparse logのhash／timestamp一致を確認した2回目が最終証拠。IExpress抽出、埋込CMD→ZIP照合、隔離Setup・post-install doctor、stub Gateway startup／health／stop、正規Uninstall/Purge、uninstall／autostart registry消失。 |
+| `validate:packaging`／`validate:release-hardening`／`docs:check`／release bundle `--dry-run`／`git diff --check` | PASS。bundle dry-runに`scripts/windows_iexpress.ts`を含むことを確認。manual `workflow_dispatch`限定。日本語基底の移行負債75件は残存。 |
+| IExpress通常GUI／default launch、full lifecycle、実provider、全suite、他OS QA、QE_QC／QE_QA | NOT_RUN。署名なし候補、public distribution HOLD。 |
+
+## 生成資産・保護状態
+
+| 資産 | 件数・容量 | 分類 |
+|---|---:|---|
+| `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-windows-artifacts-rev5-20261113` | 10 files・174,749,451 bytes | 保持。検証済みZIP／CMD／EXEとmanifest／checksum／README。 |
+| workspace build `dist` | 14 directories・1,073 files・12,934,512 bytes | 開発用に保持。 |
+| Linux isolation `target` | 31 files・10,462,590 bytes | 既存開発用untracked assetとして保持。 |
+| smoke `BTsmoke\w-*` roots | 2回分、cleanup後0 | test-owned generated state。Setup／DataRoot／Temp payload／IExpress extractionを含め削除・後状態確認済み。 |
+| `.codex-tmp\windows-install-entrypoint\install.log` | 1 file・79 bytes | 初回smokeがreparse point経由で更新。前状態未記録のため推測復元せず、owner確認対象として保留。二回目以後は不変。 |
+| OneDrive `release/windows` ZIP／manifest／SHA sidecar／README | 4 files | 保持。開始hashと一致。 |
+| `.codex-attachments/`／`.codex-remote-attachments/` | 2 directories | 保護。未stage・未変更。 |
+| stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadata | 1 stale worktree entry | fetch pruneのPermission denied。ACL／属性を変更せず保留。 |
+
+OneDrive既存artifact hashはZIP=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、manifest=`0996b5213f3c2e21e6ee43659836ed4734ad5c4ddb2e07644ff01e677b21c2a2`、sidecar=`3088b1f42eb0486e0cfbe0e96e83042135801f749cc85662b4552fb23283ea50`、README=`2dbcc31386c58b89498f574916fb5da3da7393753ecda9b842673f1d1d7c6806`。
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows IExpress embedded Setup → installed Gateway startup/health/stop → isolated Uninstall cleanup
+- **STATUS:** WIRED（Windows installed startup consumer限定。通常GUI/default launchとfull lifecycleは未確認）
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再実施し、rev5.0と最新HEADからP2全体成立に必要なconsumerを再選定。
+- **PRODUCT_STATE:** QE_BUILD。`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO`。HDS authority、Approval、owner data、secret、実provider／外部作用、別repo、public distributionへ変更なし。
+- **GIT_STATUS:** 実装・closeout commitとGitHub main／local recovery refは、この作業単位のpush完了後に追記する。
+
 ## 2026-11-13 — QEB-WINDOWS-IEXPRESS-SINGLE-FILE
 
 現行rev5.0に沿い、Windows向けdistribution entrypointへIExpress self-extracting `.exe`を追加した。主語はWindows x64 installer package builderとverifier、目的は一つのEXEからSetup commandと製品ZIPを内包した配布candidateを作り、署名・実Setupを伴わない抽出検証で内部のhash bindingを確かめること。製品全体の導入・runtime・completion判定は対象外。

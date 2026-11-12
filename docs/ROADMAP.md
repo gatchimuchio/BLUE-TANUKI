@@ -8,9 +8,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
+### 直近完了BUILD_BATCH — QE_BUILD / Windows EXEから隔離Setup・Gateway startup consumerへ接続
 
-Windows利用者向けの単一`.exe`をWindows hostで生成するproducer、manifest／SHA sidecar、IExpress抽出専用verifierを接続した。ZIP 3,553 entries、CMDの埋め込みpayload binding、EXEのPE/CAB、Setup command抽出後のhashとembedded ZIP hashがPASS。release bundle dry-runにもWindows EXEが含まれることを確認した。candidateは未署名で、公開・配布は保留。EXEからのSetup実行／installed smoke、source bundle archive生成（OneDrive `release`／`.codex-tmp`のreparse point保護）、full suite、全OS QA、QE_QC／QE_QAはNOT_RUN。実装commit=`2ea5ad78625956872268f5d65c57af2351ad4851`。生成10 files・174,749,451 bytesは非OneDrive Tempに保持し、OneDrive上の既存Windows artifactは不変。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+IExpress EXEの実CMDを埋込ZIPとhash照合し、そのCMDから既存Windows installed smokeの隔離InstallRoot／DataRootへSetupを接続した。Windows x64 hostでZIP 3,553 entries、CMD／EXE manifest・SHA、PE/CAB、埋込ZIP照合がPASS。実EXEからの抽出・Setup・post-install doctor・stub Gateway起動／health／停止、正規Uninstall/Purge、registry消失までisolated smokeでPASSした。通常GUI/default launchとfull lifecycleはNOT_RUN。provider credential／外部作用なし。生成10 files・174,749,451 bytesは非OneDrive Tempに保持し、OneDrive上の既存Windows artifactは書き換えていない。初回smokeが既存`.codex-tmp` reparse-point logを79-byte開始記録へ更新したため内容前状態は保留し、後続smokeのWorkRootを隔離して再書込みなしを確認した。source bundle archive生成、全suite、全OS QA、QE_QC／QE_QA、公開・配布も未実施。candidateは未署名で公開・配布保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
+
+単一`.exe`を生成するproducer、manifest／SHA sidecar、IExpress抽出専用verifierを接続した。EXEからのSetup実行／installed smokeは後続の直近BUILD_BATCHで接続。実装commit=`2ea5ad78625956872268f5d65c57af2351ad4851`。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64・arm64単体Setup生成
 

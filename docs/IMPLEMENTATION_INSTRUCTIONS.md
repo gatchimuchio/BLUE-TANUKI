@@ -2,7 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
+## 完了BUILD_BATCH — QE_BUILD / Windows x64 IExpress EXE → 隔離Setup → Gateway起動・停止
+
+主語はWindows x64の単一EXE配布入口、埋込Setup CMD、既存の隔離installed smokeである。目的は、生成済みEXEの埋込CMDとZIPを照合したうえで、そのCMDから隔離InstallRoot／DataRootへSetupを通し、installed Gatewayの起動・health・停止、正規Uninstallと隔離状態の回収まで実consumerへ接続すること。通常のGUI起動・default launch、全lifecycle、製品全体の完成判定はこの単位に含めない。
+
+IExpressのPE/CAB・manifest・SHA sidecar・埋込CMD・埋込ZIP照合を共有関数`verifyAndExtractWindowsIExpressCommand`へ集約し、standalone verifierとinstalled smokeで同じ契約を使う。`smoke_windows_installed.ts --iexpress-exe <EXE> --artifact <ZIP> --startup-only`は、別個に指定されたZIPとEXEのmanifest／hash bindingを確認してから、EXEの実CMDを隔離環境で実行する。既存のZIP経路、process／registry preflight、正規Uninstall／Purge cleanupは維持した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm typecheck`／`corepack pnpm build` | PASS。型検査がworkspace `dist`を削除する既存動作の後、15 workspace projectsを再build。開始時と同じ14 `dist` directories／1,073 files／12,934,512 bytesへ復元。 |
+| `package:windows:verify` | PASS。ZIP 3,553 entries、ZIP SHA=`4d5459784bfbaefe9c2b4126c1b75e08e27b25da9cee7f9cae3503b1e6d68ce1`、CMD SHA=`ae295b7a3ba11da3e0b9c07e7af5b993e6b84859aaa3cc860e78f728bf128dd5`、EXE SHA=`a58658f54d086073bfaa4512082906dfb12f37bc78ae9d596f7e3f26c71e6133`。IExpress抽出PASS。standalone verifier単独ではSetupを起動せず`setup_execution=NOT_RUN`と報告。 |
+| Windows `smoke:windows-installed --iexpress-exe ... --startup-only` | PASS。開始時Gateway processなし、既存製品uninstall／autostart登録なし。EXE CMD抽出、CMD→ZIP hash一致、埋込Setup、stub providerで隔離導入とpost-install doctor、Gateway起動・health応答・停止、正規Uninstall/Purge、registry不在を確認。資格情報・外部providerなし。 |
+| `validate:packaging`／`validate:release-hardening`／`docs:check`／`git diff --check` | PASS。Actionsはmanual `workflow_dispatch`限定。日本語基底の移行負債75件は残存。 |
+| IExpress通常GUI／default launch、full Windows lifecycle smoke、実provider、全suite、他OS QA、QE_QC／QE_QA | NOT_RUN。署名なしcandidateの公開・配布は引き続きHOLD。 |
+
+local assets: 非OneDrive artifact directory `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-windows-artifacts-rev5-20261113`の10 files／174,749,451 bytesを保持。workspace `dist`14 directories／1,073 files／12,934,512 bytesとLinux isolation `target`31 files／10,462,590 bytesを保持。2回の隔離smoke rootとIExpress extraction、outer CMDのTemp payload、InstallRoot／DataRootは成功確認後にcleanupし、root残存0を確認。2回目は`.codex-tmp/windows-install-entrypoint/install.log`のreparse-point pathが前後SHA=`374457099b707771a78bb753f04fdb5b2fbc0dca4341a9ee4ef992d1df9fd043`／更新時刻不変。初回smokeは既定WorkRootで同fileを79-byte開始記録へ更新した。前状態の内容は未記録であり、推測復元せず保留する。後続runが同じpathへ書かないようsmokeにtask-owned WorkRootを設定。OneDrive `release/windows`既存ZIP／manifest／sidecar／READMEは開始hashと一致。protected attachment directoriesは未stage。
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows EXE embedded Setup → installed Gateway startup/health/stop → isolated Uninstall cleanup
+- **STATUS:** WIRED（このWindows installed consumer限定。通常GUI/default launchと全lifecycleは未確認）
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業開始時に⓪→④を再実施し、最新rev5.0と実物からP2全体成立に必要な次consumerを再選定する。
+- **SAFETY_STATUS:** HDS authority、Approval、owner data、秘密、実provider／外部作用、別repo、release／owner GOへ変更なし。隔離smokeだけで作成した製品状態を正規Uninstall経由で除去。
+
+## 前段完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
 
 主語はWindows x64のinstaller package builderとIExpress verifier。目的は、通常利用者が一つの`.exe`からWindows Setupを開始できるpackageを生成し、そのEXEからSetup commandと埋め込みZIPが改変なく抽出されることを検証すること。Setup実行・製品導入・runtime成立をこの工程へ含めない。
 

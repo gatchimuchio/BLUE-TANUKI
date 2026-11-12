@@ -352,7 +352,10 @@ function main(): void {
   const windowsIExpressVerify = read("scripts/verify_windows_iexpress.ts");
   requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "single_file_extraction=PASS");
   requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "setup_execution=NOT_RUN");
-  requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "embeddedZip.length");
+  const windowsIExpress = read("scripts/windows_iexpress.ts");
+  requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "verifyAndExtractWindowsIExpressCommand");
+  requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "embeddedZip.length");
+  requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "manifest.payload.sha256 !== payloadHash");
   requireIncludes("scripts/windows_short_path.ts", read("scripts/windows_short_path.ts"), "GetShortPathName");
   const windowsArtifactDirectory = read("scripts/windows_artifact_dir.ts");
   requireIncludes("scripts/windows_artifact_dir.ts", windowsArtifactDirectory, "BLUE_TANUKI_WINDOWS_ARTIFACT_DIR");
@@ -443,6 +446,10 @@ function main(): void {
 
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "--iexpress-exe");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "iexpress_embedded_setup_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled,
+    `path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),\n      "-DryRun",\n      "-WorkRoot",\n      path.join(work, "root-entrypoint-default-dry-run"),\n      "-NoLaunch",`);
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "source_tree_setup_guidance_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_build_from_source_result=pass");
@@ -594,6 +601,7 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "BlueTanukiSetup-${version}-windows-x64.exe");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_windows_iexpress.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/windows_iexpress.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_windows_iexpress.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");
@@ -667,6 +675,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/BlueTanukiSetup-${version}-windows-x64.exe");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/package_windows_iexpress.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/windows_iexpress.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_iexpress.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");

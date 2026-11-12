@@ -141,6 +141,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/windows_short_path.ts",
   "scripts/windows_artifact_dir.ts",
   "scripts/package_windows_iexpress.ts",
+  "scripts/windows_iexpress.ts",
   "scripts/verify_windows_iexpress.ts",
   "scripts/smoke_windows_installed.ts",
   "scripts/package_unix.ts",
