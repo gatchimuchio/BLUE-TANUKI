@@ -8,6 +8,8 @@
 
 GitHub Actions run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)は`workflow_dispatch`、`target_os=linux`、source SHA=`37ca041caa573956b3181f11b51032123df2175f`、run interval 2026-11-12 22:05:20Z–22:11:45Z（6分25秒）、overall success。Linux job [131526056630](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235/job/131526056630) success、選択外macOS jobはskip。Ubuntu 24.04.5 LTS x86_64、image `ubuntu-24.04` version `20261111.370.1`、kernel `7.0.0-1017-azure`、glibc 2.39。Node.js 22.23.3、Rust 1.95.0、pnpm 9.12.0。生成installer `blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz` SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。
 
+Actions annotationは1件で、`actions/checkout@v4`／`actions/setup-node@v4`のNode.js 20 runtimeが非推奨となりNode.js 24へ強制移行されたというrunner tooling警告。workflowの結果はsuccessで、製品の合否とは分離した。run summaryのscreenshot `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-run-43316577235-proof.png`（69,167 bytes）をfinal report evidenceとして保持する。
+
 | hosted installed consumer | 結果 |
 |---|---|
 | Linux source entrypoint／build-from-source、package build・verify、runtime hash／manifest、archive Setup | PASS。 |
@@ -17,7 +19,7 @@ GitHub Actions run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/run
 | 合成DataRoot／ConfigRoot／runtime state／logsを通常Uninstall後に保持、同じisolated rootへ再導入、明示Purge | PASS。 |
 | terminal markers | `linux_installed_smoke=pass`、`update_failure_rollback_result=pass`、`interrupted_update_recovery_result=pass`、`autostart_exec_restart_result=pass`、`normal_uninstall_retention_result=pass`、`reinstall_after_retention_result=pass`、`purge_removed_logs_result=pass`。 |
 
-DoctorはPASSしたが、runnerではLinux isolationに必要な構成要素（provider／bubblewrap／systemd user manager／cgroup limits）のいずれかが利用できず、`shell.exec`は無効・fail-closedと報告した。したがってshell isolationの稼働は証明しない。workflowは`contents: read`、manual `workflow_dispatch`のみ。Actions artifactは0件。test用の`/tmp/blue-tanuki-g0301-linux.*` rootはscriptのprefix-bound `trap cleanup`で除去。ローカルへartifact等の新規生成・取得なし。protected attachments／既存Linux `target/`／他worktreeは未変更。複数distribution、実OS login／reboot、system service／Secret Service、owner実機、real provider／credential、full suite、全OS QA、製品全体QC／QAはNOT_RUN。
+DoctorはPASSしたが、runnerではLinux isolationに必要な構成要素（provider／bubblewrap／systemd user manager／cgroup limits）のいずれかが利用できず、`shell.exec`は無効・fail-closedと報告した。したがってshell isolationの稼働は証明しない。workflowは`contents: read`、manual `workflow_dispatch`のみ。Actions artifactは0件。test用の`/tmp/blue-tanuki-g0301-linux.*` rootはscriptのprefix-bound `trap cleanup`で除去。製品artifactのローカル新規生成・取得なし。final report proof screenshot 1件は上記Temp pathに保持。protected attachments／既存Linux `target/`／他worktreeは未変更。複数distribution、実OS login／reboot、system service／Secret Service、owner実機、real provider／credential、full suite、全OS QA、製品全体QC／QAはNOT_RUN。
 
 closeout documentation更新後の`docs:check`／`git diff --check`はPASS。日本語基底の移行負債75件は既存注意として維持した。この単位の状態はLinux hosted installed consumer限定の`WIRED`。P2全体、5OS実装、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開・出荷判断に拡張しない。run開始local／origin／GitHub main=`37ca041caa573956b3181f11b51032123df2175f`、recovery current／previous=`37ca041caa573956b3181f11b51032123df2175f`／`4b4f25b7b5becf06c245124b5b64594f3e9dc897`。closeout記録push後に最終HEADと復旧refsを再照合する。
 

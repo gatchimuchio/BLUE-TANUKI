@@ -14,7 +14,8 @@
 | bundled runtime／Gateway・Control Center起動、synthetic first message、Repair、port conflict、Approval／Audit／crash recovery、stop／restart／safe mode | PASS。healthz／appはHTTP 200。providerはstub、資格情報・実provider・外部作用なし。 |
 | update失敗rollback／中断update復旧・再開／通常Uninstall後の合成DataRoot・ConfigRoot・runtime state保持／再導入／明示Purge | PASS。 |
 | doctor | PASS。ただしrunnerではLinux isolationに必要な構成要素（provider／bubblewrap／systemd user manager／cgroup limits）のいずれかが利用できず、`shell.exec`は無効のままfail-closed。Linux isolationの稼働証拠ではない。 |
-| artifact／ローカル生成物 | GitHub Actions artifactは0件。隔離runner rootは専用prefix確認付き`trap cleanup`で除去。ローカルへの新規生成・取得なし。 |
+| workflow warning | GitHub Actions annotation 1件：`actions/checkout@v4`と`actions/setup-node@v4`のNode.js 20 runtimeが非推奨となりNode.js 24へ強制移行された。workflowはsuccess。 |
+| artifact／ローカル生成物 | GitHub Actions artifactは0件。隔離runner rootは専用prefix確認付き`trap cleanup`で除去。製品build／artifactのローカル生成・取得なし。最終報告用のrun screenshot 69,167 bytesをTempに保持。 |
 | docs:check／git diff --check | PASS。日本語基底の移行負債75件は残存。 |
 | 複数distribution、OS login／reboot、実system service／Secret Service、owner実機QA、実provider／資格情報、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
 
@@ -22,7 +23,7 @@
 - **STATUS:** WIRED（このUbuntu 24.04.5 hosted smoke限定。Linux全distributionや製品全体へ拡張しない）
 - **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再実施し、rev5.0と最新実物からP2全体成立に必要な次consumerを選ぶ。
 - **SAFETY_STATUS:** synthetic isolated stateのみ。HDS authority、Approval、owner data／資格情報、実provider、外部作用、別repo、署名資格、公開／出荷判断へ変更なし。
-- **LOCAL_ASSET_STATUS:** Actions artifactなし、今回取得・生成したローカルfileなし。runnerの`/tmp/blue-tanuki-g0301-linux.*`はcleanup済み。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
+- **LOCAL_ASSET_STATUS:** Actions artifactなし、製品build／artifactのローカル生成・取得なし。final report screenshot `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-run-43316577235-proof.png`（69,167 bytes）は証拠表示用に保持。runnerの`/tmp/blue-tanuki-g0301-linux.*`はcleanup済み。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
 - **PRODUCT_STATE:** QE_BUILD継続。`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、P13 `PENDING_OWNER_GO`。C08.03実provider、OD-03 live external action、別repo変更は引き続き保留。
 - **GIT_STATUS:** run開始時local／origin／GitHub `main`=`37ca041caa573956b3181f11b51032123df2175f`、ahead／behind=0/0。開始recovery current／previous=`37ca041caa573956b3181f11b51032123df2175f`／`4b4f25b7b5becf06c245124b5b64594f3e9dc897`。closeout commit／push後の最終HEADと二世代refは終了時に再照合する。
 
