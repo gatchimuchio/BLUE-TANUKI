@@ -18,7 +18,7 @@ STATUS: WIRED（packaged Uninstall code pathと動的target再照合fixtureは�
 NEXT_REQUIRED_CONSUMER: 次の独立作業で⓪→④を再実行し、rev4.0と最新HEADから全体接続距離・未接続consumer・安全危険度で選ぶ。Windows dynamic-targetは再観測済み。C08.03実provider、OD-03 live外部作用、D4／MINIDORA別repo変更、P13公開GOへ拡張しない。
 SAFETY_STATUS: 所有marker／managed inventory／InstallRoot identity／reparse拒否を維持し、停止後に対象が変化したら削除を中断する。通常UninstallはDataRootを保持し、Purgeは全量完全削除の明示経路に限定。
 LOCAL_ASSET_STATUS: dynamic fixtureの一時InstallRoot／DataRoot／外部sentinel／status fileはtest内cleanup PASS。残存 fixture rootなし。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。実ユーザーデータ、provider credential、別repo、OneDrive資料に作用なし。
-CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`98149ea42a2e5fcbaa34d5cb93e3f33b8ce767e2`、ahead／behind=0/0、worktreeはmainのみ。closeout文書push後のHEAD・復旧refは最終照合して報告する。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`98149ea42a2e5fcbaa34d5cb93e3f33b8ce767e2`、ahead／behind=0/0、worktreeはmainのみ。closeout commit `40ea7d3151bb39d36a65c1f4dd1a2a6e572cd36d`をGitHub `main`へpushし、local／remote main一致を確認した。local recovery branch current=`40ea7d3151bb39d36a65c1f4dd1a2a6e572cd36d`／previous=`98149ea42a2e5fcbaa34d5cb93e3f33b8ce767e2`、remote recovery tagも同じcommitを指す。
 
 ## 完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則・検証済みJ/M根拠と復旧の再同期
 

@@ -6,6 +6,12 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Uninstallの動的削除対象再照合
+
+現行mainにあった停止後のInstallRoot managed inventory再検証と、明示`-PurgeData`時のDataRoot再検証をWindows上のfocused fixtureで再実行した。synthetic launcherが停止中にInstallRootへfileを追加するケースと、Purge対象へjunctionを作るケースがともに削除前にexit 1で停止し、InstallRoot／DataRoot／外部sentinelが保持された。製品コードの追加・owner data・installed productへの作用はない。
+
+`install/installer/test/windows_product_installer.test.ts` focused test 1件PASS（同file 20件skip）。fixture cleanup、`docs:check`、`git diff --check`はPASS。実installed product、OS reboot、native installed QA、G02.03全体、全suite、QE_QC／QE_QAはNOT_RUN。この限定再観測だけをG02.03の`WIRED` evidenceとし、完了範囲へ拡張しない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
 ### 直近完了BUILD_BATCH — QE_BUILD / F02.02 owner選択済みGmail identityから返信draft候補へのJ内束縛
 
 ownerが`gmail.read`結果から選択したidentity digestをCの外でJへ渡し、`OperationPlanLedger.retainCandidate`が同一owner／channel／task／revisionの未期限・verified read resultと照合した後、単一`draft.create`候補へsource message IDを内部束縛する。メール内容やprovider IDはC、projection、M receiptへ渡さず、添付候補とsource不一致を拒否し、返信thread確認付きresult validationを適用する。`operation_plan_gmail_reply.test.ts` 5/5、HDS typecheck、HDS standalone、`git diff --check`はPASS。served Gateway全経路、実provider／credential／draft作成、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
