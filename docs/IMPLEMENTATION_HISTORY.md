@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-11-12 — QEB-F02.02-GMAIL-OWNER-SELECTED-REPLY-SOURCE
+
+開始時local／`origin/main`／GitHub `main`=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／tag current=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、previous=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。
+
+Ownerが選択したbody-free Gmail message identity digestから、返信draft sourceをCの外でJ内へ束縛するconsumerを追加した。`retainCandidate`はowner／channel／task identity、source planの最新revision、`gmail.read` step、verified bindingのstep／result／delivery digest、成功結果一件、観測時刻と10分期限を照合する。message IDが選択digestと一致した場合だけ、単一の`gmail.write draft.create`候補へ内部設定し、`gmail_reply_draft_result_matches` validationを適用する。添付、source ID競合、digest不一致を拒否する。prompt-injection風synthetic snippetはdraft候補へ移らない。raw provider IDはC入力・projection・M receiptへ出さず、実provider・credential・draft作成・sendは使用しない。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm exec vitest run packages/hds-brain/test/operation_plan_gmail_reply.test.ts` | PASS：1 file／5 tests。 |
+| `corepack pnpm --filter @blue-tanuki/hds-brain typecheck` | PASS。 |
+| `corepack pnpm hds:standalone` | PASS：health `ok`、audit chain valid、runtime invariants 6件すべてtrue。 |
+| `git diff --check` | PASS。 |
+| served Gateway全経路、実Google provider／credential／draft作成／send、全suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+生成物分類：tracked source／test／active docsを変更。focused test固有の一時資産なし。build生成物なし。protected添付領域・別repo・OneDriveは未変更。これはF02.02の選択identity→返信draft候補の限定`WIRED` consumerだけであり、provider接続・送信・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを示さない。
+
 ## 2026-11-12 — QEB-F02.02-GMAIL-THREAD-REPLY-DRAFT
 
 開始時local／`origin/main`／GitHub `main`=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／tag current=`133fc7163b0caedd229e88fba3ce39dad3d74c31`、previous=`b47018e5418027b193cdb850c75c26757b85b441`。protected `.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。

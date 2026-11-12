@@ -2,6 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — QE_BUILD / F02.02 owner選択済みGmail identityから返信draft候補へのJ内束縛
+
+主語はHDS-Jの`OperationPlanLedger.retainCandidate`と、既存のowner選択済み`gmail.read` identity経路である。目的は、ownerが読取結果から選択したmessage identity digestを、Cの候補返却後にJが同じowner／channel／task／revisionの未期限・検証済みread resultと照合し、返信draft候補のsource message IDへ内部束縛すること。C入力、Control Center projection、M receiptへraw provider IDやメール内容を渡さない。候補は単一の`gmail.write draft.create`だけを許し、添付を拒否し、返信draftのthread確認付きresult validationへ置き換える。
+
+Jはsource plan／最新revision／`gmail.read` step／verified bindingのresult・delivery digest／成功結果一件／観測時刻と10分期限を照合する。digestが結果内message identityと一意一致しない、候補がsource IDと矛盾する、source stateが古い・曖昧な場合は保持しない。fixtureに含むprompt-injection風snippetも候補へ複製されない。実Gatewayでの全経路やdraft作成はこのbatchで実行していない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| `packages/hds-brain/test/operation_plan_gmail_reply.test.ts` | PASS：5/5 tests。HDS内identity解決、誤digest・source ID競合の拒否、owner task明示ID経路、reply draft result validationを確認。 |
+| `corepack pnpm --filter @blue-tanuki/hds-brain typecheck` | PASS。 |
+| `corepack pnpm hds:standalone` | PASS：health `ok`、audit chain valid、全runtime invariants true。 |
+| `git diff --check` | PASS。 |
+| served Gateway／実Google provider／credential／draft作成／send、全workspace suite、5OS QA、QE_QC／QE_QA | NOT_RUN。 |
+
+UNIT_ID: F02.02（owner選択済みのbody-free Gmail read identityを、返信draft候補のthread-bound sourceへHDS内で接続する限定consumer）
+STATUS: WIRED（HDS `retainCandidate`のowner／channel／task／revision／result receipt照合後にsource IDを候補へ結合。focused helper testと型検査で確認。served Gateway全経路やproviderは未確認）
+NEXT_REQUIRED_CONSUMER: 現行rev4.0と最新HEADから次の未接続consumerを再選定する。実provider／credential／draft作成・send、OD-03 live作用、別repo、QE_QC／QE_QA、公開／出荷判断へ拡張しない。
+SAFETY_STATUS: source message IDはC／projection／Mへ出さない。メール内容とheadersは未信頼のまま。single-step draft.create、添付拒否、thread-result validation、high/L3／Approval Gateの既存契約を維持。作用・実credential・外部書込みなし。
+LOCAL_ASSET_STATUS: source／test／active docsのみ変更候補。focused test固有の一時資産なし。build生成物なし。保護添付`.codex-attachments/`／`.codex-remote-attachments/`は未追跡・未変更。他repo／OneDrive保管操作なし。
+CURRENT_HEAD_AND_DIRTY_OWNER: 作業開始local／`origin/main`／GitHub `main`=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、ahead／behind=0/0、worktreeはmainのみ。開始recovery branch／remote tag current=`0b846894bc287a4cc3bdfdfa4dde1d9ae308daf8`、previous=`62bfd2dcbd1a1e86dc5e7ae1740015bb7b8f9e92`。終端main・二世代recovery refはpush後に再照合する。保護添付は未追跡のまま維持する。
+
 ## 完了BUILD_BATCH — QE_BUILD / F02.01 Gmail読取identity・信頼境界のAdapter確認
 
 主語はBLUEの既存`gmail.read` production Adapter `invokeGmailRead`である。目的はsynthetic Gmail応答から認証mailbox、message／thread、recipient header claims、添付identityを正しく識別し、メールsubject／snippet／recipient／添付metadataを未信頼データのまま分離すること。人間ownerとmailboxの対応や宛先claimの真実性は確定しない。本文・raw MIME・添付bytesは結果に含めず、本文bytesを含むfull metadata応答はfail-closedに拒否する。

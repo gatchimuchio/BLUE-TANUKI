@@ -852,6 +852,7 @@ function operationPlanExecutionSourceDigest(
 
 interface GmailMessageIdentityOption {
   readonly message_identity_digest: string;
+  readonly message_id: string;
 }
 
 /** Only bounded Gmail message identity fields can be selected as non-authority plan context. */
@@ -875,9 +876,53 @@ function verifiedGmailMessageIdentityOptions(value: unknown): GmailMessageIdenti
     options.push({
       message_identity_digest: operationPlanDigest({ schema_version: "gmail-message-identity.v1",
         mailbox_identity_digest: operationPlanDigest(value.mailbox_identity), message_id: message.id, thread_id: message.thread_id }),
+      message_id: message.id,
     });
   }
   return new Set(options.map((option) => option.message_identity_digest)).size === options.length ? options : null;
+}
+
+/** @internal Bind a verified owner-selected read identity after C returns, keeping provider IDs out of C input. */
+export function bindOwnerSelectedGmailMessageIdentityToReplyDraftCandidate(
+  value: unknown,
+  selectedMessageIdentityDigest: string,
+  sourceReadResult: unknown,
+): OperationPlan {
+  if (!/^[a-f0-9]{64}$/.test(selectedMessageIdentityDigest)) {
+    throw new Error("plan_compute_gmail_identity_selection_invalid");
+  }
+  const selected = verifiedGmailMessageIdentityOptions(sourceReadResult)?.filter((option) =>
+    option.message_identity_digest === selectedMessageIdentityDigest) ?? [];
+  if (selected.length !== 1) throw new Error("plan_compute_gmail_identity_selection_invalid");
+
+  const plan = OperationPlanSchema.parse(value);
+  if (plan.steps.length !== 1) throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
+  const step = plan.steps[0]!;
+  const parameters = step.parameters ?? {};
+  if (step.operation !== "gmail.write" || parameters.operation !== "draft.create" ||
+      parameters.attachments !== undefined) {
+    throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
+  }
+  const selectedMessageId = selected[0]!.message_id;
+  if (parameters.reply_to_message_id !== undefined && parameters.reply_to_message_id !== selectedMessageId) {
+    throw new Error("plan_compute_gmail_identity_reply_source_mismatch");
+  }
+  if (!step.preparation) throw new Error("plan_compute_gmail_identity_reply_validation_unavailable");
+
+  const replyStep: OperationStep = {
+    ...step,
+    parameters: { ...parameters, reply_to_message_id: selectedMessageId },
+    preparation: {
+      ...step.preparation,
+      validation: [{
+        check_id: "gmail-reply-source-thread-confirmed",
+        method: "gmail_reply_draft_result_matches",
+        target: step.target,
+        expected: { schema_version: "blue-tanuki.gmail-reply-draft-result-validation.v1", operation: "draft.create" },
+      }],
+    },
+  };
+  return candidatePlan({ ...plan, steps: [replyStep] });
 }
 
 interface GmailAttachmentIdentityOption {
@@ -3796,7 +3841,7 @@ export class OperationPlanLedger {
     memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[],
     parentPlanReference?: OperationPlanComputeParent): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
-    const plan = candidatePlan(value);
+    let plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
       throw new Error("plan_source_binding_mismatch");
@@ -3886,6 +3931,7 @@ export class OperationPlanLedger {
     }
     const selectedGmailIdentityObservations = verifiedComputeSourceObservations?.filter((observation) =>
       observation.source === "owner_selected_gmail_message_identity") ?? [];
+    let selectedGmailReplySourceMessageId: string | undefined;
     if (selectedGmailIdentityObservations.length > 0) {
       const selected = selectedGmailIdentityObservations[0]!;
       if (selectedGmailIdentityObservations.length !== 1 || verifiedComputeSourceObservations?.length !== 1 ||
@@ -3894,12 +3940,55 @@ export class OperationPlanLedger {
           plan.steps[0]!.operation !== "gmail.write" || plan.steps[0]!.parameters?.operation !== "draft.create") {
         throw new Error("plan_compute_gmail_identity_candidate_must_be_draft_create_only");
       }
+      const sourcePlans = this.state.plans.filter((candidate) =>
+        operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === selected.plan_id_digest);
+      if (sourcePlans.length !== 1) throw new Error("plan_compute_gmail_identity_source_plan_unavailable");
+      const sourcePlan = sourcePlans[0]!;
+      if (sourcePlan.owner !== origin.user || sourcePlan.channel !== origin.channel ||
+          operationPlanTaskIdentityDigest(sourcePlan) !== selected.task_identity_digest ||
+          this.recoveryHolds.has(selected.plan_id_digest) || !this.goalPurposeBindingIsCurrent(sourcePlan.goal_purpose_binding) ||
+          !this.computeSourceObservationsAreCurrent(sourcePlan, this.nowMs())) {
+        throw new Error("plan_compute_gmail_identity_source_plan_stale");
+      }
+      const sourceRevision = sourcePlan.revisions.at(-1);
+      if (!sourceRevision || sourceRevision.digest !== selected.revision_digest) {
+        throw new Error("plan_compute_gmail_identity_source_revision_stale");
+      }
+      const sourceSteps = sourceRevision.plan.steps.filter((step) =>
+        operationPlanDigest(step.step_id) === selected.step_id_digest && step.operation === "gmail.read");
+      if (sourceSteps.length !== 1) throw new Error("plan_compute_gmail_identity_source_step_unavailable");
+      const sourceStep = sourceSteps[0]!;
+      const sourceBindings = sourcePlan.bindings.filter((binding) =>
+        binding.revision_digest === selected.revision_digest && binding.step_id === sourceStep.step_id);
+      if (sourceBindings.length !== 1 || sourceBindings[0]!.status !== "verified" ||
+          sourceBindings[0]!.result_digest !== selected.source_result_digest ||
+          sourceBindings[0]!.delivery_digest !== selected.delivery_digest ||
+          sourceBindings[0]!.step_digest !== stepDigest(sourceStep)) {
+        throw new Error("plan_compute_gmail_identity_source_binding_unavailable");
+      }
+      const sourceResults = sourcePlan.results.filter((result) => result.plan_id === sourceRevision.plan.plan_id &&
+        result.request_id === sourceRevision.plan.request_id && result.step_id === sourceStep.step_id &&
+        result.operation === "gmail.read" && result.status === "succeeded");
+      if (sourceResults.length !== 1 || sourceResults[0]!.observed_at_ms !== selected.observed_at_ms ||
+          sourceResults[0]!.expires_at_ms !== selected.expires_at_ms || this.nowMs() >= selected.expires_at_ms) {
+        throw new Error("plan_compute_gmail_identity_source_result_unavailable");
+      }
+      plan = bindOwnerSelectedGmailMessageIdentityToReplyDraftCandidate(
+        plan, selected.message_identity_digest, sourceResults[0]!.output);
+      const boundMessageId = plan.steps[0]!.parameters?.reply_to_message_id;
+      if (typeof boundMessageId !== "string") {
+        throw new Error("plan_compute_gmail_identity_reply_source_unavailable");
+      }
+      selectedGmailReplySourceMessageId = boundMessageId;
     }
     for (const step of plan.steps) {
       const replySourceMessageId = step.operation === "gmail.write" && step.parameters?.operation === "draft.create"
         ? step.parameters.reply_to_message_id : undefined;
       if (replySourceMessageId !== undefined &&
-          (typeof replySourceMessageId !== "string" || !retainedTaskGoal.includes(replySourceMessageId))) {
+          (typeof replySourceMessageId !== "string" ||
+           (selectedGmailReplySourceMessageId !== undefined
+             ? replySourceMessageId !== selectedGmailReplySourceMessageId
+             : !retainedTaskGoal.includes(replySourceMessageId)))) {
         throw new Error("plan_gmail_reply_source_message_id_must_be_explicit_in_owner_task");
       }
     }

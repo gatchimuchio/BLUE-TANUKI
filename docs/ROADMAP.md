@@ -6,7 +6,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / F02.01 Gmail read Adapter identity・信頼境界確認
+### 直近完了BUILD_BATCH — QE_BUILD / F02.02 owner選択済みGmail identityから返信draft候補へのJ内束縛
+
+ownerが`gmail.read`結果から選択したidentity digestをCの外でJへ渡し、`OperationPlanLedger.retainCandidate`が同一owner／channel／task／revisionの未期限・verified read resultと照合した後、単一`draft.create`候補へsource message IDを内部束縛する。メール内容やprovider IDはC、projection、M receiptへ渡さず、添付候補とsource不一致を拒否し、返信thread確認付きresult validationを適用する。`operation_plan_gmail_reply.test.ts` 5/5、HDS typecheck、HDS standalone、`git diff --check`はPASS。served Gateway全経路、実provider／credential／draft作成、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / F02.01 Gmail read Adapter identity・信頼境界確認
 
 既存`invokeGmailRead`へsynthetic transportを通し、profile由来mailbox、message／thread／attachment identity、To/Cc/Bcc/Reply-To claimsを確認した。recipient claims、subject、snippet、attachment metadataは非信頼データ、human-owner relationは未確認とし、本文／raw MIME／添付bytesは返さない。unexpected message-part body bytesは拒否する。focused Adapter tests 2/2、core typecheck/build PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。Gateway runtime／実Google provider・credential、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定producerだけを`WIRED`とし、F02.01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
