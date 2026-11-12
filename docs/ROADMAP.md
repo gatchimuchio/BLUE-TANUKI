@@ -2,7 +2,9 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。ownerは2026-11-09にrev4.0を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINはrev4.0のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。ownerは2026-11-13にrev5.0を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+
+工程は全域棚卸し・設計からP2全体一括実装を継続し、全体の`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC、OS別QAへ進む。198索引は実装traceであり、局所完了gateではない。Windowsは所有PCで最終確認し、他4OSはOS契約に忠実な仮想環境で独立に検査する。仮想で再現できない物理条件は別に未確認として扱う。
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 

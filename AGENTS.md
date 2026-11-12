@@ -14,7 +14,7 @@
 
 owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) 一か所だけで管理する。ownerが新しい三点一組を指定したら、配布manifestと三文書それぞれのhashを照合し、この唯一の現行ピンを新版へ置き換える。旧版の三点・旧pin・完了した作業や実装は履歴ログとして保持するが、通常作業では旧版群や完了ログを列挙・再読せず、現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合に限り、該当部分を参照する。内部原典や全要求対応表はPublicリポジトリへ転載しない。作業時に内部正本へアクセスできなければ推測で補わず、現行repoの実物と公開可能な要求から作業可能範囲を確定し、欠落条件を明記する。
 
-2026-11-09にowner採用された現行rev4.0は、HDS Frameworkの意味・関係・反証・学習・原理候補と、BLUE Runtimeの有限なJ/M状態・安全採否を分離する。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行はrev4.0の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
+2026-11-13にowner採用された現行rev5.0は、HDS Frameworkの意味・関係・反証・学習・原理候補と、BLUE Runtimeの有限なJ/M状態・安全採否を分離する。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
 
 本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
 
@@ -292,7 +292,7 @@ Mobileの招待・device credential等の秘密はnative境界に置き、Dart�
 
 「MobileクライアントがDesktop Brokerを経由して仕事を行う」ことと「Mobile端末単独でC/J/Mや実作用を稼働させる」ことは別能力。後者を本規定だけで実装済み・必要条件成立とは扱わない。
 
-従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行pinが指す非公開QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後にOS別QC、対象別QAを行い、AndroidとiOSの実機証拠を相互代用しない。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
+従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行pinが指す非公開QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後に各OSの規格・権限・配布契約に沿ってQC／QAを独立に行い、AndroidとiOSの証拠を相互代用しない。物理機能・署名・Store等、仮想環境で再現できない条件は別に未確認範囲を示す。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
 
 ## 19. 競合比較・互換性と公開境界
 
@@ -302,13 +302,13 @@ P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのま�
 
 ## 第III部 現行QE施工・再同期規律
 
-## 20. QE施工運転・次の実consumer優先
+## 20. QE施工運転・全域設計と全体一括実装
 
-現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書を正本とする。docs/IMPLEMENTATION_INSTRUCTIONS.mdは個別のactive task、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdは観測済み履歴を持つ。これらに残る旧「毎小単位の詳細QA／full test／Git closure」は、本QE規律に反する工程方法として上書きし、規定同期作業へ記録する。安全条件・公開の保留は旧版でも維持する。
+現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書を正本とする。現行rev5.0はP0全域実物棚卸し→P1全域設計→P2全体一括実装を一つの施工経路として進め、依存consumerを同時に制作・結線する。docs/IMPLEMENTATION_INSTRUCTIONS.mdは現在の全体施工状態、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdと閉じたbatch記録は履歴を持つ。旧版に残る局所工程・全OS物理実機必須・毎小単位のQC/QAはrev5.0で上書きし、安全・権限・秘密・公開・出荷の保護は維持する。
 
-工程状態はQE_DESIGN → QE_BUILD → SYSTEM_SHAPED → BUILD_COVERED → QE_QC → QE_QA → QE_RELEASE_REVIEW。QE_QCは全体実装形状の成立後であり、QE_QAは個別対象を限定してQCの証拠から判定する。198施工単位は分解・依存・再同期の索引であって198個のQAゲートではない。
+工程状態はrev5.0のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
 
-BUILD_BATCHは小単位をいくつかまとめて、目的→C→J→Broker／Executor→結果→M→帰還の実際のproducer／consumerを前進させるまとまりとする。各独立した作業・BUILD_BATCHの開始、切替、再開時には現行三点セット全文と適用AGENTS.mdを読み直す。同一バッチ内の連続する小単位では関係する節、active指示、現物を再同期する。旧版・閉じた施工記録は必要時だけ参照する。接続済みか未接続かを記録して次へ進み、バッチ末に最低限の技術疎通とGit保全を行う。schema・型・mockだけを積み上げて完了扱いしない。
+BUILD_BATCHはP2全体施工内の技術的checkpointとGit保全単位であり、198区分に閉じた局所工程・QC/QA完了・全体達成gateではない。全要求・5OS入口・能力間の実consumerを一つの施工計画にまとめ、未接続を見つけたらその全体工事へ結び付ける。各独立した作業の開始・再開時には現行三点セット全文と適用AGENTS.mdを読み直し、同じ施工単位内では関係する節・現物を再同期する。閉じた記録は履歴として保持し、必要時だけ参照する。型・schema・mockだけで実物完遂と報告しない。
 
 大きなバッチ指示には、目的・現状・次consumer、対象／非対象、関係単位ID、安全条件、停止条件、必要な技術確認、Git復元点、再同期条件を明示する。旧指示書の16節は利用してよいが、全小単位への品質票作成義務にはしない。
 

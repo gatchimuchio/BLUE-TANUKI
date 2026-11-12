@@ -4,17 +4,20 @@
 
 ## 現行セット
 
-- owner指定版：BLUE-TANUKI LLM QE三点セット rev4.0（2026-11-09）
-- owner採用日：2026-11-09
-- 配布ZIP SHA-256：`A7D53ED84EC30536FE257B56B6746DF75BF3F88E8DB089D33FB462A2FDBC3FE6`
-- 配布 `MANIFEST.json` SHA-256：`7E1DAE2E0CD7CB022D6360C8317BE2068BDDB2DFD60E6BEFC79F83EF75177695`
-- 仕様書 `01_BLUE-TANUKI_統合仕様書_rev4_0.json` SHA-256：`5CBBAE8BA9A1E00804049FF32D6325E209F7FDAC1BA13BA78F0100ED4B61F1ED`
-- 工程表 `02_BLUE-TANUKI_全体施工工程表_rev4_0.json` SHA-256：`0F8D8DE62FB353731965CC1894B85574AF6FB63DF38B90EEBDAC64EFBD406B8E`
-- 施工指示書 `03_BLUE-TANUKI_Codex施工指示書_rev4_0.json` SHA-256：`38098F3387362BF066C418443116A31357F496471A400050D02E7F93180224D1`
+- owner指定版：BLUE-TANUKI QE三点セット rev5.0（2026-11-13）
+- owner採用日：2026-11-13
+- 配布ZIP SHA-256：`B931D04AC4CB5EF364261BB6672238189B148C84923E2716ACDE3B5AB1169DF8`
+- 配布 `MANIFEST.json` SHA-256：`4DEB56A00A2AFE513AA68FFE345F69A61A5CDFE4BDDB5BDE932E347167C70941`
+- 仕様書 `01_BLUE-TANUKI_統合仕様書_rev5_0.json` SHA-256：`9B4E9F8D2183150D6CB3D9C2763CD43BFC21D6218C30B6CD99AFAECCF8588961`
+- 工程表 `02_BLUE-TANUKI_全体施工工程表_rev5_0.json` SHA-256：`05F46C201FC9176AF1AAA0DEDF5E0289E439984FE944F25AF774E556EE2A253B`
+- 施工指示書 `03_BLUE-TANUKI_Codex施工指示書_rev5_0.json` SHA-256：`AD6F35BCC99C8C9ABAC477E0BE4DD074EB344BA2E6B395C1DF1B733435261439`
+- 同梱の継承監査資料SHA-256（証拠・非正本）：`98FA46256ED3FC72A82929D8081DEE139E29CB6F17E98930025948AA0FA5A31F`
 
-ownerの「これで作業して」という指定をrev4.0採用指示として扱い、三文書・manifestのSHA-256とバイト数、三文書の版・主語・目的、要求431件・親成果65件・施工単位198件・親QC260件・局所QC396件・競合ID61件の件数とID一意性、要求／単位／競合台帳一致を照合して本pinを更新した。採用時の配布記載main、local `main`、remote `main` は `a6d3e8502910afb55396618361f5a5d9726e6649` で一致していた。manifestの配布時状態は `候補=true`／`公開可否=false` だが、ownerの採用指示で内部施工正本として発効したことと、公開・出荷許可は別である。製品はQE_BUILD、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO` を維持する。ZIP本文・内部原典・要求対応表はPublic Gitへ転載しない。
+ownerの「コレで作業しろ」という指定をrev5.0採用指示として扱い、本pinを更新した。manifestの「候補・owner未採用」は配布時点の状態であり、本指示によりrev5.0は内部施工正本として発効した。これは製品出荷GO、外部公開、他repo書込み、使用者のL3同意を意味しない。ZIP・manifest・四同梱ファイルのhash／byte数、三文書の版・主語・目的、431要求・65親成果・198索引・260親QC・396局所QC・61競合基準の件数／一意性／相互参照を照合した。改訂対照62件は監査資料の件数と一致し、全要求・施工単位・QC・競合IDの順序はrev4.0から維持されている。新manifestの継承旧版hashは直前のrev4.0 pinと一致する。採用時のlocal `main`、`origin/main`、GitHub `main` は `71addd5e6172a098b195ffdd6e97afeb2637d1ae` で一致し、復旧branchとremote tag二世代を照合した。ZIP本文・内部原典・要求対応表・監査資料本文はPublic Gitへ転載しない。
 
-旧rev3.1のpinと作業履歴はGit履歴に保持する。rev4.0の公開pinは三点セットの内部施工正本を識別するだけで、package本体の公開、実GitHub送信、他repo変更、Rust authority cutover、QE_QC／QE_QA、公開・出荷GOを成立させない。
+rev5.0の現行工程は全域設計から全体一括施工を続け、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC・OS別QAへ進む。Windows実PCを最終確認に使い、他OSは各OS契約に忠実な仮想環境で個別に確認する。製品状態はQE_BUILD、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO` のままである。
+
+旧rev3.1のpinと作業履歴はGit履歴に保持する。rev5.0の公開pinは三点セットの内部施工正本を識別するだけで、package本体の公開、実GitHub送信、他repo変更、Rust authority cutover、QE_QC／QE_QA、公開・出荷GOを成立させない。
 
 ## 更新と参照
 
