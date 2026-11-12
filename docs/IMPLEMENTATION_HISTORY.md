@@ -23,7 +23,7 @@ STATUS=`WIRED`（Windows installed Gateway startup consumerとLinux archive clos
 
 生成物分類：release Windows ZIP（51,886,120 bytes）とLinux tar.gz（49,032,580 bytes）、各manifest／checksum／READMEはこの作業の現在build artifactとして保持。WSLが生成した`packages/blue-tanuki/native/linux-isolation/target`は44 entries／10,462,590 bytesで、OneDrive同期領域からの削除伝播を避け保留。`.codex-tmp/windows-install-entrypoint/install.log`は79 bytesだが`ReparsePoint`属性のため保留。`git fetch origin`のpruneで既存`.git/worktrees/blue-tanuki-health-2026-11-07-windows`の削除がpermission deniedとなったため、metadata／ACL／attributesを変更せず保留。隔離installed smoke rootはcleanup後に残存なし。protected attachment directoryは未追跡・未変更。別repo、実資格、実provider、owner data、外部作用に変更なし。
 
-実装・作業記録commitとcloseout commitを`main`へfast-forward push後、local／`origin/main`／GitHub `main`、ahead／behind、復旧branch current／previousとremote recovery tagを再照合する。実装push後にcurrent recovery refをそのcommit、previousを開始`main`へ更新し、closeout push後にcurrentを最終`main`、previousを実装commitへ更新する。
+実装commit=`1fec12ad17cbe03c26bee706ca268db4a70853aa`を開始`main`=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`からfast-forward push。push後にlocal／`origin/main`／GitHub `main`一致とahead／behind=0/0を確認した。実装push後のlocal recovery branch／remote recovery tagはcurrent=`1fec12ad17cbe03c26bee706ca268db4a70853aa`／previous=`cb4a49fedcc16f5d1c1a77eb0632997efa4f2b4f`。このcloseout記録push後にlocal／origin／GitHub mainを再確認し、recovery branch／tagをcurrent=最終main／previous=`1fec12ad17cbe03c26bee706ca268db4a70853aa`へ更新する。
 
 ---
 
