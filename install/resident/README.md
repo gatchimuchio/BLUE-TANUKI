@@ -20,3 +20,10 @@ Launcher command surface:
 Resident mode starts the existing Gateway serve process with the generated env
 file. All WebChat, Approval Gate, HDS-BRAIN, audit, Runtime Invariants, and
 Control Center rules remain unchanged.
+
+On Windows, the resident helper verifies the recorded PID against the Node
+executable, Gateway entry point, serve flag, and exact env-file path before it
+reports or stops a process. If process identity cannot be inspected or does not
+match this installation, the helper preserves the PID record and refuses to
+signal the process. A stop is reported only after the process handle confirms
+exit; timeout or inspection failure keeps the record for recovery.

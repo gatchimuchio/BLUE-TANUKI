@@ -2,6 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / Windows portable resident PID ownership and stop confirmation
+
+主語はWindows portable installerのresident helper、目的は記録PIDをBLUE-TANUKI Gatewayと照合してから状態表示・停止し、PID再利用による無関係なprocess操作を拒否すること。対象は`install/resident/blue-tanuki-resident.ps1`であり、既存product launcher、HDS authority、Approval、Gateway運転契約は変更していない。
+
+`blue-tanuki.pid`の読込失敗・不正値を空扱いせず停止する。Win32 process executable path、handle path、Gateway entry point、`--serve`、env-file pathを照合し、識別不能または他processならstatus/start/stopをfail-closedにする。停止時は同じprocessのStartTimeを再照合し、process handleへの停止要求後10秒以内の終了を確認する。終了未確認ならPID記録を保持する。portable resident説明書にもこの境界を反映した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Windows PowerShell AST parser | PASS：resident helper構文解析。 |
+| `git diff --check` | PASS。 |
+| resident実processの所有拒否／停止、Windows installed smoke、installer tests | 未実行。 |
+| product launcher、OS常駐設定、自動起動、owner data、外部作用 | 変更なし。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows portable resident PID ownership and stop confirmation
+- **STATUS:** WIRED（既存portable resident start/status/stop commandへ接続。実process smokeは未確認）
+- **NEXT_REQUIRED_CONSUMER:** rev5.0と最新mainからP2全体BUILDの次consumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA未成立。
+- **SAFETY_STATUS:** process identityが不明・不一致ならsignalせずPID recordを保持。C/J/M authority、Approval Gate、秘密、実provider、外部作用、別repo、release／owner GOに変更なし。
+- **LOCAL_ASSET_STATUS:** 作業由来一時資産なし。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。
+- **GIT_STATUS:** 開始local／GitHub `main`=`6a86ce05ca644c53fcbef4b73510d10a1006581d`、追跡先と一致。開始recovery current／previous=`6a86ce05ca644c53fcbef4b73510d10a1006581d`／`74760dd7496ad4dc5326a9a966ffd8df6b16a3fe`、remote backup tagも同SHA。closeout時に最終SHA／refsを再照合する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / shell.exec Doctor readiness projection
 
 主語はGateway Doctorの`shell.exec`準備状態projectionとRemediationである。目的は、native isolation providerの有無と`BLUE_TANUKI_SHELL_ROOT`設定の有無を区別し、利用者に対して実際の停止理由と次の設定操作を正確に示すこと。Doctorは秘密やroot pathを読出・表示せず、shell commandも起動しない。
