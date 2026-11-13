@@ -22,6 +22,7 @@ Gateway reviewに`external_effect_class=form_submission_unclassified`を追加�
 - **NEXT_REQUIRED_CONSUMER:** F06の未接続producer／consumerを全体P2設計内で続けて選び、全要求・5OSの実consumerを接続する。購入・確定等の効果分類を未確認のまま安全と扱わない。
 - **SAFETY_STATUS:** L3 no-store、同一origin、credentialなし、JavaScript／service worker無効、public-address guard、結果不明時の自動再送なしを維持。外部効果は未分類、owner確認なしのlive送信・公開・出荷判断なし。
 - **LOCAL_ASSET_STATUS:** 実装・focused test・docs差分。WebChat package buildで`packages/channel-webchat/dist`を再生成し保持。Vitest一時物はtest cleanup済み。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護して未変更。WSL／他repoに触れない。
+- **GIT_STATUS:** 編集前local／origin／GitHub `main`=`a5ac1f6dbf6c85400cc38cb251ad315296603705`、ahead／behind=0/0。編集前local recovery branch／remote backup tag current／previous=`a5ac1f6dbf6c85400cc38cb251ad315296603705`／`6722c55b5c9f70aca03e98334afd27faee52770a`。実装commit=`7abe8c372c37f6d3dc1994cdc9d61de7e12f6b1f`を`main`へpushし、直後readbackでlocal `HEAD`／`origin/main`／GitHub `main`の一致と二世代refsを確認した。protected untracked assetsはstageしていない。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser.automation送信先束縛付き検索GET
 
