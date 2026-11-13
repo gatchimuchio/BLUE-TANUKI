@@ -8,6 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+
+### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle
+
+GitHub Actionsの手動 workflow_dispatch run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)、source SHA=a9e26f7ae427e1973a2b1519d393f9a1446cdb64で、macOS x64／arm64 hosted runnerのnative package build、DMG検証、Setup、Gateway／WebChat入口、更新回復、通常Uninstall後のデータ保持、再導入、隔離PurgeまでPASS。artifact 2件を7日保持設定でGitHub Actionsに保存した。/appはHTTP 200であり実画面操作ではない。owner device QA、host reboot、Keychain、署名・公証、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。macOS shell isolationは未提供のためshell.execをfail-closedで無効維持。詳細、package／artifact hash、保護したローカル資産は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。rev5.0 P2全体BUILDを継続する。
+
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / Linux native packaged installed lifecycle
 
 Ubuntu 24.04.5 hosted runnerのmanual `workflow_dispatch` run [#24](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43515570476)、source SHA=`79dfca35c375a659d6840ad6f071ce79a8367006`で、workspace／Linux packages build、tar.gz Setup、resident起動、`/healthz`・`/app` HTTP 200、synthetic first message、update rollback／interrupted-update recovery、normal uninstall時のdata保持、isolated PurgeまでPASS。`.run`はbuild／verifyのみ。Hosted runner上の限定consumer evidenceであり、実GUI、物理Linux、全suite、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。Artifactsは保持なし。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。

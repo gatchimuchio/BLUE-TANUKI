@@ -5028,3 +5028,36 @@ update中のruntime move失敗を注入して旧installationへrollbackする経
 各install path・synthetic user dataはGitHub hosted runnerのisolated Temp内だけを使用し、runner artifactは保持していない。ローカル資産はdocs差分のみ。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`、stale Windows worktree metadataを保持・未変更。D4-Pocket／MINIDORAのrepo変更なし。
 
 開始時local／`origin/main`／GitHub `main`=`79dfca35c375a659d6840ad6f071ce79a8367006`、local recovery branch／remote backup tag current／previous=`79dfca35c375a659d6840ad6f071ce79a8367006`／`75a4cc6f04b89803ced9a396d457b7f7cd73b982`。runはこのSHAに固定。docs closeoutは成功したmain fast-forwardとしてpushし、終了時local／remote `main`、current／previous recovery pair、保護untracked資産を直接再照合した。Gitのstale worktree metadata整理は本単位では実施していない。
+
+## 2026-11-14 — rev5.0 QE_BUILD / macOS native installed product lifecycle
+
+主語はmacOS x64／arm64のnative DMG・一体型installer、Setup／Launcher、installed Gateway／WebChat入口、update recovery／Uninstallである。目的はmacOS別hosted runnerへ実packageを導入し、通常利用と更新・復旧・保管・削除の既存consumer経路を隔離synthetic状態で接続すること。製品コードは変更せず、既存main成果の実consumerを実行した。
+
+GitHub Actions手動workflow_dispatch run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)はsource SHA=a9e26f7ae427e1973a2b1519d393f9a1446cdb64でsuccess。x64 jobはmacos-15／macOS 15.7.9 build 24G830、arm64 jobはmacos-15／macOS 15.8.2 build 24H232。Linux jobはtarget_os=macosの指定どおりskipped。両jobでworkspace build、native payloadとproduct installerの生成・検証、AppKit DMGの生成・read-only検証、artifact保存、DMG以外の`.app`単体起動・停止、one-file installer起動、installed lifecycle smokeがPASSした。
+
+| architecture | installer archive SHA-256 | Setup command SHA-256 | DMG SHA-256 |
+|---|---|---|---|
+| macOS x64 | eb6e6b08ed2b4989dea1b0b34477d19ab4d82be8638d082b2e03f124963d404c | ddbd93852551d197f22c1cfcd961bcac208f6d37ed6b20ddc8d107751b9b795a | 832c918e9e5ecb6203b05c7f62ff3ad4a70a6c9d185c26ba009c5a8b10030ddc |
+| macOS arm64 | 87b28e891d781358a6a12dbc67eea8bd0842e832478d8fdbdadc4ffa61a1500c | 5dee07ebee4695126f0245fef77aa41107f6abeb836d5ebcb27cd496dca90c4a | 3e577d5bf6ef22cf191d3824df618a161f2a5b11dcac4971a7832ba589a39647 |
+
+Lifecycleではarchive Setup、resident起動／停止、health endpoint、synthetic WebSocket first message、repair、port conflict拒否、approval flow、audit tamper拒否、crash recovery、doctor／restart／safe mode、update failure rollback、interrupted-update recovery、permission-denied拒否を確認した。normal uninstallは隔離DataRoot／ConfigRootとsynthetic user dataを保持し、再導入後のPurgeだけがrunner内synthetic dataを削除した。全step成功し、両jobでmacos_installed_smoke=pass。installer実行時のuser_requires_node_pnpm_git=falseを確認した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| macOS x64／arm64 workspace、payload／installer／native app DMG build・verify | PASS。 |
+| AppKit `.app`をSetupなしで起動・停止、one-file product installerからのSetup | PASS。 |
+| installed Setup／Gateway health／WebChat synthetic first message／repair／approval・audit拒否／crash recovery | PASS。 |
+| update failure rollback／interrupted-update recovery／permission denial／normal uninstall retention／reinstall／isolated Purge | PASS。 |
+| Gatekeeper enabled状態の維持／runner一時領域cleanup | PASS。 |
+| owner Mac実画面操作、owner device QA、host reboot、Keychain・権限UI、署名／公証、physical Mac | NOT_RUN。 |
+| provider credential、実provider、live external action | NOT_RUN。 |
+
+`gui_result=pass`はscriptが`/app`へHTTP GETし200を受け取ったことを指し、実GUI操作を意味しない。app単体の起動・停止とDMG verifierはPASSだが、実Applicationsへの導入、drag install、アプリ画面上の操作を確認していない。doctorはmacOS用verified shell isolation provider不在をwarningとして返し、`shell.exec`はdisabled／fail-closedのまま。これは2 hosted imageにおけるQE_BUILD consumer evidenceに限る。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立のまま。
+
+Actions artifactはx64 ID=14081663717、182,770,111 bytes、ZIP SHA-256=ed00ee86515548f74d3262aaa5e262f4519e837cbfed65e6ccdce91e36b34270、期限2026-11-20 22:32:54 UTC。arm64 ID=14081089954、173,791,815 bytes、ZIP SHA-256=8743e17a54437316979f1b0b7633cc5b56a7ef7f4a905c9c53ff85de0686d44e、期限2026-11-20 22:32:48 UTC。これはrelease公開ではなく7日保持の検証artifactである。
+
+Setup／runtime／synthetic dataはhosted runnerの隔離Tempに限定し、Gatekeeperはenabledのまま不変、isolated_temp_cleanup=pass。ローカル生成packageはなし。protected `.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`を保持・未変更。stale Windows worktree metadataはPermission deniedを回避せず残した。D4-Pocket／MINIDORAのrepo変更なし。
+
+開始時local／`origin/main`／GitHub `main`=a9e26f7ae427e1973a2b1519d393f9a1446cdb64、recovery current／previous=a9e26f7ae427e1973a2b1519d393f9a1446cdb64／79dfca35c375a659d6840ad6f071ce79a8367006。runは開始時main SHAへ固定。開始時に`git fetch origin main`は`.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanup Permission deniedを返したが、read-only `git ls-remote`でremote mainと両tagを直接照合し、local／remote SHAとrecovery refsの一致を確認した。作業開始時はtracked差分なし。closeoutはdocs-only fast-forward pushとしてmainへ反映し、終了時SHA・recovery 2世代をreadback確認する。
+
+次の独立作業もrev5.0 P2全体BUILDを続け、最新sourceからBlue-owned producer→consumer gapを選ぶ。Mobile→D4→BLUEは別repo限定委任待ち、C08.03実provider、OD-03 live作用、P13 owner公開GOは保留する。

@@ -2,7 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux native packaged install・runtime・lifecycle consumer (2026-11-14)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle (2026-11-14)
+
+主語はmacOS x64／arm64の製品DMG／一体型installer、Setup、Launcher、installed Gateway／WebChat入口、更新・復旧・Uninstallである。目的はmacOS別hosted runnerに実packageを導入し、既存の製品入口から通常起動・停止、synthetic仕事、更新回復、データ保持・Purgeまでつなぐこと。製品コードは変更していない。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / macOS native installed product lifecycle, x64 and arm64。
+- **STATUS:** CLOSED（macOS x64／arm64両hosted jobとrun #25がsuccess）。GitHub Actionsの手動 `workflow_dispatch` run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)、source SHA=`a9e26f7ae427e1973a2b1519d393f9a1446cdb64`。
+- **CHECK_SCOPE:** `macos-15` x64 runnerはmacOS 15.7.9／24G830、arm64 runnerはmacOS 15.8.2／24H232。workspace build、native payload／one-file installer／DMG build・verify、DMG artifact保存、`.app`単体起動・停止、one-file installerからのSetup、installed lifecycleを両architectureでPASS。archive SHA-256はx64=`eb6e6b08ed2b4989dea1b0b34477d19ab4d82be8638d082b2e03f124963d404c`、arm64=`87b28e891d781358a6a12dbc67eea8bd0842e832478d8fdbdadc4ffa61a1500c`。Setup command SHA-256はx64=`ddbd93852551d197f22c1cfcd961bcac208f6d37ed6b20ddc8d107751b9b795a`、arm64=`5dee07ebee4695126f0245fef77aa41107f6abeb836d5ebcb27cd496dca90c4a`。DMG SHA-256はx64=`832c918e9e5ecb6203b05c7f62ff3ad4a70a6c9d185c26ba009c5a8b10030ddc`、arm64=`3e577d5bf6ef22cf191d3824df618a161f2a5b11dcac4971a7832ba589a39647`。
+- **LIFECYCLE:** archive Setup、resident起動／停止、health endpoint、`/app` HTTP 200、synthetic WebSocket first message、repair、port conflict拒否、approval flow、audit改ざん拒否、crash recovery、safe mode、update failure rollback、interrupted-update復旧、permission-denied拒否、normal uninstall後の設定・データ保持、再導入、isolated synthetic dataのPurgeが両architectureでPASS。`macos_installed_smoke=pass`。
+- **ARTIFACTS:** x64 ID=`14081663717`、182,770,111 bytes、artifact ZIP SHA-256=`ed00ee86515548f74d3262aaa5e262f4519e837cbfed65e6ccdce91e36b34270`。arm64 ID=`14081089954`、173,791,815 bytes、SHA-256=`8743e17a54437316979f1b0b7633cc5b56a7ef7f4a905c9c53ff85de0686d44e`。両artifactは2026-11-20 22:32 UTCに期限切れ予定。
+- **EVIDENCE_LIMIT:** `gui_result=pass`は `/app` GETのHTTP 200を指し、実画面操作やowner Macでの初回利用を示さない。owner device QA、host reboot、実Applicationsへの導入、Keychain／権限ダイアログ、署名・公証、物理MacはNOT_RUN。診断ではmacOS用shell isolation providerがなく `shell.exec` は無効・fail-closed。provider credential、実provider、live外部作用は不使用。これは2 hosted imageのQE_BUILD consumer evidenceで、製品全体 `SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOには拡張しない。
+- **LOCAL_ASSET_STATUS:** package／install／synthetic dataはrunner専用Temp内のみ。Gatekeeperは有効のまま変化せず、runner一時領域cleanupはPASS。DMG artifactはGitHub上に7日保持される。ローカルpackage出力なし。protected attachmentsとLinux `target/`は保持・未変更。D4-Pocket／MINIDORAのrepo変更なし。
+- **GIT_STATUS:** run sourceと開始時local／`origin/main`／GitHub `main`=`a9e26f7ae427e1973a2b1519d393f9a1446cdb64`、recovery current／previous=`a9e26f7ae427e1973a2b1519d393f9a1446cdb64`／`79dfca35c375a659d6840ad6f071ce79a8367006`。終了時のcloseout push／main／recovery ref readbackは本記録のGit push後に確認する。fetch時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupがPermission deniedとなったため、metadata／ACLを迂回せず残した。直接のremote SHA観測は開始時にlocal HEADと一致。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体BUILDを継続し、次の独立単位で最新sourceからBlue-ownedのproducer→consumer gapを選び直す。Mobile→D4→BLUEの別repo変更、C08.03、OD-03、P13 holdは維持する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Linux native packaged install・runtime・lifecycle consumer (2026-11-14)
 
 主語はBLUE-TANUKI Linux x86_64製品archiveのSetup、Launcher、installed Gateway／Control Center応答、update recovery、Uninstallである。目的は隔離runnerに実packageを導入し、通常起動・停止から更新・復旧・削除まで既存Linux製品consumerを接続すること。
 
