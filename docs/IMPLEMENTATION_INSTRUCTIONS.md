@@ -2,7 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installerのMAX_PATH回復 (G02.01, G02.03)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / release draftの注釈付きtag chain解決 (F05.02)
+
+主語は既存の`github.write release.draft.create`経路と、GitHub上のtag refからcommitまでの参照解決である。目的は、別の注釈付きtagを指すtagも、検証済みcommitを特定したうえで既存の未公開draft作成経路へ通すこと。
+
+新しいresolverは最大16段の注釈付きtag chainを追い、tag SHAの循環、上限超過、不完全・不正な対象、commit以外への終端をfail-closedで停止する。対象版観測と既存L3承認後のreadbackで同じresolverを使い、外側tag refと要求commitの一致を維持する。既存のOperation Plan／L3／Approval／Broker、POST一回、曖昧結果の自動再送なしは変更していない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `git diff --check` / `pnpm docs:check` | PASS。日本語基底の既存移行負債75件の注意を維持。 |
+| release関連test、workspace full build、実GitHub credential/API、外部作用、全F05、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。Linux isolation `target/`を保護するためcore package buildは行っていない。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F05.02 nested annotated tag target resolution。
+- **STATUS:** `CODE_PRESENT`（typecheck済み。nested tag fixture／Gateway processでのconsumer確認は未実施）。F05全体・製品全体は未成立。
+- **NEXT_REQUIRED_CONSUMER:** P2全体施工を続ける。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`で維持する。Android／iOS、5OS、製品全体へ完了を拡張しない。
+- **SAFETY_STATUS:** 不明なtag type・cycle・16段超を拒否。requested commitとの完全一致、既存no-store L3、事前再観測、結果不明時no-retryを維持。実provider・POST・公開releaseなし。
+- **LOCAL_ASSET_STATUS:** 新規永続生成物なし。保護対象attachmentsとLinux isolation `target/`は未変更。
+- **GIT_STATUS:** closeoutでcommit／push／recovery refs readbackを追記する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installerのMAX_PATH回復 (G02.01, G02.03)
 
 主語はWindows x64のIExpress単一exe→自己展開ZIP→製品Setup→installed Gateway→通常Uninstall経路。目的は、Playwright/Chromium同梱物を含む実パッケージがWindowsの従来パス長制限内で展開・導入・起動・停止・削除へ進めるようにすること。これはG02.01の導入consumerとG02.03の通常削除consumerを短時間観測したBUILD_BATCHであり、更新・中断復旧・データ保持を含むG02全域や製品全体の完成ではない。
 

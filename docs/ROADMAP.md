@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / Windows installer MAX_PATH recovery (G02.01, G02.03)
+### 直近完了BUILD_BATCH — QE_BUILD / GitHub release draft annotated tag chain (F05.02)
+
+`github.write release.draft.create` now resolves nested annotated tag objects through a bounded 16-step chain to the exact requested commit. The target inspection and post-create readback share the resolver. Cycles, invalid or non-commit targets, and deeper chains fail closed. Operation Plan, no-store L3 review, the one-POST boundary, and no automatic retry for uncertain results remain unchanged. Core typecheck, `pnpm docs:check`, and `git diff --check` PASS; the 75 existing Japanese-base migration items remain a notice. Tests, workspace build, real GitHub API, external effects, full F05 and product-wide `SYSTEM_SHAPED`／`BUILD_COVERED`, QE_QC／QE_QA are NOT_RUN or not established. This is `CODE_PRESENT`, not runtime evidence. G09.01 remains `BLOCKED_AUTHORITY` pending separate D4 adapter delegation. Details: [current implementation state](IMPLEMENTATION_INSTRUCTIONS.md) and [history](IMPLEMENTATION_HISTORY.md).
+
+### 前段完了BUILD_BATCH — QE_BUILD / Windows installer MAX_PATH recovery (G02.01, G02.03)
 
 IExpressからSetupへ進むWindows実パッケージで、Chromium同梱ファイルの260文字超パスにより自己展開とSetup stage copyが失敗した。自己展開work/extract pathとSetup stage/rollback suffixを短縮し、旧32-hex rollback復旧互換を維持した。focused safe-target test、Windows package build/verify、isolated startup-only install→stub Gateway health/stop→normal uninstall、`validate:packaging`、`docs:check`、`git diff --check`はPASS。これはG02.01/G02.03の限定BUILD consumer確認であり、更新/rollback/user data、GUI、全suite、他OS、実provider、製品全体の成立やQC/QAを示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

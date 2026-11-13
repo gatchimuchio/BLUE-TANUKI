@@ -4806,3 +4806,15 @@ form GETのHTTP応答は、`Content-Disposition: attachment`やPDF等の非テ�
 task-generated artifact／展開診断／隔離smoke root 6パス、合計18,275 files／2,990,810,866 bytesを個別に再生成可能・owner dataなし・未稼働と確認し、Windows標準Recycle Binへ移動した。6元pathの消失とごみ箱readbackを確認。これはowner処分待ちで容量回復として数えない。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`、OneDrive資料、稼働中開発環境は変更していない。
 
 編集前local／`origin/main`／GitHub `main`=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`、ahead/behind=0/0。編集前recovery local branch／remote tag current/previous=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。実装commit=`3f60fef9addc6bd66395988e3b3f27ade6d2076c`とcloseout commit=`3363c8d29950aaf231649fe7909a1ad5a33c3e8e`をGitHub `main`へfast-forward pushした。直後のreadbackはlocal／origin／GitHub=`3363c8d29950aaf231649fe7909a1ad5a33c3e8e`、recovery current/previous=`3363c8d29950aaf231649fe7909a1ad5a33c3e8e`／`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`で一致した。このGIT_STATUS追記を含むdocs-only closeout commitも同じBUILD_BATCHのfast-forwardとしてpushし、recovery currentだけ最終HEADへ更新、previousは開始SHAのまま保持して再確認する。Git commit自体は成功したが、Gitのstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`自動整理はPermission denied。metadata／ACLを迂回・変更せず残した。
+
+## 2026-11-13 — QE_BUILD rev5.0 / GitHub release draft nested annotated tag resolution
+
+主語は既存`github.write release.draft.create` producer／consumerと、GitHub tag refからcommitまでのtarget identityである。目的は、別の注釈付きtagを指す有効なtag refも、正確なrequested commitを確定した場合に限り、既存の未公開draft作成経路へ接続すること。
+
+初回target observationとPOST後のreadbackに共通のbounded resolverを追加した。tag SHAを最大16段追跡し、循環、上限超過、不正SHA、commit／tag以外のtarget type、commit以外の終端を拒否する。outer tag refのSHA／typeと最終commitは既存target observation／review digestへ束縛され、requested commitとの完全一致を維持する。Operation Plan、no-store L3、Approval／Broker、単回POST、結果不明時の自動再送なしは変更なし。
+
+Core typecheck、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の既存移行負債75件は注意として継続。tag chain fixture／Gateway process、test、workspace full buildはNOT_RUN。core package buildはLinux isolation `target/`を保護するため行っていない。実GitHub credential／API／POST、公開・配布なし。新しい永続生成物なし。D4／MINIDORAは未変更。
+
+新nested-chain consumerの状態は`CODE_PRESENT`のみで、実provider／Gateway runtime証拠ではない。F05全体、5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。rev5.0 P2全体施工を継続し、G09.01 D4 Adapter producer→BLUE ingressは別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+
+編集前local／`origin/main`／GitHub `main`=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`、ahead／behind=0/0。編集前recovery branch／remote backup tag current／previous=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`／`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`。Git反映後のSHA、ref readback、protected untracked assetsと作業ツリーの最終状態はcloseoutで記録する。

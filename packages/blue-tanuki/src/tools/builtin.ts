@@ -814,6 +814,50 @@ async function readGitHubRepositoryNetworkIdentity(input: {
     is_fork: isFork, network_root_id: networkRootId };
 }
 
+const GITHUB_ANNOTATED_TAG_CHAIN_MAX_DEPTH = 16;
+
+async function resolveGitHubTagTargetCommit(input: {
+  repository_path: string;
+  target_sha: string;
+  target_type: "commit" | "tag";
+  read_request: NonNullable<GitHubWriteOptions["read_request"]>;
+  max_bytes: number;
+  token: string;
+  signal?: AbortSignal;
+  context: string;
+}): Promise<string> {
+  let targetSha = input.target_sha;
+  let targetType = input.target_type;
+  const visited = new Set<string>();
+  for (let depth = 0; targetType === "tag"; depth += 1) {
+    if (depth >= GITHUB_ANNOTATED_TAG_CHAIN_MAX_DEPTH) {
+      throw new Error(`${input.context} annotated tag chain exceeds the supported depth; mutation_sent=false; status=BUILD_GAP`);
+    }
+    if (visited.has(targetSha)) {
+      throw new Error(`${input.context} annotated tag chain contains a cycle; mutation_sent=false`);
+    }
+    visited.add(targetSha);
+    assertToolExecutionNotCancelled(input.signal, `${input.context} annotated tag inspection`);
+    const response = await input.read_request({
+      path: `${input.repository_path}/git/tags/${targetSha}`,
+      maxBytes: input.max_bytes,
+      token: input.token,
+    }, input.signal);
+    const annotatedTag = requireGitHubJsonRecord(response, input.context + " annotated tag");
+    const target = isRecord(annotatedTag.object) ? annotatedTag.object : null;
+    if (typeof target?.sha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(target.sha) ||
+        (target.type !== "commit" && target.type !== "tag")) {
+      throw new Error(`${input.context} annotated tag target is incomplete or unsupported; mutation_sent=false; status=BUILD_GAP`);
+    }
+    targetSha = target.sha;
+    targetType = target.type;
+  }
+  if (targetType !== "commit") {
+    throw new Error(`${input.context} tag does not resolve to a commit; mutation_sent=false; status=BUILD_GAP`);
+  }
+  return targetSha;
+}
+
 function githubBoolArg(
   args: Record<string, unknown>,
   name: string,
@@ -2283,18 +2327,16 @@ export async function inspectGitHubReleaseDraftCreateTargetVersion(
       (tagRefType !== "commit" && tagRefType !== "tag")) {
     throw new Error("github.write release.draft.create tag target is incomplete or unsupported; mutation_sent=false");
   }
-  let targetCommitSha = tagRefSha;
-  if (tagRefType === "tag") {
-    assertToolExecutionNotCancelled(opts.signal, "github.write release.draft.create annotated tag inspection");
-    const annotatedTagResponse = await readRequest({ path: `${repositoryPath}/git/tags/${tagRefSha}`, maxBytes, token }, opts.signal);
-    const annotatedTag = requireGitHubJsonRecord(annotatedTagResponse, "annotated release draft tag");
-    const annotatedTarget = isRecord(annotatedTag.object) ? annotatedTag.object : null;
-    if (annotatedTarget?.type !== "commit" || typeof annotatedTarget.sha !== "string" ||
-        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(annotatedTarget.sha)) {
-      throw new Error("github.write release.draft.create supports only tags that directly identify a commit; mutation_sent=false; status=BUILD_GAP");
-    }
-    targetCommitSha = annotatedTarget.sha;
-  }
+  const targetCommitSha = await resolveGitHubTagTargetCommit({
+    repository_path: repositoryPath,
+    target_sha: tagRefSha,
+    target_type: tagRefType,
+    read_request: readRequest,
+    max_bytes: maxBytes,
+    token,
+    signal: opts.signal,
+    context: "github.write release.draft.create",
+  });
   if (targetCommitSha !== requestedCommit) {
     throw new Error("github.write release.draft.create requested commit does not match the exact tag target; mutation_sent=false; outcome=stale");
   }
@@ -2482,16 +2524,16 @@ async function invokeGitHubReleaseDraftCreate(args: Record<string, unknown>, opt
     if (tagObject?.sha !== expected.tag_ref_sha || tagObject?.type !== expected.tag_ref_type) {
       throw new Error("tag reference changed");
     }
-    let targetCommitSha = tagObject.sha;
-    if (tagObject.type === "tag") {
-      const annotatedResponse = await readRequest({ path: `${repositoryPath}/git/tags/${tagObject.sha}`, maxBytes, token }, opts.signal);
-      const annotated = requireGitHubJsonRecord(annotatedResponse, "draft release annotated tag readback");
-      const annotatedObject = isRecord(annotated.object) ? annotated.object : null;
-      if (annotatedObject?.type !== "commit" || typeof annotatedObject.sha !== "string") {
-        throw new Error("annotated tag no longer resolves directly to a commit");
-      }
-      targetCommitSha = annotatedObject.sha;
-    }
+    const targetCommitSha = await resolveGitHubTagTargetCommit({
+      repository_path: repositoryPath,
+      target_sha: expected.tag_ref_sha,
+      target_type: expected.tag_ref_type,
+      read_request: readRequest,
+      max_bytes: maxBytes,
+      token,
+      signal: opts.signal,
+      context: "draft release readback",
+    });
     if (targetCommitSha !== expected.target_commit_sha) throw new Error("tag target commit changed");
 
     const releasePath = `${repositoryPath}/releases/tags/${encodeURIComponent(expected.tag_name)}`;
