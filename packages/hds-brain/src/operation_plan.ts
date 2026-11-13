@@ -33,6 +33,7 @@ import {
   githubIssueCreateRequestPayloadDigest,
   githubIssueUpdateRequestPayloadDigest,
   githubIssueCloseRequestPayloadDigest,
+  githubIssueReopenRequestPayloadDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubPullRequestCommentCreateRequestPayloadDigest,
   githubPullRequestCreateRequestPayloadDigest,
@@ -244,7 +245,7 @@ export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v6";
     readonly operation: "github.write";
-    readonly operation_name: "issue.create" | "issue.update" | "issue.close" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create";
+    readonly operation_name: "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create";
     readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
     readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
     readonly http_status: number | null;
@@ -1140,6 +1141,12 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
         !allowedKeys(["operation", "owner", "repo", "number"])) return undefined;
     return githubIssueCloseRequestPayloadDigest({ owner, repo, issue_number: number });
   }
+  if (operation === "issue.reopen") {
+    const number = parameters.number;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
+        !allowedKeys(["operation", "owner", "repo", "number"])) return undefined;
+    return githubIssueReopenRequestPayloadDigest({ owner, repo, issue_number: number });
+  }
   if (operation === "issue.comment.create" || operation === "pr.comment.create") {
     const number = parameters.number;
     if (!body || typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
@@ -1259,6 +1266,8 @@ function githubWriteResultMatches(
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
       : parameters.operation === "issue.close" && typeof number === "number"
         ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : parameters.operation === "issue.reopen" && typeof number === "number"
+        ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
       : (parameters.operation === "issue.comment.create" || parameters.operation === "pr.comment.create") &&
           typeof number === "number"
         ? parameters.operation === "pr.comment.create" && parameters.comment_kind === "pull_request_review_inline"
@@ -1309,6 +1318,11 @@ function githubWriteResultMatches(
     return Object.keys(result).sort().join(",") === "id,locked,number,state" &&
       Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.number === parameters.number &&
       result.state === "closed" && result.locked === false;
+  }
+  if (parameters.operation === "issue.reopen") {
+    return Object.keys(result).sort().join(",") === "id,locked,number,state" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.number === parameters.number &&
+      result.state === "open" && result.locked === false;
   }
   if (parameters.operation === "issue.comment.create" || parameters.operation === "pr.comment.create") {
     return Object.keys(result).join(",") === "id" && Number.isSafeInteger(result.id) && (result.id as number) > 0;
@@ -5377,7 +5391,7 @@ export class OperationPlanLedger {
         : binding.status === "provider_rejected" ? "provider_rejected" : null;
       if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
           !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
-          !["issue.create", "issue.update", "issue.close", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
+          !["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
           committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
           committedObservation.record_type !== "github_write_outcome_observation" ||
           committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
@@ -5421,7 +5435,7 @@ export class OperationPlanLedger {
         memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
         observed_at_ms: binding.result_observed_at_ms,
         operation: "github.write",
-        operation_name: operationName as "issue.create" | "issue.update" | "issue.close" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create",
+        operation_name: operationName as "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.comment.create" | "code.push" | "release.draft.create",
         status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
         mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
         provider_result_digest: summary?.provider_result_digest ?? null,

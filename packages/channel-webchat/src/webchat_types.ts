@@ -936,6 +936,33 @@ export interface WebChatGitHubIssueCloseContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubIssueReopenContentReview {
+  kind: "github_issue_reopen";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.issue.reopen";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  issue_id: number;
+  issue_number: number;
+  issue_state: "closed";
+  issue_locked: false;
+  issue_updated_at: string;
+  issue_title: string;
+  requested_state: "open";
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubIssueCommentCreateContentReview {
   kind: "github_issue_comment_create";
   command_id: string;
@@ -1112,7 +1139,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |
   WebChatGoogleDrivePublicLinkCreateContentReview |
   WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview |
-  WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCloseContentReview | WebChatGitHubIssueCommentCreateContentReview |
+  WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCloseContentReview | WebChatGitHubIssueReopenContentReview | WebChatGitHubIssueCommentCreateContentReview |
   WebChatGitHubPullRequestCommentCreateContentReview |
   WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
   WebChatGitHubReleaseDraftCreateContentReview;

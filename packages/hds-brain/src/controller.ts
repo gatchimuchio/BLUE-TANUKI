@@ -61,6 +61,8 @@ import {
   githubIssueUpdateRequestPayloadDigest,
   githubIssueCloseTargetIdentityDigest,
   githubIssueCloseRequestPayloadDigest,
+  githubIssueReopenTargetIdentityDigest,
+  githubIssueReopenRequestPayloadDigest,
   githubIssueCommentCreateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubPullRequestCommentCreateTargetIdentityDigest,
@@ -3953,7 +3955,7 @@ ${planControl.question}`,
       const planBindingDigest = operation_plan_binding_digest;
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
-          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.comment.create" &&
+          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.comment.create" &&
             operation !== "pr.create" && operation !== "pr.comment.create" && operation !== "code.push" &&
             operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
@@ -4016,6 +4018,17 @@ ${planControl.question}`,
         }
         requestPayloadDigest = githubIssueCloseRequestPayloadDigest({ owner, repo, issue_number: issueNumber });
         targetIdentityDigest = githubIssueCloseTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
+          issue_number: observation.issue_number });
+      } else if (operation === "issue.reopen") {
+        const issueNumber = positiveNumber("number");
+        if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "max_bytes"].includes(key)) ||
+            observation.operation !== "issue.reopen" || observation.issue_number !== issueNumber ||
+            observation.issue_state !== "closed" || observation.issue_locked) {
+          throw new Error("HDS github.write issue.reopen target is not the exact closed, unlocked issue");
+        }
+        requestPayloadDigest = githubIssueReopenRequestPayloadDigest({ owner, repo, issue_number: issueNumber });
+        targetIdentityDigest = githubIssueReopenTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
           issue_number: observation.issue_number });
       } else if (operation === "issue.comment.create" || operation === "pr.comment.create") {

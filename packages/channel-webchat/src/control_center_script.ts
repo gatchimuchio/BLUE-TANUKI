@@ -6913,9 +6913,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub issueの変更前後と影響を再確認";
           return;
         }
-        if (review.kind === "github_issue_close") {
+        if (review.kind === "github_issue_close" || review.kind === "github_issue_reopen") {
+          const isReopen = review.kind === "github_issue_reopen";
+          const expectedOperation = isReopen ? "github.write.issue.reopen" : "github.write.issue.close";
+          const expectedCurrentState = isReopen ? "closed" : "open";
+          const expectedRequestedState = isReopen ? "open" : "closed";
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
-          if (review.command_id !== commandId || review.operation !== "github.write.issue.close" ||
+          if (review.command_id !== commandId || review.operation !== expectedOperation ||
               review.used_for_authority !== false || review.may_execute !== false ||
               review.provider_observation_is_atomic !== false ||
               review.notification_effect !== "github_api_may_trigger_notifications" ||
@@ -6930,14 +6934,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               typeof review.canonical_full_name !== "string" ||
               review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
               (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
-              review.issue_state !== "open" || review.issue_locked !== false || review.requested_state !== "closed" ||
+              review.issue_state !== expectedCurrentState || review.issue_locked !== false || review.requested_state !== expectedRequestedState ||
               typeof review.issue_updated_at !== "string" || !Number.isFinite(Date.parse(review.issue_updated_at)) ||
               typeof review.issue_title !== "string" || review.issue_title.length === 0 || review.issue_title.length > 65536) {
-            throw new Error("GitHub Issueのopen状態とclose対象がこの承認要求に結び付いていません");
+            throw new Error("GitHub Issueの状態変更対象がこの承認要求に結び付いていません");
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "GitHub Issueをcloseする外部作用";
+          heading.textContent = isReopen ? "GitHub Issueをreopenする外部作用" : "GitHub Issueをcloseする外部作用";
           view.appendChild(heading);
           [
             ["操作", review.operation],
@@ -6945,7 +6949,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["Repository ID", String(review.repository_id)],
             ["可視性", review.repository_visibility === "public" ? "Public" : "Private"],
             ["Issue", "#" + String(review.issue_number) + "（ID " + String(review.issue_id) + "）"],
-            ["現在の状態 → 変更後", "open → closed"],
+            ["現在の状態 → 変更後", expectedCurrentState + " → " + expectedRequestedState],
             ["ロック", "なし"],
             ["観測時刻", review.issue_updated_at],
             ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
@@ -6963,7 +6967,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(title);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "対象は表示したopen・未ロックIssueだけです。観測とPATCHは非原子的です。承認後にRepositoryとIssueを再読取し、識別子・状態・ロック・更新時刻・タイトルが変わっていれば送信を止めます。応答が不明なら自動再送せず、GitHubを確認してOwnerが次の判断を行います。";
+          note.textContent = "対象は表示した" + expectedCurrentState + "・未ロックIssueだけです。観測とPATCHは非原子的です。承認後にRepositoryとIssueを再読取し、識別子・状態・ロック・更新時刻・タイトルが変わっていれば送信を止めます。応答が不明なら自動再送せず、GitHubを確認してOwnerが次の判断を行います。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
@@ -6971,7 +6975,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(digests);
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
-          button.textContent = "GitHub Issueをcloseする対象と影響を確認";
+          button.textContent = isReopen ? "GitHub Issueをreopenする対象と影響を確認" : "GitHub Issueをcloseする対象と影響を確認";
           return;
         }
         if (review.kind === "github_issue_comment_create") {
