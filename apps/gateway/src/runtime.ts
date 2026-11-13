@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import {
   FailureMemoryStore,
@@ -355,7 +355,8 @@ async function runCliWithExecutionStore(
       gatewayLog.info("inbound", {
         id: inbound.id,
         channel: inbound.channel,
-        content: inbound.content,
+        content_sha256: createHash("sha256").update(inbound.content, "utf8").digest("hex"),
+        content_bytes: Buffer.byteLength(inbound.content, "utf8"),
       });
     }
 
