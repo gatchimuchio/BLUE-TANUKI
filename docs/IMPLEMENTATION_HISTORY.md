@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2)
+
+WebChatのD4 Runtime専用認証routeへ`POST /runtime/intent/cancel`を追加した。入力は登録runtime・session・submission IDだけとし、private submission storeからrequest IDを得る。GatewayはD4 Runtime owner identity digest、WebChat channel digest、同じrequest IDのOperation Plan binding、およびactive execution registryのcommandを一意照合してから既存AbortSignalを送る。実行済み、binding欠落／曖昧、異session、未登録submissionは通さず、caller指定command ID経路はない。responseは`202`受付、signal abort、worker観測状態を区別し、Executor settled／外部処理停止を主張しない。依頼本文とcommand IDを返さず、監査のtoken kindは`d4_runtime`を維持する。D4アプリ側consumerとD4 Pocket repoは変更していない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| TypeScript project-reference build／`git diff --check`／`pnpm docs:check` | PASS。 |
+| WebChat cancellation endpoint対象試験 | 1件PASS（専用Bearer、same-session lookup、非権威応答、本文／command ID非漏えい、inactive拒否）。 |
+| Gateway projection／active registry／cancellation ledger試験 | 18件PASS。 |
+| WebChat `webchat.test.ts`全135件 | 132件PASS／3件FAIL。3件は今回未変更のControl Center recovery scope helper／HTML fixture期待の不整合（null `.length`、期待文欠落、test DOM element未定義）。 |
+| 実D4アプリ／実Gateway end-to-end、実provider、実外部作用、全suite／OS、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+source-level `CODE_PRESENT`のBlue側producerであり、D4 consumerや製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。implementation commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpushし、remote `main` readback一致を確認。実装反映後のrecovery current／previous=`2fdc70167b4844625ce4e73407f19c29b5504170`／`171b04d8f6b1144ff78a6ba67bc3a5437ba52901`をlocal branch／remote tagでCAS更新した。workspace ignored `dist/` 14 directories／1,097 files／13,414,121 bytesを保持。test temporary rootsはtestが除去。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`を変更・削除せず保持。commitのworktree pruneでPermission deniedが出た古いWindows metadata／ACLは触らず保留。
+
 ## 2026-11-14 — rev5.0 GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
 
 `github.write issue.reopen`を既存close／本文更新と独立した操作として追加した。target observationはclosed・未ロック・非PRの正確なIssueに限り、operation固有のtarget identity／open request payload digestを使う。HDS Operation Planが両digestと対象番号を検証し、Executorはcommand／planに結び付いたobservationを承認時・review時に照合する。GatewayはL3 reviewの生成・currentness・結果receiptを既存経路へ接続する。Control CenterはRepository identity／visibility、Issue ID／number、closed→open、title、更新時刻、通知可能性をno-store reviewで表示する。

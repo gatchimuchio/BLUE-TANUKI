@@ -2,19 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2, 2026-11-14)
 
-主語はBLUE-TANUKIの`github.write`、HDS Operation Plan、Approval Gate、Gateway/Brokerである。目的は、誤ってcloseされたIssueを明示的な別操作で戻せるようにし、閉じた一件を厳密に再観測してから、ownerのplan-bound L3確認・単回作用・結果のJ/M帰還へ接続すること。これはP2全体施工中の一作用であり、製品全体完成、QC／QA、D4 Pocket、実credential、GitHubへの実書込み、公開／出荷判断を成立させない。
+主語はBLUE-TANUKI WebChat/GatewayのD4 Runtime ingress、private submission store、HDS Operation Plan、active execution registryである。目的はD4 Runtimeが自sessionの受付済み依頼に限り、実行中Executorへ中止signalを要求できるBlue側producerを成立させること。専用Bearer・登録runtime・session-scoped submissionから内部request IDを得て、D4 Runtime owner digest／WebChat channel digest／plan binding／現在のactive commandを一意照合する。callerからrequest IDやcommand IDは受けず、依頼本文・command ID・結果本文を返さない。これはP2全体施工中の一接続であり、D4アプリ側consumer、製品完成、QC／QA、公開・出荷判断を成立させない。
 
-開始時の現行HEADは`0b70cad6e1ea26d500e9454e69d34476199d8617`。local `main`、`origin/main`、GitHub `main`は一致し、ahead/behind=0/0。recovery local branch／remote tag current／previousは`0b70cad6e1ea26d500e9454e69d34476199d8617`／`0f022fbee102238605dabb207d09e5058c1e701a`。main worktreeのみ。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`の保護対象は維持する。
+開始HEADは`171b04d8f6b1144ff78a6ba67bc3a5437ba52901`。開始時のlocal `main`、`origin/main`、GitHub `main`と二世代復旧参照は一致し、worktreeはmainのみ。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`を変更・削除せず保持した。
 
-- **UNIT_ID:** F05 follow-up / exact GitHub Issue reopen as a separate plan-bound operation.
-- **STATUS:** CLOSED（source-level `CODE_PRESENT`）。専用target-version／identity・payload digest、HDS plan binding、no-store L3 review、Gateway承認／review currentness、Executor/Broker単回PATCH・結果照合、既存J/M保存projectionまで接続。
-- **SAFETY_STATUS:** allowlist内のexact repositoryにあるclosed・未ロック・非PR Issue一件だけを対象とする。owner reviewはclosed→open、Repository／Issue identity、title、時刻、通知可能性を表示し、承認後とPATCH直前に同一対象を再観測する。結果不明時は自動再送しない。実GitHub書込み・実credentialなし。
-- **CHECK_SCOPE:** `node node_modules/typescript/bin/tsc -b --pretty false` PASS（workspace TypeScript project references）。`git diff --check` PASS。test suite、package/native build、Gateway process／合成API、外部provider／credential／作用はNOT_RUN。
-- **LOCAL_ASSET_STATUS:** TypeScript project buildでworkspace ignored `dist/` 14 directories／1,097 files／13,396,283 bytesを生成・保持。保護untracked添付領域とLinux isolation `target/`は編集・削除せず保持。新規fixture／Temp assetなし。
-- **GIT_STATUS:** 開始HEAD=`0b70cad6e1ea26d500e9454e69d34476199d8617`、開始時local／origin／GitHub main一致、ahead/behind=0/0、開始recovery current／previous=`0b70cad6e1ea26d500e9454e69d34476199d8617`／`0f022fbee102238605dabb207d09e5058c1e701a`。実装commit=`6a07eed1d655874f3e1a5b265a5de9fdc1c71a7e`をGitHub `main`へpushし、remote `main` readbackは同SHA。続けて本closeout docs commitを`main`へpushする。作業終端ではlocal／origin／GitHub `main`を一致させ、local／remote recovery currentをcloseout HEAD、previousを実装commitにして二世代をreadback確認する。古いworktree metadataのpruneはPermission deniedで止まり、metadata／ACLは変更せず保留。
-- **NEXT_REQUIRED_CONSUMER:** rev5.0のP2全体施工を続け、最新sourceから次の実consumer gapを選ぶ。D4 Pocket producer／Android・iOS ingressは別repo限定委任待ちを維持する。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
+- **UNIT_ID:** D4 Runtime same-session intent cancellation ingress / P2 QE_BUILD.
+- **STATUS:** CLOSED（Blue側source-level `CODE_PRESENT`）。`POST /runtime/intent/cancel`を受付・Gatewayへ接続し、一意に結び付いた未settled commandへ既存AbortSignalを送る。Settled、未登録、別session、plan／binding欠落・曖昧は拒否する。D4アプリ側からの呼出し・D4 Pocket repo変更は未実施。
+- **SAFETY_STATUS:** `202`は中止要求受付とExecutor signal abortだけを示し、Executor終了・worker停止・外部処理停止を示さない。settlement監査に実際の`d4_runtime` token種別を保持する。実D4／実provider／外部作用なし。
+- **CHECK_SCOPE:** `node node_modules/typescript/bin/tsc -b --pretty false`、`git diff --check`、`pnpm docs:check` PASS。WebChat cancellation endpoint対象1 test PASS、Gateway binding／registry／監査store対象18 tests PASS。WebChat `webchat.test.ts`全135件は132 PASS／3 FAIL。失敗は今回未変更のControl Center recovery scope DOM fixtureが原因（null length、HTML期待文不一致、未定義DOM value）。全workspace test suite、実Gateway＋実D4 client、全5OS、QE_QC／QE_QAはNOT_RUN／未成立。
+- **LOCAL_ASSET_STATUS:** TypeScript build後のignored workspace `dist/` 14 directories／1,097 files／13,414,121 bytesを稼働中再生成物として保持。test fixtureは各testで除去済み。添付領域およびLinux isolation `target/`は保護対象として保持。
+- **GIT_STATUS:** implementation commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpush済み。closeout docs commitを続けて`main`へpushし、終端local／origin／GitHub `main`一致と、recovery current＝closeout HEAD／previous=`2fdc70167b4844625ce4e73407f19c29b5504170`を再照合する。旧Windows worktree metadata pruneはcommit時にPermission denied、metadata／ACLを変更せず保留。
+- **NEXT_REQUIRED_CONSUMER:** D4アプリproducer・Desktop Broker接続・切断後回復は未接続で、別repoの限定委任境界を維持する。rev5.0 P2全体施工を継続し、次単位開始時に⓪から現行指示とsourceを読み直して次consumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up, 2026-11-14)
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05, 2026-11-14)
 
