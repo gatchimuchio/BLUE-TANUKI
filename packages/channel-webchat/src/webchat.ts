@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import {
@@ -107,6 +107,60 @@ const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
 const MAX_OWNER_TASK_JSON_BYTES = Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4 + 256 * 1024;
 const MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4 + 256 * 1024;
+const CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS = 30_000;
+const CONTROL_CENTER_LAUNCH_HANDOFF_CAP = 32;
+
+interface ControlCenterLaunchHandoff {
+  readonly expires_at: number;
+  readonly tokens: {
+    readonly webchat: string;
+    readonly resume?: string;
+    readonly owner?: string;
+    readonly settings?: string;
+    readonly maintenance?: string;
+  };
+}
+
+function isLoopbackClientAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+function loopbackRequestOrigin(req: IncomingMessage, requireOrigin: boolean): boolean {
+  const host = req.headers.host;
+  if (typeof host !== "string" || !host || host.length > 255) return false;
+  let hostUrl: URL;
+  try {
+    hostUrl = new URL(`http://${host}`);
+  } catch {
+    return false;
+  }
+  const hostname = hostUrl.hostname.toLowerCase();
+  if (hostUrl.username || hostUrl.password || hostUrl.pathname !== "/" || hostUrl.search || hostUrl.hash ||
+      !["127.0.0.1", "localhost", "[::1]"].includes(hostname)) return false;
+  const effectivePort = hostUrl.port ? Number(hostUrl.port) : 80;
+  if (effectivePort !== (req.socket.localPort ?? effectivePort)) return false;
+
+  const origin = req.headers.origin;
+  if (origin === undefined) return !requireOrigin;
+  if (typeof origin !== "string") return false;
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.origin === hostUrl.origin && originUrl.username === "" && originUrl.password === "";
+  } catch {
+    return false;
+  }
+}
+
+function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    pragma: "no-cache",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  });
+  res.end(JSON.stringify(body));
+}
 
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
@@ -449,6 +503,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   private readonly ticketTtlMs: number;
   private readonly resumeApprovalTokenStore: ResumeApprovalTokenStore | null;
   private readonly resumeApprovalTokenTtlMs: number;
+  private readonly controlCenterLaunchHandoffs = new Map<string, ControlCenterLaunchHandoff>();
   private readonly buckets: {
     inbound: TokenBucket | null;
     resume: TokenBucket | null;
@@ -856,6 +911,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         "cache-control": "no-store",
       });
       res.end(renderControlCenterHtml());
+      return;
+    }
+
+    if (url.pathname === "/control-center/launch-handoff") {
+      await this.handleControlCenterLaunchHandoff(req, res);
+      return;
+    }
+    if (url.pathname === "/control-center/launch-handoff/exchange") {
+      await this.handleControlCenterLaunchHandoffExchange(req, res);
       return;
     }
 
@@ -2025,6 +2089,138 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.destroy();
     });
     stream.pipe(res);
+  }
+
+  private pruneControlCenterLaunchHandoffs(now = Date.now()): void {
+    for (const [digest, handoff] of this.controlCenterLaunchHandoffs) {
+      if (handoff.expires_at <= now) this.controlCenterLaunchHandoffs.delete(digest);
+    }
+  }
+
+  private checkLaunchHandoffTokenHeader(
+    req: IncomingMessage,
+    header: string,
+    expected: string | undefined,
+  ): boolean {
+    if (!expected) return true;
+    const value = req.headers[header];
+    return typeof value === "string" && bearerTokenMatches(value, expected);
+  }
+
+  private async handleControlCenterLaunchHandoff(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (req.method !== "POST") {
+      sendLaunchHandoffJson(res, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (!isLoopbackClientAddress(req.socket.remoteAddress) || !loopbackRequestOrigin(req, false)) {
+      sendLaunchHandoffJson(res, 403, { error: "local_launcher_required" });
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      sendLaunchHandoffJson(res, 415, { error: "application_json_required" });
+      return;
+    }
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 1024);
+    } catch {
+      sendLaunchHandoffJson(res, 413, { error: "invalid_launch_handoff_request" });
+      return;
+    }
+    if (!body || Object.keys(body).length !== 0) {
+      sendLaunchHandoffJson(res, 400, { error: "invalid_launch_handoff_request" });
+      return;
+    }
+
+    const authenticated = this.checkAuth(req, "inbound") &&
+      this.checkLaunchHandoffTokenHeader(req, "x-blue-tanuki-launch-resume", this.opts.resume_token) &&
+      this.checkLaunchHandoffTokenHeader(req, "x-blue-tanuki-launch-owner", this.opts.owner_token) &&
+      this.checkLaunchHandoffTokenHeader(req, "x-blue-tanuki-launch-settings", this.opts.settings?.token) &&
+      this.checkLaunchHandoffTokenHeader(req, "x-blue-tanuki-launch-maintenance", this.opts.maintenance_token);
+    if (!authenticated) {
+      sendLaunchHandoffJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const now = Date.now();
+    this.pruneControlCenterLaunchHandoffs(now);
+    if (this.controlCenterLaunchHandoffs.size >= CONTROL_CENTER_LAUNCH_HANDOFF_CAP) {
+      sendLaunchHandoffJson(res, 503, { error: "launch_handoff_capacity_reached" });
+      return;
+    }
+    const ticket = randomBytes(32).toString("base64url");
+    const ticketDigest = createHash("sha256").update(ticket, "utf8").digest("hex");
+    this.controlCenterLaunchHandoffs.set(ticketDigest, {
+      expires_at: now + CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS,
+      tokens: {
+        webchat: this.opts.token,
+        ...(this.opts.resume_token ? { resume: this.opts.resume_token } : {}),
+        ...(this.opts.owner_token ? { owner: this.opts.owner_token } : {}),
+        ...(this.opts.settings?.token ? { settings: this.opts.settings.token } : {}),
+        ...(this.opts.maintenance_token ? { maintenance: this.opts.maintenance_token } : {}),
+      },
+    });
+    sendLaunchHandoffJson(res, 200, {
+      ticket,
+      expires_in_ms: CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS,
+      single_use: true,
+    });
+  }
+
+  private async handleControlCenterLaunchHandoffExchange(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (req.method !== "POST") {
+      sendLaunchHandoffJson(res, 405, { error: "method_not_allowed" });
+      return;
+    }
+    const fetchSite = req.headers["sec-fetch-site"];
+    if (!isLoopbackClientAddress(req.socket.remoteAddress) || !loopbackRequestOrigin(req, true) ||
+        (fetchSite !== undefined && fetchSite !== "same-origin")) {
+      sendLaunchHandoffJson(res, 403, { error: "same_origin_local_control_center_required" });
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      sendLaunchHandoffJson(res, 415, { error: "application_json_required" });
+      return;
+    }
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 1024);
+    } catch {
+      sendLaunchHandoffJson(res, 413, { error: "invalid_launch_handoff_ticket" });
+      return;
+    }
+    const ticket = body?.ticket;
+    if (!body || Object.keys(body).length !== 1 || typeof ticket !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(ticket)) {
+      sendLaunchHandoffJson(res, 400, { error: "invalid_launch_handoff_ticket" });
+      return;
+    }
+
+    const now = Date.now();
+    this.pruneControlCenterLaunchHandoffs(now);
+    const ticketDigest = createHash("sha256").update(ticket, "utf8").digest("hex");
+    const handoff = this.controlCenterLaunchHandoffs.get(ticketDigest);
+    this.controlCenterLaunchHandoffs.delete(ticketDigest);
+    if (!handoff || handoff.expires_at <= now) {
+      sendLaunchHandoffJson(res, 401, { error: "launch_handoff_expired_or_consumed" });
+      return;
+    }
+
+    sendLaunchHandoffJson(res, 200, {
+      tokens: {
+        webchat: handoff.tokens.webchat,
+        ...(handoff.tokens.resume ? { resume: handoff.tokens.resume } : {}),
+        ...(handoff.tokens.owner ? { owner: handoff.tokens.owner } : {}),
+        ...(handoff.tokens.settings ? { settings: handoff.tokens.settings } : {}),
+        ...(handoff.tokens.maintenance ? { maintenance: handoff.tokens.maintenance } : {}),
+      },
+    });
   }
 
   private checkAuth(

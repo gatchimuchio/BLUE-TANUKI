@@ -70,6 +70,90 @@ webchat_host() {
   fi
 }
 
+control_center_loopback_host() {
+  case "$(webchat_host | tr '[:upper:]' '[:lower:]')" in
+    127.0.0.1|localhost|::1) webchat_host | tr '[:upper:]' '[:lower:]' ;;
+    0.0.0.0|::|'') printf '127.0.0.1\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+control_center_open_url() {
+  local_host=$(control_center_loopback_host 2>/dev/null || true)
+  if [ -z "$local_host" ]; then
+    printf '%s\n' "$CONTROL_CENTER_URL"
+    return
+  fi
+  case "$local_host" in
+    ::1) url_host='[::1]' ;;
+    *) url_host=$local_host ;;
+  esac
+  printf 'http://%s:%s/app\n' "$url_host" "$(webchat_port)"
+}
+
+issue_control_center_launch_ticket() {
+  loopback_host=$1
+  webchat_token=$(read_env_value WEBCHAT_TOKEN)
+  [ -n "$webchat_token" ] || return 1
+  resume_token=$(read_env_value WEBCHAT_RESUME_TOKEN)
+  owner_token=$(read_env_value BLUE_TANUKI_OWNER_TOKEN)
+  settings_token=$(read_env_value BLUE_TANUKI_SETTINGS_TOKEN)
+  maintenance_token=$(read_env_value BLUE_TANUKI_MAINTENANCE_TOKEN)
+  ticket=$(BT_LAUNCH_HOST="$loopback_host" \
+    BT_LAUNCH_PORT="$(webchat_port)" \
+    BT_LAUNCH_WEBCHAT_TOKEN="$webchat_token" \
+    BT_LAUNCH_RESUME_TOKEN="$resume_token" \
+    BT_LAUNCH_OWNER_TOKEN="$owner_token" \
+    BT_LAUNCH_SETTINGS_TOKEN="$settings_token" \
+    BT_LAUNCH_MAINTENANCE_TOKEN="$maintenance_token" \
+    "$NODE_EXE" -e '
+const http = require("node:http");
+const headers = {
+  "content-type": "application/json",
+  "content-length": "2",
+  authorization: "Bearer " + process.env.BT_LAUNCH_WEBCHAT_TOKEN,
+};
+for (const [environmentName, headerName] of [
+  ["BT_LAUNCH_RESUME_TOKEN", "x-blue-tanuki-launch-resume"],
+  ["BT_LAUNCH_OWNER_TOKEN", "x-blue-tanuki-launch-owner"],
+  ["BT_LAUNCH_SETTINGS_TOKEN", "x-blue-tanuki-launch-settings"],
+  ["BT_LAUNCH_MAINTENANCE_TOKEN", "x-blue-tanuki-launch-maintenance"],
+]) {
+  const token = process.env[environmentName];
+  if (token) headers[headerName] = token;
+}
+const request = http.request({
+  hostname: process.env.BT_LAUNCH_HOST,
+  port: Number(process.env.BT_LAUNCH_PORT),
+  path: "/control-center/launch-handoff",
+  method: "POST",
+  headers,
+  timeout: 4000,
+}, (response) => {
+  let text = "";
+  response.setEncoding("utf8");
+  response.on("data", (chunk) => { text += chunk; if (text.length > 4096) request.destroy(); });
+  response.on("end", () => {
+    try {
+      const body = JSON.parse(text);
+      if (response.statusCode === 200 && /^[A-Za-z0-9_-]{43}$/.test(body.ticket || "")) {
+        process.stdout.write(body.ticket);
+        return;
+      }
+    } catch {}
+    process.exitCode = 1;
+  });
+});
+request.on("error", () => { process.exitCode = 1; });
+request.end("{}");
+') || return 1
+  case "$ticket" in
+    ''|*[!A-Za-z0-9_-]*) return 1 ;;
+  esac
+  [ "${#ticket}" -eq 43 ] || return 1
+  printf '%s\n' "$ticket"
+}
+
 read_pid() {
   read_pid_record "$PID_FILE" resident
 }
@@ -417,17 +501,27 @@ open_control_center() {
     echo "next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh doctor' and review the logs before retrying." >&2
     return 2
   fi
+  control_center_url=$(control_center_open_url)
+  launch_host=$(control_center_loopback_host 2>/dev/null || true)
+  if [ -n "$launch_host" ]; then
+    launch_ticket=$(issue_control_center_launch_ticket "$launch_host" 2>/dev/null || true)
+    if [ -n "$launch_ticket" ]; then
+      control_center_url="$control_center_url#bt-launch-handoff=$launch_ticket"
+    else
+      echo "launch_handoff=unavailable; no credential was added to the browser URL" >&2
+    fi
+  fi
   if command -v open >/dev/null 2>&1; then
-    (open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true) &
-    echo "open_requested=$CONTROL_CENTER_URL"
+    (open "$control_center_url" >/dev/null 2>&1 || true) &
+    echo "open_requested=$(control_center_open_url)"
     return
   fi
   if command -v xdg-open >/dev/null 2>&1; then
-    (xdg-open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true) &
-    echo "open_requested=$CONTROL_CENTER_URL"
+    (xdg-open "$control_center_url" >/dev/null 2>&1 || true) &
+    echo "open_requested=$(control_center_open_url)"
     return
   fi
-  echo "open_manually=$CONTROL_CENTER_URL"
+  echo "open_manually=$(control_center_open_url)"
 }
 
 resident_start() {

@@ -6,6 +6,17 @@ const OPERATION_ADAPTER_REGISTRY_JSON = JSON.stringify(OPERATION_ADAPTER_REGISTR
 
 export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
       const OPERATION_ADAPTER_REGISTRY = ${OPERATION_ADAPTER_REGISTRY_JSON};
+      const controlCenterLaunchTicket = (() => {
+        try {
+          const fragment = new URLSearchParams(window.location.hash.slice(1));
+          if (!fragment.has("bt-launch-handoff")) return "";
+          const ticket = fragment.get("bt-launch-handoff") || "";
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          return ticket;
+        } catch {
+          return "";
+        }
+      })();
       const MASCOT_PREFS_STORAGE_KEY = "bt.mascotPrefs";
       const DEFAULT_MASCOT_PREFS = {
         enabled: true,
@@ -1978,6 +1989,72 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
         syncMascotSettingsInputs();
+      }
+
+      async function consumeControlCenterLaunchHandoff() {
+        if (!controlCenterLaunchTicket) return;
+        try {
+          const response = await fetch("/control-center/launch-handoff/exchange", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            cache: "no-store",
+            credentials: "same-origin",
+            body: JSON.stringify({ ticket: controlCenterLaunchTicket })
+          });
+          if (!response.ok) throw new Error("handoff_unavailable");
+          const body = await response.json();
+          const tokens = body && body.tokens;
+          if (!tokens || typeof tokens.webchat !== "string" || tokens.webchat.length < 8) {
+            throw new Error("handoff_unavailable");
+          }
+
+          state.chatToken = tokens.webchat;
+          state.runtimeToken = tokens.webchat;
+          state.auditToken = tokens.webchat;
+          state.authorityToken = tokens.webchat;
+          state.notificationsToken = tokens.webchat;
+          state.historyToken = tokens.webchat;
+          state.evidenceToken = tokens.webchat;
+          state.aboutToken = tokens.webchat;
+          state.approvalToken = typeof tokens.resume === "string" ? tokens.resume : "";
+          state.settingsToken = typeof tokens.settings === "string" ? tokens.settings : "";
+          state.connectorsToken = state.settingsToken;
+          state.updateToken = typeof tokens.maintenance === "string" ? tokens.maintenance : "";
+          state.recoveryToken = state.updateToken;
+
+          for (const [key, value] of Object.entries({
+            "bt.chatToken": state.chatToken,
+            "bt.runtimeToken": state.runtimeToken,
+            "bt.auditToken": state.auditToken,
+            "bt.authorityToken": state.authorityToken,
+            "bt.notificationsToken": state.notificationsToken,
+            "bt.historyToken": state.historyToken,
+            "bt.evidenceToken": state.evidenceToken,
+            "bt.aboutToken": state.aboutToken,
+            "bt.approvalToken": state.approvalToken,
+            "bt.settingsToken": state.settingsToken,
+            "bt.connectorsToken": state.connectorsToken,
+            "bt.updateToken": state.updateToken,
+            "bt.recoveryToken": state.recoveryToken
+          })) {
+            if (value) sessionStorage.setItem(key, value);
+            else sessionStorage.removeItem(key);
+          }
+          syncInputs();
+          const ownerToken = typeof tokens.owner === "string" ? tokens.owner : "";
+          for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token"]) {
+            const ownerTokenInput = byId(inputId);
+            if (ownerTokenInput) ownerTokenInput.value = ownerToken;
+          }
+          appendChat("accepted", "このPCのBLUE-TANUKIセッションを接続しました。操作ごとのHDS判断と必要な最終確認は維持されています。");
+          connectChat().catch(() => {
+            setChatStatus("接続できません", "bad");
+            appendChat("error", "Control Centerの接続に失敗しました。Gatewayの状態を確認して再度起動してください。");
+          });
+        } catch {
+          setChatStatus("接続情報を取得できません", "bad");
+          appendChat("error", "Control Centerの接続情報を受け取れませんでした。再度アプリを起動するか、Doctorを確認してください。");
+        }
       }
 
       function severityTone(severity) {
@@ -8642,4 +8719,5 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       syncInputs();
       setActiveScreen(state.activeScreen);
       renderAotanuMascot("idle");
+      void consumeControlCenterLaunchHandoff();
 `;

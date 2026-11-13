@@ -338,6 +338,75 @@ function Get-ControlCenterUrl {
   return "http://$(Get-WebHost):$(Get-WebPort)/app"
 }
 
+function Get-ControlCenterLoopbackHost {
+  $configuredHost = (Get-WebHost).Trim().ToLowerInvariant()
+  if ($configuredHost -in @("0.0.0.0", "::")) { return "127.0.0.1" }
+  if ($configuredHost -in @("127.0.0.1", "localhost", "::1")) { return $configuredHost }
+  return $null
+}
+
+function Format-ControlCenterHost($HostValue) {
+  if ($HostValue -eq "::1") { return "[::1]" }
+  return $HostValue
+}
+
+function Get-ControlCenterOpenUrl {
+  $loopbackHost = Get-ControlCenterLoopbackHost
+  if (-not $loopbackHost) { return Get-ControlCenterUrl }
+  return "http://$(Format-ControlCenterHost $loopbackHost):$(Get-WebPort)/app"
+}
+
+function New-ControlCenterLaunchTicket {
+  $loopbackHost = Get-ControlCenterLoopbackHost
+  if (-not $loopbackHost) { return $null }
+  $webchatToken = Get-EnvFileValue "WEBCHAT_TOKEN" ""
+  if (-not $webchatToken) { return $null }
+  $headers = @{ Authorization = "Bearer $webchatToken" }
+  foreach ($credential in @(
+    @{ Name = "WEBCHAT_RESUME_TOKEN"; Header = "x-blue-tanuki-launch-resume" },
+    @{ Name = "BLUE_TANUKI_OWNER_TOKEN"; Header = "x-blue-tanuki-launch-owner" },
+    @{ Name = "BLUE_TANUKI_SETTINGS_TOKEN"; Header = "x-blue-tanuki-launch-settings" },
+    @{ Name = "BLUE_TANUKI_MAINTENANCE_TOKEN"; Header = "x-blue-tanuki-launch-maintenance" }
+  )) {
+    $value = Get-EnvFileValue $credential.Name ""
+    if ($value) { $headers[$credential.Header] = $value }
+  }
+  $hostText = Format-ControlCenterHost $loopbackHost
+  $handoffUri = "http://${hostText}:$(Get-WebPort)/control-center/launch-handoff"
+  $request = $null
+  $requestStream = $null
+  $response = $null
+  $reader = $null
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($handoffUri)
+    $request.Method = "POST"
+    $request.Proxy = $null
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 5000
+    $request.ReadWriteTimeout = 5000
+    $request.ContentType = "application/json"
+    foreach ($name in $headers.Keys) { $request.Headers[$name] = [string]$headers[$name] }
+    $payload = [System.Text.Encoding]::UTF8.GetBytes("{}")
+    $request.ContentLength = $payload.Length
+    $requestStream = $request.GetRequestStream()
+    $requestStream.Write($payload, 0, $payload.Length)
+    $requestStream.Dispose()
+    $requestStream = $null
+    $response = $request.GetResponse()
+    $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
+    $responseBody = $reader.ReadToEnd() | ConvertFrom-Json
+    $ticket = [string]$responseBody.ticket
+    if ($ticket -match '^[A-Za-z0-9_-]{43}$') { return $ticket }
+  } catch {
+    return $null
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($response) { $response.Dispose() }
+    if ($requestStream) { $requestStream.Dispose() }
+  }
+  return $null
+}
+
 function Get-HealthUrl {
   return "http://$(Get-WebHost):$(Get-WebPort)/healthz"
 }
@@ -712,7 +781,14 @@ function Open-ControlCenter {
   if (-not (Start-Resident $false)) {
     Fail "The Control Center was not opened because Gateway health is not ready. Run BlueTanukiDoctor.cmd and review $logDir."
   }
-  Start-Process (Get-ControlCenterUrl)
+  $url = Get-ControlCenterOpenUrl
+  $ticket = New-ControlCenterLaunchTicket
+  if ($ticket) {
+    $url += "#bt-launch-handoff=$ticket"
+  } elseif (Get-ControlCenterLoopbackHost) {
+    Write-Warning "The local Control Center session could not be connected automatically. No credential was added to the browser URL."
+  }
+  Start-Process $url
 }
 
 function Start-SafeMode {
