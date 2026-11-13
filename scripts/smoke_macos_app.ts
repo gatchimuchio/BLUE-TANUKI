@@ -17,8 +17,11 @@ function argument(name: string): string | undefined {
 function run(command: string, args: readonly string[], context: string): string {
   try {
     return execFileSync(command, [...args], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  } catch {
-    throw new Error(`${context} failed`);
+  } catch (error) {
+    const stderr = typeof error === "object" && error !== null && "stderr" in error
+      ? String((error as { stderr?: Buffer | string }).stderr ?? "").trim().split(/\r?\n/u).slice(-3).join(" ").slice(0, 400)
+      : "";
+    throw new Error(`${context} failed${stderr ? `: ${stderr}` : ""}`);
   }
 }
 
@@ -44,6 +47,20 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<b
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return predicate();
+}
+
+async function detachReadOnlyImage(mount: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      run("/usr/bin/hdiutil", ["detach", "-quiet", mount], "native app DMG detach");
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error(lastError instanceof Error ? lastError.message : "native app DMG detach failed after five normal attempts");
 }
 
 function minimalAppEnvironment(): NodeJS.ProcessEnv {
@@ -174,9 +191,12 @@ async function smoke(arch: MacArch): Promise<void> {
     }
     if (mounted && cleanupSafe) {
       try {
-        run("/usr/bin/hdiutil", ["detach", "-quiet", mount], "native app DMG detach");
+        await detachReadOnlyImage(mount);
         mounted = false;
-      } catch { cleanupSafe = false; }
+      } catch (error) {
+        cleanupSafe = false;
+        console.error(`native_app_dmg_detach=failed reason=${error instanceof Error ? error.message : "unknown failure"}`);
+      }
     }
     if (cleanupSafe && !mounted) {
       rmSync(resolvedRoot, { recursive: true, force: true });
