@@ -14,16 +14,17 @@
 | `pnpm build` | PASS、15 workspace projects。 |
 | Windows browser package／`verify_windows_package.ts` | PASS。ZIP 3,986 entries、manifest／sidecar／Playwright version・revision 1254／OS path／built runtime registry／shell binary・license照合。SHA-256=`3665cabe2494d85f47c84e2d63e138b0fd3b7cb5944da49b514e075cf0d7bf4f`。full Chromium binaryなし。 |
 | Windows one-file CMD／verifier・IExpress EXE／verifier | PASS。CMD SHA-256=`df1bc97a11f8bb89e1763706487d12b829d7f0c4bbf1b723c3951a2941a9825c`、EXE SHA-256=`228fb43eab9130c4f8d013edc8188a3b5c40233b53468c338e8de79ab8da224e`。EXEからCAB／CMD／payload ZIPを抽出・hash照合。Setup実行はNOT_RUN。 |
-| Linux／macOS native package builder・archive verifier・one-file installer verifier | `workflow_dispatch` package-only実行待ち。 |
+| Linux x64 package-only（WSL2 Ubuntu 24.04、source SHA=`49fb172e172320ff4ef5baafe5a570623c51cc67`） | PASS。workspace build、`package:linux`、archive verifier（4,214 entries、SHA-256=`3de96299b7a7219ff73d71c5315410c4c9e350e90f712f3cff4abcf240300127`）、one-file `.run` installer verifier（SHA-256=`3d4139a23edd5832c9b1aa3f32f0a8ea3ffa53bbbd8c3cbd30b4e99c0223c2fc`）。WSL2限定であり、Linux native hosted proofへ転用しない。 |
+| Linux native hosted package-only／macOS x64・arm64 package-only | NOT_RUN。対象SHA=`49fb172e172320ff4ef5baafe5a570623c51cc67`のworkflow runは0件。Windows Computer UseがURL判定を拒否したためdispatch未成立。 |
 | `pnpm docs:check`／終端`git diff --check`／workflow YAML parse | PASS。日本語基底の既存移行負債75件は注意表示。 |
 | browser launch／HTTP、installed Setup／Uninstall、全suite、5OS実物、QE_QC／QE_QA | NOT_RUN／未成立。 |
 
 - **UNIT_ID:** rev5.0 QE_BUILD / desktop package-local browser headless-shell consumer closure.
-- **STATUS:** Windows archiveは`WIRED`（manifest path・revisionとZIP内binaryを静的照合。起動未確認）。Linux／macOSはコード変更済み、hosted package proof待ち。F06全域・Android／iOS preview・製品全体は`BUILD_GAP`。
-- **NEXT_REQUIRED_CONSUMER:** Linux／macOS各architectureのmanual package-only build／archive／one-file Setup verifierを固定SHAで確認し、結果をcloseout記録へ反映後、rev5.0 P2全域の次consumerを選ぶ。QE_QC／QE_QAへ移らない。
+- **STATUS:** Windows archiveは`WIRED`（manifest path・revisionとZIP内binaryを静的照合。起動未確認）。Linux x64 package／archive／one-file installerはWSL2で`WIRED`（native Linux保証ではない）。Linux native hosted buildとmacOS x64／arm64 package proofは未成立。F06全域・Android／iOS preview・製品全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** Linux native hosted／macOS x64・arm64 package-only runは対象SHAを固定して取得する。dispatch手段が未成立でもrev5.0 P2の他producer／consumer施工を停止せず、全体BUILD_COVERED前に証拠を取り直す。QE_QC／QE_QAへ移らない。
 - **SAFETY_STATUS:** Preview既定無効、L3、Chromium sandbox有効、ephemeral context、credential／保存profileなし、GET／HEAD・public-address guardを維持。browser起動、通信、実provider、外部作用なし。unsigned installerは公開・配布保留。
-- **LOCAL_ASSET_STATUS:** Windows ZIP／CMD／IExpress EXEと各SHA／manifest sidecar、READMEの10ファイル・696,500,007 bytesを非OneDrive Temp `blue-tanuki-artifacts-20261113-headless-shell`に証拠artifactとして保持。Windows package／IExpress staging/cacheは成功後各scriptが削除。ignored workspace build outputは開発用として保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
-- **GIT_STATUS:** 編集開始local／`origin/main`／GitHub `main`=`7ce0778257f96f8d367cc6898a805f05aebfb736`、ahead／behind=0/0。開始recovery current／previous=`7ce0778257f96f8d367cc6898a805f05aebfb736`／`e56c0880e37cfed4255a44184a01240c39681f0d`。closeout前に最新remote・保護差分・二世代refを再照合する。
+- **LOCAL_ASSET_STATUS:** Windows ZIP／CMD／IExpress EXEと各SHA／manifest sidecar、READMEの10ファイル・696,500,007 bytesを非OneDrive Temp `blue-tanuki-artifacts-20261113-headless-shell`に保持。Linux WSL package／one-file installer／manifest／checksum／READMEに、source snapshot・build／verify script・verification recordを含む11ファイル・421,956,995 bytesを非OneDrive Temp `blue-tanuki-artifacts-20261113-linux-wsl-49fb172`に保持。WSL2 source workspaceと専用pnpm storeは`/home/ohira/.cache/blue-tanuki-linux-package-49fb172`に継続中build用として保持。package staging/cacheはbuilderが一時領域で管理。ignored Windows workspace build outputは開発用として保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** task開始local／`origin/main`／GitHub `main`=`7ce0778257f96f8d367cc6898a805f05aebfb736`、ahead／behind=0/0。package実装commit `49fb172e172320ff4ef5baafe5a570623c51cc67`はmainへpush済み。編集前復旧refをlocal branch／tag・remote tagでcurrent=`49fb172e172320ff4ef5baafe5a570623c51cc67`、previous=`7ce0778257f96f8d367cc6898a805f05aebfb736`へ競合検出付きで更新。closeout後にmain・復旧二世代・保護差分を再照合する。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows製品packageへbrowser runtimeを結合
 

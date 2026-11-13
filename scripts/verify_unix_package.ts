@@ -232,11 +232,16 @@ function listTarEntries(archive: string): string[] {
 }
 
 function readTarEntryText(archive: string, entry: string): string {
-  const result = spawnSync("tar", ["-xOzf", archive, entry], { encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`tar read failed for ${entry}: ${result.stderr || result.stdout}`);
+  const normalized = entry.replace(/\\/g, "/").replace(/^\.\//, "");
+  let lastFailure = "";
+  for (const archiveEntry of [normalized, `./${normalized}`]) {
+    const result = spawnSync("tar", ["-xOzf", archive, archiveEntry], { encoding: "utf8" });
+    if (result.status === 0) {
+      return result.stdout;
+    }
+    lastFailure = result.error?.message || result.stderr || result.stdout || `exit ${result.status}`;
   }
-  return result.stdout;
+  throw new Error(`tar read failed for ${entry}: ${lastFailure}`);
 }
 
 function assertSafeEntry(entry: string): void {
