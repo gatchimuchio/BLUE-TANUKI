@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
+
+`github.write issue.reopen`を既存close／本文更新と独立した操作として追加した。target observationはclosed・未ロック・非PRの正確なIssueに限り、operation固有のtarget identity／open request payload digestを使う。HDS Operation Planが両digestと対象番号を検証し、Executorはcommand／planに結び付いたobservationを承認時・review時に照合する。GatewayはL3 reviewの生成・currentness・結果receiptを既存経路へ接続する。Control CenterはRepository identity／visibility、Issue ID／number、closed→open、title、更新時刻、通知可能性をno-store reviewで表示する。
+
+Brokerはreview後とPATCH直前にRepository／Issueを再読取してtarget versionを比較し、stateが変わった場合は送信しない。作用はPATCH一回に限定する。受理応答では同一Issue・open状態・未ロック・title・更新時刻を確認し、known rejectionとoutcome unknownを区別する。unknownは自動再送しない。結果を既存Operation Plan／Executor receipt／Gateway result store／J/M return projectionへ接続した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| TypeScript project-reference build (`node node_modules/typescript/bin/tsc -b --pretty false`) | PASS。 |
+| `git diff --check` | PASS。 |
+| test suite、package/native build、Gateway process、合成GitHub API、実GitHub／credential／外部作用 | NOT_RUN。 |
+
+これはsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。実装commit=`6a07eed1d655874f3e1a5b265a5de9fdc1c71a7e`をGitHub `main`へpushし、remote `main` readback一致を確認した。TypeScript build outputのignored `dist/` 14 directories／1,097 files／13,396,283 bytesを保持。`.codex-attachments/`、`.codex-remote-attachments/`、untracked Linux isolation `target/`（31 files／10,462,590 bytes）は変更・削除せず保持。D4／他repo・実providerは変更なし。`git commit`が旧worktree metadata pruneでPermission deniedを報告したため、自動整理を行わずmetadata／ACLはそのまま保留した。
+
 ## 2026-11-14 — rev5.0 GitHub Issue closeをplan-bound L3へ接続 (F05)
 
 `github.write issue.close`を、既存title/body専用`issue.update`とは別の単一操作として追加した。候補はallowlist内のexact repositoryで観測されたopen・未ロック・非PR Issue一件に限定する。close専用target-version observation、target identity digest、`closed` request payload digestをprotocolへ追加し、Operation Planのpayload/result validation、HDS command binding、Executor target assertion、Gateway承認と結果照合、既存J/M result memoryへ接続した。Ownerのno-store L3 reviewにはrepository identity／visibility、Issue ID／number、open→closed、title、観測時刻、通知可能性を表示する。review後と作用直前にrepo／Issueを再観測し、変化時は停止する。PATCHは単回。受理応答では同一Issue ID／number、closed、未ロック、titleと更新時刻を照合し、known provider rejectionとoutcome unknownを区別する。未知結果は自動再送しない。

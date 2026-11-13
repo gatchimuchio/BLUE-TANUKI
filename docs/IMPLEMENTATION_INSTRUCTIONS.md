@@ -2,19 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issueの状態変更をplan-bound L3へ接続 (F05, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up, 2026-11-14)
 
-主語はBLUE-TANUKIの`github.write`、HDS Operation Plan、Approval Gate、Gateway/Brokerである。目的は、Issueのcloseを本文編集と混ぜず独立した一作用として扱い、対象Issueの現在状態・owner確認内容・実行直前の再観測・結果記憶を既存のplan-bound L3経路へ接続すること。D4 Pocket、実credential、GitHubへの実書込み、公開／出荷判断は対象外。
+主語はBLUE-TANUKIの`github.write`、HDS Operation Plan、Approval Gate、Gateway/Brokerである。目的は、誤ってcloseされたIssueを明示的な別操作で戻せるようにし、閉じた一件を厳密に再観測してから、ownerのplan-bound L3確認・単回作用・結果のJ/M帰還へ接続すること。これはP2全体施工中の一作用であり、製品全体完成、QC／QA、D4 Pocket、実credential、GitHubへの実書込み、公開／出荷判断を成立させない。
 
-開始時の現行HEADは`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。local `main`、`origin/main`、GitHub `main`は一致し、ahead/behind=0/0。recovery local branch／remote tag current／previousは`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`／`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`。main worktreeのみ。保護untracked添付領域とLinux isolation `target/`は維持する。
+開始時の現行HEADは`0b70cad6e1ea26d500e9454e69d34476199d8617`。local `main`、`origin/main`、GitHub `main`は一致し、ahead/behind=0/0。recovery local branch／remote tag current／previousは`0b70cad6e1ea26d500e9454e69d34476199d8617`／`0f022fbee102238605dabb207d09e5058c1e701a`。main worktreeのみ。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`の保護対象は維持する。
 
-- **UNIT_ID:** F05 / exact GitHub Issue close as a separate plan-bound operation.
-- **STATUS:** CLOSED（source-level `CODE_PRESENT`）。Issue close専用operation、target-version／request digest、HDS plan binding、no-store L3 review、Gateway承認・review currentness、Executor/Broker単回PATCH・結果照合、J/M保存projectionまで接続。実Gateway runtimeは未確認。
-- **SAFETY_STATUS:** allowlist内の一件open・未ロック・非PR Issueだけを対象とし、owner表示にopen→closedとIssue identityを示す。review後と単回PATCH直前に同一repo／Issueを再観測。known rejectionとoutcome unknownを分け、unknownの自動再送なし。実GitHub書込み・実credentialなし。
-- **CHECK_SCOPE:** `corepack pnpm typecheck` PASS、`corepack pnpm build` PASS（15 workspace projects）、`git diff --check` PASS。test suite、Gateway process／合成API、外部provider／credential／作用はNOT_RUN。
-- **LOCAL_ASSET_STATUS:** typecheck/buildでworkspace ignored `dist/`を生成（14 directories／1,097 files／13,346,265 bytes、保持）。root buildが既存untracked Linux isolation `target/`にも実行され、31 files／10,462,590 bytesを確認したため保持・保留。保護添付領域は未変更。新規test fixture／Temp assetなし。
-- **GIT_STATUS:** 開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。開始時local／origin／GitHub main一致、ahead/behind=0/0。実装commit=`13c7c465173d7d6bd0f5ac1d474c86b6cd65e3a1`、first closeout=`0f022fbee102238605dabb207d09e5058c1e701a`をGitHub mainへfast-forward pushし、その時点のlocal／origin／remote一致とrecovery current／previous=`0f022fbee102238605dabb207d09e5058c1e701a`／`13c7c465173d7d6bd0f5ac1d474c86b6cd65e3a1`をreadback確認。この記録を含む最終closeout commitは本commitであり、終端recovery currentは本commit、previous=`0f022fbee102238605dabb207d09e5058c1e701a`とする。古いworktree metadataの自動削除はPermission deniedだったがmetadata／ACLを変更しない。
-- **NEXT_REQUIRED_CONSUMER:** 次の有限単位開始時にrev5.0正本と最新sourceからP2の次の未接続consumerを選ぶ。D4 Pocket producer／Android/iOS ingressは別repo限定委任待ちで維持する。
+- **UNIT_ID:** F05 follow-up / exact GitHub Issue reopen as a separate plan-bound operation.
+- **STATUS:** CLOSED（source-level `CODE_PRESENT`）。専用target-version／identity・payload digest、HDS plan binding、no-store L3 review、Gateway承認／review currentness、Executor/Broker単回PATCH・結果照合、既存J/M保存projectionまで接続。
+- **SAFETY_STATUS:** allowlist内のexact repositoryにあるclosed・未ロック・非PR Issue一件だけを対象とする。owner reviewはclosed→open、Repository／Issue identity、title、時刻、通知可能性を表示し、承認後とPATCH直前に同一対象を再観測する。結果不明時は自動再送しない。実GitHub書込み・実credentialなし。
+- **CHECK_SCOPE:** `node node_modules/typescript/bin/tsc -b --pretty false` PASS（workspace TypeScript project references）。`git diff --check` PASS。test suite、package/native build、Gateway process／合成API、外部provider／credential／作用はNOT_RUN。
+- **LOCAL_ASSET_STATUS:** TypeScript project buildでworkspace ignored `dist/` 14 directories／1,097 files／13,396,283 bytesを生成・保持。保護untracked添付領域とLinux isolation `target/`は編集・削除せず保持。新規fixture／Temp assetなし。
+- **GIT_STATUS:** 開始HEAD=`0b70cad6e1ea26d500e9454e69d34476199d8617`、開始時local／origin／GitHub main一致、ahead/behind=0/0、開始recovery current／previous=`0b70cad6e1ea26d500e9454e69d34476199d8617`／`0f022fbee102238605dabb207d09e5058c1e701a`。実装commit=`6a07eed1d655874f3e1a5b265a5de9fdc1c71a7e`をGitHub `main`へpushし、remote `main` readbackは同SHA。続けて本closeout docs commitを`main`へpushする。作業終端ではlocal／origin／GitHub `main`を一致させ、local／remote recovery currentをcloseout HEAD、previousを実装commitにして二世代をreadback確認する。古いworktree metadataのpruneはPermission deniedで止まり、metadata／ACLは変更せず保留。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0のP2全体施工を続け、最新sourceから次の実consumer gapを選ぶ。D4 Pocket producer／Android・iOS ingressは別repo限定委任待ちを維持する。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05, 2026-11-14)
 
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02, 2026-11-14)

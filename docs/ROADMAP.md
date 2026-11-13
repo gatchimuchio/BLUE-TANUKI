@@ -8,7 +8,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05)
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
+
+`github.write issue.reopen`を`issue.close`／本文更新から独立した単一操作として実装した。対象はallowlist内のexact repositoryにあるclosed・未ロック・非PR Issue一件。closed状態のtarget observationと独立digestをOperation Plan、HDS、Executorへ結び、no-store L3 reviewにclosed→open、Issue identity、title、観測時刻、通知可能性を表示する。review後とPATCH直前にRepository／Issueを再観測し、変化時は送信しない。PATCHは単回で、同一Issueのopen状態を応答照合する。既知拒否と結果不明を分離し、結果不明時に自動再送しない。結果projectionは既存Executor／Gateway／J/M帰還へ接続した。
+
+TypeScript project-reference build、`git diff --check`はPASS。test suite、package/native build、Gateway runtime、合成GitHub API、実GitHub／credential／外部作用はNOT_RUN。source-level `CODE_PRESENT`でありruntime `WIRED`や製品全体完成の証拠ではない。5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05)
 
 `github.write issue.close`を本文更新と独立したoperationとして追加した。対象はallowlist内のexact repositoryにあるopen・未ロック・非PRの一件だけ。target observation、repo／Issue identity、close payload、Operation Plan、no-store L3 owner reviewを束縛し、review後・単回PATCH直前にrepoとIssueを再観測する。accepted responseは同一Issueがclosedになったことを検証し、provider rejection／outcome unknownを分離してunknown時に自動再送しない。結果は既存Executor／Gateway／J/M保存・同一Owner照会へ送る。
 
