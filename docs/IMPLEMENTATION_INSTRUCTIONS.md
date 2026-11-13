@@ -22,7 +22,7 @@
 - **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再同期し、rev5.0 P2全域から次のproducer→consumer欠損を選定する。QC／QAへ移らない。
 - **SAFETY_STATUS:** Preview既定無効、L3、Chromium sandbox有効、ephemeral context、credential／保存profileなしを維持。実browser起動、外部HTTP、実provider、外部作用は行っていない。installerはunsignedで公開・配布保留。
 - **LOCAL_ASSET_STATUS:** 検証済みZIP／CMD／EXEとmanifest／SHAは非OneDrive Temp `blue-tanuki-artifacts-20261113-browser-runtime` にpackage artifactとして保持。失敗attemptのIExpress stage 2件、合計1,100,693,745 bytesをWindowsゴミ箱へ移動し、元path消失とRecycle Bin entryを確認。成功stageとbrowser package workrootは既に不在。ignored workspace build outputは再生成し開発用に保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
-- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`e56c0880e37cfed4255a44184a01240c39681f0d`、recovery current／previous=`e56c0880e37cfed4255a44184a01240c39681f0d`／`2e188a97e68df1294d7f781f825b5a731caa6c10`。終了HEAD・remote・recovery二世代はcommit／push後に再照合して記録する。
+- **GIT_STATUS:** 実装commit `9a1a07d0242643582f6303bc2edf73d5eccb0c6f`を開始main `e56c0880e37cfed4255a44184a01240c39681f0d`からfast-forward pushし、closeout記録もmainへpushした。終了local main／`origin/main`／GitHub `main`は一致し、復旧currentは終了main、previousは開始mainを指す。終了時のHEADはこのactive instructionを含むcommitとしてGit refsから照合済み。ローカルのprotected untracked attachments／Linux isolation `target/`は未変更。Gitの自動worktree整理が`.git/worktrees/blue-tanuki-health-2026-11-07-windows`への削除をACLで拒否したため、metadata／ACLを変更せず保留した。
 
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / browser previewの同一origin link navigation
 
