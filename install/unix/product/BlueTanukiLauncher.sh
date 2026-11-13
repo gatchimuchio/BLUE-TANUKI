@@ -127,6 +127,7 @@ const request = http.request({
   port: Number(process.env.BT_LAUNCH_PORT),
   path: "/control-center/launch-handoff",
   method: "POST",
+  agent: new http.Agent({ keepAlive: false }),
   headers,
   timeout: 4000,
 }, (response) => {
@@ -144,6 +145,7 @@ const request = http.request({
     process.exitCode = 1;
   });
 });
+request.on("timeout", () => request.destroy(new Error("launch_handoff_timeout")));
 request.on("error", () => { process.exitCode = 1; });
 request.end("{}");
 ') || return 1
