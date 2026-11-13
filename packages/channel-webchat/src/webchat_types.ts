@@ -335,6 +335,29 @@ export interface WebChatBrowserFormGetContentReview {
   may_execute: false;
 }
 
+export interface WebChatBrowserLinkNavigationContentReview {
+  kind: "browser_link_navigation";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  operation: "browser.automation.click";
+  page_url: string;
+  target_url: string;
+  origin: string;
+  link_name: string;
+  method: "GET";
+  external_effect_class: "navigation_unclassified";
+  same_origin_only: true;
+  javascript_enabled: false;
+  credentials_reused: false;
+  downloads_enabled: false;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoogleCalendarEventCreateContentReview {
   kind: "google_calendar_event_create";
   command_id: string;
@@ -1026,6 +1049,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
+  WebChatBrowserLinkNavigationContentReview |
   WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |

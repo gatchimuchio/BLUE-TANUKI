@@ -110,6 +110,7 @@ export interface BrowserAutomationRunRequest {
   action: "snapshot" | "navigate" | "click" | "form_submit";
   url: string;
   link_name?: string;
+  target_url?: string;
   action_url?: string;
   form_name?: string;
   fields?: readonly { name: string; value: string }[];

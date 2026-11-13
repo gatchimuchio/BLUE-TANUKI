@@ -88,7 +88,9 @@ import { shellExecTool } from "./shell_exec.js";
 import {
   buildBrowserSearchFormGetUrl,
   parseBrowserFormGetArguments,
+  parseBrowserLinkNavigationArguments,
   type BrowserFormGetArguments,
+  type BrowserLinkNavigationArguments,
   type BrowserSearchFormSnapshot,
 } from "./browser_form_submission.js";
 import type {
@@ -4045,7 +4047,7 @@ async function defaultBrowserAutomationRunner(
       });
     }
     if (request.action === "click") {
-      if (!request.link_name || !page.getByRole) {
+      if (!request.link_name || !request.target_url || !page.getByRole) {
         throw new Error("browser_link_navigation_unavailable; mutation_sent=false");
       }
       const link = page.getByRole("link", { name: request.link_name, exact: true });
@@ -4062,6 +4064,15 @@ async function defaultBrowserAutomationRunner(
       }
       if (linkUrl.origin !== new URL(request.url).origin) {
         throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+      }
+      let expectedLinkUrl: URL;
+      try {
+        expectedLinkUrl = parseHttpUrl(request.target_url);
+      } catch {
+        throw new Error("browser_link_navigation_expected_target_invalid; mutation_sent=false");
+      }
+      if (linkUrl.href !== expectedLinkUrl.href) {
+        throw new Error("browser_link_navigation_target_changed_after_review; mutation_sent=false");
       }
       await resolvePublicTarget(linkUrl, request.env, request.resolveHost);
       await page.goto(linkUrl.href, {
@@ -4192,6 +4203,7 @@ async function invokeBrowserPreview(
   action: BrowserAutomationRunRequest["action"],
   linkName?: string,
   formSubmission?: BrowserFormGetArguments,
+  linkNavigation?: BrowserLinkNavigationArguments,
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   if (!browserAutomationEnabled(env)) {
@@ -4219,6 +4231,7 @@ async function invokeBrowserPreview(
     action,
     url: url.href,
     ...(linkName ? { link_name: linkName } : {}),
+    ...(linkNavigation ? { target_url: linkNavigation.target_url } : {}),
     ...(formSubmission ? { action_url: formSubmission.action_url } : {}),
     ...(formSubmission ? { form_name: formSubmission.form_name, fields: formSubmission.fields } : {}),
     http_request: opts.request ?? defaultHttpRequest,
@@ -4323,7 +4336,9 @@ export async function invokeBrowserAutomation(
   assertNoBrowserCredentialUse(args);
   const acceptedKeys = action === "form_submit"
     ? new Set(["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"])
-    : new Set(["action", "url", "max_chars", "timeout_ms", "link_name"]);
+    : action === "click"
+      ? new Set(["action", "url", "max_chars", "timeout_ms", "link_name", "target_url"])
+      : new Set(["action", "url", "max_chars", "timeout_ms"]);
   if (Object.keys(args).some((key) => !acceptedKeys.has(key))) {
     throw new Error("browser.automation received an unsupported argument; mutation_sent=false");
   }
@@ -4337,14 +4352,18 @@ export async function invokeBrowserAutomation(
   const formSubmission = action === "form_submit"
     ? parseBrowserFormGetArguments({ ...args, action })
     : undefined;
-  const linkName = action === "click" ? stringArg(args, "link_name", false)?.trim() : undefined;
-  if (action === "click" && (!linkName || linkName.length > 200 || !isWellFormedBrowserLinkName(linkName))) {
-    throw new Error("browser.automation click requires one exact link_name of 1-200 characters; mutation_sent=false");
+  const linkNavigation = action === "click"
+    ? parseBrowserLinkNavigationArguments(args)
+    : undefined;
+  const linkName = linkNavigation?.link_name;
+  if (action === "click" && (!linkName || !isWellFormedBrowserLinkName(linkName))) {
+    throw new Error("browser.automation click requires an exact link_name and target_url; mutation_sent=false");
   }
-  if (action !== "click" && action !== "form_submit" && args.link_name !== undefined) {
+  if (action !== "click" && action !== "form_submit" &&
+      (args.link_name !== undefined || args.target_url !== undefined)) {
     throw new Error("browser.automation navigation does not accept link_name; mutation_sent=false");
   }
-  const snapshot = await invokeBrowserPreview(args, opts, action, linkName, formSubmission);
+  const snapshot = await invokeBrowserPreview(args, opts, action, linkName, formSubmission, linkNavigation);
   if (isRecord(snapshot)) {
     return {
       ...snapshot,
@@ -5538,7 +5557,7 @@ export const browserSnapshotTool: Tool = {
 
 export const browserAutomationTool: Tool = {
   name: "browser.automation",
-  description: "Disabled-by-default preview for guarded headless browser actions.",
+  description: "Disabled-by-default preview for guarded headless browser actions. Link navigation requires an exact same-origin target_url reviewed at L3 and revalidated immediately before navigation.",
   required_capabilities: requireToolOperationDescriptor("browser.automation").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeBrowserAutomation(args);

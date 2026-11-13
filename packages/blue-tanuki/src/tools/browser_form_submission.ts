@@ -13,6 +13,15 @@ export interface BrowserFormGetArguments {
   timeout_ms?: number;
 }
 
+export interface BrowserLinkNavigationArguments {
+  action: "click";
+  url: string;
+  link_name: string;
+  target_url: string;
+  max_chars?: number;
+  timeout_ms?: number;
+}
+
 export interface BrowserSearchFormControlSnapshot {
   tag: string;
   type: string;
@@ -133,6 +142,35 @@ export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArgu
     action_url: actionUrl.href,
     form_name: formName,
     fields,
+    ...(value.max_chars === undefined ? {} : { max_chars: value.max_chars as number }),
+    ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms as number }),
+  };
+}
+
+/** Bind a link navigation to the exact same-origin destination shown for L3 review. */
+export function parseBrowserLinkNavigationArguments(value: unknown): BrowserLinkNavigationArguments {
+  if (!isRecord(value) || value.action !== "click" ||
+      Object.keys(value).some((key) => !["action", "url", "link_name", "target_url", "max_chars", "timeout_ms"].includes(key)) ||
+      typeof value.url !== "string" || typeof value.link_name !== "string" || typeof value.target_url !== "string") {
+    throw new Error("browser_link_navigation_invalid_arguments");
+  }
+  const url = safeHttpUrl(value.url, "browser_link_navigation_invalid_url", true);
+  const targetUrl = safeHttpUrl(value.target_url, "browser_link_navigation_invalid_target_url", true);
+  if (targetUrl.origin !== url.origin) throw new Error("browser_link_navigation_cross_origin_denied");
+  const linkName = value.link_name.trim();
+  if (linkName.length === 0 || linkName.length > 200 || /[\u0000-\u001f\u007f]/.test(linkName) ||
+      hasUnpairedSurrogate(linkName) ||
+      (value.max_chars !== undefined && (typeof value.max_chars !== "number" ||
+        !Number.isSafeInteger(value.max_chars) || value.max_chars < 1 || value.max_chars > 20_000)) ||
+      (value.timeout_ms !== undefined && (typeof value.timeout_ms !== "number" ||
+        !Number.isSafeInteger(value.timeout_ms) || value.timeout_ms < 1 || value.timeout_ms > 15_000))) {
+    throw new Error("browser_link_navigation_invalid_arguments");
+  }
+  return {
+    action: "click",
+    url: url.href,
+    link_name: linkName,
+    target_url: targetUrl.href,
     ...(value.max_chars === undefined ? {} : { max_chars: value.max_chars as number }),
     ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms as number }),
   };

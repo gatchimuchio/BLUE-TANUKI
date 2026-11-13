@@ -5858,6 +5858,60 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "検索先と入力内容を再確認";
           return;
         }
+        if (review.kind === "browser_link_navigation") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          let parsedPageUrl = null;
+          let parsedTargetUrl = null;
+          try { parsedPageUrl = new URL(review.page_url); parsedTargetUrl = new URL(review.target_url); }
+          catch { /* validation below keeps approval closed */ }
+          if (review.command_id !== commandId || review.operation !== "browser.automation.click" ||
+              review.method !== "GET" || review.external_effect_class !== "navigation_unclassified" ||
+              review.same_origin_only !== true || review.javascript_enabled !== false ||
+              review.credentials_reused !== false || review.downloads_enabled !== false || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.origin !== "string" || !parsedPageUrl || parsedPageUrl.origin !== review.origin ||
+              parsedPageUrl.search || parsedPageUrl.hash || !parsedTargetUrl || parsedTargetUrl.origin !== review.origin ||
+              parsedTargetUrl.search || parsedTargetUrl.hash || typeof review.link_name !== "string" ||
+              review.link_name.length === 0 || review.link_name.length > 200) {
+            throw new Error("リンク遷移先の確認内容がこのL3承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "同一originのリンク遷移";
+          view.appendChild(heading);
+          [
+            ["現在のページ", review.page_url],
+            ["リンク名", review.link_name],
+            ["固定された遷移先", review.target_url],
+            ["origin", review.origin],
+            ["method", "GET。外部効果は未分類"],
+            ["ページJavaScript", "無効"],
+            ["資格情報・Cookie", "再利用なし"],
+            ["download", "無効"],
+            ["作用直前の再確認", "現在のページ上の同名リンクが同じ完全URLを指す場合だけ進む"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "ページが変わり同名リンクの遷移先が変化した場合は実行を停止します。GETでも外部状態が変わる可能性があるため、送信先の効果を自動判定しません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "遷移先を再確認";
+          return;
+        }
         if (review.kind === "file_delete_target") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "file.delete" ||

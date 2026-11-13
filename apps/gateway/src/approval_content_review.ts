@@ -3,6 +3,7 @@ import {
   gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest,
   parseBrowserFormGetArguments,
+  parseBrowserLinkNavigationArguments,
 } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { normalizeGmailAddressList, type ExecuteCommand } from "@blue-tanuki/protocol";
@@ -12,6 +13,7 @@ import type {
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
   WebChatBrowserFormGetContentReview,
+  WebChatBrowserLinkNavigationContentReview,
 } from "@blue-tanuki/channel-webchat";
 
 const GMAIL_WRITE_ARGUMENTS = new Set([
@@ -33,6 +35,66 @@ export function isBrowserFormGetReviewCommand(command: ExecuteCommand): boolean 
   return command.type === "tool_call" && command.payload.tool_name === "browser.automation" &&
     typeof command.payload.arguments.action === "string" &&
     command.payload.arguments.action.trim().toLowerCase() === "form_submit";
+}
+
+export function isBrowserLinkNavigationReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "browser.automation" &&
+    typeof command.payload.arguments.action === "string" &&
+    command.payload.arguments.action.trim().toLowerCase() === "click";
+}
+
+export function projectBrowserLinkNavigationContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+): WebChatBrowserLinkNavigationContentReview | null {
+  if (!isBrowserLinkNavigationReviewCommand(command) || command.type !== "tool_call" ||
+      !/^[a-f0-9]{64}$/.test(commandDigest) || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) return null;
+  try {
+    const request = parseBrowserLinkNavigationArguments(command.payload.arguments);
+    const parsedUrl = new URL(request.url);
+    const parsedTargetUrl = new URL(request.target_url);
+    const requestPayloadDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.browser-link-navigation-request.v1",
+      page_url: request.url,
+      link_name: request.link_name,
+      target_url: request.target_url,
+    });
+    const reviewBase = {
+      kind: "browser_link_navigation" as const,
+      command_id: command.id,
+      command_digest: commandDigest,
+      request_payload_digest: requestPayloadDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      operation: "browser.automation.click" as const,
+      page_url: request.url,
+      target_url: request.target_url,
+      origin: parsedUrl.origin,
+      link_name: request.link_name,
+      method: "GET" as const,
+      external_effect_class: "navigation_unclassified" as const,
+      same_origin_only: true as const,
+      javascript_enabled: false as const,
+      credentials_reused: false as const,
+      downloads_enabled: false as const,
+      no_store: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    if (parsedTargetUrl.origin !== parsedUrl.origin) return null;
+    return {
+      ...reviewBase,
+      review_digest: operationPlanDigest({
+        schema_version: "blue-tanuki.browser-link-navigation-review.v1",
+        command_digest: commandDigest,
+        request_payload_digest: requestPayloadDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        external_effect_class: "navigation_unclassified",
+      }),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function projectBrowserFormGetContentReview(

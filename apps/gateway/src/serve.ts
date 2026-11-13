@@ -187,6 +187,8 @@ import {
 import {
   isBrowserFormGetReviewCommand,
   projectBrowserFormGetContentReview,
+  isBrowserLinkNavigationReviewCommand,
+  projectBrowserLinkNavigationContentReview,
   isGmailMessageTrashReviewCommand,
   isGmailMessageModifyReviewCommand,
   isGmailDraftSendReviewCommand,
@@ -3322,6 +3324,7 @@ async function serveWithOwnerLease(
         ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)))
     );
     if (verdict === "approve" && (isBrowserFormGetReviewCommand(pending.command) ||
+        isBrowserLinkNavigationReviewCommand(pending.command) ||
         isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) || isGmailMessageTrashReviewCommand(pending.command) ||
         requiresToolContentReview)) {
@@ -4898,6 +4901,21 @@ async function serveWithOwnerLease(
         return null;
       }
     }
+    if (pending && isBrowserLinkNavigationReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return null;
+        const review = projectBrowserLinkNavigationContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        if (!review) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.goal_purpose_relation_review_proposal) {
       const proposal = pending.goal_purpose_relation_review_proposal;
       const args = getGoalPurposeRelationReviewArguments(pending.command);
@@ -5307,6 +5325,21 @@ async function serveWithOwnerLease(
         return "unavailable";
       }
     }
+    if (isBrowserLinkNavigationReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = projectBrowserLinkNavigationContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        return current && current.review_digest === pending.content_review_digest ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
     if (pending.goal_purpose_relation_review_proposal) {
       return validateGoalPurposeRelationContentReview(pending, content_review_digest);
     }
@@ -5557,6 +5590,7 @@ async function serveWithOwnerLease(
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
       content_review_required: isBrowserFormGetReviewCommand(p.command) ||
+        isBrowserLinkNavigationReviewCommand(p.command) ||
         isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         isGmailMessageTrashReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
