@@ -2,7 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02, 2026-11-14)
+
+主語はBLUE-TANUKIのWindows CLI one-shot、HDS-J Operation Plan、Executor result delivery、M receiptである。目的は、CLI ownerが明示した達成規則付きtaskについて、選択された一stepの現在性確認・J実行意図・Executor結果・M receipt・CLI達成projectionを同じ保存済みplanへ結ぶこと。provider liveや製品全体の完成判定は行わない。
+
+通常CLI処理は、HDSが発行したplan commandの現在性をApproval／target observation後に再確認し、Executor admissionをJの`beginOperationPlanAttempt`へ渡す。plan-bound executionはGatewayと同じ耐久result outboxへ保存し、直後にdeliveryをJ/Mへ再照合してacknowledgeする。CLI起動時に未acknowledged resultが存在する場合はOperation Plan／result-memory stateを開き、通常入力処理より前にstartup reconciliationへ含める。達成projectionは既存のHDS feedback後に生成し、明示規則・検証済みresult・M receiptが揃わない場合のpending／heldを維持する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm --filter @blue-tanuki/gateway typecheck` | PASS。 |
+| `corepack pnpm --filter @blue-tanuki/gateway build` | PASS。 |
+| `git diff --check` | PASS。 |
+| test suite、CLI process実行、J/M receiptの実生成・再起動復旧、実provider／credential、外部作用、全体P2／`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / CLI owner goal rules → current J attempt → durable Executor result → J/M → CLI projection.
+- **STATUS:** source-levelのplan-bound CLI実行・result recovery consumerを接続。typecheck／package buildはPASS。実processでの`WIRED`動作、C08.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未確認／未成立。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続し、現行HEADからC→J→Broker→実結果→J/Mと5OS導入後利用を再照合して、最初の実未接続consumerを選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+- **SAFETY_STATUS:** HDS currentness／Approval／Executor admission／既存Broker境界を維持。未確認結果は達成に昇格させず、明示規則・検証済み結果・M receiptの不足はpending／held。実provider、実credential、CLIでのlive作用、他repo変更、公開／出荷GOなし。
+- **LOCAL_ASSET_STATUS:** Gateway `dist/`をpackage buildで生成／更新し、通常開発用build出力として保持。test fixture／Temp assetは生成していない。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** START_HEAD=`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`。local／`origin/main`／GitHub mainは開始時一致、ahead／behind=0/0。開始recovery local branch／remote tag current／previous=`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`／`f45506e6d87b58eadd03eb20798e3fd36db435cb`。implementation commit=`b36215a7d6d9ab698c1b91810a26708fd483aa98`。この後のdocs closeoutを同じBUILD_BATCHとしてmainへpushし、最終SHA・復旧ref・dirty状態を終端照合する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02, 2026-11-14)
 
 主語はBLUE-TANUKIのWindows／Unix launcher、managed GatewayのWebChat認証、既存Control Centerである。目的は、製品launcherからControl Centerを開いた初回に、手作業で.env内のtokenを転記せず、既存の通常GUIへ接続すること。これはP2全体施工中の初回利用consumer接続であり、G02全体または製品完成の判定ではない。
 

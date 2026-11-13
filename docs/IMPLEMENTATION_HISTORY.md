@@ -2,6 +2,21 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02)
+
+CLIの明示達成規則経路について、Gateway one-shotで抜けていたOperation Plan実行境界を接続した。CLIはrequest前に未acknowledged result outboxを調べ、該当がある場合は同じprivate Operation Plan／result-memory stateを開いてstartup reconciliationを行う。plan-bound commandはExecutor approval後にcurrentnessを再確認し、Gatewayと同じ`executionAdmissionForCommand`／`beginOperationPlanAttempt`でJの実行意図を永続化してからExecutorへ進む。Executorにはresult delivery保存を指示し、feedback処理前に保存deliveryをJ/Mへ再照合・acknowledgeする。最終CLI projectionは従来どおりHDS feedback後に計算し、達成規則・検証済みresult・M receiptが不足する場合はpending／heldを保つ。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway typecheck | PASS。 |
+| Gateway package build | PASS。 |
+| `git diff --check` | PASS。 |
+| CLI process実行、test、result outboxのruntime照合、M receipt実生成、再起動復旧、実provider／credential、live作用、全体P2／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+状態はsource-levelのplan-bound CLI producer→J execution intent→Executor durable result→J/M reconciliation→既存CLI projection接続。`runCli()`でのruntime evidenceがないため実動作を`WIRED`実証とは扱わず、C08.02全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。作業開始HEAD=`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`。implementation commit=`b36215a7d6d9ab698c1b91810a26708fd483aa98`。docs closeoutとGitHub main／復旧refの最終SHAは終端照合後の作業報告に記録する。
+
+Gateway `dist/`はpackage buildで生成／更新した開発用出力として保持。test fixture／Temp生成なし。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。実provider・credential・live外部作用・他repo変更なし。
+
 ## 2026-11-14 — rev5.0 Control Center初回起動のローカル認証引継ぎ (G02.02)
 
 Windows／Unix launcherが`.env`から現在のWebChatと設定済み役割tokenを読み、health gate通過後にloopback上のWebChat issuerへheaderで渡す。issuerは各tokenを既存設定値と照合し、credentialを含まない32-byte random ticketを発行する。Gatewayはticket自体のSHA-256だけを30秒保持し、最大32件に制限する。交換はloopback client、Host／Origin／port、same-origin fetchを確認し、bodyのticketを期限内に一度だけ消費して、no-store応答で既存token束を返す。
