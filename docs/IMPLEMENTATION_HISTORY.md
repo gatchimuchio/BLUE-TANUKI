@@ -2,6 +2,21 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 P2 SAFE_MIN / Gateway smoke child environment isolation
+
+既存serve smokeは`...process.env`をGatewayとaudit-dumpへ渡していたため、親processの資格情報や`BLUE_TANUKI_ENV_FILE`による設定読込が子processへ流れる境界があった。runnerを限定OS環境＋明示した合成WebChat／stub／専用state・audit設定へ変更し、Gatewayとaudit-dumpをローカルtsxから直接起動する。audit-dumpからWebChat tokenとmaintenance tokenも除外した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| runner単体strict TypeScript check／`git diff --check` | PASS。 |
+| synthetic parent environment下のserve smoke | PASS。存在しない`BLUE_TANUKI_ENV_FILE`と`PNPM_BIN`、synthetic `LLM_API_KEY`を設定しても、child Gatewayはstubのみ・provider/channel credential未設定で起動。loopback WebSocket hello／inbound／channel_send、監査JSONL 8件、audit-dump chain valid。 |
+| temp root／port cleanup | PASS。runner生成Temp rootは元path不在、使用portのlistenerなし。 |
+| 実資格／実provider／外部作用／installed製品／5OS／全suite／QE_QC／QE_QA | NOT_RUN。 |
+
+これはsmoke子processの環境境界を示すだけで、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`やC08.03を成立させない。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`を保持。D4 Pocketのdirty worktreeと古いBLUE worktree metadata／ACLには触れていない。
+
+implementation commit=`0b6cca83715ea275ff4a116bde45c489e628d35c`をGitHub `main`へpushした。この記録を含むdocs closeout commitをGitHub `main`へpushし、local／origin／GitHub SHAの一致とrecovery current／previousの二世代を再照合した。
+
 ## 2026-11-14 — rev5.0 P2 SAFE_MIN / isolated Gateway serve smoke
 
 既存`smoke:serve`はGateway初期化が終わる前に15秒でhealth待ちを打ち切り、初回runがFAILした。また旧runnerは`BLUE_TANUKI_STATE_ROOT`を指定せずrepo既定stateを使う構成だった。専用Temp rootにstate／auditをまとめ、起動待ちを60秒へ延長し、子process終了のreadback後にだけauditを検査するよう変更した。終了を観測できないときは一時stateを残し、監査を並行読取しない。runner stdout／stderrのnullable型も明示した。

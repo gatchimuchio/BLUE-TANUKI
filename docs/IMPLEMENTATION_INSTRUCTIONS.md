@@ -2,7 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / Gateway serve smokeの状態分離と終了確認 (P2 SAFE_MIN, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / Gateway serve smokeの子process環境隔離 (P2 SAFE_MIN, 2026-11-14)
+
+主語はrepo内の既存serve smoke runner、Gateway子process、audit-dump子processである。目的はstub／loopbackの短時間疎通が親processのprovider/channel資格、env-file selector、Node preload、proxy、利用者固有設定を継承せず、専用state／auditだけで完了すること。製品機能の完成や全体品質判定ではない。
+
+開始HEADは`48a88d0ef216d253cd6b35f831aa234f89e8de76`。local `main`、`origin/main`、GitHub `main`、local recovery branch二世代、remote backup tag二世代が所定SHAで一致した。tracked差分なし。D4 Pocketには別writerのdirty worktreeがあるため読み取り確認だけに限定した。
+
+- **UNIT_ID:** rev5.0 P2 SAFE_MIN / isolated Gateway smoke child environment.
+- **STATUS:** CLOSED。`scripts/smoke_serve.ts`はOS実行に必要な限定キーと合成Gateway設定のみを子processへ渡す。Gatewayはローカルtsxを直接起動し、audit-dumpにはさらに狭い環境を渡す。`PNPM_BIN`や親の`BLUE_TANUKI_ENV_FILE`を実行選択・設定へ継承しない。
+- **CHECK_SCOPE:** runner strict TypeScript check PASS、`git diff --check` PASS。synthetic `BLUE_TANUKI_ENV_FILE`（存在しないpath）、`PNPM_BIN`（存在しないpath）、`LLM_API_KEY`だけを親へ設定した同runner実行はPASS。Gateway logはstubのみ・provider未設定・各channel資格未設定を示し、loopback WebSocket hello／inbound／channel_send、監査JSONL 8件、audit-dump chain validを確認した。
+- **EVIDENCE_LIMIT:** 合成の短時間Gateway smokeのみ。実資格、実provider、channel接続、外部作用、D4 consumer、installed製品、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを確認していない。
+- **LOCAL_ASSET_STATUS:** runnerのTemp rootは削除済みで元path不在、smoke port `40620`のlistenerなし。合成環境値は一時command process内だけ。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`、古いworktree metadataは保持。Git fetch時の古いWindows worktree metadata ACL拒否は変更せず保留。
+- **GIT_STATUS:** implementation commit=`0b6cca83715ea275ff4a116bde45c489e628d35c`はGitHub `main`へpush済み。このcloseout docs commitを含むlocal／origin／GitHub `main`を照合し、recovery currentはcloseout HEAD、previousはimplementation commitとなるようlocal branch／remote tagを更新して実SHAを再照合した。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続する。次の独立作業開始時に現行sourceからBlue repo内の実未接続consumerを選び、D4 Pocket／MINIDORAの別repo変更、C08.03実provider、未委任外部作用、P13 owner GOを引き続き保留する。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Gateway serve smokeの状態分離と終了確認 (P2 SAFE_MIN, 2026-11-14)
 
 主語はrepo内の既存serve smoke runnerと、そこから起動されるGateway子processである。目的は短時間の全体疎通をstub／loopbackで行い、ユーザーの通常stateを参照せず、Gateway停止後にこの実行が生成した監査証拠を検査すること。これは製品機能の完成や全体品質判定ではない。
 
