@@ -61,6 +61,15 @@ webchat_port() {
   fi
 }
 
+webchat_host() {
+  host=$(read_env_value WEBCHAT_HOST)
+  if [ -n "$host" ]; then
+    printf '%s\n' "$host"
+  else
+    printf '127.0.0.1\n'
+  fi
+}
+
 read_pid() {
   read_pid_record "$PID_FILE" resident
 }
@@ -332,7 +341,82 @@ server.listen(port, "127.0.0.1");
   exit 2
 }
 
+wait_gateway_health() {
+  health_timeout_seconds=${1:-15}
+  health_host=$(webchat_host)
+  health_port=$(webchat_port)
+  "$NODE_EXE" - "$health_host" "$health_port" "$health_timeout_seconds" <<'NODE'
+"use strict";
+const http = require("node:http");
+const net = require("node:net");
+const os = require("node:os");
+
+const rawHost = (process.argv[2] || "").trim().replace(/^\[|\]$/g, "");
+const port = Number(process.argv[3]);
+const timeoutSeconds = Number(process.argv[4]);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  process.stderr.write("health_probe_invalid_port\n");
+  process.exit(2);
+}
+if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 15) {
+  process.stderr.write("health_probe_invalid_timeout\n");
+  process.exit(2);
+}
+
+const localAddresses = new Set(Object.values(os.networkInterfaces()).flatMap((entries) =>
+  (entries || []).map((entry) => entry.address.toLowerCase().split("%", 1)[0])));
+const host = rawHost.toLowerCase();
+let candidates;
+if (host === "0.0.0.0") candidates = ["127.0.0.1"];
+else if (host === "::") candidates = ["::1"];
+else if (host === "localhost") candidates = ["127.0.0.1", "::1"];
+else if (net.isIP(rawHost) === 4 && Number(rawHost.split(".", 1)[0]) === 127) candidates = [rawHost];
+else if (net.isIP(rawHost) === 6 && (host === "::1" || localAddresses.has(host))) candidates = [rawHost];
+else if (net.isIP(rawHost) === 4 && localAddresses.has(host)) candidates = [rawHost];
+else {
+  process.stderr.write("health_probe_refused_nonlocal_host\n");
+  process.exit(2);
+}
+
+const deadline = Date.now() + timeoutSeconds * 1000;
+let retryPending = false;
+let attempts = 0;
+function retry() {
+  if (retryPending) return;
+  if (Date.now() >= deadline) process.exit(2);
+  retryPending = true;
+  setTimeout(() => {
+    retryPending = false;
+    probe();
+  }, 250);
+}
+function probe() {
+  if (Date.now() >= deadline) process.exit(2);
+  const hostname = candidates[attempts % candidates.length];
+  attempts += 1;
+  const timeout = Math.max(1, Math.min(1000, deadline - Date.now()));
+  const request = http.get({ hostname, port, path: "/healthz", method: "GET", timeout, agent: false }, (response) => {
+    response.resume();
+    response.once("end", () => {
+      if (response.statusCode === 200 && Date.now() < deadline) process.exit(0);
+      retry();
+    });
+  });
+  request.once("timeout", () => request.destroy(new Error("health_timeout")));
+  request.once("error", retry);
+}
+probe();
+NODE
+}
+
 open_control_center() {
+  managed_pid=$(resolve_owned_pid resident "$PID_FILE") || return 2
+  [ -n "$managed_pid" ] || fail "managed Gateway is not running; the Control Center was not opened"
+  if ! wait_gateway_health 2; then
+    echo "resident_health=not_ready; the managed process was left running. logs=$LOG_DIR" >&2
+    echo "next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh doctor' and review the logs before retrying." >&2
+    return 2
+  fi
   if command -v open >/dev/null 2>&1; then
     (open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true) &
     echo "open_requested=$CONTROL_CENTER_URL"
@@ -355,22 +439,29 @@ resident_start() {
     else
       echo "resident_status=starting watchdog_pid=$existing_watchdog"
     fi
-    echo "control_center=$CONTROL_CENTER_URL"
-    return
+  else
+    if [ -L "$STOP_FILE" ] || { [ -e "$STOP_FILE" ] && [ ! -f "$STOP_FILE" ]; }; then
+      fail "resident stop marker is not a regular file; cannot start safely"
+    fi
+    rm -f -- "$STOP_FILE"
+    assert_port_available
+    mkdir -p "$DATA_ROOT" "$LOG_DIR"
+    "$SCRIPT_DIR/BlueTanukiLauncher.sh" resident-watchdog "$@" >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
+    watchdog_process=$!
+    if ! write_pid_record "$WATCHDOG_PID_FILE" "$watchdog_process" watchdog; then
+      kill -TERM "$watchdog_process" 2>/dev/null || true
+      fail "resident watchdog identity could not be recorded; gateway was not started"
+    fi
+    echo "resident_status=started pid=$(read_pid)"
   fi
-  if [ -L "$STOP_FILE" ] || { [ -e "$STOP_FILE" ] && [ ! -f "$STOP_FILE" ]; }; then
-    fail "resident stop marker is not a regular file; cannot start safely"
+  if ! wait_gateway_health; then
+    echo "resident_health=not_ready; the managed process was left running. logs=$LOG_DIR" >&2
+    echo "next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh doctor' and review the logs before retrying." >&2
+    return 2
   fi
-  rm -f -- "$STOP_FILE"
-  assert_port_available
-  mkdir -p "$DATA_ROOT" "$LOG_DIR"
-  "$SCRIPT_DIR/BlueTanukiLauncher.sh" resident-watchdog "$@" >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
-  watchdog_process=$!
-  if ! write_pid_record "$WATCHDOG_PID_FILE" "$watchdog_process" watchdog; then
-    kill -TERM "$watchdog_process" 2>/dev/null || true
-    fail "resident watchdog identity could not be recorded; gateway was not started"
-  fi
-  echo "resident_status=started pid=$(read_pid)"
+  ready_pid=$(resolve_owned_pid resident "$PID_FILE") || return 2
+  [ -n "$ready_pid" ] || fail "Gateway health responded but the managed process could not be verified; no process was changed"
+  echo "resident_health=ready pid=$ready_pid"
   echo "control_center=$CONTROL_CENTER_URL"
   echo "logs=$LOG_DIR"
 }
