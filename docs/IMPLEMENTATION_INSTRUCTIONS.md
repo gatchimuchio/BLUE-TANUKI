@@ -23,7 +23,7 @@
 - **NEXT_REQUIRED_CONSUMER:** P2全体施工を継続し、現在の実装から未接続consumerを再選定する。現行repoの`apps`/`packages`/`install`にはAndroid/iOS native product entryが見当たらず、G09/G10の入口・Device Link・秘密保管・一仕事consumerは未接続候補。D4-Pocketは読取のみとし変更しない。
 - **SAFETY_STATUS:** fixtureと`provider=stub`のみ。実credential/provider、外部送信、公開、署名、owner dataを使わず、製品の通常アンインストールだけを隔離先で実行した。`P13=PENDING_OWNER_GO`を維持。
 - **LOCAL_ASSET_STATUS:** Task-generated artifact、展開診断、隔離smoke rootの6パス／18,275 files／2,990,810,866 bytesを通常Windowsゴミ箱へ移動し、各元path消失と6件のRecycle Bin readbackを確認。ownerの最終処分待ちであり、容量回復としては計上しない。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
-- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`、ahead/behind=0/0。編集前recovery local branch／remote tag current/previous=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。終了commit/pushとrecovery更新値はBUILD_BATCHのGit閉包後に追記する。
+- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`、ahead/behind=0/0。編集前recovery local branch／remote tag current/previous=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。実装commit=`3f60fef9addc6bd66395988e3b3f27ade6d2076c`。closeout記録を含めてmainへfast-forward pushし、終了時local／origin／GitHub SHA一致、recovery current=終了main・previous=開始mainをreadback照合する。Git commit後のstale worktree metadata自動整理はPermission deniedだったため、metadata／ACLは変更せず保留。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser.read 添付・非text応答遮断
 
