@@ -2,6 +2,23 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 F06.02 ephemeral form fillと最終GETの独立L3
+
+既存`browser.automation action=form_fill/form_submit`をGateway content-review、Control Center、Executor、Browser Adapterへ縦断接続した。`form_fill`はJavaScript／service worker／credential／Cookie／downloadなしで一時DOMへ入力するだけとし、ページGETの効果は`page_read_unclassified`としてownerへ表示する。成功後のGateway receiptはcommand、review、request payload、form markup state、request、ownerのdigestだけをprocess-localに保持する。最終GETは別のL3 reviewを必要とし、Browser Adapterがページ状態・同一origin・GET契約・入力制約・送信先を再取得して照合する。Gateway停止条件を実GET直前に再確認し、receiptを一回だけ消費する。redirect追跡・自動再送をせず、外部効果の意味は未分類のままとする。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Core typecheck／Core TypeScript emit（native isolation build scriptなし） | PASS。 |
+| WebChat package build／Gateway typecheck | PASS。 |
+| 生成Control Center script JavaScript構文／`pnpm docs:check`／日本語基底audit／`git diff --check` | PASS。日本語基底の既存移行負債75件は継続。 |
+| test suite、fixture runner、実Playwright／HTTP／Web、実provider、installed製品、F06全域、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+**UNIT_ID:** rev5.0 QE_BUILD / F06.02 ephemeral form input → separate final GET review. **STATUS:** parser、Gateway content review、Control Center、Executor callback、Browser Adapterのsource経路は`CODE_PRESENT`。runtime往復／実runnerは未確認で、F06.02全体・製品全体は`BUILD_GAP`、P2全体施工を継続する。実Web・外部作用・C08.03 live provider・D4／MINIDORA別repo変更・P13公開／出荷GOは実施していない。
+
+作業中に生成・更新されたignored Core `dist/`（121 files／2,421,756 bytes）とWebChat `dist/`（44 files／1,141,142 bytes）は、開発用再生成物として保持。新規test fixture、外部artifact、非Git資料はなし。`.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は保護して未変更。Gitが古いworktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動整理にPermission deniedとなったが、metadata／ACLは変更せず保持。
+
+開始local／`origin/main`／GitHub `main`=`57de66fadf4b45c85ef9455aff4a3e493153d410`、ahead/behind=0/0。実装commit=`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`を`main`へpushし、push後local／`origin/main`／GitHub `main`一致を確認。実装commit後のlocal recovery branch／remote backup tag current／previous=`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`／`57de66fadf4b45c85ef9455aff4a3e493153d410`。本記録を含むdocs-only closeout後はcurrentを本記録のcommit、previousを実装commitへ更新する。保護された未追跡資産以外の差分は閉包時に再照合する。
+
 ## 2026-11-13 — QE_BUILD rev5.0 browser.read添付・非text応答遮断
 
 `browser.read`が内部HTTP応答の`Content-Disposition`／`Content-Type`を本文処理前に検査し、添付、非text、型不明の応答本文とファイル名をCへ渡さない経路を追加した。通常の`http.fetch`戻り値契約、download保存、browser download有効化は変更していない。拒否応答は固定文で、自動再試行しない。

@@ -22,7 +22,7 @@
 - **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体実装を続け、次consumerを現行実装・工程索引から選び直す。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。局所QC／QAへ移らない。
 - **SAFETY_STATUS:** 2段階ともL3。入力段階はephemeral DOM fillのみ。最終GETには短期・単回receipt、完全form-state再照合、実送信直前のGateway停止条件確認が必要。HTTP外部効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。実Web・外部作用・C08.03 live provider・他repo変更・P13公開／出荷GOはHOLD。
 - **LOCAL_ASSET_STATUS:** Core／WebChatのignored `dist/`を型解決とscript構文確認の再生成物として保持。新規test fixture・artifact・非Git資料なし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護して未変更。
-- **GIT_STATUS:** START_HEAD=`57de66fadf4b45c85ef9455aff4a3e493153d410`。作業前local／`origin/main`／GitHub `main`は一致、ahead/behind=0/0。local復旧branch／remote backup tag current／previous=`57de66fadf4b45c85ef9455aff4a3e493153d410`／`53fcccc1fe5a6f2f44670b71079a9110cb3690b1`。本BUILD_BATCHの実装・状態docsを`main`へfast-forward pushし、完全SHA・二世代ref・clean／protected差分をcloseoutでreadbackする。Gitが古いworktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動整理にPermission deniedとなったため、metadata／ACLを変更せず保留。
+- **GIT_STATUS:** START_HEAD=`57de66fadf4b45c85ef9455aff4a3e493153d410`。開始時local／`origin/main`／GitHub `main`は一致、ahead/behind=0/0。実装commit=`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`を`main`へpushし、GitHub SHA一致を確認。実装push後のlocal／remote recovery current／previous=`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`／`57de66fadf4b45c85ef9455aff4a3e493153d410`。本項を含むdocs-only closeout commitも`main`へpushし、そのcommitをcurrent、実装commitをpreviousとして二世代refを再照合した。Gitが古いworktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動整理にPermission deniedとなったため、metadata／ACLを変更せず保留。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Browser link navigationのL3遷移先束縛 (F06.02限定)
 
