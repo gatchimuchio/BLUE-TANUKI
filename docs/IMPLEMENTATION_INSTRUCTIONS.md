@@ -27,7 +27,27 @@
 - **GIT_STATUS:** source main SHA before/after run was `8f09f9c6f752c375f6547e087bc6b49a7978e21f`; local `main` and `origin/main` matched and only the main worktree was registered. This documentation closeout is a separate docs-only fast-forward; record the resulting local/remote SHA and two-generation recovery refs at commit completion.
 - **NEXT_REQUIRED_CONSUMER:** continue rev5.0 P2 whole-product BUILD from current source and choose the next Blue-repository producer→consumer gap. Do not treat these package-only results as installed OS support or wait for QC/QA before implementation. D4 Pocket/MINIDORA repo edits, C08.03 live provider, uncommissioned external actions, and P13 owner GO remain held.
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外 (P2 SAFE_MIN, 2026-11-14)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02検索フォームの通常入力型拡張 (2026-11-14)
+
+主語は既存`browser.automation action=form_fill/form_submit`、フォーム契約parser、ephemeral Browser Adapterである。目的は既存の二段L3経路を維持したまま、検索フォームの通常入力型をtext/searchに限定しないこと。これはrev5.0 P2全体施工の一部であり、F06.02や製品全体の完成判定ではない。
+
+parserとrunnerで共通の許可型を使い、`input`のtext/search/email/url/tel/number/date/time/month/week/datetime-localと`textarea`を受け付ける。hidden／password／file／checkbox／radio／select等の未許可controlは引き続き拒否する。textareaだけはtab・改行を許可し、ephemeral DOM値をLFへ正規化、GET queryをCRLFへ正規化する。その他のcontrol byteは拒否する。HTML native constraint validationを入力receipt返却前と最終GET前に行う。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `git diff --check` | PASS。 |
+| `corepack pnpm docs:check` | PASS。日本語基底の移行負債75件の注意を維持。 |
+| test suite、Browser Adapter runtime、Gateway L3往復、実Web／HTTP、provider、installed製品、F06全域、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06.02 common search-form input controls。
+- **STATUS:** parser→ephemeral fill runner→native constraint validation→既存の別L3 final GET経路をソース上で拡張。実runner未実行のためF06.02全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を続け、次のBlue-owned producer→consumer gapを現行HEADから選び直す。F06.03の所有試験サイト往復、他OSの全体入口、G09.01 D4側consumerは未成立。C08.03実provider、D4 Pocket／MINIDORA別repo変更、未委任外部作用、P13公開／出荷GOは保留する。
+- **SAFETY_STATUS:** 入力と最終GETのL3を分離し、短期・単回receipt、state digest、同一origin GET、redirect拒否、結果不明時no-retryを維持。JavaScript／credential／Cookie／download／任意フォームは有効化していない。GETの外部効果は未分類。
+- **LOCAL_ASSET_STATUS:** package/build出力なし。hash・読取用に`%TEMP%`へ作成した三点セット文書コピー3件（2,184,478 bytes）はWindowsごみ箱へ移動し、各元path不在・ごみ箱内各1件を確認。元ZIPとrepo正本は保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。Gitのcommit後stale worktree metadata整理はPermission deniedとなったため、metadata／ACLを変更せず保留。
+- **GIT_STATUS:** 開始HEAD=`5d40ada6b8b409420e51353045a7a118fe37439e`。開始時local／`origin/main`／GitHub `main`一致、local recovery branch／remote backup tag current/previous=`5d40ada6b8b409420e51353045a7a118fe37439e`／`a882a2aa5693b694236a2e2ac7e645d536c8d211`。実装commit=`4a31043eda21579a5c62381575e84b2ad893baf2`はGitHub `main`へfast-forward push済み。closeout反映後のmainと復旧ref二世代はこのBUILD_BATCH終端で再照合する。
+
+## 前段完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / CLI受信内容の運用ログ除外 (2026-11-14)
 
 主語はBLUE-TANUKIの通常CLI one-shot requestとGateway運用ログである。目的は、利用者がCLIへ入力した依頼本文をdiagnostic logへ複写せず、依頼相関に必要なmetadataだけを残すこと。CLI回答の表示、HDS処理、memory/history、外部作用は変更しない。
 
