@@ -2,6 +2,25 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 Control Center初回起動のローカル認証引継ぎ (G02.02)
+
+Windows／Unix launcherが`.env`から現在のWebChatと設定済み役割tokenを読み、health gate通過後にloopback上のWebChat issuerへheaderで渡す。issuerは各tokenを既存設定値と照合し、credentialを含まない32-byte random ticketを発行する。Gatewayはticket自体のSHA-256だけを30秒保持し、最大32件に制限する。交換はloopback client、Host／Origin／port、same-origin fetchを確認し、bodyのticketを期限内に一度だけ消費して、no-store応答で既存token束を返す。
+
+launcherはticketをControl Center URL fragmentへ一時的に置く。Control Center scriptは最初のfetch前にfragmentをhistoryから消し、同一originのexchange endpointだけを呼ぶ。成功時は既存のpassword欄とsessionStorage経路へ役割別tokenを設定し、WebChatへ接続する。owner tokenは既存owner操作用password欄へ設定しsessionStorageへ保存しない。仕事本文の送信・承認・作用を行わず、既存HDS／Approval／L3／Broker経路を変更しない。browserに渡す応答は`no-store`、Windows launcherの発行通信はproxy／redirectなし、Unix Node built-in HTTPは専用non-proxy agent・4秒timeoutを指定する。非loopback bindは自動handoff対象外。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| WebChat／Gateway typecheck、WebChat build、生成Control Center JavaScript構文 | PASS。 |
+| PowerShell AST／Authorization header設定（dummy値・HTTP送信なし） | PASS。 |
+| POSIX `sh -n`／inline Node `node --check -`／`git diff --check` | PASS。 |
+| test suite、実Gateway／HTTP issuer・exchange、installed Windows／Linux／macOS GUI、全体G02／P2、BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+状態はlauncher→issuer→短期ticket→same-origin交換→既存Control Center認証入力のソース経路を`WIRED`。実行consumerは未確認のためG02.02は`BUILD_GAP`。次はP2全体施工でC/J/M仕事閉路・safe Broker作用・結果/M帰還と全OS入口の実接続を進める。C08.03 provider live、OD-03外部作用、D4／MINIDORA変更、P13公開・出荷GOは保留。
+
+生成物は再生成したignored `packages/channel-webchat/dist/`のみで、型解決／script構文確認に使用して保持。test fixture・package artifact・Tempファイルなし。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。旧Worktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動整理はACL拒否のためmetadata／ACLを変更せず保留。
+
+開始main=`d208a0a3ebe2493cd1ad7142f1c3a51099cdb9ea`。implementation commits=`5a97ecfbf536cfc922438a69d58e3f51c4e7d582`／`f45506e6d87b58eadd03eb20798e3fd36db435cb`はGitHub `main`へ順にfast-forward pushしremote SHAをreadback確認。push後recovery local branch／remote tag current／previous=`f45506e6d87b58eadd03eb20798e3fd36db435cb`／`5a97ecfbf536cfc922438a69d58e3f51c4e7d582`。本履歴を含むdocs closeoutをpush後、currentはcloseout HEAD、previousは最新implementation commitとして再照合する。
+
 ## 2026-11-13 — QE_BUILD rev5.0 Linux／macOS installed launcher health gate (G02.01/G02.03)
 
 Unix共通`BlueTanukiLauncher.sh`で、`resident-start`／launch／open／restart／safe-modeがmanaged Gatewayを起動または再利用した後、`/healthz`=200を最大15秒確認してからready扱いする。health probeはNode built-in HTTPを使い、HTTP redirectを追わず、credentialを送らず、localhost／loopback／wildcard loopback／OS上のlocal interface addressに宛先を限定する。managed process identityをhealth確認後に再照合する。GUIを開く`open`／`launch`／`resident-open`は開く直前にもmanaged processとhealthを短時間再確認する。

@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03)
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02)
+
+Windows／Unix launcherからmanaged GatewayのWebChat tokenをloopbackだけで短時間の単回ticketへ束縛し、Control Centerがsame-origin no-store交換後に既存password入力とsessionStorageを設定してWebChatへ接続する。Unixは専用non-proxy HTTP agentと4秒timeout、Windowsはproxy・redirect無効を使う。URL・出力へstatic credentialを載せず、仕事送信や承認は行わない。WebChat／Gateway typecheck、WebChat build、生成script構文、PowerShell AST／dummy header設定、POSIX shell／inline Node構文、`git diff --check`はPASS。test suite・実Gateway／HTTP・installed GUI・全G02／P2・BUILD_COVERED・QC／QAはNOT_RUN／未成立。これは初回画面のsource-level producer→consumer接続で、G02全体・製品完成の証拠ではない。最新実装commit=`f45506e6d87b58eadd03eb20798e3fd36db435cb`までGitHub mainへpush済み。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03)
 
 Linux／macOS共通のinstalled launcherで、resident起動・再起動・safe mode後にmanaged process identityを再照合し、local `/healthz`=200を最大15秒待つようにした。Control Centerの各入口は開く直前にもhealthを確認し、未readyなら開かずDoctor／ログを案内する。失敗後もmanaged process、DataRoot、ユーザーデータを保持する。POSIX shell構文、inline Node probe構文、`git diff --check`、`corepack pnpm docs:check`はPASS。docs checkは日本語基底の既存移行負債75件を注意表示した。test、Linux／macOS installed runtime・GUI、全体G02／P2、QE_QC／QE_QAはNOT_RUN／未成立。これはG02入口のsource-level P2 BUILDであり、製品完成の証拠ではない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

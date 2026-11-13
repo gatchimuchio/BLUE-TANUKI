@@ -2,7 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02, 2026-11-14)
+
+主語はBLUE-TANUKIのWindows／Unix launcher、managed GatewayのWebChat認証、既存Control Centerである。目的は、製品launcherからControl Centerを開いた初回に、手作業で.env内のtokenを転記せず、既存の通常GUIへ接続すること。これはP2全体施工中の初回利用consumer接続であり、G02全体または製品完成の判定ではない。
+
+LauncherはGateway health gate通過後、loopback宛てだけに.env由来の既存WebChat／設定済み役割tokenをheaderで渡し、30秒・単回のopaque ticketを発行する。GatewayはticketのSHA-256だけを短時間保持する。ticketはURL fragmentに限ってブラウザーへ渡し、Control Center scriptは最初の通信より前にfragmentを履歴から消し、same-origin loopbackのno-store交換経路でtokenを受け取る。既存のpassword inputとsessionStorage契約へ接続し、WebChatを開くだけで接続する。owner tokenは既存owner操作用password欄へだけ設定し、sessionStorageへ保存しない。仕事本文の送信、承認、作用は行わず、既存HDS／Approval／L3経路を変更しない。
+
+Launcherの発行通信はWindowsでproxy・redirectを無効化し、UnixではNode built-in HTTPへ専用non-proxy agentと4秒timeoutを指定する。URL・標準出力・固定エラー文にstatic credentialやticketを出さない。非loopback bindにはhandoffを発行しない。発行／交換はloopback client、Host／Origin／portを照合し、交換はOrigin必須とsame-origin fetchを確認する。credentialをブラウザーへ返す応答は`no-store`とする。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| WebChat／Gateway typecheck、WebChat build、生成Control Center JavaScript構文 | PASS。 |
+| Windows PowerShell AST、Authorization header設定（dummy値のみ・送信なし） | PASS。 |
+| POSIX `sh -n`、Unix inline Node構文、`git diff --check` | PASS。 |
+| test suite、実Gateway／HTTP handoff、installed Windows／Linux／macOS GUI、全体G02／P2、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / launcher→WebChat one-use Control Center handoff.
+- **STATUS:** launcher→loopback ticket issuer→single-use exchange→既存Control Center認証入力のソース経路を接続。実Gateway／HTTP／installed GUIは未実行のためG02.02全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続する。次のBUILD_BATCH開始時に現行HEADからC→J→Broker→実結果→J/M帰還の呼出し経路と5OS導入後利用を照合し、最初の実未接続consumerを選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+- **SAFETY_STATUS:** tokenはlauncherのloopback request headerと同一originのno-store応答だけを通る。URL fragmentには30秒・単回ticketだけを含み、script実行時に消去する。既存password欄でmasked表示し、owner tokenはstorageへ残さない。実tokenを使うprovider接続、仕事送信、実行承認、外部作用、別repo変更、P13公開／出荷GOなし。
+- **LOCAL_ASSET_STATUS:** WebChat packageのignored `dist/`をbuildで再生成し型解決／script syntax確認に使用して保持。新規test fixture／installer artifact／Tempファイルなし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** START_HEAD=`d208a0a3ebe2493cd1ad7142f1c3a51099cdb9ea`。implementation commits=`5a97ecfbf536cfc922438a69d58e3f51c4e7d582`／`f45506e6d87b58eadd03eb20798e3fd36db435cb`をGitHub `main`へfast-forward pushしreadback確認。implementation後のrecovery local branch／remote tag current／previous=`f45506e6d87b58eadd03eb20798e3fd36db435cb`／`5a97ecfbf536cfc922438a69d58e3f51c4e7d582`。本記録のcloseout後はcurrentをdocs closeout commit、previousを`f45506e6d87b58eadd03eb20798e3fd36db435cb`へ更新して再照合する。旧Worktree metadataの自動整理はACL拒否のため変更せず保留。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
 
 主語はLinux／macOS installed productの共通Unix launcher、managed Gateway process、Control Center入口である。目的はprocessが存在するだけの状態をreadyと誤認せず、Gatewayの`/healthz`が200を返した場合だけControl Centerを開くこと。これはG02.01/G02.03に残る通常入口のP2施工であり、Setup・更新・全lifecycleや製品全体の成立判定ではない。
 
