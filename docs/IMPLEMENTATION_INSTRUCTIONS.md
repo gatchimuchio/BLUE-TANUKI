@@ -2,27 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則からJ/M結果projectionまで
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則からJ/M結果projection・Control Center引継ぎまで
 
-主語はBLUEの通常Gateway CLI one-shot requestと同一taskのHDS J OperationPlanである。目的はowner指定rulesをCLIのTask producerからJ/Mへ保持し、Executor feedback後に同じrequest・rules digestに結び付く非権威projectionだけを表示すること。rulesのない通常CLI経路は変えない。
+主語はBLUEの通常Gateway CLI task、HDS J OperationPlan、既存Control Center owner再認証実行経路である。目的はCLI起点の明示達成規則を共有private stateのJ/Mへ保持し、owner再認証後の検証済みresult／M receiptを、CLIから後でdigest-only照会できる一続きのconsumerへつなぐこと。規則は同一taskの達成停止だけに使い、permission／approval／外部作用の権限を作らない。
 
-達成規則付きの非空taskを内部owner plan:compute requestとして構成し、authority_context、actor_kind=owner、trust_level=owner、operator_surface=developerをGateway内marker付きで設定する。--organizeとの併用とtask欠落を拒否し、先頭がJSON objectのtaskもstructured plan inputと誤認させない。規則は同一taskの停止判定だけで、permission／approval／外部作用の権限を作らない。
+CLIの達成規則stdin入力は非空taskだけを受け、`--organize`との併用、欠落・重複・過大・invalid UTF-8／JSON／schemaを拒否する。規則付きrequestと状態照会だけを`serve`と同じ`BLUE_TANUKI_STATE_ROOT`のOperationPlan／result-M storeへ接続し、通常CLIのprovider経路には状態照会を混ぜない。結果表示はJ/Mの照合後、`--goal-completion-status <request-id-digest>`という独立照会用HDS controlで再取得する。未知ID・追加引数・owner/channel不一致・不整合policyはfail-closed。status controlはno-op commandとoutput auditを通すが、M receipt再照合と監査記録は行う。task本文・規則・result本文を出さない。
 
-共通command finalizerにfeedback後projection hookを追加した。JがExecutor feedbackを消費してOperationPlan memoryを再照合した後、request ID digest・rules digest・全rule count・goal_completion_rules_satisfied・64桁のevidence digestがすべて一致する場合だけ「達成」と表示する。不一致・曖昧・未確認は達成とせず、rules指定時はraw LLM candidate contentをCLI出力へ出さない。出力projectionはHDS output auditへ渡す。
+既存Control Centerは再起動後も同じprivate stateのplanを読み、owner再認証に束縛したreviewへ渡す。status照会はHDSが一意plan、request digest、owner/channel、task identity、目標本文digest、規則digestを再照合し、M receiptを反映した非権威状態だけを返す。達成・保留・進行中のprojectionは証拠digestと規則件数に限定し、実行権限を付与しない。
 
 | QE_BUILD限定確認 | 結果 |
 |---|---|
-| CLI rules parser／内部owner request／空task拒否／JSON task境界 | PASS、5/5 tests。 |
-| CLI channel request→HDS J→fixture candidate→test owner step review→Executor file.search→execution result reconciliation→M receipt→CLI projection（達成／不一致／曖昧） | PASS、3/3 cases。合成workspace・test-owned state・fixture backend。 |
-| Gateway typecheck／Gateway build | PASS。 |
-| pnpm docs:check／git diff --check | PASS。日本語基底の既存移行負債75件は注意表示。 |
-| runCli()子process実行、provider／外部作用、全suite、installed／5OS、QE_QC／QE_QA | NOT_RUN。child-process smoke commandは一時test rootのrecursive cleanupを含んだため実行policyが起動前に拒否。回避せず、temp rootは作成されていない。 |
+| CLI達成規則／status引数parser・内部owner request | PASS、6/6 tests。重複・不正digest・未知引数境界を確認。 |
+| J/M達成・不一致・曖昧対応付けの再起動後status照会 | PASS、3/3 cases。test-owned workspace／SQLite／fixture Executor。 |
+| CLI-origin planの再起動後Control Center owner再認証引継ぎ | PASS、1/1 case。fixture owner review commandまで。作用実行は別のtest条件であり、実人間認証を証明しない。 |
+| Protocol／HDS-BRAIN build、Gateway typecheck／build | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債75件は注意表示。 |
+| focused tests | PASS、CLI parser 6/6、J/M status・Control Center引継ぎ4/4（同test fileの47件はskip）。初回status testで目標digest照合の実装不一致を検出し、既存policy契約のSHA-256照合へ是正後、同じ条件で再実行PASS。 |
+| runCli() process全体のinstalled smoke、provider／外部作用、全suite、5OS、QE_QC／QE_QA | NOT_RUN。 |
 
-- STATUS: CLI request producer・J/M status consumerをコード接続し、provider-free fixture経路でCLI-origin requestから実result/M receipt後のprojectionを確認。runCli() process全体の短時間smokeは未確認で、production provider／installed productの証拠ではない。QE_BUILD、SYSTEM_SHAPED=false、BUILD_COVERED=false、QE_QC／QE_QA未成立、P13 PENDING_OWNER_GOを維持。
-- NEXT_REQUIRED_CONSUMER: CLI-origin OperationPlanを既存のowner再認証付きControl Center review/execution経路へ渡し、そのresult/M receiptをCLIの次回projectionへ結ぶconsumerを確認する。加えてP2全域の未接続producer／consumerを継続し、このrules sliceの局所品質検査へ滞留しない。
-- SAFETY_STATUS: C08.03 real provider、資格情報、外部作用、他repo変更、P13公開・出荷GOはHOLD。testでは合成file.searchのみをtest-owned workspaceで実行し、達成rulesによるpermission生成なし。
-- LOCAL_ASSET_STATUS: focused testの一時workspace／SQLiteはtest cleanup済み。Gatewayのignored dist/は再生成可能な開発用として保持。protected .codex-attachments/、.codex-remote-attachments/、Linux isolation target/は未変更。
-- GIT_STATUS: 編集前local／origin／GitHub main=ebab0c0c6129c68e5d4af100bbe96865bb149933、ahead／behind=0/0。編集前local復旧branch／remote tag current=eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980、previous=7ce0778257f96f8d367cc6898a805f05aebfb736。編集前にCASで2世代を回転し、編集開始main=ebab0c0c6129c68e5d4af100bbe96865bb149933をcurrent、旧current=eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980をpreviousへ保存。BUILD_BATCH確定後にmainへcommit/pushし、remote SHAを照合する。
+- STATUS: CLI producer、共有J/M永続状態、既存Control Center再認証consumer、次回CLI status projectionをprovider-free fixtureで接続し、限定`WIRED`。runCli() process全体／installed製品／実人間認証は未確認。QE_BUILDを継続し、SYSTEM_SHAPED=false、BUILD_COVERED=false、QE_QC／QE_QA未成立、P13 PENDING_OWNER_GOを維持。
+- NEXT_REQUIRED_CONSUMER: rev5.0 P2全域のproducer→consumer欠損を続け、Windows-firstの全体仕事経路をつなぐ。局所品質検査へ工程を移さず、未実装機能群をconsumer単位で施工する。
+- SAFETY_STATUS: C08.03 real provider、実資格情報、live外部作用、別repo変更、P13公開・出荷GOはHOLD。fixtureのfile.searchはtest-owned workspace限定。statusは照会専用no-op command・digest-only・output audit付きで、M receipt再照合と監査記録を行う。rulesによるpermission生成なし。
+- LOCAL_ASSET_STATUS: focused testの一時workspace／SQLiteはtest cleanup済み。Gateway／HDS／Protocolのignored build出力は開発用として保持。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
+- GIT_STATUS: 編集前local／origin／GitHub main=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、ahead／behind=0/0。編集前local recovery branch／remote tag current=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、previous=`ebab0c0c6129c68e5d4af100bbe96865bb149933`。編集前にCASで二世代を保全済み。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupはACL拒否のため触れず保留。BUILD_BATCHと閉包記録をmainへpushし、remote SHAとrecovery refsを再照合する。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則のGateway ingress
 

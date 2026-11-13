@@ -666,11 +666,13 @@ export const OperationPlanControlSchema = z.discriminatedUnion("action", [
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
   z.object({ action: z.literal("result"), plan_id: Id, revision_digest: Digest, step_id: Id,
     owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
+  z.object({ action: z.literal("status"), request_id_digest: Digest }).strict(),
 ]);
 export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
 export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;
 export type OperationPlanReceiptReconciliationControl = Extract<OperationPlanControl, { action: "reconcile" }>;
 export type OperationPlanResultReturnControl = Extract<OperationPlanControl, { action: "result" }>;
+export type OperationPlanGoalCompletionStatusControl = Extract<OperationPlanControl, { action: "status" }>;
 export type OperationPlanWaitResumeControl = Extract<OperationPlanControl, { action: "resume_wait" }>;
 export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v2";
 /** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */

@@ -19,11 +19,13 @@ import {
   createLogger,
   type SessionStore,
 } from "@blue-tanuki/core";
-import type { InboundRequest } from "@blue-tanuki/protocol";
+import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
 import {
   createCliInboundRequest,
+  createCliGoalCompletionStatusRequest,
   cliGoalCompletionRulesRequested,
   CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
+  parseCliGoalCompletionStatusArguments,
   readCliGoalCompletionRulesInput,
 } from "./cli_goal_completion_rules.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -35,7 +37,7 @@ import {
 } from "./llm_config.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput } from "./finalize_command_output.js";
-import { renderCurrentCliGoalCompletionProjection } from "./cli_goal_completion_projection.js";
+import { renderCurrentCliGoalCompletionProjection, renderCurrentCliGoalCompletionStatusProjection } from "./cli_goal_completion_projection.js";
 import { approvalDeniedFeedback, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
@@ -59,6 +61,8 @@ import { developmentHandoffStoreFromEnvironment } from "./development_handoff_st
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
+import { OperationPlanStateStore } from "./operation_plan_store.js";
+import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -113,17 +117,28 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   let computeBudget: GatewayComputeBudgetStore | undefined;
   let resourceBackpressure: GatewayResourceBackpressure | undefined;
   let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
+  let operationPlanState: OperationPlanStateStore | undefined;
   try {
+    const cleanArgs = stripEnvFileArgs([...argv]);
+    const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
+    const goalCompletionStatus = parseCliGoalCompletionStatusArguments(cleanArgs);
+    if (completionRulesRequested && goalCompletionStatus) {
+      throw new Error("--goal-completion-status cannot be combined with --goal-completion-rules-stdin");
+    }
+    if (completionRulesRequested || goalCompletionStatus) {
+      operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
+    }
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
     await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure,
-      mcpRuntimeObservations);
+      mcpRuntimeObservations, operationPlanState, goalCompletionStatus);
   } finally {
     computeBudget?.close();
     executionStore?.close();
     mcpRuntimeObservations?.close();
+    operationPlanState?.close();
     ownerLease.close();
   }
 }
@@ -135,14 +150,22 @@ async function runCliWithExecutionStore(
   computeBudget: GatewayComputeBudgetStore,
   resourceBackpressure: GatewayResourceBackpressure,
   mcpRuntimeObservations: McpRuntimeObservationStore,
+  operationPlanState: OperationPlanStateStore | undefined,
+  goalCompletionStatus: ReturnType<typeof parseCliGoalCompletionStatusArguments>,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
+  if (completionRulesRequested && goalCompletionStatus) {
+    throw new Error("--goal-completion-status cannot be combined with --goal-completion-rules-stdin");
+  }
   const requestArgs = completionRulesRequested
     ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
-    : cleanArgs;
+    : goalCompletionStatus?.remaining_args ?? cleanArgs;
   if (completionRulesRequested && requestArgs.includes("--organize")) {
     throw new Error("--goal-completion-rules-stdin cannot be combined with --organize");
+  }
+  if (goalCompletionStatus && requestArgs.length > 0) {
+    throw new Error("--goal-completion-status accepts only a request digest");
   }
   if (completionRulesRequested && process.stdin.isTTY) {
     throw new Error("--goal-completion-rules-stdin requires piped UTF-8 JSON on stdin");
@@ -177,10 +200,20 @@ async function runCliWithExecutionStore(
     ? `/organize\n${organizationSource}`
     : userInput || "Hello, BLUE-TANUKI";
 
-  const plugins = await loadPluginRuntime();
-  plugins.enforceLLMConfig(process.env);
-  plugins.enforceSessionConfig(process.env);
-  plugins.enforceAuditConfig(process.env);
+  const inbound: InboundRequest = goalCompletionStatus
+    ? createCliGoalCompletionStatusRequest({ id: randomUUID(), timestamp: Date.now(),
+      request_id_digest: goalCompletionStatus.request_id_digest })
+    : createCliInboundRequest({
+      id: randomUUID(),
+      content,
+      timestamp: Date.now(),
+      ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),
+    });
+
+  const plugins = goalCompletionStatus ? undefined : await loadPluginRuntime();
+  plugins?.enforceLLMConfig(process.env);
+  plugins?.enforceSessionConfig(process.env);
+  plugins?.enforceAuditConfig(process.env);
 
   ownerLease.assertActive();
   const memoryStore = buildHDSMemoryStore(process.env);
@@ -189,7 +222,10 @@ async function runCliWithExecutionStore(
     memory: memoryStore,
     llm_route: buildLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
+    ...(operationPlanState ? { operation_plan_state: operationPlanState,
+      operation_plan_memory: operationResultMemoryStorage(process.env) } : {}),
   });
+  try {
   ownerLease.assertActive();
   const startupRecovery = reconcileStartupExecutionState(hds, executionStore, ownerLease.executionEpoch);
   gatewayLog.info("CLI startup saved-result reconciliation", {
@@ -209,9 +245,45 @@ async function runCliWithExecutionStore(
       result_store_readable: startupRecovery.result_store_readable,
       wait_compute_reconciliation_ready: startupRecovery.wait_compute_reconciliation_ready,
     });
-    hds.closeOperationPlanMemory();
     throw new Error("gateway_startup_reconciliation_unresolved");
   }
+
+  if (goalCompletionStatus) {
+    const decision = hds.decide(inbound);
+    const command = decision.command;
+    if (!command) {
+      gatewayLog.info("CLI goal-completion status query was not accepted", {
+        request_id: inbound.id,
+        decision: decision.log.commit.decision,
+      });
+      auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+      return;
+    }
+    if (command.type !== "noop" || command.payload.control_event !== "operation_plan_goal_completion_status" ||
+        command.payload.request_id_digest !== goalCompletionStatus.request_id_digest) {
+      hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: inbound.user,
+        reason: "cli_goal_completion_status_command_unexpected" });
+      throw new Error("cli_goal_completion_status_command_unexpected");
+    }
+    const feedback: ExecuteFeedback = { command_id: command.id, status: "success",
+      result: { content: "Read-only J goal completion status projection." }, metrics: { duration_ms: 0 } };
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback,
+      target_surface: "cli",
+      request_id: inbound.id,
+      rendered_output_after_feedback: () => renderCurrentCliGoalCompletionStatusProjection({
+        hds,
+        request_id_digest: goalCompletionStatus.request_id_digest,
+      }),
+    });
+    if (finalized.rendered_output) process.stdout.write(`${finalized.rendered_output}\n`);
+    auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+    return;
+  }
+
+  if (!plugins) throw new Error("cli_plugin_runtime_unavailable");
 
   gatewayLog.info("BLUE-TANUKI starting (CLI one-shot)");
   gatewayLog.info("LLM config", describeLLMConfig());
@@ -245,12 +317,6 @@ async function runCliWithExecutionStore(
     session_store,
   });
 
-  const inbound: InboundRequest = createCliInboundRequest({
-    id: randomUUID(),
-    content,
-    timestamp: Date.now(),
-    ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),
-  });
   const organizationSourceText = documentOrganizationSourceFromRequest(inbound);
   const organizationStore = organizationSourceText === null
     ? null
@@ -539,4 +605,7 @@ async function runCliWithExecutionStore(
     entries: hds.getAudit().size(),
     chain_valid: hds.getAudit().verify(),
   });
+  } finally {
+    hds.closeOperationPlanMemory();
+  }
 }

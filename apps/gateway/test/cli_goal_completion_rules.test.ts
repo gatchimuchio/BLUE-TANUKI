@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { isGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
 import {
   CLI_GOAL_COMPLETION_RULES_MAX_BYTES,
+  createCliGoalCompletionStatusRequest,
   createCliInboundRequest,
   cliGoalCompletionRulesRequested,
+  parseCliGoalCompletionStatusArguments,
   parseCliGoalCompletionRulesInput,
   readCliGoalCompletionRulesInput,
 } from "../src/cli_goal_completion_rules.js";
@@ -26,6 +28,34 @@ describe("CLI goal completion rules input", () => {
       "--goal-completion-rules-stdin",
       "--goal-completion-rules-stdin",
     ])).toThrow("cli_goal_completion_rules_flag_repeated");
+  });
+
+  it("accepts one digest-only readback selector and creates an owner-bound CLI status request", () => {
+    const digest = "a".repeat(64);
+    expect(parseCliGoalCompletionStatusArguments(["--goal-completion-status", digest])).toEqual({
+      request_id_digest: digest,
+      remaining_args: [],
+    });
+    expect(() => parseCliGoalCompletionStatusArguments(["--goal-completion-status", digest,
+      "--goal-completion-status", digest])).toThrow("cli_goal_completion_status_flag_repeated");
+    expect(() => parseCliGoalCompletionStatusArguments(["--goal-completion-status"])
+      ).toThrow("cli_goal_completion_status_digest_required");
+    expect(() => parseCliGoalCompletionStatusArguments(["--goal-completion-status", "not-a-digest"])
+      ).toThrow("cli_goal_completion_status_digest_required");
+
+    const request = createCliGoalCompletionStatusRequest({ id: "status-request", timestamp: 3,
+      request_id_digest: digest.toUpperCase() });
+    expect(request.content).toBe(`plan:status ${JSON.stringify({ request_id_digest: digest })}`);
+    expect(request.channel).toBe("cli");
+    expect(request.user).toBe("local-user");
+    expect(request.goal_completion_rules).toBeUndefined();
+    expect(isGatewayInternalInboundRequest(request)).toBe(true);
+    expect(request.metadata).toMatchObject({
+      "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner",
+      "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.operation_core.used_for_authority": false,
+    });
   });
 
   it("parses only bounded, schema-valid UTF-8 JSON without echoing input", () => {

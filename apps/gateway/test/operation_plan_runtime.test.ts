@@ -17,7 +17,7 @@ import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservation
   MemoryPersonalizationTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   OperationPlanCheckpointEnvelopeSchema,
-  type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
+  type ExecuteCommand, type ExecuteFeedback, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { planGatewayInboundBoundary } from "../src/serve.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -25,8 +25,9 @@ import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
-import { createCliInboundRequest } from "../src/cli_goal_completion_rules.js";
-import { renderCurrentCliGoalCompletionProjection } from "../src/cli_goal_completion_projection.js";
+import { createCliGoalCompletionStatusRequest, createCliInboundRequest } from "../src/cli_goal_completion_rules.js";
+import { renderCurrentCliGoalCompletionProjection, renderCurrentCliGoalCompletionStatusProjection } from "../src/cli_goal_completion_projection.js";
+import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -208,13 +209,9 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const workspace = join(root, "workspace"); await mkdir(workspace);
     await writeFile(join(workspace, "blue.txt"), "blue\n", "utf8");
     vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
-    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
-    const privateRoot = join(root, "private-state");
-    const resultMemoryRoot = join(privateRoot, "operation-result");
-    await mkdir(resultMemoryRoot, { recursive: true });
-    const memory = { private_state_root: privateRoot,
-      database_path: join(resultMemoryRoot, "j-control.sqlite"),
-      memory_database_path: join(resultMemoryRoot, "m-state.sqlite") };
+    const stateEnv = { BLUE_TANUKI_STATE_ROOT: root };
+    const store = OperationPlanStateStore.fromEnvironment(stateEnv);
+    const memory = operationResultMemoryStorage(stateEnv);
     let hds: HDSUpperController | undefined;
     let executionStore: GatewayExecutionIntentStore | undefined;
     const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
@@ -312,6 +309,28 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
         .toMatchObject({ status: expectedStatus, reason_code: expectedReasonCode });
+      const requestIdDigest = createHash("sha256").update(origin.id, "utf8").digest("hex");
+      const statusDecision = hds.decide(createCliGoalCompletionStatusRequest({ id: randomUUID(), timestamp: Date.now(),
+        request_id_digest: requestIdDigest }));
+      expect(statusDecision.command?.type, statusDecision.log.commit.reason).toBe("noop");
+      expect(statusDecision.command?.payload).toMatchObject({ control_event: "operation_plan_goal_completion_status",
+        request_id_digest: requestIdDigest });
+      const statusFeedback: ExecuteFeedback = { command_id: statusDecision.command!.id, status: "success",
+        result: { content: "Read-only J goal completion status projection." }, metrics: { duration_ms: 0 } };
+      const statusFinalized = finalizeCommandOutput({ hds, command: statusDecision.command!, feedback: statusFeedback,
+        request_id: statusDecision.log.request_id, target_surface: "cli",
+        rendered_output_after_feedback: () => renderCurrentCliGoalCompletionStatusProjection({ hds: hds!,
+          request_id_digest: requestIdDigest }) });
+      expect(statusFinalized.rendered_output).toContain(expectedStatus === "achieved" ? "達成判定: 達成" : "達成判定: 保留");
+      expect(statusFinalized.rendered_output).toContain(`計画照会ID digest: ${requestIdDigest}`);
+      expect(statusFinalized.rendered_output).toContain("この照会は外部作用や計画実行を行わず、達成判定は権限を付与しません。");
+      expect(statusFinalized.rendered_output).not.toContain("blue\n");
+      expect(hds.getAudit().verify()).toBe(true);
+
+      const unknownStatus = hds.decide(createCliGoalCompletionStatusRequest({ id: randomUUID(), timestamp: Date.now(),
+        request_id_digest: "f".repeat(64) }));
+      expect(unknownStatus.command).toBeNull();
+      expect(unknownStatus.log.commit.reason).toContain("plan_control_denied:plan_goal_completion_status_unavailable");
       if (expectedStatus === "achieved") {
         const afterRestart = reviewCli(hds, candidate, "search");
         expect(afterRestart.command).toBeNull();
@@ -322,6 +341,59 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       executionStore?.close(); store.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("CLI owner計画を同じprivate-stateから再起動後のControl Center owner再認証レビューへ渡す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-cli-owner-handoff-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    await writeFile(join(workspace, "blue.txt"), "synthetic blue fixture\n", "utf8");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const stateEnv = { BLUE_TANUKI_STATE_ROOT: join(root, "state") };
+    const store = OperationPlanStateStore.fromEnvironment(stateEnv);
+    const memory = operationResultMemoryStorage(stateEnv);
+    let hds: HDSUpperController | undefined;
+    try {
+      const rules = { schema_version: "blue-tanuki.goal-completion-rules.v1" as const,
+        rules: [{ rule_id: "matching-line", operation: "file.search" as const,
+          target: { kind: "directory" as const, id: workspace }, output_pointer: "/matches/0/line", expected_value: "blue" }] };
+      const origin = createCliInboundRequest({ id: randomUUID(), content: "find blue", timestamp: Date.now(),
+        goal_completion_rules: rules });
+      const candidate = plan(origin.id, workspace);
+      candidate.steps = [candidate.steps[0]!];
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      const initial = hds.decide(origin);
+      expect(initial.command?.type, initial.log.commit.reason).toBe("llm_call");
+      await rig(hds, candidate).run(initial.command!);
+      expect(store.load()?.plans).toHaveLength(1);
+
+      hds.closeOperationPlanMemory();
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      const projected = projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans);
+      const planProjection = projected.plans[0]!;
+      expect(projected.status).toBe("available");
+      expect(planProjection).toMatchObject({ owner_authentication_required: true, owner_reauthentication_binding: {
+        owner_identity_digest: operationPlanDigest("local-user"), channel_identity_digest: operationPlanDigest("cli"),
+      } });
+
+      const review = hds.decide(createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify({ plan_id: planProjection.plan_id,
+          revision_digest: planProjection.revision_digest, step_id: operationPlanDigest("search"),
+          owner_reauthentication: planProjection.owner_reauthentication_binding })}`,
+        timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      }));
+      expect(review.command?.type, review.log.commit.reason).toBe("tool_call");
+      expect(hds.operationPlanCommandIsCurrent(review.command!)).toBe(true);
+      expect(store.load()?.plans).toHaveLength(1);
+    } finally {
+      hds?.closeOperationPlanMemory();
+      store.close();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("HDS plan projection emits only the one-way execution ticket digest", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-execution-ticket-projection-"));

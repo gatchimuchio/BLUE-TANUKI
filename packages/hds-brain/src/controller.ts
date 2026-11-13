@@ -1243,6 +1243,7 @@ export class HDSUpperController {
     let failureReviewProjection: FailureReviewProjection | undefined;
     let reflection: ResultObservationProjection | undefined;
     let savedResultReturn: OperationPlanSavedResultReturnProjection | undefined;
+    let goalCompletionStatusProjection: ReturnType<OperationPlanLedger["inspectGoalCompletionStatus"]> | undefined;
     const controlCaller = req;
     const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
     if (options.plan_compute_source_refresh_failure &&
@@ -1367,6 +1368,17 @@ ${planControl.question}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
               "blue_tanuki.operation_plan.control_event": "result_return",
               "blue_tanuki.operation_plan.result_projection_digest": operationPlanDigest(savedResultReturn) } });
+        } else if (planControl.action === "status") {
+          if (req.channel !== "cli" || req.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+              req.metadata?.["blue_tanuki.trust_level"] !== "owner") {
+            throw new Error("plan_goal_completion_status_requires_cli_owner");
+          }
+          goalCompletionStatusProjection = this.operationPlans.inspectGoalCompletionStatus(planControl, req);
+          req = createGatewayInternalInboundRequest({ ...req, content: "plan:status",
+            metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
+              "blue_tanuki.operation_plan.control_event": "goal_completion_status",
+              "blue_tanuki.operation_plan.request_id_digest": goalCompletionStatusProjection.request_id_digest,
+              "blue_tanuki.operation_plan.status_projection_digest": operationPlanDigest(goalCompletionStatusProjection) } });
         } else if (planControl.action === "resume_wait") {
           const wait = this.operationPlans.inspectInterruptedWaitForResume(planControl, controlCaller);
           const resumedPurpose = wait.goal_purpose_binding
@@ -1432,6 +1444,7 @@ ${planControl.question}`,
           "plan_goal_purpose_scope_changed",
           "plan_goal_purpose_relation_unavailable", "plan_goal_purpose_relation_stale",
           "plan_goal_purpose_relation_conflicts", "plan_goal_purpose_relation_unverified",
+          "plan_goal_completion_status_requires_cli_owner", "plan_goal_completion_status_unavailable",
           "plan_attempted_step_or_dependency_changed", "plan_compute_source_observation_expired",
           "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
@@ -1620,6 +1633,7 @@ ${planControl.question}`,
       : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const
       : planPrefix?.[1]?.toLowerCase() === "compute" ? "operation_plan_compute" as const
       : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
+      : planPrefix?.[1]?.toLowerCase() === "status" ? "operation_plan_goal_completion_status" as const
       : planPrefix?.[1]?.toLowerCase() === "resume_wait" ? "operation_plan_wait_resume" as const
       : planComputeWaitResume ? "operation_plan_wait_resume" as const
       : failureReviewControlRequested ? "failure_review" as const : undefined;
@@ -1809,6 +1823,19 @@ ${planControl.question}`,
             throw new Error("plan_saved_result_return_binding_failed");
           }
           this.operationPlans.bindSavedResultReturn(planControl, controlCaller, command, savedResultReturn);
+        } else if (planControl.action === "status") {
+          if (!goalCompletionStatusProjection || command.type !== "noop" ||
+              command.payload.control_event !== "operation_plan_goal_completion_status" ||
+              command.payload.request_id_digest !== goalCompletionStatusProjection.request_id_digest ||
+              command.payload.projection_digest !== operationPlanDigest(goalCompletionStatusProjection)) {
+            throw new Error("plan_goal_completion_status_command_binding_failed");
+          }
+          this.audit.append({ kind: "operation_plan", event: "goal_completion_status_projection_selected",
+            request_id: req.id, command_id: command.id, projection_digest: operationPlanDigest(goalCompletionStatusProjection),
+            candidate_digest: goalCompletionStatusProjection.plan_id_digest,
+            target_digest: goalCompletionStatusProjection.rules_digest,
+            reason: `rule_count=${goalCompletionStatusProjection.rule_count}`, used_for_authority: false,
+            timestamp: this.nowMs() });
         } else if (planControl.action === "resume_wait") {
           if (command.type !== "llm_call" || planComputeWaitResume?.reason !== "recovery") {
             throw new Error("plan_wait_resume_command_invalid");
@@ -4956,6 +4983,17 @@ ${planControl.question}`,
       return { id: randomUUID(), type: "noop", payload: {
         control_event: "operation_plan_result_return", result_projection_digest: projectionDigest,
       }, upstream_decision };
+    }
+    if (req.metadata?.["blue_tanuki.operation_plan.control_event"] === "goal_completion_status") {
+      const requestIdDigest = req.metadata["blue_tanuki.operation_plan.request_id_digest"];
+      const projectionDigest = req.metadata["blue_tanuki.operation_plan.status_projection_digest"];
+      if (!isGatewayInternalInboundRequest(req) || req.metadata["blue_tanuki.operator_surface"] !== "developer" ||
+          req.content.trim() !== "plan:status" || typeof requestIdDigest !== "string" || !/^[a-f0-9]{64}$/.test(requestIdDigest) ||
+          typeof projectionDigest !== "string" || !/^[a-f0-9]{64}$/.test(projectionDigest)) {
+        throw new Error("plan_goal_completion_status_command_binding_failed");
+      }
+      return { id: randomUUID(), type: "noop", payload: { control_event: "operation_plan_goal_completion_status",
+        request_id_digest: requestIdDigest, projection_digest: projectionDigest }, upstream_decision };
     }
     if (req.content.trim() === "plan:reconcile") {
       return { id: randomUUID(), type: "noop", payload: { control_event: "operation_plan_receipt_reconciliation" }, upstream_decision };

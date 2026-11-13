@@ -4145,6 +4145,40 @@ export class OperationPlanLedger {
     } catch { return false; }
   }
 
+  inspectGoalCompletionStatus(
+    control: Extract<OperationPlanControl, { action: "status" }>,
+    caller: InboundRequest,
+  ): { request_id_digest: string; plan_id_digest: string; rules_digest: string; rule_count: number } {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
+    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
+    if (this.port) {
+      const loaded = this.port.load(Boolean(this.memoryStorage));
+      if ((loaded === null ? null : operationPlanDigest(loaded)) !== this.savedDigest) throw new Error("plan_state_changed");
+    }
+
+    const requestIdDigest = control.request_id_digest.toLowerCase();
+    const matches = this.state.plans.filter((candidate) =>
+      createHash("sha256").update(candidate.revisions[0]!.plan.request_id, "utf8").digest("hex") === requestIdDigest);
+    if (matches.length !== 1) throw new Error("plan_goal_completion_status_unavailable");
+    const plan = matches[0]!;
+    if (plan.owner !== caller.user || plan.channel !== caller.channel) throw new Error("plan_owner_or_identity_mismatch");
+
+    const policy = plan.goal_completion_policy;
+    const sourceRequestId = plan.revisions[0]!.plan.request_id;
+    if (!policy || policy.source_request_id !== sourceRequestId ||
+        policy.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+        policy.task_goal_digest !== taskGoalDigest(plan.goal) ||
+        policy.rules_digest !== operationPlanDigest(policy.rules) || policy.rules.rules.length < 1) {
+      throw new Error("plan_goal_completion_status_unavailable");
+    }
+    return {
+      request_id_digest: requestIdDigest,
+      plan_id_digest: operationPlanDigest(plan.revisions[0]!.plan.plan_id),
+      rules_digest: policy.rules_digest,
+      rule_count: policy.rules.rules.length,
+    };
+  }
+
   recordGoalPurposeRelationOwnerReview(
     args: OperationPlanGoalPurposeRelationReviewArguments,
     review: OperationPlanGoalPurposeRelationOwnerReview,

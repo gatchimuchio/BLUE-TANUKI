@@ -6,7 +6,13 @@ import {
 } from "@blue-tanuki/protocol";
 
 export const CLI_GOAL_COMPLETION_RULES_STDIN_FLAG = "--goal-completion-rules-stdin";
+export const CLI_GOAL_COMPLETION_STATUS_FLAG = "--goal-completion-status";
 export const CLI_GOAL_COMPLETION_RULES_MAX_BYTES = 128 * 1024;
+
+export interface CliGoalCompletionStatusArguments {
+  request_id_digest: string;
+  remaining_args: string[];
+}
 
 export function createCliInboundRequest(input: {
   id: string;
@@ -39,6 +45,45 @@ export function createCliInboundRequest(input: {
       "blue_tanuki.operation_core.used_for_authority": false,
     } } : {}),
   }, { internal_authority_metadata: hasCompletionRules });
+}
+
+export function createCliGoalCompletionStatusRequest(input: {
+  id: string;
+  timestamp: number;
+  request_id_digest: string;
+}): InboundRequest {
+  if (!/^[a-f0-9]{64}$/i.test(input.request_id_digest)) {
+    throw new Error("cli_goal_completion_status_digest_invalid");
+  }
+  return normalizeInboundRequestForAuthority({
+    id: input.id,
+    content: `plan:status ${JSON.stringify({ request_id_digest: input.request_id_digest.toLowerCase() })}`,
+    timestamp: input.timestamp,
+    channel: "cli",
+    user: "local-user",
+    metadata: {
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner",
+      "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.operation_core.used_for_authority": false,
+    },
+  }, { internal_authority_metadata: true });
+}
+
+export function parseCliGoalCompletionStatusArguments(args: readonly string[]): CliGoalCompletionStatusArguments | null {
+  const positions = args.flatMap((arg, index) => arg === CLI_GOAL_COMPLETION_STATUS_FLAG ? [index] : []);
+  if (positions.length > 1) throw new Error("cli_goal_completion_status_flag_repeated");
+  const position = positions[0];
+  if (position === undefined) return null;
+  const digest = args[position + 1];
+  if (!digest || !/^[a-f0-9]{64}$/i.test(digest)) {
+    throw new Error("cli_goal_completion_status_digest_required");
+  }
+  return {
+    request_id_digest: digest.toLowerCase(),
+    remaining_args: [...args.slice(0, position), ...args.slice(position + 2)],
+  };
 }
 
 export function cliGoalCompletionRulesRequested(args: readonly string[]): boolean {

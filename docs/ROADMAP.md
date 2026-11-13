@@ -8,9 +8,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 現行BUILD_BATCH — QE_BUILD / desktop package-local Playwright headless-shell
+### 現行BUILD_BATCH — QE_BUILD / CLI達成規則→共有J/M→Control Center再認証→CLI状態照会
 
-主語はWindows・Linux・macOS製品packageとPlaywright browser runtime、目的はheadless起動が選ぶbinaryとpackage-local registry path・Playwright revision・manifestを結ぶこと。Windows ZIP verifierは3,986 entries、revision 1254のheadless shell／license/pathを確認し、full Chromium binaryがないことをPASS。一ファイルCMDとIExpress EXEの埋込ZIP／SHA／CAB抽出verifierもPASSした。Linux x64はsource SHA `49fb172e172320ff4ef5baafe5a570623c51cc67`のWSL2 Ubuntu 24.04 package-only build、4,214-entry archive verifier、single-file `.run` installer verifierまでPASS。archive SHA-256=`3de96299b7a7219ff73d71c5315410c4c9e350e90f712f3cff4abcf240300127`、installer SHA-256=`3d4139a23edd5832c9b1aa3f32f0a8ea3ffa53bbbd8c3cbd30b4e99c0223c2fc`。tar memberが`./`で始まる形式をverifierが見失う不一致を修正した。WSL結果はLinux native適合へ転用しない。対象SHAのGitHub Actions runは0件で、Linux native hosted／macOS x64・arm64 package-onlyは未実行。P2は他consumerの施工を続け、このOS package evidenceをBUILD_COVERED前に再取得する。起動・外部HTTP・Setup lifecycle、F06全域、Android／iOS browser、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。preview既定無効、L3、sandbox、ephemeral context、GET／HEAD・public-address guardを維持し、実browser／外部作用は未実行。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+CLIのowner明示達成規則を、`serve`と同じprivate OperationPlan／result-M stateへ保持する。再起動後、既存Control Centerがplanをowner再認証reviewへ渡し、検証済みresultとM receiptを反映する。`--goal-completion-status <request-id-digest>`はHDS no-op／output auditを通るdigest-onlyの読取照会で、task・規則・結果本文や実行権限を返さない。達成・不一致・曖昧な対応付けの3ケースとControl Center再認証引継ぎはprovider-free fixtureでPASS。これは限定`WIRED` consumerであり、runCli process全体、実人間認証、実provider、installed製品、外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを証明しない。Windows-firstのP2全体施工を続ける。C08.03実provider、OD-03 live外部作用、別repo変更、P13公開／出荷GOは保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows package-local browser runtime consumer
 
