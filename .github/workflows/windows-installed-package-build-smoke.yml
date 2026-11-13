@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   windows-installed-package-build-smoke:
-    name: Build and exercise the installed Windows consumer
+    name: Build and exercise the installed Windows entrypoint
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
@@ -63,6 +63,13 @@ jobs:
           pnpm package:windows
           pnpm package:windows:verify
 
-      - name: Run isolated installed Windows smoke
+      - name: Run isolated single-file installer startup smoke
         shell: pwsh
-        run: pnpm smoke:windows-installed
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "package.json version is missing for the Windows installed smoke."
+          }
+          $installer = Join-Path $PWD "release/windows/BlueTanukiSetup-$version-windows-x64.exe"
+          $payload = Join-Path $PWD "release/windows/blue-tanuki-$version-windows-x64-installer.zip"
+          pnpm exec tsx scripts/smoke_windows_installed.ts --iexpress-exe $installer --artifact $payload --startup-only
