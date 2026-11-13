@@ -365,7 +365,7 @@ function Restore-InterruptedWindowsProductUpdate {
   }
 
   $candidatePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) +
-    '\.blue-tanuki-rollback-([0-9a-f]{32})$'
+    '\.blue-tanuki-rollback-([0-9a-f]{16}|[0-9a-f]{32})$'
   $candidates = @($siblings | Where-Object {
     [System.Text.RegularExpressions.Regex]::IsMatch(
       [string]$_.Name,

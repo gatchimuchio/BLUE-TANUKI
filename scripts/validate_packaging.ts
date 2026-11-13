@@ -354,7 +354,7 @@ function main(): void {
   requireIncludes("scripts/verify_windows_iexpress.ts", windowsIExpressVerify, "setup_execution=NOT_RUN");
   const windowsIExpress = read("scripts/windows_iexpress.ts");
   requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "verifyAndExtractWindowsIExpressCommand");
-  requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "embeddedZip.length");
+  requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "embeddedZip.sizeBytes");
   requireIncludes("scripts/windows_iexpress.ts", windowsIExpress, "manifest.payload.sha256 !== payloadHash");
   requireIncludes("scripts/windows_short_path.ts", read("scripts/windows_short_path.ts"), "GetShortPathName");
   const windowsArtifactDirectory = read("scripts/windows_artifact_dir.ts");

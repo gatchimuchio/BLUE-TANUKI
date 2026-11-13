@@ -106,8 +106,8 @@ try {
   $userData = Join-Path $productData "owner-data.txt"
   Set-Content -LiteralPath $userData -Value "preserve through ordinary uninstall" -Encoding UTF8
 
-  $rollbackOne = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N"))
-  $rollbackTwo = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N"))
+  $rollbackOne = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N").Substring(0,16))
+  $rollbackTwo = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N").Substring(0,16))
   Copy-Item -LiteralPath $productInstall -Destination $rollbackOne -Recurse
   Copy-Item -LiteralPath $productInstall -Destination $rollbackTwo -Recurse
   Remove-Item -LiteralPath $productInstall -Recurse -Force
@@ -130,6 +130,17 @@ try {
       (Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData) -ne 'managed-v3' -or
       (Get-Content -LiteralPath $userData -Raw).Trim() -ne 'preserve through ordinary uninstall') {
     throw 'A single verified interrupted-update rollback candidate was not restored safely.'
+  }
+
+  $legacyRollback = Join-Path $tempRoot (".product-app.blue-tanuki-rollback-" + [Guid]::NewGuid().ToString("N"))
+  Copy-Item -LiteralPath $productInstall -Destination $legacyRollback -Recurse
+  Remove-Item -LiteralPath $productInstall -Recurse -Force
+  $legacyRecovered = Restore-InterruptedWindowsProductUpdate -InstallRoot $productInstall -DataRoot $productData
+  if (-not $legacyRecovered -or -not (Test-Path -LiteralPath $productInstall -PathType Container) -or
+      (Test-Path -LiteralPath $legacyRollback) -or
+      (Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData) -ne 'managed-v3' -or
+      (Get-Content -LiteralPath $userData -Raw).Trim() -ne 'preserve through ordinary uninstall') {
+    throw 'A legacy interrupted-update rollback candidate was not restored safely.'
   }
 
   $managed = Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData

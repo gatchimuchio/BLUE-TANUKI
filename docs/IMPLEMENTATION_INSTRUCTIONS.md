@@ -2,7 +2,30 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser.read 添付・非text応答遮断
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installerのMAX_PATH回復 (G02.01, G02.03)
+
+主語はWindows x64のIExpress単一exe→自己展開ZIP→製品Setup→installed Gateway→通常Uninstall経路。目的は、Playwright/Chromium同梱物を含む実パッケージがWindowsの従来パス長制限内で展開・導入・起動・停止・削除へ進めるようにすること。これはG02.01の導入consumerとG02.03の通常削除consumerを短時間観測したBUILD_BATCHであり、更新・中断復旧・データ保持を含むG02全域や製品全体の完成ではない。
+
+初回のIExpress smokeでは、深いTemp配下の自己展開先で`Expand-Archive`が260文字超のChromiumパスに失敗した。展開先を短縮すると、その後Setupの`.i.blue-tanuki-stage-<32 hex>`へのコピーで同じ制限に達した。自己展開Tempを`bt-<16 hex>`、展開子を`i`へ短縮し、Setupのstage/rollback transaction suffixも16 hexにした。中断rollbackの検出は新16 hexと既存32 hexの両方を受け入れ、旧配置からの復旧互換を維持する。パス生成失敗時の`New-Item`は`-Force`で既存先を再利用せず、停止する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `install/installer/test/windows_safe_target.ps1` | PASS。短い新suffixと既存32 hex suffix双方の中断rollback復旧を確認。 |
+| `pnpm package:windows` | PASS。ZIP 186,367,695 bytes / SHA-256 `5123884fce70ae9eac3aec1ff66ecfc3ecd43f8265991e9210abf5c03b94eb70`、CMD 255,032,569 bytes / `9a8d4a309d64b26beb5d2639cbf6e2bc41239a175ef11c750cce91b1b6aa1537`、IExpress EXE 255,275,008 bytes / `807981b16e1a94bfaa6b62ffd366e8066e4dae61d2d221fe212505416b0d34b4`。署名なし、公開・配布はHOLD。 |
+| `pnpm package:windows:verify` | PASS。ZIP 4,002 entries、manifest/SHA、CMD/EXE埋込payload、EXE単一ファイル展開を照合。Verifier自身の`setup_execution`はNOT_RUN。 |
+| `pnpm smoke:windows-installed -- --artifact <ZIP> --iexpress-exe <EXE> --startup-only` | PASS。隔離先へのIExpress展開・Setup・post-install doctor（`provider=stub`）・Gateway手動起動・loopback `/healthz`・停止・通常Uninstallを確認。uninstall/autostart登録とsmoke rootが残らないことを確認。 |
+| `pnpm validate:packaging` | PASS。実装はpayload sizeを`embeddedZip.sizeBytes`で検査するため、静的validatorの旧`embeddedZip.length`文字列期待を現行契約へ修正して再実行。 |
+| `pnpm docs:check` / `git diff --check` | PASS。 |
+| GUI初回利用・既定起動・更新/rollback・再起動・全suite・他OS・実provider・全体SYSTEM_SHAPED/BUILD_COVERED・QE_QC/QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / G02.01 Windows配布物・新規導入、G02.03 Windows更新・復旧・削除。
+- **STATUS:** packaged IExpress→Setup→installed stub Gatewayの起動consumerと通常Uninstallを限定`WIRED`確認。Windows製品導線全体、更新/rollback/ユーザーデータ保持、5OS、製品全体は`BUILD_GAP`継続。
+- **NEXT_REQUIRED_CONSUMER:** P2全体施工を継続し、現在の実装から未接続consumerを再選定する。現行repoの`apps`/`packages`/`install`にはAndroid/iOS native product entryが見当たらず、G09/G10の入口・Device Link・秘密保管・一仕事consumerは未接続候補。D4-Pocketは読取のみとし変更しない。
+- **SAFETY_STATUS:** fixtureと`provider=stub`のみ。実credential/provider、外部送信、公開、署名、owner dataを使わず、製品の通常アンインストールだけを隔離先で実行した。`P13=PENDING_OWNER_GO`を維持。
+- **LOCAL_ASSET_STATUS:** Task-generated artifact、展開診断、隔離smoke rootの6パス／18,275 files／2,990,810,866 bytesを通常Windowsゴミ箱へ移動し、各元path消失と6件のRecycle Bin readbackを確認。ownerの最終処分待ちであり、容量回復としては計上しない。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
+- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`、ahead/behind=0/0。編集前recovery local branch／remote tag current/previous=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。終了commit/pushとrecovery更新値はBUILD_BATCHのGit閉包後に追記する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser.read 添付・非text応答遮断
 
 主語は`browser.read`とHTTP応答consumer。目的は、添付またはPDF等の非text応答をページ読取結果としてCへ渡さないこと。内部HTTP応答の`Content-Disposition`を使って添付を拒否し、許可MIMEだけを本文処理へ進める。拒否時は本文・ファイル名を含まない固定エラーを返す。`invokeHttpFetch`の外部戻り値契約にはheaderを追加していない。ファイル保存、browser download有効化、実browser実行は行っていない。
 

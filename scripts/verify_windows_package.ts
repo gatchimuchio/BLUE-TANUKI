@@ -398,6 +398,7 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "post-install doctor",
     "blue-tanuki-install.json",
     "data_root",
+    "Substring(0,16)",
     "This setup script must be run from the packaged Windows installer zip.",
     "INSTALL_WINDOWS.cmd",
   ]);

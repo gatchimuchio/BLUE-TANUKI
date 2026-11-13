@@ -413,8 +413,9 @@ try {
     $installParent = Resolve-SafeDirectoryTarget -Path $installParent -Label 'InstallParent'
   }
   $suffix = [Guid]::NewGuid().ToString('N')
-  $stageRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-stage-" + $suffix)
-  $rollbackRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-rollback-" + $suffix)
+  $transactionSuffix = $suffix.Substring(0,16)
+  $stageRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-stage-" + $transactionSuffix)
+  $rollbackRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-rollback-" + $transactionSuffix)
   if ((Test-Path -LiteralPath $stageRoot) -or (Test-Path -LiteralPath $rollbackRoot)) { Fail "Could not allocate unique installer staging paths." }
   New-Item -ItemType Directory -Path $stageRoot | Out-Null
 

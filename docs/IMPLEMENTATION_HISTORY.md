@@ -4790,3 +4790,19 @@ form GETのHTTP応答は、`Content-Disposition: attachment`やPDF等の非テ�
 `@blue-tanuki/core`のdownload応答拒否focused testは1件PASS（他108件はskip）、同package typecheck PASS。`pnpm docs:check`、`git diff --check` PASS。日本語基底の既存移行負債75件は維持。実Playwright／HTTP、外部provider、live作用、保存・実行、全suite、5OS、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN。
 
 実装・active指示・ROADMAPをcommit `2355bd0bde1b23b24b5c27998264a25c716b3aa6`としてGitHub `main`へfast-forward pushし、local／`origin/main`／GitHub `main`一致を照合した。Git commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの自動cleanupがACL拒否となったが、commit／pushは成功。ACL／metadata／他repoは変更していない。`.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`はuntrackedのまま未変更。新たな永続生成物なし。
+
+## 2026-11-13 — QE_BUILD rev5.0 / Windows IExpress・Setup MAX_PATH recovery (G02.01/G02.03)
+
+主語はWindows x64のIExpress単一exe→自己展開ZIP→製品Setup→installed Gateway→通常Uninstall経路。目的は、Playwright/Chromium同梱物を含む現在の実パッケージがWindowsの従来パス長制限内で導入・起動・停止・削除へ進めるようにすること。現行三点セットrev5.0は配布ZIP SHA-256=`B931D04AC4CB5EF364261BB6672238189B148C84923E2716ACDE3B5AB1169DF8`、manifestおよび三文書hashが`QE_CURRENT_AUTHORITY.md`と一致。工程はP2全体実装継続、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`、QC/QA未成立、P13 hold。
+
+初回IExpress smokeは深いTemp配下の`Expand-Archive`で、Chromiumパスが260文字を超え失敗した。自己展開先短縮後はSetup stage `.i.blue-tanuki-stage-<32 hex>`へのコピーが同じ制限に達した。`scripts/package_product_installers.ts`でself-extract workを`bt-<16 hex>`、展開子を`i`へ短縮し、重複先を`-Force`で再利用しないよう`New-Item -ErrorAction Stop`へ変更した。`install/windows/product/BlueTanukiSetup.ps1`はランダムGUID由来16-hex suffixでstage/rollback名を短縮する。`install/windows/safe-target.ps1`は16/32-hex双方の旧・新rollback名を復元できる。対応smoke selectorとpackage verifierを更新し、PowerShell fixtureには旧32-hex recoveryを追加した。
+
+`pnpm package:windows` PASS。生成ZIP 186,367,695 bytes / SHA-256=`5123884fce70ae9eac3aec1ff66ecfc3ecd43f8265991e9210abf5c03b94eb70`、CMD 255,032,569 bytes / SHA-256=`9a8d4a309d64b26beb5d2639cbf6e2bc41239a175ef11c750cce91b1b6aa1537`、unsigned IExpress EXE 255,275,008 bytes / SHA-256=`807981b16e1a94bfaa6b62ffd366e8066e4dae61d2d221fe212505416b0d34b4`。`pnpm package:windows:verify` PASS（ZIP 4,002 entries、manifest/SHAと埋込payload照合、単一ファイル展開。verifier内Setup executionはNOT_RUN）。`install/installer/test/windows_safe_target.ps1` PASS（短suffixと旧32-hex rollback復旧）。隔離`smoke:windows-installed --startup-only` PASS：IExpress抽出、Setup、post-install doctor（provider=stub）、手動Gateway起動、loopback `/healthz`、停止、通常Uninstallと登録・workroot不残存を確認した。
+
+`pnpm validate:packaging`初回は、`scripts/validate_packaging.ts`が実装に存在しない`embeddedZip.length`を要求して停止した。現行`windows_iexpress.ts`は`hashEmbeddedBase64PayloadSync`で`embeddedZip.sizeBytes`とSHA-256を検査するため、validator期待値を実装の実契約へ合わせて再実行しPASS。期待値を弱めたり、dead codeを追加したりしていない。`pnpm docs:check` PASS（日本語基底の既存移行負債75件は注意として継続）、`git diff --check` PASS。
+
+全suite、GUI初回利用、更新/rollback、再起動、他OS、実provider/credential、外部作用、5OS製品、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAはNOT_RUN／未成立。署名なし、公開・出荷保留。G02.01/G02.03のWindows consumerを限定`WIRED`確認したもので、G02全域、製品全体の完成やOS別QAではない。D4-Pocketはread-onlyで確認し、複数のdirty worktreeを含む並行作業を検知したため同repoは変更していない。
+
+task-generated artifact／展開診断／隔離smoke root 6パス、合計18,275 files／2,990,810,866 bytesを個別に再生成可能・owner dataなし・未稼働と確認し、Windows標準Recycle Binへ移動した。6元pathの消失とごみ箱readbackを確認。これはowner処分待ちで容量回復として数えない。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`、OneDrive資料、稼働中開発環境は変更していない。
+
+編集前local／`origin/main`／GitHub `main`=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`、ahead/behind=0/0。編集前recovery local branch／remote tag current/previous=`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。実装・限定検証・現行記録をmainへ確定・pushし、終了SHAと二世代復旧refはpush後のreadback結果をcloseoutで追記する。

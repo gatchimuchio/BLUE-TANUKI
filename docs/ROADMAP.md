@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / browser.read attachment and non-text response guard
+### 直近完了BUILD_BATCH — QE_BUILD / Windows installer MAX_PATH recovery (G02.01, G02.03)
+
+IExpressからSetupへ進むWindows実パッケージで、Chromium同梱ファイルの260文字超パスにより自己展開とSetup stage copyが失敗した。自己展開work/extract pathとSetup stage/rollback suffixを短縮し、旧32-hex rollback復旧互換を維持した。focused safe-target test、Windows package build/verify、isolated startup-only install→stub Gateway health/stop→normal uninstall、`validate:packaging`、`docs:check`、`git diff --check`はPASS。これはG02.01/G02.03の限定BUILD consumer確認であり、更新/rollback/user data、GUI、全suite、他OS、実provider、製品全体の成立やQC/QAを示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / browser.read attachment and non-text response guard
 
 `browser.read`はHTTP応答の`Content-Disposition`と`Content-Type`を本文処理前に確認し、attachment、PDF等の非text、型不明の本文をCへ返さない。filename・本文を含まない固定拒否と自動再試行なしを保つ。`http.fetch`の戻り値契約、ファイル保存、download／upload quarantineは変えていない。focused file tests 104件PASS／6件skip、Core typecheck、`pnpm docs:check`、`git diff --check` PASS。実HTTP／Playwright、installed製品、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`browser.read`内の限定コード接続であり、F06／製品全体の成立を示さない。Android／iOSのclient・installer treeは現行repoに見当たらず、G09／G10のnative product entryが次の全体施工対象。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

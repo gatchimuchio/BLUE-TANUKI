@@ -355,8 +355,8 @@ function Move-Item {
   $destination = [System.IO.Path]::GetFullPath($Destination)
   $parent = [System.IO.Path]::GetDirectoryName($target)
   $installName = [System.IO.Path]::GetFileName($target)
-  $rollbackPattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-rollback-[0-9a-f]{32}$'
-  $stagePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-stage-[0-9a-f]{32}$'
+  $rollbackPattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-rollback-(?:[0-9a-f]{16}|[0-9a-f]{32})$'
+  $stagePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-stage-(?:[0-9a-f]{16}|[0-9a-f]{32})$'
 
   if ($destination -ieq $target -and $env:BT_TEST_MOVE_MODE -eq 'fail-stage' -and
       [System.Text.RegularExpressions.Regex]::IsMatch([System.IO.Path]::GetFileName($source), $stagePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
@@ -1532,7 +1532,7 @@ async function main(): Promise<void> {
     }
     const transactionPrefix = `.${path.basename(installRoot)}.blue-tanuki-`;
     const transactionSiblingsAfterFailure = readdirSync(work).filter((entry) =>
-      entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-[0-9a-f]{32}$/i.test(entry));
+      entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry));
     const failedUpdateRegistry = readSmokeRegistryState(autostartRunName, "post update-failure registry check");
     if (!existsSync(installRoot) || existsSync(path.join(installRoot, "g02-update-marker.txt")) ||
         !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.json")).equals(updateInventoryBefore) ||
@@ -1553,8 +1553,8 @@ async function main(): Promise<void> {
     });
     const rollbackPrefix = `${transactionPrefix}rollback-`;
     const stagePrefix = `${transactionPrefix}stage-`;
-    const rollbackSiblings = readdirSync(work).filter((entry) => entry.startsWith(rollbackPrefix) && /^[0-9a-f]{32}$/i.test(entry.slice(rollbackPrefix.length)));
-    const stageSiblings = readdirSync(work).filter((entry) => entry.startsWith(stagePrefix) && /^[0-9a-f]{32}$/i.test(entry.slice(stagePrefix.length)));
+    const rollbackSiblings = readdirSync(work).filter((entry) => entry.startsWith(rollbackPrefix) && /^(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry.slice(rollbackPrefix.length)));
+    const stageSiblings = readdirSync(work).filter((entry) => entry.startsWith(stagePrefix) && /^(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry.slice(stagePrefix.length)));
     if (existsSync(installRoot) || rollbackSiblings.length !== 1 || stageSiblings.length !== 1) {
       throw new Error("interrupted Windows update did not leave one exact old-install rollback and its paired staging directory");
     }
@@ -1577,7 +1577,7 @@ async function main(): Promise<void> {
       "-NoLaunch",
     ], updatePackageDir, 0, "installed Windows interrupted-update recovery and resumed update", INSTALLER_TRANSACTION_TIMEOUT_MS, isolatedProductEnv);
     const transactionSiblingsAfterRecovery = readdirSync(work).filter((entry) =>
-      entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-[0-9a-f]{32}$/i.test(entry));
+      entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry));
     const recoveredUpdateRegistry = readSmokeRegistryState(autostartRunName, "post interrupted-update recovery registry check");
     if (!recoveryOutput.includes("Restored one verified previous BLUE-TANUKI install after an interrupted update") ||
         readFileSync(path.join(installRoot, "g02-update-marker.txt"), "utf8") !== updateMarkerValue ||

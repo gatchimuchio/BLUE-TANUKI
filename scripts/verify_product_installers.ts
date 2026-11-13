@@ -205,7 +205,14 @@ function assertNoNormalUserBuildPath(target: ProductInstallerTarget): void {
     }
   }
   if (target.os === "windows") {
-    for (const needle of ["BlueTanukiSetup.cmd", "Expand-Archive", "requires_manual_nested_extraction=false"]) {
+    for (const needle of [
+      "BlueTanukiSetup.cmd",
+      "Expand-Archive",
+      "('bt-' + [Guid]::NewGuid().ToString('N').Substring(0,16))",
+      "New-Item -ItemType Directory -Path $work -ErrorAction Stop",
+      "Join-Path $work 'i'",
+      "requires_manual_nested_extraction=false",
+    ]) {
       if (!text.includes(needle)) throw new Error(`${target.installerPath}: missing ${needle}`);
     }
   } else {
