@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / Gateway serve smoke子process環境隔離
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
+
+通常CLI依頼のdiagnostic `inbound` recordからraw textを除き、content SHA-256とUTF-8 byte数だけを残す。Gateway package typecheckと`git diff --check`はPASS。実CLI log、provider、外部作用、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの証拠ではない。implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へpush済み。詳細と終端refは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。
+
+### 前段完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / Gateway serve smoke子process環境隔離
 
 serve smokeのGateway／audit-dump子processを、OS実行に必要な限定環境と合成設定だけで起動するよう変更した。親のprovider/channel credential、`BLUE_TANUKI_ENV_FILE`、`PNPM_BIN`、Node preload、proxy、利用者固有Gateway設定は継承しない。strict typecheckと、存在しないenv-file／pnpm pathおよびsynthetic `LLM_API_KEY`を親へ与えたstub／loopback smokeがPASS。audit JSONL 8件とchain検証を確認し、Temp root削除・listener消失を確認した。実providerや外部作用の証拠ではない。GitHub main SHAと復旧refは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。
 

@@ -2,6 +2,18 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 P2 SAFE_MIN / CLI inbound diagnostic log privacy
+
+通常CLI one-shotの`inbound`運用ログがraw依頼本文を記録していたため、本文を除きUTF-8 byte数とSHA-256へ置き換えた。organization route既存の本文非記録を維持する。CLI回答表示、HDS処理、外部作用、memory/historyの契約は変更していない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway package typecheck | PASS。 |
+| `git diff --check` | PASS。 |
+| 実CLI log、test suite、実provider、外部作用、全体5OS／`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN。 |
+
+implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へfast-forward push済み。push後はlocal／origin／GitHub `main`一致を確認し、recovery local branch／remote tag current=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`、previous=`d6eb1473bea1628468ac76fb3df5beb32ac4238e`へ更新した。docs closeout反映後に終端状態を再照合する。古いWindows worktree metadata削除のPermission deniedは既存metadata／ACLを変更せず保留。保護添付、Linux isolation `target/`も保持し、この単位の新たな永続生成資産はない。
+
 ## 2026-11-14 — rev5.0 P2 SAFE_MIN / Gateway smoke child environment isolation
 
 既存serve smokeは`...process.env`をGatewayとaudit-dumpへ渡していたため、親processの資格情報や`BLUE_TANUKI_ENV_FILE`による設定読込が子processへ流れる境界があった。runnerを限定OS環境＋明示した合成WebChat／stub／専用state・audit設定へ変更し、Gatewayとaudit-dumpをローカルtsxから直接起動する。audit-dumpからWebChat tokenとmaintenance tokenも除外した。

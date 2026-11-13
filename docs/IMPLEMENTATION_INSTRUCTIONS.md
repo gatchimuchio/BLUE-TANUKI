@@ -2,7 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / Gateway serve smokeの子process環境隔離 (P2 SAFE_MIN, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外 (P2 SAFE_MIN, 2026-11-14)
+
+主語はBLUE-TANUKIの通常CLI one-shot requestとGateway運用ログである。目的は、利用者がCLIへ入力した依頼本文をdiagnostic logへ複写せず、依頼相関に必要なmetadataだけを残すこと。CLI回答の表示、HDS処理、memory/history、外部作用は変更しない。
+
+開始HEADは`d6eb1473bea1628468ac76fb3df5beb32ac4238e`。編集前local／`origin/main`／GitHub `main`とlocal recovery branch／remote backup tag二世代は同じ既知SHAへ一致し、tracked差分なし。D4 Pocketの別writer dirty worktreeは読み取り確認だけとした。
+
+- **UNIT_ID:** rev5.0 P2 SAFE_MIN / CLI inbound diagnostic log privacy.
+- **STATUS:** CLOSED。`apps/gateway/src/runtime.ts`の通常CLI `inbound`記録からraw `content`を除去し、UTF-8 byte数とSHA-256だけを記録する。organization routeの既存digest-only記録と同じく本文は記録しない。CLI応答経路は変更していない。
+- **CHECK_SCOPE:** `corepack pnpm --filter @blue-tanuki/gateway typecheck` PASS、`git diff --check` PASS。CLI processによる実行時log確認、test suite、provider、外部作用はNOT_RUN。
+- **EVIDENCE_LIMIT:** Gateway packageの型整合と差分形式のみ。実CLIのstdout／運用log出力、保存先、全経路の秘密非漏えい、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは確認していない。
+- **LOCAL_ASSET_STATUS:** この単位で生成した永続資産なし。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`、古いworktree metadataを保持。Git fetch／commit時の古いWindows worktree metadata ACL拒否は変更せず保留。
+- **GIT_STATUS:** implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へfast-forward push済み。push後readback mainとlocal recovery currentは実装SHA、previousは開始SHAへ更新して照合した。docs closeout反映後の終端refはpush後に再照合する。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続する。次の独立作業開始時に現行sourceからBlue repo内の実未接続consumerを選ぶ。D4 Pocket／MINIDORA別repo変更、C08.03実provider、未委任外部作用、P13 owner GOは保留し、全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移らない。
+
+## 前段完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / Gateway serve smokeの子process環境隔離 (P2 SAFE_MIN, 2026-11-14)
 
 主語はrepo内の既存serve smoke runner、Gateway子process、audit-dump子processである。目的はstub／loopbackの短時間疎通が親processのprovider/channel資格、env-file selector、Node preload、proxy、利用者固有設定を継承せず、専用state／auditだけで完了すること。製品機能の完成や全体品質判定ではない。
 
