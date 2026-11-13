@@ -68,6 +68,10 @@ const MAX_BROWSER_FORM_MARKUP_BYTES = 131_072;
 const BROWSER_FORM_INPUT_RECEIPT_TTL_MS = 10 * 60 * 1000;
 const MAX_BROWSER_FORM_INPUT_RECEIPTS = 256;
 const SECRET_LIKE_FIELD_NAME = /(password|passcode|token|secret|credential|cookie|session|auth|csrf|nonce|api[_-]?key|otp|one[_-]?time[_-]?code)/i;
+export const BROWSER_SEARCH_FORM_EDITABLE_INPUT_TYPES = [
+  "text", "search", "email", "url", "tel", "number", "date", "time", "month", "week", "datetime-local",
+] as const;
+const browserSearchFormEditableInputTypes = new Set<string>(BROWSER_SEARCH_FORM_EDITABLE_INPUT_TYPES);
 
 export interface BrowserFormInputStageReceipt {
   receipt_digest: string;
@@ -262,7 +266,7 @@ export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArgu
     const name = rawField.name.trim();
     const fieldValue = rawField.value;
     if (!validFieldName(name) || names.has(name) || fieldValue.length === 0 || fieldValue.length > 1_024 ||
-        /[\u0000-\u001f\u007f]/.test(fieldValue) || hasUnpairedSurrogate(fieldValue)) {
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(fieldValue) || hasUnpairedSurrogate(fieldValue)) {
       throw new Error("browser_form_get_invalid_arguments");
     }
     names.add(name);
@@ -369,6 +373,7 @@ export function buildBrowserSearchFormGetUrl(input: {
   const inputNames = new Set<string>();
   const requiredNames = new Set<string>();
   const fieldLengths = new Map<string, { min: number; max: number }>();
+  const fieldControls = new Map<string, { tag: string; type: string }>();
   for (const control of form.controls) {
     if (!control || typeof control.tag !== "string" || typeof control.type !== "string" ||
         typeof control.name !== "string" || typeof control.disabled !== "boolean" ||
@@ -386,14 +391,20 @@ export function buildBrowserSearchFormGetUrl(input: {
     }
     const tag = control.tag.toLowerCase();
     const type = control.type.toLowerCase();
-    if (tag === "input" && (type === "text" || type === "search")) {
+    const editable = (tag === "input" && browserSearchFormEditableInputTypes.has(type)) ||
+      (tag === "textarea" && type === "");
+    if (editable) {
+      const autocomplete = control.autocomplete.trim().toLowerCase();
+      const typeSpecificAutocomplete = (type === "email" && autocomplete === "email") ||
+        (type === "url" && autocomplete === "url") || (type === "tel" && autocomplete === "tel");
       if (!validFieldName(control.name) || inputNames.has(control.name) || control.read_only || control.has_pattern ||
-          !["", "on", "off"].includes(control.autocomplete.trim().toLowerCase()) ||
+          (!(["", "on", "off"].includes(autocomplete)) && !typeSpecificAutocomplete) ||
           /(?:password|one-time-code|current-password|new-password)/i.test(control.autocomplete)) {
         throw new Error("browser_form_get_control_denied");
       }
       inputNames.add(control.name);
       fieldLengths.set(control.name, { min: control.min_length, max: control.max_length });
+      fieldControls.set(control.name, { tag, type });
       if (control.required) requiredNames.add(control.name);
       continue;
     }
@@ -405,11 +416,17 @@ export function buildBrowserSearchFormGetUrl(input: {
   const requestedNames = new Set<string>();
   for (const field of input.fields) {
     const lengthConstraints = fieldLengths.get(field.name);
+    const fieldControl = fieldControls.get(field.name);
+    const hasLineBreakOrTab = /[\t\r\n]/.test(field.value);
+    const hasForbiddenControl = fieldControl?.tag === "textarea"
+      ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(field.value)
+      : /[\u0000-\u001f\u007f]/.test(field.value);
     if (!validFieldName(field.name) || requestedNames.has(field.name) || !inputNames.has(field.name) ||
-        !lengthConstraints || field.value.length === 0 || field.value.length > 1_024 ||
+        !lengthConstraints || !fieldControl || (hasLineBreakOrTab && fieldControl.tag !== "textarea") ||
+        field.value.length === 0 || field.value.length > 1_024 ||
         (lengthConstraints.min >= 0 && field.value.length < lengthConstraints.min) ||
         (lengthConstraints.max >= 0 && field.value.length > lengthConstraints.max) ||
-        /[\u0000-\u001f\u007f]/.test(field.value) || hasUnpairedSurrogate(field.value)) {
+        hasForbiddenControl || hasUnpairedSurrogate(field.value)) {
       throw new Error("browser_form_get_field_binding_denied");
     }
     requestedNames.add(field.name);
@@ -419,7 +436,13 @@ export function buildBrowserSearchFormGetUrl(input: {
   }
 
   const submissionUrl = new URL(actionUrl.href);
-  for (const field of input.fields) submissionUrl.searchParams.append(field.name, field.value);
+  for (const field of input.fields) {
+    const fieldControl = fieldControls.get(field.name)!;
+    const value = fieldControl.tag === "textarea"
+      ? field.value.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")
+      : field.value;
+    submissionUrl.searchParams.append(field.name, value);
+  }
   if (submissionUrl.href.length > MAX_BROWSER_FORM_URL_LENGTH) throw new Error("browser_form_get_url_too_large");
   return submissionUrl;
 }

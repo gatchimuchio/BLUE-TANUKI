@@ -96,6 +96,7 @@ import {
 } from "./file_safety.js";
 import { shellExecTool } from "./shell_exec.js";
 import {
+  BROWSER_SEARCH_FORM_EDITABLE_INPUT_TYPES,
   browserFormStateDigest,
   buildBrowserSearchFormGetUrl,
   parseBrowserFormInputArguments,
@@ -4651,31 +4652,46 @@ async function defaultBrowserAutomationRunner(
           ? { expected_form_state_digest: request.expected_form_state_digest } : {}),
       });
       formStateDigest = browserFormStateDigest(form);
-      if (request.action === "form_fill") {
-        const fieldsBase64 = Buffer.from(JSON.stringify(request.fields), "utf8").toString("base64");
-        const fillResult = await searchRegion.evaluate<{ ok: boolean; filled_count: number }>(`element => {
-          const bytes = Uint8Array.from(atob("${fieldsBase64}"), value => value.charCodeAt(0));
-          const fields = JSON.parse(new TextDecoder().decode(bytes));
-          const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
-          if (forms.length !== 1 || !Array.isArray(fields)) return { ok: false, filled_count: 0 };
-          const form = forms[0];
-          let filledCount = 0;
-          for (const field of fields) {
-            if (!field || typeof field.name !== "string" || typeof field.value !== "string") return { ok: false, filled_count: filledCount };
-            const matches = Array.from(form.elements).filter(control =>
-              control.tagName.toLowerCase() === "input" &&
-              ["text", "search"].includes(String(control.type || "").toLowerCase()) &&
-              String(control.name || "") === field.name);
-            if (matches.length !== 1) return { ok: false, filled_count: filledCount };
-            matches[0].value = field.value;
-            if (matches[0].value !== field.value) return { ok: false, filled_count: filledCount };
-            filledCount += 1;
+      const fieldsBase64 = Buffer.from(JSON.stringify(request.fields), "utf8").toString("base64");
+      const fillResult = await searchRegion.evaluate<{ ok: boolean; filled_count: number; valid: boolean }>(`element => {
+        const bytes = Uint8Array.from(atob("${fieldsBase64}"), value => value.charCodeAt(0));
+        const fields = JSON.parse(new TextDecoder().decode(bytes));
+        const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
+        if (forms.length !== 1 || !Array.isArray(fields)) return { ok: false, filled_count: 0, valid: false };
+        const form = forms[0];
+        const editableInputTypes = new Set(${JSON.stringify(BROWSER_SEARCH_FORM_EDITABLE_INPUT_TYPES)});
+        let filledCount = 0;
+        for (const field of fields) {
+          if (!field || typeof field.name !== "string" || typeof field.value !== "string") {
+            return { ok: false, filled_count: filledCount, valid: false };
           }
-          return { ok: true, filled_count: filledCount };
-        }`);
-        if (!fillResult?.ok || fillResult.filled_count !== request.fields.length) {
-          throw new Error("browser_form_input_fill_failed; final_submit_sent=false");
+          const matches = Array.from(form.elements).filter(control => {
+            const tag = control.tagName.toLowerCase();
+            const type = "type" in control ? String(control.type || "").toLowerCase() : "";
+            return ((tag === "input" && editableInputTypes.has(type)) || (tag === "textarea" && type === "")) &&
+              String(control.name || "") === field.name;
+          });
+          if (matches.length !== 1) return { ok: false, filled_count: filledCount, valid: false };
+          const control = matches[0];
+          const value = control.tagName.toLowerCase() === "textarea"
+            ? field.value.replace(/\\r\\n?/g, "\\n") : field.value;
+          control.value = value;
+          if (control.value !== value) return { ok: false, filled_count: filledCount, valid: false };
+          filledCount += 1;
         }
+        return { ok: true, filled_count: filledCount, valid: form.checkValidity() };
+      }`);
+      if (!fillResult?.ok || fillResult.filled_count !== request.fields.length) {
+        throw new Error(request.action === "form_submit"
+          ? "browser_form_get_input_fill_failed; form_submission_sent=false"
+          : "browser_form_input_fill_failed; final_submit_sent=false");
+      }
+      if (!fillResult.valid) {
+        throw new Error(request.action === "form_submit"
+          ? "browser_form_get_native_validation_failed; form_submission_sent=false"
+          : "browser_form_input_native_validation_failed; final_submit_sent=false");
+      }
+      if (request.action === "form_fill") {
         formFinalUrl = new URL(request.url);
       } else {
         if (!request.input_receipt_digest || !request.expected_form_state_digest) {
@@ -6175,7 +6191,7 @@ export const browserSnapshotTool: Tool = {
 
 export const browserAutomationTool: Tool = {
   name: "browser.automation",
-  description: "Disabled-by-default preview for guarded headless browser actions. Link navigation binds an exact L3-reviewed target. form_fill requires L3 and only fills an ephemeral form; form_submit requires a matching, short-lived input receipt, a separate L3, and an exact form-state digest recheck before GET.",
+  description: "既定で無効なpreview用headless browser操作。リンク移動はL3確認済みの完全URLへ固定する。form_fillはL3確認後に一時DOMへ値を入れるだけで送信しない。入力はtext/search/email/url/tel/number/date/time/month/week/datetime-localとtextareaに限定し、他のcontrolは拒否する。form_submitは短期receipt・別L3・実行直前のform-state再照合後に同一originへGETを一回だけ送る。GETの外部効果は未分類とし、結果不明時に自動再送しない。",
   required_capabilities: requireToolOperationDescriptor("browser.automation").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeBrowserAutomation(args, {
