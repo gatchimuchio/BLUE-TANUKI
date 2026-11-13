@@ -8,13 +8,21 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2)
+### 直近完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / isolated Gateway serve smoke
+
+既存の`smoke:serve` runnerが起動直後15秒でhealthを打ち切り、repo既定state rootを使っていたため、初回runはhealth待ちでFAILした。runnerのstate／auditを専用Temp rootへ隔離し、Gateway初期化用の待機を60秒とし、子process終了を観測してから監査chainを読むようにした。終了未確認時はTemp stateを残す。
+
+最終`pnpm smoke:serve`はstub・loopbackのみでGateway起動、WebSocket hello、inbound応答、監査JSONL 8件、audit-dump hash-chain検証までPASS。Workspace TypeScript project-reference build、runner単体strict typecheck、`git diff --check`もPASS。これはserve／応答／監査の短いSAFE_MIN smokeで、J/M達成・D4 consumer・実provider／外部作用・installed製品・5OS・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`・QE_QC／QE_QAの証拠ではない。
+
+implementation commit=`e7538c7f606af18e44e75ca42e5d4da2e766db96`をGitHub `main`へpush済み。手動isolated probe（18 files／505,501 bytes）はWindows標準Recycle Binへ移動済み。既存stateと保護対象は保持し、D4／MINIDORA別repo変更、実provider、外部作用、P13 GOは行っていない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2)
 
 Blue WebChatに`POST /runtime/intent/cancel`を追加し、専用D4 Runtime Bearer、登録runtime、session-scoped private submissionからrequest IDを解決する。GatewayはD4 Runtime owner digest／WebChat channel digestを持つHDS planの同一request bindingとactive execution registryを照合し、現在実行中commandが一意の場合だけ既存AbortSignalへ中止要求を送る。外部入力のcommand IDは受けない。不存在、別session、settled、欠落・複数bindingは拒否する。応答は中止要求とsignal状態を示すだけで、Executor終了・worker停止・外部処理停止を断定しない。監査はresume／D4 Runtimeのtoken種別を要求からsettlementまで保持する。
 
 Workspace TypeScript project-reference build、WebChat endpoint対象1件、Gateway binding／registry／監査store 18件、`pnpm docs:check`、`git diff --check`はPASS。WebChat `webchat.test.ts`全135件中132件PASS／3件FAILで、FAILは未変更のControl Center recovery scope DOM fixtureに限られる。実D4 client・他repo・実provider・外部作用は未使用。本producerはsource-level `CODE_PRESENT`で、D4アプリconsumerは未接続。5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。実装commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpush済み。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
 
 `github.write issue.reopen`を`issue.close`／本文更新から独立した単一操作として実装した。対象はallowlist内のexact repositoryにあるclosed・未ロック・非PR Issue一件。closed状態のtarget observationと独立digestをOperation Plan、HDS、Executorへ結び、no-store L3 reviewにclosed→open、Issue identity、title、観測時刻、通知可能性を表示する。review後とPATCH直前にRepository／Issueを再観測し、変化時は送信しない。PATCHは単回で、同一Issueのopen状態を応答照合する。既知拒否と結果不明を分離し、結果不明時に自動再送しない。結果projectionは既存Executor／Gateway／J/M帰還へ接続した。
 

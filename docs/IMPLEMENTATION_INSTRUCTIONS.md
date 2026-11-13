@@ -2,7 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / Gateway serve smokeの状態分離と終了確認 (P2 SAFE_MIN, 2026-11-14)
+
+主語はrepo内の既存serve smoke runnerと、そこから起動されるGateway子processである。目的は短時間の全体疎通をstub／loopbackで行い、ユーザーの通常stateを参照せず、Gateway停止後にこの実行が生成した監査証拠を検査すること。これは製品機能の完成や全体品質判定ではない。
+
+開始HEADは`1418247c1a79c783a540277cc43f91070f1d5cd4`。local `main`、`origin/main`、GitHub `main`、recovery current／previousが一致し、tracked差分はなかった。D4 Pocketの別repo main作業木には未commit差分があり、読み取り確認だけに限定した。
+
+- **UNIT_ID:** rev5.0 P2 SAFE_MIN / isolated Gateway serve smoke.
+- **STATUS:** CLOSED。`scripts/smoke_serve.ts`が専用Temp root内のprivate state／auditだけを使い、Gatewayが終了した場合に限って監査を読み、終了未確認ならstateを残す。
+- **CHECK_SCOPE:** 初回の既存smokeは15秒以内にhealthを確認できずFAILし、inbound要求前に終了した。原因はGateway初期化時間が15秒を超えることと、旧runnerがrepo既定のstate rootを使うことだった。修正後の`pnpm smoke:serve`はPASS（`LLM_BACKEND=stub`、loopback WebSocket hello／inbound／channel_send、監査JSONL 8件、audit-dump chain valid）。`node node_modules/typescript/bin/tsc -b --pretty false`、runner単体strict typecheck、`git diff --check`もPASS。
+- **EVIDENCE_LIMIT:** このsmokeはstub応答の起動・配送・監査保存だけを示す。目的達成、J/M結果帰還、D4アプリconsumer、実provider、実外部作用、installed製品、5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは確認していない。
+- **LOCAL_ASSET_STATUS:** runnerの一時rootはGateway終了後に削除済み。別途作成したisolated probe rootは18 files／505,501 bytesで、Windows標準Recycle Binへ移動し格納元Tempをreadback確認した。既存`.blue-tanuki`、添付領域、untracked Linux isolation `target/`は保持。古いworktree metadataはGit pruneのPermission deniedにより変更せず保留。
+- **GIT_STATUS:** implementation commit=`e7538c7f606af18e44e75ca42e5d4da2e766db96`はGitHub `main`へpush済み。docs closeout後のlocal／origin／GitHub `main`は一致し、recovery currentはcloseout HEAD、previousはimplementation commitとなるようCAS更新する。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続する。G09.01 Android／G10.01 iOSのD4 Pocket producer・Broker経路は別repo変更の委任待ちとして維持し、次単位ではその権限を要しないBlue内の実未接続consumerを現行sourceから選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2, 2026-11-14)
 
 主語はBLUE-TANUKI WebChat/GatewayのD4 Runtime ingress、private submission store、HDS Operation Plan、active execution registryである。目的はD4 Runtimeが自sessionの受付済み依頼に限り、実行中Executorへ中止signalを要求できるBlue側producerを成立させること。専用Bearer・登録runtime・session-scoped submissionから内部request IDを得て、D4 Runtime owner digest／WebChat channel digest／plan binding／現在のactive commandを一意照合する。callerからrequest IDやcommand IDは受けず、依頼本文・command ID・結果本文を返さない。これはP2全体施工中の一接続であり、D4アプリ側consumer、製品完成、QC／QA、公開・出荷判断を成立させない。
 
@@ -13,7 +27,7 @@
 - **SAFETY_STATUS:** `202`は中止要求受付とExecutor signal abortだけを示し、Executor終了・worker停止・外部処理停止を示さない。settlement監査に実際の`d4_runtime` token種別を保持する。実D4／実provider／外部作用なし。
 - **CHECK_SCOPE:** `node node_modules/typescript/bin/tsc -b --pretty false`、`git diff --check`、`pnpm docs:check` PASS。WebChat cancellation endpoint対象1 test PASS、Gateway binding／registry／監査store対象18 tests PASS。WebChat `webchat.test.ts`全135件は132 PASS／3 FAIL。失敗は今回未変更のControl Center recovery scope DOM fixtureが原因（null length、HTML期待文不一致、未定義DOM value）。全workspace test suite、実Gateway＋実D4 client、全5OS、QE_QC／QE_QAはNOT_RUN／未成立。
 - **LOCAL_ASSET_STATUS:** TypeScript build後のignored workspace `dist/` 14 directories／1,097 files／13,414,121 bytesを稼働中再生成物として保持。test fixtureは各testで除去済み。添付領域およびLinux isolation `target/`は保護対象として保持。
-- **GIT_STATUS:** implementation commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpush済み。closeout docs commitを続けて`main`へpushし、終端local／origin／GitHub `main`一致と、recovery current＝closeout HEAD／previous=`2fdc70167b4844625ce4e73407f19c29b5504170`を再照合する。旧Windows worktree metadata pruneはcommit時にPermission denied、metadata／ACLを変更せず保留。
+- **GIT_STATUS:** implementation commit=`2fdc70167b4844625ce4e73407f19c29b5504170`とdocs closeout commit=`1418247c1a79c783a540277cc43f91070f1d5cd4`はGitHub `main`へpush済み。終了時local／origin／GitHub `main`=`1418247...`、recovery current=`1418247...`／previous=`2fdc701...`を確認。旧Windows worktree metadata pruneはPermission denied、metadata／ACLを変更せず保留。
 - **NEXT_REQUIRED_CONSUMER:** D4アプリproducer・Desktop Broker接続・切断後回復は未接続で、別repoの限定委任境界を維持する。rev5.0 P2全体施工を継続し、次単位開始時に⓪から現行指示とsourceを読み直して次consumerを選ぶ。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQC／QAへ移行しない。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up, 2026-11-14)

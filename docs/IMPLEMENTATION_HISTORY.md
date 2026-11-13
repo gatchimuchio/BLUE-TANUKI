@@ -2,6 +2,21 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 P2 SAFE_MIN / isolated Gateway serve smoke
+
+既存`smoke:serve`はGateway初期化が終わる前に15秒でhealth待ちを打ち切り、初回runがFAILした。また旧runnerは`BLUE_TANUKI_STATE_ROOT`を指定せずrepo既定stateを使う構成だった。専用Temp rootにstate／auditをまとめ、起動待ちを60秒へ延長し、子process終了のreadback後にだけauditを検査するよう変更した。終了を観測できないときは一時stateを残し、監査を並行読取しない。runner stdout／stderrのnullable型も明示した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| 最終`pnpm smoke:serve` | PASS。stub provider、loopback WebSocket hello／inbound／channel_send、監査JSONL 8件、audit-dump chain valid。 |
+| `node node_modules/typescript/bin/tsc -b --pretty false` | PASS。 |
+| runner単体strict TypeScript check／`git diff --check` | PASS。 |
+| full test suite、実provider、外部作用、D4 app、installed product、全5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+この結果は短いserve／response／audit smokeであり、C/J/Mの仕事達成、D4 consumer、installed製品、全体`SYSTEM_SHAPED`／`BUILD_COVERED`を証明しない。初回失敗後に既存`.blue-tanuki`を削除せず保持した。後続の正常runnerは専用Temp rootをGateway終了・監査検証後にcleanupした。手動のisolated probe root 18 files／505,501 bytesはWindows標準Recycle Binへ移動し、格納元を`Temp`として確認した。保護添付とLinux isolation `target/`は保持し、実provider・外部作用・他repo変更はない。
+
+implementation commit=`e7538c7f606af18e44e75ca42e5d4da2e766db96`をGitHub `main`へpushした。docs closeout後はlocal／origin／GitHub `main`を一致させ、recovery currentをcloseout HEAD、previousをimplementation commitへCAS更新する。
+
 ## 2026-11-14 — rev5.0 D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2)
 
 WebChatのD4 Runtime専用認証routeへ`POST /runtime/intent/cancel`を追加した。入力は登録runtime・session・submission IDだけとし、private submission storeからrequest IDを得る。GatewayはD4 Runtime owner identity digest、WebChat channel digest、同じrequest IDのOperation Plan binding、およびactive execution registryのcommandを一意照合してから既存AbortSignalを送る。実行済み、binding欠落／曖昧、異session、未登録submissionは通さず、caller指定command ID経路はない。responseは`202`受付、signal abort、worker観測状態を区別し、Executor settled／外部処理停止を主張しない。依頼本文とcommand IDを返さず、監査のtoken kindは`d4_runtime`を維持する。D4アプリ側consumerとD4 Pocket repoは変更していない。
