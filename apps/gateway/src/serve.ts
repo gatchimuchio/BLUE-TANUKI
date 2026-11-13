@@ -75,6 +75,7 @@ import { developmentHandoffStoreFromEnvironment } from "./development_handoff_st
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
+import { approvalRecoveryCommandIdDigest, GatewayApprovalRecoveryStore } from "./approval_recovery_store.js";
 import { buildAuditLog } from "./audit_config.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
@@ -954,10 +955,13 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
 export async function serve(): Promise<ServeShutdown> {
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
   let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
+  let approvalRecoveryStore: GatewayApprovalRecoveryStore | undefined;
   try {
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
-    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations);
+    approvalRecoveryStore = GatewayApprovalRecoveryStore.fromEnvironment(process.env);
+    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations, approvalRecoveryStore);
   } catch (error) {
+    approvalRecoveryStore?.close();
     mcpRuntimeObservations?.close();
     ownerLease.close();
     throw error;
@@ -967,6 +971,7 @@ export async function serve(): Promise<ServeShutdown> {
 async function serveWithOwnerLease(
   ownerLease: GatewayRuntimeOwnerLease,
   mcpRuntimeObservations: McpRuntimeObservationStore,
+  approvalRecoveryStore: GatewayApprovalRecoveryStore,
 ): Promise<ServeShutdown> {
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
@@ -2044,12 +2049,22 @@ async function serveWithOwnerLease(
               prepared: false,
               schedule_rejection_reason: prepared.message,
             });
+            discardPendingApproval(cmd.id);
             await dispatcher.dispatch(
               replyPayload(origin, prepared.message),
               { command_id: `schedule-rejected-${cmd.id}`, upstream_commit_hash: log.commit.hash },
             );
             return { status: "schedule_rejected" };
           }
+        }
+        try {
+          approvalRecoveryStore.recordPending(cmd.id, log.request_id);
+        } catch (error) {
+          discardPendingApproval(cmd.id);
+          if (runtimeScheduleMutationCommand(cmd)) {
+            runtimeSchedules.rejectPending(cmd.id, actor, "approval_recovery_journal_unavailable");
+          }
+          throw error;
         }
         hds.onCommandLifecycle(cmd.id, "approval_pending", {
           actor,
@@ -2062,6 +2077,7 @@ async function serveWithOwnerLease(
             cronEventStore.recordPendingApproval(cronEvent.event_id, cronEvent.payload_digest, cmd.id, log.request_id);
           }
         } catch (error) {
+          discardPendingApproval(cmd.id);
           hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "cron_approval_handoff_unavailable" });
           recordApprovalHistory("approval_cancelled", cmd, log, origin, actor, evaluation, {
             reason: "cron_approval_handoff_unavailable",
@@ -2070,6 +2086,7 @@ async function serveWithOwnerLease(
         }
         const issued = await webchat.issueResumeApprovalToken(cmd.id);
         if (!hds.operationPlanCommandIsCurrent(cmd)) {
+          discardPendingApproval(cmd.id);
           if (cronEvent) {
             cronEventStore.resolvePendingApproval(
               cronEvent.event_id,
@@ -3181,7 +3198,21 @@ async function serveWithOwnerLease(
     }
     const pending = pendingApprovals.get(command_id);
     if (!pending) {
-      if (interruptedApprovalSnapshot().some((item) => item.command_id === command_id)) {
+      let recoveryState: ReturnType<GatewayApprovalRecoveryStore["state"]>;
+      try {
+        recoveryState = approvalRecoveryStore.state(command_id);
+      } catch {
+        return { executed: false, status: "approval_recovery_unavailable", fresh_request_required: true };
+      }
+      if (recoveryState === "resolving") {
+        return { executed: false, status: "approval_resolution_in_progress", fresh_request_required: false };
+      }
+      if (recoveryState !== null) {
+        return recoveryState === "outcome_unknown"
+          ? { executed: false, status: "approval_resolution_outcome_unknown", fresh_request_required: true, automatic_retry: false }
+          : { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
+      }
+      if (interruptedApprovalSnapshot().some((item) => "command_id" in item && item.command_id === command_id)) {
         return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
       }
       if (cronEventStore.hasCronApprovalReference(command_id)) {
@@ -3203,13 +3234,13 @@ async function serveWithOwnerLease(
       : ctx.actor;
     if (executorCommandDigest(pending.command) !== pending.command_digest) {
       resolveCronApprovalHandoff(pending, "cancelled");
-      pendingApprovals.delete(command_id);
+      discardPendingApproval(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "approval_content_changed" });
       return { executed: false, status: "approval_content_changed" };
     }
     if (!hds.operationPlanCommandIsCurrent(pending.command)) {
       resolveCronApprovalHandoff(pending, "cancelled");
-      pendingApprovals.delete(command_id);
+      discardPendingApproval(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
     }
@@ -3233,7 +3264,7 @@ async function serveWithOwnerLease(
           currentFailureGate.decision === "block" ||
           currentFailureGateDigest !== pending.failure_memory_gate_digest) {
         resolveCronApprovalHandoff(pending, "cancelled");
-        pendingApprovals.delete(command_id);
+        discardPendingApproval(command_id);
         hds.onCommandLifecycle(command_id, "approval_cancelled", {
           actor: approvalActor,
           reason: "failure_memory_gate_changed",
@@ -3298,9 +3329,22 @@ async function serveWithOwnerLease(
     }
     if (verdict === "approve" && emergencyStop.active) {
       const issued = await webchat.issueResumeApprovalToken(command_id);
+      let recoveryState: ReturnType<GatewayApprovalRecoveryStore["state"]>;
+      try {
+        recoveryState = approvalRecoveryStore.state(command_id);
+      } catch {
+        return { executed: false, status: "approval_recovery_unavailable", fresh_request_required: true };
+      }
+      if (recoveryState !== "pending") {
+        return {
+          executed: false,
+          status: recoveryState === "resolving" ? "approval_resolution_in_progress" : "approval_recovery_unavailable",
+          fresh_request_required: recoveryState !== "resolving",
+        };
+      }
       if (!hds.operationPlanCommandIsCurrent(pending.command)) {
         resolveCronApprovalHandoff(pending, "cancelled");
-        pendingApprovals.delete(command_id);
+        discardPendingApproval(command_id);
         hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
         return { executed: false, status: "plan_binding_stale" };
       }
@@ -3369,302 +3413,340 @@ async function serveWithOwnerLease(
         approval_token_reissued: Boolean(issued?.token),
       };
     }
-    if (verdict !== "approve") {
-      resolveCronApprovalHandoff(pending, "rejected");
-      pendingApprovals.delete(command_id);
-      if (pending.meaning_update_proposal) {
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "meaning_update_adoption",
-            owner_verdict: verdict,
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            reference_review: null,
-            pending_reassessment_required_count: null,
-          }),
-          command_present: false,
-        });
-        hds.discardMeaningUpdateProposal(pending.meaning_update_proposal.source_command_id);
-      }
-      if (pending.memory_judgment_reassessment_proposal) {
-        const requestedCount = pending.memory_judgment_reassessment_proposal.reassesses_judgment_refs.length;
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "memory_judgment_reassessment",
-            owner_verdict: verdict,
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            requested_judgment_count: requestedCount,
-            reassessed_judgment_count: 0,
-            remaining_reassessment_required_count: requestedCount,
-          }),
-          command_present: false,
-        });
-      }
-      runtimeSchedules.rejectPending(command_id, approvalActor, `human_approval:${verdict}`);
-      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: `human_approval:${verdict}` });
-      recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
-        verdict,
-        token_kind: ctx.token_kind,
-      });
-      await dispatcher.dispatch(replyPayload(pending.origin, `[approval-${verdict}] command_id=${command_id}`), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
-      return { approval: verdict, executed: false };
+    let resolutionStarted = false;
+    try {
+      resolutionStarted = approvalRecoveryStore.beginResolution(command_id);
+    } catch {
+      return { executed: false, status: "approval_recovery_unavailable", fresh_request_required: true };
     }
-    if (runtimeScheduleMutationCommand(pending.command) && !runtimeSchedules.hasPending(command_id)) {
-      resolveCronApprovalHandoff(pending, "cancelled");
-      pendingApprovals.delete(command_id);
-      const content = "[schedule-expired] approval expired before activation. activated=false can_fire=false next_action=Submit the schedule request again and approve the new command_id.";
-      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: "schedule_approval_expired" });
-      recordApprovalHistory("schedule_approval_expired", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
-        verdict,
-        token_kind: ctx.token_kind,
-      });
-      await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
-      return { approval: "approve", executed: false, status: "schedule_approval_expired" };
-    }
-    resolveCronApprovalHandoff(pending, "consumed");
-    pendingApprovals.delete(command_id);
-    const rememberRequested = Boolean(ctx.approval?.remember || ctx.approval?.mode);
-    if (rememberRequested && !pending.evaluation.final_review_required &&
-        !pending.failure_memory_gate_requires_approval) {
-      const grant = approval.remember(pending.evaluation, { actor: approvalActor, mode: ctx.approval?.mode, duration_ms: ctx.approval?.duration_ms, note: `remembered from approval of command_id=${command_id}` });
-      hds.onAuthorityEvent("grant_created", {
-        request_id: pending.log.request_id,
-        command_id,
-        grant_id: grant.id,
-        actor: approvalActor,
-        reason: `remembered from approval of command_id=${command_id}`,
-        evaluation: pending.evaluation,
-      });
-    }
-    hds.onCommandLifecycle(command_id, "approval_approved", {
-      actor: approvalActor,
-      reason: "human_approval:approve",
-      request_id: pending.log.request_id,
-    });
-    recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
-      verdict,
-      token_kind: ctx.token_kind,
-      remember_requested: rememberRequested && !pending.evaluation.final_review_required &&
-        !pending.failure_memory_gate_requires_approval,
-      remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
-      remember_ignored_failure_memory_review: rememberRequested && pending.failure_memory_gate_requires_approval,
-      failure_memory_gate_digest: pending.failure_memory_gate_digest,
-      failure_memory_gate_rechecked: true,
-      ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
-    });
-    if (pending.meaning_update_proposal) {
-      const proposal = pending.meaning_update_proposal;
-      const args = getMeaningUpdateAdoptionArguments(pending.command);
-      const current = hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id);
-      if (!args || !current || current.proposal_digest !== proposal.proposal_digest ||
-          args.proposal_digest !== proposal.proposal_digest || args.candidate_digest !== current.proposal.candidate_digest ||
-          args.source_observation_digest !== current.source_observation_binding?.digest ||
-          args.target_record_id !== current.proposal.target_reference.record_id ||
-          args.target_version !== current.proposal.target_reference.version ||
-          validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "meaning_update_adoption",
-            owner_verdict: "approve",
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            reference_review: current?.reference_review ?? null,
-            pending_reassessment_required_count: null,
-          }),
-          command_present: false,
-        });
-        return { approval: "approve", executed: false, status: "meaning_update_adoption_stale" };
-      }
-      const committed = hds.commitMeaningUpdateAfterL3({ source_command_id: proposal.source_command_id, args,
-        request_id: pending.log.request_id, command_id, command_digest: pending.command_digest,
-        content_review_digest: ctx.content_review_digest ?? "", proposal_actor: proposal.proposal_actor,
-        reviewer_actor: approvalActor, evaluation: pending.evaluation });
-      if (!committed.ok) {
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "meaning_update_adoption",
-            owner_verdict: "approve",
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            reference_review: current.reference_review,
-            pending_reassessment_required_count: null,
-          }),
-          command_present: false,
-        });
-        return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
-      }
-      runtimeKernelShadowObserver?.observe({
-        j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-          kind: "meaning_update_adoption",
-          owner_verdict: "approve",
-          memory_application_status: "applied",
-          memory_revision_before: committed.memory_revision_before ?? null,
-          memory_revision_after: committed.memory_revision_after ?? null,
-          reference_review: current.reference_review,
-          pending_reassessment_required_count: committed.pending_reassessment_required_count,
-        }),
-        command_present: false,
-      });
-      return { approval: "approve", executed: false, status: "meaning_update_adoption_committed",
-        proposal_digest: committed.proposal_digest, candidate_digest: committed.candidate_digest,
-        approval_status: committed.approval_status, memory_application_status: committed.memory_application_status,
-        follow_up_action_status: committed.follow_up_action_status, used_for_authority: false, may_execute: false };
-    }
-    if (pending.memory_judgment_reassessment_proposal) {
-      const proposal = pending.memory_judgment_reassessment_proposal;
-      const args = getMemoryJudgmentReassessmentArguments(pending.command);
-      if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
-          !memoryJudgmentReassessmentProposalIsCurrent(pending) ||
-          validateMemoryJudgmentReassessmentContentReview(pending, ctx.content_review_digest) !== "valid") {
-        const requestedCount = proposal.reassesses_judgment_refs.length;
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "memory_judgment_reassessment",
-            owner_verdict: "approve",
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            requested_judgment_count: requestedCount,
-            reassessed_judgment_count: 0,
-            remaining_reassessment_required_count: requestedCount,
-          }),
-          command_present: false,
-        });
-        return { approval: "approve", executed: false, status: "memory_judgment_reassessment_stale" };
-      }
-      const committed = hds.commitMemoryJudgmentReassessmentAfterL3({ args, request_id: pending.log.request_id,
-        command_id, command_digest: pending.command_digest, content_review_digest: ctx.content_review_digest ?? "",
-        proposal_actor: proposal.proposal_actor, reviewer_actor: approvalActor, evaluation: pending.evaluation });
-      if (!committed.ok) {
-        const requestedCount = proposal.reassesses_judgment_refs.length;
-        runtimeKernelShadowObserver?.observe({
-          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-            kind: "memory_judgment_reassessment",
-            owner_verdict: "approve",
-            memory_application_status: "not_applied",
-            memory_revision_before: null,
-            memory_revision_after: null,
-            requested_judgment_count: requestedCount,
-            reassessed_judgment_count: 0,
-            remaining_reassessment_required_count: requestedCount,
-          }),
-          command_present: false,
-        });
-        return { approval: "approve", executed: false,
-          status: `memory_judgment_reassessment_${committed.reason}` };
-      }
-      runtimeKernelShadowObserver?.observe({
-        j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
-          kind: "memory_judgment_reassessment",
-          owner_verdict: "approve",
-          memory_application_status: "applied",
-          memory_revision_before: committed.memory_revision_before ?? null,
-          memory_revision_after: committed.memory_revision_after ?? null,
-          requested_judgment_count: committed.requested_judgment_count,
-          reassessed_judgment_count: committed.reassessed_judgment_count,
-          remaining_reassessment_required_count: committed.remaining_reassessment_required_count,
-        }),
-        command_present: false,
-      });
-      return { approval: "approve", executed: false, status: "memory_judgment_reassessment_committed",
-        judgment_ref: committed.judgment_ref, reassesses_digest: committed.reassesses_digest,
-        used_for_authority: false, may_execute: false };
-    }
-    if (pending.goal_purpose_relation_review_proposal) {
-      const proposal = pending.goal_purpose_relation_review_proposal;
-      const args = getGoalPurposeRelationReviewArguments(pending.command);
-      if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
-          !goalPurposeRelationReviewProposalIsCurrent(pending) ||
-          validateGoalPurposeRelationContentReview(pending, ctx.content_review_digest) !== "valid") {
-        return { approval: "approve", executed: false, status: "goal_purpose_relation_review_stale" };
-      }
-      const committed = hds.commitOperationPlanGoalPurposeRelationReviewAfterL3({
-        args,
-        request_id: pending.log.request_id,
-        command_id,
-        command_digest: pending.command_digest,
-        proposal_actor: proposal.proposal_actor,
-        reviewer_actor: approvalActor,
-        content_review_digest: ctx.content_review_digest ?? "",
-        evaluation: pending.evaluation,
-      });
-      if (!committed.ok) {
-        return { approval: "approve", executed: false, status: `goal_purpose_relation_review_${committed.reason}` };
-      }
-      return { approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
-        plan_id_digest: args.plan_id_digest, outcome: committed.outcome };
-    }
-    if (pending.goal_purpose_proposal) {
-      const proposal = pending.goal_purpose_proposal;
-      const args = getGoalPurposeChangeArguments(pending.command);
-      const current = hds.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === proposal.goal_ref);
-      if (!args || !current || current.goal_kind !== "delegated" ||
-          current.current_version !== proposal.prior_version ||
-          current.current_purpose_digest !== proposal.prior_purpose_digest ||
-          digestString(proposal.purpose_text) !== proposal.purpose_digest ||
-          args.goal_ref !== proposal.goal_ref || args.prior_version !== proposal.prior_version ||
-          args.prior_purpose_digest !== proposal.prior_purpose_digest ||
-          args.new_purpose_digest !== proposal.purpose_digest ||
-          !hds.getAudit().isPersistent() || !hds.getAudit().verify()) {
-        return { approval: "approve", executed: false, status: "goal_purpose_change_stale" };
-      }
-      const committed = hds.commitGoalPurposeChangeAfterL3({
-        goal_ref: proposal.goal_ref,
-        prior_version: proposal.prior_version,
-        prior_purpose_digest: proposal.prior_purpose_digest,
-        new_purpose_digest: proposal.purpose_digest,
-        purpose_text: proposal.purpose_text,
-        request_id: pending.log.request_id,
-        command_id,
-        proposal_actor: proposal.proposal_actor,
-        actor: approvalActor,
-        evaluation: pending.evaluation,
-      });
-      if (!committed.ok) {
-        return { approval: "approve", executed: false, status: `goal_purpose_change_${committed.reason}` };
-      }
+    if (!resolutionStarted) {
+      let state: ReturnType<GatewayApprovalRecoveryStore["state"]> = null;
+      try { state = approvalRecoveryStore.state(command_id); } catch { /* Fail closed below. */ }
       return {
-        approval: "approve",
         executed: false,
-        status: "goal_purpose_change_committed",
-        goal_ref: committed.goal_ref,
-        version: committed.version,
-        purpose_digest: committed.purpose_digest,
+        status: state === "resolving" ? "approval_resolution_in_progress" : "approval_recovery_unavailable",
+        fresh_request_required: state !== "resolving",
       };
     }
-    const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
-      skip_approval: true,
-      actor: approvalActor,
-      failure_memory_gate_digest: pending.failure_memory_gate_digest,
-      failure_memory_gate_actor: pending.failure_memory_gate_actor,
-      approval_evaluation: pending.evaluation,
-      command_digest: pending.command_digest,
-      ...(pending.content_review_provider_state_digest && isGmailDraftSendReviewCommand(pending.command)
-        ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
-      ...(pending.content_review_provider_state_digest && isGmailMessageSendReviewCommand(pending.command)
-        ? { expected_gmail_message_send_provider_state_digest: pending.content_review_provider_state_digest } : {}),
-      ...(pending.content_review_provider_state_digest && isGmailMessageTrashReviewCommand(pending.command)
-        ? { expected_gmail_message_trash_provider_state_digest: pending.content_review_provider_state_digest } : {}),
-      ...(pending.content_review_provider_state_digest && isGmailMessageModifyReviewCommand(pending.command)
-        ? { expected_gmail_message_modify_provider_state_digest: pending.content_review_provider_state_digest } : {}),
-      ...(pending.content_review_file_edit_target_version_digest
-        ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
-      ...(pending.content_review_file_delete_target_version_digest
-        ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
-      ...(pending.content_review_drive_target_version_digest
-        ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
-      ...(pending.content_review_github_target_version_digest
-        ? { expected_github_write_target_version_digest: pending.content_review_github_target_version_digest } : {}),
-    });
-    if (r.status === "failure_memory_gate_changed") {
-      return { approval: "approve", executed: false, status: r.status, fresh_request_required: true };
+    try {
+      discardPendingApproval(command_id);
+      if (verdict !== "approve") {
+        resolveCronApprovalHandoff(pending, "rejected");
+        if (pending.meaning_update_proposal) {
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "meaning_update_adoption",
+              owner_verdict: verdict,
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              reference_review: null,
+              pending_reassessment_required_count: null,
+            }),
+            command_present: false,
+          });
+          hds.discardMeaningUpdateProposal(pending.meaning_update_proposal.source_command_id);
+        }
+        if (pending.memory_judgment_reassessment_proposal) {
+          const requestedCount = pending.memory_judgment_reassessment_proposal.reassesses_judgment_refs.length;
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "memory_judgment_reassessment",
+              owner_verdict: verdict,
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              requested_judgment_count: requestedCount,
+              reassessed_judgment_count: 0,
+              remaining_reassessment_required_count: requestedCount,
+            }),
+            command_present: false,
+          });
+        }
+        runtimeSchedules.rejectPending(command_id, approvalActor, `human_approval:${verdict}`);
+        hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: `human_approval:${verdict}` });
+        recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
+          verdict,
+          token_kind: ctx.token_kind,
+        });
+        await dispatcher.dispatch(replyPayload(pending.origin, `[approval-${verdict}] command_id=${command_id}`), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+        completeApprovalResolution(command_id);
+        return { approval: verdict, executed: false };
+      }
+      if (runtimeScheduleMutationCommand(pending.command) && !runtimeSchedules.hasPending(command_id)) {
+        resolveCronApprovalHandoff(pending, "cancelled");
+        const content = "[schedule-expired] approval expired before activation. activated=false can_fire=false next_action=Submit the schedule request again and approve the new command_id.";
+        hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: "schedule_approval_expired" });
+        recordApprovalHistory("schedule_approval_expired", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
+          verdict,
+          token_kind: ctx.token_kind,
+        });
+        await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, status: "schedule_approval_expired" };
+      }
+      resolveCronApprovalHandoff(pending, "consumed");
+      const rememberRequested = Boolean(ctx.approval?.remember || ctx.approval?.mode);
+      if (rememberRequested && !pending.evaluation.final_review_required &&
+          !pending.failure_memory_gate_requires_approval) {
+        const grant = approval.remember(pending.evaluation, { actor: approvalActor, mode: ctx.approval?.mode, duration_ms: ctx.approval?.duration_ms, note: `remembered from approval of command_id=${command_id}` });
+        hds.onAuthorityEvent("grant_created", {
+          request_id: pending.log.request_id,
+          command_id,
+          grant_id: grant.id,
+          actor: approvalActor,
+          reason: `remembered from approval of command_id=${command_id}`,
+          evaluation: pending.evaluation,
+        });
+      }
+      hds.onCommandLifecycle(command_id, "approval_approved", {
+        actor: approvalActor,
+        reason: "human_approval:approve",
+        request_id: pending.log.request_id,
+      });
+      recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
+        verdict,
+        token_kind: ctx.token_kind,
+        remember_requested: rememberRequested && !pending.evaluation.final_review_required &&
+          !pending.failure_memory_gate_requires_approval,
+        remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
+        remember_ignored_failure_memory_review: rememberRequested && pending.failure_memory_gate_requires_approval,
+        failure_memory_gate_digest: pending.failure_memory_gate_digest,
+        failure_memory_gate_rechecked: true,
+        ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
+      });
+      if (pending.meaning_update_proposal) {
+        const proposal = pending.meaning_update_proposal;
+        const args = getMeaningUpdateAdoptionArguments(pending.command);
+        const current = hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id);
+        if (!args || !current || current.proposal_digest !== proposal.proposal_digest ||
+            args.proposal_digest !== proposal.proposal_digest || args.candidate_digest !== current.proposal.candidate_digest ||
+            args.source_observation_digest !== current.source_observation_binding?.digest ||
+            args.target_record_id !== current.proposal.target_reference.record_id ||
+            args.target_version !== current.proposal.target_reference.version ||
+            validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "meaning_update_adoption",
+              owner_verdict: "approve",
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              reference_review: current?.reference_review ?? null,
+              pending_reassessment_required_count: null,
+            }),
+            command_present: false,
+          });
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "meaning_update_adoption_stale" };
+        }
+        const committed = hds.commitMeaningUpdateAfterL3({ source_command_id: proposal.source_command_id, args,
+          request_id: pending.log.request_id, command_id, command_digest: pending.command_digest,
+          content_review_digest: ctx.content_review_digest ?? "", proposal_actor: proposal.proposal_actor,
+          reviewer_actor: approvalActor, evaluation: pending.evaluation });
+        if (!committed.ok) {
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "meaning_update_adoption",
+              owner_verdict: "approve",
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              reference_review: current.reference_review,
+              pending_reassessment_required_count: null,
+            }),
+            command_present: false,
+          });
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
+        }
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "meaning_update_adoption",
+            owner_verdict: "approve",
+            memory_application_status: "applied",
+            memory_revision_before: committed.memory_revision_before ?? null,
+            memory_revision_after: committed.memory_revision_after ?? null,
+            reference_review: current.reference_review,
+            pending_reassessment_required_count: committed.pending_reassessment_required_count,
+          }),
+          command_present: false,
+        });
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, status: "meaning_update_adoption_committed",
+          proposal_digest: committed.proposal_digest, candidate_digest: committed.candidate_digest,
+          approval_status: committed.approval_status, memory_application_status: committed.memory_application_status,
+          follow_up_action_status: committed.follow_up_action_status, used_for_authority: false, may_execute: false };
+      }
+      if (pending.memory_judgment_reassessment_proposal) {
+        const proposal = pending.memory_judgment_reassessment_proposal;
+        const args = getMemoryJudgmentReassessmentArguments(pending.command);
+        if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
+            !memoryJudgmentReassessmentProposalIsCurrent(pending) ||
+            validateMemoryJudgmentReassessmentContentReview(pending, ctx.content_review_digest) !== "valid") {
+          const requestedCount = proposal.reassesses_judgment_refs.length;
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "memory_judgment_reassessment",
+              owner_verdict: "approve",
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              requested_judgment_count: requestedCount,
+              reassessed_judgment_count: 0,
+              remaining_reassessment_required_count: requestedCount,
+            }),
+            command_present: false,
+          });
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "memory_judgment_reassessment_stale" };
+        }
+        const committed = hds.commitMemoryJudgmentReassessmentAfterL3({ args, request_id: pending.log.request_id,
+          command_id, command_digest: pending.command_digest, content_review_digest: ctx.content_review_digest ?? "",
+          proposal_actor: proposal.proposal_actor, reviewer_actor: approvalActor, evaluation: pending.evaluation });
+        if (!committed.ok) {
+          const requestedCount = proposal.reassesses_judgment_refs.length;
+          runtimeKernelShadowObserver?.observe({
+            j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+              kind: "memory_judgment_reassessment",
+              owner_verdict: "approve",
+              memory_application_status: "not_applied",
+              memory_revision_before: null,
+              memory_revision_after: null,
+              requested_judgment_count: requestedCount,
+              reassessed_judgment_count: 0,
+              remaining_reassessment_required_count: requestedCount,
+            }),
+            command_present: false,
+          });
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false,
+            status: `memory_judgment_reassessment_${committed.reason}` };
+        }
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "memory_judgment_reassessment",
+            owner_verdict: "approve",
+            memory_application_status: "applied",
+            memory_revision_before: committed.memory_revision_before ?? null,
+            memory_revision_after: committed.memory_revision_after ?? null,
+            requested_judgment_count: committed.requested_judgment_count,
+            reassessed_judgment_count: committed.reassessed_judgment_count,
+            remaining_reassessment_required_count: committed.remaining_reassessment_required_count,
+          }),
+          command_present: false,
+        });
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, status: "memory_judgment_reassessment_committed",
+          judgment_ref: committed.judgment_ref, reassesses_digest: committed.reassesses_digest,
+          used_for_authority: false, may_execute: false };
+      }
+      if (pending.goal_purpose_relation_review_proposal) {
+        const proposal = pending.goal_purpose_relation_review_proposal;
+        const args = getGoalPurposeRelationReviewArguments(pending.command);
+        if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
+            !goalPurposeRelationReviewProposalIsCurrent(pending) ||
+            validateGoalPurposeRelationContentReview(pending, ctx.content_review_digest) !== "valid") {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "goal_purpose_relation_review_stale" };
+        }
+        const committed = hds.commitOperationPlanGoalPurposeRelationReviewAfterL3({
+          args,
+          request_id: pending.log.request_id,
+          command_id,
+          command_digest: pending.command_digest,
+          proposal_actor: proposal.proposal_actor,
+          reviewer_actor: approvalActor,
+          content_review_digest: ctx.content_review_digest ?? "",
+          evaluation: pending.evaluation,
+        });
+        if (!committed.ok) {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: `goal_purpose_relation_review_${committed.reason}` };
+        }
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
+          plan_id_digest: args.plan_id_digest, outcome: committed.outcome };
+      }
+      if (pending.goal_purpose_proposal) {
+        const proposal = pending.goal_purpose_proposal;
+        const args = getGoalPurposeChangeArguments(pending.command);
+        const current = hds.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === proposal.goal_ref);
+        if (!args || !current || current.goal_kind !== "delegated" ||
+            current.current_version !== proposal.prior_version ||
+            current.current_purpose_digest !== proposal.prior_purpose_digest ||
+            digestString(proposal.purpose_text) !== proposal.purpose_digest ||
+            args.goal_ref !== proposal.goal_ref || args.prior_version !== proposal.prior_version ||
+            args.prior_purpose_digest !== proposal.prior_purpose_digest ||
+            args.new_purpose_digest !== proposal.purpose_digest ||
+            !hds.getAudit().isPersistent() || !hds.getAudit().verify()) {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "goal_purpose_change_stale" };
+        }
+        const committed = hds.commitGoalPurposeChangeAfterL3({
+          goal_ref: proposal.goal_ref,
+          prior_version: proposal.prior_version,
+          prior_purpose_digest: proposal.prior_purpose_digest,
+          new_purpose_digest: proposal.purpose_digest,
+          purpose_text: proposal.purpose_text,
+          request_id: pending.log.request_id,
+          command_id,
+          proposal_actor: proposal.proposal_actor,
+          actor: approvalActor,
+          evaluation: pending.evaluation,
+        });
+        if (!committed.ok) {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: `goal_purpose_change_${committed.reason}` };
+        }
+        completeApprovalResolution(command_id);
+        return {
+          approval: "approve",
+          executed: false,
+          status: "goal_purpose_change_committed",
+          goal_ref: committed.goal_ref,
+          version: committed.version,
+          purpose_digest: committed.purpose_digest,
+        };
+      }
+      const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
+        skip_approval: true,
+        actor: approvalActor,
+        failure_memory_gate_digest: pending.failure_memory_gate_digest,
+        failure_memory_gate_actor: pending.failure_memory_gate_actor,
+        approval_evaluation: pending.evaluation,
+        command_digest: pending.command_digest,
+        ...(pending.content_review_provider_state_digest && isGmailDraftSendReviewCommand(pending.command)
+          ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+        ...(pending.content_review_provider_state_digest && isGmailMessageSendReviewCommand(pending.command)
+          ? { expected_gmail_message_send_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+        ...(pending.content_review_provider_state_digest && isGmailMessageTrashReviewCommand(pending.command)
+          ? { expected_gmail_message_trash_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+        ...(pending.content_review_provider_state_digest && isGmailMessageModifyReviewCommand(pending.command)
+          ? { expected_gmail_message_modify_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+        ...(pending.content_review_file_edit_target_version_digest
+          ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
+        ...(pending.content_review_file_delete_target_version_digest
+          ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
+        ...(pending.content_review_drive_target_version_digest
+          ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
+        ...(pending.content_review_github_target_version_digest
+          ? { expected_github_write_target_version_digest: pending.content_review_github_target_version_digest } : {}),
+      });
+      if (r.status === "failure_memory_gate_changed") {
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, status: r.status, fresh_request_required: true };
+      }
+      completeApprovalResolution(command_id);
+      return { approval: "approve", executed: true, status: r.status };
+    } catch (error) {
+      try {
+        approvalRecoveryStore.markOutcomeUnknown(command_id);
+      } catch {
+        gatewayLog.error("approval recovery outcome could not be persisted", { state: "resolving" });
+      }
+      throw error;
     }
-    return { approval: "approve", executed: true, status: r.status };
   }
 
   async function requestRecoveryMutation(
@@ -3829,7 +3911,7 @@ async function serveWithOwnerLease(
     }
     const pending = pendingApprovals.get(command.id);
     if (!pending || pending.evaluation.context.operation !== toolName || !pending.evaluation.final_review_required) {
-      if (pending) pendingApprovals.delete(command.id);
+      if (pending) discardPendingApproval(command.id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", {
         actor: authorityOrigin.user,
         reason: "recovery_approval_queue_incomplete",
@@ -3837,7 +3919,7 @@ async function serveWithOwnerLease(
       return { status: "approval_unavailable", executed: false, operation: toolName, command_id: command.id };
     }
     if (!pending.approval_token) {
-      pendingApprovals.delete(command.id);
+      discardPendingApproval(command.id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", {
         actor: authorityOrigin.user,
         reason: "recovery_approval_token_unavailable",
@@ -4307,7 +4389,7 @@ async function serveWithOwnerLease(
     });
     const pending = pendingApprovals.get(command.id);
     if (result.status !== "approval_required" || !pending?.meaning_update_proposal || !pending.approval_token) {
-      if (pending) pendingApprovals.delete(command.id);
+      if (pending) discardPendingApproval(command.id);
       hds.discardMeaningUpdateProposal(input.source_command_id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: "webchat-owner-token-holder",
         reason: "meaning_update_adoption_approval_queue_unavailable", request_id: log.request_id });
@@ -4379,7 +4461,7 @@ async function serveWithOwnerLease(
     });
     const pending = pendingApprovals.get(command.id);
     if (result.status !== "approval_required" || !pending?.memory_judgment_reassessment_proposal || !pending.approval_token) {
-      if (pending) pendingApprovals.delete(command.id);
+      if (pending) discardPendingApproval(command.id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: "webchat-owner-token-holder",
         reason: "memory_judgment_reassessment_approval_queue_unavailable", request_id: log.request_id });
       return { accepted: false, status: "memory_judgment_reassessment_approval_unavailable" };
@@ -4551,7 +4633,7 @@ async function serveWithOwnerLease(
     });
     const pending = pendingApprovals.get(command.id);
     if (result.status !== "approval_required" || !pending?.goal_purpose_proposal || !pending.approval_token) {
-      if (pending) pendingApprovals.delete(command.id);
+      if (pending) discardPendingApproval(command.id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", {
         actor: input.actor,
         reason: "goal_purpose_change_approval_queue_unavailable",
@@ -4655,7 +4737,7 @@ async function serveWithOwnerLease(
     });
     const pending = pendingApprovals.get(command.id);
     if (result.status !== "approval_required" || !pending?.goal_purpose_relation_review_proposal || !pending.approval_token) {
-      if (pending) pendingApprovals.delete(command.id);
+      if (pending) discardPendingApproval(command.id);
       hds.onCommandLifecycle(command.id, "approval_cancelled", {
         actor: input.actor, reason: "goal_purpose_relation_review_approval_queue_unavailable", request_id: log.request_id,
       });
@@ -5406,7 +5488,7 @@ async function serveWithOwnerLease(
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {
     for (const [id, p] of pendingApprovals) if (!hds.operationPlanCommandIsCurrent(p.command)) {
       resolveCronApprovalHandoff(p, "cancelled");
-      pendingApprovals.delete(id);
+      discardPendingApproval(id);
       hds.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_binding_stale" });
     }
     return Array.from(pendingApprovals.values()).map((p) => ({
@@ -5812,7 +5894,35 @@ async function serveWithOwnerLease(
   }
 
   function interruptedApprovalSnapshot() {
-    return startupInterruptedApprovals.filter((item) => !pendingApprovals.has(item.command_id));
+    const audited = startupInterruptedApprovals.filter((item) => !pendingApprovals.has(item.command_id));
+    const represented = new Set(audited.map((item) => approvalRecoveryCommandIdDigest(item.command_id)));
+    const journal = approvalRecoveryStore.listInterrupted()
+      .filter((item) => !represented.has(item.command_id_digest))
+      .map((item) => ({
+        command_id_digest: item.command_id_digest,
+        request_id_digest: item.request_id_digest,
+        recovery_state: item.state,
+        timestamp_ms: item.timestamp_ms,
+      }));
+    return [...audited, ...journal];
+  }
+
+  function discardPendingApproval(commandId: string): void {
+    pendingApprovals.delete(commandId);
+    try {
+      approvalRecoveryStore.clearPending(commandId);
+    } catch {
+      gatewayLog.error("approval recovery pending record could not be cleared", { state: "pending" });
+    }
+  }
+
+  function completeApprovalResolution(commandId: string): void {
+    try {
+      approvalRecoveryStore.completeResolution(commandId);
+    } catch {
+      try { approvalRecoveryStore.markOutcomeUnknown(commandId); } catch { /* Keep the original safe failure record. */ }
+      gatewayLog.error("approval recovery resolution record could not be cleared", { state: "resolving" });
+    }
   }
 
   function resolveCronApprovalHandoff(
@@ -6763,6 +6873,7 @@ async function serveWithOwnerLease(
       emergencyStopStateStore.close();
       hds.closeOperationPlanMemory();
       executionStore.close();
+      approvalRecoveryStore.close();
       mcpRuntimeObservations.close();
       auditLog.info("summary", {
         entries: hds.getAudit().size(),

@@ -1274,7 +1274,10 @@ export interface WebChatNotificationItem {
   read_only: true;
   authority: "display_only";
   request_id?: string | null;
+  request_id_digest?: string;
   command_id?: string;
+  command_id_digest?: string;
+  approval_recovery_state?: "interrupted" | "outcome_unknown";
   schedule_id?: string;
   approval_level?: string;
   risk?: string;

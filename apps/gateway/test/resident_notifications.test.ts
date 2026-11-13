@@ -110,6 +110,37 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(JSON.stringify(notifications)).not.toContain("must-not-project");
   });
 
+  it("shows digest-only generic approval interruption evidence", () => {
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 100,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      interrupted_approvals: [{
+        command_id_digest: "a".repeat(64),
+        request_id_digest: "b".repeat(64),
+        recovery_state: "outcome_unknown",
+        timestamp_ms: 50,
+      }],
+      authority_trace: [],
+    });
+
+    expect(notifications).toContainEqual(expect.objectContaining({
+      id: `approval-interrupted:${"a".repeat(64)}`,
+      kind: "approval_interrupted",
+      source: "approval_lifecycle",
+      title: "Approval result is unknown after Gateway restart",
+      command_id_digest: "a".repeat(64),
+      request_id_digest: "b".repeat(64),
+      approval_recovery_state: "outcome_unknown",
+      read_only: true,
+      authority: "display_only",
+      timestamp: 50,
+      next_action: expect.stringContaining("Do not repeat the action"),
+    }));
+    expect(JSON.stringify(notifications)).not.toContain("synthetic-command");
+    expect(JSON.stringify(notifications)).not.toContain("approval_token");
+  });
+
   it("keeps verified Cron projections and unrelated notices when one Cron projection fails", () => {
     const approval = {
       source_digest: "d".repeat(64),

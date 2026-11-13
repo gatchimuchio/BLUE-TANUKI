@@ -2,6 +2,31 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / Approval Gate restart recovery journal
+
+主語はBLUE Gatewayのprocess-local Approval Gate待ち状態と、Gateway再起動後のowner向け復旧表示である。目的は、監査永続化が無効でも未決承認を失わず、旧tokenやraw仕事を復元・再利用せず、承認処理中断の結果不明を明示すること。既存のHDS/J単独authority、Approval Gate、L3 review、Broker、M非権威境界は変更していない。
+
+`BLUE_TANUKI_STATE_ROOT/private-state/approval-recovery`にdigest-only SQLite journalを接続した。記録するのはdomain-separated command/request SHA-256 digest、状態、時刻だけ。承認token、command/proposal本文、引数、originは保存しない。新しい待ちをtoken提示前に永続化し、owner verdictの処理開始時はSQLiteの一回限りCASで`pending → resolving`へ遷移させる。再起動時に残る`pending`は`interrupted`、`resolving`は`outcome_unknown`にし、どちらも旧承認を実行・再送せず、新しい依頼を要求する。同期処理例外も`outcome_unknown`へ投影する。キャンセル・完了時にjournalを閉じる。
+
+owner向けResident Notifications／Control Centerへdigest参照と回復状態を接続した。`outcome_unknown`は実行結果を推定せず、receipt確認前の再実行を避ける次行動を示す。保存不成立・競合時は旧承認をfail-closedにし、journalは判断権限を持たない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway／WebChat typecheck、package build | PASS。 |
+| approval journal／resident notification tests | PASS：29件。raw ID／tokenのDB非保存、restart state回復、原子的one-time resolution、digest-only表示、unknown結果の再実行抑止を確認。 |
+| 変更後distによるGateway L3経路 | PASS：`BT-U-E2E-01 keeps synthetic file.delete behind reviewed L3 and stops on a stale target`、1件PASS／7件skip。外部providerなし、隔離fixture。 |
+| `pnpm docs:check` | PASS。日本語基底の移行負債75件は既存継続。 |
+| `git diff --check` | PASS。 |
+| 長時間C08.02統合selector | 変更前のdistで起動し、別のOperationPlan `file.search.parameters` assertionに到達してFAIL。現行変更sourceをロードしていないため、今回の実装評価には数えず履歴へ記録。 |
+| 全suite／Gateway再起動を含むserved approval E2E／実provider／外部作用／全OS／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / digest-only Approval Gate restart recovery journal
+- **STATUS:** WIRED（pending作成→CAS verdict開始→通常L3 consumer／restart interruption projection。実Gateway process killを跨ぐ新journal E2Eは未実施）
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続し、全要求・5OSのC/J/M／Broker／Approval／channel入口から次の未接続consumerを再選定する。局所QAへ移らない。
+- **SAFETY_STATUS:** HDS authority／L3／Brokerと仕事実行規則は不変。journalは非権威で旧approvalを復元しない。result unknownで自動再送しない。C08.03 live provider HOLD、D4／MINIDORA別repo、公開・出荷GO境界を維持。
+- **LOCAL_ASSET_STATUS:** store／notificationのtest-owned Temp rootとserved Gateway fixtureは終了時cleanup。追加ignored package `dist`は開発実行用に保持。既存`.blue-tanuki/private-state`、protected `.codex-attachments/`／`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。資格情報／OneDrive資料／owner dataは対象外。
+- **GIT_STATUS:** 編集開始local／`origin/main`／GitHub `main`=`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`、ahead／behind=0/0。開始recovery local branch／remote tag current／previous=`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`／`b2d507cc3b48e75ceb3696d811909f571d01e27a`。`git fetch`は既存stale worktree metadataのACL拒否で失敗したためmetadata／ACLを変更せず、`git ls-remote`でmainと両remote recovery tagを直接照合した。closeout後にhead・保護差分・復旧二世代を再照合する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / MCP restart-safe runtime observation consumer
 
 主語はBLUE Gateway MCP Adapterの通常呼出し観測とConnections SettingsSurface。目的は、Gateway再起動後も保存済み状態を読み、応答未観測のtool dispatchを`outcome_unknown`としてownerへ提示すること。MCP endpointのcanonical SHA-256 digest・状態・時刻だけを最大8件、private-state SQLiteへ保存する。CLI／常駐Gatewayのtool実装とSettingsSurfaceに同じstoreを注入した。SettingsSurfaceはprobe・process起動を行わず、観測はJ／Approval／Brokerに権限を与えない。

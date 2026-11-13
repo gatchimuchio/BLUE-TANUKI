@@ -2,6 +2,25 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 Approval Gate restart recovery journal
+
+主語はGateway内のprocess-local Approval Gate待ち状態と、再起動後にownerへ提示する未決／結果不明状態である。目的は監査永続化の有無に依存せず、承認待ちをdigestだけで再起動後へ引き継ぎ、旧tokenを復元せず、解決途中の外部作用を再実行しないこと。Gateway `serve()`からprivate SQLite storeを生成・終了し、汎用承認待ちの作成・解決処理・Resident Notifications／Control Centerの既存consumerへ接続した。cron固有handoff、HDS authority、Approval Gate policy、L3 review、Broker、外部作用契約は変更していない。
+
+SQLiteにはdomain-separated command/request SHA-256 digest、`pending`／`resolving`／`interrupted`／`outcome_unknown`状態と時刻のみを保存する。command本文、arguments、origin、tokenは保存しない。verdict処理開始時のSQL compare-and-setにより一回だけ`pending → resolving`できる。再起動時に`pending`を`interrupted`、`resolving`を`outcome_unknown`にする。失敗・競合・unknown状態はfail-closedで、旧approvalやverdictを再現しない。Resident/Control Centerはdigest参照だけを表示し、unknownの場合はsaved result／external receiptの確認前に再実行しないよう通知する。Unresolved record数は4096件で上限を設け、上限到達時は新規承認を拒否する。
+
+| 検証 | 結果 |
+|---|---|
+| Gateway／WebChat typecheck、package build | PASS。 |
+| Recovery store／notification focused tests | PASS 29件。raw command/request IDがDBに現れないこと、restart state recovery、one-time CAS、完了・取消のclear、digest-only notificationを確認。 |
+| 再build後のsynthetic Gateway L3 test | PASS 1件／7件skip。`file.delete`のL3境界とstale-target stopを確認。synthetic fixtureのみ。 |
+| `pnpm docs:check` | PASS。日本語基底の移行負債75件は既存継続。 |
+| `git diff --check` | PASS。 |
+| 全suite／process restartを跨ぐserved E2E／実provider・credential／外部作用／全OS QA | NOT_RUN。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAも未成立。 |
+
+初回の長時間selector実行はpackage再build前の既存`dist/main.js`を読み、別の`file.search.parameters` assertionでFAILした。この結果は変更後ソースを対象としていないため本実装の失敗根拠にはせず、変更後distで対象L3 testを再実行してPASSを得た。process killを跨ぐstore recovery自体はunit testで検証したが、実Gateway restartのend-to-end試験はしていない。
+
+ローカルtest専用Temp root／DB／fixtureはcleanup確認済み。既存ignored `dist`、既存private state、保護された添付・Linux targetは保持。実資格情報、外部provider、owner data、別repo、外部作用は未使用。開始local／origin／GitHub mainは`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`。開始recovery current／previousは`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`／`b2d507cc3b48e75ceb3696d811909f571d01e27a`。`git fetch`は既存stale worktree metadataのACL拒否で失敗し、`git ls-remote`でmain／tagを直接照合した。ACL／metadataは変更していない。
+
 ## 2026-11-13 — QE_BUILD MCP restart-safe runtime observation consumer
 
 主語はBLUE Gateway MCP Adapterの通常呼出し観測と認証済みConnections SettingsSurface。目的はGateway再起動後に失われるprocess-local観測を、再送を誘発しないowner向け回復情報として既存consumerへ結ぶこと。rev5.0 P2全体施工の一接続であり、F08.03全体の達成やQAではない。

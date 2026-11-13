@@ -58,6 +58,15 @@ export interface ResidentNotificationInput {
 }
 
 export interface InterruptedApprovalSnapshot {
+  readonly command_id?: string;
+  readonly command_id_digest?: string;
+  readonly request_id?: string | null;
+  readonly request_id_digest?: string;
+  readonly recovery_state?: "interrupted" | "outcome_unknown";
+  readonly timestamp_ms: number;
+}
+
+export interface AuditedInterruptedApprovalSnapshot {
   readonly command_id: string;
   readonly request_id: string | null;
   readonly timestamp_ms: number;
@@ -72,7 +81,7 @@ export function interruptedApprovalsFromAudit(
   entries: readonly { readonly index: number; readonly log: unknown }[],
   startupEntryCount: number,
   activeCommandIds: ReadonlySet<string> = new Set(),
-): InterruptedApprovalSnapshot[] {
+): AuditedInterruptedApprovalSnapshot[] {
   if (!Number.isSafeInteger(startupEntryCount) || startupEntryCount < 0) return [];
   const latest = new Map<string, {
     index: number;
@@ -222,19 +231,28 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const approval of input.interrupted_approvals ?? []) {
+    const reference = approval.command_id_digest ?? approval.command_id ?? "unidentified";
+    const outcomeUnknown = approval.recovery_state === "outcome_unknown";
     notifications.push({
-      id: `approval-interrupted:${approval.command_id}`,
+      id: `approval-interrupted:${reference}`,
       kind: "approval_interrupted",
       severity: "warning",
-      title: "Approval was interrupted by Gateway restart",
-      message: "An approval was pending before Gateway restarted. Its prior one-time token was not restored, and no approval verdict was recovered.",
+      title: outcomeUnknown ? "Approval result is unknown after Gateway restart" : "Approval was interrupted by Gateway restart",
+      message: outcomeUnknown
+        ? "Gateway stopped while resolving this approval. Whether the requested work took effect is not established; no action was replayed and the prior token was not restored."
+        : "An approval was pending before Gateway restarted. Its prior one-time token was not restored, and no approval verdict was recovered.",
       timestamp: approval.timestamp_ms,
       source: "approval_lifecycle",
       read_only: true,
       authority: "display_only",
-      request_id: approval.request_id,
-      command_id: approval.command_id,
-      next_action: "Review Authority Trace and any saved result. If the work is still needed, submit a new request and review its current target before approving.",
+      ...(approval.request_id !== undefined ? { request_id: approval.request_id } : {}),
+      ...(approval.command_id ? { command_id: approval.command_id } : {}),
+      ...(approval.command_id_digest ? { command_id_digest: approval.command_id_digest } : {}),
+      ...(approval.request_id_digest ? { request_id_digest: approval.request_id_digest } : {}),
+      ...(approval.recovery_state ? { approval_recovery_state: approval.recovery_state } : {}),
+      next_action: outcomeUnknown
+        ? "Inspect Authority Trace, saved results, and any external receipt first. Do not repeat the action while its result is unclear. If still needed, submit a new request and review its current target."
+        : "Review Authority Trace and any saved result. If the work is still needed, submit a new request and review its current target before approving.",
     });
   }
 
