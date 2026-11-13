@@ -2,6 +2,19 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native app・DMG producer (2026-11-14)
+
+主語はBLUE-TANUKIのmacOS x64／arm64製品アプリ入口と、そのSetup／Launcher／Uninstall consumerである。目的は既存の保護付きUnix製品経路をAppKit画面から明示操作で呼び出せる`.app`とDMGを生成し、macOSの対象CPU／minimum deployment target／同梱installerの同一性を検証すること。HDS authority、Gateway、Broker、秘密、外部作用能力、既存Setup／Uninstallの削除対象は変更しない。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / macOS native product app entry, x64 and arm64.
+- **STATUS:** CLOSED（native app source／package producer／read-only image verifierを接続）。`install/macos/app/BlueTanukiApp.swift`は初回自動導入をせず、画面操作から既存Setupを`--no-launch`で起動する。起動前には既存Uninstallの`--dry-run --quiet`で所有・管理対象を検証し、既存Launcherへresident start/openを依頼する。停止はresident-stop、通常Uninstallは確認後にPurgeなしで実行し、設定とユーザーデータを保持する。自動起動は追加しない。`scripts/package_macos_app.ts`は対象別AppKit `.app`とUDZO `.dmg`、SHA-256 sidecar、配布manifestを生成する。VerifierはDMGをread-only mountし、manifest／hash／bundle／architecture／minimum OS／installer hash／Applications linkを確認してmountを解除する。release bundle artifact listにも両DMGを追加した。
+- **CHECK_SCOPE:** Windows上の対象TypeScript strict check、`package.json` parse、GitHub Actions YAML parse、`git diff --check`はPASS。GitHub Actions `workflow_dispatch` run [#18](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43494033491)、source SHA=`a882a2aa5693b694236a2e2ac7e645d536c8d211`はmacOS x64／arm64両runnerでworkspace build、native payload、single-file installer、AppKit compile、DMG生成、read-only verifier、artifact uploadまでPASS。x64 DMG SHA-256=`7cb6888457416c92efcc3ccb7d8837280de3fea060f877eeddc2ea4a3e82fd28`、arm64 DMG SHA-256=`291a78b1c48faaf4bc4a37a09ef847fb7fddac3f375730dcee91c266795a9451`。App binary architectureは各target単一arch、minimum deployment targetは11.0として検証。Actions artifact x64 ID=`14069903967`、SHA-256=`0593d97f81eb039f395123522e6ceeef1091c984b103c5da43d085692970b459`、容量182,936,447 bytes。arm64 ID=`14072050542`、SHA-256=`cace64df7705e25c7b00215df30747aa41af702cce573fdeaca7e9b5796bd798`、容量173,789,453 bytes。各artifactは2026-11-20 UTCに期限切れとなる。
+- **CORRECTION:** 先行run #17は旧README verifierがmacOS READMEの固定英文を要求してx64 payload検証で停止した。macOS package READMEとverifierを日本語の現行規定に合わせ、同条件run #18で再検証した。run #17を成功扱いしていない。
+- **EVIDENCE_LIMIT:** package-only BUILD証拠である。生成した`.app`の実GUI起動、macOS上でのdrag-install、Setupボタンからの実インストール、Gateway／Control Center、停止、アンインストール、OS権限／Keychain、ログイン／再起動、Gatekeeper受入、署名・notarization、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。両DMGとinstallerは署名なしで、公証提出なし。README／manifestに状態を明示し、署名検証・publisher認証は主張しない。Actions artifactは7日保持であり恒久配布物ではない。
+- **LOCAL_ASSET_STATUS:** package outputはhosted runner上で生成し、x64／arm64各Actions artifactへ保存。ローカルにDMGや一時mountを残していない。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`は保護対象として未変更。古いWindows worktree metadataはGit pruneのPermission deniedにより保留し、metadata／ACLを変更していない。
+- **GIT_STATUS:** source commit=`3cdc83ae0958f0c67a54b7959b322b5f6100cfa4`およびREADME/verifier correction=`a882a2aa5693b694236a2e2ac7e645d536c8d211`をGitHub `main`へfast-forward push済み。run #18は後者の正確なSHAで実行した。このdocs closeout push後のlocal／remote `main`と復旧2世代を再照合して記録する。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体BUILDを続ける。macOS app package PASSをinstalled app／runtime成立へ拡張しない。次単位開始時に現行sourceからBlue-owned producer→consumer gapを選び直し、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`前にQE_QC／QE_QAへ移らない。
+
 ## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux native・macOS x64/arm64 package-only producer (2026-11-14)
 
 主語はBLUE-TANUKIのLinux x86_64およびmacOS x64/arm64製品package producerと各package verifierである。目的は現行mainの製品workspaceからLinux/macOS native payloadと一体型installerを生成・静的検証すること。利用者向けinstalled runtimeの起動・仕事・更新・復旧・削除、配布、署名、notarizationはこの限定buildに含めない。
