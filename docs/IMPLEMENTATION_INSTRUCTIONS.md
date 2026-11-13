@@ -2,7 +2,31 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則からJ/M結果projection・Control Center引継ぎまで
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser.automation送信先束縛付き検索GET
+
+主語はBLUE `browser.automation`とWebChat L3 content reviewである。目的は、ownerが明示した送信元ページ・同一origin送信先・検索項目を、既存の承認境界に結び付けたbounded GET consumerへ接続すること。
+
+`action=form_submit`は明示された`url`／`action_url`、一意なaccessible `search`領域、同一origin、GET、`_self`、標準URL encoding、UTF-8、text/search inputを要求する。hidden／credential-like／unsupported／duplicate field、submit action/method/encoding/target/validation override、`dirname`、pattern、非標準autocomplete、曖昧なform、送信先差替えを拒否する。`minlength`／`maxlength`を手動適用し、必須fieldを確認する。owner再認証UIは送信元、送信先、全入力値をauthenticated no-storeのL3 content reviewで表示し、command digest・OperationPlan binding・内容digestへ結ぶ。
+
+実行時はJavaScript／service workerを無効にしたephemeral contextを使う。送信元と送信先へのHTTP GETはpublic-address／allowlist確認後、DNS解決済みIPへ固定する既存transportを使い、browser cookie／credentialを送らずredirectを追わない。ブラウザの外部networkは遮断し、取得HTMLだけをローカルDOM解析へ渡す。検索queryは返却URL・observationへ含めず、送信後の失敗は結果不明として自動再送しない。previewは既定無効のまま。GETで状態変更するWeb endpointは判定できないため、送信先と値のowner L3確認を維持する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Core form contract／URL builder | PASS、23 tests。GET／送信先・origin／field binding、HTML長制約、encoding・submitter override等の拒否境界をfixtureで確認。 |
+| `browser.automation`／Gateway approval review／Control Center表示のfocused tests | PASS、2 + 2 + 1 tests。入力値はno-store reviewのみ、返却URL／observation metadataにquery値を含めない。 |
+| Core／Gateway／WebChat TypeScript typecheck | PASS。 |
+| Core／Gateway／WebChat TypeScript出力・package build | NOT_RUN（今回の最終差分後）。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債75件は注意表示。 |
+| 実Playwright／HTTP、外部provider／作用、installed runtime、全suite、5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / browser.automation owner-bound same-origin search-form GET.
+- **STATUS:** parser→tool→ephemeral runnerとGateway L3 review→WebChat表示の実装経路を追加。focused fixture／typecheck範囲で確認した`CODE_PRESENT`。実Playwright／Gateway owner approval往復は未実行で、`WIRED`／F06完了へ拡張しない。製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始を維持。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体の未接続producer／consumerを次作業開始時に再選定し、Windows-firstの全体実装を続ける。品質監査へ工程移行しない。
+- **SAFETY_STATUS:** browser preview既定無効、L3、public-address／allowlist guard、credentialなし、download／upload quarantineを維持。form GETはownerが明示したdestinationとfieldを承認する。GETの状態変更性は保証できず、外部送信、実provider、live browser、公開・出荷判断なし。失敗時の結果不明と自動再送禁止を実装。
+- **LOCAL_ASSET_STATUS:** 新規ローカル資産はsource／test／docs差分。focused test一時物はtest cleanup。型検査はno-emit。既存TypeScript `dist`、`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。WSL／他repoには触れていない。
+- **GIT_STATUS:** BUILD_BATCH検証後に復旧2世代とlocal／remote `main`を再照合し、通常のmain commit／push結果を追記する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則からJ/M結果projection・Control Center引継ぎまで
 
 主語はBLUEの通常Gateway CLI task、HDS J OperationPlan、既存Control Center owner再認証実行経路である。目的はCLI起点の明示達成規則を共有private stateのJ/Mへ保持し、owner再認証後の検証済みresult／M receiptを、CLIから後でdigest-only照会できる一続きのconsumerへつなぐこと。規則は同一taskの達成停止だけに使い、permission／approval／外部作用の権限を作らない。
 

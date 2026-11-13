@@ -106,14 +106,19 @@ export type BrowserAutomationAction =
   | "upload";
 
 export interface BrowserAutomationRunRequest {
-  action: "snapshot" | "navigate" | "click";
+  action: "snapshot" | "navigate" | "click" | "form_submit";
   url: string;
   link_name?: string;
+  action_url?: string;
+  form_name?: string;
+  fields?: readonly { name: string; value: string }[];
   target: HttpFetchTarget;
   timeout_ms: number;
   max_chars: number;
   env: Env;
   resolveHost: (hostname: string) => Promise<ResolvedAddress[]>;
+  http_request: NonNullable<HttpFetchOptions["request"]>;
+  signal?: AbortSignal;
 }
 
 export interface BrowserAutomationRunResult {
@@ -122,6 +127,7 @@ export interface BrowserAutomationRunResult {
   title: string | null;
   text: string;
   truncated: boolean;
+  http_status?: number;
 }
 
 export type BrowserAutomationRunner = (

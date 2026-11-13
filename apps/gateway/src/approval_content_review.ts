@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "@blue-tanuki/core";
+import {
+  gmailWriteRequestPayloadDigest,
+  gmailWriteTargetIdentityDigest,
+  parseBrowserFormGetArguments,
+} from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { normalizeGmailAddressList, type ExecuteCommand } from "@blue-tanuki/protocol";
 import type {
@@ -7,6 +11,7 @@ import type {
   WebChatGmailMessageModifyContentReview,
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
+  WebChatBrowserFormGetContentReview,
 } from "@blue-tanuki/channel-webchat";
 
 const GMAIL_WRITE_ARGUMENTS = new Set([
@@ -23,6 +28,62 @@ const GMAIL_WRITE_ARGUMENTS = new Set([
   "attachments",
   "max_bytes",
 ]);
+
+export function isBrowserFormGetReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "browser.automation" &&
+    typeof command.payload.arguments.action === "string" &&
+    command.payload.arguments.action.trim().toLowerCase() === "form_submit";
+}
+
+export function projectBrowserFormGetContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+): WebChatBrowserFormGetContentReview | null {
+  if (!isBrowserFormGetReviewCommand(command) || command.type !== "tool_call" ||
+      !/^[a-f0-9]{64}$/.test(commandDigest) || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) return null;
+  try {
+    const request = parseBrowserFormGetArguments(command.payload.arguments);
+    const parsedUrl = new URL(request.url);
+    const requestPayloadDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.browser-form-get-request.v1",
+      url: request.url,
+      action_url: request.action_url,
+      form_name: request.form_name,
+      fields: request.fields,
+    });
+    const reviewDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.browser-form-get-review.v1",
+      command_digest: commandDigest,
+      request_payload_digest: requestPayloadDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+    });
+    return {
+      kind: "browser_form_get",
+      command_id: command.id,
+      command_digest: commandDigest,
+      review_digest: reviewDigest,
+      request_payload_digest: requestPayloadDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      operation: "browser.automation.form_get",
+      url: `${parsedUrl.origin}${parsedUrl.pathname}`,
+      action_url: request.action_url,
+      origin: parsedUrl.origin,
+      form_name: request.form_name,
+      fields: request.fields.map((field) => ({ ...field })),
+      method: "GET",
+      same_origin_only: true,
+      javascript_enabled: false,
+      credentials_reused: false,
+      downloads_enabled: false,
+      no_store: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function isGmailWriteContentReviewCommand(
   command: ExecuteCommand,

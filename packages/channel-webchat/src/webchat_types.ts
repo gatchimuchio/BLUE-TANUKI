@@ -311,6 +311,29 @@ export interface WebChatFileDeleteTargetContentReview {
   may_execute: false;
 }
 
+export interface WebChatBrowserFormGetContentReview {
+  kind: "browser_form_get";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  operation: "browser.automation.form_get";
+  url: string;
+  action_url: string;
+  origin: string;
+  form_name: string;
+  fields: readonly { name: string; value: string }[];
+  method: "GET";
+  same_origin_only: true;
+  javascript_enabled: false;
+  credentials_reused: false;
+  downloads_enabled: false;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoogleCalendarEventCreateContentReview {
   kind: "google_calendar_event_create";
   command_id: string;
@@ -1001,7 +1024,8 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview |
-  WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatGoogleCalendarEventCreateContentReview |
+  WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
+  WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |
   WebChatGoogleCalendarEventInviteContentReview | WebChatGoogleDriveFileCreateContentReview |
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |

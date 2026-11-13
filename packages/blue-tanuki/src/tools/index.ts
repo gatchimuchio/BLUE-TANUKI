@@ -125,3 +125,11 @@ export {
   type BrowserAutomationAction,
   type ShellExecOptions,
 } from "./builtin.js";
+export {
+  buildBrowserSearchFormGetUrl,
+  parseBrowserFormGetArguments,
+  type BrowserFormGetArguments,
+  type BrowserFormGetField,
+  type BrowserSearchFormControlSnapshot,
+  type BrowserSearchFormSnapshot,
+} from "./browser_form_submission.js";

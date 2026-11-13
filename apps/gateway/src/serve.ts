@@ -185,6 +185,8 @@ import {
   runtimeScheduleMutationCommand,
 } from "./runtime_schedule.js";
 import {
+  isBrowserFormGetReviewCommand,
+  projectBrowserFormGetContentReview,
   isGmailMessageTrashReviewCommand,
   isGmailMessageModifyReviewCommand,
   isGmailDraftSendReviewCommand,
@@ -3319,7 +3321,8 @@ async function serveWithOwnerLease(
       (pending.command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)))
     );
-    if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
+    if (verdict === "approve" && (isBrowserFormGetReviewCommand(pending.command) ||
+        isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) || isGmailMessageTrashReviewCommand(pending.command) ||
         requiresToolContentReview)) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
@@ -4880,6 +4883,21 @@ async function serveWithOwnerLease(
 
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
+    if (pending && isBrowserFormGetReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return null;
+        const review = projectBrowserFormGetContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        if (!review) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.goal_purpose_relation_review_proposal) {
       const proposal = pending.goal_purpose_relation_review_proposal;
       const args = getGoalPurposeRelationReviewArguments(pending.command);
@@ -5274,6 +5292,21 @@ async function serveWithOwnerLease(
   ): Promise<WebChatApprovalContentReviewValidation> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
+    if (isBrowserFormGetReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = projectBrowserFormGetContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        return current && current.review_digest === pending.content_review_digest ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
     if (pending.goal_purpose_relation_review_proposal) {
       return validateGoalPurposeRelationContentReview(pending, content_review_digest);
     }
@@ -5523,7 +5556,8 @@ async function serveWithOwnerLease(
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
+      content_review_required: isBrowserFormGetReviewCommand(p.command) ||
+        isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         isGmailMessageTrashReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||

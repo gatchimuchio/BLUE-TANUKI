@@ -5785,6 +5785,75 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "停止対象を再確認";
           return;
         }
+        if (review.kind === "browser_form_get") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          let parsedUrl = null;
+          let parsedActionUrl = null;
+          try { parsedUrl = new URL(review.url); parsedActionUrl = new URL(review.action_url); }
+          catch { /* validation below keeps approval closed */ }
+          const fieldsValid = Array.isArray(review.fields) && review.fields.length > 0 && review.fields.length <= 10 &&
+            review.fields.every(function (field) {
+              return field && typeof field.name === "string" && field.name.length > 0 && field.name.length <= 64 &&
+                typeof field.value === "string" && field.value.length > 0 && field.value.length <= 1024;
+            });
+          if (review.command_id !== commandId || review.operation !== "browser.automation.form_get" ||
+              review.method !== "GET" || review.same_origin_only !== true || review.javascript_enabled !== false ||
+              review.credentials_reused !== false || review.downloads_enabled !== false || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.origin !== "string" || !parsedUrl || parsedUrl.origin !== review.origin ||
+              parsedUrl.search || parsedUrl.hash || !parsedActionUrl || parsedActionUrl.origin !== review.origin ||
+              parsedActionUrl.search || parsedActionUrl.hash || !fieldsValid) {
+            throw new Error("検索フォームの確認内容がこのL3承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "同一originの検索フォーム（GET）";
+          view.appendChild(heading);
+          [
+            ["ページ", review.url],
+            ["送信先", review.action_url],
+            ["origin", review.origin],
+            ["検索領域", review.form_name],
+            ["送信方式", "GET。POST等は拒否"],
+            ["ページJavaScript", "無効"],
+            ["資格情報・Cookie", "再利用なし"],
+            ["download", "無効"],
+            ["承認後の再確認", "同じoriginの検索領域、GET方式、入力名・制約を照合"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const valuesHeading = document.createElement("strong");
+          valuesHeading.textContent = "送信する検索項目";
+          view.appendChild(valuesHeading);
+          review.fields.forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field.name + ": ";
+            const value = document.createElement("pre");
+            value.textContent = field.value;
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この確認は依頼内容を表示するだけです。実行時はJavaScript・認証情報を使わず、同一originの公開検索フォームへGETだけを送ります。Web側がGETを状態変更に使う可能性までは判定できません。失敗後は自動再送しません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "検索先と入力内容を再確認";
+          return;
+        }
         if (review.kind === "file_delete_target") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "file.delete" ||

@@ -521,6 +521,10 @@ describe("WebChatChannel — Control Center shell", () => {
       .filter((code) => code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d || code === 0x7f);
     expect(rawControlCharacters).toEqual([]);
     expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.kind === "browser_form_get"');
+    expect(CONTROL_CENTER_SCRIPT).toContain('parsedActionUrl.origin !== review.origin');
+    expect(CONTROL_CENTER_SCRIPT).toContain('value.textContent = field.value');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.no_store !== true');
     const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function isCanvasPreviewContent(");
     const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("function bindCanvasPreviewDialog(", helperStart);
     expect(helperStart).toBeGreaterThanOrEqual(0);

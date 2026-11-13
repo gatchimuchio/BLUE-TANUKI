@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 現行BUILD_BATCH — QE_BUILD / CLI達成規則→共有J/M→Control Center再認証→CLI状態照会
+### 直近完了BUILD_BATCH — QE_BUILD / browser.automationの送信先束縛付き検索GET
+
+`browser.automation action=form_submit`に、送信元ページと送信先をowner依頼へ明示し、一意のaccessible `search`領域内にある単純な同一origin GET検索フォームだけを扱う経路を追加。隠し項目、資格情報に見える項目、曖昧なフォーム、他方式・他origin・送信先の差替えは拒否する。実行時はL3 no-store content reviewで送信先と入力値を表示し、JavaScript／service worker無効、外部通信を固定DNS先のHTTP transportへ限定、browser network・subresource・iframe・redirect遮断を適用。GETによる状態変更可能性と結果不明時の自動再送禁止を明記した。provider-free focused tests／型検査はPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。`CODE_PRESENT`限定であり、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / CLI達成規則→共有J/M→Control Center再認証→CLI状態照会
 
 CLIのowner明示達成規則を、`serve`と同じprivate OperationPlan／result-M stateへ保持する。再起動後、既存Control Centerがplanをowner再認証reviewへ渡し、検証済みresultとM receiptを反映する。`--goal-completion-status <request-id-digest>`はHDS no-op／output auditを通るdigest-onlyの読取照会で、task・規則・結果本文や実行権限を返さない。達成・不一致・曖昧な対応付けの3ケースとControl Center再認証引継ぎはprovider-free fixtureでPASS。これは限定`WIRED` consumerであり、runCli process全体、実人間認証、実provider、installed製品、外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを証明しない。Windows-firstのP2全体施工を続ける。C08.03実provider、OD-03 live外部作用、別repo変更、P13公開／出荷GOは保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

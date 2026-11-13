@@ -85,6 +85,12 @@ import {
   walkFiles,
 } from "./file_safety.js";
 import { shellExecTool } from "./shell_exec.js";
+import {
+  buildBrowserSearchFormGetUrl,
+  parseBrowserFormGetArguments,
+  type BrowserFormGetArguments,
+  type BrowserSearchFormSnapshot,
+} from "./browser_form_submission.js";
 import type {
   BrowserAutomationAction,
   BrowserAutomationOptions,
@@ -195,6 +201,7 @@ const HTTP_FETCH_TIMEOUT_MS = 15_000;
 const BROWSER_AUTOMATION_ENABLE_ENV = "BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW";
 const BROWSER_AUTOMATION_TIMEOUT_MS = 15_000;
 const BROWSER_AUTOMATION_MAX_CHARS = 20_000;
+const BROWSER_FORM_RESPONSE_MAX_BYTES = 512_000;
 const BROWSER_AUTOMATION_VIEWPORT = { width: 1280, height: 720 } as const;
 const FILE_SEARCH_EXACT_TARGET_MAX_BYTES = 1_000_000;
 const BLOCKED_IPS = new BlockList();
@@ -3783,6 +3790,7 @@ interface BrowserLike {
 
 interface BrowserContextLike {
   newPage(): Promise<PageLike>;
+  clearCookies(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -3792,15 +3800,17 @@ interface PageLike {
     handler: (route: RouteLike, request: RequestLike) => Promise<void>,
   ): Promise<void>;
   goto(url: string, options: Record<string, unknown>): Promise<unknown>;
+  setContent(html: string, options: Record<string, unknown>): Promise<void>;
   title(): Promise<string>;
   evaluate(expression: string): Promise<unknown>;
   url(): string;
-  getByRole?(role: "link", options: { name: string; exact: true }): LocatorLike;
+  getByRole?(role: "link" | "search", options: { name: string; exact: true }): LocatorLike;
 }
 
 interface LocatorLike {
   count(): Promise<number>;
   getAttribute(name: string): Promise<string | null>;
+  evaluate<Result>(expression: string): Promise<Result>;
 }
 
 interface RouteLike {
@@ -3812,6 +3822,29 @@ interface RequestLike {
   url(): string;
   method(): string;
   isNavigationRequest(): boolean;
+}
+
+function isBrowserHtmlContentType(contentType: string | null): boolean {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "text/html" || mediaType === "application/xhtml+xml";
+}
+
+async function setBrowserDocumentContent(page: PageLike, html: string, baseUrl: string, timeoutMs: number): Promise<void> {
+  await page.setContent(html, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+  await page.evaluate(`(() => {
+    const requestedBase = ${JSON.stringify(baseUrl)};
+    const root = document.documentElement;
+    if (!root) return;
+    let head = document.head;
+    if (!head) {
+      head = document.createElement("head");
+      root.insertBefore(head, root.firstChild);
+    }
+    for (const existing of head.querySelectorAll("base")) existing.remove();
+    const base = document.createElement("base");
+    base.href = requestedBase;
+    head.prepend(base);
+  })()`);
 }
 
 async function importPlaywright(): Promise<PlaywrightLike> {
@@ -3856,11 +3889,17 @@ async function defaultBrowserAutomationRunner(
     context = await browser.newContext({
       viewport: { ...BROWSER_AUTOMATION_VIEWPORT },
       acceptDownloads: false,
+      javaScriptEnabled: false,
+      serviceWorkers: "block",
     });
     const page = await context.newPage();
     if (!page.route) throw new Error("browser network interception unavailable; mutation_sent=false");
     await page.route("**/*", async (route, browserRequest) => {
       try {
+        if (request.action === "form_submit") {
+          await route.abort();
+          return;
+        }
         const requestUrl = browserRequest.url();
         const method = browserRequest.method().toUpperCase();
         if (method !== "GET" && method !== "HEAD") {
@@ -3879,10 +3918,35 @@ async function defaultBrowserAutomationRunner(
         await route.abort();
       }
     });
-    await page.goto(request.url, {
-      waitUntil: "domcontentloaded",
-      timeout: request.timeout_ms,
-    });
+    let formFinalUrl: URL | null = null;
+    let formHttpStatus: number | undefined;
+    let formText: string | null = null;
+    let formResponseTruncated = false;
+    let formRequestDispatched = false;
+    if (request.action === "form_submit") {
+      if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
+        throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
+      }
+      let sourceResponse;
+      try {
+        sourceResponse = await request.http_request(request.target, "GET", BROWSER_FORM_RESPONSE_MAX_BYTES, request.signal);
+      } catch {
+        throw new Error("browser_form_get_source_unavailable; form_submission_sent=false");
+      }
+      if (isRedirect(sourceResponse.status) || sourceResponse.location) {
+        throw new Error("browser_form_get_source_redirect_denied; form_submission_sent=false");
+      }
+      if (!sourceResponse.ok || sourceResponse.truncated ||
+          !isBrowserHtmlContentType(sourceResponse.content_type)) {
+        throw new Error("browser_form_get_source_unusable; form_submission_sent=false");
+      }
+      await setBrowserDocumentContent(page, sourceResponse.body, request.url, request.timeout_ms);
+    } else {
+      await page.goto(request.url, {
+        waitUntil: "domcontentloaded",
+        timeout: request.timeout_ms,
+      });
+    }
     if (request.action === "click") {
       if (!request.link_name || !page.getByRole) {
         throw new Error("browser_link_navigation_unavailable; mutation_sent=false");
@@ -3907,26 +3971,109 @@ async function defaultBrowserAutomationRunner(
         waitUntil: "domcontentloaded",
         timeout: request.timeout_ms,
       });
+    } else if (request.action === "form_submit") {
+      if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
+        throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
+      }
+      const searchRegion = page.getByRole("search", { name: request.form_name, exact: true });
+      if (await searchRegion.count() !== 1) {
+        throw new Error("browser_form_get_search_region_not_unique; form_submission_sent=false");
+      }
+      const form = await searchRegion.evaluate<BrowserSearchFormSnapshot>(`element => {
+        const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
+        if (forms.length !== 1) return { form_count: forms.length, control_count: 0, controls: [], method: "", action: "", target: "", enctype: "", accept_charset: "" };
+        const current = forms[0];
+        const controls = Array.from(current.elements);
+        return {
+          form_count: 1,
+          control_count: controls.length,
+          method: current.method || "",
+          action: current.action || "",
+          target: current.target || "",
+          enctype: current.enctype || "",
+          accept_charset: current.acceptCharset || "",
+          controls: controls.slice(0, 16).map(control => ({
+            tag: control.tagName.toLowerCase(),
+            type: "type" in control ? String(control.type || "").toLowerCase() : "",
+            name: "name" in control ? String(control.name || "") : "",
+            disabled: "disabled" in control ? Boolean(control.disabled) : false,
+            required: "required" in control ? Boolean(control.required) : false,
+            read_only: "readOnly" in control ? Boolean(control.readOnly) : false,
+            min_length: "minLength" in control ? Number(control.minLength) : -1,
+            max_length: "maxLength" in control ? Number(control.maxLength) : -1,
+            has_pattern: control.hasAttribute("pattern"),
+            autocomplete: "autocomplete" in control ? String(control.autocomplete || "") : "",
+            has_formaction: control.hasAttribute("formaction"),
+            has_formmethod: control.hasAttribute("formmethod"),
+            has_formenctype: control.hasAttribute("formenctype"),
+            has_formtarget: control.hasAttribute("formtarget"),
+            has_formnovalidate: control.hasAttribute("formnovalidate"),
+            dirname: "dirname" in control ? String(control.dirname || "") : ""
+          }))
+        };
+      }`);
+      const submissionUrl = buildBrowserSearchFormGetUrl({
+        source_url: request.url,
+        expected_action_url: request.action_url,
+        form,
+        fields: request.fields,
+      });
+      const submissionTarget = await resolvePublicTarget(submissionUrl, request.env, request.resolveHost);
+      let submissionResponse;
+      formRequestDispatched = true;
+      try {
+        submissionResponse = await request.http_request(
+          submissionTarget,
+          "GET",
+          BROWSER_FORM_RESPONSE_MAX_BYTES,
+          request.signal,
+        );
+      } catch {
+        throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
+      }
+      if (isRedirect(submissionResponse.status) || submissionResponse.location) {
+        throw new Error("browser_form_get_redirect_blocked; outcome_unknown; automatic_retry=false");
+      }
+      formFinalUrl = submissionUrl;
+      formHttpStatus = submissionResponse.status;
+      formResponseTruncated = submissionResponse.truncated;
+      if (isBrowserHtmlContentType(submissionResponse.content_type)) {
+        try {
+          await setBrowserDocumentContent(page, submissionResponse.body, submissionUrl.href, request.timeout_ms);
+        } catch {
+          throw new Error("browser_form_get_result_parse_failed; outcome_unknown; automatic_retry=false");
+        }
+      } else {
+        formText = submissionResponse.body;
+      }
     }
-    const finalUrl = page.url();
+    const finalUrl = formFinalUrl?.href ?? page.url();
     const parsedFinalUrl = parseHttpUrl(finalUrl);
     if (request.action === "click" && parsedFinalUrl.origin !== new URL(request.url).origin) {
       throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
     }
-    await resolvePublicTarget(
-      parsedFinalUrl,
-      request.env,
-      request.resolveHost,
-    );
-    const title = await page.title();
-    const bodyText = await page.evaluate("document.body ? document.body.innerText : ''");
+    if (request.action !== "form_submit") {
+      await resolvePublicTarget(parsedFinalUrl, request.env, request.resolveHost);
+    }
+    let title: string;
+    let bodyText: unknown;
+    try {
+      title = formText === null ? await page.title() : "";
+      bodyText = formText ?? await page.evaluate("document.body ? document.body.innerText : ''");
+    } catch (error) {
+      if (request.action === "form_submit" && formRequestDispatched) {
+        throw new Error("browser_form_get_result_parse_failed; outcome_unknown; automatic_retry=false");
+      }
+      throw error;
+    }
     const text = typeof bodyText === "string" ? bodyText.replace(/\s+/g, " ").trim() : "";
     return {
       engine: "playwright.chromium",
       final_url: finalUrl,
       title: title.trim().length > 0 ? title : null,
       text: truncateText(text, request.max_chars),
-      truncated: text.length > request.max_chars,
+      truncated: formResponseTruncated || text.length > request.max_chars,
+      ...(formHttpStatus === undefined ? {} : { http_status: formHttpStatus }),
     };
   } finally {
     await context?.close().catch(() => undefined);
@@ -3946,6 +4093,7 @@ async function invokeBrowserPreview(
   opts: BrowserSnapshotOptions,
   action: BrowserAutomationRunRequest["action"],
   linkName?: string,
+  formSubmission?: BrowserFormGetArguments,
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   if (!browserAutomationEnabled(env)) {
@@ -3973,25 +4121,51 @@ async function invokeBrowserPreview(
     action,
     url: url.href,
     ...(linkName ? { link_name: linkName } : {}),
+    ...(formSubmission ? { action_url: formSubmission.action_url } : {}),
+    ...(formSubmission ? { form_name: formSubmission.form_name, fields: formSubmission.fields } : {}),
+    http_request: opts.request ?? defaultHttpRequest,
+    ...(opts.signal ? { signal: opts.signal } : {}),
     target,
     timeout_ms: timeoutMs,
     max_chars: maxChars,
     env,
     resolveHost,
   });
-  const finalUrl = parseHttpUrl(snapshot.final_url);
+  let finalUrl: URL;
+  try {
+    finalUrl = parseHttpUrl(snapshot.final_url);
+  } catch (error) {
+    if (action === "form_submit") {
+      throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
+    }
+    throw error;
+  }
+  if (action === "form_submit" && (!formSubmission || finalUrl.origin !== url.origin ||
+      finalUrl.pathname !== new URL(formSubmission.action_url).pathname)) {
+    throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
+  }
   if (action === "click" && finalUrl.origin !== url.origin) {
     throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
   }
-  await resolvePublicTarget(finalUrl, env, resolveHost);
+  if (action !== "form_submit") {
+    await resolvePublicTarget(finalUrl, env, resolveHost);
+  }
+  const displayedUrl = new URL(url.href);
+  const displayedFinalUrl = new URL(finalUrl.href);
+  if (action === "form_submit") {
+    displayedUrl.search = "";
+    displayedUrl.hash = "";
+    displayedFinalUrl.search = "";
+    displayedFinalUrl.hash = "";
+  }
 
   return {
     preview: "browser.automation",
     enabled: true,
     action,
     engine: snapshot.engine,
-    url: url.href,
-    final_url: finalUrl.href,
+    url: displayedUrl.href,
+    final_url: displayedFinalUrl.href,
     title: snapshot.title,
     text: truncateText(snapshot.text, maxChars),
     truncated: snapshot.truncated || snapshot.text.length > maxChars,
@@ -4009,7 +4183,18 @@ async function invokeBrowserPreview(
       persistent_profile: false,
       downloads: "disabled",
       credential_reuse: false,
+      javascript_enabled: false,
+      service_workers: "blocked",
     },
+    ...(action === "form_submit" ? {
+      submission: {
+        method: "GET",
+        scope: "same_origin_search_form",
+        target_url: formSubmission?.action_url,
+        ...(snapshot.http_status === undefined ? {} : { response_status: snapshot.http_status }),
+        query_values_in_result_url: false,
+      },
+    } : {}),
     network_policy: {
       protocol: url.protocol.replace(":", ""),
       host: target.hostname,
@@ -4037,25 +4222,30 @@ export async function invokeBrowserAutomation(
     throw browserAutomationDisabledError();
   }
   assertNoBrowserCredentialUse(args);
-  const acceptedKeys = new Set(["action", "url", "max_chars", "timeout_ms", "link_name"]);
+  const acceptedKeys = action === "form_submit"
+    ? new Set(["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"])
+    : new Set(["action", "url", "max_chars", "timeout_ms", "link_name"]);
   if (Object.keys(args).some((key) => !acceptedKeys.has(key))) {
     throw new Error("browser.automation received an unsupported argument; mutation_sent=false");
   }
 
-  if (action !== "navigate" && action !== "click") {
+  if (action !== "navigate" && action !== "click" && action !== "form_submit") {
     throw new Error(
       `browser.automation action ${action} is preview-quarantined and not implemented; ` +
         "approval_level=L3_final_review; mutation_sent=false",
     );
   }
+  const formSubmission = action === "form_submit"
+    ? parseBrowserFormGetArguments({ ...args, action })
+    : undefined;
   const linkName = action === "click" ? stringArg(args, "link_name", false)?.trim() : undefined;
   if (action === "click" && (!linkName || linkName.length > 200 || !isWellFormedBrowserLinkName(linkName))) {
     throw new Error("browser.automation click requires one exact link_name of 1-200 characters; mutation_sent=false");
   }
-  if (action !== "click" && args.link_name !== undefined) {
+  if (action !== "click" && action !== "form_submit" && args.link_name !== undefined) {
     throw new Error("browser.automation navigation does not accept link_name; mutation_sent=false");
   }
-  const snapshot = await invokeBrowserPreview(args, opts, action, linkName);
+  const snapshot = await invokeBrowserPreview(args, opts, action, linkName, formSubmission);
   if (isRecord(snapshot)) {
     return {
       ...snapshot,

@@ -4,6 +4,8 @@ import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
+  isBrowserFormGetReviewCommand,
+  projectBrowserFormGetContentReview,
   isGmailDraftSendReviewCommand,
   isGmailMessageSendReviewCommand,
   isGmailMessageTrashReviewCommand,
@@ -26,6 +28,20 @@ function command(arguments_: Record<string, unknown>): ExecuteCommand {
     payload: { tool_name: "gmail.write", arguments: arguments_ },
     upstream_decision: {
       frame_goal: "synthetic approval review",
+      model_abstraction: "fixture",
+      commit_hash: "a".repeat(64),
+      commit_decision: "ASSERT",
+    },
+  };
+}
+
+function browserFormCommand(arguments_: Record<string, unknown>): ExecuteCommand {
+  return {
+    id: "cmd-browser-form-review",
+    type: "tool_call",
+    payload: { tool_name: "browser.automation", arguments: arguments_ },
+    upstream_decision: {
+      frame_goal: "synthetic browser form review",
       model_abstraction: "fixture",
       commit_hash: "a".repeat(64),
       commit_decision: "ASSERT",
@@ -336,5 +352,52 @@ describe("Gmail approval content review projection", () => {
       { ...snapshot, reply_source: { ...snapshot.reply_source, message_id: "another-message" } })).toBeNull();
     expect(projectGmailWriteContentReview(input, commandDigest,
       { ...snapshot, reply_source: { ...snapshot.reply_source, subject: "another thread" } })).toBeNull();
+  });
+});
+
+describe("browser form GET approval content review projection", () => {
+  const args = {
+    action: "form_submit",
+    url: "https://example.test/search",
+    action_url: "https://example.test/search/results",
+    form_name: "Site search",
+    fields: [{ name: "q", value: "synthetic blue" }],
+  };
+
+  it("shows and digests the exact same-origin page, destination, and fields", () => {
+    const input = browserFormCommand(args);
+    const projection = projectBrowserFormGetContentReview(input, "a".repeat(64), "b".repeat(64));
+
+    expect(isBrowserFormGetReviewCommand(input)).toBe(true);
+    expect(projection).toMatchObject({
+      kind: "browser_form_get",
+      url: "https://example.test/search",
+      action_url: "https://example.test/search/results",
+      origin: "https://example.test",
+      form_name: "Site search",
+      fields: [{ name: "q", value: "synthetic blue" }],
+      method: "GET",
+      same_origin_only: true,
+      javascript_enabled: false,
+      credentials_reused: false,
+      downloads_enabled: false,
+      no_store: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projectBrowserFormGetContentReview(browserFormCommand({ ...args,
+      fields: [{ name: "q", value: "changed" }] }), "a".repeat(64), "b".repeat(64))?.review_digest)
+      .not.toBe(projection?.review_digest);
+    expect(projectBrowserFormGetContentReview(browserFormCommand({ ...args,
+      action_url: "https://example.test/other" }), "a".repeat(64), "b".repeat(64))?.review_digest)
+      .not.toBe(projection?.review_digest);
+  });
+
+  it("fails closed for malformed or cross-origin form requests", () => {
+    expect(projectBrowserFormGetContentReview(browserFormCommand({ ...args,
+      action_url: "https://other.test/search" }), "a".repeat(64), "b".repeat(64))).toBeNull();
+    expect(projectBrowserFormGetContentReview(browserFormCommand({ ...args, extra: true }),
+      "a".repeat(64), "b".repeat(64))).toBeNull();
+    expect(isBrowserFormGetReviewCommand(browserFormCommand({ ...args, action: "navigate" }))).toBe(false);
   });
 });

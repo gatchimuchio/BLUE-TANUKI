@@ -24,6 +24,7 @@ export {
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatMemoryPersonalizationStopContentReview,
   type WebChatGoalPurposeRelationContentReview,
+  type WebChatBrowserFormGetContentReview,
   type WebChatApprovalGrantItem,
   type WebChatApprovalHistoryItem,
   type WebChatEmergencyStopSnapshot,

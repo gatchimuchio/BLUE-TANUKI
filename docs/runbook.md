@@ -327,13 +327,28 @@ with Chromium sandboxing enabled. Linux and macOS packages do not yet bundle a
 browser binary and require an operator-managed Playwright Chromium installation
 in the local browser cache. Android and iOS do not have this browser preview
 runtime. The optional `browser.snapshot` / `browser.automation` preview uses an
-ephemeral context with no stored credentials or downloads. The only automation
-action currently implemented is following one exact, unique, same-origin
-accessible link by its `link_name`; it navigates to the resolved HTTP(S) target
-without dispatching page click handlers. Requests are limited to GET/HEAD and
-rechecked by the public-address guard. The preview remains disabled by default
-and L3 final-review protected. Form submission, download, and upload remain
-quarantined and unimplemented.
+ephemeral context with no stored credentials or downloads. The `click` action
+follows one exact, unique, same-origin accessible link by its `link_name`
+without dispatching page click handlers. A bounded `form_submit` consumer also
+supports one exact accessible `search` region with one same-origin action URL
+and explicit text/search field values. It accepts only GET, `_self`, UTF-8, and
+the standard URL-encoded form encoding. Required fields and native
+`minlength`/`maxlength` limits are enforced. Hidden, credential-like, duplicate,
+unsupported, patterned, directionality, nonstandard-autocomplete, or submitter
+override controls are rejected. The action URL and exact field values appear
+in the authenticated no-store L3 content review.
+
+For `form_submit`, JavaScript and service workers are disabled. The source page
+and exact form action each use the fixed-address HTTP transport with no browser
+cookies or credentials; redirects are not followed. Browser network requests
+are blocked while the returned HTML is parsed locally, so subresources and
+iframes do not go to the network. Both remote requests are rechecked by the
+public-address and allowlist guards. A GET endpoint can still change server
+state, so this preview does not infer that the destination is read-only. If the
+action request is dispatched but its result cannot be verified, the operation
+reports an unknown outcome and is not retried. The preview remains disabled by
+default and L3 final-review protected. Download and upload remain quarantined
+and unimplemented.
 
 `shell.exec` runs a bounded non-shell command (`cmd` plus `args[]`) under
 `BLUE_TANUKI_SHELL_ROOT`. It is a final-review operation because it carries

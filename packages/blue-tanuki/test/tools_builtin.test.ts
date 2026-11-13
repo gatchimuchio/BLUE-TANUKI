@@ -2622,6 +2622,71 @@ describe("built-in tools", () => {
     expect(result.safe_to_ignore).toBe(true);
   });
 
+  it("browser.automation form GET binds the reviewed target and omits query values from result URLs", async () => {
+    const seen: string[] = [];
+    const result = (await invokeBrowserAutomation(
+      {
+        action: "form_submit",
+        url: "https://example.test/search",
+        action_url: "https://example.test/search/results",
+        form_name: "Site search",
+        fields: [{ name: "q", value: "blue tanuki" }],
+      },
+      fakeBrowserAutomation({
+        env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" },
+        async runner(request) {
+          seen.push(`${request.action}:${request.action_url}:${request.fields?.[0]?.name}:${request.fields?.[0]?.value}`);
+          return {
+            engine: "fake-headless",
+            final_url: "https://example.test/search/results?q=blue+tanuki",
+            title: "Search results",
+            text: "one result",
+            truncated: false,
+            http_status: 200,
+          };
+        },
+      }),
+    )) as {
+      action: string;
+      url: string;
+      final_url: string;
+      submission: { target_url?: string; response_status?: number; query_values_in_result_url: boolean };
+      approval_level: string;
+    };
+
+    expect(seen).toEqual(["form_submit:https://example.test/search/results:q:blue tanuki"]);
+    expect(result).toMatchObject({
+      action: "form_submit",
+      url: "https://example.test/search",
+      final_url: "https://example.test/search/results",
+      submission: {
+        target_url: "https://example.test/search/results",
+        response_status: 200,
+        query_values_in_result_url: false,
+      },
+      approval_level: "L3_final_review",
+    });
+    expect(JSON.stringify(result)).not.toContain("blue tanuki");
+  });
+
+  it("browser.automation form GET rejects an unbound target before starting the runner", async () => {
+    let called = false;
+    await expect(invokeBrowserAutomation(
+      {
+        action: "form_submit",
+        url: "https://example.test/search",
+        action_url: "https://other.test/search",
+        form_name: "Site search",
+        fields: [{ name: "q", value: "blue tanuki" }],
+      },
+      fakeBrowserAutomation({
+        env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" },
+        async runner() { called = true; throw new Error("runner should not start"); },
+      }),
+    )).rejects.toThrow(/cross_origin_denied/);
+    expect(called).toBe(false);
+  });
+
   it("browser.automation denies credential use and quarantines side-effect actions", async () => {
     await expect(
       invokeBrowserAutomation(
@@ -2632,7 +2697,7 @@ describe("built-in tools", () => {
 
     await expect(
       invokeBrowserAutomation(
-        { action: "click", url: "https://example.test/", selector: "#buy" },
+        { action: "download", url: "https://example.test/" },
         fakeBrowserAutomation({ env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" } }),
       ),
     ).rejects.toThrow(/preview-quarantined.*mutation_sent=false/);
