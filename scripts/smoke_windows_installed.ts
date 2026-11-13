@@ -488,6 +488,7 @@ async function removeTreeBestEffort(target: string): Promise<void> {
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     try {
       rmSync(target, { recursive: true, force: true });
+      if (existsSync(target)) throw new Error("temporary tree remains after removal");
       return;
     } catch (error) {
       if (attempt < 6) {
@@ -495,6 +496,7 @@ async function removeTreeBestEffort(target: string): Promise<void> {
         continue;
       }
       console.error(`[windows-smoke] cleanup temporary install tree failed: ${errorMessage(error)}`);
+      throw new Error(`cleanup temporary install tree failed: ${errorMessage(error)}`);
     }
   }
 }
@@ -1000,7 +1002,10 @@ async function main(): Promise<void> {
   let stopped = false;
   let uninstalled = false;
   let allowWorkCleanup = false;
-  try {
+  let smokeFailure: unknown;
+  let cleanupFailure: Error | undefined;
+  let startupOnlySmokePassed = false;
+  smoke: try {
     assertNoActiveGatewayProcesses("installed smoke active Gateway preflight");
     logStep("installed smoke active Gateway preflight passed");
     assertSmokeRegistryAbsent(autostartRunName, "installed smoke registry preflight");
@@ -1215,8 +1220,8 @@ async function main(): Promise<void> {
       if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
         throw new Error("installed gateway remained reachable after startup-only smoke stop");
       }
-      console.log("windows_installed_startup_smoke=pass");
-      return;
+      startupOnlySmokePassed = true;
+      break smoke;
     }
     const envBeforeRepair = parseEnvFile(envFile);
     run("cmd.exe", [
@@ -1725,6 +1730,8 @@ async function main(): Promise<void> {
     console.log("defender_smartscreen_guidance_result=pass");
     console.log("uninstall_data_purge_result=pass");
     console.log("uninstall_result=pass");
+  } catch (error) {
+    smokeFailure = error;
   } finally {
     if (process.platform === "win32") {
       if (launcher && existsSync(launcher)) {
@@ -1795,6 +1802,7 @@ async function main(): Promise<void> {
           allowWorkCleanup = true;
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
+          cleanupFailure = error instanceof Error ? error : new Error(String(error));
           const cleanupStatus = existsSync(cleanupStatusFile)
             ? readFileSync(cleanupStatusFile, "utf8").trim().replace(/^exit_code=/m, "")
             : "absent";
@@ -1821,6 +1829,12 @@ async function main(): Promise<void> {
       console.error(`[windows-smoke] preserving temporary install tree because product cleanup is unconfirmed: ${work}`);
     }
   }
+  if (smokeFailure && cleanupFailure) {
+    throw new Error(`installed smoke failed: ${errorMessage(smokeFailure)}; cleanup also failed: ${errorMessage(cleanupFailure)}`);
+  }
+  if (smokeFailure) throw smokeFailure;
+  if (cleanupFailure) throw cleanupFailure;
+  if (startupOnlySmokePassed) console.log("windows_installed_startup_smoke=pass");
 }
 
 main().catch((error) => {

@@ -70,7 +70,9 @@ function Fail($Message) {
 }
 
 trap {
+  $failure = $_
   Write-UninstallStatus 1
+  Write-Error -Message "BLUE-TANUKI uninstall failed: $($failure.Exception.Message)" -ErrorAction Continue
   throw
 }
 
