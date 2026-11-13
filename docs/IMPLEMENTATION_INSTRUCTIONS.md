@@ -12,7 +12,7 @@ HTTP transportは`Content-Disposition`を内部応答へ保持する。form GET�
 |---|---|
 | download／非テキスト応答の拒否境界focused test | PASS、1 selected test（本文・ファイル名をエラーへ含めないことを確認）。 |
 | Core typecheck | PASS。 |
-| `pnpm docs:check`／`git diff --check` | 文書反映後に確認予定。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の移行負債75件は既存注意。 |
 | default Playwright／HTTP、実ブラウザ、実provider、ファイル保存、全suite、全体P2、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
 
 - **UNIT_ID:** rev5.0 QE_BUILD / F06 form response download quarantine.
@@ -20,7 +20,7 @@ HTTP transportは`Content-Disposition`を内部応答へ保持する。form GET�
 - **NEXT_REQUIRED_CONSUMER:** P2全体施工を継続し、downloadを実装する場合はowner L3・対象path・隔離保存・安全な後続consumerを結んだ実経路を作る。現在のdownload/upload quarantineは維持する。
 - **SAFETY_STATUS:** GETの外部効果は未分類のまま。添付・非textは未保存・未返却、結果不明、自動再送なし。credential、実browser、live provider、外部作用なし。
 - **LOCAL_ASSET_STATUS:** 新たな永続生成物なし。test一時物はtest cleanup。protected attachmentsとLinux isolation `target/`は未変更。
-- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`8a81d0e51eba66e96505255170494333a6b66bbf`、ahead／behind=0/0。編集前recovery current／previous=`8a81d0e51eba66e96505255170494333a6b66bbf`／`a5ac1f6dbf6c85400cc38cb251ad315296603705`。終了時の実commit/pushとremote SHAを下記履歴および最終報告へ記録する。
+- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`8a81d0e51eba66e96505255170494333a6b66bbf`、ahead／behind=0/0。編集前recovery current／previous=`8a81d0e51eba66e96505255170494333a6b66bbf`／`a5ac1f6dbf6c85400cc38cb251ad315296603705`。実装commit=`2355bd0bde1b23b24b5c27998264a25c716b3aa6`を`main`へpushし、local／`origin/main`／GitHub `main`の一致をreadback確認した。終了時recovery refsはcloseoutで照合する。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser form外部作用の分類とowner review
 

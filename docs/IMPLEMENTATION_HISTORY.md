@@ -4767,3 +4767,13 @@ CMD installer生成とproduct-installer検証は巨大ZIPを一括base64文字�
 検証済みartifact ZIP 402,173,106 bytes、CMD 550,345,231 bytes、EXE 550,662,144 bytesとmanifest／SHA sidecar／README_INSTALL_WINDOWS.txtは非OneDrive Temp `blue-tanuki-artifacts-20261113-browser-runtime`に保持。失敗IExpress stage 2件（550,346,861 bytes／550,346,884 bytes、合計1,100,693,745 bytes）はWindowsゴミ箱へ移動し、元path消失とRecycle Bin entryを確認した。stage内のCMDは保持artifactと同一SHA、残りはtask-generated SED／DDFのみ。成功stageとbrowser package workrootは不在。workspace `dist`／Windows isolation build outputは開発用として保持し、`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。D4-Pocket／MINIDORAを変更していない。
 
 実装commit `9a1a07d0242643582f6303bc2edf73d5eccb0c6f`を開始main `e56c0880e37cfed4255a44184a01240c39681f0d`からfast-forward pushし、closeout記録もmainへpushした。終了時にlocal／`origin/main`／GitHub `main`の一致、recovery local branchesとremote tagsのcurrent=終了main／previous=開始mainを照合した。protected untracked assetsはcommit対象外で未変更。自動worktree整理は過去metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`へのACL拒否で失敗し、metadata／ACLを迂回せず保留した。D4-Pocketはread-only確認のみで、HEAD=`57d905c5bb89070a156e8f9ff83b60ecfa8acdb9`。確認時点のdirty項目は`MANIFEST.sha256.json`と`docs/QE_2026-11-13/E0_要求consumer台帳.md`の2件で、D4並行作業の可能性を考慮して変更していない。
+
+## 2026-11-13 — QE_BUILD rev5.0 / browser form添付応答の隔離
+
+編集前local／`origin/main`／GitHub `main`=`8a81d0e51eba66e96505255170494333a6b66bbf`、ahead／behind=0/0。単一のrepo worktreeを確認した。現行rev5.0三点セットはZIP・manifest・仕様書・工程表・施工指示書のSHA-256が現行pinと一致し、QE_BUILD/P2継続、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立を確認した。編集前recovery branch／remote tag二世代はcurrent=`8a81d0e51eba66e96505255170494333a6b66bbf`、previous=`a5ac1f6dbf6c85400cc38cb251ad315296603705`。
+
+form GETのHTTP応答は、`Content-Disposition: attachment`やPDF等の非テキストでも従来はbodyを検索結果として返し得た。transport応答に`Content-Disposition`を内部保持し、form GET consumerをtext／JSON／XML系またはbody空の204に限定した。attachmentと非text応答は本文・ファイル名をerrorへ含めず停止し、外部GETの結果不明と自動再送禁止を示す。binary downloadを保存・開く経路は追加せず、`download`／`upload` preview quarantineを維持した。
+
+`@blue-tanuki/core`のdownload応答拒否focused testは1件PASS（他108件はskip）、同package typecheck PASS。`pnpm docs:check`、`git diff --check` PASS。日本語基底の既存移行負債75件は維持。実Playwright／HTTP、外部provider、live作用、保存・実行、全suite、5OS、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN。
+
+実装・active指示・ROADMAPをcommit `2355bd0bde1b23b24b5c27998264a25c716b3aa6`としてGitHub `main`へfast-forward pushし、local／`origin/main`／GitHub `main`一致を照合した。Git commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの自動cleanupがACL拒否となったが、commit／pushは成功。ACL／metadata／他repoは変更していない。`.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`はuntrackedのまま未変更。新たな永続生成物なし。
