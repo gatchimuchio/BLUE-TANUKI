@@ -8,9 +8,9 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 現行BUILD_BATCH — rev5.0 QE_BUILD / macOS native app mounted-launch consumer
+### 現行BUILD_BATCH — rev5.0 QE_BUILD / macOS native app copied-launch consumer
 
-macOS x64／arm64のnative `.app`をread-only DMGから実起動・停止し、初回起動がSetupや製品状態変更を自動実行しないことを既存manual `workflow_dispatch`で短時間確認する作業を進行中。run #20でarm64 DMG生成が失敗したが、run #21のarm64はDMG生成・read-only検証・app起動停止・通常detach・artifact保存までsuccessした。x64はDMG生成・起動停止までsuccessした一方、通常detachを5回試みてもexit 16 `Resource busy`でFAILし、mountを保持した。強制detachは使わず、限定再試行後に`lsof`でmount以下のopen processを読み取り調査し、通常detachの成立条件を修正する。合成設定・資格なしのHosted runner内検査であり、画面操作、installed lifecycle、署名／公証、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。状態・実装commit・run結果は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)で更新する。
+macOS x64／arm64のnative `.app`をread-only DMGから一時Applicationsへcopyし、normal detach後にcopy版を実起動・停止して初回Setupや製品状態変更が自動実行されないことをmanual `workflow_dispatch`で確認する作業を進行中。run #21／#22のarm64は全対象工程success、x64は起動・停止後のnormal detachがexit 16 `Resource busy`で失敗しmountを保持した。run #22の`lsof +D`はholderを報告しなかった。強制detachは使わず、READMEの利用経路に合わせてcopy-before-launch方式へ変更する。ownerのApplicationsやinstalled lifecycleは操作しない。合成設定・資格なしのHosted runner内検査であり、画面操作、installed lifecycle、署名／公証、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。状態・実装commit・run結果は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)で更新する。
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
 

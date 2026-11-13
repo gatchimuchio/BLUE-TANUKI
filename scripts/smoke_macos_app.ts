@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -133,7 +133,9 @@ async function smoke(arch: MacArch): Promise<void> {
     throw new Error("cannot confirm the generated smoke temp root is contained by the OS temp directory");
   }
   const mount = path.join(resolvedRoot, "mount");
-  const app = path.join(mount, "BlueTanuki.app");
+  const sourceApp = path.join(mount, "BlueTanuki.app");
+  const isolatedApplications = path.join(resolvedRoot, "Applications");
+  const app = path.join(isolatedApplications, "BlueTanuki.app");
   const executable = path.join(app, "Contents", "MacOS", "BlueTanuki");
   const productDataRoot = path.join(os.homedir(), "Library", "Application Support", "BlueTanuki");
   const installedStateBefore = {
@@ -148,14 +150,28 @@ async function smoke(arch: MacArch): Promise<void> {
 
   try {
     mkdirSync(mount);
+    mkdirSync(isolatedApplications);
     run("/usr/bin/hdiutil", ["attach", "-quiet", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", mount, dmg],
       "read-only native app DMG mount");
     mounted = true;
-    if (!existsSync(app) || !lstatSync(app).isDirectory() || !existsSync(executable) || !lstatSync(executable).isFile()) {
+    const sourceExecutable = path.join(sourceApp, "Contents", "MacOS", "BlueTanuki");
+    if (!existsSync(sourceApp) || !lstatSync(sourceApp).isDirectory() ||
+        !existsSync(sourceExecutable) || !lstatSync(sourceExecutable).isFile()) {
       throw new Error("native app bundle or executable is missing from the mounted DMG");
     }
+    cpSync(sourceApp, app, { recursive: true, dereference: false, errorOnExist: true });
+    if (!existsSync(app) || !lstatSync(app).isDirectory() || !existsSync(executable) || !lstatSync(executable).isFile()) {
+      throw new Error("native app bundle copy or executable is missing from the isolated Applications directory");
+    }
+    const canonicalAppRoot = realpathSync(app);
     const canonicalAppExecutable = realpathSync(executable);
+    if (!canonicalAppExecutable.startsWith(`${canonicalAppRoot}${path.sep}`)) {
+      throw new Error("copied native app executable escaped the isolated Applications directory");
+    }
     canonicalExecutable = canonicalAppExecutable;
+    await detachReadOnlyImage(mount);
+    mounted = false;
+    console.log(`native_app_dmg_detached=before_launch architecture=${arch}`);
     if (appProcessIds(canonicalAppExecutable).length !== 0) throw new Error("a matching app process is already running");
 
     child = spawn("/usr/bin/open", ["-n", "-W", app], {
@@ -178,7 +194,7 @@ async function smoke(arch: MacArch): Promise<void> {
     for (const pid of runningIds) spawnedAppPids.add(pid);
     if (!started || runningIds.length !== 1) throw new Error("native app did not start as exactly one process");
     if (!isChildRunning(child)) throw new Error("macOS Launch Services exited before the app smoke completed");
-    console.log(`native_app_process=started architecture=${arch}`);
+    console.log(`native_app_process=started architecture=${arch} source=isolated_app_copy`);
 
     process.kill(runningIds[0], "SIGTERM");
     const stopped = await waitUntil(() => {
