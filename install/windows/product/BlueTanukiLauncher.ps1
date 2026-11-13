@@ -565,20 +565,41 @@ function Start-Watchdog($SafeMode = $false) {
 
 function Start-Resident($SafeMode = $false) {
   Ensure-EnvFile
-  if (Test-ResidentRunning) {
+  $alreadyRunning = Test-ResidentRunning
+  $process = $null
+  if ($alreadyRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
     Start-Watchdog $SafeMode
-    return
-  }
-  $process = Start-ResidentProcess $SafeMode "manual"
-  Start-Watchdog $SafeMode
-  if (Wait-Health 15000) {
-    Write-Host "resident_status=started pid=$($process.Id)"
   } else {
-    Write-Warning "resident started but health did not become ready within timeout. Logs: $logDir"
+    $process = Start-ResidentProcess $SafeMode "manual"
+    Start-Watchdog $SafeMode
   }
-  Write-Host "control_center=$(Get-ControlCenterUrl)"
+
+  if (Wait-Health 15000) {
+    if ($alreadyRunning) {
+      Write-Host "resident_health=ready pid=$(Read-ResidentPid)"
+    } else {
+      Write-Host "resident_status=started pid=$($process.Id)"
+    }
+    Write-Host "control_center=$(Get-ControlCenterUrl)"
+    Write-Host "logs=$logDir"
+    return $true
+  }
+
+  if ($alreadyRunning) {
+    Write-Warning "resident_health=not_ready; the existing managed process was left running. Logs: $logDir"
+  } else {
+    Write-Warning "resident_health=not_ready; the launched process was left running. Logs: $logDir"
+  }
+  Write-Host "next_action=Run BlueTanukiDoctor.cmd and review its log before retrying."
   Write-Host "logs=$logDir"
+  return $false
+}
+
+function Start-ResidentCommand($SafeMode = $false) {
+  if (-not (Start-Resident $SafeMode)) {
+    Fail "Gateway health did not become ready. The Control Center was not opened. Run BlueTanukiDoctor.cmd and review $logDir."
+  }
 }
 
 function Stop-Watchdog {
@@ -688,13 +709,15 @@ function Run-Watchdog($SafeMode = $false) {
 }
 
 function Open-ControlCenter {
-  Start-Resident $false
+  if (-not (Start-Resident $false)) {
+    Fail "The Control Center was not opened because Gateway health is not ready. Run BlueTanukiDoctor.cmd and review $logDir."
+  }
   Start-Process (Get-ControlCenterUrl)
 }
 
 function Start-SafeMode {
   Stop-Resident
-  Start-Resident $true
+  Start-ResidentCommand $true
 }
 
 function Run-Doctor($OpenLog) {
@@ -760,8 +783,8 @@ function Show-AutostartStatus {
 
 switch ($Command.ToLowerInvariant()) {
   "open" { Open-ControlCenter }
-  "start" { Start-Resident $false }
-  "resident-start" { Start-Resident $false }
+  "start" { Start-ResidentCommand $false }
+  "resident-start" { Start-ResidentCommand $false }
   "safe-mode" { Start-SafeMode }
   "resident-safe-mode" { Start-SafeMode }
   "watchdog" { Run-Watchdog $false }

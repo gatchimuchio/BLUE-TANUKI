@@ -2,7 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3 (2026-11-13)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
+
+主語はWindows installed product launcher、managed Gateway process、Control Center入口である。目的は、processが存在するだけの状態をreadyと誤認せず、`/healthz`が200を返した場合だけControl Centerを開くこと。これはWindows G02.01/G02.03の導入後通常利用入口を閉じるP2施工であり、全lifecycleや製品全体成立の判定ではない。
+
+`Start-Resident`は既存processと新規起動processの双方で最大15秒healthを確認し、ready状態をbooleanで返す。`open`、`start`、safe modeは未ready時にControl Centerを開かずexit code 2で停止し、Doctorとログを案内する。未readyのprocessは自動停止・再起動せず、DataRootやユーザーデータへ変更を加えない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Windows PowerShell AST `Parser::ParseFile` | PASS。 |
+| `git diff --check` | PASS。 |
+| `corepack pnpm docs:check` | PASS。日本語基底の既存移行負債75件は注意として継続。 |
+| tests、installed runtime／GUI、health failure／existing unhealthy processのsmoke、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows installed launcher health gate before Control Center open.
+- **STATUS:** Windows launcher sourceのready gateを接続。AST構文確認のみで、installed製品／process／HTTP health consumerは未実行。G02.01/G02.03全体および製品全体は`BUILD_GAP`のまま。
+- **NEXT_REQUIRED_CONSUMER:** P2全体実装を続け、次の未接続producer→consumerを全体経路から選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+- **SAFETY_STATUS:** health未成立ではGUIを開かず、process・dataを停止／削除しない。D4／MINIDORA別repo変更、C08.03 live provider、OD-03無委任live作用、P13公開／出荷GOなし。
+- **LOCAL_ASSET_STATUS:** source/docs差分のみ。test fixture／installer artifactなし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** START_HEAD=`06914a6b009b38173027c3cb3f191913198aff91`。開始時local／origin／GitHub main一致。pre-edit recovery branch／remote tag current／previous=`06914a6b009b38173027c3cb3f191913198aff91`／`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`。push後のhead/ref readbackを閉包時に追記する。stale worktree metadata ACL拒否は変更せず保持。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3 (2026-11-13)
 
 主語は既存`browser.automation action=form_fill/form_submit`、Gatewayのcontent-review／Executor境界、Control Center、Browser Adapterである。目的は、一時フォーム入力と最終GET送信を独立したowner L3 reviewへ分け、入力段階の結果だけで送信権限を作らず、送信直前に同じrequest・owner・入力・フォーム状態を照合すること。
 

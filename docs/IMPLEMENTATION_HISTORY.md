@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 Windows installed launcher health gate (G02.01/G02.03)
+
+Windowsの`BlueTanukiLauncher.ps1`で、managed Gateway processの存在だけをControl Center readyと扱っていた。`Start-Resident`は既存・新規processの双方で`/healthz`を最大15秒確認し、ready booleanを返す。`open`はhealth未成立でブラウザーを起動せず、`start`／safe modeもexit code 2で停止してDoctorとログを案内する。health未成立のprocessを自動停止・再起動せず、install/data状態を変更しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Windows PowerShell AST `Parser::ParseFile` | PASS。 |
+| `git diff --check`／`corepack pnpm docs:check` | PASS。日本語基底移行負債75件は既存注意。 |
+| tests、installed runtime／GUI、health未成立のprocess smoke、全G02、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+**UNIT_ID:** rev5.0 QE_BUILD / Windows installed launcherのHealth→Control Center入口接続。**STATUS:** PowerShell source上で`CODE_PRESENT`、installed／HTTP consumer未確認のためG02の全体成立は未確認。**SAFETY_STATUS:** health failure時はbrowserを開かず、managed process・DataRoot・user dataを維持。実provider／外部作用／別repo変更／P13公開・出荷GOなし。
+
+作業資産はsource/docs差分のみ。installer artifact・test fixture・一時データは作成していない。protected attachment directoriesとLinux isolation `target/`は未変更。開始local／origin／GitHub main=`06914a6b009b38173027c3cb3f191913198aff91`、開始recovery current／previous=`06914a6b009b38173027c3cb3f191913198aff91`／`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`。実装・docs closeoutのpush後SHAと最終recovery refsはこの段落へ追記する。stale worktree metadataのACL拒否は変更せず保持。
+
 ## 2026-11-13 — QE_BUILD rev5.0 F06.02 ephemeral form fillと最終GETの独立L3
 
 既存`browser.automation action=form_fill/form_submit`をGateway content-review、Control Center、Executor、Browser Adapterへ縦断接続した。`form_fill`はJavaScript／service worker／credential／Cookie／downloadなしで一時DOMへ入力するだけとし、ページGETの効果は`page_read_unclassified`としてownerへ表示する。成功後のGateway receiptはcommand、review、request payload、form markup state、request、ownerのdigestだけをprocess-localに保持する。最終GETは別のL3 reviewを必要とし、Browser Adapterがページ状態・同一origin・GET契約・入力制約・送信先を再取得して照合する。Gateway停止条件を実GET直前に再確認し、receiptを一回だけ消費する。redirect追跡・自動再送をせず、外部効果の意味は未分類のままとする。

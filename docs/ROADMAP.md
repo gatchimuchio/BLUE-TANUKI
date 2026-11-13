@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03)
+
+Windows installed launcherが、managed Gatewayの`/healthz`=200を確認してからControl Centerを開くようにした。既存process・新規processの両方で最大15秒待ち、未readyならブラウザーを開かず、process／ユーザーデータを保持したままDoctorとログを案内する。PowerShell AST構文確認と`git diff --check`はPASS。tests、installed HTTP／GUI smoke、製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはWindows通常入口のP2 BUILDであり、全lifecycleや製品完成の証拠ではない。次はP2全体実装を続ける。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3
 
 既存`browser.automation`を`form_fill`と`form_submit`の別段階に分けた。前者はL3確認後のephemeral DOM fillのみで、後者は同じrequest／owner／payload／form stateへ結ぶ短期・単回の非権威receipt、再取得・完全state照合、別L3確認を必須にし、Gateway停止条件を実GETの直前に再確認する。外部GETの効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。Core／Gateway typecheck、Core emit、WebChat build、Control Center script構文、`git diff --check`はPASS。test suite、runtime往復、実Web／HTTP、実provider、全F06・製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはsource-levelの`CODE_PRESENT`であり、製品全体の完成を示さない。次はP2全体実装を継続する。G09.01はD4別repo限定委任待ち。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
