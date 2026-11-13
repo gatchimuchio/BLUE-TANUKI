@@ -19,6 +19,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -30,6 +31,9 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 
 const PORT = 40000 + Math.floor(Math.random() * 1000);
+// Gateway initializes several private stores before it starts listening.
+const STARTUP_TIMEOUT_MS = 60_000;
+const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 const TOKEN = "smoke-token-1234";
 const RESUME_TOKEN = "smoke-resume-token-1234";
 const PNPM = process.env.PNPM_BIN;
@@ -118,7 +122,10 @@ async function waitFor(
 }
 
 async function main(): Promise<void> {
-  const auditDir = mkdtempSync(join(tmpdir(), "smoke-audit-"));
+  const tempRoot = mkdtempSync(join(tmpdir(), "smoke-serve-"));
+  const auditDir = join(tempRoot, "audit");
+  const stateRoot = join(tempRoot, "state");
+  mkdirSync(auditDir, { recursive: true });
   const env = {
     ...process.env,
     WEBCHAT_PORT: String(PORT),
@@ -131,6 +138,7 @@ async function main(): Promise<void> {
     SLACK_APP_TOKEN: "",
     DISCORD_BOT_TOKEN: "",
     BLUE_TANUKI_AUDIT_DIR: auditDir,
+    BLUE_TANUKI_STATE_ROOT: stateRoot,
   };
 
   console.log(`[smoke] booting gateway on :${PORT}`);
@@ -138,23 +146,41 @@ async function main(): Promise<void> {
   const child = spawnGateway({ env, stdio: ["ignore", "pipe", "pipe"] });
 
   const cleanup = (): void => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* ignore */
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  };
+  const stopGateway = async (): Promise<boolean> => {
+    cleanup();
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        const onClose = (): void => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        const timeout = setTimeout(() => {
+          child.off("close", onClose);
+          resolve();
+        }, CHILD_SHUTDOWN_TIMEOUT_MS);
+        child.once("close", onClose);
+      });
     }
+    if (child.exitCode === null && child.signalCode === null) {
+      console.error(`[smoke] temp state retained because gateway did not exit: ${tempRoot}`);
+      return false;
+    }
+    return true;
   };
   process.on("exit", cleanup);
 
-  child.stdout.on("data", (d) => process.stdout.write(`[gw] ${d}`));
-  child.stderr.on("data", (d) => process.stderr.write(`[gw!] ${d}`));
+  child.stdout?.on("data", (d) => process.stdout.write(`[gw] ${d}`));
+  child.stderr?.on("data", (d) => process.stderr.write(`[gw!] ${d}`));
 
-  const up = await waitFor(`http://127.0.0.1:${PORT}/healthz`, 15000);
+  const up = await waitFor(`http://127.0.0.1:${PORT}/healthz`, STARTUP_TIMEOUT_MS);
   if (!up) {
     console.error("[smoke] FAIL — gateway did not come up");
-    cleanup();
-    rmSync(auditDir, { recursive: true, force: true });
-    process.exit(1);
+    if (await stopGateway()) rmSync(tempRoot, { recursive: true, force: true });
+    process.exitCode = 1;
+    return;
   }
   console.log("[smoke] gateway is up");
 
@@ -169,9 +195,9 @@ async function main(): Promise<void> {
   });
   if (!tRes.ok) {
     console.error("[smoke] FAIL — could not obtain WS ticket");
-    cleanup();
-    rmSync(auditDir, { recursive: true, force: true });
-    process.exit(1);
+    if (await stopGateway()) rmSync(tempRoot, { recursive: true, force: true });
+    process.exitCode = 1;
+    return;
   }
   const { ticket } = (await tRes.json()) as { ticket: string };
 
@@ -221,11 +247,13 @@ async function main(): Promise<void> {
     ok = false;
   }
 
-  cleanup();
-  // Give the child a moment to die so file writes flush
-  await new Promise((r) => setTimeout(r, 400));
+  const gatewayStopped = await stopGateway();
+  if (!gatewayStopped) {
+    process.exitCode = 1;
+    return;
+  }
 
-  // Phase 4-S3: verify audit.jsonl was written.
+  // Phase 4-S3: verify audit.jsonl was written after the Gateway flushes it.
   const auditFile = join(auditDir, "audit.jsonl");
   if (!existsSync(auditFile)) {
     console.error(`[smoke] FAIL — audit file not written at ${auditFile}`);
@@ -305,7 +333,14 @@ async function main(): Promise<void> {
     }
   }
 
-  rmSync(auditDir, { recursive: true, force: true });
+  if (gatewayStopped) {
+    try { rmSync(tempRoot, { recursive: true, force: true }); }
+    catch (error) {
+      console.error(`[smoke] temp state retained because cleanup failed: ${tempRoot}`);
+      console.error(`[smoke] cleanup error: ${(error as Error).message}`);
+      ok = false;
+    }
+  }
 
   if (ok) {
     console.log(
