@@ -54,7 +54,7 @@ import {
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
-import { reconcileStartupExecutionState } from "./reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
@@ -125,11 +125,11 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     if (completionRulesRequested && goalCompletionStatus) {
       throw new Error("--goal-completion-status cannot be combined with --goal-completion-rules-stdin");
     }
-    if (completionRulesRequested || goalCompletionStatus) {
-      operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
-    }
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
+    if (completionRulesRequested || goalCompletionStatus || executionStore.pendingResults(1).length > 0) {
+      operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
+    }
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
     await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure,
@@ -485,6 +485,18 @@ async function runCliWithExecutionStore(
     });
   }
 
+  if (!hds.operationPlanCommandIsCurrent(command)) {
+    hds.onCommandLifecycle(command.id, "approval_cancelled", {
+      actor: inbound.user,
+      reason: "plan_binding_stale",
+    });
+    gatewayLog.warn("CLI operation-plan command is no longer current", {
+      used_for_authority: false,
+    });
+    auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+    return;
+  }
+
   const reviewed = captureExecutorCommandForApproval(command);
   const approvalEval = approval.evaluate(command, inbound.user);
   hds.onApprovalEvaluation(approvalEval, { request_id: inbound.id });
@@ -536,10 +548,26 @@ async function runCliWithExecutionStore(
     final_review_required: approvalEval.final_review_required,
     reason: approvalEval.reason,
   }, reviewed.command_digest, hdsBinding, targetVersionObservation);
+  const planBound = hds.isOperationPlanCommand(command.id);
+  const admission = planBound ? executionAdmissionForCommand(command, executorApproval.receipt(approvedCommand)) : undefined;
+  let planAttemptRejection: string | undefined;
+  if (!hds.beginOperationPlanAttempt(command, admission, (reason) => { planAttemptRejection = reason; })) {
+    hds.onCommandLifecycle(command.id, "approval_cancelled", {
+      actor: inbound.user,
+      reason: "plan_attempt_not_admitted",
+    });
+    gatewayLog.warn("CLI operation-plan attempt was not admitted", {
+      reason: planAttemptRejection ?? "plan_attempt_not_admitted",
+      used_for_authority: false,
+    });
+    auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+    return;
+  }
   let executionAdmissionLease: { release(): void } | undefined;
   let feedback: Awaited<ReturnType<Executor["execute"]>>;
   try {
     feedback = await executor.execute(approvedCommand, {
+      save_result_delivery: planBound,
       before_execute: () => {
         const admission = resourceBackpressure.tryAcquireExecution();
         if (!admission.ok) throw new Error(admission.reason);
@@ -548,6 +576,10 @@ async function runCliWithExecutionStore(
     });
   } finally {
     executionAdmissionLease?.release();
+  }
+  if (planBound) {
+    gatewayLog.info("CLI saved execution result reconciliation",
+      reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
   }
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({
