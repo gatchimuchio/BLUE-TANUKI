@@ -7,6 +7,11 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256FileSync } from "./embedded_payload.js";
+import {
+  installHeadlessShell,
+  PLAYWRIGHT_CORE_VERSION,
+  type InstalledHeadlessShell,
+} from "./playwright_browser_runtime.ts";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 interface PackageJson {
@@ -37,6 +42,7 @@ interface WindowsInstallerManifest {
     package: "playwright-core";
     package_version: string;
     engine: "chromium";
+    revision: string;
     executable: string;
     chromium_sandbox: true;
     preview_enabled_by_default: false;
@@ -80,7 +86,6 @@ const RUNTIME_PACKAGES = [
 ] as const;
 
 const MCP_CLIENT_VERSION = "2.4.0";
-const PLAYWRIGHT_CORE_VERSION = "1.65.0";
 const MCP_CLIENT_NODE_MODULES = `node_modules/.pnpm/@modelcontextprotocol+client@${MCP_CLIENT_VERSION}/node_modules`;
 const RUNTIME_EXTERNAL_MODULES: readonly {
   name: string;
@@ -402,40 +407,14 @@ export async function copyAppLayout(
   }
 }
 
-async function installWindowsBrowserRuntime(appRoot: string): Promise<string> {
+async function installWindowsBrowserRuntime(appRoot: string): Promise<InstalledHeadlessShell> {
   const packageJson = JSON.parse(
     readFileSync(path.join(root, "packages/blue-tanuki/package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
   if (packageJson.dependencies?.["playwright-core"] !== PLAYWRIGHT_CORE_VERSION) {
     throw new Error(`packages/blue-tanuki/package.json must pin playwright-core to ${PLAYWRIGHT_CORE_VERSION}`);
   }
-  const cli = path.join(appRoot, "node_modules", "playwright-core", "cli.js");
-  if (!existsSync(cli)) throw new Error("packaged Playwright Core CLI is missing");
-
-  const browserEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: "0" };
-  const install = spawnSync(process.execPath, [cli, "install", "chromium"], {
-    cwd: appRoot,
-    env: browserEnv,
-    stdio: "inherit",
-  });
-  if (install.error) throw install.error;
-  if (install.status !== 0) throw new Error(`Playwright Chromium headless-shell install failed (exit=${install.status})`);
-
-  const probe = spawnSync(process.execPath, ["--input-type=module", "-e",
-    'import { chromium } from "playwright-core"; console.log(chromium.executablePath());'], {
-    cwd: appRoot,
-    env: browserEnv,
-    encoding: "utf8",
-  });
-  if (probe.error) throw probe.error;
-  if (probe.status !== 0) throw new Error(`packaged Playwright browser path probe failed (exit=${probe.status})`);
-  const executable = probe.stdout.trim().split(/\r?\n/u).at(-1);
-  if (!executable || !existsSync(executable)) throw new Error("packaged Chromium headless-shell executable is missing");
-  const relative = path.relative(appRoot, executable);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error("packaged Chromium executable resolved outside the application root");
-  }
-  return relative.split(path.sep).join("/");
+  return installHeadlessShell(appRoot, { platform: "win32", arch: "x64" });
 }
 
 async function copyProductLaunchers(packageRoot: string): Promise<void> {
@@ -608,7 +587,7 @@ async function main(): Promise<void> {
     await mkdir(path.dirname(outFile), { recursive: true });
     await copyProductLaunchers(packageRoot);
     await copyAppLayout(appRoot, { platform: "win32", arch: "x64" }, workRoot);
-    const browserExecutable = await installWindowsBrowserRuntime(appRoot);
+    const browserRuntime = await installWindowsBrowserRuntime(appRoot);
 
     const runtime = await downloadNodeRuntime(nodeVersion, cacheDir);
     await mkdir(path.join(packageRoot, "runtime"), { recursive: true });
@@ -633,7 +612,8 @@ async function main(): Promise<void> {
         package: "playwright-core",
         package_version: PLAYWRIGHT_CORE_VERSION,
         engine: "chromium",
-        executable: `app/${browserExecutable}`,
+        revision: browserRuntime.revision,
+        executable: `app/${browserRuntime.executable}`,
         chromium_sandbox: true,
         preview_enabled_by_default: false,
       },

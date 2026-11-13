@@ -3,6 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertPackageLocalBrowserRegistrySource,
+  headlessShellExecutableRelativePath,
+  parseHeadlessShellRevision,
+  PLAYWRIGHT_CORE_VERSION,
+} from "./playwright_browser_runtime.ts";
 
 type UnixPlatform = "linux" | "macos";
 type UnixArch = "x64" | "arm64";
@@ -23,6 +29,16 @@ interface ExternalManifest {
     archive?: string;
     sha256?: string;
     shasums_source?: string;
+  };
+  browser_runtime?: {
+    bundled?: boolean;
+    package?: string;
+    package_version?: string;
+    engine?: string;
+    revision?: string;
+    executable?: string;
+    chromium_sandbox?: boolean;
+    preview_enabled_by_default?: boolean;
   };
   linux_runtime?: {
     distribution?: string;
@@ -88,6 +104,7 @@ const REQUIRED_APP_ENTRIES = [
   "app/packages/hds-brain/dist/index.js",
   "app/packages/hds-brain/blue-tanuki.plugin.json",
   "app/packages/blue-tanuki/dist/index.js",
+  "app/packages/blue-tanuki/dist/tools/builtin.js",
   "app/packages/blue-tanuki/blue-tanuki.plugin.json",
   "app/packages/channel-base/dist/index.js",
   "app/packages/channel-webchat/dist/index.js",
@@ -105,6 +122,11 @@ const REQUIRED_APP_ENTRIES = [
   "app/node_modules/@blue-tanuki/operator-daily/package.json",
   "app/node_modules/@blue-tanuki/operator-developer/package.json",
   "app/node_modules/ws/package.json",
+  "app/node_modules/playwright-core/package.json",
+  "app/node_modules/playwright-core/browsers.json",
+  "app/node_modules/playwright-core/LICENSE",
+  "app/node_modules/playwright-core/NOTICE",
+  "app/node_modules/playwright-core/ThirdPartyNotices.txt",
   "app/node_modules/zod/package.json",
   "app/node_modules/@modelcontextprotocol/client/package.json",
   "app/node_modules/@modelcontextprotocol/client/dist/index.mjs",
@@ -209,6 +231,14 @@ function listTarEntries(archive: string): string[] {
     .filter(Boolean);
 }
 
+function readTarEntryText(archive: string, entry: string): string {
+  const result = spawnSync("tar", ["-xOzf", archive, entry], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`tar read failed for ${entry}: ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
+}
+
 function assertSafeEntry(entry: string): void {
   const normalized = entry.replace(/\\/g, "/").replace(/^\.\//, "");
   if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
@@ -266,6 +296,20 @@ function assertManifest(
   }
   if (manifest.node_runtime?.shasums_source !== "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt") {
     throw new Error("manifest Node runtime shasums_source mismatch");
+  }
+  const browserRuntime = manifest.browser_runtime;
+  if (browserRuntime?.bundled !== true || browserRuntime.package !== "playwright-core" ||
+      browserRuntime.package_version !== PLAYWRIGHT_CORE_VERSION || browserRuntime.engine !== "chromium" ||
+      !/^\d+$/u.test(browserRuntime.revision ?? "") || browserRuntime.chromium_sandbox !== true ||
+      browserRuntime.preview_enabled_by_default !== false) {
+    throw new Error("manifest browser runtime boundary mismatch");
+  }
+  const expectedExecutable = `app/${headlessShellExecutableRelativePath(
+    { platform: platform === "macos" ? "darwin" : "linux", arch },
+    browserRuntime.revision!,
+  )}`;
+  if (browserRuntime.executable !== expectedExecutable) {
+    throw new Error("manifest browser executable does not match the target headless-shell path");
   }
   if (platform === "linux") {
     const linux = manifest.linux_runtime;
@@ -337,7 +381,8 @@ export function verifyUnixPackage(
   const actualSha = sha256File(archive);
   const sidecarSha = readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
   if (sidecarSha !== actualSha) throw new Error("sha256 sidecar does not match artifact");
-  assertManifest(readManifest(manifestFile), archive, actualSha, platform, arch);
+  const manifest = readManifest(manifestFile);
+  assertManifest(manifest, archive, actualSha, platform, arch);
 
   const readme = readFileSync(readmeFile, "utf8");
   const platformLabel = platform === "macos" ? "macOS" : "Linux";
@@ -363,6 +408,32 @@ export function verifyUnixPackage(
   const entries = listTarEntries(archive);
   const entrySet = new Set(entries);
   for (const entry of entries) assertSafeEntry(entry);
+  const packagedPlaywright = JSON.parse(
+    readTarEntryText(archive, "app/node_modules/playwright-core/package.json"),
+  ) as { version?: string };
+  if (packagedPlaywright.version !== PLAYWRIGHT_CORE_VERSION) {
+    throw new Error("archive Playwright Core version does not match the browser runtime contract");
+  }
+  const archiveRevision = parseHeadlessShellRevision(
+    readTarEntryText(archive, "app/node_modules/playwright-core/browsers.json"),
+  );
+  if (archiveRevision !== manifest.browser_runtime?.revision) {
+    throw new Error("archive Playwright headless-shell revision does not match the manifest");
+  }
+  assertPackageLocalBrowserRegistrySource(
+    readTarEntryText(archive, "app/packages/blue-tanuki/dist/tools/builtin.js"),
+  );
+  const shellExecutable = manifest.browser_runtime?.executable;
+  const shellPlatform = platform === "linux" ? "linux64" : arch === "x64" ? "mac-x64" : "mac-arm64";
+  const shellLicense = `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${archiveRevision}/chrome-headless-shell-${shellPlatform}/LICENSE.headless_shell`;
+  for (const required of [shellExecutable, shellLicense]) {
+    if (!required || !entrySet.has(required)) {
+      throw new Error(`installer archive missing browser runtime or notice entry: ${required}`);
+    }
+  }
+  if (entries.some((entry) => entry.includes(`/chromium-${archiveRevision}/`))) {
+    throw new Error("installer archive contains unused full Chromium binaries; only headless shell is required");
+  }
   const platformNativeEntries = platform === "linux"
     ? ["app/node_modules/@blue-tanuki/core/dist/native/blue-tanuki-linux-isolation"]
     : [];

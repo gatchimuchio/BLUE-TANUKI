@@ -13,6 +13,14 @@ on:
           - macos
         default: all
         required: true
+      linux_scope:
+        description: Build and verify Linux packages only, or also run installed lifecycle smoke
+        type: choice
+        options:
+          - installed-lifecycle
+          - package-only
+        default: installed-lifecycle
+        required: true
       macos_scope:
         description: Build and verify macOS packages only, or also run installed lifecycle smoke
         type: choice
@@ -42,6 +50,18 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Require the selected ref to be main
+        shell: bash
+        env:
+          BLUE_TANUKI_ACTION_REF: ${{ github.ref }}
+          BLUE_TANUKI_ACTION_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$BLUE_TANUKI_ACTION_REF" = "refs/heads/main"
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$BLUE_TANUKI_ACTION_SHA"
+          printf 'source_sha=%s\n' "$actual_sha"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -68,7 +88,13 @@ jobs:
           pnpm package:linux
           pnpm package:linux:verify
 
+      - name: Build and verify the one-file Linux product installer
+        run: |
+          pnpm exec tsx scripts/package_product_installers.ts --platform=linux
+          pnpm exec tsx scripts/verify_product_installers.ts --platform=linux
+
       - name: Install and start the isolated packaged consumer
+        if: ${{ inputs.linux_scope == 'installed-lifecycle' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -175,6 +201,7 @@ jobs:
           printf 'resident_stop=pass\n'
 
       - name: Exercise isolated Linux update, recovery, and uninstall consumers
+        if: ${{ inputs.linux_scope == 'installed-lifecycle' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -207,6 +234,18 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Require the selected ref to be main
+        shell: bash
+        env:
+          BLUE_TANUKI_ACTION_REF: ${{ github.ref }}
+          BLUE_TANUKI_ACTION_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$BLUE_TANUKI_ACTION_REF" = "refs/heads/main"
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$BLUE_TANUKI_ACTION_SHA"
+          printf 'source_sha=%s\n' "$actual_sha"
 
       - name: Set up Node.js for BUILD
         uses: actions/setup-node@v4

@@ -2,7 +2,30 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 完了BUILD_BATCH — rev5.0 QE_BUILD / Windows製品packageへbrowser runtimeを結合
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / desktop package-local Playwright headless-shell
+
+主語はBLUEの`browser.snapshot`／`browser.automation` previewを含むWindows・Linux・macOSの製品packageと、そのPlaywright runtimeである。目的はheadless起動が選ぶChromium Headless Shell、Playwrightの固定revision、manifest path、runtime browser registryを同じapp-local payloadへ結び、Linux／macOS packageで欠けていたbrowser binaryも生成・検証すること。browser起動、HTTP通信、Setup実行、F06全体や製品完成の確認は対象外。
+
+`PLAYWRIGHT_BROWSERS_PATH=0`をPlaywrightのdynamic import前とbrowser child環境へ全対象OSで設定する。共通package helperは固定`playwright-core@1.65.0`の`browsers.json`から`chromium-headless-shell` revisionを読み、OS／architecture別実行pathの存在を確認してから`install --only-shell chromium`を使う。Windows通常Chromium binaryは同梱せず、headless shell、Playwright付属metadata／license、manifest revision/pathを照合する。Linux x64・macOS x64／arm64も同じ契約でpackage builder／verifierへ接続した。Unix workflowへmain SHA固定・`workflow_dispatch` package-only・単一Setup生成／検証を加えた。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS。typecheckが消去するignored `dist`は直後のworkspace buildで再生成。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| Windows browser package／`verify_windows_package.ts` | PASS。ZIP 3,986 entries、manifest／sidecar／Playwright version・revision 1254／OS path／built runtime registry／shell binary・license照合。SHA-256=`3665cabe2494d85f47c84e2d63e138b0fd3b7cb5944da49b514e075cf0d7bf4f`。full Chromium binaryなし。 |
+| Windows one-file CMD／verifier・IExpress EXE／verifier | PASS。CMD SHA-256=`df1bc97a11f8bb89e1763706487d12b829d7f0c4bbf1b723c3951a2941a9825c`、EXE SHA-256=`228fb43eab9130c4f8d013edc8188a3b5c40233b53468c338e8de79ab8da224e`。EXEからCAB／CMD／payload ZIPを抽出・hash照合。Setup実行はNOT_RUN。 |
+| Linux／macOS native package builder・archive verifier・one-file installer verifier | `workflow_dispatch` package-only実行待ち。 |
+| `pnpm docs:check`／終端`git diff --check`／workflow YAML parse | PASS。日本語基底の既存移行負債75件は注意表示。 |
+| browser launch／HTTP、installed Setup／Uninstall、全suite、5OS実物、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / desktop package-local browser headless-shell consumer closure.
+- **STATUS:** Windows archiveは`WIRED`（manifest path・revisionとZIP内binaryを静的照合。起動未確認）。Linux／macOSはコード変更済み、hosted package proof待ち。F06全域・Android／iOS preview・製品全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** Linux／macOS各architectureのmanual package-only build／archive／one-file Setup verifierを固定SHAで確認し、結果をcloseout記録へ反映後、rev5.0 P2全域の次consumerを選ぶ。QE_QC／QE_QAへ移らない。
+- **SAFETY_STATUS:** Preview既定無効、L3、Chromium sandbox有効、ephemeral context、credential／保存profileなし、GET／HEAD・public-address guardを維持。browser起動、通信、実provider、外部作用なし。unsigned installerは公開・配布保留。
+- **LOCAL_ASSET_STATUS:** Windows ZIP／CMD／IExpress EXEと各SHA／manifest sidecar、READMEの10ファイル・696,500,007 bytesを非OneDrive Temp `blue-tanuki-artifacts-20261113-headless-shell`に証拠artifactとして保持。Windows package／IExpress staging/cacheは成功後各scriptが削除。ignored workspace build outputは開発用として保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** 編集開始local／`origin/main`／GitHub `main`=`7ce0778257f96f8d367cc6898a805f05aebfb736`、ahead／behind=0/0。開始recovery current／previous=`7ce0778257f96f8d367cc6898a805f05aebfb736`／`e56c0880e37cfed4255a44184a01240c39681f0d`。closeout前に最新remote・保護差分・二世代refを再照合する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows製品packageへbrowser runtimeを結合
 
 主語はBLUEの`browser.snapshot`／`browser.automation` previewを含むWindows製品packageである。目的はPlaywright依存だけの`CODE_PRESENT`を越え、Windows archive内の実browser binary・対応Playwright revision・installer consumerをhash結合すること。rev5.0 P2全体施工内のWindows限定producer→package consumerであり、browserの実起動や全体製品完成ではない。
 

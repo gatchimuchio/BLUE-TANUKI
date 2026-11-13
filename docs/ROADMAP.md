@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / Windows package-local browser runtime consumer
+### 現行BUILD_BATCH — QE_BUILD / desktop package-local Playwright headless-shell
+
+主語はWindows・Linux・macOS製品packageとPlaywright browser runtime、目的はheadless起動が選ぶbinaryとpackage-local registry path・Playwright revision・manifestを結ぶこと。Windows ZIP verifierは3,986 entries、revision 1254のheadless shell／license/pathを確認し、full Chromium binaryがないことをPASS。一ファイルCMDとIExpress EXEの埋込ZIP／SHA／CAB抽出verifierもPASSした。Linux／macOS x64／arm64のnative package／archive／one-file Setup verifierはmain SHA固定のmanual package-only Actions待ち。起動・外部HTTP・Setup lifecycle、F06全域、Android／iOS browser、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。preview既定無効、L3、sandbox、ephemeral context、GET／HEAD・public-address guardを維持し、実browser／外部作用は未実行。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / Windows package-local browser runtime consumer
 
 Windows製品ZIPへPlaywright Core 1.65.0と一致するChromium／Headless Shellを同梱し、manifestで実binary path、sandbox、preview既定無効を束縛した。Verifierはbrowser binaryとlicense/notice entry、ZIP／CMD／IExpress EXEのSHA・埋込関係・EXE抽出を確認。workspace typecheck／buildとWindows package verifierはPASS（ZIP 4,295 entries）。browser launch、外部HTTP、Setup executionはNOT_RUN。Windows package consumerのみ`WIRED`、他OS browserとF06全域は`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA未成立。unsigned installerの公開・配布は保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

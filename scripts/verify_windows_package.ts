@@ -4,6 +4,12 @@ import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { fileURLToPath } from "node:url";
+import {
+  assertPackageLocalBrowserRegistrySource,
+  headlessShellExecutableRelativePath,
+  parseHeadlessShellRevision,
+  PLAYWRIGHT_CORE_VERSION,
+} from "./playwright_browser_runtime.ts";
 
 interface ExternalManifest {
   schema_version?: number;
@@ -27,6 +33,7 @@ interface ExternalManifest {
     package?: string;
     package_version?: string;
     engine?: string;
+    revision?: string;
     executable?: string;
     chromium_sandbox?: boolean;
     preview_enabled_by_default?: boolean;
@@ -73,6 +80,7 @@ const REQUIRED_ENTRIES = [
   "app/node_modules/playwright-core/LICENSE",
   "app/node_modules/playwright-core/NOTICE",
   "app/node_modules/playwright-core/ThirdPartyNotices.txt",
+  "app/node_modules/playwright-core/browsers.json",
   "app/assets/aotanu/spritesheets/aotanu_idle_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_walk_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_working_2x2.png",
@@ -86,6 +94,7 @@ const REQUIRED_ENTRIES = [
   "app/packages/hds-brain/dist/index.js",
   "app/packages/hds-brain/blue-tanuki.plugin.json",
   "app/packages/blue-tanuki/dist/index.js",
+  "app/packages/blue-tanuki/dist/tools/builtin.js",
   "app/packages/blue-tanuki/blue-tanuki.plugin.json",
   "app/packages/channel-base/dist/index.js",
   "app/packages/channel-webchat/dist/index.js",
@@ -194,6 +203,32 @@ function listZipEntries(archive: string): string[] {
   throw new Error("could not list zip entries; install unzip, python, or PowerShell zip support");
 }
 
+function readZipEntryText(archive: string, entry: string): string {
+  if (commandExists("unzip")) {
+    const result = spawnSync("unzip", ["-p", archive, entry], { encoding: "utf8" });
+    if (result.status === 0) return result.stdout;
+  }
+  const py = commandExists("python3") ? "python3" : commandExists("python") ? "python" : null;
+  if (py) {
+    const script =
+      "import sys,zipfile\n" +
+      "with zipfile.ZipFile(sys.argv[1]) as z:\n" +
+      "  sys.stdout.buffer.write(z.read(sys.argv[2]))\n";
+    const result = spawnSync(py, ["-c", script, archive, entry], { encoding: "utf8" });
+    if (result.status === 0) return result.stdout;
+  }
+  if (process.platform === "win32") {
+    const command =
+      "Add-Type -AssemblyName System.IO.Compression.FileSystem; " +
+      "$z=[IO.Compression.ZipFile]::OpenRead(" + JSON.stringify(archive) + "); " +
+      "try { $e=$z.GetEntry(" + JSON.stringify(entry) + "); if (-not $e) { throw 'entry missing' }; " +
+      "$r=[IO.StreamReader]::new($e.Open()); try { $r.ReadToEnd() } finally { $r.Dispose() } } finally { $z.Dispose() }";
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], { encoding: "utf8" });
+    if (result.status === 0) return result.stdout;
+  }
+  throw new Error(`could not read zip entry: ${entry}`);
+}
+
 function readManifest(file: string): ExternalManifest {
   return JSON.parse(readFileSync(file, "utf8")) as ExternalManifest;
 }
@@ -243,12 +278,18 @@ function assertManifest(manifest: ExternalManifest, archive: string, actualSha: 
     throw new Error("manifest Node runtime shasums_source mismatch");
   }
   if (manifest.browser_runtime?.bundled !== true || manifest.browser_runtime.package !== "playwright-core" ||
-      manifest.browser_runtime.package_version !== "1.65.0" || manifest.browser_runtime.engine !== "chromium" ||
+      manifest.browser_runtime.package_version !== PLAYWRIGHT_CORE_VERSION || manifest.browser_runtime.engine !== "chromium" ||
+      !/^\d+$/u.test(manifest.browser_runtime.revision ?? "") ||
       manifest.browser_runtime.chromium_sandbox !== true || manifest.browser_runtime.preview_enabled_by_default !== false) {
     throw new Error("manifest browser runtime boundary mismatch");
   }
   const browserExecutable = manifest.browser_runtime.executable?.replace(/\\/gu, "/");
-  if (!browserExecutable || browserExecutable.startsWith("/") || /^[A-Za-z]:\//u.test(browserExecutable) ||
+  const expectedBrowserExecutable = `app/${headlessShellExecutableRelativePath(
+    { platform: "win32", arch: "x64" },
+    manifest.browser_runtime.revision!,
+  )}`;
+  if (!browserExecutable || browserExecutable !== expectedBrowserExecutable ||
+      browserExecutable.startsWith("/") || /^[A-Za-z]:\//u.test(browserExecutable) ||
       browserExecutable.split("/").includes("..") ||
       !browserExecutable.startsWith("app/node_modules/playwright-core/.local-browsers/") ||
       !browserExecutable.toLowerCase().endsWith(".exe")) {
@@ -323,15 +364,29 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
       throw new Error(`installer zip missing required entry: ${required}`);
     }
   }
-  if (!entrySet.has(browserExecutable)) throw new Error("installer zip missing bundled Chromium executable");
-  const chromiumRevision = browserExecutable.match(/\/chromium-(\d+)\/chrome-win64\/chrome\.exe$/u)?.[1];
-  if (!chromiumRevision) throw new Error("manifest browser executable does not identify a packaged Chromium revision");
-  for (const required of [
-    `app/node_modules/playwright-core/.local-browsers/chromium-${chromiumRevision}/chrome-win64/ABOUT`,
-    `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${chromiumRevision}/chrome-headless-shell-win64/chrome-headless-shell.exe`,
-    `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${chromiumRevision}/chrome-headless-shell-win64/LICENSE.headless_shell`,
-  ]) {
-    if (!entrySet.has(required)) throw new Error(`installer zip missing browser runtime or notice entry: ${required}`);
+  const browserRevision = manifest.browser_runtime?.revision;
+  if (!browserRevision) throw new Error("manifest browser runtime revision is missing");
+  const packagedPlaywright = JSON.parse(
+    readZipEntryText(archive, "app/node_modules/playwright-core/package.json"),
+  ) as { version?: string };
+  if (packagedPlaywright.version !== PLAYWRIGHT_CORE_VERSION) {
+    throw new Error("archive Playwright Core version does not match the browser runtime contract");
+  }
+  const archiveRevision = parseHeadlessShellRevision(
+    readZipEntryText(archive, "app/node_modules/playwright-core/browsers.json"),
+  );
+  if (archiveRevision !== browserRevision) {
+    throw new Error("archive Playwright headless-shell revision does not match the manifest");
+  }
+  assertPackageLocalBrowserRegistrySource(
+    readZipEntryText(archive, "app/packages/blue-tanuki/dist/tools/builtin.js"),
+  );
+  const shellLicense = `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${browserRevision}/chrome-headless-shell-win64/LICENSE.headless_shell`;
+  if (!entrySet.has(browserExecutable) || !entrySet.has(shellLicense)) {
+    throw new Error("installer zip missing bundled Chromium headless-shell or its license");
+  }
+  if (entries.some((entry) => entry.includes(`/chromium-${browserRevision}/`))) {
+    throw new Error("installer zip contains unused full Chromium binaries; only headless shell is required");
   }
 
   requireSourceText("install/windows/product/BlueTanukiSetup.ps1", [

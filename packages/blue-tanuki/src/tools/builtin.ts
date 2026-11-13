@@ -3816,6 +3816,8 @@ interface RequestLike {
 
 async function importPlaywright(): Promise<PlaywrightLike> {
   try {
+    // Playwright selects its browser registry during module initialization; package-local binaries use path "0".
+    process.env.PLAYWRIGHT_BROWSERS_PATH = "0";
     const specifier = "playwright-core";
     const imported = await import(specifier);
     if (!isRecord(imported)) {
@@ -3848,7 +3850,7 @@ async function defaultBrowserAutomationRunner(
       chromiumSandbox: true,
       env: {
         ...safeProcessEnv(),
-        ...(process.platform === "win32" ? { PLAYWRIGHT_BROWSERS_PATH: "0" } : {}),
+        PLAYWRIGHT_BROWSERS_PATH: "0",
       },
     });
     context = await browser.newContext({

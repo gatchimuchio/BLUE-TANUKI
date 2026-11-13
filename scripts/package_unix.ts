@@ -14,6 +14,7 @@ import {
   sha256File,
   type NativeAppTarget,
 } from "./package_windows.ts";
+import { installHeadlessShell, PLAYWRIGHT_CORE_VERSION } from "./playwright_browser_runtime.ts";
 
 type UnixPlatform = "linux" | "macos";
 type UnixArch = "x64" | "arm64";
@@ -42,6 +43,16 @@ interface UnixInstallerManifest {
     source: string;
     sha256: string;
     shasums_source: string;
+  };
+  browser_runtime: {
+    bundled: true;
+    package: "playwright-core";
+    package_version: string;
+    engine: "chromium";
+    revision: string;
+    executable: string;
+    chromium_sandbox: true;
+    preview_enabled_by_default: false;
   };
   linux_runtime?: {
     distribution: "vendor-supported GNU/Linux releases using glibc";
@@ -273,6 +284,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
     appTarget,
     workRoot,
   );
+  const browserRuntime = installHeadlessShell(appRoot, appTarget);
 
   const runtime = await downloadNodeRuntime(nodeVersion, target, cacheDir);
   await mkdir(path.join(packageRoot, "runtime"), { recursive: true });
@@ -295,6 +307,16 @@ async function packageTarget(target: UnixTarget): Promise<void> {
       source: runtime.url,
       sha256: runtime.sha256,
       shasums_source: runtime.shasumsUrl,
+    },
+    browser_runtime: {
+      bundled: true,
+      package: "playwright-core",
+      package_version: PLAYWRIGHT_CORE_VERSION,
+      engine: "chromium",
+      revision: browserRuntime.revision,
+      executable: `app/${browserRuntime.executable}`,
+      chromium_sandbox: true,
+      preview_enabled_by_default: false,
     },
     ...(target.platform === "linux" ? {
       linux_runtime: {
@@ -361,6 +383,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
   console.log(`install_readme=${readmeFile}`);
   console.log("unsigned_installer=true");
   console.log("bundled_node_runtime=true");
+  console.log("bundled_playwright_headless_shell=true");
   console.log("runtime_sha256_verified=true");
   console.log("user_requires_node_pnpm_git=false");
 }
