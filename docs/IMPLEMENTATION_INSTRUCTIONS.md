@@ -24,7 +24,7 @@ CLIの達成規則stdin入力は非空taskだけを受け、`--organize`との�
 - NEXT_REQUIRED_CONSUMER: rev5.0 P2全域のproducer→consumer欠損を続け、Windows-firstの全体仕事経路をつなぐ。局所品質検査へ工程を移さず、未実装機能群をconsumer単位で施工する。
 - SAFETY_STATUS: C08.03 real provider、実資格情報、live外部作用、別repo変更、P13公開・出荷GOはHOLD。fixtureのfile.searchはtest-owned workspace限定。statusは照会専用no-op command・digest-only・output audit付きで、M receipt再照合と監査記録を行う。rulesによるpermission生成なし。
 - LOCAL_ASSET_STATUS: focused testの一時workspace／SQLiteはtest cleanup済み。Gateway／HDS／Protocolのignored build出力は開発用として保持。protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
-- GIT_STATUS: 編集前local／origin／GitHub main=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、ahead／behind=0/0。編集前local recovery branch／remote tag current=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、previous=`ebab0c0c6129c68e5d4af100bbe96865bb149933`。編集前にCASで二世代を保全済み。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupはACL拒否のため触れず保留。BUILD_BATCHと閉包記録をmainへpushし、remote SHAとrecovery refsを再照合する。
+- GIT_STATUS: 編集前local／origin／GitHub main=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、ahead／behind=0/0。編集前local recovery branch／remote tag current=`a702c82785dd48da28f4372d82c4f28ac4af3e08`、previous=`ebab0c0c6129c68e5d4af100bbe96865bb149933`。実装コミット`48762eb8920e319a90b2dd7986c7f2e907d5b736`はmainへpush済み。閉包記録を含む最新mainはローカルとGitHubで一致し、二世代のrecovery refsも編集前SHAで読み戻し確認済み。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupはACL拒否のため触れず保留。closeout docs commitの最終SHAはpush後のGit readbackで確認する。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則のGateway ingress
 
