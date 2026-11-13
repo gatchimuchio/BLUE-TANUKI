@@ -2,6 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / browser previewの同一origin link navigation
+
+主語はBLUE `browser.automation` のephemeral browser previewである。目的は、初期URLのsnapshot／navigateに限られていた経路から、公開ページ上の完全一致するaccessible linkを一つ選び、同一originのHTTP(S)先を閲覧consumerへ渡すこと。これはF06の限定`CODE_PRESENT` sliceであり、製品全体やF06全体を`WIRED`にしない。
+
+`action=click`はJavaScript click handlerをdispatchせず、uniqueな`link_name`の`href`を解決して直接navigationする。入力は1–200文字、曖昧な一致・欠落・非HTTP・cross-originは停止する。browser route interceptionを必須とし、全requestをpublic-address guardで再検査し、GET／HEAD以外をabortする。ephemeral context、credential拒否、download無効、preview既定無効、L3 final-reviewを維持する。form submit／download／uploadは未実装のままquarantineする。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Core TypeScript typecheck／package build | PASS。 |
+| `git diff --check`／`pnpm docs:check` | PASS。英語runbookの既存移行負債hashを実物と照合して更新。負債数は75のまま。 |
+| browser runtime／外部HTTP smoke／負例実行 | NOT_RUN。workspaceにPlaywright package／browserがなく、Previewは既定無効。実際のページ操作はしていない。 |
+| 全suite、installed product、5OS、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / browser.automation exact same-origin link navigation.
+- **STATUS:** `CODE_PRESENT`。source runner内の限定経路を追加した。Playwright runtime／browserはpackage dependency・installed productへ含まれておらず、製品consumerは`BUILD_GAP`。F06全体・製品全体は未成立。
+- **NEXT_REQUIRED_CONSUMER:** P2全体施工を続け、現在の製品packageにおける実consumer欠損を再選定する。browser previewを製品機能に昇格するにはOS別runtime bundlingとPreview isolationの実物確認が別途必要。QC／QAへ移らない。
+- **SAFETY_STATUS:** 実行時には既定無効、L3、credential／storage stateなし、同一origin link navigationのみ、GET／HEAD限定、public-address guard、cross-origin停止。POST系、form submit、download、upload、外部ページの実使用は行っていない。
+- **LOCAL_ASSET_STATUS:** package buildが生成したignored `dist`／Rust `target`は作業環境として保持。`.codex-attachments/`、`.codex-remote-attachments/`は保護・未変更。browser runtimeやcacheは追加していない。
+- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`2e188a97e68df1294d7f781f825b5a731caa6c10`、ahead／behind=0/0。開始recovery pair current／previous=`2e188a97e68df1294d7f781f825b5a731caa6c10`／`96916e543096f7637c3a1b42abe756709242f940`。closeout時にcommit/push後のSHAと二世代を再照合する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / owner task statusからJ達成根拠への接続
 
 主語はBLUE WebChatのowner-authenticated task submission status、同一requestに束縛されたHDS J task outcome、およびControl Centerである。目的は、明示規則付きowner taskの受付状態照会だけでJの達成状態を確認可能にし、Runtime tokenがない場合も受付状態を最終結果と誤認せず、検証済みdigest-only outcomeをownerへ返すこと。rev5.0 P2全体施工の一接続であり、製品全体の完成やQC／QAではない。

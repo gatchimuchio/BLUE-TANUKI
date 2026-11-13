@@ -318,9 +318,18 @@ mapped as credential access when OAuth token capabilities are present. Google
 write tools are fixed to Google API hosts and always L3 final-review. Missing
 Google tokens fail before a request is sent.
 
-`browser.read` is a lightweight no-JavaScript page reader. It is not the future
-headless Chromium automation backend; it fetches public pages through
-`http.fetch` guards and returns bounded title/text/link extraction.
+`browser.read` is a lightweight no-JavaScript page reader. It fetches public
+pages through `http.fetch` guards and returns bounded title/text/link extraction.
+When Playwright and Chromium are available in an operator-controlled preview
+environment, the optional `browser.snapshot` / `browser.automation` preview uses
+an ephemeral context with no stored credentials or downloads. The current product
+packages do not include that browser runtime. The only
+automation action currently implemented is following one exact, unique,
+same-origin accessible link by its `link_name`; it navigates to the resolved
+HTTP(S) target without dispatching page click handlers. Requests are limited to
+GET/HEAD and rechecked by the public-address guard. The preview remains disabled
+by default and L3 final-review protected. Form submission, download, and upload
+remain quarantined and unimplemented.
 
 `shell.exec` runs a bounded non-shell command (`cmd` plus `args[]`) under
 `BLUE_TANUKI_SHELL_ROOT`. It is a final-review operation because it carries

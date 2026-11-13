@@ -8,6 +8,10 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+### 直近完了BUILD_BATCH — QE_BUILD / browser preview同一origin link navigation
+
+`browser.automation` previewに、完全一致・一意なaccessible linkの同一origin HTTP(S) navigationを追加した。JavaScript click handlerは実行せず、browser interception必須、GET／HEADのみ、public-address guard、credentialなし、download無効、L3、既定無効を維持。form submit／download／uploadは未実装・quarantine。Core typecheck／build PASS。Playwright package／browser未導入のため実browser smokeはNOT_RUNであり、製品package consumerは`BUILD_GAP`、このsliceは`CODE_PRESENT`に限る。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+
 ### 直近完了BUILD_BATCH — QE_BUILD / rev5.0 Linux x64 hosted installed lifecycle consumer
 
 最新main SHA=`37ca041caa573956b3181f11b51032123df2175f`の既存manual `workflow_dispatch` run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)をUbuntu 24.04.5 LTS x86_64上で実行。package build／verify、隔離Setup・bundled runtime・Gateway／Control Center health／app、synthetic first message、Repair、port conflict、Approval／Audit／crash recovery、update失敗rollback・中断復旧、通常Uninstall後の合成state保持、再導入、明示PurgeまでPASS。Linux installer SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。provider=stub、資格情報・実provider・外部作用なし。Actions artifactなし、隔離runner rootはcleanup済み。runnerではLinux isolationに必要な構成要素のいずれかが利用できず、`shell.exec`は無効・fail-closed。distribution別QA、owner実機、OS login／reboot、全suite、5OS QA、製品全体BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。

@@ -428,6 +428,20 @@ function browserAutomationAction(args: Record<string, unknown>): BrowserAutomati
   throw new Error("action must be smoke, navigate, click, form_submit, download, or upload");
 }
 
+function isWellFormedBrowserLinkName(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function assertNoBrowserCredentialUse(args: Record<string, unknown>): void {
   for (const key of [
     "credentials",
@@ -3781,6 +3795,12 @@ interface PageLike {
   title(): Promise<string>;
   evaluate(expression: string): Promise<unknown>;
   url(): string;
+  getByRole?(role: "link", options: { name: string; exact: true }): LocatorLike;
+}
+
+interface LocatorLike {
+  count(): Promise<number>;
+  getAttribute(name: string): Promise<string | null>;
 }
 
 interface RouteLike {
@@ -3790,6 +3810,8 @@ interface RouteLike {
 
 interface RequestLike {
   url(): string;
+  method(): string;
+  isNavigationRequest(): boolean;
 }
 
 async function importPlaywright(): Promise<PlaywrightLike> {
@@ -3830,28 +3852,63 @@ async function defaultBrowserAutomationRunner(
       acceptDownloads: false,
     });
     const page = await context.newPage();
-    if (page.route) {
-      await page.route("**/*", async (route, browserRequest) => {
-        try {
-          const requestUrl = browserRequest.url();
-          await resolvePublicTarget(
-            parseHttpUrl(requestUrl),
-            request.env,
-            request.resolveHost,
-          );
-          await route.continue();
-        } catch {
+    if (!page.route) throw new Error("browser network interception unavailable; mutation_sent=false");
+    await page.route("**/*", async (route, browserRequest) => {
+      try {
+        const requestUrl = browserRequest.url();
+        const method = browserRequest.method().toUpperCase();
+        if (method !== "GET" && method !== "HEAD") {
           await route.abort();
+          return;
         }
-      });
-    }
+        const parsedRequestUrl = parseHttpUrl(requestUrl);
+        if (request.action === "click" && browserRequest.isNavigationRequest() &&
+            parsedRequestUrl.origin !== new URL(request.url).origin) {
+          await route.abort();
+          return;
+        }
+        await resolvePublicTarget(parsedRequestUrl, request.env, request.resolveHost);
+        await route.continue();
+      } catch {
+        await route.abort();
+      }
+    });
     await page.goto(request.url, {
       waitUntil: "domcontentloaded",
       timeout: request.timeout_ms,
     });
+    if (request.action === "click") {
+      if (!request.link_name || !page.getByRole) {
+        throw new Error("browser_link_navigation_unavailable; mutation_sent=false");
+      }
+      const link = page.getByRole("link", { name: request.link_name, exact: true });
+      if (await link.count() !== 1) {
+        throw new Error("browser_link_navigation_not_unique; mutation_sent=false");
+      }
+      const href = await link.getAttribute("href");
+      if (!href) throw new Error("browser_link_navigation_target_missing; mutation_sent=false");
+      let linkUrl: URL;
+      try {
+        linkUrl = parseHttpUrl(new URL(href, page.url()).href);
+      } catch {
+        throw new Error("browser_link_navigation_target_invalid; mutation_sent=false");
+      }
+      if (linkUrl.origin !== new URL(request.url).origin) {
+        throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+      }
+      await resolvePublicTarget(linkUrl, request.env, request.resolveHost);
+      await page.goto(linkUrl.href, {
+        waitUntil: "domcontentloaded",
+        timeout: request.timeout_ms,
+      });
+    }
     const finalUrl = page.url();
+    const parsedFinalUrl = parseHttpUrl(finalUrl);
+    if (request.action === "click" && parsedFinalUrl.origin !== new URL(request.url).origin) {
+      throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+    }
     await resolvePublicTarget(
-      parseHttpUrl(finalUrl),
+      parsedFinalUrl,
       request.env,
       request.resolveHost,
     );
@@ -3874,6 +3931,15 @@ async function defaultBrowserAutomationRunner(
 export async function invokeBrowserSnapshot(
   args: Record<string, unknown>,
   opts: BrowserSnapshotOptions = {},
+): Promise<unknown> {
+  return await invokeBrowserPreview(args, opts, "snapshot");
+}
+
+async function invokeBrowserPreview(
+  args: Record<string, unknown>,
+  opts: BrowserSnapshotOptions,
+  action: BrowserAutomationRunRequest["action"],
+  linkName?: string,
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   if (!browserAutomationEnabled(env)) {
@@ -3898,8 +3964,9 @@ export async function invokeBrowserSnapshot(
   const target = await resolvePublicTarget(url, env, resolveHost);
   const runner = opts.runner ?? defaultBrowserAutomationRunner;
   const snapshot = await runner({
-    action: "snapshot",
+    action,
     url: url.href,
+    ...(linkName ? { link_name: linkName } : {}),
     target,
     timeout_ms: timeoutMs,
     max_chars: maxChars,
@@ -3907,12 +3974,15 @@ export async function invokeBrowserSnapshot(
     resolveHost,
   });
   const finalUrl = parseHttpUrl(snapshot.final_url);
+  if (action === "click" && finalUrl.origin !== url.origin) {
+    throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+  }
   await resolvePublicTarget(finalUrl, env, resolveHost);
 
   return {
     preview: "browser.automation",
     enabled: true,
-    action: "snapshot",
+    action,
     engine: snapshot.engine,
     url: url.href,
     final_url: finalUrl.href,
@@ -3961,15 +4031,25 @@ export async function invokeBrowserAutomation(
     throw browserAutomationDisabledError();
   }
   assertNoBrowserCredentialUse(args);
+  const acceptedKeys = new Set(["action", "url", "max_chars", "timeout_ms", "link_name"]);
+  if (Object.keys(args).some((key) => !acceptedKeys.has(key))) {
+    throw new Error("browser.automation received an unsupported argument; mutation_sent=false");
+  }
 
-  if (action !== "navigate") {
+  if (action !== "navigate" && action !== "click") {
     throw new Error(
       `browser.automation action ${action} is preview-quarantined and not implemented; ` +
         "approval_level=L3_final_review; mutation_sent=false",
     );
   }
-
-  const snapshot = await invokeBrowserSnapshot(args, opts);
+  const linkName = action === "click" ? stringArg(args, "link_name", false)?.trim() : undefined;
+  if (action === "click" && (!linkName || linkName.length > 200 || !isWellFormedBrowserLinkName(linkName))) {
+    throw new Error("browser.automation click requires one exact link_name of 1-200 characters; mutation_sent=false");
+  }
+  if (action !== "click" && args.link_name !== undefined) {
+    throw new Error("browser.automation navigation does not accept link_name; mutation_sent=false");
+  }
+  const snapshot = await invokeBrowserPreview(args, opts, action, linkName);
   if (isRecord(snapshot)) {
     return {
       ...snapshot,

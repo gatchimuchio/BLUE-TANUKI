@@ -106,8 +106,9 @@ export type BrowserAutomationAction =
   | "upload";
 
 export interface BrowserAutomationRunRequest {
-  action: "snapshot" | "navigate";
+  action: "snapshot" | "navigate" | "click";
   url: string;
+  link_name?: string;
   target: HttpFetchTarget;
   timeout_ms: number;
   max_chars: number;
