@@ -104,7 +104,7 @@ pnpm gateway:serve
 
 `http://127.0.0.1:8787/` を開く。設定、first-run、恒久利用は [QUICKSTART.md](QUICKSTART.md)、[docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md)、[docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) を参照する。
 
-通常CLIの一回実行では、ownerが指定する達成規則JSONを標準入力から渡せる。`--goal-completion-rules-stdin` を付けると、最大128 KiBのUTF-8 JSONを読み、`blue-tanuki.goal-completion-rules.v1` として検証する。規則がない、形式が不正、または検証済みoperation結果とM receiptが揃わない場合、目的達成とは判定しない。この規則は完了判定だけを定め、作用の実行許可にはならない。規則本文は同一taskのJ OperationPlanに保持されるため、認証情報や秘密を含めない。条件値をプロセス引数へ置かず、JSONを標準入力で渡す。
+通常CLIの一回実行では、ownerが指定する達成規則JSONを標準入力から渡せる。`--goal-completion-rules-stdin` は非空のtaskと併用し、最大128 KiBのUTF-8 JSONを `blue-tanuki.goal-completion-rules.v1` として検証する。規則付きtaskは内部owner `plan:compute` requestとしてHDSへ渡し、Executor feedback後に同じrequest ID・規則digestへ一致するJ/M達成状態だけをCLIへ表示する。J/M状態や根拠が不足・不一致・曖昧な場合は達成と表示せず、達成規則は作用の実行許可を作らない。規則本文は同一taskのJ OperationPlanに保持されるため、認証情報や秘密を含めない。条件値をプロセス引数へ置かず、JSONを標準入力で渡す。`--organize` とは併用できない。
 
 ## 公開技術RCの機能範囲
 

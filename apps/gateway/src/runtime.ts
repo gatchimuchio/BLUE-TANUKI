@@ -35,6 +35,7 @@ import {
 } from "./llm_config.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput } from "./finalize_command_output.js";
+import { renderCurrentCliGoalCompletionProjection } from "./cli_goal_completion_projection.js";
 import { approvalDeniedFeedback, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
@@ -137,15 +138,18 @@ async function runCliWithExecutionStore(
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
+  const requestArgs = completionRulesRequested
+    ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
+    : cleanArgs;
+  if (completionRulesRequested && requestArgs.includes("--organize")) {
+    throw new Error("--goal-completion-rules-stdin cannot be combined with --organize");
+  }
   if (completionRulesRequested && process.stdin.isTTY) {
     throw new Error("--goal-completion-rules-stdin requires piped UTF-8 JSON on stdin");
   }
   const goalCompletionRules = completionRulesRequested
     ? await readCliGoalCompletionRulesInput(process.stdin)
     : undefined;
-  const requestArgs = completionRulesRequested
-    ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
-    : cleanArgs;
   const organizeIndex = requestArgs.indexOf("--organize");
   const organizationSource = organizeIndex >= 0
     ? requestArgs.slice(organizeIndex + 1).join(" ").trim()
@@ -166,6 +170,9 @@ async function runCliWithExecutionStore(
     )
     .join(" ")
     .trim();
+  if (goalCompletionRules && userInput.length === 0) {
+    throw new Error("--goal-completion-rules-stdin requires an explicit CLI task");
+  }
   const content = organizationSource !== null
     ? `/organize\n${organizationSource}`
     : userInput || "Hello, BLUE-TANUKI";
@@ -499,10 +506,17 @@ async function runCliWithExecutionStore(
     target_surface: "cli",
     request_id: inbound.id,
     development_handoff_store: developmentHandoffStore,
+    ...(goalCompletionRules ? { rendered_output_after_feedback: () => renderCurrentCliGoalCompletionProjection({
+      hds,
+      request_id: inbound.id,
+      rules: goalCompletionRules,
+    }) } : {}),
   });
   const output = finalized.rendered_output;
 
-  if (feedback.status === "success" && command.type === "llm_call") {
+  if (goalCompletionRules && output) {
+    process.stdout.write(`${output}\n`);
+  } else if (feedback.status === "success" && command.type === "llm_call") {
     const result = finalized.reviewed_feedback.result as {
       content: string;
       model: string;
@@ -517,7 +531,7 @@ async function runCliWithExecutionStore(
     coreLog.error("error", { error: feedback.error });
   }
 
-  if (output && command.type !== "llm_call") {
+  if (output && command.type !== "llm_call" && !goalCompletionRules) {
     coreLog.info("command.output", { content: output });
   }
 

@@ -14,11 +14,31 @@ export function createCliInboundRequest(input: {
   timestamp: number;
   goal_completion_rules?: GoalCompletionRules;
 }): InboundRequest {
+  const hasCompletionRules = input.goal_completion_rules !== undefined;
+  if (hasCompletionRules && input.content.trim().length === 0) {
+    throw new Error("cli_goal_completion_rules_task_required");
+  }
+  const taskContent = hasCompletionRules && input.content.trimStart().startsWith("{")
+    ? `task:\n${input.content}`
+    : input.content;
+  const content = hasCompletionRules
+    ? `plan:compute ${taskContent}`
+    : input.content;
   return normalizeInboundRequestForAuthority({
-    ...input,
+    id: input.id,
+    content,
+    timestamp: input.timestamp,
     channel: "cli",
     user: "local-user",
-  }, { internal_authority_metadata: input.goal_completion_rules !== undefined });
+    ...(input.goal_completion_rules ? { goal_completion_rules: input.goal_completion_rules } : {}),
+    ...(hasCompletionRules ? { metadata: {
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner",
+      "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.operation_core.used_for_authority": false,
+    } } : {}),
+  }, { internal_authority_metadata: hasCompletionRules });
 }
 
 export function cliGoalCompletionRulesRequested(args: readonly string[]): boolean {

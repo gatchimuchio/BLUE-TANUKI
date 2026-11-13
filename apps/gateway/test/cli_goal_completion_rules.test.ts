@@ -66,8 +66,16 @@ describe("CLI goal completion rules input", () => {
       goal_completion_rules: rules,
     });
     expect(request.channel).toBe("cli");
+    expect(request.content).toBe("plan:compute save the requested result");
     expect(request.goal_completion_rules).toEqual(validRules);
     expect(isGatewayInternalInboundRequest(request)).toBe(true);
+    expect(request.metadata).toMatchObject({
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner",
+      "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.operation_core.used_for_authority": false,
+    });
 
     const ordinaryRequest = createCliInboundRequest({
       id: "request-2",
@@ -76,5 +84,15 @@ describe("CLI goal completion rules input", () => {
     });
     expect(ordinaryRequest.goal_completion_rules).toBeUndefined();
     expect(isGatewayInternalInboundRequest(ordinaryRequest)).toBe(false);
+    expect(ordinaryRequest.content).toBe("ordinary request");
+  });
+
+  it("does not turn an empty CLI input into an implicit completion task", () => {
+    const rules = parseCliGoalCompletionRulesInput(new TextEncoder().encode(JSON.stringify(validRules)));
+    expect(() => createCliInboundRequest({ id: "request-3", content: "  ", timestamp: 3, goal_completion_rules: rules }))
+      .toThrow("cli_goal_completion_rules_task_required");
+    expect(createCliInboundRequest({ id: "request-4", content: "{\"task\":\"quoted JSON task\"}", timestamp: 4,
+      goal_completion_rules: rules }).content)
+      .toBe("plan:compute task:\n{\"task\":\"quoted JSON task\"}");
   });
 });

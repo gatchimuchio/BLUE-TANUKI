@@ -25,6 +25,8 @@ import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
+import { createCliInboundRequest } from "../src/cli_goal_completion_rules.js";
+import { renderCurrentCliGoalCompletionProjection } from "../src/cli_goal_completion_projection.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -162,6 +164,17 @@ function review(hds: HDSUpperController, candidate: OperationPlan, step_id: stri
     step_id: operationPlanDigest(step_id), ...(goal_purpose_binding ? { goal_purpose_binding } : {}) })}`));
 }
 
+function reviewCli(hds: HDSUpperController, candidate: OperationPlan, step_id: string) {
+  const current = hds.getRuntimeSnapshot().operation_plans.plans.find((p) => p.plan_id === operationPlanDigest(candidate.plan_id))!;
+  return hds.decide(createGatewayInternalInboundRequest({ id: randomUUID(), channel: "cli", user: "local-user",
+    content: `plan:review ${JSON.stringify({ plan_id: current.plan_id, revision_digest: current.revision_digest,
+      step_id: operationPlanDigest(step_id) })}`, timestamp: Date.now(), metadata: {
+      "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner", "blue_tanuki.operator_surface": "developer",
+      "blue_tanuki.operation_core.used_for_authority": false,
+    } }));
+}
+
 function goalGovernanceConfig() {
   const event = {
     event_ref: "ge_0123456789abcdef", event_kind: "purpose_change" as const,
@@ -211,12 +224,13 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     expect(rulesDigest).toBe(operationPlanDigest(rules));
     try {
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
-      const origin = request("plan:compute find blue", "fixture-owner", undefined, rules);
+      const origin = createCliInboundRequest({ id: randomUUID(), content: "find blue", timestamp: Date.now(),
+        goal_completion_rules: rules });
       const candidate = plan(origin.id, workspace);
       candidate.steps = candidate.steps.filter((step) => stepIds.some((stepId) => stepId === step.step_id));
       const executor = rig(hds, candidate);
       const initial = hds.decide(origin);
-      if (!initial.command) throw new Error("completion-rule plan did not reach C");
+      if (!initial.command) throw new Error(`completion-rule plan did not reach C: ${initial.log.commit.reason}`);
       expect(initial.log.frame.goal_projection.evaluation_rules).toMatchObject({
         status: "referenced", rules_digest: rulesDigest, rule_count: 1, source_ref: origin.id,
       });
@@ -232,8 +246,9 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         tools, approval_authority: authority,
         file_search_worker: createFileSearchWorker({ execution_epoch: executionEpoch,
           env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }) });
+      let cliProjectionOutput = "";
       for (const stepId of stepIds) {
-        const selected = review(hds, candidate, stepId);
+        const selected = reviewCli(hds, candidate, stepId);
         if (!selected.command) throw new Error(`explicitly selected ${stepId} did not reach the executor`);
         const bindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
         if (!bindingDigest) throw new Error("current J plan binding was unavailable");
@@ -253,13 +268,20 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         const feedback = await searchExecutor.execute(approved, { save_result_delivery: true });
         expect(feedback.status).toBe("success");
         expect(reconcileExecutionResults(hds, executionStore, executionEpoch)).toMatchObject({ adopted: 1, deferred: 0 });
-        finalizeCommandOutput({ hds, command: selected.command, feedback,
-          request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+        const finalized = finalizeCommandOutput({ hds, command: selected.command, feedback,
+          request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel",
+          rendered_output_after_feedback: () => renderCurrentCliGoalCompletionProjection({
+            hds: hds!,
+            request_id: origin.id, rules,
+          }) });
+        cliProjectionOutput = finalized.rendered_output ?? "";
       }
       expect(executionStore.verifyEvents()).toBe(true);
       expect(hds.reconcileOperationPlanMemory()).toBe(true);
 
       const assessed = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+      expect(cliProjectionOutput).toContain(expectedStatus === "achieved" ? "達成判定: 達成" : "達成判定: 保留");
+      expect(cliProjectionOutput).not.toContain("blue\n");
       expect(store.load()?.plans[0]?.goal_completion_policy?.rules_digest).toBe(rulesDigest);
       if (expectedStatus === "achieved") {
         expect(assessed.task_outcome).toMatchObject({ status: "achieved", reason_code: "goal_completion_rules_satisfied",
@@ -273,7 +295,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         expect(store.load()?.plans[0]?.goal_completion_assessment).toMatchObject({
           decision_scope: "stop_same_task_after_verified_goal_completion", may_execute: false,
         });
-        const stopped = review(hds, candidate, "search");
+        const stopped = reviewCli(hds, candidate, "search");
         expect(stopped.command).toBeNull();
         expect(stopped.log.commit.reason).toContain("plan_control_denied");
         expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
@@ -291,7 +313,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.task_outcome)
         .toMatchObject({ status: expectedStatus, reason_code: expectedReasonCode });
       if (expectedStatus === "achieved") {
-        const afterRestart = review(hds, candidate, "search");
+        const afterRestart = reviewCli(hds, candidate, "search");
         expect(afterRestart.command).toBeNull();
         expect(afterRestart.log.commit.reason).toContain("plan_control_denied");
       }

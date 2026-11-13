@@ -25,11 +25,14 @@ export function finalizeCommandOutput(input: {
   request_id: string | null;
   /** Safe fixed projection for commands whose raw result is consumed internally. */
   rendered_output_override?: string;
+  /** Projection that needs the HDS feedback consumer to update state first. */
+  rendered_output_after_feedback?: () => string;
   development_handoff_store?: DevelopmentHandoffStore;
 }): FinalizedCommandOutput {
   const reviewed_feedback = input.hds.reviewMemoryCitations(input.command, input.feedback);
-  const rendered_output = input.rendered_output_override ?? renderCommandOutput(input.command, reviewed_feedback);
   deliverDevelopmentHandoff(input.hds.onFeedback(input.feedback), input.development_handoff_store);
+  const rendered_output = input.rendered_output_after_feedback?.() ?? input.rendered_output_override ??
+    renderCommandOutput(input.command, reviewed_feedback);
   const output_audit = input.hds.onOutputAudit({
     command: input.command,
     feedback: input.feedback,
