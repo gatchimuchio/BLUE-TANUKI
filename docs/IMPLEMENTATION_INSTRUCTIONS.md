@@ -19,7 +19,7 @@
 - **NEXT_REQUIRED_CONSUMER:** P2全体施工を続ける。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`で維持する。Android／iOS、5OS、製品全体へ完了を拡張しない。
 - **SAFETY_STATUS:** 不明なtag type・cycle・16段超を拒否。requested commitとの完全一致、既存no-store L3、事前再観測、結果不明時no-retryを維持。実provider・POST・公開releaseなし。
 - **LOCAL_ASSET_STATUS:** 新規永続生成物なし。保護対象attachmentsとLinux isolation `target/`は未変更。
-- **GIT_STATUS:** closeoutでcommit／push／recovery refs readbackを追記する。
+- **GIT_STATUS:** START_HEAD=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`。実装・状態記録commit=`230c9fff17ada14749320f667d1999af5cae32a8`を`main`へfast-forward pushし、local／`origin/main`／GitHub `main`の一致を確認。実装push後のlocal recovery branch／remote backup tag current／previous=`230c9fff17ada14749320f667d1999af5cae32a8`／`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`。その後のdocs-only closeout commitも同batchでfast-forwardする。fetch／commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの自動整理がPermission deniedとなったため保持し、metadata／ACLは変更しない。短縮refはlocal tagと曖昧だったため、すべて完全修飾refで照合した。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installerのMAX_PATH回復 (G02.01, G02.03)
 
