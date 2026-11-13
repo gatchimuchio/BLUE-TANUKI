@@ -5009,3 +5009,22 @@ Core typecheck、`pnpm docs:check`、`git diff --check`はPASS。日本語基底
 新nested-chain consumerの状態は`CODE_PRESENT`のみで、実provider／Gateway runtime証拠ではない。F05全体、5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、owner GOは未成立。rev5.0 P2全体施工を継続し、G09.01 D4 Adapter producer→BLUE ingressは別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
 
 編集前local／`origin/main`／GitHub `main`=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`、ahead／behind=0/0。編集前recovery branch／remote backup tag current／previous=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`／`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`。実装・状態記録commit=`230c9fff17ada14749320f667d1999af5cae32a8`を`main`へfast-forward push。remote readbackはmain/current/previous=`230c9fff17ada14749320f667d1999af5cae32a8`／`230c9fff17ada14749320f667d1999af5cae32a8`／`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`。remote backup tagは旧SHAへ`--force-with-lease`を指定し二本をatomic更新し、local recovery branchesも完全修飾refと期待旧SHAを指定して更新した。local／remote pairは実装push後に一致。ローカルの同名stale tag refs（`eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980`／`7ce0778257f96f8d367cc6898a805f05aebfb736`）が短縮refを曖昧にするため、削除せず保持し、canonical branch／remote tagは完全修飾refで照合した。fetch／commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupがPermission deniedとなったが、commit・pushは成功し、metadata／ACLは変更せず残した。closeout docs-only commit後のlocal／origin／GitHub `main`・復旧二世代・保護対象asset最終状態を直接確認する。
+
+## 2026-11-14 — rev5.0 QE_BUILD / Linux native packaged installed lifecycle
+
+主語はBLUE-TANUKI Linux x86_64製品archiveのSetup、Launcher、installed Gateway／Control Center応答、update recovery、Uninstallである。目的は隔離runnerに実packageを導入し、通常起動・停止から更新・復旧・削除まで既存Linux製品consumerを接続すること。
+
+GitHub Actions `workflow_dispatch` run [#24](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43515570476)はsource SHA=`79dfca35c375a659d6840ad6f071ce79a8367006`でsuccess。runnerは`ubuntu-24.04` / Ubuntu 24.04.5 LTS、x86_64、kernel `7.0.0-1017-azure`、glibc 2.39。workspace build、Linux tar.gz package／verifier、一体型`.run` package build／verifierがPASSした。runtime smokeはtar.gz archiveを隔離install/data/config/runtime/bin pathへ導入し、resident start後の`/healthz` HTTP 200、`/app` HTTP 200、synthetic WebSocket first message、port conflict拒否、repair install、explicit autostart、approval flow、audit tamper拒否、crash recovery、doctor／restart／safe mode／stopを確認した。
+
+update中のruntime move失敗を注入して旧installationへrollbackする経路と、interrupted updateから検証済み旧productを復元して更新を再開する経路がPASS。normal uninstall後は隔離DataRoot／ConfigRoot／logとuser retention sentinelを保持し、再導入後のPurge uninstallではrunner内synthetic dataのみ削除した。各step success、run conclusion `success`。`/app`はHTTP endpoint応答であり実画面操作ではない。`.run` installer本体の実行、物理Linux PC、他OS／distribution、全suite、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未確認。provider credentialsとlive external actionsは使っていない。Actions artifactは0件。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Ubuntu 24.04.5 hosted x86_64 workspace build／tar.gz archive package・verifier／single-file `.run` package・verifier | PASS。 |
+| tar.gzからisolated Setup→resident runtime→health／app endpoint→synthetic first message→stop | PASS（`healthz_http=200`、`app_http=200`）。 |
+| update failure rollback／interrupted-update recovery／normal uninstall retention／reinstall／isolated purge uninstall | PASS。 |
+| GUI実操作、`.run`実行、physical Linux device、全suite、実provider／live external action、他OS全lifecycle、製品全体BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+各install path・synthetic user dataはGitHub hosted runnerのisolated Temp内だけを使用し、runner artifactは保持していない。ローカル資産はdocs差分のみ。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`、stale Windows worktree metadataを保持・未変更。D4-Pocket／MINIDORAのrepo変更なし。
+
+開始時local／`origin/main`／GitHub `main`=`79dfca35c375a659d6840ad6f071ce79a8367006`、local recovery branch／remote backup tag current／previous=`79dfca35c375a659d6840ad6f071ce79a8367006`／`75a4cc6f04b89803ced9a396d457b7f7cd73b982`。runはこのSHAに固定。docs closeoutは成功したmain fast-forwardとしてpushし、終了時local／remote `main`、current／previous recovery pair、保護untracked資産を直接再照合した。Gitのstale worktree metadata整理は本単位では実施していない。

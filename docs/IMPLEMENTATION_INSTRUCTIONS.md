@@ -2,7 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native app・DMG producer (2026-11-14)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux native packaged install・runtime・lifecycle consumer (2026-11-14)
+
+主語はBLUE-TANUKI Linux x86_64製品archiveのSetup、Launcher、installed Gateway／Control Center応答、update recovery、Uninstallである。目的は隔離runnerに実packageを導入し、通常起動・停止から更新・復旧・削除まで既存Linux製品consumerを接続すること。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / Linux native packaged installed consumer lifecycle。
+- **STATUS:** CLOSED（Ubuntu hosted runnerの一条件でLinux tar.gz→Setup→resident Launcher→Gateway／WebChat入口→停止・update rollback／recovery→Uninstallを接続確認）。製品コードの変更はなく、既存main成果の実consumer smokeを行った。
+- **CHECK_SCOPE:** GitHub Actions `workflow_dispatch` run [#24](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43515570476)、source SHA=`79dfca35c375a659d6840ad6f071ce79a8367006`。`ubuntu-24.04` / Ubuntu 24.04.5 LTS、x86_64、kernel `7.0.0-1017-azure`、glibc 2.39。workspace build、Linux tar.gz package／verifier、一体型 `.run` build／verifierはPASS。実導入はtar.gz archiveから隔離pathへ行い、`/healthz` HTTP 200、`/app` HTTP 200、synthetic WebSocket first message、port conflict拒否、repair install、明示autostart、approval flow、audit tamper拒否、crash recovery、doctor／restart／safe mode／stopを確認した。
+- **UPDATE／UNINSTALL:** runtime move failure注入時のupdate rollbackとinterrupted-update recoveryがPASS。normal uninstallは隔離DataRoot／ConfigRootを保持し、再導入後のPurge uninstallは同じrunner内のsynthetic dataだけを削除した。全lifecycle step success。Hosted workflow run artifactsは0件。
+- **EVIDENCE_LIMIT:** このrunは一つのUbuntu hosted imageにおけるQE_BUILD consumer evidence。Web UI endpoint応答は実画面操作ではなく、`.run` installer本体も実行していない。物理Linux機、他Linux版／architecture、正式配布、全suite、QE_QC／QE_QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`の証拠へ拡張しない。provider credentialやlive external actionは使わず、provider検証と外部作用は未実施。
+- **LOCAL_ASSET_STATUS:** package／install／runtime／synthetic user dataはGitHub runnerの隔離Temp内でのみ生成し、Actions artifactは保持されていない。ローカルPCへのpackage出力なし。添付領域と既存Linux isolation `target/`を保護し未変更。D4-Pocket／MINIDORAの別repo変更なし。
+- **GIT_STATUS:** run開始時local／`origin/main`／GitHub `main`=`79dfca35c375a659d6840ad6f071ce79a8367006`、復旧branch／tag current／previous=`79dfca35c375a659d6840ad6f071ce79a8367006`／`75a4cc6f04b89803ced9a396d457b7f7cd73b982`。本closeoutはこのmainからのdocs-only fast-forwardとし、push後readback SHAと復旧ref二世代を照合する。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体BUILDを継続する。次の独立単位でBlue-ownedのproducer→consumer gapを現行sourceから選び直す。G09/G10のMobile→D4→BLUE経路は別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持し、D4／MINIDORAへ書き込まない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native app・DMG producer (2026-11-14)
 
 主語はBLUE-TANUKIのmacOS x64／arm64製品アプリ入口と、そのSetup／Launcher／Uninstall consumerである。目的は既存の保護付きUnix製品経路をAppKit画面から明示操作で呼び出せる`.app`とDMGを生成し、macOSの対象CPU／minimum deployment target／同梱installerの同一性を検証すること。HDS authority、Gateway、Broker、秘密、外部作用能力、既存Setup／Uninstallの削除対象は変更しない。
 
