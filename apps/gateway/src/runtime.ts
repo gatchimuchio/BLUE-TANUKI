@@ -51,6 +51,7 @@ import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
+import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -104,14 +105,18 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   let executionStore: GatewayExecutionIntentStore | undefined;
   let computeBudget: GatewayComputeBudgetStore | undefined;
   let resourceBackpressure: GatewayResourceBackpressure | undefined;
+  let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
   try {
+    mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
-    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure);
+    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure,
+      mcpRuntimeObservations);
   } finally {
     computeBudget?.close();
     executionStore?.close();
+    mcpRuntimeObservations?.close();
     ownerLease.close();
   }
 }
@@ -122,6 +127,7 @@ async function runCliWithExecutionStore(
   ownerLease: GatewayRuntimeOwnerLease,
   computeBudget: GatewayComputeBudgetStore,
   resourceBackpressure: GatewayResourceBackpressure,
+  mcpRuntimeObservations: McpRuntimeObservationStore,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const organizeIndex = cleanArgs.indexOf("--organize");
@@ -190,7 +196,7 @@ async function runCliWithExecutionStore(
 
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
-  registerMcpCallToolFromEnvironment(tools, process.env);
+  registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   plugins.registerTools(tools);
   const runtimeSchedules = await RuntimeScheduleManager.open({ env: process.env });
   for (const tool of runtimeSchedules.tools()) tools.register(tool);

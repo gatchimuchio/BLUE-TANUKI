@@ -74,6 +74,7 @@ import { GatewayWebChatOwnerTaskStore } from "./webchat_owner_task_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
+import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 import { buildAuditLog } from "./audit_config.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
@@ -952,15 +953,21 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
 
 export async function serve(): Promise<ServeShutdown> {
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
+  let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
   try {
-    return await serveWithOwnerLease(ownerLease);
+    mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
+    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations);
   } catch (error) {
+    mcpRuntimeObservations?.close();
     ownerLease.close();
     throw error;
   }
 }
 
-async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promise<ServeShutdown> {
+async function serveWithOwnerLease(
+  ownerLease: GatewayRuntimeOwnerLease,
+  mcpRuntimeObservations: McpRuntimeObservationStore,
+): Promise<ServeShutdown> {
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
   plugins.enforceSessionConfig(process.env);
@@ -997,7 +1004,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
-  registerMcpCallToolFromEnvironment(tools, process.env);
+  registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
   let gatewayShuttingDown = false;
@@ -3917,6 +3924,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       settings: createWebChatSettingsSurface({
         env: process.env,
         plugins,
+        mcpRuntimeObservations,
       }),
       runtime: {
         getSnapshot: async () => {
@@ -6755,6 +6763,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       emergencyStopStateStore.close();
       hds.closeOperationPlanMemory();
       executionStore.close();
+      mcpRuntimeObservations.close();
       auditLog.info("summary", {
         entries: hds.getAudit().size(),
         chain_valid: hds.getAudit().verify(),

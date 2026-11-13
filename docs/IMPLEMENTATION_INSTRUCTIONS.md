@@ -2,6 +2,26 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / MCP restart-safe runtime observation consumer
+
+主語はBLUE Gateway MCP Adapterの通常呼出し観測とConnections SettingsSurface。目的は、Gateway再起動後も保存済み状態を読み、応答未観測のtool dispatchを`outcome_unknown`としてownerへ提示すること。MCP endpointのcanonical SHA-256 digest・状態・時刻だけを最大8件、private-state SQLiteへ保存する。CLI／常駐Gatewayのtool実装とSettingsSurfaceに同じstoreを注入した。SettingsSurfaceはprobe・process起動を行わず、観測はJ／Approval／Brokerに権限を与えない。
+
+再起動時の`dispatching`は`outcome_unknown`へ遷移し、自動再送を拒む案内を表示する。endpoint本文、tool名、引数、response、raw errorは保存しない。live provider／MCP server、health monitor、server process管理、既存server設定migrationは対象外であり、F08.03全体は未成立。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway typecheck | PASS。 |
+| `settings_surface.test.ts` | PASS 17/17。永続再open、interrupted dispatchのunknown復旧、設定面consumer、endpoint本文非保存。 |
+| `mcp_connection_client.test.ts` | PASS 5/5。既存の合成process経路と未再送。 |
+| 全suite／全MCP互換／live provider／全OS／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / MCP restart-safe runtime observation consumer
+- **STATUS:** WIRED（通常呼出し→SQLite→再起動後SettingsSurface。process-local runtime healthではない）
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続し、全要求・5OS入口に跨る未接続consumerを現物から再選定する。F08個別QAへ滞留しない。
+- **SAFETY_STATUS:** 非権威の観測のみ。J／Approval／Broker、M権限、外部作用、C08.03 live provider、D4／MINIDORA別repo、公開・出荷境界に変更なし。
+- **LOCAL_ASSET_STATUS:** Test-owned temp root／SQLiteはcleanup済み。追加build artifactなし。protected attachments／Linux isolation targetは保持。
+- **GIT_STATUS:** 開始local／origin／GitHub main=`b2d507cc3b48e75ceb3696d811909f571d01e27a`、ahead／behind=0/0。開始recovery current／previous=`b2d507cc3b48e75ceb3696d811909f571d01e27a`／`8233761b3b533d707e39932e6e442886a4a75c5a`。closeout後のHEAD／ref再照合を実施する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / synthetic same-workspace edit-test adapter profile
 
 主語はOperationPlanからshell execution adapterへ渡る、開発用の固定失敗test profileである。目的は、plannerへraw commandを持たせず、編集後test・同一Workspace再読取・失敗時の再計画経路で必要な`shell.exec` consumerを成立させること。対象は`packages/blue-tanuki/src/llm/synthetic_file_write_plan.ts`、`packages/blue-tanuki/src/tools/shell_exec.ts`とそのadapter contract／限定testである。

@@ -2,6 +2,22 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD MCP restart-safe runtime observation consumer
+
+主語はBLUE Gateway MCP Adapterの通常呼出し観測と認証済みConnections SettingsSurface。目的はGateway再起動後に失われるprocess-local観測を、再送を誘発しないowner向け回復情報として既存consumerへ結ぶこと。rev5.0 P2全体施工の一接続であり、F08.03全体の達成やQAではない。
+
+`McpRuntimeObservationStore`へper-install SQLiteを追加し、CLIと常駐GatewayのMCP toolおよびSettingsSurfaceへ同じstoreを注入した。persistするのはcanonical loopback endpoint SHA-256 digest、connection／last-call state、時刻だけで、上限は8 endpoint。raw endpoint、tool名、arguments、response body、raw errorは保存しない。Gateway startup時の残存`dispatching`を`outcome_unknown`へ同期更新するため、停止境界が不明なtoolを自動再送しない。設定画面は保存済みprojectionを表示し、probe／server起動は行わない。観測値は非権威で、approval・実作用receipt・独立したtarget state確認を置換しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway TypeScript typecheck | PASS。 |
+| `settings_surface.test.ts` | PASS 17/17。永続storeをclose/reopenし、interrupted dispatchのunknown化・UI接続・非権威flags・endpoint本文非保存を確認。 |
+| `mcp_connection_client.test.ts` | PASS 5/5。既存合成MCP process→HDS／High-L3／Broker／Executor接続と未再送。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、全MCP protocol／transport互換、実provider／credential、外部業務作用、全OS、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+test用Temp rootとSQLiteファイルはclose後に削除し、残存なし。実provider、実credential、別repo、owner dataを使用・変更していない。C08.03 live provider、OD-03外部作用、他repo変更、P13 owner GOはHOLDのまま。
+
 ## 2026-11-13 — QE_BUILD Linux x64 installed lifecycle on current main
 
 主語はLinux x64 installer、installed Gateway／Control Centerと既存の手動Actions consumerである。rev5.0 QE_BUILD中に、最新main sourceからのpackage build／verifyを含む導入後経路を再実行し、P2全体成立に必要な限定consumer証拠を記録する。これは製品全体SYSTEM_SHAPED／BUILD_COVERED、Linux distribution別QA、QE_QC／QE_QA、owner GOではない。製品コードの変更はなく、既存workflow／smokeのみを使用した。

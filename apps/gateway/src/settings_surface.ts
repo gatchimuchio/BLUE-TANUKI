@@ -44,7 +44,7 @@ export interface SettingsEnvFileUpdateOptions extends SettingsSecretStorageOptio
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
   switch (observation.last_call.state) {
     case "outcome_unknown":
-      return "The last MCP call may have taken effect, but its outcome is unknown. Do not retry automatically. Inspect the target and service evidence before making a new reviewed decision.";
+      return "The last recorded MCP call may have taken effect, but no response was observed. Do not retry automatically. Inspect the target and service evidence before making a new reviewed decision.";
     case "dispatching":
       return "The last MCP call is in progress or its response has not been observed. Do not retry until its outcome is known.";
     case "response_received":
@@ -61,7 +61,7 @@ function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapsho
   if (observation.connection.state === "catalog_reachable") {
     return "The MCP catalog was reachable at the recorded time. This is not a live health monitor; use Load to refresh after a normal runtime call.";
   }
-  return "No MCP runtime observation is available in this Gateway process. This page does not probe the endpoint.";
+  return "No saved MCP runtime observation is available for this endpoint. This page does not probe the endpoint.";
 }
 
 export interface SettingsSnapshot {
@@ -817,7 +817,7 @@ export function renderSettingsHtml(): string {
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
           <p id="mcp-runtime-next-action" role="status"></p>
-          <p class="muted">Runtime observations are process-local results from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
+          <p class="muted">Runtime observations are saved locally from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
           <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. Start and stop the dedicated local server in its own trusted service; this settings page does not launch processes or test connectivity. Saving requires a Gateway restart. Every selected tool still uses HDS and High/L3 review.</p>
         </section>
         <section id="tab-paths">

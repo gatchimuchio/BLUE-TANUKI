@@ -271,7 +271,7 @@ describe("settings surface", () => {
     expect(html).toContain('id="mcp-next-action"');
     expect(html).toContain('id="mcp-runtime-connection"');
     expect(html).toContain('id="mcp-runtime-call"');
-    expect(html).toContain("Runtime observations are process-local results from normal MCP use");
+    expect(html).toContain("Runtime observations are saved locally from normal MCP use");
     expect(html).toContain("does not launch processes or test connectivity");
     const scriptStart = html.indexOf("<script>") + "<script>".length;
     const scriptEnd = html.indexOf("</script>", scriptStart);
@@ -316,6 +316,46 @@ describe("settings surface", () => {
       connection: { state: "not_observed", observed_at: null },
       last_call: { state: "not_observed", observed_at: null },
     });
+  });
+
+  it("restores MCP observations and marks interrupted dispatches outcome-unknown", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-mcp-observation-"));
+    const endpoint = "http://127.0.0.1:43125/private-mcp-path";
+    const completedEndpoint = "http://127.0.0.1:43126/other-private-path";
+    const env = { BLUE_TANUKI_STATE_ROOT: stateRoot };
+    const first = McpRuntimeObservationStore.fromEnvironment(env);
+    first.recordCatalogReachable(endpoint);
+    first.recordDispatchStarted(endpoint);
+    first.recordCatalogReachable(completedEndpoint);
+    first.recordDispatchStarted(completedEndpoint);
+    first.recordResponseReceived(completedEndpoint);
+    first.close();
+
+    const databasePath = path.join(stateRoot, "private-state", "mcp-runtime-observations", "observations.sqlite");
+    const databaseBytes = await fs.readFile(databasePath);
+    expect(databaseBytes.includes(Buffer.from(endpoint))).toBe(false);
+    expect(databaseBytes.includes(Buffer.from(completedEndpoint))).toBe(false);
+
+    const restored = McpRuntimeObservationStore.fromEnvironment(env);
+    try {
+      const recoveredUnknown = buildSettingsSnapshot({ BLUE_TANUKI_MCP_ENDPOINT: endpoint }, runtime(), restored)
+        .integrations.mcp.runtime_observation;
+      expect(recoveredUnknown).toMatchObject({
+        connection: { state: "catalog_reachable" },
+        last_call: { state: "outcome_unknown" },
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(recoveredUnknown.next_action).toContain("Do not retry automatically");
+
+      const completed = restored.snapshot(completedEndpoint);
+      expect(completed.last_call.state).toBe("response_received");
+      expect(completed.used_for_authority).toBe(false);
+      expect(completed.may_execute).toBe(false);
+    } finally {
+      restored.close();
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it("writes settings updates back to BLUE_TANUKI_ENV_FILE", async () => {

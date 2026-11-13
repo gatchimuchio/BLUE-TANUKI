@@ -6,7 +6,7 @@ import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSche
   McpCallTargetVersionObservationSchema, requireToolOperationDescriptor,
   type OperationPlan, type McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
-import { mcpRuntimeObservationStore } from "./mcp_connection_observation.js";
+import { mcpRuntimeObservationStore, type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 
 export const BLUE_TANUKI_MCP_PROTOCOL_VERSION = "2026-07-28" as const;
 export const BLUE_TANUKI_MCP_TRANSPORT = "streamable_http" as const;
@@ -331,6 +331,7 @@ export interface McpCallToolOptions {
   readonly endpoint?: string | URL;
   readonly fetch?: McpFetch;
   readonly disabled_reason?: "mcp_endpoint_not_configured" | "mcp_endpoint_invalid";
+  readonly runtime_observations?: McpRuntimeObservationStore;
 }
 
 /** A per-invocation MCP client that never forwards credentials or accepts a command endpoint. */
@@ -346,6 +347,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
   }
   if (!endpoint && !configurationError) configurationError = "mcp_endpoint_not_configured";
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis) as McpFetch;
+  const runtimeObservations = options.runtime_observations ?? mcpRuntimeObservationStore;
   const getEndpoint = (): URL => {
     if (configurationError) throw new McpAdapterError(configurationError);
     if (!endpoint) throw new McpAdapterError("mcp_endpoint_not_configured");
@@ -367,7 +369,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       try {
         client = await connect();
         const catalog = await projectMcpCatalog(client, getEndpoint());
-        mcpRuntimeObservationStore.recordCatalogReachable(getEndpoint());
+        runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
         const candidate = parseMcpCallArguments(args);
         assertCandidateMatchesCatalog(candidate, catalog);
@@ -384,7 +386,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           may_execute: false,
         } satisfies McpCallTargetVersionObservation);
       } catch (error) {
-        if (!catalogObserved && endpoint) mcpRuntimeObservationStore.recordPreflightFailed(endpoint);
+        if (!catalogObserved && endpoint) runtimeObservations.recordPreflightFailed(endpoint);
         throw safeMcpFailure(error, "mcp_target_version_unavailable");
       } finally {
         await client?.close().catch(() => undefined);
@@ -408,7 +410,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       try {
         client = await connect(ctx.signal);
         const catalog = await projectMcpCatalog(client, getEndpoint());
-        mcpRuntimeObservationStore.recordCatalogReachable(getEndpoint());
+        runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
         assertCandidateMatchesCatalog(candidate, catalog);
         if (catalog.catalog_digest !== observation.data.catalog_digest ||
@@ -417,7 +419,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         }
         if (ctx.signal?.aborted) throw new McpAdapterError("mcp_call_cancelled_before_dispatch");
         dispatchStarted = true;
-        mcpRuntimeObservationStore.recordDispatchStarted(getEndpoint());
+        runtimeObservations.recordDispatchStarted(getEndpoint());
         const result = await client.callTool({ name: candidate.tool_name, arguments: candidate.arguments });
         if (result.isError === true) throw new McpAdapterError("mcp_server_reported_tool_failure");
         const parsedResult = OperationJsonValueSchema.safeParse(result);
@@ -426,7 +428,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         }
         const resultBytes = Buffer.byteLength(JSON.stringify(parsedResult.data), "utf8");
         if (resultBytes > MAX_TOOL_RESULT_BYTES) throw new McpAdapterError("mcp_tool_result_too_large");
-        mcpRuntimeObservationStore.recordResponseReceived(getEndpoint());
+        runtimeObservations.recordResponseReceived(getEndpoint());
         return {
           schema_version: "blue-tanuki.mcp-call-result.v1",
           connection_digest: candidate.connection_digest,
@@ -442,10 +444,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         };
       } catch (error) {
         if (dispatchStarted) {
-          mcpRuntimeObservationStore.recordOutcomeUnknown(getEndpoint());
+          runtimeObservations.recordOutcomeUnknown(getEndpoint());
           throw new Error("mcp_call_outcome_unknown");
         }
-        if (!catalogObserved && endpoint) mcpRuntimeObservationStore.recordPreflightFailed(endpoint);
+        if (!catalogObserved && endpoint) runtimeObservations.recordPreflightFailed(endpoint);
         throw safeMcpFailure(error, "mcp_call_preflight_failed");
       } finally {
         await client?.close().catch(() => undefined);
@@ -458,13 +460,14 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
 export function registerMcpCallToolFromEnvironment(
   registry: ToolRegistry,
   env: Readonly<Record<string, string | undefined>>,
+  runtimeObservations: McpRuntimeObservationStore = mcpRuntimeObservationStore,
 ): void {
   const endpoint = env.BLUE_TANUKI_MCP_ENDPOINT?.trim();
   if (!endpoint) {
-    registry.register(createMcpCallTool({ disabled_reason: "mcp_endpoint_not_configured" }));
+    registry.register(createMcpCallTool({ disabled_reason: "mcp_endpoint_not_configured", runtime_observations: runtimeObservations }));
     return;
   }
-  registry.register(createMcpCallTool({ endpoint }));
+  registry.register(createMcpCallTool({ endpoint, runtime_observations: runtimeObservations }));
 }
 
 interface NativeMcpCallArguments {
