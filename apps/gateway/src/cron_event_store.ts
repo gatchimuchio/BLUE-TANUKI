@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { parseCronEventResultReceipt, type CronEventResultReceipt } from "./cron_event_result_receipt.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -125,6 +126,18 @@ export class GatewayCronEventStore {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS cron_event_archive_request_digest
         ON cron_event_archive(request_id_digest);
+      CREATE TABLE IF NOT EXISTS cron_event_result_receipt (
+        event_id TEXT PRIMARY KEY,
+        request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+        source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
+        sequence INTEGER NOT NULL CHECK(sequence >= 0),
+        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+        receipt_json TEXT NOT NULL,
+        receipt_digest TEXT NOT NULL CHECK(length(receipt_digest) = 64),
+        observed_at_ms INTEGER NOT NULL CHECK(observed_at_ms >= 0)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS cron_event_result_receipt_request_digest
+        ON cron_event_result_receipt(request_id_digest);
       CREATE TABLE IF NOT EXISTS cron_approval_handoff (
         source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
         sequence INTEGER NOT NULL CHECK(sequence >= 0),
@@ -154,6 +167,8 @@ export class GatewayCronEventStore {
         FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest LIMIT 0`);
       this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
         FROM cron_event_archive LIMIT 0`);
+      this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,receipt_json,receipt_digest,observed_at_ms
+        FROM cron_event_result_receipt LIMIT 0`);
       const handoffRows = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
         request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff`).all() as unknown as CronApprovalHandoffRow[];
       if (handoffRows.length > MAX_CRON_APPROVAL_HANDOFFS) {
@@ -246,9 +261,17 @@ export class GatewayCronEventStore {
     return this.readCurrentCursor(source_digest)?.sequence ?? null;
   }
 
-  settle(event: CronEventIdentity, state: Exclude<CronEventDeliveryState, "dispatching">, now_ms = Date.now()): void {
+  settle(
+    event: CronEventIdentity,
+    state: Exclude<CronEventDeliveryState, "dispatching">,
+    now_ms = Date.now(),
+    completionReceipt?: CronEventResultReceipt,
+  ): void {
     validateEvent(event);
     if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event receipt time");
+    if (completionReceipt && (state !== "handler_returned" || !receiptMatchesEvent(completionReceipt, event))) {
+      throw new Error("cron event completion receipt identity mismatch");
+    }
     const source_digest = sha256(event.source);
     this.transaction(() => {
       const inbox = this.db.prepare(`UPDATE cron_event_inbox SET delivery_state=?,updated_at_ms=?
@@ -260,7 +283,41 @@ export class GatewayCronEventStore {
       if (Number(inbox.changes) !== 1 || Number(outbox.changes) !== 1) {
         throw new Error("cron event settlement does not match the current dispatch");
       }
+      if (completionReceipt) {
+        this.db.prepare(`INSERT INTO cron_event_result_receipt
+          (event_id,request_id_digest,source_digest,sequence,payload_digest,receipt_json,receipt_digest,observed_at_ms)
+          VALUES (?,?,?,?,?,?,?,?)`).run(
+          event.event_id,
+          completionReceipt.request_id_digest,
+          source_digest,
+          event.sequence,
+          event.payload_digest,
+          JSON.stringify(completionReceipt),
+          completionReceipt.receipt_digest,
+          completionReceipt.observed_at_ms,
+        );
+      }
     });
+  }
+
+  /** Read-only access to the digest-only job observation attached during event settlement. */
+  resultReceipt(event: CronEventIdentity): CronEventResultReceipt | null {
+    validateEvent(event);
+    const row = this.db.prepare(`SELECT request_id_digest,source_digest,sequence,payload_digest,receipt_json,receipt_digest,observed_at_ms
+      FROM cron_event_result_receipt WHERE event_id=?`).get(event.event_id) as {
+        request_id_digest: string; source_digest: string; sequence: number; payload_digest: string;
+        receipt_json: string; receipt_digest: string; observed_at_ms: number;
+      } | undefined;
+    if (!row) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(row.receipt_json); } catch { throw new Error("cron event result receipt is invalid"); }
+    const receipt = parseCronEventResultReceipt(parsed);
+    if (!receipt || !receiptMatchesEvent(receipt, event) || row.request_id_digest !== receipt.request_id_digest ||
+        row.source_digest !== sha256(event.source) || row.sequence !== event.sequence || row.payload_digest !== event.payload_digest ||
+        row.receipt_digest !== receipt.receipt_digest || row.observed_at_ms !== receipt.observed_at_ms) {
+      throw new Error("cron event result receipt integrity check failed");
+    }
+    return receipt;
   }
 
   /**
@@ -697,6 +754,13 @@ function validateEvent(event: CronEventIdentity): void {
       event.event_id !== `cron-${sha256(`${sha256(event.source)}\0${event.sequence}`)}`) {
     throw new Error("invalid cron event identity");
   }
+}
+
+function receiptMatchesEvent(receipt: CronEventResultReceipt, event: CronEventIdentity): boolean {
+  const parsed = parseCronEventResultReceipt(receipt);
+  return parsed !== null && parsed.event_id_digest === sha256(event.event_id) &&
+    parsed.request_id_digest === sha256(event.event_id) && parsed.source_digest === sha256(event.source) &&
+    parsed.sequence === event.sequence && parsed.payload_digest === event.payload_digest;
 }
 
 function sha256(value: string): string {

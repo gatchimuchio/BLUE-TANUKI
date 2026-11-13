@@ -12,7 +12,13 @@ import {
   nextDailyFireAtMs,
 } from "../src/cron_channel.js";
 import { GatewayCronEventStore } from "../src/cron_event_store.js";
+import { createCronEventResultReceipt } from "../src/cron_event_result_receipt.js";
 import { InboundRouter } from "@blue-tanuki/channel-base";
+
+function makeTestEventStore(prefix: string): { root: string; store: GatewayCronEventStore } {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  return { root, store: new GatewayCronEventStore(join(root, "private", "cron-events.sqlite")) };
+}
 
 describe("DailyBriefCronChannel snapshot", () => {
   it("exposes the next daily fire time without exposing content", async () => {
@@ -97,6 +103,7 @@ describe("daily wall-clock scheduling", () => {
     vi.useFakeTimers();
     const targetAt = Date.UTC(2026, 4, 9, 7, 0);
     vi.setSystemTime(targetAt - 5 * 60_000);
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-clock-jump-");
     const received: number[] = [];
     const ch = new CronSchedulerChannel({
       tasks: [{
@@ -107,6 +114,7 @@ describe("daily wall-clock scheduling", () => {
         time: "07:00",
         time_zone: "UTC",
       }],
+      event_store: store,
       log: () => undefined,
     });
     try {
@@ -121,6 +129,8 @@ describe("daily wall-clock scheduling", () => {
       });
     } finally {
       await ch.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
@@ -130,6 +140,7 @@ describe("CronSchedulerChannel", () => {
   it("holds scheduled consumers when Cron restore is not cleanly observed or its store is ambiguous", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-metadata-");
     const received: unknown[] = [];
     const heldObservation = {
       operation: "restore",
@@ -256,6 +267,7 @@ describe("CronSchedulerChannel", () => {
   it("fires scheduled messages through trusted cron metadata", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-metadata-");
     const received: unknown[] = [];
     const ch = new CronSchedulerChannel({
       tasks: [
@@ -267,6 +279,7 @@ describe("CronSchedulerChannel", () => {
           interval_ms: 1000,
         },
       ],
+      event_store: store,
       log: () => undefined,
     });
 
@@ -294,6 +307,8 @@ describe("CronSchedulerChannel", () => {
       expect(ch.snapshot()[0]?.last_fire_at_ms).toBe(new Date(2026, 4, 9, 6, 30, 1, 0).getTime());
     } finally {
       await ch.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
@@ -302,12 +317,14 @@ describe("CronSchedulerChannel", () => {
     vi.useFakeTimers();
     const base = Date.UTC(2026, 4, 9, 6, 30);
     vi.setSystemTime(base);
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-schedule-wake-");
     const received: Array<{ task_id: string; session_id: string | undefined }> = [];
     const ch = new CronSchedulerChannel({
       tasks: [
         { id: "wait-task-a", channel: "webchat", target: "local-user", content: "event a", interval_ms: 1000 },
         { id: "wait-task-b", channel: "webchat", target: "local-user", content: "event b", interval_ms: 1000 },
       ],
+      event_store: store,
       log: () => undefined,
     });
 
@@ -338,6 +355,8 @@ describe("CronSchedulerChannel", () => {
       expect(distinctSessions.size).toBe(2);
     } finally {
       await ch.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
@@ -383,6 +402,58 @@ describe("CronSchedulerChannel", () => {
       store.close();
       rmSync(root, { recursive: true, force: true });
       errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stores the digest-only result observation when the Cron handler returns", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base);
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-result-callback-"));
+    const store = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+    const observedEvents: Array<Parameters<typeof createCronEventResultReceipt>[0]> = [];
+    const cron = new CronSchedulerChannel({
+      tasks: [{
+        id: "result-observation",
+        origin: "runtime",
+        channel: "webchat",
+        target: "local-user",
+        content: "private synthetic content",
+        interval_ms: 1000,
+      }],
+      event_store: store,
+      onHandlerReturned: (event) => {
+        observedEvents.push(event);
+        return createCronEventResultReceipt(event, {
+          schema_version: "operation-plan-projection.v1",
+          used_for_authority: false,
+          raw_payload_exposed: false,
+          recovery_refresh_status: "ready",
+          result_memory: { configured: false, status: "not_configured", used_for_authority: false },
+          plans: [],
+        }, {
+          entries: [], chain_valid: true, skipped_count: 0,
+        });
+      },
+      log: () => undefined,
+    });
+
+    try {
+      await cron.start(async () => undefined);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(observedEvents).toHaveLength(1);
+      const receipt = store.resultReceipt(observedEvents[0]!);
+      expect(receipt).toMatchObject({
+        task_outcome_status: "unobserved",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(store.unresolvedEvents()).toEqual([]);
+    } finally {
+      await cron.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });
@@ -530,6 +601,7 @@ describe("CronSchedulerChannel", () => {
   it("uses a dynamic content provider without exposing content in snapshots", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-content-provider-");
     const received: unknown[] = [];
     const fired: unknown[] = [];
     const ch = new CronSchedulerChannel({
@@ -552,6 +624,7 @@ describe("CronSchedulerChannel", () => {
         },
       }),
       onFire: (task) => fired.push(task),
+      event_store: store,
     });
 
     try {
@@ -579,6 +652,8 @@ describe("CronSchedulerChannel", () => {
       expect(JSON.stringify(ch.snapshot())).not.toContain("dynamic google brief");
     } finally {
       await ch.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

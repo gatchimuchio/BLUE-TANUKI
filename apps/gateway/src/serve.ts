@@ -177,6 +177,7 @@ import {
 import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronRestoreObservationRequiresHold, cronSchedulesFromEnv } from "./cron_channel.js";
 import { GatewayCronEventStore } from "./cron_event_store.js";
+import { createCronEventResultReceipt } from "./cron_event_result_receipt.js";
 import { createCronEventResolutionTool } from "./cron_event_resolution_tool.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
@@ -1271,6 +1272,21 @@ async function serveWithOwnerLease(
         request_id: event.event_id,
         ...(delegation ? { delegation } : {}),
       });
+    },
+    onHandlerReturned: (event) => {
+      let operationPlans: unknown;
+      let finalOutputHistory: { entries: readonly unknown[]; chain_valid: boolean; skipped_count: number } = {
+        entries: [], chain_valid: false, skipped_count: 0,
+      };
+      try { operationPlans = hds.getRuntimeSnapshot().operation_plans; } catch { /* preserve an unverified observation */ }
+      try {
+        finalOutputHistory = {
+          entries: completeHistory.replay({ kind: "final_output", request_id: event.event_id }),
+          chain_valid: completeHistory.verify(),
+          skipped_count: completeHistory.skippedCount(),
+        };
+      } catch { /* preserve an unverified observation */ }
+      return createCronEventResultReceipt(event, operationPlans, finalOutputHistory);
     },
   });
   if (cronRestoreObservationRequiresHold(startupRecoveryObservation)) {

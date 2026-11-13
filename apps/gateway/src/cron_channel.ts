@@ -12,6 +12,7 @@ import {
   type CronEventIdentity,
   type GatewayCronEventStore,
 } from "./cron_event_store.js";
+import type { CronEventResultReceipt } from "./cron_event_result_receipt.js";
 
 export interface CronTaskOptions {
   id: string;
@@ -37,6 +38,7 @@ export interface CronSchedulerOptions {
   log?: (line: string) => void;
   now?: () => Date;
   onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
+  onHandlerReturned?: (event: CronEventIdentity) => CronEventResultReceipt;
   content_provider?: CronContentProvider;
   event_store?: GatewayCronEventStore;
 }
@@ -157,6 +159,7 @@ export class CronSchedulerChannel implements InboundChannel {
   private readonly nowFn?: () => Date;
   private handler: InboundHandler | null = null;
   private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
+  private readonly onHandlerReturned?: (event: CronEventIdentity) => CronEventResultReceipt;
   private readonly contentProvider?: CronContentProvider;
   private readonly eventStore?: GatewayCronEventStore;
   private recoveryHold: CronTaskSnapshot["recovery_hold"] = null;
@@ -167,6 +170,7 @@ export class CronSchedulerChannel implements InboundChannel {
     this.logLine = opts.log;
     this.nowFn = opts.now;
     this.onFire = opts.onFire;
+    this.onHandlerReturned = opts.onHandlerReturned;
     this.contentProvider = opts.content_provider;
     this.eventStore = opts.event_store;
     for (const task of normalizeCronTasks(opts.tasks)) {
@@ -427,7 +431,8 @@ export class CronSchedulerChannel implements InboundChannel {
       this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
       try {
         await handler(inbound);
-        eventStore.settle(event, "handler_returned");
+        const completionReceipt = this.onHandlerReturned?.(event);
+        eventStore.settle(event, "handler_returned", completionReceipt?.observed_at_ms, completionReceipt);
       } catch (error) {
         eventStore.settle(event, "outcome_unknown");
         throw error;

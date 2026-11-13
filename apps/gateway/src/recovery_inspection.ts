@@ -28,6 +28,7 @@ import {
   type CronEventRequestMatch,
   type CronEventRecoveryInspection,
   type CronEventRecoveryLedgerInspection,
+  type CronEventResultReceiptSummary,
   type CronEventRecoveryReason,
   type CronEventRecoveryStatus,
 } from "./cron_event_recovery_inspection.js";
@@ -157,9 +158,16 @@ export interface OperationPlanBrokerCorrelation {
     | "cron_unverified"
     | "plan_binding_unverified";
   readonly cron_event_delivery_state: CronEventDeliveryState | null;
+  readonly cron_result_receipt_status: "not_applicable" | "verified" | "not_recorded" | "not_available" | "unverified" | "event_unmatched";
+  readonly cron_result_receipt_digest: string | null;
+  readonly cron_task_outcome_status: CronEventResultReceiptSummary["task_outcome_status"] | null;
+  readonly cron_result_memory_receipt_count: number | null;
+  readonly cron_result_memory_receipt_set_digest: string | null;
+  readonly cron_final_output_status: CronEventResultReceiptSummary["final_output_status"] | null;
+  readonly cron_final_output_digest: string | null;
 }
 
-export type RecoveryPlanDependencyCategory = "operation_plan" | "broker" | "delivery" | "memory" | "cron_approval" | "cron_event";
+export type RecoveryPlanDependencyCategory = "operation_plan" | "broker" | "delivery" | "memory" | "cron_approval" | "cron_event" | "cron_result";
 
 /** Digest-only plan evidence; this is not a job recovery or restore authorization. */
 export interface RecoveryPlanDependencyScope extends OperationPlanRecoveryPlanSummary {
@@ -201,7 +209,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 14;
+  readonly schema_version: 15;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -272,6 +280,13 @@ export interface GatewayRecoveryOperatorProjection {
     readonly cron_approval_correlation: OperationPlanBrokerCorrelation["cron_approval_correlation"];
     readonly cron_event_correlation: OperationPlanBrokerCorrelation["cron_event_correlation"];
     readonly cron_event_delivery_state: CronEventDeliveryState | null;
+    readonly cron_result_receipt_status: OperationPlanBrokerCorrelation["cron_result_receipt_status"];
+    readonly cron_result_receipt_digest: string | null;
+    readonly cron_task_outcome_status: OperationPlanBrokerCorrelation["cron_task_outcome_status"];
+    readonly cron_result_memory_receipt_count: number | null;
+    readonly cron_result_memory_receipt_set_digest: string | null;
+    readonly cron_final_output_status: OperationPlanBrokerCorrelation["cron_final_output_status"];
+    readonly cron_final_output_digest: string | null;
   }[];
   readonly omitted_operation_plan_correlation_count: number;
   readonly plan_dependency_scopes: readonly RecoveryPlanDependencyScope[];
@@ -321,8 +336,11 @@ const CRON_EVENT_CORRELATION_RESIDUALS = new Set<OperationPlanBrokerCorrelation[
   "ambiguous",
 ]);
 const CRON_EVENT_DELIVERY_STATES: readonly CronEventDeliveryState[] = ["dispatching", "handler_returned", "outcome_unknown"];
+const CRON_RESULT_RECEIPT_STATUSES: readonly OperationPlanBrokerCorrelation["cron_result_receipt_status"][] = [
+  "not_applicable", "verified", "not_recorded", "not_available", "unverified", "event_unmatched",
+];
 const PLAN_DEPENDENCY_CATEGORIES: readonly RecoveryPlanDependencyCategory[] = [
-  "operation_plan", "broker", "delivery", "memory", "cron_approval", "cron_event",
+  "operation_plan", "broker", "delivery", "memory", "cron_approval", "cron_event", "cron_result",
 ];
 const RECOVERY_LEDGER_REASONS: readonly NonNullable<RecoveryLedgerBoundaryObservation["reason"]>[] = [
   "disk_full", "write_failed", "sync_failed", "schema_mismatch", "ledger_corrupt", "projection_mismatch",
@@ -422,12 +440,36 @@ function projectOperatorOperationPlanCorrelations(
     const cronEventDeliveryState = value.cron_event_delivery_state === null
       ? null
       : fixedEnum(value.cron_event_delivery_state, CRON_EVENT_DELIVERY_STATES);
+    const cronResultReceiptStatus = fixedEnum(value.cron_result_receipt_status, CRON_RESULT_RECEIPT_STATUSES);
+    const cronResultReceiptDigest = value.cron_result_receipt_digest === null ? null : fixedDigest(value.cron_result_receipt_digest);
+    const cronTaskOutcomeStatus = value.cron_task_outcome_status === null ? null
+      : fixedEnum(value.cron_task_outcome_status, ["achieved", "in_progress", "held", "unobserved", "unverified"] as const);
+    const cronResultMemoryReceiptCount = value.cron_result_memory_receipt_count === null ? null : fixedCount(value.cron_result_memory_receipt_count);
+    const cronResultMemoryReceiptSetDigest = value.cron_result_memory_receipt_set_digest === null ? null
+      : fixedDigest(value.cron_result_memory_receipt_set_digest);
+    const cronFinalOutputStatus = value.cron_final_output_status === null ? null
+      : fixedEnum(value.cron_final_output_status, ["observed", "not_observed", "not_observed_due_to_limit", "unverified"] as const);
+    const cronFinalOutputDigest = value.cron_final_output_digest === null ? null : fixedDigest(value.cron_final_output_digest);
     if (!planIdDigest || !stepIdDigest || !commandIdDigest ||
         (value.command_key_digest !== null && !commandKeyDigest) || !status || !bindingIntegrity ||
         (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation ||
         (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || !memoryCorrelation || !cronApprovalCorrelation ||
         !cronEventCorrelation || (value.cron_event_delivery_state !== null && !cronEventDeliveryState) ||
-        (cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null)) continue;
+        (cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null) || !cronResultReceiptStatus ||
+        (value.cron_result_receipt_digest !== null && !cronResultReceiptDigest) ||
+        (value.cron_task_outcome_status !== null && !cronTaskOutcomeStatus) ||
+        (value.cron_result_memory_receipt_count !== null && cronResultMemoryReceiptCount === null) ||
+        (value.cron_result_memory_receipt_set_digest !== null && !cronResultMemoryReceiptSetDigest) ||
+        (value.cron_final_output_status !== null && !cronFinalOutputStatus) ||
+        (value.cron_final_output_digest !== null && !cronFinalOutputDigest) ||
+        (cronResultReceiptStatus === "verified") !== (cronResultReceiptDigest !== null) ||
+        (cronResultReceiptStatus === "verified") !== (cronTaskOutcomeStatus !== null) ||
+        (cronResultReceiptStatus === "verified") !== (cronResultMemoryReceiptCount !== null) ||
+        (cronResultReceiptStatus === "verified") !== (cronFinalOutputStatus !== null) ||
+        (cronResultMemoryReceiptCount !== null && (cronResultMemoryReceiptCount === 0) !== (cronResultMemoryReceiptSetDigest === null)) ||
+        (cronFinalOutputStatus === "observed") !== (cronFinalOutputDigest !== null) ||
+        (cronResultReceiptStatus === "not_applicable") !== (cronEventCorrelation === "not_applicable") ||
+        (cronResultReceiptStatus === "verified" && (cronEventCorrelation !== "matched" || cronEventDeliveryState !== "handler_returned"))) continue;
     rows.push({
       plan_id_digest: planIdDigest,
       step_id_digest: stepIdDigest,
@@ -443,6 +485,13 @@ function projectOperatorOperationPlanCorrelations(
       cron_approval_correlation: cronApprovalCorrelation,
       cron_event_correlation: cronEventCorrelation,
       cron_event_delivery_state: cronEventDeliveryState,
+      cron_result_receipt_status: cronResultReceiptStatus,
+      cron_result_receipt_digest: cronResultReceiptDigest,
+      cron_task_outcome_status: cronTaskOutcomeStatus,
+      cron_result_memory_receipt_count: cronResultMemoryReceiptCount,
+      cron_result_memory_receipt_set_digest: cronResultMemoryReceiptSetDigest,
+      cron_final_output_status: cronFinalOutputStatus,
+      cron_final_output_digest: cronFinalOutputDigest,
     });
   }
   return { rows, omitted: values.length - rows.length };
@@ -456,6 +505,7 @@ type RecoveryPlanDependencyCorrelation = Pick<OperationPlanBrokerCorrelation,
   | "memory_correlation"
   | "cron_approval_correlation"
   | "cron_event_correlation"
+  | "cron_result_receipt_status"
 >;
 
 /** Group plan evidence without upgrading an observed plan to a recoverable job or restore point. */
@@ -523,12 +573,19 @@ export function buildRecoveryPlanDependencyScopes(
         // Older events may have been replaced by a later cursor; absence is unobserved, not proof of no event.
         unobserved.add("cron_event");
       }
+      if (row.cron_result_receipt_status === "verified" || row.cron_result_receipt_status === "not_applicable") {
+        // The completion observation was integrity-checked, or no Cron result applies.
+      } else if (row.cron_result_receipt_status === "unverified") {
+        residual.add("cron_result");
+      } else {
+        unobserved.add("cron_result");
+      }
     }
 
     const omittedBindingCount = Math.max(plan.omitted_binding_count, plan.binding_count - rows.length);
     const expectedObservedBindingCount = Math.max(0, plan.binding_count - omittedBindingCount);
     if (rows.length !== expectedObservedBindingCount || omittedBindingCount > 0) {
-      for (const category of ["broker", "delivery", "memory", "cron_approval", "cron_event"] as const) unobserved.add(category);
+      for (const category of ["broker", "delivery", "memory", "cron_approval", "cron_event", "cron_result"] as const) unobserved.add(category);
     }
 
     const status: RecoveryPlanDependencyScope["status"] = residual.size > 0
@@ -734,6 +791,12 @@ function projectCronEventSummary(value: unknown): {
     omitted_approval_handoff_count: null,
     pending_approval_handoff_count: null,
     interrupted_approval_handoff_count: null,
+    result_receipt_available: null,
+    result_receipt_count: null,
+    verified_result_receipt_count: null,
+    unverified_result_receipt_count: null,
+    omitted_result_receipt_count: null,
+    orphan_result_receipt_count: null,
     residual_count: 1,
   };
   if (!isRecord(value)) return { summary: unknown, valid: false };
@@ -744,6 +807,8 @@ function projectCronEventSummary(value: unknown): {
     "archived_event_count", "verified_archived_event_count", "unverified_archived_event_count", "omitted_archived_event_count",
     "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count",
     "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count",
+    "result_receipt_count", "verified_result_receipt_count", "unverified_result_receipt_count",
+    "omitted_result_receipt_count", "orphan_result_receipt_count",
   ] as const;
   const counts = Object.fromEntries(countKeys.map((key) => {
     const item = value[key];
@@ -753,18 +818,25 @@ function projectCronEventSummary(value: unknown): {
     Pick<Omit<CronEventRecoveryInspection, "used_for_authority" | "status" | "reason" | "residual_count">, (typeof countKeys)[number]>;
   const residualCount = value.residual_count;
   const historyAvailable = value.event_history_available;
+  const resultReceiptAvailable = value.result_receipt_available;
   if (!status || (value.reason !== null && !reason) || value.used_for_authority !== false ||
       !Number.isSafeInteger(residualCount) || (residualCount as number) < 0 ||
       countKeys.some((key) => counts[key] === undefined) ||
-      (historyAvailable !== null && typeof historyAvailable !== "boolean")) return { summary: unknown, valid: false };
+      (historyAvailable !== null && typeof historyAvailable !== "boolean") ||
+      (resultReceiptAvailable !== null && typeof resultReceiptAvailable !== "boolean")) return { summary: unknown, valid: false };
   if (["unavailable", "schema_mismatch", "corrupt"].includes(status)) {
-    const countsUnknown = countKeys.every((key) => counts[key] === null) && historyAvailable === null;
+    const countsUnknown = countKeys.every((key) => counts[key] === null) && historyAvailable === null && resultReceiptAvailable === null;
     const expectedReason = status === "unavailable" ? "store_unavailable"
       : status === "schema_mismatch" ? "schema_mismatch" : "ledger_corrupt";
     if (!countsUnknown || (residualCount as number) < 1 || reason !== expectedReason) return { summary: unknown, valid: false };
-    return { summary: { status, reason, ...safeCounts, event_history_available: null, residual_count: residualCount as number }, valid: true };
+    return { summary: { status, reason, ...safeCounts, event_history_available: null, result_receipt_available: null, residual_count: residualCount as number }, valid: true };
   }
-  const numeric = countKeys.every((key) => typeof counts[key] === "number") && typeof historyAvailable === "boolean";
+  const baseCountKeys = countKeys.filter((key) => !key.includes("result_receipt")) as readonly (typeof countKeys)[number][];
+  const receiptCountKeys = countKeys.filter((key) => key.includes("result_receipt")) as readonly (typeof countKeys)[number][];
+  const numeric = baseCountKeys.every((key) => typeof counts[key] === "number") && typeof historyAvailable === "boolean" &&
+    typeof resultReceiptAvailable === "boolean" && (resultReceiptAvailable
+      ? receiptCountKeys.every((key) => typeof counts[key] === "number")
+      : receiptCountKeys.every((key) => counts[key] === null));
   if (!numeric) return { summary: unknown, valid: false };
   const cursorCount = counts.cursor_count as number;
   const verifiedCursorCount = counts.verified_cursor_count as number;
@@ -778,21 +850,28 @@ function projectCronEventSummary(value: unknown): {
   const verifiedApprovalCount = counts.verified_approval_handoff_count as number;
   const unverifiedApprovalCount = counts.unverified_approval_handoff_count as number;
   const omittedApprovalCount = counts.omitted_approval_handoff_count as number;
+  const resultReceiptCount = resultReceiptAvailable ? counts.result_receipt_count as number : 0;
+  const verifiedResultReceiptCount = resultReceiptAvailable ? counts.verified_result_receipt_count as number : 0;
+  const unverifiedResultReceiptCount = resultReceiptAvailable ? counts.unverified_result_receipt_count as number : 0;
+  const omittedResultReceiptCount = resultReceiptAvailable ? counts.omitted_result_receipt_count as number : 0;
   const expectedResidualCount = unverifiedCursorCount + omittedCursorCount + (counts.unresolved_cursor_count as number) +
     unverifiedArchivedEventCount + omittedArchivedEventCount + (counts.orphan_outbox_count as number) +
     unverifiedApprovalCount + omittedApprovalCount +
-    (counts.pending_approval_handoff_count as number) + (counts.interrupted_approval_handoff_count as number);
+    (counts.pending_approval_handoff_count as number) + (counts.interrupted_approval_handoff_count as number) +
+    unverifiedResultReceiptCount + omittedResultReceiptCount;
   const consistent = verifiedCursorCount + unverifiedCursorCount + omittedCursorCount === cursorCount &&
     verifiedArchivedEventCount + unverifiedArchivedEventCount + omittedArchivedEventCount === archivedEventCount &&
     verifiedApprovalCount + unverifiedApprovalCount + omittedApprovalCount === approvalCount &&
+    (!resultReceiptAvailable || verifiedResultReceiptCount + unverifiedResultReceiptCount + omittedResultReceiptCount === resultReceiptCount) &&
     Number.isSafeInteger(expectedResidualCount) && expectedResidualCount === residualCount &&
     ((status === "verified" && residualCount === 0) || (status === "residuals_present" && residualCount > 0)) &&
     (status !== "verified" || reason === null) &&
     (status !== "residuals_present" || reason === null || reason === "ledger_corrupt" || reason === "outbox_mismatch") &&
-    (reason !== "ledger_corrupt" || unverifiedCursorCount + unverifiedArchivedEventCount + unverifiedApprovalCount > 0) &&
+    (reason !== "ledger_corrupt" || unverifiedCursorCount + unverifiedArchivedEventCount + unverifiedApprovalCount + unverifiedResultReceiptCount > 0) &&
     (reason !== "outbox_mismatch" || (counts.orphan_outbox_count as number) > 0);
   if (!consistent) return { summary: unknown, valid: false };
-  return { summary: { status, reason, ...safeCounts, event_history_available: historyAvailable as boolean, residual_count: residualCount as number }, valid: true };
+  return { summary: { status, reason, ...safeCounts, event_history_available: historyAvailable as boolean,
+    result_receipt_available: resultReceiptAvailable as boolean, residual_count: residualCount as number }, valid: true };
 }
 
 function projectDocumentOrganizationCheckpointSummary(value: unknown): {
@@ -1137,7 +1216,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     unlinked_document_checkpoint_count: null,
   };
   return {
-    schema_version: 14,
+    schema_version: 15,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -1340,6 +1419,8 @@ function inspectGatewayRecoveryStateFromPaths(
     omitted_archived_event_count: null, orphan_outbox_count: null,
     approval_handoff_count: null, verified_approval_handoff_count: null, unverified_approval_handoff_count: null,
     omitted_approval_handoff_count: null, pending_approval_handoff_count: null, interrupted_approval_handoff_count: null,
+    result_receipt_available: null, result_receipt_count: null, verified_result_receipt_count: null,
+    unverified_result_receipt_count: null, omitted_result_receipt_count: null, orphan_result_receipt_count: null,
     residual_count: 1, used_for_authority: false,
   };
   const j = paths?.jPath
@@ -1659,8 +1740,46 @@ export function correlateOperationPlanBindings(
       cron_approval_correlation: correlateCronApprovalHandoff(binding, cronEvents, cronApprovalMatches),
       cron_event_correlation: correlateCronEventRequest(binding, cronEvents, cronEventMatches),
       cron_event_delivery_state: correlateCronEventDeliveryState(binding, cronEvents, cronEventMatches),
+      ...correlateCronResultReceipt(binding, cronEvents, cronEventMatches),
     };
   });
+}
+
+function correlateCronResultReceipt(
+  binding: OperationPlanRecoveryInspection["bindings"][number],
+  cronEvents: CronEventRecoveryInspection,
+  matches: readonly CronEventRequestMatch[],
+): Pick<OperationPlanBrokerCorrelation,
+  "cron_result_receipt_status" | "cron_result_receipt_digest" | "cron_task_outcome_status" |
+  "cron_result_memory_receipt_count" | "cron_result_memory_receipt_set_digest" | "cron_final_output_status" | "cron_final_output_digest"> {
+  const unavailable = (status: OperationPlanBrokerCorrelation["cron_result_receipt_status"]) => ({
+    cron_result_receipt_status: status,
+    cron_result_receipt_digest: null,
+    cron_task_outcome_status: null,
+    cron_result_memory_receipt_count: null,
+    cron_result_memory_receipt_set_digest: null,
+    cron_final_output_status: null,
+    cron_final_output_digest: null,
+  });
+  if (!binding.cron_origin) return unavailable("not_applicable");
+  if (binding.integrity !== "verified" || !binding.request_id_digest || !HEX_DIGEST.test(binding.request_id_digest)) {
+    return unavailable("unverified");
+  }
+  if (["unavailable", "schema_mismatch", "corrupt"].includes(cronEvents.status)) return unavailable("not_available");
+  const match = matches.find((item) => item.request_id_digest === binding.request_id_digest);
+  if (!match || match.status !== "matched") return unavailable("event_unmatched");
+  if (match.result_receipt_status === "not_available") return unavailable("not_available");
+  if (match.result_receipt_status === "not_recorded") return unavailable("not_recorded");
+  if (match.result_receipt_status !== "verified" || !match.result_receipt) return unavailable("unverified");
+  return {
+    cron_result_receipt_status: "verified",
+    cron_result_receipt_digest: match.result_receipt.receipt_digest,
+    cron_task_outcome_status: match.result_receipt.task_outcome_status,
+    cron_result_memory_receipt_count: match.result_receipt.result_memory_receipt_count,
+    cron_result_memory_receipt_set_digest: match.result_receipt.result_memory_receipt_set_digest,
+    cron_final_output_status: match.result_receipt.final_output_status,
+    cron_final_output_digest: match.result_receipt.latest_final_output_digest,
+  };
 }
 
 function correlateCronEventRequest(

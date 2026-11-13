@@ -3204,7 +3204,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 14,
+            schema_version: 15,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -3236,6 +3236,12 @@ describe("WebChatChannel — Recovery surface", () => {
               omitted_approval_handoff_count: 0,
               pending_approval_handoff_count: 0,
               interrupted_approval_handoff_count: 0,
+              result_receipt_available: true,
+              result_receipt_count: 0,
+              verified_result_receipt_count: 0,
+              unverified_result_receipt_count: 0,
+              omitted_result_receipt_count: 0,
+              orphan_result_receipt_count: 0,
               residual_count: 0,
             },
             document_organization_checkpoint_summary: {
@@ -3286,6 +3292,13 @@ describe("WebChatChannel — Recovery surface", () => {
               cron_approval_correlation: "cron_unverified",
               cron_event_correlation: "not_in_retained_event_history",
               cron_event_delivery_state: null,
+              cron_result_receipt_status: "event_unmatched",
+              cron_result_receipt_digest: null,
+              cron_task_outcome_status: null,
+              cron_result_memory_receipt_count: null,
+              cron_result_memory_receipt_set_digest: null,
+              cron_final_output_status: null,
+              cron_final_output_digest: null,
             }],
             omitted_operation_plan_correlation_count: 0,
             plan_dependency_scopes: [{
@@ -3299,7 +3312,7 @@ describe("WebChatChannel — Recovery surface", () => {
               residual_binding_count: 1,
               status: "residuals_present",
               residual_dependencies: ["operation_plan", "broker"],
-              unobserved_dependencies: ["delivery", "memory", "cron_approval", "cron_event"],
+              unobserved_dependencies: ["delivery", "memory", "cron_approval", "cron_event", "cron_result"],
             }],
             omitted_plan_dependency_scope_count: 0,
             request_scope_correlation: {
@@ -3421,7 +3434,7 @@ describe("WebChatChannel — Recovery surface", () => {
       expect(inspection.status).toBe(200);
       expect(inspection.headers.get("cache-control")).toBe("no-store");
       expect(JSON.parse(inspection.text)).toMatchObject({
-        schema_version: 14,
+        schema_version: 15,
         surface: "recovery_inspection_operator",
         mode: "read_only",
         status: "residuals_present",

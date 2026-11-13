@@ -2,6 +2,29 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 Cron result observation receiptからJ・M回復consumer
+
+主語はBLUE Gateway Cron handler返却と、同一request IDに束縛されたJ Operation Plan task outcome、current revisionのM receipt参照、CompleteHistory最終出力digest、およびread-only Recovery Inspector／Control Centerである。目的は、handler返却だけを成功と見なさず、検証可能な状態をdigest-only receiptで保持し、再起動後の回復consumerへ渡すこと。W-WORK／E01.01全体の完了ではない。
+
+新しい`cron_event_result_receipt` SQLite tableにsettleと同じtransactionでreceiptを保存する。readyなJ snapshotを特定event request IDへ照合し、一意なplanではplan/revision digest、`task_outcome`、利用可能なcurrent-revision M receipt digest集合を観測する。J refreshが未完了ならoutcomeを未検証、M未設定・未観測・利用不能ならreceipt不在を確認済みと扱わない。最終出力は検証済みCompleteHistory entryの`rendered_output_digest`だけを使い、chain不正・履歴上限・未観測を区別する。event/source/payload/outputのraw内容は永続化しない。新規M writer、実結果推測、承認復元、自動再送、外部作用は追加していない。`handler_returned`はtransport/handler lifecycleであり、J outcomeの`achieved`とは別概念である。
+
+Recovery Inspectorは結果receiptのcanonical shape／digest、台帳row、event identity、`handler_returned`状態を検証してOperation Plan bindingと照合する。上限でevent inventoryを見られない時にorphanやledger corruptionと誤判定しない。operator projection schema 15、Cron result dependency category、Control Center validatorも更新。旧schemaの結果table欠落は`not_available`／未観測として扱い、DBをrepairしない。
+
+| QE_BUILD検査 | 結果 |
+|---|---|
+| Gateway／WebChat typecheck | PASS。 |
+| Gateway／WebChat package build | PASS。 |
+| Cron receipt builder、store、Operation Plan recovery、Recovery Inspector targeted tests | PASS：5 files／61 tests。receiptのdigest-only／非権威、J/M未確定時の未観測化、row integrity、current／historical event correlation、旧台帳、不変のread-only検査を確認。 |
+| Cron channel focused tests | PASS：18/18。result observation callback後のatomic receipt保存、exception時unknownを確認。現行必須event storeが未設定だった既存4 fixtureを更新し、仕様どおりのstore使用後に同file全件PASS。 |
+| Gateway focused tests合計 | PASS：6 files／79 tests。 |
+| WebChat Recovery surface test | PASS：1/1（same file 132件skip）。schema 15とresult-receipt項目を含むControl Center向けAPI応答を確認。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底監査は正本7、例外4、例外資産74、Markdown197、既存移行負債75件。 |
+| 全suite／実Cron業務／実provider／外部receipt／5OS all-up／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+生成資産：test-owned Temp root／SQLiteはcleanup済み。ignored Gateway／WebChat `dist`は開発用build outputとして保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`、D4-Pocket／MINIDORAを変更していない。credential、owner data、external artifactなし。
+
+作業開始local／origin／GitHub main=`0f2842075d0d999c6ea55dbb122c085623d7c7c8`、recovery current／previous=`0f2842075d0d999c6ea55dbb122c085623d7c7c8`／`6a92af5208d8bc1408f8282c102eec6d894585e1`。最終main／remote／二世代refはcloseoutで再照合する。この観測consumer限定を`WIRED`とし、Mへの新規書込みや最終仕事成功、W-WORK全域、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。
+
 ## 2026-11-13 — QE_BUILD rev5.0 Cron historical event recovery correlation
 
 主語はGateway Cron event storeのcurrent cursorと過去event receipt、それをconsumerとするread-only recovery inspector／Operation Plan correlation／WebChat Control Centerである。目的は高水位cursorの重複・順序保護を維持しつつ、later eventにより過去event IDが消えても、計画と配送状態のdigest-only相関を回復経路へ残すこと。関係索引はW-WORK、E01.01「永続jobと重複event」。親成果・索引全体の完了ではない。

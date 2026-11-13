@@ -4366,7 +4366,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const documentCheckpointSource = source.document_organization_checkpoint_summary && typeof source.document_organization_checkpoint_summary === "object" ? source.document_organization_checkpoint_summary : {};
         const cronStatus = recoveryInspectionEnum(cronSource.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronReason = cronSource.reason === null ? null : recoveryInspectionEnum(cronSource.reason, ["store_unavailable", "schema_mismatch", "ledger_corrupt", "outbox_mismatch"]);
-        const cronCountKeys = ["cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count", "archived_event_count", "verified_archived_event_count", "unverified_archived_event_count", "omitted_archived_event_count", "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count", "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count"];
+        const cronCountKeys = ["cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count", "archived_event_count", "verified_archived_event_count", "unverified_archived_event_count", "omitted_archived_event_count", "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count", "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count", "result_receipt_count", "verified_result_receipt_count", "unverified_result_receipt_count", "omitted_result_receipt_count", "orphan_result_receipt_count"];
         const cronCounts = {};
         let cronCountsValid = true;
         cronCountKeys.forEach(function (key) {
@@ -4375,23 +4375,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           else cronCountsValid = false;
         });
         const cronHistoryAvailable = cronSource.event_history_available;
+        const cronResultReceiptAvailable = cronSource.result_receipt_available;
         if (cronHistoryAvailable !== null && typeof cronHistoryAvailable !== "boolean") cronCountsValid = false;
+        if (cronResultReceiptAvailable !== null && typeof cronResultReceiptAvailable !== "boolean") cronCountsValid = false;
         const cronResidualCount = recoveryInspectionCount(cronSource.residual_count);
         const cronUnavailable = ["unavailable", "schema_mismatch", "corrupt"].includes(cronStatus);
         const cronExpectedUnavailableReason = cronStatus === "unavailable" ? "store_unavailable" : cronStatus === "schema_mismatch" ? "schema_mismatch" : "ledger_corrupt";
-        const cronCountsUnknown = cronCountKeys.every(function (key) { return cronCounts[key] === null; }) && cronHistoryAvailable === null;
-        const cronCountsNumeric = cronCountKeys.every(function (key) { return Number.isSafeInteger(cronCounts[key]) && cronCounts[key] >= 0; }) && typeof cronHistoryAvailable === "boolean";
-        const cronExpectedResiduals = cronCounts.unverified_cursor_count + cronCounts.omitted_cursor_count + cronCounts.unresolved_cursor_count + cronCounts.unverified_archived_event_count + cronCounts.omitted_archived_event_count + cronCounts.orphan_outbox_count + cronCounts.unverified_approval_handoff_count + cronCounts.omitted_approval_handoff_count + cronCounts.pending_approval_handoff_count + cronCounts.interrupted_approval_handoff_count;
+        const cronResultCountKeys = ["result_receipt_count", "verified_result_receipt_count", "unverified_result_receipt_count", "omitted_result_receipt_count", "orphan_result_receipt_count"];
+        const cronBaseCountKeys = cronCountKeys.filter(function (key) { return cronResultCountKeys.indexOf(key) < 0; });
+        const cronCountsUnknown = cronCountKeys.every(function (key) { return cronCounts[key] === null; }) && cronHistoryAvailable === null && cronResultReceiptAvailable === null;
+        const cronCountsNumeric = cronBaseCountKeys.every(function (key) { return Number.isSafeInteger(cronCounts[key]) && cronCounts[key] >= 0; }) && typeof cronHistoryAvailable === "boolean" && typeof cronResultReceiptAvailable === "boolean" && (cronResultReceiptAvailable
+          ? cronResultCountKeys.every(function (key) { return Number.isSafeInteger(cronCounts[key]) && cronCounts[key] >= 0; })
+          : cronResultCountKeys.every(function (key) { return cronCounts[key] === null; }));
+        const cronExpectedResiduals = cronCounts.unverified_cursor_count + cronCounts.omitted_cursor_count + cronCounts.unresolved_cursor_count + cronCounts.unverified_archived_event_count + cronCounts.omitted_archived_event_count + cronCounts.orphan_outbox_count + cronCounts.unverified_approval_handoff_count + cronCounts.omitted_approval_handoff_count + cronCounts.pending_approval_handoff_count + cronCounts.interrupted_approval_handoff_count + (cronResultReceiptAvailable ? cronCounts.unverified_result_receipt_count + cronCounts.omitted_result_receipt_count : 0);
         const cronSummaryValid = cronStatus !== "unknown" && cronCountsValid && Number.isSafeInteger(cronSource.residual_count) && cronSource.residual_count >= 0 &&
           (cronUnavailable
             ? cronCountsUnknown && cronResidualCount > 0 && cronReason === cronExpectedUnavailableReason
             : cronCountsNumeric && cronCounts.verified_cursor_count + cronCounts.unverified_cursor_count + cronCounts.omitted_cursor_count === cronCounts.cursor_count &&
               cronCounts.verified_archived_event_count + cronCounts.unverified_archived_event_count + cronCounts.omitted_archived_event_count === cronCounts.archived_event_count &&
               cronCounts.verified_approval_handoff_count + cronCounts.unverified_approval_handoff_count + cronCounts.omitted_approval_handoff_count === cronCounts.approval_handoff_count &&
+              (!cronResultReceiptAvailable || cronCounts.verified_result_receipt_count + cronCounts.unverified_result_receipt_count + cronCounts.omitted_result_receipt_count === cronCounts.result_receipt_count) &&
               cronExpectedResiduals === cronResidualCount && (cronStatus === "verified" ? cronResidualCount === 0 : cronResidualCount > 0) &&
               (cronStatus !== "verified" || cronReason === null) &&
               (cronStatus !== "residuals_present" || cronReason === null || cronReason === "ledger_corrupt" || cronReason === "outbox_mismatch") &&
-              (cronReason !== "ledger_corrupt" || cronCounts.unverified_cursor_count + cronCounts.unverified_archived_event_count + cronCounts.unverified_approval_handoff_count > 0) &&
+              (cronReason !== "ledger_corrupt" || cronCounts.unverified_cursor_count + cronCounts.unverified_archived_event_count + cronCounts.unverified_approval_handoff_count + (cronResultReceiptAvailable ? cronCounts.unverified_result_receipt_count : 0) > 0) &&
               (cronReason !== "outbox_mismatch" || cronCounts.orphan_outbox_count > 0));
         const cronLedgerStatus = recoveryInspectionLedgerStatus(ledgers.cron_events, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const documentCheckpointStatus = recoveryInspectionEnum(documentCheckpointSource.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
@@ -4474,7 +4481,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }).filter(function (item) { return item !== null; });
         if (operationPlanSchemaResiduals.length !== (schemaResidualSource || []).length) schemaResidualsValid = false;
         const omittedOperationPlanSchemaResidualCount = recoveryInspectionCount(source.omitted_operation_plan_schema_residual_count);
-        const initialBoundaryOk = source.schema_version === 14 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && unboundExecutionEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null && schemaResidualsValid && omittedOperationPlanSchemaResidualCount === 0;
+        const initialBoundaryOk = source.schema_version === 15 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && unboundExecutionEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null && schemaResidualsValid && omittedOperationPlanSchemaResidualCount === 0;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -4512,7 +4519,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const cronApprovalCorrelation = recoveryInspectionEnum(value.cron_approval_correlation, ["not_recorded", "pending", "interrupted", "resolved", "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified"]);
               const cronEventCorrelation = recoveryInspectionEnum(value.cron_event_correlation, ["not_applicable", "matched", "not_in_current_cursor", "not_in_retained_event_history", "not_observed_due_to_limit", "ambiguous", "cron_unverified", "plan_binding_unverified"]);
               const cronEventDeliveryState = value.cron_event_delivery_state === null ? null : recoveryInspectionEnum(value.cron_event_delivery_state, ["dispatching", "handler_returned", "outcome_unknown"]);
-              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.command_key_digest !== null && !commandKeyDigest) || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown" || cronApprovalCorrelation === "unknown" || cronEventCorrelation === "unknown" || (value.cron_event_delivery_state !== null && cronEventDeliveryState === "unknown") || ((cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null))) return null;
+              const cronResultReceiptStatus = recoveryInspectionEnum(value.cron_result_receipt_status, ["not_applicable", "verified", "not_recorded", "not_available", "unverified", "event_unmatched"]);
+              const cronResultReceiptDigest = value.cron_result_receipt_digest === null ? null : recoveryInspectionDigest(value.cron_result_receipt_digest);
+              const cronTaskOutcomeStatus = value.cron_task_outcome_status === null ? null : recoveryInspectionEnum(value.cron_task_outcome_status, ["achieved", "in_progress", "held", "unobserved", "unverified"]);
+              const cronResultMemoryReceiptCount = value.cron_result_memory_receipt_count === null ? null : value.cron_result_memory_receipt_count;
+              const cronResultMemoryReceiptSetDigest = value.cron_result_memory_receipt_set_digest === null ? null : recoveryInspectionDigest(value.cron_result_memory_receipt_set_digest);
+              const cronFinalOutputStatus = value.cron_final_output_status === null ? null : recoveryInspectionEnum(value.cron_final_output_status, ["observed", "not_observed", "not_observed_due_to_limit", "unverified"]);
+              const cronFinalOutputDigest = value.cron_final_output_digest === null ? null : recoveryInspectionDigest(value.cron_final_output_digest);
+              const cronReceiptVerified = cronResultReceiptStatus === "verified";
+              const cronReceiptFieldsPresent = cronResultReceiptDigest !== null && cronTaskOutcomeStatus !== null && Number.isSafeInteger(cronResultMemoryReceiptCount) && cronResultMemoryReceiptCount >= 0 && cronFinalOutputStatus !== null;
+              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.command_key_digest !== null && !commandKeyDigest) || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown" || cronApprovalCorrelation === "unknown" || cronEventCorrelation === "unknown" || (value.cron_event_delivery_state !== null && cronEventDeliveryState === "unknown") || ((cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null)) || cronResultReceiptStatus === "unknown" || (value.cron_result_receipt_digest !== null && !cronResultReceiptDigest) || (value.cron_task_outcome_status !== null && cronTaskOutcomeStatus === "unknown") || (value.cron_result_memory_receipt_count !== null && (!Number.isSafeInteger(cronResultMemoryReceiptCount) || cronResultMemoryReceiptCount < 0)) || (value.cron_result_memory_receipt_set_digest !== null && !cronResultMemoryReceiptSetDigest) || (value.cron_final_output_status !== null && cronFinalOutputStatus === "unknown") || (value.cron_final_output_digest !== null && !cronFinalOutputDigest) || (cronReceiptVerified !== cronReceiptFieldsPresent) || (cronResultReceiptStatus !== "verified" && (value.cron_result_receipt_digest !== null || value.cron_task_outcome_status !== null || value.cron_result_memory_receipt_count !== null || value.cron_result_memory_receipt_set_digest !== null || value.cron_final_output_status !== null || value.cron_final_output_digest !== null)) || (cronResultMemoryReceiptCount !== null && ((cronResultMemoryReceiptCount === 0) !== (cronResultMemoryReceiptSetDigest === null))) || (cronFinalOutputStatus === "observed" ? cronFinalOutputDigest === null : cronFinalOutputDigest !== null) || ((cronResultReceiptStatus === "not_applicable") !== (cronEventCorrelation === "not_applicable")) || (cronReceiptVerified && (cronEventCorrelation !== "matched" || cronEventDeliveryState !== "handler_returned"))) return null;
               return {
                 plan_id_digest: planIdDigest,
                 step_id_digest: stepIdDigest,
@@ -4527,11 +4543,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 memory_correlation: memoryCorrelation,
                 cron_approval_correlation: cronApprovalCorrelation,
                 cron_event_correlation: cronEventCorrelation,
-                cron_event_delivery_state: cronEventDeliveryState
+                cron_event_delivery_state: cronEventDeliveryState,
+                cron_result_receipt_status: cronResultReceiptStatus,
+                cron_result_receipt_digest: cronResultReceiptDigest,
+                cron_task_outcome_status: cronTaskOutcomeStatus,
+                cron_result_memory_receipt_count: cronResultMemoryReceiptCount,
+                cron_result_memory_receipt_set_digest: cronResultMemoryReceiptSetDigest,
+                cron_final_output_status: cronFinalOutputStatus,
+                cron_final_output_digest: cronFinalOutputDigest
               };
             }).filter(function (item) { return item !== null; })
           : [];
-        const dependencyCategories = ["operation_plan", "broker", "delivery", "memory", "cron_approval", "cron_event"];
+        const dependencyCategories = ["operation_plan", "broker", "delivery", "memory", "cron_approval", "cron_event", "cron_result"];
         let planDependencyScopesValid = Array.isArray(source.plan_dependency_scopes) && source.plan_dependency_scopes.length <= 64 &&
           source.omitted_plan_dependency_scope_count === 0;
         const planDependencyScopes = Array.isArray(source.plan_dependency_scopes)
@@ -4703,6 +4726,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             status: cronStatus,
             reason: cronReason,
             event_history_available: cronHistoryAvailable,
+            result_receipt_available: cronResultReceiptAvailable,
             ...cronCounts,
             residual_count: cronResidualCount
           },

@@ -2,6 +2,31 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / Cron result receiptからJ・M回復consumerへの相関接続
+
+主語はBLUE GatewayのCron handler返却、既存J Operation Planのtask outcome／M receipt参照／最終出力監査digest、およびread-only Recovery Inspector／Operation Plan／Control Centerである。目的は、handlerの返却を成功と誤認せず、同じCron eventに結び付く現在観測可能なJ・M・最終出力状態をdigest-only receiptへ保存し、後続の回復調査consumerへ渡すこと。rev5.0 P2全体施工内の限定接続であり、W-WORK／E01.01全体の完了ではない。
+
+新しい`cron_event_result_receipt` SQLite tableへ、Cron event settleと同一transactionで非権威・実行不能の完了観測receiptを保存する。receiptはrequest-bound J `task_outcome`、current revisionの既存M receipt digest集合、`final_output` historyのrendered-output digest／観測状態だけを保持し、raw source／payload／output、command、tokenを含めない。J projectionのrecovery refreshがreadyでない場合はJ outcomeを未検証、Mが未設定・未観測・利用不能の場合はreceipt不在を成功扱いしない。Mを書き込む新writer、実結果の推測、自動再送を追加しない。`handler_returned`は引き続きhandler lifecycle状態であり、仕事や外部作用の成功を意味しない。旧SQLiteはresult tableがなくてもread-only inspection可能で、結果receiptは未観測として扱う。
+
+Recovery Inspectorはreceipt digestとevent identity／`handler_returned`を検証し、Operation PlanのCron result依存へ接続する。Control Center operator projectionをschema 15へ更新し、receipt status、J outcome、M receipt件数/digest、最終出力状態/digestを読み取り表示データへ含める。異常・上限による未照合は成功に昇格させず、read-only／非権威境界を維持する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway／WebChat typecheck、Gateway／WebChat build | PASS（buildはcloseout前に実行）。 |
+| Cron result receipt builder／store／Recovery Inspector／Operation Plan相関 | PASS：対象5 files・61 tests。receipt整合性、raw非保存、J/M未確定時の未観測化、atomic settle、再open、履歴event照合、read-only、schema 15を確認。 |
+| Cron channel | PASS：18 tests。handler返却後のreceipt保存と例外時`outcome_unknown`を含む。test fixtureは現行必須event storeを使用。 |
+| WebChat Control Center Recovery surface | PASS：1 test。新schema・receipt件数／availability・Cron result項目を含む応答を確認（同fileの他132件はNOT_RUN）。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底移行負債は既存継続。 |
+| 合計focused Gateway tests | PASS：79 tests（対象6 files）。 |
+| full suite／実Cron仕事の成功・実外部receipt／実provider／5OS全体／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Cron event→digest-only J・M result observation→recovery consumer（W-WORK、E01.01関連接続）。
+- **STATUS:** WIRED（限定した観測receiptとread-only inspector／Control Center。新規M更新・仕事成功判定・W-WORK全域は未成立）。
+- **NEXT_REQUIRED_CONSUMER:** 次の独立単位で⓪→④を再同期し、rev5.0 P2全体成立に必要な未接続producer→consumerを最新mainと実物から再選定する。局所QC／QAへ移らない。
+- **SAFETY_STATUS:** HDS-J／Approval／Broker／Mのauthorityと書込み責任は不変。receiptはdigest-only、非権威、実行不能。`handler_returned`を成功へ読み替えず、自動再送・実provider・外部作用なし。C08.03、OD-03、他repo、P13公開／出荷GOの保留を維持。
+- **LOCAL_ASSET_STATUS:** test-owned Temp root／SQLiteは各test後cleanup。ignored Gateway／WebChat build outputは稼働開発物として保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。credential／OneDrive資料／owner data／外部artifactなし。
+- **GIT_STATUS:** 編集開始local／`origin/main`／GitHub `main`=`0f2842075d0d999c6ea55dbb122c085623d7c7c8`、開始recovery current／previous=`0f2842075d0d999c6ea55dbb122c085623d7c7c8`／`6a92af5208d8bc1408f8282c102eec6d894585e1`。終了HEAD／二世代ref／clean stateはGit closeoutで再照合する。protected untracked pathsはstageしない。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / Cron event履歴から回復consumerへの相関接続
 
 主語はBLUE GatewayのCron inbox/outbox高水位cursor、過去event receipt、Operation Plan回復照合である。目的は、同一sourceの新しいeventでcurrent cursorが進んでも、以前のscheduled eventと計画の関係を保持し、再起動・復旧時に結果状態をdigestだけで再観測できるようにすること。rev5.0のP2全体施工内で、W-WORKとE01.01「永続jobと重複event」に関係するproducer→consumer接続である。

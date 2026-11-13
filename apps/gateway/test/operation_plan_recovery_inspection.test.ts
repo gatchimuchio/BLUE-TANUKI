@@ -13,6 +13,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
+import { createCronEventResultReceipt } from "../src/cron_event_result_receipt.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import {
   createRecoveryBackup,
@@ -579,7 +580,7 @@ describe("J OperationPlan recovery inspection", () => {
     const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
     const projection = projectGatewayRecoveryInspectionForOperator(report);
     expect(projection).toMatchObject({
-      schema_version: 14,
+      schema_version: 15,
       boundary_valid: true,
       operation_plan_schema_residuals: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
       omitted_operation_plan_schema_residual_count: 0,
@@ -787,6 +788,72 @@ describe("J OperationPlan recovery inspection", () => {
     expect(serialized).not.toContain(first.event_id);
     expect(serialized).not.toContain(first.source);
     expect(serialized).not.toContain(second.source);
+  });
+
+  it("correlates the atomic Cron result receipt to J outcome and exposes it to the read-only operator projection", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-result-"));
+    const event = createCronEventIdentity("synthetic-cron-result-source", 21, sha256("synthetic-cron-result-payload"));
+    const nextEvent = createCronEventIdentity(event.source, 22, sha256("synthetic-cron-next-payload"));
+    const { stateRoot, privateRoot, checkpoint } = await createPlanState(temporaryRoot, 1, {
+      channel: "cron", requestId: event.event_id,
+    });
+    const plan = checkpoint.plans[0]!;
+    const revision = plan.revisions.at(-1)!;
+    const resultReceipt = createCronEventResultReceipt(event, {
+      schema_version: "operation-plan-projection.v1",
+      used_for_authority: false,
+      raw_payload_exposed: false,
+      recovery_refresh_status: "ready",
+      result_memory: { configured: true, status: "receipt_confirmed", used_for_authority: false },
+      plans: [{
+        request_id: event.event_id,
+        plan_id: operationPlanDigest(plan.revisions[0]!.plan.plan_id),
+        revision_digest: revision.digest,
+        task_outcome: { status: "in_progress", reason_code: "awaiting_step_review", used_for_authority: false, may_execute: false },
+        bindings: plan.bindings.map((binding) => ({ revision_digest: binding.revision_digest, memory_status: "not_recorded" })),
+      }],
+    }, { entries: [], chain_valid: true, skipped_count: 0 }, 90);
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    expect(cron.claim(event, 80).status).toBe("accepted");
+    cron.settle(event, "handler_returned", resultReceipt.observed_at_ms, resultReceipt);
+    expect(cron.resultReceipt(event)).toEqual(resultReceipt);
+    expect(cron.claim(nextEvent, 100).status).toBe("accepted");
+    cron.settle(nextEvent, "handler_returned", 110);
+    cron.close();
+
+    const before = await readFile(cronPath);
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    expect(report.operation_plan_correlations[0]).toMatchObject({
+      cron_event_correlation: "matched",
+      cron_event_delivery_state: "handler_returned",
+      cron_result_receipt_status: "verified",
+      cron_result_receipt_digest: resultReceipt.receipt_digest,
+      cron_task_outcome_status: "in_progress",
+      cron_result_memory_receipt_count: 0,
+      cron_result_memory_receipt_set_digest: null,
+      cron_final_output_status: "not_observed",
+      cron_final_output_digest: null,
+    });
+    expect(report.ledgers.cron_events).toMatchObject({ archived_event_count: 1, verified_archived_event_count: 1 });
+    expect(report.plan_dependency_scopes[0]?.unobserved_dependencies).not.toContain("cron_result");
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection.schema_version).toBe(15);
+    expect(projection.operation_plan_correlations[0]).toMatchObject({
+      cron_result_receipt_status: "verified",
+      cron_task_outcome_status: "in_progress",
+      cron_final_output_status: "not_observed",
+      cron_final_output_digest: null,
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain(event.event_id);
+    expect(serialized).not.toContain(event.source);
+    expect(serialized).not.toContain("synthetic-cron-result-payload");
+    expect(await readFile(cronPath)).toEqual(before);
   });
 
   it("fails closed when a retained Cron event receipt no longer matches its identity", async () => {
