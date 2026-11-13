@@ -12,7 +12,7 @@
 
 `github.write issue.close`を本文更新と独立したoperationとして追加した。対象はallowlist内のexact repositoryにあるopen・未ロック・非PRの一件だけ。target observation、repo／Issue identity、close payload、Operation Plan、no-store L3 owner reviewを束縛し、review後・単回PATCH直前にrepoとIssueを再観測する。accepted responseは同一Issueがclosedになったことを検証し、provider rejection／outcome unknownを分離してunknown時に自動再送しない。結果は既存Executor／Gateway／J/M保存・同一Owner照会へ送る。
 
-全workspace typecheck、15-project build、`git diff --check`はPASS。test suite、Gateway process／合成API、実GitHub／credential／外部作用はNOT_RUN。従って新経路はsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証していない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。GitHub main SHA・復旧参照はcloseout後に確定する。保護添付は保持し、workspace buildがLinux isolation `target/`を実行したため既存untracked targetは削除せず保留する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+全workspace typecheck、15-project build、`git diff --check`はPASS。test suite、Gateway process／合成API、実GitHub／credential／外部作用はNOT_RUN。従って新経路はsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証していない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。実装commit=`13c7c46`はGitHub mainへpush済み。docs closeoutと最終recovery refsは施工指示書に記録する。保護添付は保持し、workspace buildがLinux isolation `target/`を実行したため既存untracked targetは削除せず保留する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02)
 

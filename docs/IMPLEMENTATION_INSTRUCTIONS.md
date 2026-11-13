@@ -12,8 +12,8 @@
 - **STATUS:** CLOSED（source-level `CODE_PRESENT`）。Issue close専用operation、target-version／request digest、HDS plan binding、no-store L3 review、Gateway承認・review currentness、Executor/Broker単回PATCH・結果照合、J/M保存projectionまで接続。実Gateway runtimeは未確認。
 - **SAFETY_STATUS:** allowlist内の一件open・未ロック・非PR Issueだけを対象とし、owner表示にopen→closedとIssue identityを示す。review後と単回PATCH直前に同一repo／Issueを再観測。known rejectionとoutcome unknownを分け、unknownの自動再送なし。実GitHub書込み・実credentialなし。
 - **CHECK_SCOPE:** `corepack pnpm typecheck` PASS、`corepack pnpm build` PASS（15 workspace projects）、`git diff --check` PASS。test suite、Gateway process／合成API、外部provider／credential／作用はNOT_RUN。
-- **LOCAL_ASSET_STATUS:** typecheck/buildでworkspace ignored `dist/`を生成。root buildが既存untracked Linux isolation `target/`にも実行され、31 files／10,462,590 bytesを確認したため保持・保留。保護添付領域は未変更。新規test fixture／Temp assetなし。
-- **GIT_STATUS:** 開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。開始時local／origin／GitHub main一致、ahead/behind=0/0。実装・closeoutを一BUILD_BATCHとしてGitHub mainへ反映し、最終SHA、二世代recovery refs、dirty／untrackedを終端照合する。
+- **LOCAL_ASSET_STATUS:** typecheck/buildでworkspace ignored `dist/`を生成（14 directories／1,097 files／13,346,265 bytes、保持）。root buildが既存untracked Linux isolation `target/`にも実行され、31 files／10,462,590 bytesを確認したため保持・保留。保護添付領域は未変更。新規test fixture／Temp assetなし。
+- **GIT_STATUS:** 開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。開始時local／origin／GitHub main一致、ahead/behind=0/0。実装commit=`13c7c46`をGitHub mainへfast-forward push済み。docs closeoutを追加commit/pushし、最後にlocal／remote HEADとrecovery ref current／previous、dirty／untrackedを照合する。commit時の古いworktree metadata自動削除はPermission deniedだったが、metadata／ACLは変更しない。
 - **NEXT_REQUIRED_CONSUMER:** 次の有限単位開始時にrev5.0正本と最新sourceからP2の次の未接続consumerを選ぶ。D4 Pocket producer／Android/iOS ingressは別repo限定委任待ちで維持する。
 
 
