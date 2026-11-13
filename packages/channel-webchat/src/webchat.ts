@@ -459,6 +459,7 @@ function findAotanuAssetRoot(): string {
  *   POST /runtime/ws-ticket body:{runtime_id, session_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
+ *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
@@ -1101,6 +1102,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         : url.pathname === "/webhook"
         ? "webhook"
         : url.pathname === "/runtime/intent" || url.pathname === "/runtime/intent/status" ||
+          url.pathname === "/runtime/intent/cancel" ||
           url.pathname === "/runtime/ws-ticket"
         ? "d4_runtime"
         : url.pathname === "/inbound" || url.pathname === "/ws-ticket"
@@ -1726,6 +1728,84 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "runtime_intent_status_unavailable" }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/runtime/intent/cancel") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const parsed = RuntimeIntentStatusInputSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_runtime_intent_cancel" }));
+        return;
+      }
+      const config = this.opts.d4_runtime_intent!;
+      if (parsed.data.runtime_id !== config.runtime_id) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_not_registered" }));
+        return;
+      }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore || typeof submissionStore.getD4RuntimeIntentStatus !== "function" ||
+          !this.opts.onD4RuntimeIntentCancellation) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_intent_cancellation_unavailable" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, D4_RUNTIME_TOKEN_ACTOR, res)) return;
+      const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
+      try {
+        const status = submissionStore.getD4RuntimeIntentStatus({
+          submission_id: parsed.data.submission_id,
+          scope_digest: scopeDigest,
+        });
+        if (!status) {
+          res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ found: false }));
+          return;
+        }
+        const cancellation = await this.opts.onD4RuntimeIntentCancellation({ request_id: status.request_id });
+        if (!cancellation) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
+          return;
+        }
+        const localWorkerStops = new Set([
+          "not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown",
+        ]);
+        if ((cancellation.status !== "cancel_requested" && cancellation.status !== "already_requested") ||
+            cancellation.cancel_request_accepted !== true || cancellation.executor_settled !== false ||
+            cancellation.execution_signal_aborted !== true || cancellation.executor_state !== "cancel_requested" ||
+            !localWorkerStops.has(cancellation.local_worker_stop) || cancellation.external_processing_stop !== "unknown" ||
+            cancellation.used_for_authority !== false || cancellation.may_execute !== false) {
+          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "runtime_intent_cancellation_unavailable" }));
+          return;
+        }
+        res.writeHead(202, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ found: true, accepted: true, cancellation: {
+          status: cancellation.status,
+          cancel_request_accepted: true,
+          executor_settled: false,
+          execution_signal_aborted: true,
+          executor_state: "cancel_requested",
+          local_worker_stop: cancellation.local_worker_stop,
+          external_processing_stop: "unknown",
+          used_for_authority: false,
+          may_execute: false,
+        } }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_intent_cancellation_unavailable" }));
       }
       return;
     }

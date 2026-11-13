@@ -28,6 +28,7 @@ import {
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,
   type WebChatD4RuntimeTaskOutcome,
+  type WebChatD4RuntimeIntentCancellation,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
   AOTANU_ASSET_ROUTE_PREFIX,
@@ -193,6 +194,8 @@ async function setup(
       webhook_token?: string;
       d4_runtime_intent?: { token: string; runtime_id: string };
       onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+      onD4RuntimeIntentCancellation?: (input: { request_id: string }) =>
+        Promise<WebChatD4RuntimeIntentCancellation | null>;
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       maintenance_token?: string;
       resume_approval_tokens?: false;
@@ -225,6 +228,7 @@ async function setup(
     webhook_token: opts.webhook_token,
     d4_runtime_intent: opts.d4_runtime_intent,
     onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
+    onD4RuntimeIntentCancellation: opts.onD4RuntimeIntentCancellation,
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
@@ -4133,6 +4137,81 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(response.body).toMatchObject({ session_ref_digest: sessionDigest });
       expect(JSON.stringify(status.body)).not.toContain("session-1234-abcd");
       expect(JSON.stringify(status.body)).not.toContain("整理して要点を教えて");
+    } finally {
+      ws?.close();
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("cancels only a same-session D4 Runtime submission and returns a non-authority request acknowledgement", async () => {
+    const cancellation: WebChatD4RuntimeIntentCancellation = {
+      status: "cancel_requested",
+      cancel_request_accepted: true,
+      executor_settled: false,
+      execution_signal_aborted: true,
+      executor_state: "cancel_requested",
+      local_worker_stop: "not_observed",
+      external_processing_stop: "unknown",
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const calls: string[] = [];
+    let cancellable = true;
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      onD4RuntimeIntentCancellation: async ({ request_id }) => {
+        calls.push(request_id);
+        return cancellable
+          ? { ...cancellation, command_id: "private-command-id" } as WebChatD4RuntimeIntentCancellation
+          : null;
+      },
+    });
+    let ws: WebSocket | undefined;
+    try {
+      await runtimeCtx.ch.start(async () => undefined);
+      const ticket = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki", session_id: "cancel-session-1234",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      ws = await openWsWithTicket(runtimeCtx.port, (ticket.body as { ticket: string }).ticket);
+      const accepted = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki", session_id: "cancel-session-1234",
+        submission_id: D4_SUBMISSION_ID_1, intent: "summarize the current task",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      expect(accepted.body).toMatchObject({ accepted: true });
+
+      const input = { runtime_id: "blue_tanuki", session_id: "cancel-session-1234", submission_id: D4_SUBMISSION_ID_1 };
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", {
+        ...input, session_id: "another-session-1234",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).body).toEqual({ found: false });
+      const response = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({
+        found: true,
+        accepted: true,
+        cancellation: {
+          status: "cancel_requested",
+          cancel_request_accepted: true,
+          executor_settled: false,
+          execution_signal_aborted: true,
+          executor_state: "cancel_requested",
+          local_worker_stop: "not_observed",
+          external_processing_stop: "unknown",
+          used_for_authority: false,
+          may_execute: false,
+        },
+      });
+      expect(calls).toEqual([(accepted.body as { request_id: string }).request_id]);
+      expect(JSON.stringify(response.body)).not.toContain("private-command-id");
+      expect(JSON.stringify(response.body)).not.toContain("summarize the current task");
+      cancellable = false;
+      const inactive = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(inactive.status).toBe(409);
+      expect(inactive.body).toEqual({ found: true, accepted: false, error: "execution_not_cancellable" });
     } finally {
       ws?.close();
       await runtimeCtx.teardown();

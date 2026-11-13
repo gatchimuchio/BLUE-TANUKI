@@ -20,6 +20,7 @@ export {
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,
   type WebChatD4RuntimeTaskOutcome,
+  type WebChatD4RuntimeIntentCancellation,
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatMemoryPersonalizationStopContentReview,

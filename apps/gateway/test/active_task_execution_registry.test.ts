@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { ActiveTaskExecutionRegistry } from "../src/active_task_execution_registry.js";
 
 describe("ActiveTaskExecutionRegistry", () => {
+  it("retains the authenticated token kind for cancellation settlement evidence", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const controller = new AbortController();
+    registry.register("command-d4", controller, 100);
+    expect(registry.requestCancel("command-d4", "d4-runtime-adapter-token-holder", 200, "d4_runtime"))
+      .toMatchObject({ status: "cancel_requested", executor_settled: false });
+    expect(registry.finish("command-d4")).toMatchObject({
+      cancel_requested_by: "d4-runtime-adapter-token-holder",
+      token_kind: "d4_runtime",
+      executor_settled: false,
+    });
+  });
+
+  it("does not accept a cancellation after the executor has settled", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const controller = new AbortController();
+    registry.register("command-settled", controller, 100);
+    registry.markExecutorSettled("command-settled", "success");
+    expect(registry.requestCancel("command-settled", "d4-runtime-adapter-token-holder", 200, "d4_runtime"))
+      .toBeNull();
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it("binds cancellation to the exact active command and keeps stop claims distinct", () => {
     const registry = new ActiveTaskExecutionRegistry();
     const target = new AbortController();

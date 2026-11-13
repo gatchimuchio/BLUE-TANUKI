@@ -33,7 +33,7 @@ export interface TaskExecutionCancellationEvidence {
   command_id: string;
   event: "execution_cancel_requested" | "execution_cancel_observed";
   actor: string;
-  token_kind: "resume";
+  token_kind: "resume" | "d4_runtime";
   observed_at_ms: number;
   cancel_requested_at_ms: number;
   cancel_request_accepted: true;
@@ -771,7 +771,7 @@ function validateTaskExecutionCancellationEvidence(value: unknown): asserts valu
       !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.command_id) ||
       (event.event !== "execution_cancel_requested" && event.event !== "execution_cancel_observed") ||
       typeof event.actor !== "string" || !/^[^\u0000-\u001f\u007f]{1,128}$/.test(event.actor) ||
-      event.token_kind !== "resume" || !isSafeTimestamp(event.observed_at_ms) ||
+      (event.token_kind !== "resume" && event.token_kind !== "d4_runtime") || !isSafeTimestamp(event.observed_at_ms) ||
       !isSafeTimestamp(event.cancel_requested_at_ms) || event.cancel_request_accepted !== true ||
       typeof event.executor_settled !== "boolean" ||
       !["success", "failed", "suspended", "unknown"].includes(String(event.executor_status)) ||

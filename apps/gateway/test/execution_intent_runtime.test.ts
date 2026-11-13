@@ -131,7 +131,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       };
       const settlement = {
         cancellation_event_id: randomUUID(), command_id: source.id, event: "execution_cancel_observed" as const,
-        actor: "webchat-resume-token-holder", token_kind: "resume" as const, observed_at_ms: 10_001,
+        actor: "d4-runtime-adapter-token-holder", token_kind: "d4_runtime" as const, observed_at_ms: 10_001,
         cancel_requested_at_ms: 10_000, cancel_request_accepted: true as const, executor_settled: true,
         executor_status: "failed" as const, local_worker_stop: "process_tree_empty_confirmed" as const,
         external_processing_stop: "unknown" as const, used_for_authority: false as const, may_execute: false as const,
@@ -166,9 +166,9 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
         { kind: "audit_history", command_id: source.id, actor: "webchat-resume-token-holder", timestamp: 10_000,
           payload: { cancellation_event_id: request.cancellation_event_id, event: "execution_cancel_requested",
             executor_settled: false, external_processing_stop: "unknown", used_for_authority: false, may_execute: false } },
-        { kind: "audit_history", command_id: source.id, timestamp: 10_001,
+        { kind: "audit_history", command_id: source.id, actor: "d4-runtime-adapter-token-holder", timestamp: 10_001,
           payload: { cancellation_event_id: settlement.cancellation_event_id, event: "execution_cancel_observed",
-            executor_settled: true, executor_status: "failed", local_worker_stop: "process_tree_empty_confirmed",
+            token_kind: "d4_runtime", executor_settled: true, executor_status: "failed", local_worker_stop: "process_tree_empty_confirmed",
             external_processing_stop: "unknown", used_for_authority: false, may_execute: false } },
       ]);
       expect(store.pendingTaskExecutionCancellationEvidence()).toHaveLength(2);

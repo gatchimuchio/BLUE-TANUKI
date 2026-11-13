@@ -42,6 +42,10 @@ const D4_RUNTIME_OWNER_DIGEST = operationPlanDigest("d4-runtime-adapter-token-ho
 const WEBCHAT_OWNER_TASK_DIGEST = operationPlanDigest("webchat-owner-token-holder");
 const WEBCHAT_CHANNEL_DIGEST = operationPlanDigest("webchat");
 
+export type D4RuntimeActiveCommandProjection =
+  | { readonly status: "matched"; readonly command_id: string }
+  | { readonly status: "not_active" | "ambiguous" | "invalid" };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -131,6 +135,37 @@ function projectTaskOutcome(
 /** Maps one D4 Runtime request-bound J assessment into a content-free, non-authority status. */
 export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: string): WebChatTaskOutcome {
   return projectTaskOutcome(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
+}
+
+/** Resolves only one currently active command bound to this D4 Runtime-owned WebChat request. */
+export function projectD4RuntimeActiveCommand(
+  operationPlans: unknown,
+  requestId: string,
+  activeCommandIds: ReadonlySet<string>,
+): D4RuntimeActiveCommandProjection {
+  if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
+    return { status: "invalid" };
+  }
+  const plans = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
+    plan.owner_identity_digest === D4_RUNTIME_OWNER_DIGEST && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+  if (plans.length === 0) return { status: "not_active" };
+  if (plans.length !== 1 || !isRecord(plans[0])) return { status: "ambiguous" };
+  const bindings = plans[0].bindings;
+  if (!Array.isArray(bindings)) return { status: "invalid" };
+
+  const requestBindings = new Set<string>();
+  for (const binding of bindings) {
+    if (!isRecord(binding) || typeof binding.request_id !== "string" || typeof binding.command_id !== "string" ||
+        !/^[^\u0000-\u001f\u007f]{1,256}$/u.test(binding.command_id)) {
+      return { status: "invalid" };
+    }
+    if (binding.request_id === requestId) requestBindings.add(binding.command_id);
+  }
+  if (requestBindings.size === 0) return { status: "not_active" };
+  const activeBindings = [...requestBindings].filter((commandId) => activeCommandIds.has(commandId));
+  if (activeBindings.length === 0) return { status: "not_active" };
+  if (activeBindings.length !== 1) return { status: "ambiguous" };
+  return { status: "matched", command_id: activeBindings[0]! };
 }
 
 /** Maps one owner-submitted WebChat task's J assessment into a content-free, non-authority status. */

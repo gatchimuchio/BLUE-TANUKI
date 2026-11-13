@@ -7,6 +7,8 @@ export type LocalWorkerStopObservation =
   | "process_tree_empty_confirmed"
   | "provider_state_unknown";
 
+export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime";
+
 export interface ActiveTaskExecutionSnapshot {
   command_id: string;
   started_at_ms: number;
@@ -27,6 +29,7 @@ export interface TaskExecutionCancellationResult extends ActiveTaskExecutionSnap
 export interface FinishedTaskExecutionCancellation {
   command_id: string;
   cancel_requested_by: string;
+  token_kind: TaskExecutionCancellationTokenKind;
   cancel_requested_at_ms: number;
   executor_settled: boolean;
   executor_status: ExecuteFeedback["status"] | "unknown";
@@ -40,6 +43,7 @@ interface ActiveTaskExecution {
   started_at_ms: number;
   cancel_requested_at_ms: number | null;
   cancel_requested_by: string | null;
+  cancel_token_kind: TaskExecutionCancellationTokenKind | null;
   executor_settled: boolean;
   executor_status: ExecuteFeedback["status"] | "unknown";
   local_worker_state: LocalWorkerStopObservation;
@@ -61,6 +65,7 @@ export class ActiveTaskExecutionRegistry {
       started_at_ms,
       cancel_requested_at_ms: null,
       cancel_requested_by: null,
+      cancel_token_kind: null,
       executor_settled: false,
       executor_status: "unknown",
       local_worker_state: "not_observed",
@@ -74,9 +79,14 @@ export class ActiveTaskExecutionRegistry {
       .map((execution) => this.project(execution));
   }
 
-  requestCancel(command_id: string, actor: string, requested_at_ms = Date.now()): TaskExecutionCancellationResult | null {
+  requestCancel(
+    command_id: string,
+    actor: string,
+    requested_at_ms = Date.now(),
+    token_kind: TaskExecutionCancellationTokenKind = "resume",
+  ): TaskExecutionCancellationResult | null {
     const execution = this.active.get(command_id);
-    if (!execution) return null;
+    if (!execution || execution.executor_settled) return null;
     if (!actor || !Number.isSafeInteger(requested_at_ms) || requested_at_ms <= 0) {
       throw new Error("active_task_execution_cancel_context_invalid");
     }
@@ -84,6 +94,7 @@ export class ActiveTaskExecutionRegistry {
     if (!alreadyRequested) {
       execution.cancel_requested_at_ms = requested_at_ms;
       execution.cancel_requested_by = actor;
+      execution.cancel_token_kind = token_kind;
     }
     execution.controller.abort();
     return {
@@ -123,6 +134,7 @@ export class ActiveTaskExecutionRegistry {
     return {
       command_id,
       cancel_requested_by: execution.cancel_requested_by,
+      token_kind: execution.cancel_token_kind ?? "resume",
       cancel_requested_at_ms: execution.cancel_requested_at_ms,
       executor_settled: execution.executor_settled,
       executor_status: execution.executor_status,

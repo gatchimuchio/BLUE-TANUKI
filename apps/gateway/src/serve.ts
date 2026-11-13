@@ -141,6 +141,7 @@ import type {
   WebChatMemoryPersonalizationStopContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
+  WebChatD4RuntimeIntentCancellation,
   WebChatD4RuntimeTaskOutcome,
   WebChatAuthorityTraceItem,
   WebChatEvidenceControlContext,
@@ -148,7 +149,7 @@ import type {
   WebChatHistorySnapshot,
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
-import { projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
+import { projectD4RuntimeActiveCommand, projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -230,7 +231,7 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { GatewayTelegramUpdateStore } from "./telegram_update_store.js";
-import { ActiveTaskExecutionRegistry } from "./active_task_execution_registry.js";
+import { ActiveTaskExecutionRegistry, type TaskExecutionCancellationTokenKind } from "./active_task_execution_registry.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import {
   brokerRestorePlanDependencyIsCurrent,
@@ -1566,9 +1567,9 @@ async function serveWithOwnerLease(
 
   function requestTaskExecutionCancellation(
     command_id: string,
-    ctx: WebChatApprovalControlContext,
+    ctx: { actor: string; token_kind: TaskExecutionCancellationTokenKind },
   ) {
-    const cancellation = activeTaskExecutions.requestCancel(command_id, ctx.actor);
+    const cancellation = activeTaskExecutions.requestCancel(command_id, ctx.actor, Date.now(), ctx.token_kind);
     if (!cancellation) return null;
     if (cancellation.status === "cancel_requested") {
       const requestedAt = cancellation.cancel_requested_at_ms;
@@ -1607,7 +1608,7 @@ async function serveWithOwnerLease(
       command_id: finished.command_id,
       event: "execution_cancel_observed",
       actor: finished.cancel_requested_by,
-      token_kind: "resume",
+      token_kind: finished.token_kind,
       observed_at_ms: Date.now(),
       cancel_requested_at_ms: finished.cancel_requested_at_ms,
       cancel_request_accepted: true,
@@ -4127,6 +4128,26 @@ async function serveWithOwnerLease(
               } catch {
                 return projectD4RuntimeTaskOutcome(undefined, request_id);
               }
+            },
+            onD4RuntimeIntentCancellation: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeIntentCancellation | null> => {
+              const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
+              const binding = projectD4RuntimeActiveCommand(hds.getRuntimeSnapshot().operation_plans, request_id, activeCommandIds);
+              if (binding.status !== "matched") return null;
+              const cancellation = requestTaskExecutionCancellation(binding.command_id, {
+                actor: "d4-runtime-adapter-token-holder",
+                token_kind: "d4_runtime",
+              });
+              return cancellation ? {
+                status: cancellation.status,
+                cancel_request_accepted: true,
+                executor_settled: false,
+                execution_signal_aborted: true,
+                executor_state: "cancel_requested",
+                local_worker_stop: cancellation.local_worker_stop,
+                external_processing_stop: "unknown",
+                used_for_authority: false,
+                may_execute: false,
+              } : null;
             },
           }
         : {}),

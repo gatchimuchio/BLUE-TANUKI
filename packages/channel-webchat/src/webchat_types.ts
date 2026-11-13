@@ -1210,6 +1210,20 @@ export interface WebChatApprovalControlContext {
   reason?: string;
 }
 
+/** Content-free cancellation acknowledgement for one D4 Runtime-owned active intent. */
+export interface WebChatD4RuntimeIntentCancellation {
+  readonly status: "cancel_requested" | "already_requested";
+  readonly cancel_request_accepted: true;
+  readonly executor_settled: false;
+  readonly execution_signal_aborted: true;
+  readonly executor_state: "cancel_requested";
+  readonly local_worker_stop: "not_observed" | "worker_exit_observed" |
+    "process_tree_empty_confirmed" | "provider_state_unknown";
+  readonly external_processing_stop: "unknown";
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
 export interface WebChatActiveExecutionSnapshot {
   command_id: string;
   started_at_ms: number;
@@ -1541,6 +1555,10 @@ export interface WebChatOptions {
   d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+  /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */
+  onD4RuntimeIntentCancellation?: (
+    input: { request_id: string },
+  ) => Promise<WebChatD4RuntimeIntentCancellation | null>;
   /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
