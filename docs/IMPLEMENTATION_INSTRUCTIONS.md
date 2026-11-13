@@ -2,6 +2,18 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux native・macOS x64/arm64 package-only producer (2026-11-14)
+
+主語はBLUE-TANUKIのLinux x86_64およびmacOS x64/arm64製品package producerと各package verifierである。目的は現行mainの製品workspaceからLinux/macOS native payloadと一体型installerを生成・静的検証すること。利用者向けinstalled runtimeの起動・仕事・更新・復旧・削除、配布、署名、notarizationはこの限定buildに含めない。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / Linux native・macOS x64/arm64 package-only build.
+- **STATUS:** CLOSED。GitHub Actions `workflow_dispatch` run [#16](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43483838295) はsource SHA=`8f09f9c6f752c375f6547e087bc6b49a7978e21f`で全job success。Linux x64 installerと一体型product installer、macOS x64/arm64 native payloadと一体型product installerの生成・各verifierがPASS。3OSすべてでinstalled lifecycleの2 stepは`skipped`。
+- **CHECK_SCOPE:** Linux archive SHA-256=`9733f28a5af61da11127c57fb076aab8f595817220b8b90a4c8d8c788b4d4291`、single-file `.run` SHA-256=`e5dd08770c393b32a11caa9b90bc8f3ebb78a6f0b2afe9aa142c3750e29a2435`。macOS x64 archive=`c90d8dfb7854ef92109b0d80a89ab2d1ed50eb324e0d5adcbd88fe5bea30fa2d`、`.command`=`ab00f339e3a5978d125f95a1c3ac2158d87d03eba3f2fb5845cc51caf150b506`。macOS arm64 archive=`909cbc0449461a88cf5ea073f989dfa90c9fe21edadccc8a75676592614f8a41`、`.command`=`315745e64a8f4abde9e74a426cddb643fd0b066e2efbc08a7b2342b03f99a783`。All installers were unsigned; macOS notarization was not submitted.
+- **EVIDENCE_LIMIT:** hosted `ubuntu-24.04`, `macos-15-intel`, `macos-15` runners only. No installed product lifecycle, app UI, broker/device permission, OS login/reboot, real provider, live external action, signing/notarization, or product-wide `SYSTEM_SHAPED`/`BUILD_COVERED`, QE_QC, QE_QA. Workflow returned no retained Actions artifacts; package outputs existed only on the hosted runners and are not distribution artifacts.
+- **LOCAL_ASSET_STATUS:** no package files created locally. Protected `.codex-attachments/`, `.codex-remote-attachments/`, untracked Linux isolation `target/`, and old Windows worktree metadata remain untouched. `git fetch` reported `Permission denied` while trying to remove stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`; direct `git ls-remote` confirmed remote main and recovery tags, and no ACL/metadata bypass was attempted.
+- **GIT_STATUS:** source main SHA before/after run was `8f09f9c6f752c375f6547e087bc6b49a7978e21f`; local `main` and `origin/main` matched and only the main worktree was registered. This documentation closeout is a separate docs-only fast-forward; record the resulting local/remote SHA and two-generation recovery refs at commit completion.
+- **NEXT_REQUIRED_CONSUMER:** continue rev5.0 P2 whole-product BUILD from current source and choose the next Blue-repository producer→consumer gap. Do not treat these package-only results as installed OS support or wait for QC/QA before implementation. D4 Pocket/MINIDORA repo edits, C08.03 live provider, uncommissioned external actions, and P13 owner GO remain held.
+
 ## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外 (P2 SAFE_MIN, 2026-11-14)
 
 主語はBLUE-TANUKIの通常CLI one-shot requestとGateway運用ログである。目的は、利用者がCLIへ入力した依頼本文をdiagnostic logへ複写せず、依頼相関に必要なmetadataだけを残すこと。CLI回答の表示、HDS処理、memory/history、外部作用は変更しない。
