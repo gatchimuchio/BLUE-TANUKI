@@ -16,7 +16,7 @@
 
 このsliceはsource-level `CODE_PRESENT`であり、Gateway process経由のruntime `WIRED`を実証しない。全体F05、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner公開・出荷GOは未成立。D4 Pocket変更はない。実provider／credentialは使用していない。
 
-開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。実装commit=`13c7c46`をGitHub mainへfast-forward pushした。root buildはLinux isolation native buildも実行した。workspace ignored `dist/`は14 directories／1,097 files／13,346,265 bytesを保持し、untracked Linux isolation `target/`は31 files／10,462,590 bytesとして保持・保留。`.codex-attachments/`／`.codex-remote-attachments/`は未変更。docs closeout push後の最終SHAと復旧ref二世代を終端照合して記録する。
+開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。実装commit=`13c7c465173d7d6bd0f5ac1d474c86b6cd65e3a1`、first closeout=`0f022fbee102238605dabb207d09e5058c1e701a`をGitHub mainへfast-forward pushした。root buildはLinux isolation native buildも実行した。workspace ignored `dist/`は14 directories／1,097 files／13,346,265 bytesを保持し、untracked Linux isolation `target/`は31 files／10,462,590 bytesとして保持・保留。`.codex-attachments/`／`.codex-remote-attachments/`は未変更。first closeout後のrecovery current／previous=`0f022fbee102238605dabb207d09e5058c1e701a`／`13c7c465173d7d6bd0f5ac1d474c86b6cd65e3a1`。この最終履歴closeout commitをrecovery current、first closeoutをpreviousとして終端readbackする。
 
 ## 2026-11-14 — rev5.0 CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02)
 
