@@ -523,6 +523,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
     expect(CONTROL_CENTER_SCRIPT).toContain('review.kind === "browser_form_get"');
     expect(CONTROL_CENTER_SCRIPT).toContain('parsedActionUrl.origin !== review.origin');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.external_effect_class !== "form_submission_unclassified"');
+    expect(CONTROL_CENTER_SCRIPT).toContain("購入・確定等の作用を除外できません");
     expect(CONTROL_CENTER_SCRIPT).toContain('value.textContent = field.value');
     expect(CONTROL_CENTER_SCRIPT).toContain('review.no_store !== true');
     const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function isCanvasPreviewContent(");

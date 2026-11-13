@@ -5797,7 +5797,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 typeof field.value === "string" && field.value.length > 0 && field.value.length <= 1024;
             });
           if (review.command_id !== commandId || review.operation !== "browser.automation.form_get" ||
-              review.method !== "GET" || review.same_origin_only !== true || review.javascript_enabled !== false ||
+              review.method !== "GET" || review.external_effect_class !== "form_submission_unclassified" ||
+              review.same_origin_only !== true || review.javascript_enabled !== false ||
               review.credentials_reused !== false || review.downloads_enabled !== false || review.no_store !== true ||
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
@@ -5817,6 +5818,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["origin", review.origin],
             ["検索領域", review.form_name],
             ["送信方式", "GET。POST等は拒否"],
+            ["外部作用分類", "外部フォーム送信（外部効果は未分類）"],
+            ["状態変更", "GETでも外部状態を変える可能性あり。購入・確定等を自動判別しません"],
+            ["結果不明時", "自動再送なし"],
             ["ページJavaScript", "無効"],
             ["資格情報・Cookie", "再利用なし"],
             ["download", "無効"],
@@ -5844,7 +5848,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "この確認は依頼内容を表示するだけです。実行時はJavaScript・認証情報を使わず、同一originの公開検索フォームへGETだけを送ります。Web側がGETを状態変更に使う可能性までは判定できません。失敗後は自動再送しません。";
+          note.textContent = "この確認は依頼内容を表示するだけです。検索フォームの形状だけでは送信先の実効果を分類できません。GETでも外部状態が変わることがあり、購入・確定等の作用を除外できません。送信先と入力値を確認し、結果不明時は自動再送しません。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;

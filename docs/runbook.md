@@ -336,7 +336,11 @@ the standard URL-encoded form encoding. Required fields and native
 `minlength`/`maxlength` limits are enforced. Hidden, credential-like, duplicate,
 unsupported, patterned, directionality, nonstandard-autocomplete, or submitter
 override controls are rejected. The action URL and exact field values appear
-in the authenticated no-store L3 content review.
+in the authenticated no-store L3 content review, which classifies this as an
+external form submission with unclassified server effect. GET can change
+remote state, and the form shape cannot identify purchase/confirmation effects;
+the owner must review the exact destination and values. Unknown outcomes are
+not retried automatically.
 
 For `form_submit`, JavaScript and service workers are disabled. The source page
 and exact form action each use the fixed-address HTTP transport with no browser

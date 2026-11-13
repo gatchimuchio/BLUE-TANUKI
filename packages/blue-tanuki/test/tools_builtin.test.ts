@@ -2650,7 +2650,7 @@ describe("built-in tools", () => {
       action: string;
       url: string;
       final_url: string;
-      submission: { target_url?: string; response_status?: number; query_values_in_result_url: boolean };
+      submission: { target_url?: string; response_status?: number; query_values_in_result_url: boolean; external_effect_class: string };
       approval_level: string;
     };
 
@@ -2663,6 +2663,7 @@ describe("built-in tools", () => {
         target_url: "https://example.test/search/results",
         response_status: 200,
         query_values_in_result_url: false,
+        external_effect_class: "form_submission_unclassified",
       },
       approval_level: "L3_final_review",
     });

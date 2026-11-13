@@ -53,10 +53,11 @@ export function projectBrowserFormGetContentReview(
       fields: request.fields,
     });
     const reviewDigest = operationPlanDigest({
-      schema_version: "blue-tanuki.browser-form-get-review.v1",
+      schema_version: "blue-tanuki.browser-form-get-review.v2",
       command_digest: commandDigest,
       request_payload_digest: requestPayloadDigest,
       operation_plan_binding_digest: operationPlanBindingDigest,
+      external_effect_class: "form_submission_unclassified",
     });
     return {
       kind: "browser_form_get",
@@ -72,6 +73,7 @@ export function projectBrowserFormGetContentReview(
       form_name: request.form_name,
       fields: request.fields.map((field) => ({ ...field })),
       method: "GET",
+      external_effect_class: "form_submission_unclassified",
       same_origin_only: true,
       javascript_enabled: false,
       credentials_reused: false,

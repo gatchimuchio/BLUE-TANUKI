@@ -377,6 +377,7 @@ describe("browser form GET approval content review projection", () => {
       form_name: "Site search",
       fields: [{ name: "q", value: "synthetic blue" }],
       method: "GET",
+      external_effect_class: "form_submission_unclassified",
       same_origin_only: true,
       javascript_enabled: false,
       credentials_reused: false,

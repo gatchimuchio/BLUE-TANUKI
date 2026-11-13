@@ -4190,6 +4190,7 @@ async function invokeBrowserPreview(
       submission: {
         method: "GET",
         scope: "same_origin_search_form",
+        external_effect_class: "form_submission_unclassified",
         target_url: formSubmission?.action_url,
         ...(snapshot.http_status === undefined ? {} : { response_status: snapshot.http_status }),
         query_values_in_result_url: false,

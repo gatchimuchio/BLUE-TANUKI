@@ -325,6 +325,7 @@ export interface WebChatBrowserFormGetContentReview {
   form_name: string;
   fields: readonly { name: string; value: string }[];
   method: "GET";
+  external_effect_class: "form_submission_unclassified";
   same_origin_only: true;
   javascript_enabled: false;
   credentials_reused: false;

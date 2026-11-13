@@ -10,7 +10,7 @@
 
 ### 直近完了BUILD_BATCH — QE_BUILD / browser.automationの送信先束縛付き検索GET
 
-`browser.automation action=form_submit`に、送信元ページと送信先をowner依頼へ明示し、一意のaccessible `search`領域内にある単純な同一origin GET検索フォームだけを扱う経路を追加。隠し項目、資格情報に見える項目、曖昧なフォーム、他方式・他origin・送信先の差替えは拒否する。実行時はL3 no-store content reviewで送信先と入力値を表示し、JavaScript／service worker無効、外部通信を固定DNS先のHTTP transportへ限定、browser network・subresource・iframe・redirect遮断を適用。GETによる状態変更可能性と結果不明時の自動再送禁止を明記した。provider-free focused tests／型検査はPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。`CODE_PRESENT`限定であり、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+`browser.automation action=form_submit`は、一意なaccessible `search`領域内のboundedな同一origin GETだけを扱う。未対応・submit override・制約違反を拒否し、送信元・送信先・入力値をL3 no-store reviewへ束縛する。レビューと結果に外部効果未分類を明示し、GETでの状態変更可能性、購入・確定等を自動判別できないこと、結果不明時の自動再送なしをownerへ示す。JavaScript／service worker無効、公開IPへ固定したtransport、browser network遮断を維持する。provider-free focused tests／型検査／WebChat package buildはPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`CODE_PRESENT`限定で、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / CLI達成規則→共有J/M→Control Center再認証→CLI状態照会
 

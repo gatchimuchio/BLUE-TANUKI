@@ -2,7 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser.automation送信先束縛付き検索GET
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser form外部作用の分類とowner review
+
+主語はBLUEの`browser.automation action=form_submit`とControl CenterのL3 content reviewである。目的は、検索フォームの形状をread-only効果と誤認せず、外部効果が未分類のフォーム送信としてowner reviewへ渡すこと。
+
+Gateway reviewに`external_effect_class=form_submission_unclassified`を追加し、review digestに束縛した。Control Centerはこの固定分類がないreviewをfail-closedにし、「GETでも状態変更があり得る」「購入・確定等の効果を自動判別できない」「結果不明時は自動再送しない」を送信先・入力値とともに表示する。tool resultにも同じ非権威分類を付ける。実際の送信先効果を製品側でread-onlyへ昇格しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| browser form contract／tool／Gateway review focused tests | PASS、27 tests（form contract 23、tool 2、Gateway 2）。 |
+| WebChat Control Center review rendering | PASS、1 selected test。 |
+| Core／Gateway／WebChat typecheck | PASS。初回Gateway typecheckは古いWebChat `dist`に対して失敗し、WebChat build後に同条件でPASS。 |
+| WebChat package build | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債75件は注意表示、license gate PASS。 |
+| live送信、実ブラウザ、外部効果、全suite、P2全域、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06-03 browser form external-effect classification.
+- **STATUS:** review projection→authenticated Control CenterのL3表示・承認digestへ外部効果未分類を結び付ける。局所`CODE_PRESENT`に限り、実browser／Gateway approval往復やF06全域・全製品の完了を意味しない。
+- **NEXT_REQUIRED_CONSUMER:** F06の未接続producer／consumerを全体P2設計内で続けて選び、全要求・5OSの実consumerを接続する。購入・確定等の効果分類を未確認のまま安全と扱わない。
+- **SAFETY_STATUS:** L3 no-store、同一origin、credentialなし、JavaScript／service worker無効、public-address guard、結果不明時の自動再送なしを維持。外部効果は未分類、owner確認なしのlive送信・公開・出荷判断なし。
+- **LOCAL_ASSET_STATUS:** 実装・focused test・docs差分。WebChat package buildで`packages/channel-webchat/dist`を再生成し保持。Vitest一時物はtest cleanup済み。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護して未変更。WSL／他repoに触れない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser.automation送信先束縛付き検索GET
 
 主語はBLUE `browser.automation`とWebChat L3 content reviewである。目的は、ownerが明示した送信元ページ・同一origin送信先・検索項目を、既存の承認境界に結び付けたbounded GET consumerへ接続すること。
 
