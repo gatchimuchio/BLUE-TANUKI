@@ -2,7 +2,25 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser form応答のdownload境界
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser.read 添付・非text応答遮断
+
+主語は`browser.read`とHTTP応答consumer。目的は、添付またはPDF等の非text応答をページ読取結果としてCへ渡さないこと。内部HTTP応答の`Content-Disposition`を使って添付を拒否し、許可MIMEだけを本文処理へ進める。拒否時は本文・ファイル名を含まない固定エラーを返す。`invokeHttpFetch`の外部戻り値契約にはheaderを追加していない。ファイル保存、browser download有効化、実browser実行は行っていない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `tools_builtin.test.ts` | PASS、104 passed／6 skipped。attachment、PDF、Content-Type欠落時に本文・filenameが返らないことをfixture確認。 |
+| Core typecheck | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債75件は注意表示。 |
+| default HTTP、Playwright、実browser、全suite、他OS、installed製品、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06 browser.read response boundary.
+- **STATUS:** `browser.read`の応答処理経路へ拒否判定を接続。`CODE_PRESENT`相当のコード確認であり、実HTTP／installed runtime、F06全域、製品全体の成立を示さない。
+- **NEXT_REQUIRED_CONSUMER:** P2全体施工を継続する。現物棚卸しではAndroid／iOS用client・installer treeが見当たらず、rev5.0のG09／G10にあるnative入口、Device Link、秘密保管、一仕事の停止・復旧consumerがBUILD_GAP。D4-Pocketの契約はread-onlyで確認し、同repoは編集しない。
+- **SAFETY_STATUS:** 添付・非text本文とfilenameはC向け結果に返さず、自動再試行なし。実credential、ファイル保存、外部業務作用なし。
+- **LOCAL_ASSET_STATUS:** 永続生成物なし。test一時物は終了済み。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
+- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。commit `bdc1d2b300a84248f92e3c088469d0a448e28763`を`main`へpushし、終了時local／origin／GitHub SHA一致を確認。recovery current／previous=`bdc1d2b300a84248f92e3c088469d0a448e28763`／`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`でlocal branch／remote tagを照合した。Git commitのstale worktree cleanupはPermission deniedとなったが、commit／pushは成功しACLは変更していない。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser form応答のdownload境界
 
 主語は`browser.automation action=form_submit`と、そのHTTP応答を受け取るC向け結果consumer。目的は、添付ダウンロードやPDF等の非テキスト本文を検索結果としてCへ流さず、未対応downloadを結果不明で閉じること。
 

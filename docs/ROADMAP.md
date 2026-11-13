@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / browser form response download quarantine
+### 直近完了BUILD_BATCH — QE_BUILD / browser.read attachment and non-text response guard
+
+`browser.read`はHTTP応答の`Content-Disposition`と`Content-Type`を本文処理前に確認し、attachment、PDF等の非text、型不明の本文をCへ返さない。filename・本文を含まない固定拒否と自動再試行なしを保つ。`http.fetch`の戻り値契約、ファイル保存、download／upload quarantineは変えていない。focused file tests 104件PASS／6件skip、Core typecheck、`pnpm docs:check`、`git diff --check` PASS。実HTTP／Playwright、installed製品、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`browser.read`内の限定コード接続であり、F06／製品全体の成立を示さない。Android／iOSのclient・installer treeは現行repoに見当たらず、G09／G10のnative product entryが次の全体施工対象。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / browser form response download quarantine
 
 form GET応答の`Content-Disposition`を取得し、`attachment`とPDF等の非テキスト応答を本文・ファイル名を返さず拒否する。結果不明・自動再送なしを保ち、ダウンロード保存や自動実行は行わない。download／uploadは引き続きquarantine。限定拒否testとCore typecheckはPASS。実HTTP／Playwright／保存経路、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは限定`CODE_PRESENT`であり、browser download機能やF06／製品全体の成立を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

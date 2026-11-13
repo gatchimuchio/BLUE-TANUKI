@@ -2,6 +2,19 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 browser.read添付・非text応答遮断
+
+`browser.read`が内部HTTP応答の`Content-Disposition`／`Content-Type`を本文処理前に検査し、添付、非text、型不明の応答本文とファイル名をCへ渡さない経路を追加した。通常の`http.fetch`戻り値契約、download保存、browser download有効化は変更していない。拒否応答は固定文で、自動再試行しない。
+
+| QE_BUILD限定検査 | 結果 |
+|---|---|
+| `tools_builtin.test.ts` | PASS、104 passed／6 skipped。 |
+| Core typecheck | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債75件は注意表示。 |
+| 実HTTP／Playwright／installed製品／全suite／他OS／全体P2／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+開始main=`bf37238dec7c4bc57c5f0ccafd8838ba72b3bd87`。実装commit=`bdc1d2b300a84248f92e3c088469d0a448e28763`をmainへpushし、local／origin／GitHub SHA一致、recovery current／previousのbranch／tag二世代を確認した。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。Git commit時に古いworktree metadataのcleanupがPermission deniedになったが、commit／push成功後もACLを変更せず保持する。Android／iOS用client・installer treeは現行repoに見当たらず、G09／G10のnative入口・Device Link・task recoveryが全体施工上の次consumer候補である。
+
 ## 2026-11-13 — QE_BUILD rev5.0 Cron result observation receiptからJ・M回復consumer
 
 主語はBLUE Gateway Cron handler返却と、同一request IDに束縛されたJ Operation Plan task outcome、current revisionのM receipt参照、CompleteHistory最終出力digest、およびread-only Recovery Inspector／Control Centerである。目的は、handler返却だけを成功と見なさず、検証可能な状態をdigest-only receiptで保持し、再起動後の回復consumerへ渡すこと。W-WORK／E01.01全体の完了ではない。
