@@ -2,7 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / release draftの注釈付きtag chain解決 (F05.02)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Browser link navigationのL3遷移先束縛 (F06.02限定)
+
+主語は既存`browser.automation action=click`とGatewayの承認コンテンツレビュー、Control Center、Browser Adapterである。目的は、ownerがL3で確認した同一originの遷移先をOperation Planへ結び、実行時の同名リンクが別URLへ変化した場合にGET前で停止すること。
+
+click入力は`url`・完全一致`link_name`・必須`target_url`の組にし、URLのquery/hashとorigin変更を拒否する。Gatewayは同じ要求・command digest・Operation Plan束縛を持つno-store reviewを生成し、Control Centerにページ、リンク名、固定遷移先、GETの外部効果未分類、JavaScript／資格情報／download無効を明示する。ownerが内容を確認したreview digestがcurrent commandと一致しなければL3承認できない。Browser Adapterは実行時にページを再取得し、同名リンクの完全URLが`target_url`と一致したときだけ遷移する。異なる場合はGET前に`target_changed_after_review`で停止する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Core／WebChat typecheck | PASS。 |
+| Core TypeScript emit（native isolation build scriptなし）／WebChat build／Gateway typecheck | PASS。Gatewayは新しいworkspace declarationを参照する状態で確認。 |
+| 生成Control Center scriptのJavaScript構文／`git diff --check` | PASS。 |
+| test suite、fixture runner、実Web、外部HTTP、installed製品、F06全域、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06.02 browser link target binding slice。
+- **STATUS:** L3 review→Control Center→実行時完全URL再照合のコード経路を`WIRED`。実runner／Gateway runtime未実行のためF06.02全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** F06.02の「入力」と「確定送信・購入」の別承認は未施工。ブラウザー状態を推測で保持せず、独立した入力確認と最終作用のJ／Approval／Broker結線を継続する。並行してrev5.0 P2全体施工を続ける。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+- **SAFETY_STATUS:** 同一origin・query/hashなしの完全URLをL3 reviewに表示し、作用直前のhref差分を拒否。navigation GETの外部効果は未分類のまま。実Web、資格情報、外部作用、downloadなし。C08.03 real provider、他repo変更、P13公開／出荷GOはHOLD。
+- **LOCAL_ASSET_STATUS:** `packages/blue-tanuki/dist/`と`packages/channel-webchat/dist/`は型解決・構文確認に使った再生成可能なignored build outputとして保持。新規の非Git資料なし。保護対象`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。
+- **GIT_STATUS:** START_HEAD=`53fcccc1fe5a6f2f44670b71079a9110cb3690b1`。実装commit=`92bc4c17b5828f1dcd2dba0cc8f2e05f3b28293d`を`main`へfast-forward push済み。push直後のlocal／`origin/main`／GitHub `main`の最終照合とrecovery refsの2世代readbackは作業閉包で行う。fetch／commit時のstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`自動整理はPermission deniedのためmetadata／ACLを変更せず保持。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / release draftの注釈付きtag chain解決 (F05.02)
 
 主語は既存の`github.write release.draft.create`経路と、GitHub上のtag refからcommitまでの参照解決である。目的は、別の注釈付きtagを指すtagも、検証済みcommitを特定したうえで既存の未公開draft作成経路へ通すこと。
 
