@@ -6,6 +6,7 @@ import * as https from "node:https";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { sha256FileSync } from "./embedded_payload.js";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 interface PackageJson {
@@ -30,6 +31,15 @@ interface WindowsInstallerManifest {
     source: string;
     sha256: string;
     shasums_source: string;
+  };
+  browser_runtime: {
+    bundled: true;
+    package: "playwright-core";
+    package_version: string;
+    engine: "chromium";
+    executable: string;
+    chromium_sandbox: true;
+    preview_enabled_by_default: false;
   };
   user_experience: {
     requires_node_pnpm_git_from_user: false;
@@ -70,8 +80,9 @@ const RUNTIME_PACKAGES = [
 ] as const;
 
 const MCP_CLIENT_VERSION = "2.4.0";
+const PLAYWRIGHT_CORE_VERSION = "1.65.0";
 const MCP_CLIENT_NODE_MODULES = `node_modules/.pnpm/@modelcontextprotocol+client@${MCP_CLIENT_VERSION}/node_modules`;
-const MCP_RUNTIME_EXTERNAL_MODULES: readonly {
+const RUNTIME_EXTERNAL_MODULES: readonly {
   name: string;
   candidates: readonly string[];
   destination?: string;
@@ -89,6 +100,10 @@ const MCP_RUNTIME_EXTERNAL_MODULES: readonly {
   { name: "which", candidates: ["node_modules/.pnpm/cross-spawn@7.0.6/node_modules/which"] },
   { name: "shebang-regex", candidates: ["node_modules/.pnpm/shebang-command@2.0.0/node_modules/shebang-regex"] },
   { name: "isexe", candidates: ["node_modules/.pnpm/which@2.0.2/node_modules/isexe"] },
+  { name: "playwright-core", candidates: [
+    `node_modules/.pnpm/playwright-core@${PLAYWRIGHT_CORE_VERSION}/node_modules/playwright-core`,
+    "packages/blue-tanuki/node_modules/playwright-core",
+  ] },
 ];
 
 const ROOT_TEXT_FILES = [
@@ -370,7 +385,7 @@ export async function copyAppLayout(
   if (mcpClientVersion !== MCP_CLIENT_VERSION) {
     throw new Error(`apps/gateway/package.json must pin @modelcontextprotocol/client to ${MCP_CLIENT_VERSION} until its packaged runtime closure is updated`);
   }
-  for (const module of MCP_RUNTIME_EXTERNAL_MODULES) {
+  for (const module of RUNTIME_EXTERNAL_MODULES) {
     await copyExternalModule(module.name, module.candidates, appRoot, module.destination);
   }
   const keyringVersion = gatewayPackage.dependencies?.["@napi-rs/keyring"];
@@ -385,6 +400,42 @@ export async function copyAppLayout(
   for (const nativePackage of keyringNativePackages(target)) {
     await copyLockedNapiPackage(nativePackage, keyringVersion, appRoot, stagingRoot);
   }
+}
+
+async function installWindowsBrowserRuntime(appRoot: string): Promise<string> {
+  const packageJson = JSON.parse(
+    readFileSync(path.join(root, "packages/blue-tanuki/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  if (packageJson.dependencies?.["playwright-core"] !== PLAYWRIGHT_CORE_VERSION) {
+    throw new Error(`packages/blue-tanuki/package.json must pin playwright-core to ${PLAYWRIGHT_CORE_VERSION}`);
+  }
+  const cli = path.join(appRoot, "node_modules", "playwright-core", "cli.js");
+  if (!existsSync(cli)) throw new Error("packaged Playwright Core CLI is missing");
+
+  const browserEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: "0" };
+  const install = spawnSync(process.execPath, [cli, "install", "chromium"], {
+    cwd: appRoot,
+    env: browserEnv,
+    stdio: "inherit",
+  });
+  if (install.error) throw install.error;
+  if (install.status !== 0) throw new Error(`Playwright Chromium headless-shell install failed (exit=${install.status})`);
+
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e",
+    'import { chromium } from "playwright-core"; console.log(chromium.executablePath());'], {
+    cwd: appRoot,
+    env: browserEnv,
+    encoding: "utf8",
+  });
+  if (probe.error) throw probe.error;
+  if (probe.status !== 0) throw new Error(`packaged Playwright browser path probe failed (exit=${probe.status})`);
+  const executable = probe.stdout.trim().split(/\r?\n/u).at(-1);
+  if (!executable || !existsSync(executable)) throw new Error("packaged Chromium headless-shell executable is missing");
+  const relative = path.relative(appRoot, executable);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("packaged Chromium executable resolved outside the application root");
+  }
+  return relative.split(path.sep).join("/");
 }
 
 async function copyProductLaunchers(packageRoot: string): Promise<void> {
@@ -495,7 +546,7 @@ function zipDirectory(sourceDir: string, outFile: string): void {
 }
 
 export function sha256File(file: string): string {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
+  return sha256FileSync(file);
 }
 
 function windowsReadmeInstallText(version: string): string {
@@ -557,6 +608,7 @@ async function main(): Promise<void> {
     await mkdir(path.dirname(outFile), { recursive: true });
     await copyProductLaunchers(packageRoot);
     await copyAppLayout(appRoot, { platform: "win32", arch: "x64" }, workRoot);
+    const browserExecutable = await installWindowsBrowserRuntime(appRoot);
 
     const runtime = await downloadNodeRuntime(nodeVersion, cacheDir);
     await mkdir(path.join(packageRoot, "runtime"), { recursive: true });
@@ -575,6 +627,15 @@ async function main(): Promise<void> {
         source: runtime.url,
         sha256: runtime.sha256,
         shasums_source: runtime.shasumsUrl,
+      },
+      browser_runtime: {
+        bundled: true,
+        package: "playwright-core",
+        package_version: PLAYWRIGHT_CORE_VERSION,
+        engine: "chromium",
+        executable: `app/${browserExecutable}`,
+        chromium_sandbox: true,
+        preview_enabled_by_default: false,
       },
       user_experience: {
         requires_node_pnpm_git_from_user: false,
@@ -632,6 +693,8 @@ async function main(): Promise<void> {
     console.log(`windows_install_readme=${readmeInstall}`);
     console.log("unsigned_installer=true");
     console.log("bundled_node_runtime=true");
+    console.log("bundled_playwright_chromium_runtime=true");
+    console.log("browser_preview_enabled_by_default=false");
     console.log("runtime_sha256_verified=true");
     console.log("user_requires_node_pnpm_git=false");
     completed = true;

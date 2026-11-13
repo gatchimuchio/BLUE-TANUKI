@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / Windows製品packageへbrowser runtimeを結合
+
+主語はBLUEの`browser.snapshot`／`browser.automation` previewを含むWindows製品packageである。目的はPlaywright依存だけの`CODE_PRESENT`を越え、Windows archive内の実browser binary・対応Playwright revision・installer consumerをhash結合すること。rev5.0 P2全体施工内のWindows限定producer→package consumerであり、browserの実起動や全体製品完成ではない。
+
+`playwright-core`を1.65.0へ固定し、Windows package時に一致するChromium 1254、Headless Shell、付随browser runtimeをapp-local `.local-browsers`へ格納する。manifestはpackage内の実行path、sandbox有効、preview既定無効を束縛する。ZIP verifierはChromiumとHeadless Shellの実在、`ABOUT`／`LICENSE.headless_shell`およびPlaywrightのLICENSE／NOTICE／ThirdPartyNoticesを要求する。Windows自己展開CMDの生成・検証を行単位のstream処理へ変更し、IExpress CABの二重圧縮を無効にして10分timeoutを解消した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| workspace `pnpm typecheck`／`pnpm build` | PASS。typecheckが消去するignored `dist`は直後のworkspace buildで再生成した。 |
+| `pnpm package:installers --platform=windows`／installer verifier | PASS。ZIP payloadと550 MB級Base64 CMDのmanifest／SHA／埋込payloadが一致。 |
+| `pnpm exec tsx scripts/package_windows_iexpress.ts` | PASS。unsigned IExpress EXEを生成。 |
+| `pnpm package:windows:verify` | PASS。ZIP 4,295 entries、manifest／sidecar、browser binary・license entry、CMD、PE/CAB EXE抽出と埋込hashを確認。setup実行はNOT_RUN。 |
+| `pnpm docs:check`／`git diff --check` | PASS（この記録を含むcloseout時）。 |
+| browser launch／HTTP通信／installed Setup・Uninstall／全suite／5OS実物／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Windows package-local Playwright Chromium consumer closure.
+- **STATUS:** Windows製品archive内のbrowser runtime consumerは`WIRED`（artifact・manifest・license entryを検証）。実起動・installed runtimeは未確認。Linux／macOSのbrowser binary、Android／iOS preview、F06全域および製品全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再同期し、rev5.0 P2全域から次のproducer→consumer欠損を選定する。QC／QAへ移らない。
+- **SAFETY_STATUS:** Preview既定無効、L3、Chromium sandbox有効、ephemeral context、credential／保存profileなしを維持。実browser起動、外部HTTP、実provider、外部作用は行っていない。installerはunsignedで公開・配布保留。
+- **LOCAL_ASSET_STATUS:** 検証済みZIP／CMD／EXEとmanifest／SHAは非OneDrive Temp `blue-tanuki-artifacts-20261113-browser-runtime` にpackage artifactとして保持。失敗attemptのIExpress stage 2件、合計1,100,693,745 bytesをWindowsゴミ箱へ移動し、元path消失とRecycle Bin entryを確認。成功stageとbrowser package workrootは既に不在。ignored workspace build outputは再生成し開発用に保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`e56c0880e37cfed4255a44184a01240c39681f0d`、recovery current／previous=`e56c0880e37cfed4255a44184a01240c39681f0d`／`2e188a97e68df1294d7f781f825b5a731caa6c10`。終了HEAD・remote・recovery二世代はcommit／push後に再照合して記録する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / browser previewの同一origin link navigation
 
 主語はBLUE `browser.automation` のephemeral browser previewである。目的は、初期URLのsnapshot／navigateに限られていた経路から、公開ページ上の完全一致するaccessible linkを一つ選び、同一originのHTTP(S)先を閲覧consumerへ渡すこと。これはF06の限定`CODE_PRESENT` sliceであり、製品全体やF06全体を`WIRED`にしない。

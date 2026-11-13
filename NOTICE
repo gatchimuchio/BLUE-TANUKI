@@ -13,4 +13,5 @@ Copyright 2026 gatchimuchio
 ## 配布物に含む第三者ソフトウェア
 
 - `@napi-rs/keyring` 2.1.2 — MIT。OS credential store binding。本体および配布するplatform packageのライセンス表記に従う。
+- `playwright-core` 1.65.0 — Apache-2.0。Windows installerには同版が対応するChromium browser runtimeも含まれる。配布物にはPlaywright／Chromiumが同梱するライセンス・第三者表示を含める。
 - platform packageはビルド済みRust依存の帰属・ライセンス文を`LICENSE.third-party.md`に含む。Linux packageに静的リンクされたlibdbusのAFL-2.1またはGPL-2.0-or-laterの条件・著作権表示も同ファイルに含まれる。

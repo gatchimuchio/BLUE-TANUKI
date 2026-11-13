@@ -22,6 +22,15 @@ interface ExternalManifest {
     sha256?: string;
     shasums_source?: string;
   };
+  browser_runtime?: {
+    bundled?: boolean;
+    package?: string;
+    package_version?: string;
+    engine?: string;
+    executable?: string;
+    chromium_sandbox?: boolean;
+    preview_enabled_by_default?: boolean;
+  };
   user_experience?: {
     requires_node_pnpm_git_from_user?: boolean;
     creates_start_menu_shortcuts?: boolean;
@@ -61,6 +70,9 @@ const REQUIRED_ENTRIES = [
   "app/LICENSE-APACHE-2.0",
   "app/LICENSE-CC-BY-4.0",
   "app/NOTICE",
+  "app/node_modules/playwright-core/LICENSE",
+  "app/node_modules/playwright-core/NOTICE",
+  "app/node_modules/playwright-core/ThirdPartyNotices.txt",
   "app/assets/aotanu/spritesheets/aotanu_idle_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_walk_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_working_2x2.png",
@@ -96,6 +108,8 @@ const REQUIRED_ENTRIES = [
   "app/node_modules/@blue-tanuki/operator-developer/package.json",
   "app/node_modules/ws/package.json",
   "app/node_modules/zod/package.json",
+  "app/node_modules/playwright-core/package.json",
+  "app/node_modules/playwright-core/LICENSE",
   "app/node_modules/@modelcontextprotocol/client/package.json",
   "app/node_modules/@modelcontextprotocol/client/dist/index.mjs",
   "app/node_modules/@modelcontextprotocol/core/package.json",
@@ -214,7 +228,7 @@ function assertSafeEntry(entry: string): void {
   }
 }
 
-function assertManifest(manifest: ExternalManifest, archive: string, actualSha: string): void {
+function assertManifest(manifest: ExternalManifest, archive: string, actualSha: string): string {
   if (manifest.schema_version !== 1) throw new Error("manifest schema_version must be 1");
   if (manifest.name !== "blue-tanuki") throw new Error("manifest name must be blue-tanuki");
   if (manifest.package_type !== "windows-x64-zip-installer") throw new Error("manifest package_type mismatch");
@@ -227,6 +241,18 @@ function assertManifest(manifest: ExternalManifest, archive: string, actualSha: 
   }
   if (manifest.node_runtime?.shasums_source !== "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt") {
     throw new Error("manifest Node runtime shasums_source mismatch");
+  }
+  if (manifest.browser_runtime?.bundled !== true || manifest.browser_runtime.package !== "playwright-core" ||
+      manifest.browser_runtime.package_version !== "1.65.0" || manifest.browser_runtime.engine !== "chromium" ||
+      manifest.browser_runtime.chromium_sandbox !== true || manifest.browser_runtime.preview_enabled_by_default !== false) {
+    throw new Error("manifest browser runtime boundary mismatch");
+  }
+  const browserExecutable = manifest.browser_runtime.executable?.replace(/\\/gu, "/");
+  if (!browserExecutable || browserExecutable.startsWith("/") || /^[A-Za-z]:\//u.test(browserExecutable) ||
+      browserExecutable.split("/").includes("..") ||
+      !browserExecutable.startsWith("app/node_modules/playwright-core/.local-browsers/") ||
+      !browserExecutable.toLowerCase().endsWith(".exe")) {
+    throw new Error("manifest browser executable path is unsafe");
   }
   if (manifest.user_experience?.requires_node_pnpm_git_from_user !== false) {
     throw new Error("manifest must declare no user Node/pnpm/Git requirement");
@@ -245,6 +271,7 @@ function assertManifest(manifest: ExternalManifest, archive: string, actualSha: 
   if (manifest.boundaries?.gui_shell_modified !== false) throw new Error("manifest must declare GUI Shell untouched");
   if (manifest.boundaries?.hds_authority_modified !== false) throw new Error("manifest must declare HDS authority untouched");
   if (manifest.boundaries?.installer_autostart !== false) throw new Error("manifest must declare installer autostart false");
+  return browserExecutable;
 }
 
 function requireSourceText(rel: string, needles: readonly string[]): void {
@@ -271,7 +298,7 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
   const sidecarSha = readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
   if (sidecarSha !== actualSha) throw new Error("sha256 sidecar does not match artifact");
   const manifest = readManifest(manifestFile);
-  assertManifest(manifest, archive, actualSha);
+  const browserExecutable = assertManifest(manifest, archive, actualSha);
   const installReadme = readFileSync(installReadmeFile, "utf8");
   for (const needle of [
     "Normal Windows users should not run source builds",
@@ -295,6 +322,16 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     if (!entrySet.has(required)) {
       throw new Error(`installer zip missing required entry: ${required}`);
     }
+  }
+  if (!entrySet.has(browserExecutable)) throw new Error("installer zip missing bundled Chromium executable");
+  const chromiumRevision = browserExecutable.match(/\/chromium-(\d+)\/chrome-win64\/chrome\.exe$/u)?.[1];
+  if (!chromiumRevision) throw new Error("manifest browser executable does not identify a packaged Chromium revision");
+  for (const required of [
+    `app/node_modules/playwright-core/.local-browsers/chromium-${chromiumRevision}/chrome-win64/ABOUT`,
+    `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${chromiumRevision}/chrome-headless-shell-win64/chrome-headless-shell.exe`,
+    `app/node_modules/playwright-core/.local-browsers/chromium_headless_shell-${chromiumRevision}/chrome-headless-shell-win64/LICENSE.headless_shell`,
+  ]) {
+    if (!entrySet.has(required)) throw new Error(`installer zip missing browser runtime or notice entry: ${required}`);
   }
 
   requireSourceText("install/windows/product/BlueTanukiSetup.ps1", [

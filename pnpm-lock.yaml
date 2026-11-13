@@ -71,6 +71,9 @@ importers:
       '@blue-tanuki/protocol':
         specifier: workspace:*
         version: link:../protocol
+      playwright-core:
+        specifier: 1.65.0
+        version: 1.65.0
 
   packages/channel-base:
     dependencies:
@@ -1668,6 +1671,11 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
+
+  playwright-core@1.65.0:
+    resolution: {integrity: sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -3644,6 +3652,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   pkce-challenge@5.0.1: {}
+
+  playwright-core@1.65.0: {}
 
   possible-typed-array-names@1.1.0: {}
 

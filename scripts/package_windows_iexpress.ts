@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  closeSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   rmSync,
   statSync,
@@ -12,6 +14,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { hashEmbeddedBase64PayloadSync } from "./embedded_payload.js";
+import { sha256File } from "./package_windows.ts";
 import { windowsShortPath } from "./windows_short_path.js";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
@@ -60,10 +64,6 @@ interface WindowsExeManifest {
 const root = process.cwd();
 const PAYLOAD_MARKER = "__BLUE_TANUKI_INSTALLER_PAYLOAD_BASE64_BELOW__";
 
-function sha256(data: Buffer | string): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
 function readPackage(): PackageJson {
   return JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as PackageJson;
 }
@@ -76,16 +76,32 @@ function readSha256Sidecar(filepath: string): string {
 }
 
 function assertPeWithEmbeddedCabinet(filepath: string): void {
-  const contents = readFileSync(filepath);
-  if (contents.length < 1024 || contents.subarray(0, 2).toString("ascii") !== "MZ") {
-    throw new Error("IExpress output does not have a Windows PE header");
-  }
-  const peOffset = contents.readUInt32LE(0x3c);
-  if (peOffset + 4 > contents.length || contents.subarray(peOffset, peOffset + 4).toString("ascii") !== "PE\u0000\u0000") {
-    throw new Error("IExpress output PE signature is missing");
-  }
-  if (contents.indexOf("MSCF", peOffset + 4, "ascii") < 0) {
-    throw new Error("IExpress output does not contain an embedded Cabinet payload");
+  const fd = openSync(filepath, "r");
+  try {
+    if (statSync(filepath).size < 1024) throw new Error("IExpress output does not have a Windows PE header");
+    const header = Buffer.alloc(65_536);
+    const headerSize = readSync(fd, header, 0, header.length, 0);
+    const prefix = header.subarray(0, headerSize);
+    if (prefix.subarray(0, 2).toString("ascii") !== "MZ") throw new Error("IExpress output does not have a Windows PE header");
+    const peOffset = prefix.readUInt32LE(0x3c);
+    if (peOffset + 4 > prefix.length || prefix.subarray(peOffset, peOffset + 4).toString("ascii") !== "PE\u0000\u0000") {
+      throw new Error("IExpress output PE signature is missing");
+    }
+    const chunk = Buffer.alloc(1024 * 1024);
+    let position = peOffset + 4;
+    let carry = Buffer.alloc(0);
+    let found = false;
+    while (!found) {
+      const count = readSync(fd, chunk, 0, chunk.length, position);
+      if (count === 0) break;
+      position += count;
+      const combined = carry.length === 0 ? chunk.subarray(0, count) : Buffer.concat([carry, chunk.subarray(0, count)]);
+      found = combined.indexOf("MSCF", "ascii") >= 0;
+      carry = Buffer.from(combined.subarray(Math.max(0, combined.length - 3)));
+    }
+    if (!found) throw new Error("IExpress output does not contain an embedded Cabinet payload");
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -101,6 +117,7 @@ function buildSed(targetExeShortPath: string, stageDirShortPath: string): string
     "HideExtractAnimation=1",
     "UseLongFileName=1",
     "InsideCompressed=0",
+    "Compress=0",
     "CAB_FixedSize=0",
     "CAB_ResvCodeSigning=0",
     "RebootMode=N",
@@ -145,8 +162,8 @@ function main(): void {
     if (!existsSync(filepath)) throw new Error(`required Windows package input is missing: ${filepath}`);
   }
 
-  const sourceCmdBytes = readFileSync(sourceCmd);
-  const sourceCmdHash = sha256(sourceCmdBytes);
+  const sourceCmdStat = statSync(sourceCmd);
+  const sourceCmdHash = sha256File(sourceCmd);
   const expectedSourceCmdHash = readSha256Sidecar(sourceCmdShaPath);
   if (sourceCmdHash !== expectedSourceCmdHash) throw new Error("source setup command SHA-256 mismatch");
   const sourceCmdManifest = JSON.parse(readFileSync(sourceCmdManifestPath, "utf8")) as ProductInstallerManifest;
@@ -156,8 +173,7 @@ function main(): void {
     throw new Error("source setup command manifest does not match the current Windows installer");
   }
 
-  const payloadBytes = readFileSync(payload);
-  const payloadHash = sha256(payloadBytes);
+  const payloadHash = sha256File(payload);
   if (payloadHash !== readSha256Sidecar(payloadShaPath)) throw new Error("Windows payload ZIP SHA-256 mismatch");
   const payloadManifest = JSON.parse(readFileSync(payloadManifestPath, "utf8")) as ProductInstallerManifest;
   if (payloadManifest.name !== "blue-tanuki" || payloadManifest.version !== version ||
@@ -175,12 +191,8 @@ function main(): void {
       wrapperPayload.sha256?.toLowerCase() !== payloadHash) {
     throw new Error("Windows command wrapper manifest does not bind to the current ZIP installer");
   }
-  const sourceCommandText = sourceCmdBytes.toString("utf8");
-  const markerIndex = sourceCommandText.lastIndexOf(PAYLOAD_MARKER);
-  if (markerIndex < 0) throw new Error("Windows command wrapper has no embedded ZIP payload marker");
-  const embeddedText = sourceCommandText.slice(markerIndex + PAYLOAD_MARKER.length).replace(/\s/gu, "");
-  if (!embeddedText || !/^[A-Za-z0-9+/]*={0,2}$/u.test(embeddedText) ||
-      sha256(Buffer.from(embeddedText, "base64")) !== payloadHash) {
+  const embeddedPayload = hashEmbeddedBase64PayloadSync(sourceCmd, PAYLOAD_MARKER);
+  if (embeddedPayload.sha256 !== payloadHash || embeddedPayload.sizeBytes !== payloadStat.size) {
     throw new Error("Windows command wrapper embeds a different or invalid ZIP payload");
   }
 
@@ -213,8 +225,7 @@ function main(): void {
 
     mkdirSync(releaseDir, { recursive: true });
     copyFileSync(stagedExe, outputExe);
-    const installerBytes = readFileSync(outputExe);
-    const installerHash = sha256(installerBytes);
+    const installerHash = sha256File(outputExe);
     const installerStat = statSync(outputExe);
     const manifest: WindowsExeManifest = {
       schema_version: 1,
@@ -225,7 +236,7 @@ function main(): void {
       installer: { file: path.basename(outputExe), size_bytes: installerStat.size, sha256: installerHash },
       bootstrapper: {
         file: "BlueTanukiSetup.cmd",
-        size_bytes: sourceCmdBytes.length,
+        size_bytes: sourceCmdStat.size,
         sha256: sourceCmdHash,
         implementation: "Windows IExpress",
       },

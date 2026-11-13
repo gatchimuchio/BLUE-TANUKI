@@ -8,9 +8,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / browser preview同一origin link navigation
+### 直近完了BUILD_BATCH — QE_BUILD / Windows package-local browser runtime consumer
 
-`browser.automation` previewに、完全一致・一意なaccessible linkの同一origin HTTP(S) navigationを追加した。JavaScript click handlerは実行せず、browser interception必須、GET／HEADのみ、public-address guard、credentialなし、download無効、L3、既定無効を維持。form submit／download／uploadは未実装・quarantine。Core typecheck／build PASS。Playwright package／browser未導入のため実browser smokeはNOT_RUNであり、製品package consumerは`BUILD_GAP`、このsliceは`CODE_PRESENT`に限る。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Windows製品ZIPへPlaywright Core 1.65.0と一致するChromium／Headless Shellを同梱し、manifestで実binary path、sandbox、preview既定無効を束縛した。Verifierはbrowser binaryとlicense/notice entry、ZIP／CMD／IExpress EXEのSHA・埋込関係・EXE抽出を確認。workspace typecheck／buildとWindows package verifierはPASS（ZIP 4,295 entries）。browser launch、外部HTTP、Setup executionはNOT_RUN。Windows package consumerのみ`WIRED`、他OS browserとF06全域は`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA未成立。unsigned installerの公開・配布は保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / browser preview同一origin link navigation
+
+`browser.automation` previewに、完全一致・一意なaccessible linkの同一origin HTTP(S) navigationを追加した。JavaScript click handlerは実行せず、browser interception必須、GET／HEADのみ、public-address guard、credentialなし、download無効、L3、既定無効を維持。form submit／download／uploadは未実装・quarantine。Core typecheck／build PASS。Playwright package／browser未導入のため実browser smokeはNOT_RUNであり、このsliceは`CODE_PRESENT`に限る。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
 
 ### 直近完了BUILD_BATCH — QE_BUILD / rev5.0 Linux x64 hosted installed lifecycle consumer
 

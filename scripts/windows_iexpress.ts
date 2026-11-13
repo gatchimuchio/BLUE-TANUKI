@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -12,6 +11,7 @@ import {
   closeSync,
 } from "node:fs";
 import * as path from "node:path";
+import { hashEmbeddedBase64PayloadSync, sha256FileSync } from "./embedded_payload.js";
 import { windowsShortPath } from "./windows_short_path.js";
 
 interface WindowsExeManifest {
@@ -33,14 +33,6 @@ export interface WindowsIExpressVerification {
   installerSha256: string;
   payloadSha256: string;
   bootstrapperSha256: string;
-}
-
-function sha256(data: Buffer | string): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-function sha256File(filepath: string): string {
-  return sha256(readFileSync(filepath));
 }
 
 function readSha256Sidecar(filepath: string): string {
@@ -143,9 +135,9 @@ export function verifyAndExtractWindowsIExpressCommand(
     throw new Error("Windows .exe verification inputs must be regular files");
   }
 
-  const installerHash = sha256File(installer);
+  const installerHash = sha256FileSync(installer);
   if (readSha256Sidecar(`${installer}.sha256`) !== installerHash) throw new Error("Windows .exe SHA-256 sidecar mismatch");
-  const payloadHash = sha256File(payload);
+  const payloadHash = sha256FileSync(payload);
   if (readSha256Sidecar(`${payload}.sha256`) !== payloadHash) throw new Error("Windows .exe selected ZIP SHA-256 sidecar mismatch");
   const manifest = JSON.parse(readFileSync(`${installer}.manifest.json`, "utf8")) as WindowsExeManifest;
   assertManifest(manifest, expectedVersion, installer, installerHash, payload, payloadHash);
@@ -171,21 +163,14 @@ export function verifyAndExtractWindowsIExpressCommand(
   const commandPath = path.join(extractionRoot, "BlueTanukiSetup.cmd");
   const commandStat = lstatSync(commandPath);
   if (!commandStat.isFile() || commandStat.isSymbolicLink()) throw new Error("IExpress command payload is not a regular file");
-  const commandBytes = readFileSync(commandPath);
-  const bootstrapperHash = sha256(commandBytes);
-  if (commandBytes.length !== manifest.bootstrapper?.size_bytes || bootstrapperHash !== manifest.bootstrapper?.sha256) {
+  const bootstrapperStat = statSync(commandPath);
+  const bootstrapperHash = sha256FileSync(commandPath);
+  if (bootstrapperStat.size !== manifest.bootstrapper?.size_bytes || bootstrapperHash !== manifest.bootstrapper?.sha256) {
     throw new Error("IExpress extracted command payload differs from the manifest");
   }
 
-  const commandText = commandBytes.toString("utf8");
-  const markerIndex = commandText.lastIndexOf(PAYLOAD_MARKER);
-  if (markerIndex < 0) throw new Error("extracted command wrapper has no embedded ZIP marker");
-  const embeddedText = commandText.slice(markerIndex + PAYLOAD_MARKER.length).replace(/\s/gu, "");
-  if (!embeddedText || !/^[A-Za-z0-9+/]*={0,2}$/u.test(embeddedText)) {
-    throw new Error("extracted command wrapper contains invalid Base64 payload text");
-  }
-  const embeddedZip = Buffer.from(embeddedText, "base64");
-  if (embeddedZip.length !== manifest.payload?.size_bytes || sha256(embeddedZip) !== payloadHash) {
+  const embeddedZip = hashEmbeddedBase64PayloadSync(commandPath, PAYLOAD_MARKER);
+  if (embeddedZip.sizeBytes !== manifest.payload?.size_bytes || embeddedZip.sha256 !== payloadHash) {
     throw new Error("IExpress command payload embeds a different Windows ZIP");
   }
 

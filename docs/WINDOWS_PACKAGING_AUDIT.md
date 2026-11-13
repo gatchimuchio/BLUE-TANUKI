@@ -33,6 +33,9 @@ The package contains:
 - built gateway and package `dist` outputs,
 - Windows `shell.exec` AppContainer and Job Object isolation helper in the `@blue-tanuki/core` runtime package,
 - physical runtime `node_modules` for `@blue-tanuki/*`, `ws`, and `zod`,
+- pinned `playwright-core` plus the matching Chromium runtime under
+  `app/node_modules/playwright-core/.local-browsers` for the disabled-by-default,
+  L3 browser preview,
 - bundled Windows Node runtime zip,
 - docs and packaging scripts needed for diagnostics.
 
@@ -46,6 +49,8 @@ command hash, and embedded ZIP hash/size. The command verifier checks:
 
 - required installer entries,
 - required runtime package entries,
+- the Playwright Core version, manifest-bound Chromium executable, and
+  package-local browser placement,
 - bundled Windows shell isolation helper,
 - bundled Node runtime declaration,
 - Start Menu and uninstall registration source text,

@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { fileURLToPath } from "node:url";
+import { hashEmbeddedBase64PayloadSync, readTextBeforeEmbeddedPayloadSync } from "./embedded_payload.js";
 import { readPackage, root, sha256File } from "./package_windows.ts";
 
 type ProductInstallerKind =
@@ -128,23 +128,6 @@ function readManifest(file: string): ProductInstallerManifest {
   return JSON.parse(readFileSync(file, "utf8")) as ProductInstallerManifest;
 }
 
-function decodeEmbeddedPayload(installerPath: string): Buffer {
-  const text = readFileSync(installerPath, "utf8");
-  const markerIndex = text.lastIndexOf(PAYLOAD_MARKER);
-  if (markerIndex < 0) {
-    throw new Error(`payload marker missing: ${installerPath}`);
-  }
-  const payloadText = text.slice(markerIndex + PAYLOAD_MARKER.length).replace(/\s/g, "");
-  if (!payloadText) {
-    throw new Error(`embedded payload missing: ${installerPath}`);
-  }
-  return Buffer.from(payloadText, "base64");
-}
-
-function sha256Buffer(data: Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
 function assertManifest(
   target: ProductInstallerTarget,
   manifest: ProductInstallerManifest,
@@ -202,12 +185,7 @@ function assertManifest(
 }
 
 function assertNoNormalUserBuildPath(target: ProductInstallerTarget): void {
-  const fullText = readFileSync(target.installerPath, "utf8");
-  const markerIndex = fullText.lastIndexOf(PAYLOAD_MARKER);
-  if (markerIndex < 0) {
-    throw new Error(`payload marker missing: ${target.installerPath}`);
-  }
-  const text = fullText.slice(0, markerIndex);
+  const text = readTextBeforeEmbeddedPayloadSync(target.installerPath, PAYLOAD_MARKER);
   const forbidden = [
     "corepack",
     "pnpm install",
@@ -252,8 +230,8 @@ function verifyTarget(target: ProductInstallerTarget): void {
   const sidecarSha = readSha256Sidecar(shaFile);
   if (sidecarSha !== installerSha) throw new Error(`product installer sha256 sidecar mismatch: ${target.installerPath}`);
   const payloadSha = sha256File(target.payloadPath);
-  const embeddedSha = sha256Buffer(decodeEmbeddedPayload(target.installerPath));
-  if (embeddedSha !== payloadSha) {
+  const embeddedPayload = hashEmbeddedBase64PayloadSync(target.installerPath, PAYLOAD_MARKER);
+  if (embeddedPayload.sha256 !== payloadSha || embeddedPayload.sizeBytes !== statSync(target.payloadPath).size) {
     throw new Error(`embedded payload sha256 mismatch: ${target.installerPath}`);
   }
   assertManifest(target, readManifest(manifestFile), installerSha, payloadSha);

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@blue-tanuki/hds-brain": "workspace:*",
-    "@blue-tanuki/protocol": "workspace:*"
+    "@blue-tanuki/protocol": "workspace:*",
+    "playwright-core": "1.65.0"
   }
 }

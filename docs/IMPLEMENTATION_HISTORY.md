@@ -4747,3 +4747,21 @@ Owner-tokenで照会する`/owner/task-submission-status`に、同一submission�
 WebChat／Gateway typecheck・buildはPASS。Owner submission status／Control Center focused testsは2/2 PASS（WebChat fileの他132件はNOT_RUN）。共通J outcome projection testsは4/4 PASS。`pnpm docs:check`と`git diff --check`はPASS。docs checkは日本語基底移行負債75件の既存継続を報告した。無filterのWebChat全file実行は誤操作で、130 passed／4 failedを報告した。変更したstatus UI harnessの失敗1件は修正しfocused rerun PASS。その他3件はRecovery scope applicability、app shell copy、owner L3 selectorで、今回のdiffから外れるため原因は未調査。全suite／全体QC／QAの根拠には使わない。
 
 HDS-J／Approval／Broker／Mのauthority・writer、owner explicit rules、C08.03 live provider HOLD、OD-03外部作用HOLD、P13公開／出荷GO、5OS全体、product `SYSTEM_SHAPED`／`BUILD_COVERED`は変更なし／未成立。D4-Pocketの現在mainは読み取りのみで、別repoには書き込んでいない。test-owned in-memory fixture以外の新規persistent/temporary assetなし。ignored WebChat／Gateway `dist`は稼働開発物として保持し、保護attachmentsとLinux `target/`は未変更。
+
+## 2026-11-13 — QE_BUILD rev5.0 / Windows browser runtime package closure
+
+主語はWindows製品packageへ接続するBLUE browser preview runtimeである。Playwright dependency-only状態を、Playwright Core 1.65.0とその一致Chromium revision 1254／Headless Shellを含むapp-local packageへ接続した。manifestは`chromium-1254/chrome-win64/chrome.exe`、Chromium sandbox有効、preview既定無効を記録する。Archive verifierはbinary pathの実在に加え、Playwright `LICENSE`／`NOTICE`／`ThirdPartyNotices.txt`、Chromium `ABOUT`、Headless Shell executable／`LICENSE.headless_shell`を要求する。Linux／macOS browser binary、Mobile browser preview、F06全体は未成立。
+
+CMD installer生成とproduct-installer検証は巨大ZIPを一括base64文字列へ変換せずstream化し、Windows CMD runtime側もline単位でBase64を復号する。IExpressはCabinetの二重圧縮を無効化し、過去の10分LZX timeoutを解消した。installerはunsignedで公開・配布保留のまま。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| workspace `pnpm typecheck`／`pnpm build` | PASS。typecheckが削除するignored `dist`はbuildで再生成。 |
+| Windows product CMD generation／verification | PASS。installer SHA-256=`5e02c570f56c766894d3b6a472e0f4555552b4aaaf8eb12f58df2f2b7a5230d7`、embedded ZIP SHA matches. |
+| Windows IExpress EXE generation | PASS。unsigned EXE SHA-256=`b570f00b162b969c3ca6a6b9a6d70b145960a3340c3967e765e7750152dd5cdf`。 |
+| `pnpm package:windows:verify` | PASS。ZIP 4,295 entries、ZIP SHA-256=`f8d859c64aef3bb4e28610d763abc38f0c086629ee8f4d685d1a5cde19cb6e50`、CMD／EXE manifestと埋込payload、EXEからのCMD抽出を確認。Setup execution=`NOT_RUN`。 |
+| browser launch／HTTP／installed Setup・Uninstall／suite／5OS runtime／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+実browser launch、外部HTTP、credential、provider、外部作用は使用していない。Previewは既定無効、L3、ephemeral context、保存credential/profileなし、sandbox有効の境界を維持する。全体`SYSTEM_SHAPED`／`BUILD_COVERED`はfalse、QE_QC／QE_QA未開始、C08.03／OD-03／P13 hold継続。
+
+検証済みartifact ZIP 402,173,106 bytes、CMD 550,345,231 bytes、EXE 550,662,144 bytesとmanifest／SHA sidecar／README_INSTALL_WINDOWS.txtは非OneDrive Temp `blue-tanuki-artifacts-20261113-browser-runtime`に保持。失敗IExpress stage 2件（550,346,861 bytes／550,346,884 bytes、合計1,100,693,745 bytes）はWindowsゴミ箱へ移動し、元path消失とRecycle Bin entryを確認した。stage内のCMDは保持artifactと同一SHA、残りはtask-generated SED／DDFのみ。成功stageとbrowser package workrootは不在。workspace `dist`／Windows isolation build outputは開発用として保持し、`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。D4-Pocket／MINIDORAを変更していない。

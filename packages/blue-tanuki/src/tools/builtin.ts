@@ -3816,7 +3816,7 @@ interface RequestLike {
 
 async function importPlaywright(): Promise<PlaywrightLike> {
   try {
-    const specifier = "playwright";
+    const specifier = "playwright-core";
     const imported = await import(specifier);
     if (!isRecord(imported)) {
       throw new Error("playwright module did not load as an object");
@@ -3826,7 +3826,7 @@ async function importPlaywright(): Promise<PlaywrightLike> {
     const reason = e instanceof Error ? e.message : String(e);
     throw new Error(
       "browser automation preview engine unavailable; mutation_sent=false; " +
-        "next_action=install Playwright in a preview environment or keep the preview disabled; " +
+        "next_action=repair the packaged Playwright Core runtime or keep the preview disabled; " +
         `reason=${reason}`,
     );
   }
@@ -3845,7 +3845,11 @@ async function defaultBrowserAutomationRunner(
   try {
     browser = await playwright.chromium.launch({
       headless: true,
-      env: safeProcessEnv(),
+      chromiumSandbox: true,
+      env: {
+        ...safeProcessEnv(),
+        ...(process.platform === "win32" ? { PLAYWRIGHT_BROWSERS_PATH: "0" } : {}),
+      },
     });
     context = await browser.newContext({
       viewport: { ...BROWSER_AUTOMATION_VIEWPORT },

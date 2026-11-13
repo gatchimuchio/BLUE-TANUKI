@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeEmbeddedPayloadInstaller } from "./embedded_payload.js";
 import {
   readPackage,
   root,
@@ -77,10 +78,6 @@ function argValue(name: string): string | undefined {
 
 function hasArg(name: string): boolean {
   return process.argv.includes(name);
-}
-
-function wrapBase64(value: Buffer): string {
-  return value.toString("base64").replace(/.{1,76}/g, "$&\n").trimEnd();
 }
 
 function readPayloadPackageType(payloadPath: string): string {
@@ -162,7 +159,7 @@ function targetsFromArgs(): ProductInstallerTarget[] {
   return [windows, linux, macosX64, macosArm64];
 }
 
-function windowsCmdInstaller(target: ProductInstallerTarget, payloadSha: string, payloadBase64: string): string {
+function windowsCmdInstallerHeader(target: ProductInstallerTarget, payloadSha: string): string {
   return [
     "@echo off",
     "setlocal EnableExtensions DisableDelayedExpansion",
@@ -179,15 +176,15 @@ function windowsCmdInstaller(target: ProductInstallerTarget, payloadSha: string,
     ">> \"%BT_PS1%\" echo $expected = $env:BT_EXPECTED_PAYLOAD_SHA",
     ">> \"%BT_PS1%\" echo $payloadFile = $env:BT_PAYLOAD_FILE",
     ">> \"%BT_PS1%\" echo $marker = '__BLUE_TANUKI_INSTALLER_PAYLOAD_BASE64_BELOW__'",
-    ">> \"%BT_PS1%\" echo $lines = [IO.File]::ReadAllLines($self)",
-    ">> \"%BT_PS1%\" echo $markerIndex = [Array]::IndexOf($lines, $marker)",
-    ">> \"%BT_PS1%\" echo if (-not ($markerIndex -ge 0)) { throw 'installer payload marker missing' }",
-    ">> \"%BT_PS1%\" echo $payloadLines = $lines[($markerIndex + 1)..($lines.Length - 1)]",
-    ">> \"%BT_PS1%\" echo $b64 = ($payloadLines -join '') -replace '\\s',''",
+    ">> \"%BT_PS1%\" echo $reader = [IO.StreamReader]::new($self, [Text.Encoding]::ASCII, $false)",
+    ">> \"%BT_PS1%\" echo $found = $false",
+    ">> \"%BT_PS1%\" echo while ($null -ne ($line = $reader.ReadLine())) { if ($line -ceq $marker) { $found = $true; break } }",
+    ">> \"%BT_PS1%\" echo if (-not $found) { $reader.Dispose(); throw 'installer payload marker missing' }",
     ">> \"%BT_PS1%\" echo $work = Join-Path $env:TEMP ('BlueTanukiSetup-' + [Guid]::NewGuid().ToString('N'))",
     ">> \"%BT_PS1%\" echo New-Item -ItemType Directory -Force -Path $work ^| Out-Null",
     ">> \"%BT_PS1%\" echo $zip = Join-Path $work $payloadFile",
-    ">> \"%BT_PS1%\" echo [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))",
+    ">> \"%BT_PS1%\" echo $zipStream = [IO.File]::Create($zip)",
+    ">> \"%BT_PS1%\" echo try { while ($null -ne ($line = $reader.ReadLine())) { if ($line.Length -eq 0) { continue }; if ($line.Length -gt 76 -or $line -notmatch '^^[A-Za-z0-9+/]*={0,2}$') { throw 'installer payload contains invalid Base64 text' }; $bytes = [Convert]::FromBase64String($line); $zipStream.Write($bytes, 0, $bytes.Length) } } finally { $zipStream.Dispose(); $reader.Dispose() }",
     ">> \"%BT_PS1%\" echo $stream = [IO.File]::OpenRead($zip)",
     ">> \"%BT_PS1%\" echo try { $shaObj = [Security.Cryptography.SHA256]::Create(); try { $actual = ([BitConverter]::ToString($shaObj.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() } finally { $shaObj.Dispose() } } finally { $stream.Dispose() }",
     ">> \"%BT_PS1%\" echo if ($actual -ne $expected) { throw \"payload sha256 mismatch: $actual\" }",
@@ -210,15 +207,13 @@ function windowsCmdInstaller(target: ProductInstallerTarget, payloadSha: string,
     ")",
     "exit /b 0",
     PAYLOAD_MARKER,
-    payloadBase64,
     "",
   ].join("\r\n");
 }
 
-function unixSelfExtractingInstaller(
+function unixSelfExtractingInstallerHeader(
   target: ProductInstallerTarget,
   payloadSha: string,
-  payloadBase64: string,
 ): string {
   const payloadFile = path.basename(target.payloadPath);
   const runLine = target.os === "macos"
@@ -284,7 +279,6 @@ function unixSelfExtractingInstaller(
     "exit \"$status\"",
     "",
     PAYLOAD_MARKER,
-    payloadBase64,
     "",
   ].join("\n");
 }
@@ -295,14 +289,17 @@ async function writeProductInstaller(target: ProductInstallerTarget): Promise<vo
   }
   const pkg = readPackage();
   const payload = assertPayload(target.payloadPath);
-  const payloadBuffer = readFileSync(target.payloadPath);
-  const payloadBase64 = wrapBase64(payloadBuffer);
-  const installerText = target.os === "windows"
-    ? windowsCmdInstaller(target, payload.sha256, payloadBase64)
-    : unixSelfExtractingInstaller(target, payload.sha256, payloadBase64);
+  const installerHeader = target.os === "windows"
+    ? windowsCmdInstallerHeader(target, payload.sha256)
+    : unixSelfExtractingInstallerHeader(target, payload.sha256);
 
   await mkdir(path.dirname(target.outputPath), { recursive: true });
-  await writeFile(target.outputPath, installerText, "utf8");
+  await writeEmbeddedPayloadInstaller(
+    target.outputPath,
+    installerHeader,
+    target.payloadPath,
+    target.os === "windows" ? "\r\n" : "\n",
+  );
   if (target.os !== "windows") {
     await chmod(target.outputPath, 0o755);
     const executableMode = (await stat(target.outputPath)).mode & 0o777;

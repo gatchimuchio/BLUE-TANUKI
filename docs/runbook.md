@@ -320,16 +320,20 @@ Google tokens fail before a request is sent.
 
 `browser.read` is a lightweight no-JavaScript page reader. It fetches public
 pages through `http.fetch` guards and returns bounded title/text/link extraction.
-When Playwright and Chromium are available in an operator-controlled preview
-environment, the optional `browser.snapshot` / `browser.automation` preview uses
-an ephemeral context with no stored credentials or downloads. The current product
-packages do not include that browser runtime. The only
-automation action currently implemented is following one exact, unique,
-same-origin accessible link by its `link_name`; it navigates to the resolved
-HTTP(S) target without dispatching page click handlers. Requests are limited to
-GET/HEAD and rechecked by the public-address guard. The preview remains disabled
-by default and L3 final-review protected. Form submission, download, and upload
-remain quarantined and unimplemented.
+The runtime packages include `playwright-core` 1.65.0. The Windows product
+package also carries the Chromium binaries for that exact Playwright revision
+inside its application tree; the preview launches that package-local browser
+with Chromium sandboxing enabled. Linux and macOS packages do not yet bundle a
+browser binary and require an operator-managed Playwright Chromium installation
+in the local browser cache. Android and iOS do not have this browser preview
+runtime. The optional `browser.snapshot` / `browser.automation` preview uses an
+ephemeral context with no stored credentials or downloads. The only automation
+action currently implemented is following one exact, unique, same-origin
+accessible link by its `link_name`; it navigates to the resolved HTTP(S) target
+without dispatching page click handlers. Requests are limited to GET/HEAD and
+rechecked by the public-address guard. The preview remains disabled by default
+and L3 final-review protected. Form submission, download, and upload remain
+quarantined and unimplemented.
 
 `shell.exec` runs a bounded non-shell command (`cmd` plus `args[]`) under
 `BLUE_TANUKI_SHELL_ROOT`. It is a final-review operation because it carries
