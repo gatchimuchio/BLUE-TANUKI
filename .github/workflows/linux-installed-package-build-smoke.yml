@@ -283,6 +283,9 @@ jobs:
           pnpm exec tsx scripts/package_macos_app.ts --arch=${{ matrix.arch }}
           pnpm exec tsx scripts/verify_macos_app.ts --arch=${{ matrix.arch }}
 
+      - name: Launch and stop the native macOS app without running Setup
+        run: pnpm exec tsx scripts/smoke_macos_app.ts --arch=${{ matrix.arch }}
+
       - name: Retain native macOS app build artifacts
         if: ${{ inputs.target_os == 'all' || inputs.target_os == 'macos' }}
         uses: actions/upload-artifact@v4

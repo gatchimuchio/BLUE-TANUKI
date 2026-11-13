@@ -2,6 +2,18 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / macOS native app mounted-launch consumer (2026-11-14)
+
+主語はBLUE-TANUKIのmacOS x64／arm64 native `.app`入口である。目的は配布DMGをread-onlyでmountした状態から実GUI app processを起動・停止し、初回起動がSetupや製品状態変更を自動実行しないことを両CPU環境で短時間確認すること。これはrev5.0 P2全域BUILDの一接続であり、macOS製品全体・他OS・全要求の完成判定ではない。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / macOS native app mounted-launch consumer, x64 and arm64.
+- **STATUS:** IN_PROGRESS。既存`workflow_dispatch`のmacOS x64／arm64 jobに、隔離環境からAppKit `.app`を`open -n -W`で起動・停止する処理を接続中。
+- **SAFETY_SCOPE:** DMGはread-only mount。環境変数はOS起動に必要な最小allowlistだけを渡し、Setup／Uninstall／Broker／provider／外部作用／資格を実行しない。起動前後のinstalled stateを比較し、プロセス停止とmount detachを確認できない場合は一時rootを残して失敗扱いにする。
+- **CHECK_PLAN:** script strict TypeScript check、workflow_dispatch限定とYAML構文確認、mainの固定SHAでmacOS x64／arm64両jobを実行する。成功時も証明範囲は`.app`起動・停止と初回自動Setupなしに限り、画面操作・installed lifecycle・OS権限／Keychain・署名／公証・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`・QE_QC／QE_QAを証明しない。
+- **GIT_RULE:** このBUILD_BATCHのソース・workflowを有意checkpointでGitHub `main`へ反映し、同じcommitを手動Actionsで固定して実施する。結果と終端SHA／復旧ref二世代は閉包時に記録する。P13公開・配布GOは行わない。
+- **LOCAL_ASSET_STATUS:** macOS build出力と一時DMG mountはHosted runner内だけで生成する。Windows上の`dist/`／`.tsbuildinfo`は復元・保持し、添付領域、Linux isolation `target/`、旧worktree metadataは触れない。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2の残る全域consumer接続を継続し、macOS native app smokeを製品QAへ昇格させない。
+
 ## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native app・DMG producer (2026-11-14)
 
 主語はBLUE-TANUKIのmacOS x64／arm64製品アプリ入口と、そのSetup／Launcher／Uninstall consumerである。目的は既存の保護付きUnix製品経路をAppKit画面から明示操作で呼び出せる`.app`とDMGを生成し、macOSの対象CPU／minimum deployment target／同梱installerの同一性を検証すること。HDS authority、Gateway、Broker、秘密、外部作用能力、既存Setup／Uninstallの削除対象は変更しない。

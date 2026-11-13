@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
+### 現行BUILD_BATCH — rev5.0 QE_BUILD / macOS native app mounted-launch consumer
+
+macOS x64／arm64のnative `.app`をread-only DMGから実起動・停止し、初回起動がSetupや製品状態変更を自動実行しないことを既存manual `workflow_dispatch`で短時間確認する作業を進行中。合成設定・資格なしのHosted runner内検査であり、画面操作、installed lifecycle、署名／公証、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。状態・実装commit・run結果は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)で更新する。
+
+### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
 
 通常CLI依頼のdiagnostic `inbound` recordからraw textを除き、content SHA-256とUTF-8 byte数だけを残す。Gateway package typecheckと`git diff --check`はPASS。実CLI log、provider、外部作用、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの証拠ではない。implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へpush済み。詳細と終端refは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。
 
