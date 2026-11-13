@@ -2,7 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser form外部作用の分類とowner review
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / browser form応答のdownload境界
+
+主語は`browser.automation action=form_submit`と、そのHTTP応答を受け取るC向け結果consumer。目的は、添付ダウンロードやPDF等の非テキスト本文を検索結果としてCへ流さず、未対応downloadを結果不明で閉じること。
+
+HTTP transportは`Content-Disposition`を内部応答へ保持する。form GET後は`attachment`を拒否し、HTML／text／JSON／XML系または空の204だけを読取結果として扱う。添付・非テキスト応答は本文・ファイル名を返さず、`outcome_unknown`／`automatic_retry=false`で停止する。ローカル保存・自動実行は行わず、`browser.automation action=download/upload`のquarantineを解除しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| download／非テキスト応答の拒否境界focused test | PASS、1 selected test（本文・ファイル名をエラーへ含めないことを確認）。 |
+| Core typecheck | PASS。 |
+| `pnpm docs:check`／`git diff --check` | 文書反映後に確認予定。 |
+| default Playwright／HTTP、実ブラウザ、実provider、ファイル保存、全suite、全体P2、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06 form response download quarantine.
+- **STATUS:** default HTTP response headers→form GET response policy→C向け結果の静的接続を追加。限定`CODE_PRESENT`であり、download保存機能、実ブラウザ経路、F06全域や製品全体の成立を示さない。
+- **NEXT_REQUIRED_CONSUMER:** P2全体施工を継続し、downloadを実装する場合はowner L3・対象path・隔離保存・安全な後続consumerを結んだ実経路を作る。現在のdownload/upload quarantineは維持する。
+- **SAFETY_STATUS:** GETの外部効果は未分類のまま。添付・非textは未保存・未返却、結果不明、自動再送なし。credential、実browser、live provider、外部作用なし。
+- **LOCAL_ASSET_STATUS:** 新たな永続生成物なし。test一時物はtest cleanup。protected attachmentsとLinux isolation `target/`は未変更。
+- **GIT_STATUS:** 編集前local／`origin/main`／GitHub `main`=`8a81d0e51eba66e96505255170494333a6b66bbf`、ahead／behind=0/0。編集前recovery current／previous=`8a81d0e51eba66e96505255170494333a6b66bbf`／`a5ac1f6dbf6c85400cc38cb251ad315296603705`。終了時の実commit/pushとremote SHAを下記履歴および最終報告へ記録する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / browser form外部作用の分類とowner review
 
 主語はBLUEの`browser.automation action=form_submit`とControl CenterのL3 content reviewである。目的は、検索フォームの形状をread-only効果と誤認せず、外部効果が未分類のフォーム送信としてowner reviewへ渡すこと。
 

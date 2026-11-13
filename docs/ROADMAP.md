@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / browser.automationの送信先束縛付き検索GET
+### 直近完了BUILD_BATCH — QE_BUILD / browser form response download quarantine
+
+form GET応答の`Content-Disposition`を取得し、`attachment`とPDF等の非テキスト応答を本文・ファイル名を返さず拒否する。結果不明・自動再送なしを保ち、ダウンロード保存や自動実行は行わない。download／uploadは引き続きquarantine。限定拒否testとCore typecheckはPASS。実HTTP／Playwright／保存経路、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは限定`CODE_PRESENT`であり、browser download機能やF06／製品全体の成立を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / browser.automationの送信先束縛付き検索GET
 
 `browser.automation action=form_submit`は、一意なaccessible `search`領域内のboundedな同一origin GETだけを扱う。未対応・submit override・制約違反を拒否し、送信元・送信先・入力値をL3 no-store reviewへ束縛する。レビューと結果に外部効果未分類を明示し、GETでの状態変更可能性、購入・確定等を自動判別できないこと、結果不明時の自動再送なしをownerへ示す。JavaScript／service worker無効、公開IPへ固定したtransport、browser network遮断を維持する。provider-free focused tests／型検査／WebChat package buildはPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`CODE_PRESENT`限定で、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

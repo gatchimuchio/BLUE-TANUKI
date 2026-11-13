@@ -1230,6 +1230,7 @@ async function defaultHttpRequest(
       (res) => {
         const status = res.statusCode ?? 0;
         const contentType = headerString(res.headers["content-type"]);
+        const contentDisposition = headerString(res.headers["content-disposition"]);
         const location = headerString(res.headers.location);
         if (method === "HEAD") {
           res.resume();
@@ -1237,6 +1238,7 @@ async function defaultHttpRequest(
             status,
             ok: status >= 200 && status < 300,
             content_type: contentType,
+            content_disposition: contentDisposition,
             location,
             body: "",
             truncated: false,
@@ -1264,6 +1266,7 @@ async function defaultHttpRequest(
               status,
               ok: status >= 200 && status < 300,
               content_type: contentType,
+              content_disposition: contentDisposition,
               location,
               body: Buffer.concat(chunks).toString("utf8"),
               truncated,
@@ -1275,6 +1278,7 @@ async function defaultHttpRequest(
             status,
             ok: status >= 200 && status < 300,
             content_type: contentType,
+            content_disposition: contentDisposition,
             location,
             body: Buffer.concat(chunks).toString("utf8"),
             truncated,
@@ -3829,6 +3833,30 @@ function isBrowserHtmlContentType(contentType: string | null): boolean {
   return mediaType === "text/html" || mediaType === "application/xhtml+xml";
 }
 
+function isBrowserTextResultContentType(contentType: string | null): boolean {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType !== undefined && (
+    mediaType.startsWith("text/") ||
+    mediaType === "application/json" || mediaType.endsWith("+json") ||
+    mediaType === "application/xml" || mediaType === "application/xhtml+xml" || mediaType.endsWith("+xml")
+  );
+}
+
+export function assertBrowserFormResponseIsReadableText(response: Pick<
+  HttpFetchResponse,
+  "status" | "content_type" | "content_disposition" | "body"
+>): void {
+  const disposition = response.content_disposition?.trim();
+  const dispositionValues = disposition?.split(",").map((value) => value.split(";", 1)[0]?.trim().toLowerCase()) ?? [];
+  if (dispositionValues.includes("attachment")) {
+    throw new Error("browser_form_get_download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+  }
+  if (response.status === 204 && response.body.length === 0) return;
+  if (!isBrowserTextResultContentType(response.content_type)) {
+    throw new Error("browser_form_get_non_text_result_rejected; download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+  }
+}
+
 async function setBrowserDocumentContent(page: PageLike, html: string, baseUrl: string, timeoutMs: number): Promise<void> {
   await page.setContent(html, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   await page.evaluate(`(() => {
@@ -4034,6 +4062,7 @@ async function defaultBrowserAutomationRunner(
       if (isRedirect(submissionResponse.status) || submissionResponse.location) {
         throw new Error("browser_form_get_redirect_blocked; outcome_unknown; automatic_retry=false");
       }
+      assertBrowserFormResponseIsReadableText(submissionResponse);
       formFinalUrl = submissionUrl;
       formHttpStatus = submissionResponse.status;
       formResponseTruncated = submissionResponse.truncated;

@@ -45,6 +45,7 @@ import {
   invokeBrowserRead,
   invokeBrowserSnapshot,
   invokeBrowserAutomation,
+  assertBrowserFormResponseIsReadableText,
   invokeShellExec,
   registerBuiltinTools,
   type BrowserAutomationOptions,
@@ -2702,6 +2703,42 @@ describe("built-in tools", () => {
         fakeBrowserAutomation({ env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" } }),
       ),
     ).rejects.toThrow(/preview-quarantined.*mutation_sent=false/);
+  });
+
+  it("browser form results reject attachments and non-text downloads without exposing response bytes", () => {
+    expect(() => assertBrowserFormResponseIsReadableText({
+      status: 200,
+      content_type: "text/plain; charset=utf-8",
+      content_disposition: 'attachment; filename="private-report.txt"',
+      body: "private response bytes",
+    })).toThrow("browser_form_get_download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+
+    expect(() => assertBrowserFormResponseIsReadableText({
+      status: 200,
+      content_type: "application/pdf",
+      content_disposition: null,
+      body: "%PDF-private response bytes",
+    })).toThrow("browser_form_get_non_text_result_rejected; download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+
+    expect(() => assertBrowserFormResponseIsReadableText({
+      status: 200,
+      content_type: "application/octet-stream",
+      content_disposition: 'inline; filename="payload.bin"',
+      body: "binary response bytes",
+    })).toThrow(/non_text_result_rejected/);
+
+    expect(() => assertBrowserFormResponseIsReadableText({
+      status: 200,
+      content_type: "text/html; charset=utf-8",
+      content_disposition: "inline",
+      body: "<html><body>Search results</body></html>",
+    })).not.toThrow();
+    expect(() => assertBrowserFormResponseIsReadableText({
+      status: 204,
+      content_type: null,
+      content_disposition: null,
+      body: "",
+    })).not.toThrow();
   });
 
   it("shell.exec does not start a host process when the native provider is missing", async () => {

@@ -19,6 +19,7 @@ export interface HttpFetchResponse {
   status: number;
   ok: boolean;
   content_type: string | null;
+  content_disposition?: string | null;
   location: string | null;
   body: string;
   truncated: boolean;
