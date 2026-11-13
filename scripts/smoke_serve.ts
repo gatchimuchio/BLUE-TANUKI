@@ -12,8 +12,9 @@
  *     dir and asserts exit_code=0 with at least one entry. This pins the
  *     end-to-end persistence path AND the dump CLI in one go.
  *
- * Run from repo root:
- *   pnpm tsx scripts/smoke_serve.ts
+ * Run from repo root with `pnpm smoke:serve`.
+ * The spawned Gateway receives only OS support variables and synthetic smoke
+ * settings; ambient provider/channel credentials and env-file selectors are not forwarded.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -36,45 +37,59 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 const TOKEN = "smoke-token-1234";
 const RESUME_TOKEN = "smoke-resume-token-1234";
-const PNPM = process.env.PNPM_BIN;
 const TSX_CLI = join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+const INHERITED_OS_ENV_KEYS =
+  process.platform === "win32"
+    ? [
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+      ]
+    : ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"];
 
-function spawnPnpm(args: string[], options: Parameters<typeof spawn>[2]) {
-  if (process.platform === "win32") {
-    return spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", PNPM!, ...args], options);
+// Keep secrets, env-file selectors, Node preload hooks, proxy settings, and
+// user-specific Gateway configuration out of both child processes.
+function createBaseChildEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of INHERITED_OS_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
   }
-  return spawn(PNPM!, args, options);
+  return env;
 }
 
-function spawnPnpmSync(args: string[], options: Parameters<typeof spawnSync>[2]) {
-  if (process.platform === "win32") {
-    return spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", PNPM!, ...args], options);
-  }
-  return spawnSync(PNPM!, args, options);
+function createGatewayEnvironment(auditDir: string, stateRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...createBaseChildEnvironment(),
+    WEBCHAT_PORT: String(PORT),
+    WEBCHAT_TOKEN: TOKEN,
+    WEBCHAT_RESUME_TOKEN: RESUME_TOKEN,
+    BLUE_TANUKI_MAINTENANCE_TOKEN: "smoke-maintenance-token-1234",
+    WEBCHAT_HOST: "127.0.0.1",
+    LLM_BACKEND: "stub",
+    BLUE_TANUKI_AUDIT_DIR: auditDir,
+    BLUE_TANUKI_STATE_ROOT: stateRoot,
+  };
+}
+
+function createAuditDumpEnvironment(auditDir: string): NodeJS.ProcessEnv {
+  return {
+    ...createBaseChildEnvironment(),
+    BLUE_TANUKI_AUDIT_DIR: auditDir,
+  };
 }
 
 function spawnGateway(options: Parameters<typeof spawn>[2]) {
-  if (PNPM) {
-    return spawnPnpm(["--filter", "@blue-tanuki/gateway", "serve:dev"], options);
-  }
   return spawn(process.execPath, [TSX_CLI, "apps/gateway/src/main.ts", "--serve"], options);
 }
 
 function spawnAuditDump(options: Parameters<typeof spawnSync>[2]) {
-  if (PNPM) {
-    return spawnPnpmSync(
-      [
-        "--filter",
-        "@blue-tanuki/gateway",
-        "exec",
-        "tsx",
-        "src/main.ts",
-        "--audit-dump",
-        "--json",
-      ],
-      options,
-    );
-  }
   return spawnSync(
     process.execPath,
     [TSX_CLI, "apps/gateway/src/main.ts", "--audit-dump", "--json"],
@@ -126,24 +141,11 @@ async function main(): Promise<void> {
   const auditDir = join(tempRoot, "audit");
   const stateRoot = join(tempRoot, "state");
   mkdirSync(auditDir, { recursive: true });
-  const env = {
-    ...process.env,
-    WEBCHAT_PORT: String(PORT),
-    WEBCHAT_TOKEN: TOKEN,
-    WEBCHAT_RESUME_TOKEN: RESUME_TOKEN,
-    BLUE_TANUKI_MAINTENANCE_TOKEN: "smoke-maintenance-token-1234",
-    WEBCHAT_HOST: "127.0.0.1",
-    LLM_BACKEND: "stub",
-    SLACK_BOT_TOKEN: "",
-    SLACK_APP_TOKEN: "",
-    DISCORD_BOT_TOKEN: "",
-    BLUE_TANUKI_AUDIT_DIR: auditDir,
-    BLUE_TANUKI_STATE_ROOT: stateRoot,
-  };
+  const gatewayEnv = createGatewayEnvironment(auditDir, stateRoot);
 
   console.log(`[smoke] booting gateway on :${PORT}`);
   console.log(`[smoke] audit dir: ${auditDir}`);
-  const child = spawnGateway({ env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawnGateway({ env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] });
 
   const cleanup = (): void => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -294,7 +296,7 @@ async function main(): Promise<void> {
   // Phase 4-S3: also exercise the audit-dump CLI end-to-end.
   if (ok) {
     const { result: dump, stdout: dumpStdout, stderr: dumpStderr } =
-      runAuditDumpToFiles(env, auditDir);
+      runAuditDumpToFiles(createAuditDumpEnvironment(auditDir), auditDir);
     if (dump.status !== 0) {
       console.error(
         `[smoke] FAIL — audit-dump exit=${dump.status} stderr=${dumpStderr}${dump.error ? ` error=${dump.error.message}` : ""}`,
