@@ -398,13 +398,21 @@ export function verifyUnixPackage(
     "Installer dependencies: POSIX sh and utilities, getconf, tar, mktemp, find, ps, awk, and sha256sum or shasum.",
     "Saving credentials requires Linux Secret Service over the user's session D-Bus; install and launch do not claim that credential service is available.",
   ] : [];
-  for (const needle of [
+  const commonReadmeNeedles = platform === "macos" ? [
+    "通常利用者はソースビルドを行わないでください",
+    "ネイティブアプリ入口には",
+    `展開先で${setup}を実行します。`,
+    "利用者側にNode.js／pnpm／Gitの導入は不要です。",
+    "署名なし",
+    "公証提出もしていません",
+    "macOSのセキュリティ設定を変更せず",
+  ] : [
     `Normal ${platformLabel} users should not run source builds`,
     "Extract the installer archive",
     `Run ${setup}`,
     "user_requires_node_pnpm_git=false",
-    ...platformNeedles,
-  ]) {
+  ];
+  for (const needle of [...commonReadmeNeedles, ...platformNeedles]) {
     if (!readme.includes(needle)) {
       throw new Error(`${path.basename(readmeFile)} missing required text: ${needle}`);
     }
