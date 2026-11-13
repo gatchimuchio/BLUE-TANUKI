@@ -1355,7 +1355,7 @@ function isGitHubWriteRejectionReceipt(value: unknown): boolean {
     "used_for_authority", "may_execute"].sort();
   return Object.keys(result).sort().join("\0") === expectedKeys.join("\0") &&
     result.schema_version === "blue-tanuki.github-write-result.v1" &&
-    ["issue.create", "issue.update", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(result.operation)) &&
+    ["issue.create", "issue.update", "issue.close", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(result.operation)) &&
     result.api_host === "api.github.com" && typeof result.repo === "string" &&
     Number.isSafeInteger(result.repository_id) && (result.repository_id as number) > 0 &&
     typeof result.target_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.target_identity_digest) &&

@@ -2,6 +2,22 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 GitHub Issue closeをplan-bound L3へ接続 (F05)
+
+`github.write issue.close`を、既存title/body専用`issue.update`とは別の単一操作として追加した。候補はallowlist内のexact repositoryで観測されたopen・未ロック・非PR Issue一件に限定する。close専用target-version observation、target identity digest、`closed` request payload digestをprotocolへ追加し、Operation Planのpayload/result validation、HDS command binding、Executor target assertion、Gateway承認と結果照合、既存J/M result memoryへ接続した。Ownerのno-store L3 reviewにはrepository identity／visibility、Issue ID／number、open→closed、title、観測時刻、通知可能性を表示する。review後と作用直前にrepo／Issueを再観測し、変化時は停止する。PATCHは単回。受理応答では同一Issue ID／number、closed、未ロック、titleと更新時刻を照合し、known provider rejectionとoutcome unknownを区別する。未知結果は自動再送しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `corepack pnpm typecheck` | PASS（全workspace）。 |
+| `corepack pnpm build` | PASS（15 workspace projects）。 |
+| HDS-BRAIN `tsc -b` | PASS（closeout前の最終コード変更後）。 |
+| `git diff --check` | PASS（closeout記載の検査）。 |
+| test suite、Gateway process、合成GitHub API、実GitHub／credential／外部作用 | NOT_RUN。 |
+
+このsliceはsource-level `CODE_PRESENT`であり、Gateway process経由のruntime `WIRED`を実証しない。全体F05、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、owner公開・出荷GOは未成立。D4 Pocket変更はない。実provider／credentialは使用していない。
+
+開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。root buildはLinux isolation native buildも実行した。workspace ignored `dist/`を保持し、untracked Linux isolation `target/`は31 files／10,462,590 bytesとして保持・保留。`.codex-attachments/`／`.codex-remote-attachments/`は未変更。実装と文書closeoutを反映したGitHub main SHAおよび復旧ref二世代はcloseout後に記録する。
+
 ## 2026-11-14 — rev5.0 CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02)
 
 CLIの明示達成規則経路について、Gateway one-shotで抜けていたOperation Plan実行境界を接続した。CLIはrequest前に未acknowledged result outboxを調べ、該当がある場合は同じprivate Operation Plan／result-memory stateを開いてstartup reconciliationを行う。plan-bound commandはExecutor approval後にcurrentnessを再確認し、Gatewayと同じ`executionAdmissionForCommand`／`beginOperationPlanAttempt`でJの実行意図を永続化してからExecutorへ進む。Executorにはresult delivery保存を指示し、feedback処理前に保存deliveryをJ/Mへ再照合・acknowledgeする。最終CLI projectionは従来どおりHDS feedback後に計算し、達成規則・検証済みresult・M receiptが不足する場合はpending／heldを保つ。

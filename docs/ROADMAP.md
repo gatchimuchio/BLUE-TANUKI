@@ -8,9 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02)
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05)
 
-CLIのowner明示達成規則経路で、現在のplan command確認、Executor admission付きJ attempt、耐久result outbox、J/M result reconciliationを接続した。未acknowledged resultが残るCLI再起動ではOperation Plan／result-memory stateを開いて通常入力前に回復する。HDS feedback後のprojectionは既存経路を使い、検証済みresultとM receiptが揃わない場合のpending／heldを維持する。Gateway typecheck／build、`git diff --check`はPASS。CLI process実行、test、J/M receipt実生成・再起動復旧、実provider、外部作用、P2全体／`BUILD_COVERED`、QE_QC／QE_QAはNOT_RUN／未成立。これはソース接続の限定BUILDで、C08.02全体や製品完成の証拠ではない。implementation commit=`b36215a7d6d9ab698c1b91810a26708fd483aa98`。GitHub mainへの最終反映SHAはcloseout後の状態照合で確認する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+`github.write issue.close`を本文更新と独立したoperationとして追加した。対象はallowlist内のexact repositoryにあるopen・未ロック・非PRの一件だけ。target observation、repo／Issue identity、close payload、Operation Plan、no-store L3 owner reviewを束縛し、review後・単回PATCH直前にrepoとIssueを再観測する。accepted responseは同一Issueがclosedになったことを検証し、provider rejection／outcome unknownを分離してunknown時に自動再送しない。結果は既存Executor／Gateway／J/M保存・同一Owner照会へ送る。
+
+全workspace typecheck、15-project build、`git diff --check`はPASS。test suite、Gateway process／合成API、実GitHub／credential／外部作用はNOT_RUN。従って新経路はsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証していない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。GitHub main SHA・復旧参照はcloseout後に確定する。保護添付は保持し、workspace buildがLinux isolation `target/`を実行したため既存untracked targetは削除せず保留する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02)
 

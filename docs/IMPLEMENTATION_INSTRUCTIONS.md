@@ -2,25 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI達成規則実行のJ attempt・耐久result/M帰還 (C08.02, 2026-11-14)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issueの状態変更をplan-bound L3へ接続 (F05, 2026-11-14)
 
-主語はBLUE-TANUKIのWindows CLI one-shot、HDS-J Operation Plan、Executor result delivery、M receiptである。目的は、CLI ownerが明示した達成規則付きtaskについて、選択された一stepの現在性確認・J実行意図・Executor結果・M receipt・CLI達成projectionを同じ保存済みplanへ結ぶこと。provider liveや製品全体の完成判定は行わない。
+主語はBLUE-TANUKIの`github.write`、HDS Operation Plan、Approval Gate、Gateway/Brokerである。目的は、Issueのcloseを本文編集と混ぜず独立した一作用として扱い、対象Issueの現在状態・owner確認内容・実行直前の再観測・結果記憶を既存のplan-bound L3経路へ接続すること。D4 Pocket、実credential、GitHubへの実書込み、公開／出荷判断は対象外。
 
-通常CLI処理は、HDSが発行したplan commandの現在性をApproval／target observation後に再確認し、Executor admissionをJの`beginOperationPlanAttempt`へ渡す。plan-bound executionはGatewayと同じ耐久result outboxへ保存し、直後にdeliveryをJ/Mへ再照合してacknowledgeする。CLI起動時に未acknowledged resultが存在する場合はOperation Plan／result-memory stateを開き、通常入力処理より前にstartup reconciliationへ含める。達成projectionは既存のHDS feedback後に生成し、明示規則・検証済みresult・M receiptが揃わない場合のpending／heldを維持する。
+開始時の現行HEADは`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。local `main`、`origin/main`、GitHub `main`は一致し、ahead/behind=0/0。recovery local branch／remote tag current／previousは`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`／`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`。main worktreeのみ。保護untracked添付領域とLinux isolation `target/`は維持する。
 
-| QE_BUILD限定確認 | 結果 |
-|---|---|
-| `corepack pnpm --filter @blue-tanuki/gateway typecheck` | PASS。 |
-| `corepack pnpm --filter @blue-tanuki/gateway build` | PASS。 |
-| `git diff --check` | PASS。 |
-| test suite、CLI process実行、J/M receiptの実生成・再起動復旧、実provider／credential、外部作用、全体P2／`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+- **UNIT_ID:** F05 / exact GitHub Issue close as a separate plan-bound operation.
+- **STATUS:** CLOSED（source-level `CODE_PRESENT`）。Issue close専用operation、target-version／request digest、HDS plan binding、no-store L3 review、Gateway承認・review currentness、Executor/Broker単回PATCH・結果照合、J/M保存projectionまで接続。実Gateway runtimeは未確認。
+- **SAFETY_STATUS:** allowlist内の一件open・未ロック・非PR Issueだけを対象とし、owner表示にopen→closedとIssue identityを示す。review後と単回PATCH直前に同一repo／Issueを再観測。known rejectionとoutcome unknownを分け、unknownの自動再送なし。実GitHub書込み・実credentialなし。
+- **CHECK_SCOPE:** `corepack pnpm typecheck` PASS、`corepack pnpm build` PASS（15 workspace projects）、`git diff --check` PASS。test suite、Gateway process／合成API、外部provider／credential／作用はNOT_RUN。
+- **LOCAL_ASSET_STATUS:** typecheck/buildでworkspace ignored `dist/`を生成。root buildが既存untracked Linux isolation `target/`にも実行され、31 files／10,462,590 bytesを確認したため保持・保留。保護添付領域は未変更。新規test fixture／Temp assetなし。
+- **GIT_STATUS:** 開始HEAD=`3a92e5644243a98c4c48ef008d1d9e2be5e64e81`。開始時local／origin／GitHub main一致、ahead/behind=0/0。実装・closeoutを一BUILD_BATCHとしてGitHub mainへ反映し、最終SHA、二世代recovery refs、dirty／untrackedを終端照合する。
+- **NEXT_REQUIRED_CONSUMER:** 次の有限単位開始時にrev5.0正本と最新sourceからP2の次の未接続consumerを選ぶ。D4 Pocket producer／Android/iOS ingressは別repo限定委任待ちで維持する。
 
-- **UNIT_ID:** rev5.0 QE_BUILD / CLI owner goal rules → current J attempt → durable Executor result → J/M → CLI projection.
-- **STATUS:** source-levelのplan-bound CLI実行・result recovery consumerを接続。typecheck／package buildはPASS。実processでの`WIRED`動作、C08.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未確認／未成立。
-- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体施工を継続し、現行HEADからC→J→Broker→実結果→J/Mと5OS導入後利用を再照合して、最初の実未接続consumerを選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
-- **SAFETY_STATUS:** HDS currentness／Approval／Executor admission／既存Broker境界を維持。未確認結果は達成に昇格させず、明示規則・検証済み結果・M receiptの不足はpending／held。実provider、実credential、CLIでのlive作用、他repo変更、公開／出荷GOなし。
-- **LOCAL_ASSET_STATUS:** Gateway `dist/`をpackage buildで生成／更新し、通常開発用build出力として保持。test fixture／Temp assetは生成していない。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
-- **GIT_STATUS:** START_HEAD=`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`。local／`origin/main`／GitHub mainは開始時一致、ahead／behind=0/0。開始recovery local branch／remote tag current／previous=`7e004028cdbd0d84c0f56b8e0defd23dba5e2a8e`／`f45506e6d87b58eadd03eb20798e3fd36db435cb`。implementation commit=`b36215a7d6d9ab698c1b91810a26708fd483aa98`。この後のdocs closeoutを同じBUILD_BATCHとしてmainへpushし、最終SHA・復旧ref・dirty状態を終端照合する。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02, 2026-11-14)
 

@@ -6913,6 +6913,67 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub issueの変更前後と影響を再確認";
           return;
         }
+        if (review.kind === "github_issue_close") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "github.write.issue.close" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.repository_id !== "number" || !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.issue_id) || review.issue_id <= 0 ||
+              !Number.isSafeInteger(review.issue_number) || review.issue_number <= 0 || review.issue_number > 1000000 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              review.issue_state !== "open" || review.issue_locked !== false || review.requested_state !== "closed" ||
+              typeof review.issue_updated_at !== "string" || !Number.isFinite(Date.parse(review.issue_updated_at)) ||
+              typeof review.issue_title !== "string" || review.issue_title.length === 0 || review.issue_title.length > 65536) {
+            throw new Error("GitHub Issueのopen状態とclose対象がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub Issueをcloseする外部作用";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name],
+            ["Repository ID", String(review.repository_id)],
+            ["可視性", review.repository_visibility === "public" ? "Public" : "Private"],
+            ["Issue", "#" + String(review.issue_number) + "（ID " + String(review.issue_id) + "）"],
+            ["現在の状態 → 変更後", "open → closed"],
+            ["ロック", "なし"],
+            ["観測時刻", review.issue_updated_at],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const title = document.createElement("pre");
+          title.textContent = review.issue_title;
+          view.appendChild(title);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "対象は表示したopen・未ロックIssueだけです。観測とPATCHは非原子的です。承認後にRepositoryとIssueを再読取し、識別子・状態・ロック・更新時刻・タイトルが変わっていれば送信を止めます。応答が不明なら自動再送せず、GitHubを確認してOwnerが次の判断を行います。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub Issueをcloseする対象と影響を確認";
+          return;
+        }
         if (review.kind === "github_issue_comment_create") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "github.write.issue.comment.create" ||

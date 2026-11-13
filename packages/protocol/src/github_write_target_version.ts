@@ -37,6 +37,17 @@ export const GitHubIssueUpdateTargetVersionObservationSchema = GitHubWriteTarget
   issue_body: z.string().max(500_000).nullable(),
 }).strict();
 
+/** Plan-bound evidence for closing one exact open, unlocked GitHub issue. */
+export const GitHubIssueCloseTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("issue.close"),
+  issue_id: z.number().int().positive().safe(),
+  issue_number: z.number().int().positive().max(1_000_000),
+  issue_state: z.literal("open"),
+  issue_locked: z.literal(false),
+  issue_updated_at: z.string().datetime({ offset: true }),
+  issue_title: z.string().min(1).max(65_536),
+}).strict();
+
 export const GitHubIssueCommentCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("issue.comment.create"),
   issue_id: z.number().int().positive().safe(),
@@ -104,6 +115,7 @@ export const GitHubReleaseDraftCreateTargetVersionObservationSchema = GitHubWrit
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
+  GitHubIssueCloseTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
@@ -157,6 +169,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
 export type GitHubWriteTargetVersionObservation = z.infer<typeof GitHubWriteTargetVersionObservationSchema>;
 export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIssueCreateTargetVersionObservationSchema>;
 export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIssueUpdateTargetVersionObservationSchema>;
+export type GitHubIssueCloseTargetVersionObservation = z.infer<typeof GitHubIssueCloseTargetVersionObservationSchema>;
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
@@ -218,6 +231,35 @@ export function githubIssueUpdateRequestPayloadDigest(input: {
     input.issue_number,
     input.title ?? null,
     input.body ?? null,
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueCloseTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  issue_id: number;
+  issue_number: number;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-close-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.issue_id,
+    input.issue_number,
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueCloseRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  issue_number: number;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-close-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.issue_number,
+    "closed",
   ]), "utf8").digest("hex");
 }
 
