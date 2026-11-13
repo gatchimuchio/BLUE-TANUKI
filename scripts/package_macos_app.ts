@@ -35,9 +35,24 @@ function targets(): MacArch[] {
 }
 
 function run(command: string, args: readonly string[], label: string): void {
-  const result = spawnSync(command, [...args], { cwd: root, encoding: "utf8", stdio: "inherit" });
+  const result = spawnSync(command, [...args], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (result.error) throw new Error(`${label}: ${result.error.message}`);
-  if (result.status !== 0) throw new Error(`${label} failed with exit code ${String(result.status)}`);
+  const stdout = typeof result.stdout === "string" ? result.stdout : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  if (result.status === 0) {
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+    return;
+  }
+  const details = [stderr, stdout]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n")
+    .split(/\r?\n/u)
+    .slice(-5)
+    .join(" ")
+    .slice(0, 800);
+  throw new Error(`${label} failed with exit code ${String(result.status)}${details ? `: ${details}` : ""}`);
 }
 
 function readVerifiedInstaller(version: string, arch: MacArch): { file: string; sha256: string } {
@@ -165,7 +180,7 @@ async function packageTarget(version: string, arch: MacArch): Promise<void> {
     const partialOutput = path.join(partialDirectory, path.basename(outputFile));
     try {
       run("hdiutil", [
-        "create", "-quiet", "-ov", "-format", "UDZO",
+        "create", "-ov", "-format", "UDZO",
         "-volname", "BLUE-TANUKI",
         "-srcfolder", imageRoot,
         partialOutput,

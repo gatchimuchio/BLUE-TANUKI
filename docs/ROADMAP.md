@@ -10,7 +10,7 @@
 
 ### 現行BUILD_BATCH — rev5.0 QE_BUILD / macOS native app mounted-launch consumer
 
-macOS x64／arm64のnative `.app`をread-only DMGから実起動・停止し、初回起動がSetupや製品状態変更を自動実行しないことを既存manual `workflow_dispatch`で短時間確認する作業を進行中。run #19はarm64 success、x64は起動・停止後の通常DMG detachでFAILし、mountを保持して安全側に停止した。強制detachは使わず、通常detachの限定再試行と理由記録を追加して再検証する。合成設定・資格なしのHosted runner内検査であり、画面操作、installed lifecycle、署名／公証、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。状態・実装commit・run結果は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)で更新する。
+macOS x64／arm64のnative `.app`をread-only DMGから実起動・停止し、初回起動がSetupや製品状態変更を自動実行しないことを既存manual `workflow_dispatch`で短時間確認する作業を進行中。run #19ではarm64 success、x64は起動・停止後の通常detachでFAIL。run #20ではx64が起動・停止後に通常detachを5回試みてもFAILしてmountを保持し、arm64はDMG生成時にexit code 1でFAILした。`hdiutil -quiet`により両失敗の詳細原因はまだ取得できていない。強制detachは使わず、detach／DMG生成のbounded診断出力を有効にして原因を特定し、両CPUで再検証する。合成設定・資格なしのHosted runner内検査であり、画面操作、installed lifecycle、署名／公証、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは対象外。状態・実装commit・run結果は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)で更新する。
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
 

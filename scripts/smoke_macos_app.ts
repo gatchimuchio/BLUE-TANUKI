@@ -18,10 +18,20 @@ function run(command: string, args: readonly string[], context: string): string 
   try {
     return execFileSync(command, [...args], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   } catch (error) {
-    const stderr = typeof error === "object" && error !== null && "stderr" in error
-      ? String((error as { stderr?: Buffer | string }).stderr ?? "").trim().split(/\r?\n/u).slice(-3).join(" ").slice(0, 400)
-      : "";
-    throw new Error(`${context} failed${stderr ? `: ${stderr}` : ""}`);
+    const failure = typeof error === "object" && error !== null
+      ? error as { stderr?: Buffer | string; stdout?: Buffer | string; status?: number | null; signal?: string | null }
+      : {};
+    const output = [failure.stderr, failure.stdout]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean)
+      .join("\n")
+      .split(/\r?\n/u)
+      .slice(-3)
+      .join(" ")
+      .slice(0, 400);
+    const exit = typeof failure.status === "number" ? ` (exit code ${failure.status})`
+      : failure.signal ? ` (signal ${failure.signal})` : "";
+    throw new Error(`${context} failed${exit}${output ? `: ${output}` : ""}`);
   }
 }
 
@@ -53,7 +63,7 @@ async function detachReadOnlyImage(mount: string): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {
-      run("/usr/bin/hdiutil", ["detach", "-quiet", mount], "native app DMG detach");
+      run("/usr/bin/hdiutil", ["detach", mount], "native app DMG detach");
       return;
     } catch (error) {
       lastError = error;
