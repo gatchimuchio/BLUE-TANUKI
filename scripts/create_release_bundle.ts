@@ -88,6 +88,7 @@ const REQUIRED_PATHS = [
   "install/linux/uninstall.sh",
   "install/macos/install.sh",
   "install/macos/uninstall.sh",
+  "install/macos/app/BlueTanukiApp.swift",
   "install/resident/README.md",
   "install/resident/blue-tanuki-resident.ps1",
   "install/resident/blue-tanuki-resident.sh",
@@ -312,6 +313,8 @@ function productInstallerArtifactPaths(version: string): string[] {
   const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
   const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
   const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
+  const macosAppX64 = `release/macos/BlueTanuki-${version}-macos-x64.dmg`;
+  const macosAppArm64 = `release/macos/BlueTanuki-${version}-macos-arm64.dmg`;
   return [
     ...windows,
     linux,
@@ -323,11 +326,73 @@ function productInstallerArtifactPaths(version: string): string[] {
     macosArm64,
     `${macosArm64}.sha256`,
     `${macosArm64}.manifest.json`,
+    macosAppX64,
+    `${macosAppX64}.sha256`,
+    `${macosAppX64}.manifest.json`,
+    macosAppArm64,
+    `${macosAppArm64}.sha256`,
+    `${macosAppArm64}.manifest.json`,
   ];
 }
 
 function hasProductInstallerArtifacts(version: string): boolean {
   return productInstallerArtifactPaths(version).every((rel) => existsSync(artifactSourcePath(rel)));
+}
+
+function hasMacAppDmgArtifacts(version: string): boolean {
+  return ["x64", "arm64"].every((arch) => {
+    const dmg = `release/macos/BlueTanuki-${version}-macos-${arch}.dmg`;
+    return [dmg, `${dmg}.sha256`, `${dmg}.manifest.json`]
+      .every((rel) => existsSync(artifactSourcePath(rel)));
+  });
+}
+
+function verifyMacAppDmgArtifacts(version: string): void {
+  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+  if (commit.status !== 0) throw new Error("cannot identify source commit for macOS app artifacts");
+  const sourceCommit = commit.stdout.trim();
+  for (const arch of ["x64", "arm64"] as const) {
+    const dmg = `release/macos/BlueTanuki-${version}-macos-${arch}.dmg`;
+    const dmgPath = artifactSourcePath(dmg);
+    const sidecarPath = artifactSourcePath(`${dmg}.sha256`);
+    const manifestPath = artifactSourcePath(`${dmg}.manifest.json`);
+    if (![dmgPath, sidecarPath, manifestPath].every(existsSync)) {
+      throw new Error(`macOS ${arch} app DMG, checksum, or manifest is missing`);
+    }
+    const [expectedSha = "", listedName = ""] = readFileSync(sidecarPath, "utf8").trim().split(/\s+/u);
+    if (!/^[a-f0-9]{64}$/iu.test(expectedSha) || listedName !== path.basename(dmg)) {
+      throw new Error(`invalid macOS app DMG checksum sidecar: ${sidecarPath}`);
+    }
+    const dmgBytes = readFileSync(dmgPath);
+    const actualSha = createHash("sha256").update(dmgBytes).digest("hex");
+    if (actualSha !== expectedSha.toLowerCase()) throw new Error(`macOS app DMG checksum mismatch: ${dmgPath}`);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      version?: string;
+      package_type?: string;
+      source_commit?: string;
+      artifact?: { file?: string; size_bytes?: number; sha256?: string };
+      boundaries?: {
+        app_signed?: boolean;
+        installer_signed?: boolean;
+        notarization_submission?: string;
+        secrets_included?: boolean;
+        hds_authority_modified?: boolean;
+      };
+    };
+    if (manifest.version !== version ||
+        manifest.package_type !== `macos-${arch}-native-app-dmg` ||
+        manifest.source_commit !== sourceCommit ||
+        manifest.artifact?.file !== path.basename(dmg) ||
+        manifest.artifact?.size_bytes !== dmgBytes.byteLength ||
+        manifest.artifact?.sha256 !== actualSha ||
+        manifest.boundaries?.app_signed !== false ||
+        manifest.boundaries?.installer_signed !== false ||
+        manifest.boundaries?.notarization_submission !== "not_submitted_by_builder" ||
+        manifest.boundaries?.secrets_included !== false ||
+        manifest.boundaries?.hds_authority_modified !== false) {
+      throw new Error(`macOS ${arch} DMG manifest does not match the source and artifact: ${manifestPath}`);
+    }
+  }
 }
 
 function runWorkspaceCommand(args: readonly string[], label: string): void {
@@ -372,11 +437,19 @@ function ensureUnixInstallerArtifacts(version: string): void {
 
 function ensureProductInstallerArtifacts(version: string): void {
   if (hasProductInstallerArtifacts(version)) return;
+  if (!hasMacAppDmgArtifacts(version) && process.platform !== "darwin") {
+    throw new Error(
+      "macOS native app DMGs are required for a complete release bundle; build them with the macOS workflow_dispatch job or run this command on macOS, then stage both architecture artifacts under release/macos",
+    );
+  }
   ensureWindowsInstallerArtifacts(version);
   ensureUnixInstallerArtifacts(version);
-  console.log("[release] Product installer artifacts missing; generating single-file release installers");
+  console.log("[release] Product installer artifacts missing; generating single-file installers and macOS native app DMGs");
   runWorkspaceCommand(["package:installers"], "pnpm package:installers");
   runWorkspaceCommand(["package:installers:verify"], "pnpm package:installers:verify");
+  console.log("[release] Native macOS app DMGs missing; generating and verifying macOS app artifacts");
+  runWorkspaceCommand(["package:macos-app"], "pnpm package:macos-app");
+  runWorkspaceCommand(["package:macos-app:verify"], "pnpm package:macos-app:verify");
   for (const rel of productInstallerArtifactPaths(version)) {
     if (!existsSync(artifactSourcePath(rel))) {
       throw new Error(
@@ -604,6 +677,7 @@ async function main(): Promise<void> {
   ensureWindowsInstallerArtifacts(pkg.version);
   ensureUnixInstallerArtifacts(pkg.version);
   ensureProductInstallerArtifacts(pkg.version);
+  verifyMacAppDmgArtifacts(pkg.version);
   await rm(stagingParent, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   await mkdir(outDir, { recursive: true });

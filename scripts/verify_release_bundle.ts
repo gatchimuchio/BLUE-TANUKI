@@ -88,6 +88,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "install/linux/uninstall.sh",
   "install/macos/install.sh",
   "install/macos/uninstall.sh",
+  "install/macos/app/BlueTanukiApp.swift",
   "install/resident/README.md",
   "install/resident/blue-tanuki-resident.ps1",
   "install/resident/blue-tanuki-resident.sh",
@@ -339,6 +340,8 @@ function productInstallerArtifactPaths(version: string): string[] {
   const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
   const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
   const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
+  const macosAppX64 = `release/macos/BlueTanuki-${version}-macos-x64.dmg`;
+  const macosAppArm64 = `release/macos/BlueTanuki-${version}-macos-arm64.dmg`;
   return [
     ...windows,
     linux,
@@ -350,6 +353,12 @@ function productInstallerArtifactPaths(version: string): string[] {
     macosArm64,
     `${macosArm64}.sha256`,
     `${macosArm64}.manifest.json`,
+    macosAppX64,
+    `${macosAppX64}.sha256`,
+    `${macosAppX64}.manifest.json`,
+    macosAppArm64,
+    `${macosAppArm64}.sha256`,
+    `${macosAppArm64}.manifest.json`,
   ];
 }
 

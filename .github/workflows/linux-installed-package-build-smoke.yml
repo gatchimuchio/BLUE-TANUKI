@@ -278,6 +278,23 @@ jobs:
           pnpm exec tsx scripts/package_product_installers.ts --platform=macos --arch=${{ matrix.arch }}
           pnpm exec tsx scripts/verify_product_installers.ts --platform=macos --arch=${{ matrix.arch }}
 
+      - name: Build and verify the native macOS app DMG
+        run: |
+          pnpm exec tsx scripts/package_macos_app.ts --arch=${{ matrix.arch }}
+          pnpm exec tsx scripts/verify_macos_app.ts --arch=${{ matrix.arch }}
+
+      - name: Retain native macOS app build artifacts
+        if: ${{ inputs.target_os == 'all' || inputs.target_os == 'macos' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blue-tanuki-macos-app-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            release/macos/BlueTanuki-*-macos-${{ matrix.arch }}.dmg
+            release/macos/BlueTanuki-*-macos-${{ matrix.arch }}.dmg.sha256
+            release/macos/BlueTanuki-*-macos-${{ matrix.arch }}.dmg.manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Install and start from the one-file installer without developer tools
         if: ${{ (inputs.target_os == 'all' || inputs.target_os == 'macos') && inputs.macos_scope == 'installed-lifecycle' }}
         shell: bash

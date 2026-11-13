@@ -227,6 +227,23 @@ function packageReadmeText(version: string, target: UnixTarget): string {
   const platformLabel = target.platform === "macos" ? "macOS" : "Linux";
   const setup = target.platform === "macos" ? "BlueTanukiSetup.command" : "BlueTanukiSetup.sh";
   const archive = `blue-tanuki-${version}-${target.platform}-${target.arch}-installer.tar.gz`;
+  if (target.platform === "macos") {
+    const dmg = `BlueTanuki-${version}-macos-${target.arch}.dmg`;
+    return [
+      "BLUE-TANUKI macOS インストール",
+      "",
+      `ネイティブアプリ入口には${dmg}を使用します。DMGを開いてBlueTanuki.appをApplicationsへドラッグし、起動後に「インストールまたは更新」を選択します。完了後に「コントロールセンターを開く」を選択してください。`,
+      "",
+      "ネイティブアプリとインストーラーは署名なしで、公証提出もしていません。発行者の真正性や公証済み配布を証明しません。macOSのセキュリティ設定を変更せず、署名・公証済みの正式配布物を利用してください。",
+      "",
+      `アーカイブ形式の代替: ${archive}を展開し、展開先で${setup}を実行します。代替アーカイブも署名なしで、macOSの通常のセキュリティ規則に従います。`,
+      `SHA-256: ${archive}.sha256`,
+      "",
+      "導入後のランチャーはhttp://127.0.0.1:8787/appを開きます。自動起動は既定で無効です。",
+      "利用者側にNode.js／pnpm／Gitの導入は不要です。",
+      "",
+    ].join("\n");
+  }
   return [
     `BLUE-TANUKI ${platformLabel} install`,
     "",
