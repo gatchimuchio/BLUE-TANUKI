@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03)
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03)
+
+Linux／macOS共通のinstalled launcherで、resident起動・再起動・safe mode後にmanaged process identityを再照合し、local `/healthz`=200を最大15秒待つようにした。Control Centerの各入口は開く直前にもhealthを確認し、未readyなら開かずDoctor／ログを案内する。失敗後もmanaged process、DataRoot、ユーザーデータを保持する。POSIX shell構文、inline Node probe構文、`git diff --check`、`corepack pnpm docs:check`はPASS。docs checkは日本語基底の既存移行負債75件を注意表示した。test、Linux／macOS installed runtime・GUI、全体G02／P2、QE_QC／QE_QAはNOT_RUN／未成立。これはG02入口のsource-level P2 BUILDであり、製品完成の証拠ではない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03)
 
 Windows installed launcherが、managed Gatewayの`/healthz`=200を確認してからControl Centerを開くようにした。既存process・新規processの両方で最大15秒待ち、未readyならブラウザーを開かず、process／ユーザーデータを保持したままDoctorとログを案内する。PowerShell AST構文確認と`git diff --check`はPASS。tests、installed HTTP／GUI smoke、製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはWindows通常入口のP2 BUILDであり、全lifecycleや製品完成の証拠ではない。次はP2全体実装を続ける。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 

@@ -2,6 +2,23 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 Linux／macOS installed launcher health gate (G02.01/G02.03)
+
+Unix共通`BlueTanukiLauncher.sh`で、`resident-start`／launch／open／restart／safe-modeがmanaged Gatewayを起動または再利用した後、`/healthz`=200を最大15秒確認してからready扱いする。health probeはNode built-in HTTPを使い、HTTP redirectを追わず、credentialを送らず、localhost／loopback／wildcard loopback／OS上のlocal interface addressに宛先を限定する。managed process identityをhealth確認後に再照合する。GUIを開く`open`／`launch`／`resident-open`は開く直前にもmanaged processとhealthを短時間再確認する。
+
+health未成立時はprocessやwatchdogを自動停止・再起動せず、DataRoot／user dataを維持してDoctorとlog pathを案内し、GUIを開かない。既存`start`／`serve` foreground、Setup／Uninstall、全G02の変更ではない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Git付属POSIX `sh -n` | PASS。 |
+| inline Node health probe `node --check -` | PASS。 |
+| `git diff --check`／`corepack pnpm docs:check` | PASS。日本語基底の既存移行負債75件は注意として継続。 |
+| tests、Linux／macOS installed runtime・HTTP・GUI、全G02、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+**UNIT_ID:** rev5.0 QE_BUILD / Linux・macOS installed launcher health gate before Control Center open. **STATUS:** static source checks only; installed Linux／macOS consumer unverified; G02 and product-wide completion remain unestablished. **SAFETY_STATUS:** health failure preserves managed process/watchdog and user data, and does not open Control Center. No provider, credential, external effect, D4／MINIDORA repo change, or P13 GO.
+
+Generated assets are source/docs only; no test fixture or package artifact. Protected `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/` were unchanged. Git commit auto-cleanup of stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadata returned Permission denied; metadata／ACL were left untouched. Start `main`=`fb50124928eece6914dd216428753734c1866b8a`, recovery current／previous=`fb50124928eece6914dd216428753734c1866b8a`／`0556f3396711d02d13b02bdb71ab51163200ffa1`. Implementation commit=`ecba6f9545c8fd912c32425256de90760a14538e` was pushed to GitHub `main` and read back. After that push, recovery current／previous=`ecba6f9545c8fd912c32425256de90760a14538e`／`fb50124928eece6914dd216428753734c1866b8a`. Docs closeout follows in the current BUILD_BATCH.
+
 ## 2026-11-13 — QE_BUILD rev5.0 Windows installed launcher health gate (G02.01/G02.03)
 
 Windowsの`BlueTanukiLauncher.ps1`で、managed Gateway processの存在だけをControl Center readyと扱っていた。`Start-Resident`は既存・新規processの双方で`/healthz`を最大15秒確認し、ready booleanを返す。`open`はhealth未成立でブラウザーを起動せず、`start`／safe modeもexit code 2で停止してDoctorとログを案内する。health未成立のprocessを自動停止・再起動せず、install/data状態を変更しない。

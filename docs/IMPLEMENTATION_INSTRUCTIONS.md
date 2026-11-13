@@ -2,7 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
+
+主語はLinux／macOS installed productの共通Unix launcher、managed Gateway process、Control Center入口である。目的はprocessが存在するだけの状態をreadyと誤認せず、Gatewayの`/healthz`が200を返した場合だけControl Centerを開くこと。これはG02.01/G02.03に残る通常入口のP2施工であり、Setup・更新・全lifecycleや製品全体の成立判定ではない。
+
+`resident-start`、`launch`／`open`、`restart`、`safe-mode`は既存・新規managed Gatewayの両方で`/healthz`=200を最大15秒確認し、managed process identityも再照合する。`open`／`launch`はControl Centerを開く直前にも最大2秒のhealth照合を行い、`resident-open`もmanaged processとhealthが揃わなければ開かない。health probeはNode built-in HTTPのGET一回を繰り返し、redirect・credential・外部宛先を使わず、200以外をreadyにしない。許可する宛先はlocalhost、loopback、wildcardのloopback変換、またはOS上のlocal interface addressに限る。
+
+health未成立・managed process再確認失敗時は非zeroで停止し、Doctorとログを案内する。起動済みprocess／watchdog、DataRoot、ユーザーデータを自動停止・削除・変更しない。既存`start`／`serve`のforeground運転、Setup／Uninstall、GUI実動作はこの単位の対象外。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Git付属POSIX `sh -n install/unix/product/BlueTanukiLauncher.sh` | PASS。 |
+| health probe heredocの`node --check -` | PASS。 |
+| `git diff --check`／`corepack pnpm docs:check` | PASS。日本語基底の既存移行負債75件は注意として継続。 |
+| tests、Linux／macOS installed runtime・HTTP health・GUI smoke、全G02、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Linux・macOS installed launcher health gate before Control Center open.
+- **STATUS:** POSIX launcher sourceからready gateを接続。静的構文確認のみで、Linux／macOS installed Gateway・HTTP・GUI consumerは未実行。G02.01/G02.03全体と製品全体は`BUILD_GAP`のまま。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体実装を続け、全体経路から次の未接続producer→consumerを選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressは別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
+- **SAFETY_STATUS:** `/healthz` GETはlocal addressのみに限定し、HTTP 200以外ではGUIを開かない。失敗したprocess／DataRoot／user dataは維持。D4／MINIDORA別repo変更、C08.03 live provider、OD-03無委任live作用、P13公開／出荷GOなし。
+- **LOCAL_ASSET_STATUS:** source／docs差分のみ。package artifact、test fixture、Tempデータなし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** START_HEAD=`fb50124928eece6914dd216428753734c1866b8a`。開始recovery local branch／remote tag current／previous=`fb50124928eece6914dd216428753734c1866b8a`／`0556f3396711d02bdb71ab51163200ffa1`。implementation commit=`ecba6f9545c8fd912c32425256de90760a14538e`を`main`へfast-forward pushし、local／origin／GitHub main一致をreadback確認。implementation push後recovery current／previous=`ecba6f9545c8fd912c32425256de90760a14538e`／`fb50124928eece6914dd216428753734c1866b8a`。本記録を含むcloseout docs commitもfast-forward pushし、終了時のlocal／origin／GitHub mainとrecovery二世代を再照合する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03, 2026-11-13)
 
 主語はWindows installed product launcher、managed Gateway process、Control Center入口である。目的は、processが存在するだけの状態をreadyと誤認せず、`/healthz`が200を返した場合だけControl Centerを開くこと。これはWindows G02.01/G02.03の導入後通常利用入口を閉じるP2施工であり、全lifecycleや製品全体成立の判定ではない。
 
