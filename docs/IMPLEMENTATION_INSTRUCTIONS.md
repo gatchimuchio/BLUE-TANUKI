@@ -2,6 +2,27 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / Cron event履歴から回復consumerへの相関接続
+
+主語はBLUE GatewayのCron inbox/outbox高水位cursor、過去event receipt、Operation Plan回復照合である。目的は、同一sourceの新しいeventでcurrent cursorが進んでも、以前のscheduled eventと計画の関係を保持し、再起動・復旧時に結果状態をdigestだけで再観測できるようにすること。rev5.0のP2全体施工内で、W-WORKとE01.01「永続jobと重複event」に関係するproducer→consumer接続である。
+
+cursorの重複・順序逆転・高水位拒否は維持し、進行前のcursorを`cron_event_archive`へdigest-onlyで保存する。旧schemaでcurrent cursorから外れたままapproval handoffに残るeventは`outcome_unknown`として補助移行し、成功を推定しない。read-only recovery inspectorはcurrent cursorとarchiveを検証し、Operation Plan request digestから過去event receiptへ相関する。Consumerは`not_in_retained_event_history`と`not_in_current_cursor`を区別する。Gateway report/operator projectionはschema 10→11／13→14へ更新し、WebChat Control Centerはarchive集計と`cron_event`未観測依存を受け取る。CLIにもarchive schema/countを表示する。raw task/source/payload、approval権限、再送許可、job成功判定は追加しない。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Gateway／WebChat typecheck・Gateway build | PASS（closeout後SHAはfinal reportに照合）。 |
+| Gateway Cron store／recovery inspector／Operation Plan recovery tests | PASS：57件。prior event retention、legacy cursor-only read、handoff migration as `outcome_unknown`、archive corruption fail-closed、Operation Plan correlationを確認。 |
+| WebChat Recovery surface selector | PASS：1件。new operator schema、verified archive counts、`not_in_retained_event_history`と`cron_event`未観測scopeの受理を確認（同fileの他132件は未実行）。 |
+| `git diff --check`／`pnpm docs:check` | PASS。docs check／日本語基底／licensing gateが通過。移行負債75件は既存継続。 |
+| 全suite／実Cron job成功・外部receipt／5OS全体／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / Cron historical event-to-recovery correlation（関係索引E01.01、縦断W-WORK。E01.01全体の完了を意味しない）
+- **STATUS:** WIRED（current cursor→digest archive→read-only recovery inspector→Operation Plan／Control Center。job全体の最終結果receiptとW-WORK全域は未接続）
+- **NEXT_REQUIRED_CONSUMER:** P2全域施工を続け、Cron eventから永続jobの実result receipt・M記憶／再判断へ繋がる次consumerを現物で選ぶ。局所QC／QAへ移らない。
+- **SAFETY_STATUS:** current high-water、重複抑止、HDS J／Approval／L3／Broker、M非権威、停止／再送境界は維持。archiveはidentity/state/time digestのみ。旧handoffからのevent状態は`outcome_unknown`。`handler_returned`はjob成功を証明せず、inspectionはread-only・非権威。
+- **LOCAL_ASSET_STATUS:** unit testsのTemp root／SQLiteは終了時cleanup。ignored Gateway build outputは作業用として保持。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護対象として保持・未変更。実資格情報・外部provider・外部作用・別repoは未使用。
+- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`6a92af5208d8bc1408f8282c102eec6d894585e1`、ahead／behind=0/0。開始recovery local branch／remote tag current／previous=`6a92af5208d8bc1408f8282c102eec6d894585e1`／`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`。終了後にmain・両世代を再照合する。既存stale worktree metadataのACL／metadataは変更しない。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / Approval Gate restart recovery journal
 
 主語はBLUE Gatewayのprocess-local Approval Gate待ち状態と、Gateway再起動後のowner向け復旧表示である。目的は、監査永続化が無効でも未決承認を失わず、旧tokenやraw仕事を復元・再利用せず、承認処理中断の結果不明を明示すること。既存のHDS/J単独authority、Approval Gate、L3 review、Broker、M非権威境界は変更していない。

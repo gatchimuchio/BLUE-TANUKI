@@ -2,6 +2,28 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-13 — QE_BUILD rev5.0 Cron historical event recovery correlation
+
+主語はGateway Cron event storeのcurrent cursorと過去event receipt、それをconsumerとするread-only recovery inspector／Operation Plan correlation／WebChat Control Centerである。目的は高水位cursorの重複・順序保護を維持しつつ、later eventにより過去event IDが消えても、計画と配送状態のdigest-only相関を回復経路へ残すこと。関係索引はW-WORK、E01.01「永続jobと重複event」。親成果・索引全体の完了ではない。
+
+`GatewayCronEventStore`に`cron_event_archive`を追加。各cursorを次sequenceへ進める直前に同じtransaction内でevent ID、event/request/source/payload digest、sequence、delivery state、時刻を保存する。raw task/source/payloadは保存しない。既存cursor-only DBは作成時にarchive tableへ移行し、current cursorと一致しないapproval handoffからevent identityを補助できる場合だけ`outcome_unknown`として挿入する。既知の実結果は捏造せず、approval状態は変更しない。
+
+Recovery inspectorはlegacy current-cursor-only schemaのread-only参照を維持し、新archive schemaではarchive receiptのidentityを検証する。各archive rowを最大10,000件まで読む。検証不一致・重複はresidual／unverified、範囲超過はomitted／未観測にし、event correlationは`matched`／`not_in_current_cursor`／`not_in_retained_event_history`／`not_observed_due_to_limit`／`unverified`等を区別する。`handler_returned`はhandler return observationだけで、scheduled job・外部作用のsuccessを示さない。migrationから作った過去eventは`outcome_unknown`。
+
+report/operator projection schemaをそれぞれ10→11／13→14へ更新した。WebChat projection validatorにも新summary count、history availability、`cron_event` dependency、new correlation enumを接続。CLIはdigest archive schema/countを表示。新規承認、権限、replay、J/M書込み、external action、authority、releaseに作用しない。旧cursorから消え、approval handoffにも残っていない過去eventは再構成できない。archiveは現在unboundedでretention/pruningは実装していないため、長期容量は今後の全体設計で扱う。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| Gateway typecheck／Gateway build／WebChat typecheck・build | PASS。 |
+| Gateway `cron_event_store`／`operation_plan_recovery_inspection`／`recovery_inspection`／`operation_plan_recovery_evidence` | PASS：57 tests。 |
+| WebChat Recovery surface targeted test | PASS：1 test、同fileの他132件はskip/NOT_RUN。new operator schema、archive集計、`not_in_retained_event_history`、`cron_event`未観測scopeを確認。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底の移行負債75件は既存継続。 |
+| Full tests／real provider／real scheduled job result／external action／5OS full product／SYSTEM_SHAPED／BUILD_COVERED／QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+**UNIT_ID:** rev5.0 QE_BUILD / Cron historical event-to-recovery correlation. **STATUS:** WIRED（cursor→archive→read-only inspector→Operation Plan／WebChat consumer）。W-WORK全体、job result receiptからMへの帰還はBUILD_GAP。製品状態はP2 QE_BUILD継続、SYSTEM_SHAPED／BUILD_COVERED false。C08.03実provider、OD-03無委任外部作用、D4／MINIDORA別repo、公開／owner GOを維持。
+
+作業中に生成したtest-owned Temp root／SQLiteは終了後cleanup確認。ignored Gateway build outputは作業資産として保持。protected添付とLinux isolation `target/`は未変更。実credential／provider／外部作用／owner dataは未使用。開始local／origin／GitHub main=`6a92af5208d8bc1408f8282c102eec6d894585e1`、recovery current／previous=`6a92af5208d8bc1408f8282c102eec6d894585e1`／`2236fcf18a8cb5c54133a3c5c1359a4b24ed74ce`。終了時SHAはcommit・push後にremoteで照合する。
+
 ## 2026-11-13 — QE_BUILD rev5.0 Approval Gate restart recovery journal
 
 主語はGateway内のprocess-local Approval Gate待ち状態と、再起動後にownerへ提示する未決／結果不明状態である。目的は監査永続化の有無に依存せず、承認待ちをdigestだけで再起動後へ引き継ぎ、旧tokenを復元せず、解決途中の外部作用を再実行しないこと。Gateway `serve()`からprivate SQLite storeを生成・終了し、汎用承認待ちの作成・解決処理・Resident Notifications／Control Centerの既存consumerへ接続した。cron固有handoff、HDS authority、Approval Gate policy、L3 review、Broker、外部作用契約は変更していない。

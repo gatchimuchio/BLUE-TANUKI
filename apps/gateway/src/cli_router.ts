@@ -111,7 +111,7 @@ async function runRecoveryInspectCli(): Promise<void> {
     for (const correlation of report.operation_plan_correlations) {
       writeStdout(`plan=${correlation.plan_id_digest} step=${correlation.step_id_digest} binding=${correlation.status}/${correlation.binding_integrity} broker=${correlation.broker_correlation} delivery=${correlation.delivery_correlation} memory=${correlation.memory_correlation} cron_approval=${correlation.cron_approval_correlation} cron_event=${correlation.cron_event_correlation}${correlation.cron_event_delivery_state ? ` cron_delivery_state=${correlation.cron_event_delivery_state}` : ""}${correlation.memory_update_id_digest ? ` update=${correlation.memory_update_id_digest}` : ""}`);
     }
-    writeStdout("Cron event correlation uses the current cursor only; handler_returned does not prove task success.");
+    writeStdout(`Cron event history schema: ${cronEvents.event_history_available === null ? "unavailable" : cronEvents.event_history_available ? "digest archive" : "current cursor only"}; archived=${cronEvents.verified_archived_event_count ?? "unavailable"}/${cronEvents.archived_event_count ?? "unavailable"}; handler_returned does not prove task success.`);
     for (const scope of report.plan_dependency_scopes) {
       writeStdout(`plan_scope=${scope.plan_id_digest} request_scope=${scope.request_scope_digest ?? "unlinked"} status=${scope.status} bindings=${scope.inspected_binding_count}/${scope.binding_count} omitted=${scope.omitted_binding_count} residual_dependencies=${scope.residual_dependencies.join(",") || "none"} unobserved_dependencies=${scope.unobserved_dependencies.join(",") || "none"}`);
     }

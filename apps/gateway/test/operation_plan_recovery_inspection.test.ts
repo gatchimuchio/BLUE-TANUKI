@@ -579,7 +579,7 @@ describe("J OperationPlan recovery inspection", () => {
     const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
     const projection = projectGatewayRecoveryInspectionForOperator(report);
     expect(projection).toMatchObject({
-      schema_version: 13,
+      schema_version: 14,
       boundary_valid: true,
       operation_plan_schema_residuals: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
       omitted_operation_plan_schema_residual_count: 0,
@@ -753,7 +753,78 @@ describe("J OperationPlan recovery inspection", () => {
     expect(await readFile(cronPath)).toEqual(cronBefore);
   });
 
-  it("reports absent historical Cron event identity as outside the current cursor, not as no event", async () => {
+  it("joins a prior Cron event to its retained digest receipt after a later event advances the cursor", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-history-match-"));
+    const first = createCronEventIdentity("synthetic-cron-plan-history", 17, sha256("synthetic-cron-plan-history-payload"));
+    const second = createCronEventIdentity("synthetic-cron-plan-history", 18, sha256("synthetic-cron-plan-next-payload"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, {
+      channel: "cron", requestId: first.event_id,
+    });
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    expect(cron.claim(first, 10).status).toBe("accepted");
+    cron.settle(first, "handler_returned", 11);
+    expect(cron.claim(second, 12).status).toBe("accepted");
+    cron.settle(second, "handler_returned", 13);
+    cron.close();
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    expect(report.operation_plan_correlations[0]).toMatchObject({
+      cron_event_correlation: "matched",
+      cron_event_delivery_state: "handler_returned",
+    });
+    expect(report.ledgers.cron_events).toMatchObject({
+      event_history_available: true,
+      archived_event_count: 1,
+      verified_archived_event_count: 1,
+      unverified_archived_event_count: 0,
+    });
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain(first.event_id);
+    expect(serialized).not.toContain(first.source);
+    expect(serialized).not.toContain(second.source);
+  });
+
+  it("fails closed when a retained Cron event receipt no longer matches its identity", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-history-corrupt-"));
+    const first = createCronEventIdentity("synthetic-cron-plan-history-corrupt", 17, sha256("history-corrupt-payload"));
+    const second = createCronEventIdentity("synthetic-cron-plan-history-corrupt", 18, sha256("history-corrupt-next-payload"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, {
+      channel: "cron", requestId: first.event_id,
+    });
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    expect(cron.claim(first, 10).status).toBe("accepted");
+    cron.settle(first, "handler_returned", 11);
+    expect(cron.claim(second, 12).status).toBe("accepted");
+    cron.settle(second, "handler_returned", 13);
+    cron.close();
+
+    const db = new DatabaseSync(cronPath);
+    try {
+      db.prepare("UPDATE cron_event_archive SET source_digest=? WHERE event_id=?").run("a".repeat(64), first.event_id);
+    } finally {
+      db.close();
+    }
+    const cronBeforeInspection = await readFile(cronPath);
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    expect(report.ledgers.cron_events).toMatchObject({
+      status: "residuals_present",
+      reason: "ledger_corrupt",
+      unverified_archived_event_count: 1,
+    });
+    expect(report.operation_plan_correlations[0]?.cron_event_correlation).toBe("cron_unverified");
+    expect(report.may_execute).toBe(false);
+    expect(await readFile(cronPath)).toEqual(cronBeforeInspection);
+  });
+
+  it("reports an event absent from retained digest history without claiming it never existed", async () => {
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-cursor-"));
     const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, {
       channel: "cron", requestId: "old-cron-event-no-longer-current",
@@ -764,10 +835,32 @@ describe("J OperationPlan recovery inspection", () => {
     cron.close();
 
     const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
-    expect(report.operation_plan_correlations[0]?.cron_event_correlation).toBe("not_in_current_cursor");
+    expect(report.operation_plan_correlations[0]?.cron_event_correlation).toBe("not_in_retained_event_history");
     expect(report.operation_plan_correlations[0]?.cron_event_delivery_state).toBeNull();
     expect(report.plan_dependency_scopes[0]?.status).toBe("unobserved");
     expect(report.plan_dependency_scopes[0]?.unobserved_dependencies).toContain("cron_event");
+  });
+
+  it("keeps read-only inspection compatible with the legacy current-cursor schema", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-legacy-"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, {
+      channel: "cron", requestId: "legacy-event-without-retained-history",
+    });
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    cron.close();
+    const db = new DatabaseSync(cronPath);
+    try {
+      db.exec("DROP TABLE cron_event_archive");
+    } finally {
+      db.close();
+    }
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    expect(report.ledgers.cron_events.event_history_available).toBe(false);
+    expect(report.operation_plan_correlations[0]?.cron_event_correlation).toBe("not_in_current_cursor");
   });
 });
 

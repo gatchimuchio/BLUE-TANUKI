@@ -93,6 +93,71 @@ describe("GatewayCronEventStore", () => {
     }
   });
 
+  it("retains prior event delivery correlation as digest-only history when the cursor advances", () => {
+    const { filepath, store } = makeStore();
+    const first = makeEvent("cron:history:private-source", 1, "private synthetic payload one");
+    const second = makeEvent("cron:history:private-source", 2, "private synthetic payload two");
+    expect(store.claim(first, 10)).toEqual({ status: "accepted" });
+    store.settle(first, "handler_returned", 11);
+    expect(store.claim(second, 12)).toEqual({ status: "accepted" });
+    store.settle(second, "outcome_unknown", 13);
+    store.close();
+
+    const db = new DatabaseSync(filepath, { readOnly: true });
+    try {
+      const rows = db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state
+        FROM cron_event_archive`).all() as Record<string, unknown>[];
+      expect(rows).toEqual([expect.objectContaining({
+        event_id: first.event_id,
+        request_id_digest: createHash("sha256").update(first.event_id).digest("hex"),
+        source_digest: createHash("sha256").update(first.source).digest("hex"),
+        sequence: first.sequence,
+        payload_digest: first.payload_digest,
+        delivery_state: "handler_returned",
+      })]);
+      const serialized = JSON.stringify(rows);
+      expect(serialized).not.toContain(first.source);
+      expect(serialized).not.toContain("private synthetic payload one");
+      expect(serialized).not.toContain("private synthetic payload two");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migrates a legacy handoff whose event fell behind the current cursor as outcome-unknown", () => {
+    const { filepath, store } = makeStore();
+    const first = makeEvent("cron:history:migration", 1, "legacy synthetic payload");
+    const second = makeEvent("cron:history:migration", 2, "current synthetic payload");
+    expect(store.claim(first, 10).status).toBe("accepted");
+    store.recordPendingApproval(first.event_id, first.payload_digest, "synthetic-command", "synthetic-request", 11);
+    store.settle(first, "handler_returned", 12);
+    expect(store.claim(second, 13).status).toBe("accepted");
+    store.settle(second, "handler_returned", 14);
+    store.close();
+
+    // Model the prior schema, which retained approval handoffs but only one cursor.
+    const legacy = new DatabaseSync(filepath);
+    try {
+      legacy.exec("DROP TABLE cron_event_archive");
+    } finally {
+      legacy.close();
+    }
+
+    const migrated = new GatewayCronEventStore(filepath);
+    try {
+      const db = new DatabaseSync(filepath, { readOnly: true });
+      try {
+        expect(db.prepare(`SELECT event_id,delivery_state FROM cron_event_archive WHERE event_id=?`).get(first.event_id))
+          .toEqual({ event_id: first.event_id, delivery_state: "outcome_unknown" });
+      } finally {
+        db.close();
+      }
+      expect(migrated.claim(first)).toEqual({ status: "stale" });
+    } finally {
+      migrated.close();
+    }
+  });
+
   it("recovers an interrupted dispatch as outcome-unknown without replaying it", () => {
     const { filepath, store } = makeStore();
     const interrupted = makeEvent("cron:runtime:interrupted", 1_000, "synthetic in-flight work");

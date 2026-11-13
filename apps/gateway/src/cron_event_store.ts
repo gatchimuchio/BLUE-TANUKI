@@ -73,9 +73,10 @@ export function createCronEventIdentity(
 }
 
 /**
- * Private, bounded inbox/outbox cursor for scheduled events. It keeps only the
- * latest sequence per source; older identities are rejected by the high-water
- * mark. The cursor prevents duplicate dispatch but is not proof of job success.
+ * Private inbox/outbox high-water cursor for scheduled events. The current
+ * cursor rejects stale identities; prior digest-only event receipts are kept
+ * separately so later events do not erase recovery correlation. Neither is
+ * proof of job success.
  */
 export class GatewayCronEventStore {
   private db: DatabaseType;
@@ -113,6 +114,17 @@ export class GatewayCronEventStore {
         delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS cron_event_archive (
+        event_id TEXT PRIMARY KEY,
+        request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+        source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
+        sequence INTEGER NOT NULL CHECK(sequence >= 0),
+        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS cron_event_archive_request_digest
+        ON cron_event_archive(request_id_digest);
       CREATE TABLE IF NOT EXISTS cron_approval_handoff (
         source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
         sequence INTEGER NOT NULL CHECK(sequence >= 0),
@@ -140,12 +152,15 @@ export class GatewayCronEventStore {
         o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
         o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
         FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest LIMIT 0`);
+      this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
+        FROM cron_event_archive LIMIT 0`);
       const handoffRows = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
         request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff`).all() as unknown as CronApprovalHandoffRow[];
       if (handoffRows.length > MAX_CRON_APPROVAL_HANDOFFS) {
         throw new Error("cron approval handoff capacity exceeded");
       }
       for (const row of handoffRows) validateApprovalHandoffRow(row);
+      this.migrateHistoricalApprovalEvents(handoffRows);
       this.transaction(() => {});
     } catch (error) {
       this.db.close();
@@ -192,6 +207,18 @@ export class GatewayCronEventStore {
       if (current && current.delivery_state !== "handler_returned" &&
           this.resolutionState(current.event_id, current.payload_digest) !== "owner_acknowledged_no_replay") {
         return { status: "blocked_unresolved", delivery_state: current.delivery_state } as const;
+      }
+
+      if (current) {
+        this.archiveEvent({
+          source_digest,
+          sequence: current.sequence,
+          event_id: current.event_id,
+          request_id_digest: sha256(current.event_id),
+          payload_digest: current.payload_digest,
+          delivery_state: current.delivery_state,
+          updated_at_ms: current.updated_at_ms,
+        });
       }
 
       this.db.prepare(`INSERT INTO cron_event_inbox
@@ -471,6 +498,7 @@ export class GatewayCronEventStore {
     event_id: string;
     payload_digest: string;
     delivery_state: CronEventDeliveryState;
+    updated_at_ms: number;
   } | undefined {
     const row = this.db.prepare(`SELECT i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
       o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
@@ -493,7 +521,51 @@ export class GatewayCronEventStore {
       event_id: snapshot.event_id,
       payload_digest: snapshot.payload_digest,
       delivery_state: snapshot.delivery_state,
+      updated_at_ms: snapshot.updated_at_ms,
     };
+  }
+
+  private migrateHistoricalApprovalEvents(rows: readonly CronApprovalHandoffRow[]): void {
+    this.transaction(() => {
+      for (const row of rows) {
+        const current = this.readCurrentCursor(row.source_digest);
+        if (current?.event_id === row.event_id && current.sequence === row.sequence &&
+            current.payload_digest === row.payload_digest) continue;
+        // Older stores retained the handoff identity after replacing the source
+        // cursor, but lost its delivery state. Preserve the correlation as
+        // outcome-unknown; never infer that the scheduled job succeeded.
+        this.archiveEvent({
+          source_digest: row.source_digest,
+          sequence: row.sequence,
+          event_id: row.event_id,
+          request_id_digest: sha256(row.event_id),
+          payload_digest: row.payload_digest,
+          delivery_state: "outcome_unknown",
+          updated_at_ms: row.updated_at_ms,
+        });
+      }
+    });
+  }
+
+  private archiveEvent(row: CronEventHistoryRow): void {
+    const existing = this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,
+      delivery_state,updated_at_ms FROM cron_event_archive WHERE event_id=?`).get(row.event_id) as
+      CronEventHistoryRow | undefined;
+    if (existing) {
+      validateCronEventHistoryRow(existing);
+      if (existing.request_id_digest !== row.request_id_digest || existing.source_digest !== row.source_digest ||
+          existing.sequence !== row.sequence || existing.payload_digest !== row.payload_digest) {
+        throw new Error("cron event history identity conflict");
+      }
+      return;
+    }
+    validateCronEventHistoryRow(row);
+    this.db.prepare(`INSERT INTO cron_event_archive
+      (event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms)
+      VALUES (?,?,?,?,?,?,?)`).run(
+      row.event_id, row.request_id_digest, row.source_digest, row.sequence, row.payload_digest,
+      row.delivery_state, row.updated_at_ms,
+    );
   }
 
   private resolutionState(event_id: string, payload_digest: string): CronEventResolutionState {
@@ -532,6 +604,27 @@ interface CronEventCursorRow {
   outbox_payload_digest?: string;
   outbox_delivery_state?: string;
   outbox_updated_at_ms?: number;
+}
+
+interface CronEventHistoryRow {
+  event_id: string;
+  request_id_digest: string;
+  source_digest: string;
+  sequence: number;
+  payload_digest: string;
+  delivery_state: string;
+  updated_at_ms: number;
+}
+
+function validateCronEventHistoryRow(row: CronEventHistoryRow): void {
+  if (!DIGEST.test(row.source_digest) || !Number.isSafeInteger(row.sequence) || row.sequence < 0 ||
+      row.event_id !== `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` ||
+      row.request_id_digest !== sha256(row.event_id) || !DIGEST.test(row.payload_digest) ||
+      (row.delivery_state !== "dispatching" && row.delivery_state !== "handler_returned" &&
+        row.delivery_state !== "outcome_unknown") ||
+      !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
+    throw new Error("cron event history integrity check failed");
+  }
 }
 
 function validateApprovalHandoffInput(

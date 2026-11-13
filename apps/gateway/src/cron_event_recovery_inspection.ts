@@ -11,7 +11,8 @@ const CRON_INSPECTION_ROW_LIMIT = 10_000;
 export type CronEventRecoveryStatus = "verified" | "residuals_present" | "corrupt" | "unavailable" | "schema_mismatch";
 export type CronEventRecoveryReason = "store_unavailable" | "schema_mismatch" | "ledger_corrupt" | "outbox_mismatch";
 export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
-export type CronEventRequestMatchStatus = "matched" | "not_in_current_cursor" | "not_observed_due_to_limit" | "ambiguous" | "unverified";
+export type CronEventRequestMatchStatus = "matched" | "not_in_current_cursor" | "not_in_retained_event_history" |
+  "not_observed_due_to_limit" | "ambiguous" | "unverified";
 
 export interface CronEventRecoveryInspection {
   readonly status: CronEventRecoveryStatus;
@@ -21,6 +22,11 @@ export interface CronEventRecoveryInspection {
   readonly unverified_cursor_count: number | null;
   readonly omitted_cursor_count: number | null;
   readonly unresolved_cursor_count: number | null;
+  readonly event_history_available: boolean | null;
+  readonly archived_event_count: number | null;
+  readonly verified_archived_event_count: number | null;
+  readonly unverified_archived_event_count: number | null;
+  readonly omitted_archived_event_count: number | null;
   readonly orphan_outbox_count: number | null;
   readonly approval_handoff_count: number | null;
   readonly verified_approval_handoff_count: number | null;
@@ -49,7 +55,7 @@ export interface CronEventRequestMatch {
 export interface CronEventRecoveryLedgerInspection extends CronEventRecoveryInspection {
   /** Digest-only matches requested by the recovery aggregator; never contains command IDs. */
   readonly approval_command_matches: readonly CronApprovalCommandMatch[];
-  /** Digest-only matches against each source's current cursor; this is not historical event proof. */
+  /** Digest-only matches against the current cursor and retained prior-event receipts. */
   readonly event_request_matches: readonly CronEventRequestMatch[];
 }
 
@@ -81,6 +87,20 @@ interface CronApprovalRow {
   cursor_sequence: unknown;
   cursor_event_id: unknown;
   cursor_payload_digest: unknown;
+  history_source_digest: unknown;
+  history_sequence: unknown;
+  history_event_id: unknown;
+  history_payload_digest: unknown;
+}
+
+interface CronEventHistoryRow {
+  event_id: unknown;
+  request_id_digest: unknown;
+  source_digest: unknown;
+  sequence: unknown;
+  payload_digest: unknown;
+  delivery_state: unknown;
+  updated_at_ms: unknown;
 }
 
 function unavailableInspection(
@@ -95,6 +115,11 @@ function unavailableInspection(
     unverified_cursor_count: null,
     omitted_cursor_count: null,
     unresolved_cursor_count: null,
+    event_history_available: null,
+    archived_event_count: null,
+    verified_archived_event_count: null,
+    unverified_archived_event_count: null,
+    omitted_archived_event_count: null,
     orphan_outbox_count: null,
     approval_handoff_count: null,
     verified_approval_handoff_count: null,
@@ -140,7 +165,9 @@ function hasCronSqliteSidecar(databasePath: string): boolean {
   });
 }
 
-function verifyCronRecoverySchema(database: DatabaseType): boolean {
+type CronEventSchemaVersion = "current_cursor_only" | "digest_history";
+
+function verifyCronRecoverySchema(database: DatabaseType): CronEventSchemaVersion | null {
   const expected: Record<string, readonly { name: string; type: string; primaryKey: number; notNull: number }[]> = {
     cron_event_inbox: [
       { name: "source_digest", type: "TEXT", primaryKey: 1, notNull: 1 },
@@ -169,26 +196,40 @@ function verifyCronRecoverySchema(database: DatabaseType): boolean {
       { name: "created_at_ms", type: "INTEGER", primaryKey: 0, notNull: 1 },
       { name: "updated_at_ms", type: "INTEGER", primaryKey: 0, notNull: 1 },
     ],
+    cron_event_archive: [
+      { name: "event_id", type: "TEXT", primaryKey: 1, notNull: 1 },
+      { name: "request_id_digest", type: "TEXT", primaryKey: 0, notNull: 1 },
+      { name: "source_digest", type: "TEXT", primaryKey: 0, notNull: 1 },
+      { name: "sequence", type: "INTEGER", primaryKey: 0, notNull: 1 },
+      { name: "payload_digest", type: "TEXT", primaryKey: 0, notNull: 1 },
+      { name: "delivery_state", type: "TEXT", primaryKey: 0, notNull: 1 },
+      { name: "updated_at_ms", type: "INTEGER", primaryKey: 0, notNull: 1 },
+    ],
   };
+  const requiredTables = Object.keys(expected).filter((table) => table !== "cron_event_archive");
   const objects = database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN ('table','trigger','view')")
     .all() as { type: string; name: string; tbl_name: string; sql: string | null }[];
   const tableRows = objects.filter((row) => row.type === "table" && Object.hasOwn(expected, row.name));
-  if (tableRows.length !== Object.keys(expected).length ||
+  const hasHistory = tableRows.some((row) => row.name === "cron_event_archive");
+  const expectedTables = hasHistory ? Object.keys(expected) : requiredTables;
+  if (tableRows.length !== expectedTables.length ||
       objects.some((row) => row.type === "trigger" || row.type === "view" || (row.type === "table" && !Object.hasOwn(expected, row.name)))) {
-    return false;
+    return null;
   }
-  for (const [table, columns] of Object.entries(expected)) {
+  for (const table of expectedTables) {
+    const columns = expected[table]!;
     const schema = tableRows.find((row) => row.name === table)?.sql;
-    if (typeof schema !== "string" || !/\bSTRICT\b/i.test(schema)) return false;
+    if (typeof schema !== "string" || !/\bSTRICT\b/i.test(schema)) return null;
     const actual = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string; type: string; pk: number; notnull: number }[];
     if (actual.length !== columns.length || !columns.every((column, index) => {
       const row = actual[index];
       return row?.name === column.name && row.type.toUpperCase() === column.type && row.pk === column.primaryKey && row.notnull === column.notNull;
-    })) return false;
+    })) return null;
   }
   const foreignKeys = database.prepare("PRAGMA foreign_key_list(cron_event_outbox)").all() as { table: string; from: string; to: string }[];
-  return foreignKeys.length === 1 && foreignKeys[0]?.table === "cron_event_inbox" &&
-    foreignKeys[0].from === "source_digest" && foreignKeys[0].to === "source_digest";
+  if (!(foreignKeys.length === 1 && foreignKeys[0]?.table === "cron_event_inbox" &&
+      foreignKeys[0].from === "source_digest" && foreignKeys[0].to === "source_digest")) return null;
+  return hasHistory ? "digest_history" : "current_cursor_only";
 }
 
 function nonnegativeSafeInteger(value: unknown): value is number {
@@ -207,7 +248,21 @@ function validCursor(row: CronCursorRow): boolean {
     row.outbox_updated_at_ms === row.updated_at_ms;
 }
 
+function validArchivedEvent(row: CronEventHistoryRow): boolean {
+  return typeof row.source_digest === "string" && DIGEST.test(row.source_digest) &&
+    nonnegativeSafeInteger(row.sequence) && typeof row.event_id === "string" &&
+    row.event_id === `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` &&
+    typeof row.request_id_digest === "string" && row.request_id_digest === sha256(row.event_id) &&
+    typeof row.payload_digest === "string" && DIGEST.test(row.payload_digest) &&
+    ["dispatching", "handler_returned", "outcome_unknown"].includes(String(row.delivery_state)) &&
+    nonnegativeSafeInteger(row.updated_at_ms);
+}
+
 function validApprovalRow(row: CronApprovalRow): boolean {
+  const matchesCurrent = row.cursor_source_digest === row.source_digest && row.cursor_sequence === row.sequence &&
+    row.cursor_event_id === row.event_id && row.cursor_payload_digest === row.payload_digest;
+  const matchesHistory = row.history_source_digest === row.source_digest && row.history_sequence === row.sequence &&
+    row.history_event_id === row.event_id && row.history_payload_digest === row.payload_digest;
   return typeof row.source_digest === "string" && DIGEST.test(row.source_digest) &&
     nonnegativeSafeInteger(row.sequence) && typeof row.event_id === "string" &&
     row.event_id === `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` &&
@@ -215,8 +270,7 @@ function validApprovalRow(row: CronApprovalRow): boolean {
     typeof row.command_id_digest === "string" && DIGEST.test(row.command_id_digest) &&
     typeof row.request_id_digest === "string" && DIGEST.test(row.request_id_digest) &&
     ["pending", "interrupted", "consumed", "rejected", "cancelled"].includes(String(row.state)) &&
-    row.cursor_source_digest === row.source_digest && row.cursor_sequence === row.sequence &&
-    row.cursor_event_id === row.event_id && row.cursor_payload_digest === row.payload_digest &&
+    (matchesCurrent !== matchesHistory) &&
     nonnegativeSafeInteger(row.created_at_ms) && nonnegativeSafeInteger(row.updated_at_ms);
 }
 
@@ -248,7 +302,8 @@ export function inspectCronEventRecoveryLedger(options: {
     if (typeof mode?.journal_mode !== "string" || mode.journal_mode.toLowerCase() !== "delete") {
       return unavailableInspection("unavailable", "store_unavailable");
     }
-    if (!verifyCronRecoverySchema(database)) return unavailableInspection("schema_mismatch", "schema_mismatch");
+    const schemaVersion = verifyCronRecoverySchema(database);
+    if (!schemaVersion) return unavailableInspection("schema_mismatch", "schema_mismatch");
     const integrity = database.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
     if (!integrity || Object.values(integrity)[0] !== "ok") {
       return unavailableInspection("corrupt", "ledger_corrupt");
@@ -260,9 +315,10 @@ export function inspectCronEventRecoveryLedger(options: {
     };
     const cursorCount = count("cron_event_inbox");
     const approvalCount = count("cron_approval_handoff");
+    const archivedEventCount = schemaVersion === "digest_history" ? count("cron_event_archive") : 0;
     const orphanRow = database.prepare(`SELECT COUNT(*) AS count FROM cron_event_outbox o
       LEFT JOIN cron_event_inbox i ON i.source_digest=o.source_digest WHERE i.source_digest IS NULL`).get() as { count?: unknown } | undefined;
-    if (cursorCount === null || approvalCount === null || !nonnegativeSafeInteger(orphanRow?.count)) {
+    if (cursorCount === null || approvalCount === null || archivedEventCount === null || !nonnegativeSafeInteger(orphanRow?.count)) {
       return unavailableInspection("schema_mismatch", "schema_mismatch");
     }
     const cursorRows = database.prepare(`SELECT i.source_digest,i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
@@ -270,12 +326,27 @@ export function inspectCronEventRecoveryLedger(options: {
         o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
       FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
       ORDER BY i.source_digest LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronCursorRow[];
-    const approvalRows = database.prepare(`SELECT a.source_digest,a.sequence,a.event_id,a.payload_digest,a.command_id_digest,
+    const approvalQuery = schemaVersion === "digest_history" ? `SELECT a.source_digest,a.sequence,a.event_id,a.payload_digest,a.command_id_digest,
         a.request_id_digest,a.state,a.created_at_ms,a.updated_at_ms,
         i.source_digest AS cursor_source_digest,i.sequence AS cursor_sequence,i.event_id AS cursor_event_id,
-        i.payload_digest AS cursor_payload_digest
+        i.payload_digest AS cursor_payload_digest,
+        h.source_digest AS history_source_digest,h.sequence AS history_sequence,h.event_id AS history_event_id,
+        h.payload_digest AS history_payload_digest
       FROM cron_approval_handoff a LEFT JOIN cron_event_inbox i ON i.source_digest=a.source_digest
-      ORDER BY a.event_id,a.command_id_digest LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronApprovalRow[];
+      LEFT JOIN cron_event_archive h ON h.event_id=a.event_id
+      ORDER BY a.event_id,a.command_id_digest LIMIT ?`
+      : `SELECT a.source_digest,a.sequence,a.event_id,a.payload_digest,a.command_id_digest,
+        a.request_id_digest,a.state,a.created_at_ms,a.updated_at_ms,
+        i.source_digest AS cursor_source_digest,i.sequence AS cursor_sequence,i.event_id AS cursor_event_id,
+        i.payload_digest AS cursor_payload_digest,
+        NULL AS history_source_digest,NULL AS history_sequence,NULL AS history_event_id,NULL AS history_payload_digest
+      FROM cron_approval_handoff a LEFT JOIN cron_event_inbox i ON i.source_digest=a.source_digest
+      ORDER BY a.event_id,a.command_id_digest LIMIT ?`;
+    const approvalRows = database.prepare(approvalQuery).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronApprovalRow[];
+    const archivedEventRows = schemaVersion === "digest_history"
+      ? database.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
+          FROM cron_event_archive ORDER BY request_id_digest,event_id LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronEventHistoryRow[]
+      : [];
 
     const wantedCommandDigests = new Set((options.command_id_digests ?? [])
       .filter((value) => typeof value === "string" && DIGEST.test(value))
@@ -289,6 +360,7 @@ export function inspectCronEventRecoveryLedger(options: {
     let verifiedCursorCount = 0;
     let unverifiedCursorCount = 0;
     let unresolvedCursorCount = 0;
+    const observedEventIds = new Set<string>();
     for (const row of cursorRows) {
       if (!validCursor(row)) {
         unverifiedCursorCount++;
@@ -303,6 +375,7 @@ export function inspectCronEventRecoveryLedger(options: {
         }
       } else {
         verifiedCursorCount++;
+        observedEventIds.add(String(row.event_id));
         const requestDigest = sha256(String(row.event_id));
         if (wantedRequestDigests.has(requestDigest)) {
           const match = eventMatches.get(requestDigest) ?? { row_count: 0, states: new Set<CronEventDeliveryState>(), unverified: false };
@@ -311,6 +384,28 @@ export function inspectCronEventRecoveryLedger(options: {
           eventMatches.set(requestDigest, match);
         }
         if (row.delivery_state !== "handler_returned") unresolvedCursorCount++;
+      }
+    }
+    let verifiedArchivedEventCount = 0;
+    let unverifiedArchivedEventCount = 0;
+    for (const row of archivedEventRows) {
+      if (!validArchivedEvent(row) || observedEventIds.has(String(row.event_id))) {
+        unverifiedArchivedEventCount++;
+        if (typeof row.request_id_digest === "string" && wantedRequestDigests.has(row.request_id_digest)) {
+          const match = eventMatches.get(row.request_id_digest) ?? { row_count: 0, states: new Set<CronEventDeliveryState>(), unverified: false };
+          match.row_count++;
+          match.unverified = true;
+          eventMatches.set(row.request_id_digest, match);
+        }
+        continue;
+      }
+      verifiedArchivedEventCount++;
+      observedEventIds.add(String(row.event_id));
+      if (wantedRequestDigests.has(String(row.request_id_digest))) {
+        const match = eventMatches.get(String(row.request_id_digest)) ?? { row_count: 0, states: new Set<CronEventDeliveryState>(), unverified: false };
+        match.row_count++;
+        match.states.add(row.delivery_state as CronEventDeliveryState);
+        eventMatches.set(String(row.request_id_digest), match);
       }
     }
     let verifiedApprovalCount = 0;
@@ -334,19 +429,26 @@ export function inspectCronEventRecoveryLedger(options: {
       }
     }
     const omittedCursorCount = cursorCount - cursorRows.length;
+    const omittedArchivedEventCount = archivedEventCount - archivedEventRows.length;
     const omittedApprovalCount = approvalCount - approvalRows.length;
-    const residualCount = unverifiedCursorCount + omittedCursorCount + unresolvedCursorCount + orphanRow.count +
+    const residualCount = unverifiedCursorCount + omittedCursorCount + unresolvedCursorCount +
+      unverifiedArchivedEventCount + omittedArchivedEventCount + orphanRow.count +
       unverifiedApprovalCount + omittedApprovalCount + pendingApprovalCount + interruptedApprovalCount;
     const status: CronEventRecoveryStatus = residualCount === 0 ? "verified" : "residuals_present";
     return {
       status,
-      reason: unverifiedCursorCount > 0 || unverifiedApprovalCount > 0 ? "ledger_corrupt"
+      reason: unverifiedCursorCount > 0 || unverifiedArchivedEventCount > 0 || unverifiedApprovalCount > 0 ? "ledger_corrupt"
         : orphanRow.count > 0 ? "outbox_mismatch" : null,
       cursor_count: cursorCount,
       verified_cursor_count: verifiedCursorCount,
       unverified_cursor_count: unverifiedCursorCount,
       omitted_cursor_count: omittedCursorCount,
       unresolved_cursor_count: unresolvedCursorCount,
+      event_history_available: schemaVersion === "digest_history",
+      archived_event_count: archivedEventCount,
+      verified_archived_event_count: verifiedArchivedEventCount,
+      unverified_archived_event_count: unverifiedArchivedEventCount,
+      omitted_archived_event_count: omittedArchivedEventCount,
       orphan_outbox_count: orphanRow.count,
       approval_handoff_count: approvalCount,
       verified_approval_handoff_count: verifiedApprovalCount,
@@ -370,8 +472,9 @@ export function inspectCronEventRecoveryLedger(options: {
         }
         return {
           request_id_digest,
-          status: omittedCursorCount > 0 ? "not_observed_due_to_limit"
-            : unverifiedCursorCount > 0 ? "unverified" : "not_in_current_cursor",
+          status: omittedCursorCount > 0 || omittedArchivedEventCount > 0 ? "not_observed_due_to_limit"
+            : unverifiedCursorCount > 0 || unverifiedArchivedEventCount > 0 ? "unverified"
+              : schemaVersion === "current_cursor_only" ? "not_in_current_cursor" : "not_in_retained_event_history",
           delivery_state: null,
         };
       }),
