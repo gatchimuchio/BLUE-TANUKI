@@ -2535,6 +2535,52 @@ describe("built-in tools", () => {
     expect(result.links).toEqual(["https://example.test/next"]);
   });
 
+  it("browser.read rejects attachments and non-text responses without exposing their metadata or bytes", async () => {
+    const cases = [
+      {
+        content_type: "text/plain",
+        content_disposition: 'attachment; filename="private-report.txt"',
+        body: "private attachment bytes",
+        expected: "browser_read_attachment_response_rejected; response_not_exposed; automatic_retry=false; next_action=inspect_without_resubmitting",
+      },
+      {
+        content_type: "application/pdf",
+        content_disposition: 'inline; filename="private-report.pdf"',
+        body: "%PDF-private response bytes",
+        expected: "browser_read_non_text_response_rejected; response_not_exposed; automatic_retry=false; next_action=inspect_without_resubmitting",
+      },
+      {
+        content_type: null,
+        content_disposition: null,
+        body: "untyped response bytes",
+        expected: "browser_read_non_text_response_rejected; response_not_exposed; automatic_retry=false; next_action=inspect_without_resubmitting",
+      },
+    ];
+
+    for (const scenario of cases) {
+      const error = await invokeBrowserRead(
+        { url: "https://example.test/download", max_bytes: 4096 },
+        fakeHttp(
+          { "example.test": { address: "93.184.216.34", family: 4 } },
+          async () => ({
+            status: 200,
+            ok: true,
+            content_type: scenario.content_type,
+            content_disposition: scenario.content_disposition,
+            location: null,
+            body: scenario.body,
+            truncated: false,
+          }),
+        ),
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(scenario.expected);
+      expect((error as Error).message).not.toContain(scenario.body);
+      expect((error as Error).message).not.toContain("private-report");
+    }
+  });
+
   it("browser.read inherits http.fetch SSRF enforcement", async () => {
     await expect(
       invokeBrowserRead(

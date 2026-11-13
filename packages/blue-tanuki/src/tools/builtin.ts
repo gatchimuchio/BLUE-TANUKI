@@ -1483,10 +1483,14 @@ function isRedirect(status: number): boolean {
     status === 307 || status === 308;
 }
 
-export async function invokeHttpFetch(
+interface HttpFetchResult extends Omit<HttpFetchResponse, "location"> {
+  url: string;
+}
+
+async function fetchHttpResponse(
   args: Record<string, unknown>,
   opts: HttpFetchOptions = {},
-): Promise<unknown> {
+): Promise<HttpFetchResult> {
   const rawUrl = stringArg(args, "url")!;
   const method = (stringArg(args, "method", false) ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
@@ -1515,10 +1519,26 @@ export async function invokeHttpFetch(
       status: res.status,
       ok: res.ok,
       content_type: res.content_type,
+      content_disposition: res.content_disposition,
       body: res.body,
       truncated: res.truncated,
     };
   }
+}
+
+export async function invokeHttpFetch(
+  args: Record<string, unknown>,
+  opts: HttpFetchOptions = {},
+): Promise<unknown> {
+  const fetched = await fetchHttpResponse(args, opts);
+  return {
+    url: fetched.url,
+    status: fetched.status,
+    ok: fetched.ok,
+    content_type: fetched.content_type,
+    body: fetched.body,
+    truncated: fetched.truncated,
+  };
 }
 
 export async function invokeWebSearch(
@@ -3707,20 +3727,17 @@ export async function invokeBrowserRead(
   const requestedUrl = parseHttpUrl(stringArg(args, "url")!);
   const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 512_000);
   const maxChars = positiveIntArg(args, "max_chars", 8_000, 50_000);
-  const fetched = (await invokeHttpFetch(
+  const fetched = await fetchHttpResponse(
     { url: requestedUrl.href, method: "GET", max_bytes: maxBytes },
     opts,
-  )) as {
-    url: string;
-    status: number;
-    ok: boolean;
-    content_type: string | null;
-    body: string;
-    truncated: boolean;
-  };
+  );
   if (!fetched.ok) {
     throw new Error(`browser.read returned HTTP ${fetched.status}`);
   }
+  assertBrowserReadableResponseIsText(fetched, {
+    attachment: "browser_read_attachment_response_rejected; response_not_exposed; automatic_retry=false; next_action=inspect_without_resubmitting",
+    nonText: "browser_read_non_text_response_rejected; response_not_exposed; automatic_retry=false; next_action=inspect_without_resubmitting",
+  });
   const finalUrl = parseHttpUrl(fetched.url);
   const body = fetched.body;
   const isHtml =
@@ -3846,14 +3863,24 @@ export function assertBrowserFormResponseIsReadableText(response: Pick<
   HttpFetchResponse,
   "status" | "content_type" | "content_disposition" | "body"
 >): void {
+  assertBrowserReadableResponseIsText(response, {
+    attachment: "browser_form_get_download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting",
+    nonText: "browser_form_get_non_text_result_rejected; download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting",
+  });
+}
+
+function assertBrowserReadableResponseIsText(response: Pick<
+  HttpFetchResponse,
+  "status" | "content_type" | "content_disposition" | "body"
+>, errors: { attachment: string; nonText: string }): void {
   const disposition = response.content_disposition?.trim();
   const dispositionValues = disposition?.split(",").map((value) => value.split(";", 1)[0]?.trim().toLowerCase()) ?? [];
   if (dispositionValues.includes("attachment")) {
-    throw new Error("browser_form_get_download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+    throw new Error(errors.attachment);
   }
   if (response.status === 204 && response.body.length === 0) return;
   if (!isBrowserTextResultContentType(response.content_type)) {
-    throw new Error("browser_form_get_non_text_result_rejected; download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting");
+    throw new Error(errors.nonText);
   }
 }
 
