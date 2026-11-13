@@ -102,18 +102,22 @@ export type BrowserAutomationAction =
   | "smoke"
   | "navigate"
   | "click"
+  | "form_fill"
   | "form_submit"
   | "download"
   | "upload";
 
 export interface BrowserAutomationRunRequest {
-  action: "snapshot" | "navigate" | "click" | "form_submit";
+  action: "snapshot" | "navigate" | "click" | "form_fill" | "form_submit";
   url: string;
   link_name?: string;
   target_url?: string;
   action_url?: string;
   form_name?: string;
   fields?: readonly { name: string; value: string }[];
+  input_receipt_digest?: string;
+  expected_form_state_digest?: string;
+  before_form_submit?: () => void;
   target: HttpFetchTarget;
   timeout_ms: number;
   max_chars: number;
@@ -130,6 +134,7 @@ export interface BrowserAutomationRunResult {
   text: string;
   truncated: boolean;
   http_status?: number;
+  form_state_digest?: string;
 }
 
 export type BrowserAutomationRunner = (
@@ -138,6 +143,7 @@ export type BrowserAutomationRunner = (
 
 export interface BrowserAutomationOptions extends HttpFetchOptions {
   runner?: BrowserAutomationRunner;
+  before_form_submit?: () => void;
 }
 
 export interface BrowserSnapshotOptions extends BrowserAutomationOptions {}

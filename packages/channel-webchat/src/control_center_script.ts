@@ -5785,6 +5785,79 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "停止対象を再確認";
           return;
         }
+        if (review.kind === "browser_form_input") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          let parsedUrl = null;
+          let parsedActionUrl = null;
+          try { parsedUrl = new URL(review.url); parsedActionUrl = new URL(review.action_url); }
+          catch { /* validation below keeps approval closed */ }
+          const fieldsValid = Array.isArray(review.fields) && review.fields.length > 0 && review.fields.length <= 10 &&
+            review.fields.every(function (field) {
+              return field && typeof field.name === "string" && field.name.length > 0 && field.name.length <= 64 &&
+                typeof field.value === "string" && field.value.length > 0 && field.value.length <= 1024;
+            });
+          if (review.command_id !== commandId || review.operation !== "browser.automation.form_fill" ||
+              review.source_method !== "GET" || review.input_effect !== "ephemeral_dom_fill_only" ||
+              review.external_effect_class !== "page_read_unclassified" || review.final_submit !== false ||
+              review.same_origin_only !== true || review.javascript_enabled !== false ||
+              review.credentials_reused !== false || review.downloads_enabled !== false || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.origin !== "string" || !parsedUrl || parsedUrl.origin !== review.origin ||
+              parsedUrl.search || parsedUrl.hash || !parsedActionUrl || parsedActionUrl.origin !== review.origin ||
+              parsedActionUrl.search || parsedActionUrl.hash || typeof review.form_name !== "string" ||
+              review.form_name.length === 0 || review.form_name.length > 200 || !fieldsValid) {
+            throw new Error("フォーム入力の確認内容がこのL3承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "同一originのフォームへ一時入力";
+          view.appendChild(heading);
+          [
+            ["ページ", review.url],
+            ["フォーム送信先（表示のみ）", review.action_url],
+            ["origin", review.origin],
+            ["検索領域", review.form_name],
+            ["ページ取得", "GET。取得効果は未分類"],
+            ["この承認の作用", "隔離ブラウザ内の一時DOM入力のみ。ページを閉じると破棄"],
+            ["最終フォーム送信", "実行しない。ページGETの外部効果は未分類。後続GETには別L3承認が必要"],
+            ["ページJavaScript", "無効"],
+            ["資格情報・Cookie", "再利用なし"],
+            ["download", "無効"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const valuesHeading = document.createElement("strong");
+          valuesHeading.textContent = "入力する値";
+          view.appendChild(valuesHeading);
+          review.fields.forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field.name + ": ";
+            const value = document.createElement("pre");
+            value.textContent = field.value;
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "これは最終フォーム送信の承認ではありません。ページ取得自体の外部効果は未分類です。値と取得先を確認してください。後続で送信する場合、同一request内で一回限り・短時間のreceiptとフォーム状態を再照合し、入力内容を再表示する別のL3承認を要求します。receipt自体に権限はありません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "入力値と一時作用を再確認";
+          return;
+        }
         if (review.kind === "browser_form_get") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           let parsedUrl = null;
@@ -5803,6 +5876,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.operation_plan_binding_digest) ||
+              !isDigest(review.input_receipt_digest) || !isDigest(review.expected_form_state_digest) ||
               typeof review.origin !== "string" || !parsedUrl || parsedUrl.origin !== review.origin ||
               parsedUrl.search || parsedUrl.hash || !parsedActionUrl || parsedActionUrl.origin !== review.origin ||
               parsedActionUrl.search || parsedActionUrl.hash || !fieldsValid) {
@@ -5819,6 +5893,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["検索領域", review.form_name],
             ["送信方式", "GET。POST等は拒否"],
             ["外部作用分類", "外部フォーム送信（外部効果は未分類）"],
+            ["前段入力receipt", review.input_receipt_digest],
+            ["前段フォーム状態digest", review.expected_form_state_digest],
             ["状態変更", "GETでも外部状態を変える可能性あり。購入・確定等を自動判別しません"],
             ["結果不明時", "自動再送なし"],
             ["ページJavaScript", "無効"],
@@ -5848,7 +5924,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "この確認は依頼内容を表示するだけです。検索フォームの形状だけでは送信先の実効果を分類できません。GETでも外部状態が変わることがあり、購入・確定等の作用を除外できません。送信先と入力値を確認し、結果不明時は自動再送しません。";
+          note.textContent = "前段の一時入力とは独立した、今回のGET送信L3確認です。検索フォームの形状だけでは送信先の実効果を分類できません。GETでも外部状態が変わることがあり、購入・確定等の作用を除外できません。送信先と値を再確認してください。receiptは入力段階との照合だけに使い権限を与えません。結果不明時は自動再送しません.";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;

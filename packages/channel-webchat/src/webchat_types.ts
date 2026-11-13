@@ -333,6 +333,34 @@ export interface WebChatBrowserFormGetContentReview {
   no_store: true;
   used_for_authority: false;
   may_execute: false;
+  input_receipt_digest?: string;
+  expected_form_state_digest?: string;
+}
+
+export interface WebChatBrowserFormInputContentReview {
+  kind: "browser_form_input";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation_plan_binding_digest: string;
+  operation: "browser.automation.form_fill";
+  url: string;
+  action_url: string;
+  origin: string;
+  form_name: string;
+  fields: readonly { name: string; value: string }[];
+  source_method: "GET";
+  input_effect: "ephemeral_dom_fill_only";
+  external_effect_class: "page_read_unclassified";
+  same_origin_only: true;
+  javascript_enabled: false;
+  credentials_reused: false;
+  downloads_enabled: false;
+  final_submit: false;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
 }
 
 export interface WebChatBrowserLinkNavigationContentReview {
@@ -1049,6 +1077,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
+  WebChatBrowserFormInputContentReview |
   WebChatBrowserLinkNavigationContentReview |
   WebChatGoogleCalendarEventCreateContentReview |
   WebChatGoogleCalendarEventUpdateContentReview | WebChatGoogleCalendarEventDeleteContentReview |

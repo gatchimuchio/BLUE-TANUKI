@@ -86,10 +86,13 @@ import {
 } from "./file_safety.js";
 import { shellExecTool } from "./shell_exec.js";
 import {
+  browserFormStateDigest,
   buildBrowserSearchFormGetUrl,
+  parseBrowserFormInputArguments,
   parseBrowserFormGetArguments,
   parseBrowserLinkNavigationArguments,
   type BrowserFormGetArguments,
+  type BrowserFormInputArguments,
   type BrowserLinkNavigationArguments,
   type BrowserSearchFormSnapshot,
 } from "./browser_form_submission.js";
@@ -428,13 +431,14 @@ function browserAutomationAction(args: Record<string, unknown>): BrowserAutomati
     raw === "smoke" ||
     raw === "navigate" ||
     raw === "click" ||
+    raw === "form_fill" ||
     raw === "form_submit" ||
     raw === "download" ||
     raw === "upload"
   ) {
     return raw;
   }
-  throw new Error("action must be smoke, navigate, click, form_submit, download, or upload");
+  throw new Error("action must be smoke, navigate, click, form_fill, form_submit, download, or upload");
 }
 
 function isWellFormedBrowserLinkName(value: string): boolean {
@@ -3995,7 +3999,7 @@ async function defaultBrowserAutomationRunner(
     if (!page.route) throw new Error("browser network interception unavailable; mutation_sent=false");
     await page.route("**/*", async (route, browserRequest) => {
       try {
-        if (request.action === "form_submit") {
+        if (request.action === "form_submit" || request.action === "form_fill") {
           await route.abort();
           return;
         }
@@ -4022,7 +4026,8 @@ async function defaultBrowserAutomationRunner(
     let formText: string | null = null;
     let formResponseTruncated = false;
     let formRequestDispatched = false;
-    if (request.action === "form_submit") {
+    let formStateDigest: string | undefined;
+    if (request.action === "form_submit" || request.action === "form_fill") {
       if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
         throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
       }
@@ -4039,6 +4044,8 @@ async function defaultBrowserAutomationRunner(
           !isBrowserHtmlContentType(sourceResponse.content_type)) {
         throw new Error("browser_form_get_source_unusable; form_submission_sent=false");
       }
+      formHttpStatus = sourceResponse.status;
+      formResponseTruncated = sourceResponse.truncated;
       await setBrowserDocumentContent(page, sourceResponse.body, request.url, request.timeout_ms);
     } else {
       await page.goto(request.url, {
@@ -4079,7 +4086,7 @@ async function defaultBrowserAutomationRunner(
         waitUntil: "domcontentloaded",
         timeout: request.timeout_ms,
       });
-    } else if (request.action === "form_submit") {
+    } else if (request.action === "form_submit" || request.action === "form_fill") {
       if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
         throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
       }
@@ -4089,7 +4096,7 @@ async function defaultBrowserAutomationRunner(
       }
       const form = await searchRegion.evaluate<BrowserSearchFormSnapshot>(`element => {
         const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
-        if (forms.length !== 1) return { form_count: forms.length, control_count: 0, controls: [], method: "", action: "", target: "", enctype: "", accept_charset: "" };
+        if (forms.length !== 1) return { form_count: forms.length, control_count: 0, controls: [], method: "", action: "", target: "", enctype: "", accept_charset: "", form_markup: "" };
         const current = forms[0];
         const controls = Array.from(current.elements);
         return {
@@ -4100,6 +4107,7 @@ async function defaultBrowserAutomationRunner(
           target: current.target || "",
           enctype: current.enctype || "",
           accept_charset: current.acceptCharset || "",
+          form_markup: current.outerHTML,
           controls: controls.slice(0, 16).map(control => ({
             tag: control.tagName.toLowerCase(),
             type: "type" in control ? String(control.type || "").toLowerCase() : "",
@@ -4125,35 +4133,74 @@ async function defaultBrowserAutomationRunner(
         expected_action_url: request.action_url,
         form,
         fields: request.fields,
+        ...(request.action === "form_submit" && request.expected_form_state_digest
+          ? { expected_form_state_digest: request.expected_form_state_digest } : {}),
       });
-      const submissionTarget = await resolvePublicTarget(submissionUrl, request.env, request.resolveHost);
-      let submissionResponse;
-      formRequestDispatched = true;
-      try {
-        submissionResponse = await request.http_request(
-          submissionTarget,
-          "GET",
-          BROWSER_FORM_RESPONSE_MAX_BYTES,
-          request.signal,
-        );
-      } catch {
-        throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
-      }
-      if (isRedirect(submissionResponse.status) || submissionResponse.location) {
-        throw new Error("browser_form_get_redirect_blocked; outcome_unknown; automatic_retry=false");
-      }
-      assertBrowserFormResponseIsReadableText(submissionResponse);
-      formFinalUrl = submissionUrl;
-      formHttpStatus = submissionResponse.status;
-      formResponseTruncated = submissionResponse.truncated;
-      if (isBrowserHtmlContentType(submissionResponse.content_type)) {
-        try {
-          await setBrowserDocumentContent(page, submissionResponse.body, submissionUrl.href, request.timeout_ms);
-        } catch {
-          throw new Error("browser_form_get_result_parse_failed; outcome_unknown; automatic_retry=false");
+      formStateDigest = browserFormStateDigest(form);
+      if (request.action === "form_fill") {
+        const fieldsBase64 = Buffer.from(JSON.stringify(request.fields), "utf8").toString("base64");
+        const fillResult = await searchRegion.evaluate<{ ok: boolean; filled_count: number }>(`element => {
+          const bytes = Uint8Array.from(atob("${fieldsBase64}"), value => value.charCodeAt(0));
+          const fields = JSON.parse(new TextDecoder().decode(bytes));
+          const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
+          if (forms.length !== 1 || !Array.isArray(fields)) return { ok: false, filled_count: 0 };
+          const form = forms[0];
+          let filledCount = 0;
+          for (const field of fields) {
+            if (!field || typeof field.name !== "string" || typeof field.value !== "string") return { ok: false, filled_count: filledCount };
+            const matches = Array.from(form.elements).filter(control =>
+              control.tagName.toLowerCase() === "input" &&
+              ["text", "search"].includes(String(control.type || "").toLowerCase()) &&
+              String(control.name || "") === field.name);
+            if (matches.length !== 1) return { ok: false, filled_count: filledCount };
+            matches[0].value = field.value;
+            if (matches[0].value !== field.value) return { ok: false, filled_count: filledCount };
+            filledCount += 1;
+          }
+          return { ok: true, filled_count: filledCount };
+        }`);
+        if (!fillResult?.ok || fillResult.filled_count !== request.fields.length) {
+          throw new Error("browser_form_input_fill_failed; final_submit_sent=false");
         }
+        formFinalUrl = new URL(request.url);
       } else {
-        formText = submissionResponse.body;
+        if (!request.input_receipt_digest || !request.expected_form_state_digest) {
+          throw new Error("browser_form_get_input_stage_receipt_required; form_submission_sent=false");
+        }
+        const submissionTarget = await resolvePublicTarget(submissionUrl, request.env, request.resolveHost);
+        if (!request.before_form_submit) {
+          throw new Error("browser_form_get_gateway_gate_unavailable; form_submission_sent=false");
+        }
+        assertToolExecutionNotCancelled(request.signal, "browser.automation form_submit");
+        request.before_form_submit();
+        let submissionResponse;
+        formRequestDispatched = true;
+        try {
+          submissionResponse = await request.http_request(
+            submissionTarget,
+            "GET",
+            BROWSER_FORM_RESPONSE_MAX_BYTES,
+            request.signal,
+          );
+        } catch {
+          throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
+        }
+        if (isRedirect(submissionResponse.status) || submissionResponse.location) {
+          throw new Error("browser_form_get_redirect_blocked; outcome_unknown; automatic_retry=false");
+        }
+        assertBrowserFormResponseIsReadableText(submissionResponse);
+        formFinalUrl = submissionUrl;
+        formHttpStatus = submissionResponse.status;
+        formResponseTruncated = submissionResponse.truncated;
+        if (isBrowserHtmlContentType(submissionResponse.content_type)) {
+          try {
+            await setBrowserDocumentContent(page, submissionResponse.body, submissionUrl.href, request.timeout_ms);
+          } catch {
+            throw new Error("browser_form_get_result_parse_failed; outcome_unknown; automatic_retry=false");
+          }
+        } else {
+          formText = submissionResponse.body;
+        }
       }
     }
     const finalUrl = formFinalUrl?.href ?? page.url();
@@ -4183,6 +4230,7 @@ async function defaultBrowserAutomationRunner(
       text: truncateText(text, request.max_chars),
       truncated: formResponseTruncated || text.length > request.max_chars,
       ...(formHttpStatus === undefined ? {} : { http_status: formHttpStatus }),
+      ...(formStateDigest ? { form_state_digest: formStateDigest } : {}),
     };
   } finally {
     await context?.close().catch(() => undefined);
@@ -4202,7 +4250,7 @@ async function invokeBrowserPreview(
   opts: BrowserSnapshotOptions,
   action: BrowserAutomationRunRequest["action"],
   linkName?: string,
-  formSubmission?: BrowserFormGetArguments,
+  formSubmission?: BrowserFormGetArguments | BrowserFormInputArguments,
   linkNavigation?: BrowserLinkNavigationArguments,
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
@@ -4234,6 +4282,12 @@ async function invokeBrowserPreview(
     ...(linkNavigation ? { target_url: linkNavigation.target_url } : {}),
     ...(formSubmission ? { action_url: formSubmission.action_url } : {}),
     ...(formSubmission ? { form_name: formSubmission.form_name, fields: formSubmission.fields } : {}),
+    ...(formSubmission?.action === "form_submit" ? {
+      ...(formSubmission.input_receipt_digest ? { input_receipt_digest: formSubmission.input_receipt_digest } : {}),
+      ...(formSubmission.expected_form_state_digest ? { expected_form_state_digest: formSubmission.expected_form_state_digest } : {}),
+    } : {}),
+    ...(action === "form_submit" && opts.before_form_submit
+      ? { before_form_submit: opts.before_form_submit } : {}),
     http_request: opts.request ?? defaultHttpRequest,
     ...(opts.signal ? { signal: opts.signal } : {}),
     target,
@@ -4255,6 +4309,10 @@ async function invokeBrowserPreview(
       finalUrl.pathname !== new URL(formSubmission.action_url).pathname)) {
     throw new Error("browser_form_get_outcome_unknown; automatic_retry=false");
   }
+  if (action === "form_fill" && (!formSubmission || finalUrl.href !== url.href ||
+      !snapshot.form_state_digest || !/^[a-f0-9]{64}$/.test(snapshot.form_state_digest))) {
+    throw new Error("browser_form_input_result_unavailable; final_submit_sent=false");
+  }
   if (action === "click" && finalUrl.origin !== url.origin) {
     throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
   }
@@ -4263,7 +4321,7 @@ async function invokeBrowserPreview(
   }
   const displayedUrl = new URL(url.href);
   const displayedFinalUrl = new URL(finalUrl.href);
-  if (action === "form_submit") {
+  if (action === "form_submit" || action === "form_fill") {
     displayedUrl.search = "";
     displayedUrl.hash = "";
     displayedFinalUrl.search = "";
@@ -4307,6 +4365,15 @@ async function invokeBrowserPreview(
         query_values_in_result_url: false,
       },
     } : {}),
+    ...(action === "form_fill" ? {
+      form_input: {
+        effect: "ephemeral_dom_fill_only",
+        form_state_digest: snapshot.form_state_digest,
+        field_names: formSubmission?.fields.map((field) => field.name) ?? [],
+        final_submit: false,
+        used_for_authority: false,
+      },
+    } : {}),
     network_policy: {
       protocol: url.protocol.replace(":", ""),
       host: target.hostname,
@@ -4335,7 +4402,9 @@ export async function invokeBrowserAutomation(
   }
   assertNoBrowserCredentialUse(args);
   const acceptedKeys = action === "form_submit"
-    ? new Set(["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"])
+    ? new Set(["action", "url", "action_url", "form_name", "fields", "input_receipt_digest", "expected_form_state_digest", "max_chars", "timeout_ms"])
+    : action === "form_fill"
+      ? new Set(["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"])
     : action === "click"
       ? new Set(["action", "url", "max_chars", "timeout_ms", "link_name", "target_url"])
       : new Set(["action", "url", "max_chars", "timeout_ms"]);
@@ -4343,7 +4412,7 @@ export async function invokeBrowserAutomation(
     throw new Error("browser.automation received an unsupported argument; mutation_sent=false");
   }
 
-  if (action !== "navigate" && action !== "click" && action !== "form_submit") {
+  if (action !== "navigate" && action !== "click" && action !== "form_fill" && action !== "form_submit") {
     throw new Error(
       `browser.automation action ${action} is preview-quarantined and not implemented; ` +
         "approval_level=L3_final_review; mutation_sent=false",
@@ -4351,7 +4420,14 @@ export async function invokeBrowserAutomation(
   }
   const formSubmission = action === "form_submit"
     ? parseBrowserFormGetArguments({ ...args, action })
-    : undefined;
+    : action === "form_fill" ? parseBrowserFormInputArguments({ ...args, action }) : undefined;
+  if (action === "form_submit" && !opts.runner &&
+      (!formSubmission || !formSubmission.input_receipt_digest || !formSubmission.expected_form_state_digest)) {
+    throw new Error("browser_form_get_input_stage_receipt_required; form_submission_sent=false");
+  }
+  if (action === "form_submit" && !opts.runner && !opts.before_form_submit) {
+    throw new Error("browser_form_get_gateway_gate_unavailable; form_submission_sent=false");
+  }
   const linkNavigation = action === "click"
     ? parseBrowserLinkNavigationArguments(args)
     : undefined;
@@ -4359,7 +4435,7 @@ export async function invokeBrowserAutomation(
   if (action === "click" && (!linkName || !isWellFormedBrowserLinkName(linkName))) {
     throw new Error("browser.automation click requires an exact link_name and target_url; mutation_sent=false");
   }
-  if (action !== "click" && action !== "form_submit" &&
+  if (action !== "click" && action !== "form_submit" && action !== "form_fill" &&
       (args.link_name !== undefined || args.target_url !== undefined)) {
     throw new Error("browser.automation navigation does not accept link_name; mutation_sent=false");
   }
@@ -5557,10 +5633,13 @@ export const browserSnapshotTool: Tool = {
 
 export const browserAutomationTool: Tool = {
   name: "browser.automation",
-  description: "Disabled-by-default preview for guarded headless browser actions. Link navigation requires an exact same-origin target_url reviewed at L3 and revalidated immediately before navigation.",
+  description: "Disabled-by-default preview for guarded headless browser actions. Link navigation binds an exact L3-reviewed target. form_fill requires L3 and only fills an ephemeral form; form_submit requires a matching, short-lived input receipt, a separate L3, and an exact form-state digest recheck before GET.",
   required_capabilities: requireToolOperationDescriptor("browser.automation").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeBrowserAutomation(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeBrowserAutomation(args, {
+      ...(context.before_browser_form_submit
+        ? { before_form_submit: context.before_browser_form_submit } : {}),
+    });
   },
 };
 

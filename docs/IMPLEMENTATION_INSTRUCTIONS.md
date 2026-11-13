@@ -2,7 +2,29 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Browser link navigationのL3遷移先束縛 (F06.02限定)
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3 (2026-11-13)
+
+主語は既存`browser.automation action=form_fill/form_submit`、Gatewayのcontent-review／Executor境界、Control Center、Browser Adapterである。目的は、一時フォーム入力と最終GET送信を独立したowner L3 reviewへ分け、入力段階の結果だけで送信権限を作らず、送信直前に同じrequest・owner・入力・フォーム状態を照合すること。
+
+`form_fill`は公開IP guard付きのHTTP GETでページを取得し、JavaScript／service worker／credential／Cookie／downloadを使わず、ephemeral DOMのtext/search inputへ値を設定するだけでsubmitしない。Gateway reviewはページ取得の外部効果を`page_read_unclassified`と明示し、送信先と全入力値をno-store表示へ結ぶ。成功後にGatewayはcommand／review／request payload／form markup state／request identity／owner identityのdigestだけを含む10分・最大256件のprocess-local receiptを発行し、呼出し結果へ返す。receiptは一回限りの照合記録であり権限ではない。
+
+後続の`form_submit`はreceiptとstate digestが必須で、Gatewayは同一request・owner・入力payloadの有効receiptを確認し、別のno-store L3 reviewへreceipt/state digest・送信先・値を表示する。Browser Adapterは新しいHTTP GETでform markupを再取得し、state digest、同一origin、GET契約、入力制約、送信先を再検証する。実送信直前にGatewayのfailure-memory／emergency-stop条件を再確認してreceiptを一度だけ消費する。GETは一回だけでredirectを追わず、結果不明の自動再送はしない。外部効果、購入・確定の意味は自動分類しない。receipt消失・期限切れ・不一致・再起動後は送信を閉じる。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| Core typecheck／Core TypeScript emit（native isolation build scriptなし） | PASS。 |
+| WebChat package build／Gateway typecheck | PASS。 |
+| 生成Control Center scriptのJavaScript構文／`git diff --check` | PASS。 |
+| test suite、fixture runner、実Playwright／HTTP／Web、実provider、installed製品、F06全域、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / F06.02 ephemeral form input → separate final GET review.
+- **STATUS:** parser、Gateway content review、Control Center、Executor callback、Browser Adapterをsource-levelで接続し`CODE_PRESENT`。runtime往復・実runnerは未確認のため、F06.02全体および製品全体は`BUILD_GAP`。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体実装を続け、次consumerを現行実装・工程索引から選び直す。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。局所QC／QAへ移らない。
+- **SAFETY_STATUS:** 2段階ともL3。入力段階はephemeral DOM fillのみ。最終GETには短期・単回receipt、完全form-state再照合、実送信直前のGateway停止条件確認が必要。HTTP外部効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。実Web・外部作用・C08.03 live provider・他repo変更・P13公開／出荷GOはHOLD。
+- **LOCAL_ASSET_STATUS:** Core／WebChatのignored `dist/`を型解決とscript構文確認の再生成物として保持。新規test fixture・artifact・非Git資料なし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護して未変更。
+- **GIT_STATUS:** START_HEAD=`57de66fadf4b45c85ef9455aff4a3e493153d410`。作業前local／`origin/main`／GitHub `main`は一致、ahead/behind=0/0。local復旧branch／remote backup tag current／previous=`57de66fadf4b45c85ef9455aff4a3e493153d410`／`53fcccc1fe5a6f2f44670b71079a9110cb3690b1`。本BUILD_BATCHの実装・状態docsを`main`へfast-forward pushし、完全SHA・二世代ref・clean／protected差分をcloseoutでreadbackする。Gitが古いworktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動整理にPermission deniedとなったため、metadata／ACLを変更せず保留。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Browser link navigationのL3遷移先束縛 (F06.02限定)
 
 主語は既存`browser.automation action=click`とGatewayの承認コンテンツレビュー、Control Center、Browser Adapterである。目的は、ownerがL3で確認した同一originの遷移先をOperation Planへ結び、実行時の同名リンクが別URLへ変化した場合にGET前で停止すること。
 

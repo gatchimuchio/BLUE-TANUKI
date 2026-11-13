@@ -714,6 +714,8 @@ export interface ToolContext {
   /** 実行権限を与えず、HDS発行commandへ結ぶBroker観測。 */
   target_version_observation?: BrokerTargetVersionObservation;
   signal?: AbortSignal;
+  /** Gateway-controlled one-shot gate immediately before a guarded browser form GET. */
+  before_browser_form_submit?: () => void;
   /** Local worker lifecycle only; the observer cannot authorize or complete a command. */
   on_execution_lifecycle?: (event: ToolExecutionLifecycleObservation) => void;
 }

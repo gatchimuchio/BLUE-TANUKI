@@ -203,6 +203,8 @@ export interface ExecutorExecutionContext {
   before_execute?: () => void;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
   before_tool_dispatch?: () => void;
+  /** 最終フォームGETの実送信直前にだけGateway停止条件とstage receiptを再照合する。 */
+  before_browser_form_submit?: () => void;
   /** Gatewayの永続J bindingがあるtool adapter結果だけ、私有outboxへ渡す。 */
   save_result_delivery?: boolean;
 }
@@ -1803,7 +1805,8 @@ export class Executor {
             context.ephemeral_images, context.ephemeral_audio, context.ephemeral_canvas_artifact, markInvoked);
           break;
         case "tool_call":
-          feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal, context.before_tool_dispatch);
+          feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal,
+            context.before_tool_dispatch, context.before_browser_form_submit);
           break;
         case "channel_send":
           feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash,
@@ -2096,6 +2099,7 @@ export class Executor {
     markInvoked: (boundary: ExecutionInvocationBoundary) => void,
     signal?: AbortSignal,
     before_tool_dispatch?: () => void,
+    before_browser_form_submit?: () => void,
   ): Promise<ExecuteFeedback> {
     const { id, payload, constraints } = command;
     const commit_hash = command.upstream_decision.commit_hash;
@@ -2232,6 +2236,7 @@ export class Executor {
         operation_plan_command_digest: operationPlanDigest(command),
         target_version_observation: record.target_version_observation,
         signal: controller.signal,
+        ...(before_browser_form_submit ? { before_browser_form_submit } : {}),
         on_execution_lifecycle: observeLifecycle,
       }));
       if (releaseTargetLock) {

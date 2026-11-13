@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface BrowserFormGetField {
   name: string;
   value: string;
@@ -9,8 +11,14 @@ export interface BrowserFormGetArguments {
   action_url: string;
   form_name: string;
   fields: readonly BrowserFormGetField[];
+  input_receipt_digest?: string;
+  expected_form_state_digest?: string;
   max_chars?: number;
   timeout_ms?: number;
+}
+
+export interface BrowserFormInputArguments extends Omit<BrowserFormGetArguments, "action"> {
+  action: "form_fill";
 }
 
 export interface BrowserLinkNavigationArguments {
@@ -50,12 +58,144 @@ export interface BrowserSearchFormSnapshot {
   controls: readonly BrowserSearchFormControlSnapshot[];
   control_count: number;
   form_count: number;
+  form_markup?: string;
 }
 
 const MAX_BROWSER_FORM_FIELDS = 10;
 const MAX_BROWSER_FORM_VALUE_BYTES = 4_096;
 const MAX_BROWSER_FORM_URL_LENGTH = 4_096;
+const MAX_BROWSER_FORM_MARKUP_BYTES = 131_072;
+const BROWSER_FORM_INPUT_RECEIPT_TTL_MS = 10 * 60 * 1000;
+const MAX_BROWSER_FORM_INPUT_RECEIPTS = 256;
 const SECRET_LIKE_FIELD_NAME = /(password|passcode|token|secret|credential|cookie|session|auth|csrf|nonce|api[_-]?key|otp|one[_-]?time[_-]?code)/i;
+
+export interface BrowserFormInputStageReceipt {
+  receipt_digest: string;
+  request_digest: string;
+  form_state_digest: string;
+  request_id_digest: string;
+  actor_digest: string;
+  expires_at_ms: number;
+  reserved_command_id?: string;
+}
+
+const browserFormInputStageReceipts = new Map<string, BrowserFormInputStageReceipt>();
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function pruneBrowserFormInputStageReceipts(nowMs: number): void {
+  for (const [key, receipt] of browserFormInputStageReceipts) {
+    if (receipt.expires_at_ms <= nowMs) browserFormInputStageReceipts.delete(key);
+  }
+  while (browserFormInputStageReceipts.size >= MAX_BROWSER_FORM_INPUT_RECEIPTS) {
+    const oldest = browserFormInputStageReceipts.keys().next().value as string | undefined;
+    if (!oldest) break;
+    browserFormInputStageReceipts.delete(oldest);
+  }
+}
+
+/** Store only digests after an owner-approved form_fill successfully returned. */
+export function recordBrowserFormInputStageReceipt(input: {
+  input_command_id: string;
+  input_command_digest: string;
+  input_review_digest: string;
+  request_digest: string;
+  form_state_digest: string;
+  request_id_digest: string;
+  actor_digest: string;
+  now_ms?: number;
+}): BrowserFormInputStageReceipt {
+  const nowMs = input.now_ms ?? Date.now();
+  if (!input.input_command_id || !isSha256(input.input_command_digest) || !isSha256(input.input_review_digest) ||
+      !isSha256(input.request_digest) || !isSha256(input.form_state_digest) ||
+      !isSha256(input.request_id_digest) || !isSha256(input.actor_digest) || !Number.isSafeInteger(nowMs)) {
+    throw new Error("browser_form_input_receipt_invalid");
+  }
+  pruneBrowserFormInputStageReceipts(nowMs);
+  const receiptDigest = createHash("sha256").update(JSON.stringify({
+    schema_version: "browser-form-input-stage-receipt.v1",
+    input_command_id: input.input_command_id,
+    input_command_digest: input.input_command_digest,
+    input_review_digest: input.input_review_digest,
+    request_digest: input.request_digest,
+    form_state_digest: input.form_state_digest,
+    request_id_digest: input.request_id_digest,
+    actor_digest: input.actor_digest,
+    created_at_ms: nowMs,
+  }), "utf8").digest("hex");
+  const receipt: BrowserFormInputStageReceipt = {
+    receipt_digest: receiptDigest,
+    request_digest: input.request_digest,
+    form_state_digest: input.form_state_digest,
+    request_id_digest: input.request_id_digest,
+    actor_digest: input.actor_digest,
+    expires_at_ms: nowMs + BROWSER_FORM_INPUT_RECEIPT_TTL_MS,
+  };
+  browserFormInputStageReceipts.set(receiptDigest, receipt);
+  return { ...receipt };
+}
+
+/** Reserve a staged input for a single final-submit command; this never authorizes execution. */
+export function inspectBrowserFormInputStageReceipt(input: {
+  receipt_digest: string;
+  request_digest: string;
+  form_state_digest: string;
+  request_id_digest: string;
+  actor_digest: string;
+  command_id?: string;
+  reserve?: boolean;
+  now_ms?: number;
+}): BrowserFormInputStageReceipt | null {
+  const nowMs = input.now_ms ?? Date.now();
+  pruneBrowserFormInputStageReceipts(nowMs);
+  if (!isSha256(input.receipt_digest) || !isSha256(input.request_digest) || !isSha256(input.form_state_digest) ||
+      !isSha256(input.request_id_digest) || !isSha256(input.actor_digest)) return null;
+  const current = browserFormInputStageReceipts.get(input.receipt_digest);
+  if (!current || current.request_digest !== input.request_digest || current.form_state_digest !== input.form_state_digest ||
+      current.request_id_digest !== input.request_id_digest || current.actor_digest !== input.actor_digest ||
+      (current.reserved_command_id && current.reserved_command_id !== input.command_id)) return null;
+  if (input.reserve) {
+    if (!input.command_id) return null;
+    current.reserved_command_id = input.command_id;
+  }
+  return { ...current };
+}
+
+/** Consume a staged input exactly once immediately before the final request is attempted. */
+export function consumeBrowserFormInputStageReceipt(input: {
+  receipt_digest: string;
+  request_digest: string;
+  form_state_digest: string;
+  request_id_digest: string;
+  actor_digest: string;
+  command_id: string;
+  now_ms?: number;
+}): boolean {
+  const receipt = inspectBrowserFormInputStageReceipt(input);
+  if (!receipt || (receipt.reserved_command_id && receipt.reserved_command_id !== input.command_id)) return false;
+  browserFormInputStageReceipts.delete(input.receipt_digest);
+  return true;
+}
+
+export function browserFormInputRequestDigest(input: Pick<BrowserFormGetArguments, "url" | "action_url" | "form_name" | "fields">): string {
+  return createHash("sha256").update(JSON.stringify({
+    schema_version: "browser-form-input-request.v1",
+    url: input.url,
+    action_url: input.action_url,
+    form_name: input.form_name,
+    fields: input.fields.map((field) => ({ name: field.name, value: field.value })),
+  }), "utf8").digest("hex");
+}
+
+export function browserFormStateDigest(form: BrowserSearchFormSnapshot): string {
+  if (!form || typeof form.form_markup !== "string" || form.form_markup.length === 0 ||
+      new TextEncoder().encode(form.form_markup).byteLength > MAX_BROWSER_FORM_MARKUP_BYTES) {
+    throw new Error("browser_form_get_markup_unavailable");
+  }
+  return createHash("sha256").update(form.form_markup, "utf8").digest("hex");
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -96,7 +236,8 @@ function safeHttpUrl(value: string, code: string, requireNoQuery: boolean): URL 
 
 export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArguments {
   if (!isRecord(value) || value.action !== "form_submit" ||
-      Object.keys(value).some((key) => !["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"].includes(key)) ||
+      Object.keys(value).some((key) => !["action", "url", "action_url", "form_name", "fields", "input_receipt_digest",
+        "expected_form_state_digest", "max_chars", "timeout_ms"].includes(key)) ||
       typeof value.url !== "string" || typeof value.action_url !== "string" ||
       typeof value.form_name !== "string" || !Array.isArray(value.fields)) {
     throw new Error("browser_form_get_invalid_arguments");
@@ -129,6 +270,9 @@ export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArgu
     totalBytes += new TextEncoder().encode(name).byteLength + new TextEncoder().encode(fieldValue).byteLength;
   }
   if (totalBytes > MAX_BROWSER_FORM_VALUE_BYTES ||
+      (value.input_receipt_digest !== undefined && !isSha256(value.input_receipt_digest)) ||
+      (value.expected_form_state_digest !== undefined && !isSha256(value.expected_form_state_digest)) ||
+      ((value.input_receipt_digest === undefined) !== (value.expected_form_state_digest === undefined)) ||
       (value.max_chars !== undefined && (typeof value.max_chars !== "number" ||
         !Number.isSafeInteger(value.max_chars) || value.max_chars < 1 || value.max_chars > 20_000)) ||
       (value.timeout_ms !== undefined && (typeof value.timeout_ms !== "number" ||
@@ -142,9 +286,21 @@ export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArgu
     action_url: actionUrl.href,
     form_name: formName,
     fields,
+    ...(value.input_receipt_digest === undefined ? {} : { input_receipt_digest: value.input_receipt_digest as string }),
+    ...(value.expected_form_state_digest === undefined ? {} : { expected_form_state_digest: value.expected_form_state_digest as string }),
     ...(value.max_chars === undefined ? {} : { max_chars: value.max_chars as number }),
     ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms as number }),
   };
+}
+
+export function parseBrowserFormInputArguments(value: unknown): BrowserFormInputArguments {
+  if (!isRecord(value) || value.action !== "form_fill" || value.input_receipt_digest !== undefined ||
+      value.expected_form_state_digest !== undefined) {
+    throw new Error("browser_form_input_invalid_arguments");
+  }
+  const parsed = parseBrowserFormGetArguments({ ...value, action: "form_submit" });
+  const { action: _action, ...rest } = parsed;
+  return { ...rest, action: "form_fill" };
 }
 
 /** Bind a link navigation to the exact same-origin destination shown for L3 review. */
@@ -181,11 +337,17 @@ export function buildBrowserSearchFormGetUrl(input: {
   expected_action_url: string;
   form: BrowserSearchFormSnapshot;
   fields: readonly BrowserFormGetField[];
+  expected_form_state_digest?: string;
 }): URL {
   const sourceUrl = safeHttpUrl(input.source_url, "browser_form_get_invalid_source_url", true);
   const expectedActionUrl = safeHttpUrl(input.expected_action_url, "browser_form_get_invalid_action_url", true);
   if (expectedActionUrl.origin !== sourceUrl.origin) throw new Error("browser_form_get_cross_origin_denied");
   const form = input.form;
+  const formStateDigest = typeof form.form_markup === "string" ? browserFormStateDigest(form) : undefined;
+  if (input.expected_form_state_digest !== undefined &&
+      (!isSha256(input.expected_form_state_digest) || input.expected_form_state_digest !== formStateDigest)) {
+    throw new Error("browser_form_get_form_changed_after_input_review");
+  }
   if (!form || form.form_count !== 1 || form.control_count < 1 || form.control_count > MAX_BROWSER_FORM_FIELDS + 3 ||
       !Array.isArray(form.controls) || form.controls.length !== form.control_count ||
       typeof form.action !== "string" || typeof form.method !== "string" || typeof form.target !== "string" ||

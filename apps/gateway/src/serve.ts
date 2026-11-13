@@ -38,6 +38,12 @@ import {
   captureExecutorCommandForApproval,
   executorCommandDigest,
   createLogger,
+  browserFormInputRequestDigest,
+  inspectBrowserFormInputStageReceipt,
+  consumeBrowserFormInputStageReceipt,
+  recordBrowserFormInputStageReceipt,
+  parseBrowserFormInputArguments,
+  parseBrowserFormGetArguments,
   type AgentWorkerLifecycleEvent,
   type ExecutorToolExecutionLifecycleEvent,
   type ExecutionIntentReceipt,
@@ -187,6 +193,8 @@ import {
 import {
   isBrowserFormGetReviewCommand,
   projectBrowserFormGetContentReview,
+  isBrowserFormInputReviewCommand,
+  projectBrowserFormInputContentReview,
   isBrowserLinkNavigationReviewCommand,
   projectBrowserLinkNavigationContentReview,
   isGmailMessageTrashReviewCommand,
@@ -288,6 +296,7 @@ interface PendingApproval {
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
+  content_review_operation_plan_binding_digest?: string;
   content_review_provider_state_digest?: string;
   content_review_file_edit_target_version_digest?: string;
   content_review_file_delete_target_version_digest?: string;
@@ -328,6 +337,59 @@ interface PendingApproval {
     reassesses_judgment_refs: readonly string[];
     proposal_actor: string;
   };
+}
+
+function browserFormInputStageReceiptMatches(pending: PendingApproval, reserve: boolean): boolean {
+  if (!isBrowserFormGetReviewCommand(pending.command) || pending.command.type !== "tool_call" ||
+      !pending.log.request_id) return false;
+  try {
+    const request = parseBrowserFormGetArguments(pending.command.payload.arguments);
+    if (!request.input_receipt_digest || !request.expected_form_state_digest) return false;
+    return inspectBrowserFormInputStageReceipt({
+      receipt_digest: request.input_receipt_digest,
+      request_digest: browserFormInputRequestDigest(request),
+      form_state_digest: request.expected_form_state_digest,
+      request_id_digest: operationPlanDigest({
+        schema_version: "browser-form-stage-request-identity.v1",
+        request_id: pending.log.request_id,
+      }),
+      actor_digest: operationPlanDigest({
+        schema_version: "browser-form-stage-owner-identity.v1",
+        channel: pending.origin.channel,
+        user: pending.origin.user ?? null,
+      }),
+      command_id: pending.command.id,
+      reserve,
+    }) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function consumeBrowserFormInputStageReceiptForPending(pending: PendingApproval): boolean {
+  if (!isBrowserFormGetReviewCommand(pending.command) || pending.command.type !== "tool_call" ||
+      !pending.log.request_id) return false;
+  try {
+    const request = parseBrowserFormGetArguments(pending.command.payload.arguments);
+    if (!request.input_receipt_digest || !request.expected_form_state_digest) return false;
+    return consumeBrowserFormInputStageReceipt({
+      receipt_digest: request.input_receipt_digest,
+      request_digest: browserFormInputRequestDigest(request),
+      form_state_digest: request.expected_form_state_digest,
+      request_id_digest: operationPlanDigest({
+        schema_version: "browser-form-stage-request-identity.v1",
+        request_id: pending.log.request_id,
+      }),
+      actor_digest: operationPlanDigest({
+        schema_version: "browser-form-stage-owner-identity.v1",
+        channel: pending.origin.channel,
+        user: pending.origin.user ?? null,
+      }),
+      command_id: pending.command.id,
+    });
+  } catch {
+    return false;
+  }
 }
 
 function failureMemoryGateReviewDigest(gate: {
@@ -1773,6 +1835,9 @@ async function serveWithOwnerLease(
     expected_file_delete_target_version_digest?: string;
     expected_google_drive_target_version_digest?: string;
     expected_github_write_target_version_digest?: string;
+    browser_form_input_review_digest?: string;
+    browser_form_input_operation_plan_binding_digest?: string;
+    browser_form_submit_receipt_pending?: PendingApproval;
     goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
     goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
@@ -2542,6 +2607,14 @@ async function serveWithOwnerLease(
           before_tool_dispatch: () => {
             recheckFailureMemoryApproval();
             if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
+          },
+          before_browser_form_submit: () => {
+            recheckFailureMemoryApproval();
+            if (emergencyStop.active) throw new Error("browser_form_submit_emergency_stop_active");
+            if (!opts.browser_form_submit_receipt_pending ||
+                !consumeBrowserFormInputStageReceiptForPending(opts.browser_form_submit_receipt_pending)) {
+              throw new Error("browser_form_input_receipt_unavailable; form_submission_sent=false");
+            }
           } });
       } catch (error) {
         try {
@@ -2555,6 +2628,57 @@ async function serveWithOwnerLease(
       executionTasks.add(executionTask);
       try {
         fb = await executionTask;
+        if (fb.status === "success" && isBrowserFormInputReviewCommand(cmd) && cmd.type === "tool_call") {
+          try {
+            const request = parseBrowserFormInputArguments(cmd.payload.arguments);
+            const result = isRecord(fb.result) ? fb.result : null;
+            const formInput = result && isRecord(result.form_input) ? result.form_input : null;
+            const formStateDigest = formInput?.form_state_digest;
+            const operationPlanBindingDigest = opts.browser_form_input_operation_plan_binding_digest;
+            const currentReview = operationPlanBindingDigest
+              ? projectBrowserFormInputContentReview(cmd, executorCommandDigest(cmd), operationPlanBindingDigest)
+              : null;
+            if (!log.request_id || !opts.browser_form_input_review_digest ||
+                currentReview?.review_digest !== opts.browser_form_input_review_digest ||
+                typeof formStateDigest !== "string" || !/^[a-f0-9]{64}$/.test(formStateDigest)) {
+              throw new Error("browser_form_input_stage_receipt_unavailable");
+            }
+            const receipt = recordBrowserFormInputStageReceipt({
+              input_command_id: cmd.id,
+              input_command_digest: executorCommandDigest(cmd),
+              input_review_digest: opts.browser_form_input_review_digest,
+              request_digest: browserFormInputRequestDigest(request),
+              form_state_digest: formStateDigest,
+              request_id_digest: operationPlanDigest({
+                schema_version: "browser-form-stage-request-identity.v1",
+                request_id: log.request_id,
+              }),
+              actor_digest: operationPlanDigest({
+                schema_version: "browser-form-stage-owner-identity.v1",
+                channel: origin.channel,
+                user: origin.user ?? null,
+              }),
+              now_ms: Date.now(),
+            });
+            fb = {
+              ...fb,
+              result: {
+                ...result,
+                input_receipt_digest: receipt.receipt_digest,
+                expected_form_state_digest: receipt.form_state_digest,
+                used_for_authority: false,
+                may_execute: false,
+              },
+            };
+          } catch {
+            fb = {
+              ...fb,
+              status: "failed",
+              error: "browser_form_input_stage_receipt_unavailable; final_submit_sent=false",
+              result: undefined,
+            };
+          }
+        }
         activeTaskExecutions.markExecutorSettled(cmd.id, fb.status);
       } catch (error) {
         activeTaskExecutions.markExecutorSettled(cmd.id, "unknown");
@@ -3323,7 +3447,8 @@ async function serveWithOwnerLease(
       (pending.command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "issue.comment.create", "pr.comment.create", "pr.create", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)))
     );
-    if (verdict === "approve" && (isBrowserFormGetReviewCommand(pending.command) ||
+    if (verdict === "approve" && (isBrowserFormInputReviewCommand(pending.command) ||
+        isBrowserFormGetReviewCommand(pending.command) ||
         isBrowserLinkNavigationReviewCommand(pending.command) ||
         isGmailWriteContentReviewCommand(pending.command) ||
         isGmailDraftSendReviewCommand(pending.command) || isGmailMessageTrashReviewCommand(pending.command) ||
@@ -3738,6 +3863,12 @@ async function serveWithOwnerLease(
         failure_memory_gate_actor: pending.failure_memory_gate_actor,
         approval_evaluation: pending.evaluation,
         command_digest: pending.command_digest,
+        ...(isBrowserFormInputReviewCommand(pending.command) && pending.content_review_digest
+          ? { browser_form_input_review_digest: pending.content_review_digest } : {}),
+        ...(isBrowserFormInputReviewCommand(pending.command) && pending.content_review_operation_plan_binding_digest
+          ? { browser_form_input_operation_plan_binding_digest: pending.content_review_operation_plan_binding_digest } : {}),
+        ...(isBrowserFormGetReviewCommand(pending.command)
+          ? { browser_form_submit_receipt_pending: pending } : {}),
         ...(pending.content_review_provider_state_digest && isGmailDraftSendReviewCommand(pending.command)
           ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
         ...(pending.content_review_provider_state_digest && isGmailMessageSendReviewCommand(pending.command)
@@ -4886,16 +5017,34 @@ async function serveWithOwnerLease(
 
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
-    if (pending && isBrowserFormGetReviewCommand(pending.command)) {
+    if (pending && isBrowserFormInputReviewCommand(pending.command)) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return null;
+        const review = projectBrowserFormInputContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        if (!review) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_operation_plan_binding_digest: operationPlanBindingDigest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
+    if (pending && isBrowserFormGetReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command) ||
+          !browserFormInputStageReceiptMatches(pending, true)) return null;
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         if (!operationPlanBindingDigest) return null;
         const review = projectBrowserFormGetContentReview(pending.command, pending.command_digest,
           operationPlanBindingDigest);
         if (!review) return null;
-        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_operation_plan_binding_digest: operationPlanBindingDigest });
         return review;
       } catch {
         return null;
@@ -5310,9 +5459,25 @@ async function serveWithOwnerLease(
   ): Promise<WebChatApprovalContentReviewValidation> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
-    if (isBrowserFormGetReviewCommand(pending.command)) {
+    if (isBrowserFormInputReviewCommand(pending.command)) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = projectBrowserFormInputContentReview(pending.command, pending.command_digest,
+          operationPlanBindingDigest);
+        return current && current.review_digest === pending.content_review_digest ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
+    }
+    if (isBrowserFormGetReviewCommand(pending.command)) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command) ||
+          !browserFormInputStageReceiptMatches(pending, false)) return "stale";
       if (!content_review_digest || !pending.content_review_digest) return "required";
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
@@ -5589,7 +5754,7 @@ async function serveWithOwnerLease(
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isBrowserFormGetReviewCommand(p.command) ||
+      content_review_required: isBrowserFormInputReviewCommand(p.command) || isBrowserFormGetReviewCommand(p.command) ||
         isBrowserLinkNavigationReviewCommand(p.command) ||
         isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         isGmailMessageTrashReviewCommand(p.command) ||

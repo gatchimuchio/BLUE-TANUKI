@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+  browserFormInputRequestDigest,
   gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest,
+  parseBrowserFormInputArguments,
   parseBrowserFormGetArguments,
   parseBrowserLinkNavigationArguments,
 } from "@blue-tanuki/core";
@@ -12,6 +14,7 @@ import type {
   WebChatGmailMessageModifyContentReview,
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
+  WebChatBrowserFormInputContentReview,
   WebChatBrowserFormGetContentReview,
   WebChatBrowserLinkNavigationContentReview,
 } from "@blue-tanuki/channel-webchat";
@@ -37,10 +40,68 @@ export function isBrowserFormGetReviewCommand(command: ExecuteCommand): boolean 
     command.payload.arguments.action.trim().toLowerCase() === "form_submit";
 }
 
+export function isBrowserFormInputReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "browser.automation" &&
+    typeof command.payload.arguments.action === "string" &&
+    command.payload.arguments.action.trim().toLowerCase() === "form_fill";
+}
+
 export function isBrowserLinkNavigationReviewCommand(command: ExecuteCommand): boolean {
   return command.type === "tool_call" && command.payload.tool_name === "browser.automation" &&
     typeof command.payload.arguments.action === "string" &&
     command.payload.arguments.action.trim().toLowerCase() === "click";
+}
+
+export function projectBrowserFormInputContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+): WebChatBrowserFormInputContentReview | null {
+  if (!isBrowserFormInputReviewCommand(command) || command.type !== "tool_call" ||
+      !/^[a-f0-9]{64}$/.test(commandDigest) || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) return null;
+  try {
+    const request = parseBrowserFormInputArguments(command.payload.arguments);
+    const parsedUrl = new URL(request.url);
+    const parsedActionUrl = new URL(request.action_url);
+    if (parsedUrl.origin !== parsedActionUrl.origin) return null;
+    const requestPayloadDigest = browserFormInputRequestDigest(request);
+    const reviewDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.browser-form-input-review.v1",
+      command_digest: commandDigest,
+      request_payload_digest: requestPayloadDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      external_effect_class: "page_read_unclassified",
+      input_effect: "ephemeral_dom_fill_only",
+      final_submit: false,
+    });
+    return {
+      kind: "browser_form_input",
+      command_id: command.id,
+      command_digest: commandDigest,
+      review_digest: reviewDigest,
+      request_payload_digest: requestPayloadDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      operation: "browser.automation.form_fill",
+      url: `${parsedUrl.origin}${parsedUrl.pathname}`,
+      action_url: request.action_url,
+      origin: parsedUrl.origin,
+      form_name: request.form_name,
+      fields: request.fields.map((field) => ({ ...field })),
+      source_method: "GET",
+      input_effect: "ephemeral_dom_fill_only",
+      external_effect_class: "page_read_unclassified",
+      same_origin_only: true,
+      javascript_enabled: false,
+      credentials_reused: false,
+      downloads_enabled: false,
+      final_submit: false,
+      no_store: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function projectBrowserLinkNavigationContentReview(
@@ -113,6 +174,8 @@ export function projectBrowserFormGetContentReview(
       action_url: request.action_url,
       form_name: request.form_name,
       fields: request.fields,
+      input_receipt_digest: request.input_receipt_digest ?? null,
+      expected_form_state_digest: request.expected_form_state_digest ?? null,
     });
     const reviewDigest = operationPlanDigest({
       schema_version: "blue-tanuki.browser-form-get-review.v2",
@@ -134,6 +197,8 @@ export function projectBrowserFormGetContentReview(
       origin: parsedUrl.origin,
       form_name: request.form_name,
       fields: request.fields.map((field) => ({ ...field })),
+      ...(request.input_receipt_digest ? { input_receipt_digest: request.input_receipt_digest } : {}),
+      ...(request.expected_form_state_digest ? { expected_form_state_digest: request.expected_form_state_digest } : {}),
       method: "GET",
       external_effect_class: "form_submission_unclassified",
       same_origin_only: true,

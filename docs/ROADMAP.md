@@ -8,7 +8,11 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-### 直近完了BUILD_BATCH — QE_BUILD / GitHub release draft annotated tag chain (F05.02)
+### 直近完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3
+
+既存`browser.automation`を`form_fill`と`form_submit`の別段階に分けた。前者はL3確認後のephemeral DOM fillのみで、後者は同じrequest／owner／payload／form stateへ結ぶ短期・単回の非権威receipt、再取得・完全state照合、別L3確認を必須にし、Gateway停止条件を実GETの直前に再確認する。外部GETの効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。Core／Gateway typecheck、Core emit、WebChat build、Control Center script構文、`git diff --check`はPASS。test suite、runtime往復、実Web／HTTP、実provider、全F06・製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはsource-levelの`CODE_PRESENT`であり、製品全体の完成を示さない。次はP2全体実装を継続する。G09.01はD4別repo限定委任待ち。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+
+### 前段完了BUILD_BATCH — QE_BUILD / GitHub release draft annotated tag chain (F05.02)
 
 `github.write release.draft.create` now resolves nested annotated tag objects through a bounded 16-step chain to the exact requested commit. The target inspection and post-create readback share the resolver. Cycles, invalid or non-commit targets, and deeper chains fail closed. Operation Plan, no-store L3 review, the one-POST boundary, and no automatic retry for uncertain results remain unchanged. Core typecheck, `pnpm docs:check`, and `git diff --check` PASS; the 75 existing Japanese-base migration items remain a notice. Tests, workspace build, real GitHub API, external effects, full F05 and product-wide `SYSTEM_SHAPED`／`BUILD_COVERED`, QE_QC／QE_QA are NOT_RUN or not established. This is `CODE_PRESENT`, not runtime evidence. G09.01 remains `BLOCKED_AUTHORITY` pending separate D4 adapter delegation. Details: [current implementation state](IMPLEMENTATION_INSTRUCTIONS.md) and [history](IMPLEMENTATION_HISTORY.md).
 

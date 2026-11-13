@@ -126,10 +126,18 @@ export {
   type ShellExecOptions,
 } from "./builtin.js";
 export {
+  browserFormInputRequestDigest,
+  browserFormStateDigest,
+  consumeBrowserFormInputStageReceipt,
+  inspectBrowserFormInputStageReceipt,
+  parseBrowserFormInputArguments,
+  recordBrowserFormInputStageReceipt,
   buildBrowserSearchFormGetUrl,
   parseBrowserFormGetArguments,
   parseBrowserLinkNavigationArguments,
   type BrowserFormGetArguments,
+  type BrowserFormInputArguments,
+  type BrowserFormInputStageReceipt,
   type BrowserFormGetField,
   type BrowserLinkNavigationArguments,
   type BrowserSearchFormControlSnapshot,
