@@ -14,7 +14,7 @@ Windowsの`BlueTanukiLauncher.ps1`で、managed Gateway processの存在だけ�
 
 **UNIT_ID:** rev5.0 QE_BUILD / Windows installed launcherのHealth→Control Center入口接続。**STATUS:** PowerShell source上で`CODE_PRESENT`、installed／HTTP consumer未確認のためG02の全体成立は未確認。**SAFETY_STATUS:** health failure時はbrowserを開かず、managed process・DataRoot・user dataを維持。実provider／外部作用／別repo変更／P13公開・出荷GOなし。
 
-作業資産はsource/docs差分のみ。installer artifact・test fixture・一時データは作成していない。protected attachment directoriesとLinux isolation `target/`は未変更。開始local／origin／GitHub main=`06914a6b009b38173027c3cb3f191913198aff91`、開始recovery current／previous=`06914a6b009b38173027c3cb3f191913198aff91`／`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`。実装・docs closeoutのpush後SHAと最終recovery refsはこの段落へ追記する。stale worktree metadataのACL拒否は変更せず保持。
+作業資産はsource/docs差分のみ。installer artifact・test fixture・一時データは作成していない。protected attachment directoriesとLinux isolation `target/`は未変更。開始local／origin／GitHub main=`06914a6b009b38173027c3cb3f191913198aff91`、開始recovery current／previous=`06914a6b009b38173027c3cb3f191913198aff91`／`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`。実装commit=`0556f3396711d02d13b02bdb71ab51163200ffa1`を`main`へpushし、GitHub SHAをreadback確認。実装push後recovery current／previous=`0556f3396711d02d13b02bdb71ab51163200ffa1`／`06914a6b009b38173027c3cb3f191913198aff91`。closeout docs commitのpush後はcurrentをcloseout HEAD、previousを実装commitへ回転する。stale worktree metadataのACL拒否は変更せず保持。
 
 ## 2026-11-13 — QE_BUILD rev5.0 F06.02 ephemeral form fillと最終GETの独立L3
 

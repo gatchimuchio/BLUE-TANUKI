@@ -20,7 +20,7 @@
 - **NEXT_REQUIRED_CONSUMER:** P2全体実装を続け、次の未接続producer→consumerを全体経路から選ぶ。G09.01 Android native producer→D4 Adapter→BLUE ingressはD4別repo限定委任待ちの`BLOCKED_AUTHORITY`を維持する。
 - **SAFETY_STATUS:** health未成立ではGUIを開かず、process・dataを停止／削除しない。D4／MINIDORA別repo変更、C08.03 live provider、OD-03無委任live作用、P13公開／出荷GOなし。
 - **LOCAL_ASSET_STATUS:** source/docs差分のみ。test fixture／installer artifactなし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保護・未変更。
-- **GIT_STATUS:** START_HEAD=`06914a6b009b38173027c3cb3f191913198aff91`。開始時local／origin／GitHub main一致。pre-edit recovery branch／remote tag current／previous=`06914a6b009b38173027c3cb3f191913198aff91`／`2729deeee06f04d5a676d3cccb3d9f0d3cd56098`。push後のhead/ref readbackを閉包時に追記する。stale worktree metadata ACL拒否は変更せず保持。
+- **GIT_STATUS:** START_HEAD=`06914a6b009b38173027c3cb3f191913198aff91`。実装commit=`0556f3396711d02d13b02bdb71ab51163200ffa1`をGitHub `main`へpushし、local／origin／GitHub main一致をreadback確認。実装push後recovery branch／remote tag current／previous=`0556f3396711d02d13b02bdb71ab51163200ffa1`／`06914a6b009b38173027c3cb3f191913198aff91`。本項を含むdocs closeout後はcurrentをcloseout HEAD、previousを実装commitにする。stale worktree metadata ACL拒否は変更せず保持。
 
 ## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3 (2026-11-13)
 
