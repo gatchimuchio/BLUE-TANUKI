@@ -19,7 +19,13 @@ import {
   createLogger,
   type SessionStore,
 } from "@blue-tanuki/core";
-import { normalizeInboundRequestForAuthority, type InboundRequest } from "@blue-tanuki/protocol";
+import type { InboundRequest } from "@blue-tanuki/protocol";
+import {
+  createCliInboundRequest,
+  cliGoalCompletionRulesRequested,
+  CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
+  readCliGoalCompletionRulesInput,
+} from "./cli_goal_completion_rules.js";
 import { buildAuditLog } from "./audit_config.js";
 import {
   buildLLMBackendFromEnv,
@@ -130,14 +136,24 @@ async function runCliWithExecutionStore(
   mcpRuntimeObservations: McpRuntimeObservationStore,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
-  const organizeIndex = cleanArgs.indexOf("--organize");
+  const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
+  if (completionRulesRequested && process.stdin.isTTY) {
+    throw new Error("--goal-completion-rules-stdin requires piped UTF-8 JSON on stdin");
+  }
+  const goalCompletionRules = completionRulesRequested
+    ? await readCliGoalCompletionRulesInput(process.stdin)
+    : undefined;
+  const requestArgs = completionRulesRequested
+    ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
+    : cleanArgs;
+  const organizeIndex = requestArgs.indexOf("--organize");
   const organizationSource = organizeIndex >= 0
-    ? cleanArgs.slice(organizeIndex + 1).join(" ").trim()
+    ? requestArgs.slice(organizeIndex + 1).join(" ").trim()
     : null;
   if (organizeIndex >= 0 && !organizationSource) {
     throw new Error("--organize requires owner-provided source text after the flag");
   }
-  const userInput = cleanArgs
+  const userInput = requestArgs
     .filter(
       (a) =>
         a !== "--serve" &&
@@ -222,12 +238,11 @@ async function runCliWithExecutionStore(
     session_store,
   });
 
-  const inbound: InboundRequest = normalizeInboundRequestForAuthority({
+  const inbound: InboundRequest = createCliInboundRequest({
     id: randomUUID(),
-    channel: "cli",
-    user: "local-user",
     content,
     timestamp: Date.now(),
+    ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),
   });
   const organizationSourceText = documentOrganizationSourceFromRequest(inbound);
   const organizationStore = organizationSourceText === null

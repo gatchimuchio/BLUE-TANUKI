@@ -104,6 +104,8 @@ pnpm gateway:serve
 
 `http://127.0.0.1:8787/` を開く。設定、first-run、恒久利用は [QUICKSTART.md](QUICKSTART.md)、[docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md)、[docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) を参照する。
 
+通常CLIの一回実行では、ownerが指定する達成規則JSONを標準入力から渡せる。`--goal-completion-rules-stdin` を付けると、最大128 KiBのUTF-8 JSONを読み、`blue-tanuki.goal-completion-rules.v1` として検証する。規則がない、形式が不正、または検証済みoperation結果とM receiptが揃わない場合、目的達成とは判定しない。この規則は完了判定だけを定め、作用の実行許可にはならない。規則本文は同一taskのJ OperationPlanに保持されるため、認証情報や秘密を含めない。条件値をプロセス引数へ置かず、JSONを標準入力で渡す。
+
 ## 公開技術RCの機能範囲
 
 以下は旧 <code>1.0.0-rc.1</code> の実装・公開境界であり、新しいQE開発全体の完成を示す一覧ではありません。

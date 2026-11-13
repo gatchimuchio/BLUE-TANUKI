@@ -2,7 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 現行BUILD_BATCH — rev5.0 QE_BUILD / desktop package-local Playwright headless-shell
+## 現行BUILD_BATCH — rev5.0 QE_BUILD / CLI明示達成規則からHDS J/Mへの接続
+
+主語はBLUEの通常Gateway CLI one-shot requestとHDS J OperationPlanである。目的はownerが指定した達成規則を、WebChatと同じ決定論的なJ判定へCLIから結び、規則欠落・不正・不一致・曖昧な結果を達成へ誤昇格させないこと。
+
+`--goal-completion-rules-stdin`を一度だけ指定した場合、CLIは標準入力から最大128 KiBのUTF-8 JSONを読み、`blue-tanuki.goal-completion-rules.v1`として検証する。不正入力はtask受付・C計算前に拒否し、規則本文はargv／Gatewayの通常inbound logへ出さない。検証済みrulesをGateway内で認証されたCLI requestに保持してHDSへ渡す。規則は同一taskの停止判定だけを定め、execution permission、approval、公開・外部作用の権限を作らない。flagがない通常CLI requestは従来の入力を保つ。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| CLI goal rules parser／stdin chunking／invalid UTF-8・JSON・schema／上限／重複flag | PASS、4 tests。 |
+| Internal CLI requestがrulesを保持しGateway内部markerを持つこと、通常requestがrulesを持たないこと | PASS、同上。 |
+| `operation_plan_runtime.test.ts` explicit completion result・J/M evidence（正例／不一致／step曖昧） | PASS、3 tests。合成workspace・test-owned state。 |
+| Gateway typecheck／build／`docs:check`／`git diff --check` | PASS。日本語基底移行負債75件は既存注意。 |
+| 通常CLI one-shot全経路、provider／外部作用、全suite、installed／5OS、QE_QC／QE_QA | NOT_RUN。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / owner-defined CLI task completion rules ingress.
+- **STATUS:** stdin→Gateway内CLI request→`HDSUpperController.decide`のproducer／consumerをコード接続し、request境界とJ/M判定を分離した局所試験で確認。通常CLI one-shotのinstalled/live executionや外部provider接続の証拠ではない。QE_BUILD、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`、P13 `PENDING_OWNER_GO`を維持。
+- **NEXT_REQUIRED_CONSUMER:** 通常CLI one-shotのHDS→Executor→result／M receipt→CLI projection全体接続を、provider liveなしの隔離手段でP2施工対象として進める。並行してW-CORE／W-EFFECT／W-WORK／W-OS／W-INSTALLの未接続を続行する。
+- **SAFETY_STATUS:** 規則の不在・誤形式を成功扱いしない。達成判定はpermission／approval／外部作用を生成しない。C08.03 live provider、無委任live外部作用、他repo変更、P13公開・出荷GOはHOLD。
+- **LOCAL_ASSET_STATUS:** source/test/README/active instruction/開発進捗ログをGit候補として保持。Gateway build出力はignoredの開発用として保持。focused testのtemp workspaceは試験内cleanup。添付2領域とLinux isolation `target/`は保護・未変更。
+- **GIT_STATUS:** 編集前local／origin／GitHub main=`eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980`、ahead／behind=0/0。local復旧branchとremote tag current=`eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980`、previous=`7ce0778257f96f8d367cc6898a805f05aebfb736`。BUILD_BATCH確定後にcommit/pushとremote SHAを照合する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / desktop package-local Playwright headless-shell
 
 主語はBLUEの`browser.snapshot`／`browser.automation` previewを含むWindows・Linux・macOSの製品packageと、そのPlaywright runtimeである。目的はheadless起動が選ぶChromium Headless Shell、Playwrightの固定revision、manifest path、runtime browser registryを同じapp-local payloadへ結び、Linux／macOS packageで欠けていたbrowser binaryも生成・検証すること。browser起動、HTTP通信、Setup実行、F06全体や製品完成の確認は対象外。
 
