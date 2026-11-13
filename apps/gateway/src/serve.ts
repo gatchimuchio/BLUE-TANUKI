@@ -142,7 +142,7 @@ import type {
   WebChatHistorySnapshot,
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
-import { projectD4RuntimeTaskOutcome } from "./d4_runtime_task_outcome.js";
+import { projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -3974,6 +3974,13 @@ async function serveWithOwnerLease(
       resume_token: resumeToken,
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
       owner_task_submission_store: ownerTaskSubmissionStore,
+      onOwnerTaskSubmissionOutcome: async ({ request_id }: { request_id: string }) => {
+        try {
+          return projectOwnerTaskOutcome(hds.getRuntimeSnapshot().operation_plans, request_id);
+        } catch {
+          return projectOwnerTaskOutcome(undefined, request_id);
+        }
+      },
       ...(d4RuntimeToken && d4RuntimeId
         ? {
             d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId },

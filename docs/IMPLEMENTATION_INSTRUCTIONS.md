@@ -2,6 +2,28 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
+## 完了BUILD_BATCH — rev5.0 QE_BUILD / owner task statusからJ達成根拠への接続
+
+主語はBLUE WebChatのowner-authenticated task submission status、同一requestに束縛されたHDS J task outcome、およびControl Centerである。目的は、明示規則付きowner taskの受付状態照会だけでJの達成状態を確認可能にし、Runtime tokenがない場合も受付状態を最終結果と誤認せず、検証済みdigest-only outcomeをownerへ返すこと。rev5.0 P2全体施工の一接続であり、製品全体の完成やQC／QAではない。
+
+既存D4 Runtime用projectionを共通化し、request ID、owner actor digest、WebChat channel digestが一意に一致するJ planだけを抽出する。Owner status APIは`rejected`でない受付記録に限り、非権威のtask outcomeを返す。operation/result本文は返さず、規則・証拠digestと件数だけを返す。HDS snapshot取得失敗、欠落、曖昧、形状不正、raw追加fieldは`unknown`へ落とす。D4 Runtime actorのplanをowner結果へ投影しない。Control Centerは応答形状と明示規則／証拠digestを再照合し、J達成が確定した場合だけ達成表示と次依頼操作を許す。Runtime tokenが別途ある場合の既存plan／M詳細照合は維持する。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| WebChat／Gateway TypeScript型検査・package build | PASS。 |
+| Owner task status route・Control Center status表示 | PASS：2 focused tests。owner認証、同一request outcome、raw field除外、Runtime tokenなしの達成表示を確認。同file残り132件はNOT_RUN。 |
+| 共通J outcome projection | PASS：4 focused tests。D4／owner actorの分離、明示規則と証拠digest、保留・曖昧・不正のfail-closedを確認。 |
+| `git diff --check`／`pnpm docs:check` | PASS（本記録を含むcloseout時に再実施）。 |
+| WebChat全fileを誤って無filter実行 | 130 passed／4 failed。当該失敗のうち新status test harness 1件は修正しfocused再実行PASS。残り3件は変更範囲外のRecovery scope projection／app shell copy／owner L3 selectorに関する失敗報告で、本BUILD_BATCHでは原因調査していない。全suiteや全体QCの証拠へ転用しない。 |
+| 全suite、実provider／外部作用、5OS、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+- **UNIT_ID:** rev5.0 QE_BUILD / owner submission receipt→request-bound J outcome→Control Center status。
+- **STATUS:** WIRED（ownerの明示規則・検証済み根拠をstatus consumerまで表示する限定経路）。製品全体はQE_BUILD P2継続、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`。
+- **NEXT_REQUIRED_CONSUMER:** 次の独立作業で⓪→④を再同期し、最新mainとrev5.0全域からproducer→consumer欠損を選ぶ。個別QC／QAへ移らない。
+- **SAFETY_STATUS:** HDS-J／Approval／Broker／M authorityは不変。owner tokenで読取のみ、結果は非権威・実行不可。明示規則と検証済みJ outcome以外で達成を表示しない。D4 Runtime task inputは引き続き限定信頼で、owner明示規則を受け取らず、そのtask outcomeは規則設定がない限りheldとなり得る。D4 repo変更、実provider、外部作用、C08.03、OD-03、P13公開／出荷GOは対象外。
+- **LOCAL_ASSET_STATUS:** WebChat／Gateway ignored build outputは作業環境として保持。新規persistent fileなし。test専用状態はmemory fixtureで、追加Temp／SQLiteなし。`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は保持・未変更。rev5 ZIPから作った一時読取copyは削除確認済み。D4 mainは読み取りのみ。
+- **GIT_STATUS:** 開始local／`origin/main`／GitHub `main`=`96916e543096f7637c3a1b42abe756709242f940`、ahead／behind=0/0。開始local recovery branchとGitHub recovery tagのcurrent／previousは`96916e543096f7637c3a1b42abe756709242f940`／`0f2842075d0d999c6ea55dbb122c085623d7c7c8`。fetchはstale worktree metadataの削除ACL拒否を報告したため、そのmetadata／ACLには触れず、`ls-remote`でGitHub mainとtag二世代を直接照合した。終了SHA・refs・protected untrackedはcloseoutで再照合する。
+
 ## 完了BUILD_BATCH — rev5.0 QE_BUILD / Cron result receiptからJ・M回復consumerへの相関接続
 
 主語はBLUE GatewayのCron handler返却、既存J Operation Planのtask outcome／M receipt参照／最終出力監査digest、およびread-only Recovery Inspector／Operation Plan／Control Centerである。目的は、handlerの返却を成功と誤認せず、同じCron eventに結び付く現在観測可能なJ・M・最終出力状態をdigest-only receiptへ保存し、後続の回復調査consumerへ渡すこと。rev5.0 P2全体施工内の限定接続であり、W-WORK／E01.01全体の完了ではない。

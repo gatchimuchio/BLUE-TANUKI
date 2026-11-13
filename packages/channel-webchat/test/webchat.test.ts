@@ -26,6 +26,7 @@ import {
   type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
   type WebChatOwnerTaskSubmissionStore,
+  type WebChatTaskOutcome,
   type WebChatD4RuntimeTaskOutcome,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
@@ -93,6 +94,10 @@ function createTestOwnerTaskSubmissionStore(): WebChatOwnerTaskSubmissionStore {
     markHandlerReturned(requestId) { setSubmissionState(submissions, requestId, "handler_returned"); },
     markOutcomeUnknown(requestId) { setSubmissionState(submissions, requestId, "outcome_unknown"); },
     markRejected(requestId) { setSubmissionState(submissions, requestId, "rejected"); },
+    getStatus(input) {
+      const current = submissions.get(input.submission_id.toLowerCase());
+      return current ? { request_id: current.request_id, state: current.state } : null;
+    },
     claimD4RuntimeIntent(input) {
       const key = `d4:${input.scope_digest}:${input.submission_id.toLowerCase()}`;
       const current = submissions.get(key);
@@ -188,6 +193,7 @@ async function setup(
       webhook_token?: string;
       d4_runtime_intent?: { token: string; runtime_id: string };
       onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+      onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       maintenance_token?: string;
       resume_approval_tokens?: false;
       resume_approval_token_ttl_ms?: number;
@@ -219,6 +225,7 @@ async function setup(
     webhook_token: opts.webhook_token,
     d4_runtime_intent: opts.d4_runtime_intent,
     onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
+    onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -707,12 +714,14 @@ describe("WebChatChannel — Control Center shell", () => {
   it("keeps the submitted owner task id through status review and excludes the next unsent id", async () => {
     const helpersStart = CONTROL_CENTER_SCRIPT.indexOf("let ownerTaskSubmissionIdMemory = null;");
     const helpersEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOwnerTaskCompute(", helpersStart + 1);
+    const outcomeSummaryStart = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskSubmissionOutcomeSummary(");
     const checkStart = CONTROL_CENTER_SCRIPT.indexOf("async function checkOwnerTaskSubmissionStatus(");
     const checkEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function ownerTaskExecutionEvidenceSummary(", checkStart + 1);
     const submitStart = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
     const submitEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", submitStart + 1);
     expect(helpersStart).toBeGreaterThanOrEqual(0);
     expect(helpersEnd).toBeGreaterThan(helpersStart);
+    expect(outcomeSummaryStart).toBeGreaterThanOrEqual(0);
     expect(checkStart).toBeGreaterThanOrEqual(0);
     expect(checkEnd).toBeGreaterThan(checkStart);
     expect(submitStart).toBeGreaterThanOrEqual(0);
@@ -740,10 +749,11 @@ describe("WebChatChannel — Control Center shell", () => {
       "owner-task-goal-ref": { value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }] },
       "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
       "owner-task-new-submission": { value: "", hidden: true }, "check-owner-task-status": { value: "", hidden: true, disabled: false },
-      "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "runtime-token" },
+      "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "" },
     };
     const submitted: string[] = [];
     const harness = new Script(`
+      function isObject(value) { return !!value && typeof value === "object" && !Array.isArray(value); }
       ${CONTROL_CENTER_SCRIPT.slice(helpersStart, helpersEnd)}
       async function postOwnerTaskCompute(_token, body) {
         submitted.push(body.submission_id);
@@ -751,6 +761,7 @@ describe("WebChatChannel — Control Center shell", () => {
         return { status: "queued_for_hds_decision", request_id: "${gatewayRequestId}" };
       }
       async function ownerTaskRuntimeCorrelation() { return "same task status correlated"; }
+      ${CONTROL_CENTER_SCRIPT.slice(outcomeSummaryStart, checkStart)}
       ${CONTROL_CENTER_SCRIPT.slice(checkStart, checkEnd)}
       ${CONTROL_CENTER_SCRIPT.slice(submitStart, submitEnd)}
       (async function () {
@@ -760,7 +771,8 @@ describe("WebChatChannel — Control Center shell", () => {
         byId("owner-task-token").value = "owner-token";
         await checkOwnerTaskSubmissionStatus();
         const afterStatusReview = { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
-          newSubmissionHidden: byId("owner-task-new-submission").hidden };
+          newSubmissionHidden: byId("owner-task-new-submission").hidden,
+          statusText: byId("owner-task-status").textContent, statusClass: byId("owner-task-status").className };
         clearOwnerTaskSubmissionId();
         const afterExplicitNewId = { currentId: ownerTaskSubmissionIdMemory,
           statusIds: ownerTaskStatusSubmissionIds(), newSubmissionHidden: byId("owner-task-new-submission").hidden };
@@ -782,19 +794,27 @@ describe("WebChatChannel — Control Center shell", () => {
       Option: function Option(this: { text: string; value: string }, text: string, value: string) { this.text = text; this.value = value; },
       byId: (id: string) => nodes[id],
       state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
-      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned" }),
+      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned", task_outcome: {
+        status: "achieved", reason_code: "goal_completion_rules_satisfied", completion_evidence: {
+          rules_digest: "a".repeat(64), evidence_digest: "b".repeat(64), rule_count: 1,
+          satisfied_rule_count: 1, used_for_authority: false, may_execute: false,
+        }, used_for_authority: false, may_execute: false,
+      } }),
       loadRuntime: async () => ({}),
       appendChat: () => {},
     }) as {
       afterSubmit: { currentId: string; statusId: string; newSubmissionHidden: boolean };
-      afterStatusReview: { currentId: string; statusId: string; newSubmissionHidden: boolean };
+      afterStatusReview: { currentId: string; statusId: string; newSubmissionHidden: boolean; statusText: string; statusClass: string };
       afterExplicitNewId: { currentId: string; statusIds: string[]; newSubmissionHidden: boolean };
       restoredCurrentId: string; restoredStatusId: string; restoredStatusIds: string[];
     };
 
     expect(submitted).toEqual([submittedId]);
     expect(result.afterSubmit).toEqual({ currentId: submittedId, statusId: submittedId, newSubmissionHidden: true });
-    expect(result.afterStatusReview).toEqual({ currentId: submittedId, statusId: submittedId, newSubmissionHidden: false });
+    expect(result.afterStatusReview).toMatchObject({ currentId: submittedId, statusId: submittedId,
+      newSubmissionHidden: false, statusClass: "badge good" });
+    expect(result.afterStatusReview.statusText).toContain("委任仕事: 達成（owner明示規則 1/1");
+    expect(result.afterStatusReview.statusText).toContain("証拠digest bbbbbbbbbbbb");
     expect(result.afterExplicitNewId).toEqual({ currentId: nextId, statusIds: [submittedId], newSubmissionHidden: true });
     expect(result.restoredCurrentId).toBe(nextId);
     expect(result.restoredStatusId).toBe(submittedId);
@@ -4608,6 +4628,70 @@ describe("WebChatChannel — HTTP inbound", () => {
         ...input, plan_id_digest: "not-a-digest",
       }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
       expect(proposals).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("returns the same request-bound J outcome from owner submission status without exposing raw result data", async () => {
+    const submissionId = "00000000-0000-4000-8000-000000000051";
+    const requestId = "00000000-0000-4000-8000-000000000052";
+    const store = createTestOwnerTaskSubmissionStore();
+    expect(store.claim({ submission_id: submissionId, payload_digest: "a".repeat(64), request_id: requestId }))
+      .toEqual({ status: "accepted", request_id: requestId });
+    store.markHandlerReturned(requestId);
+    let outcome: WebChatTaskOutcome = {
+      status: "achieved",
+      reason_code: "goal_completion_rules_satisfied",
+      completion_evidence: {
+        rules_digest: "b".repeat(64),
+        evidence_digest: "c".repeat(64),
+        rule_count: 2,
+        satisfied_rule_count: 2,
+        used_for_authority: false,
+        may_execute: false,
+      },
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const projectedRequests: string[] = [];
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      owner_task_submission_store: store,
+      onOwnerTaskSubmissionOutcome: async ({ request_id }) => {
+        projectedRequests.push(request_id);
+        return outcome;
+      },
+    });
+    try {
+      await ownerCtx.ch.start(async () => {});
+      const unauthorized = await postJson(ownerCtx.port, "/owner/task-submission-status", {
+        submission_id: submissionId,
+      });
+      expect(unauthorized.status).toBe(401);
+      expect(projectedRequests).toEqual([]);
+
+      const status = await postJson(ownerCtx.port, "/owner/task-submission-status", {
+        submission_id: submissionId,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(status.status).toBe(200);
+      expect(status.body).toEqual({ found: true, request_id: requestId, state: "handler_returned", task_outcome: outcome });
+
+      outcome = { ...outcome, raw_result: "must-not-leak" } as unknown as WebChatTaskOutcome;
+      const invalid = await postJson(ownerCtx.port, "/owner/task-submission-status", {
+        submission_id: submissionId,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(invalid.body).toMatchObject({
+        found: true,
+        task_outcome: { status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false },
+      });
+      expect(JSON.stringify(invalid.body)).not.toContain("must-not-leak");
+
+      const missing = await postJson(ownerCtx.port, "/owner/task-submission-status", {
+        submission_id: "00000000-0000-4000-8000-000000000053",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(missing.body).toEqual({ found: false });
+      expect(projectedRequests).toEqual([requestId, requestId]);
     } finally {
       await ownerCtx.teardown();
     }

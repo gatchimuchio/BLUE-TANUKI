@@ -34,7 +34,7 @@ export interface WebChatD4RuntimeIntentConfig {
   runtime_id: string;
 }
 
-export interface WebChatD4RuntimeTaskOutcome {
+export interface WebChatTaskOutcome {
   readonly status: "unknown" | "in_progress" | "held" | "achieved";
   readonly reason_code: "projection_unavailable" | "projection_ambiguous" | "projection_invalid" |
     "completion_pending" | "completion_held" | "goal_completion_rules_satisfied";
@@ -49,6 +49,9 @@ export interface WebChatD4RuntimeTaskOutcome {
   readonly used_for_authority: false;
   readonly may_execute: false;
 }
+
+/** Backwards-compatible name for the D4 Runtime status projection. */
+export type WebChatD4RuntimeTaskOutcome = WebChatTaskOutcome;
 
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
@@ -1406,6 +1409,8 @@ export interface WebChatOptions {
   d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+  /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
+  onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
   onGoalPurposeChangeProposal?: (input: {
     goal_ref: string;

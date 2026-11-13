@@ -1186,6 +1186,36 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge good";
       }
 
+      function ownerTaskSubmissionOutcomeSummary(value) {
+        if (value === undefined) return null;
+        const unknown = { text: "委任仕事の達成状態projectionが不正または未確認です。", achieved: false };
+        if (!isObject(value) || Object.keys(value).some(function (key) {
+          return ["status", "reason_code", "completion_evidence", "used_for_authority", "may_execute"].indexOf(key) < 0;
+        }) || value.used_for_authority !== false || value.may_execute !== false) return unknown;
+        if (value.status === "unknown" && ["projection_unavailable", "projection_ambiguous", "projection_invalid"].indexOf(value.reason_code) >= 0 &&
+            value.completion_evidence === undefined) {
+          return { text: "委任仕事の達成状態は未確認です。J結果を達成へ読み替えていません。", achieved: false };
+        }
+        if (value.status === "in_progress" && value.reason_code === "completion_pending" && value.completion_evidence === undefined) {
+          return { text: "委任仕事: 進行中（達成は確立していません）。", achieved: false };
+        }
+        if (value.status === "held" && value.reason_code === "completion_held" && value.completion_evidence === undefined) {
+          return { text: "委任仕事: 保留（達成は確立していません）。", achieved: false };
+        }
+        const evidence = value.completion_evidence;
+        if (value.status !== "achieved" || value.reason_code !== "goal_completion_rules_satisfied" || !isObject(evidence) ||
+            Object.keys(evidence).length !== 6 || Object.keys(evidence).some(function (key) {
+              return ["rules_digest", "evidence_digest", "rule_count", "satisfied_rule_count", "used_for_authority", "may_execute"].indexOf(key) < 0;
+            }) || !/^[a-f0-9]{64}$/i.test(evidence.rules_digest || "") || !/^[a-f0-9]{64}$/i.test(evidence.evidence_digest || "") ||
+            !Number.isSafeInteger(evidence.rule_count) || evidence.rule_count < 1 || evidence.rule_count > 64 ||
+            evidence.satisfied_rule_count !== evidence.rule_count || evidence.used_for_authority !== false || evidence.may_execute !== false) {
+          return unknown;
+        }
+        return { text: "委任仕事: 達成（owner明示規則 " + String(evidence.satisfied_rule_count) + "/" +
+          String(evidence.rule_count) + "、Jが検証済み結果・M receiptを照合。証拠digest " +
+          evidence.evidence_digest.slice(0, 12) + "）。これは実行権限や公開／出荷判断を作りません。", achieved: true };
+      }
+
       async function checkOwnerTaskSubmissionStatus() {
         const ownerTokenInput = byId("owner-task-token");
         const button = byId("check-owner-task-status");
@@ -1226,15 +1256,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           const stateMessage = {
             dispatching: "受付処理中です。新しい依頼を作らず、しばらくして再照会してください。",
-            handler_returned: "Gateway handlerは戻りました。仕事の最終結果ではありません。Tasks／Runtimeの同じ依頼IDを確認してください。",
-            outcome_unknown: "依頼結果は不明です。再送せず、Tasks／RuntimeとGateway状態を確認してください。",
+            handler_returned: "Gateway handlerは戻りました。handler状態だけでは最終結果を示しません。",
+            outcome_unknown: "Gateway handler結果は不明です。再送せず、Tasks／RuntimeとGateway状態を確認してください。",
             rejected: "依頼受付は拒否済みです。現在の委任目的とTasks／Runtimeを確認してください。"
           }[result.state];
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
+          const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
-            status.textContent = stateSummary + " Runtime token未入力のためplan照合は未実施です。";
-            if (isCurrentSubmission && result.state === "rejected") {
+            status.textContent = stateSummary + (taskOutcomeSummary
+              ? " " + taskOutcomeSummary.text
+              : " Runtime token未入力のためJ/M plan照合は未実施です。");
+            if (taskOutcomeSummary?.achieved && result.state !== "rejected") status.className = "badge good";
+            if (isCurrentSubmission && result.state !== "dispatching" && (result.state === "rejected" ||
+                (result.state !== "rejected" && taskOutcomeSummary?.achieved))) {
               byId("owner-task-new-submission").hidden = false;
             }
           } else {

@@ -1,4 +1,4 @@
-import type { WebChatD4RuntimeTaskOutcome } from "@blue-tanuki/channel-webchat";
+import type { WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 const TASK_OUTCOME_REASON_CODES = new Set([
@@ -39,6 +39,7 @@ const GOAL_ASSESSMENT_REASON_CODES = new Set([
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const D4_RUNTIME_OWNER_DIGEST = operationPlanDigest("d4-runtime-adapter-token-holder");
+const WEBCHAT_OWNER_TASK_DIGEST = operationPlanDigest("webchat-owner-token-holder");
 const WEBCHAT_CHANNEL_DIGEST = operationPlanDigest("webchat");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,8 +47,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function unknownOutcome(
-  reason_code: Extract<WebChatD4RuntimeTaskOutcome["reason_code"], "projection_unavailable" | "projection_ambiguous" | "projection_invalid">,
-): WebChatD4RuntimeTaskOutcome {
+  reason_code: Extract<WebChatTaskOutcome["reason_code"], "projection_unavailable" | "projection_ambiguous" | "projection_invalid">,
+): WebChatTaskOutcome {
   return { status: "unknown", reason_code, used_for_authority: false, may_execute: false };
 }
 
@@ -75,12 +76,15 @@ function validGoalAssessment(value: unknown): value is Record<string, unknown> {
   return value.status === "held" && value.reason_code !== "rules_missing" && value.reason_code !== "rules_satisfied";
 }
 
-/** Maps one HDS request-bound task projection into a content-free, non-authority Runtime status. */
-export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: string): WebChatD4RuntimeTaskOutcome {
+function projectTaskOutcome(
+  operationPlans: unknown,
+  requestId: string,
+  ownerIdentityDigest: string,
+): WebChatTaskOutcome {
   if (!REQUEST_ID.test(requestId)) return unknownOutcome("projection_invalid");
   if (!isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) return unknownOutcome("projection_unavailable");
   const matches = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
-    plan.owner_identity_digest === D4_RUNTIME_OWNER_DIGEST && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+    plan.owner_identity_digest === ownerIdentityDigest && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
   if (matches.length === 0) return unknownOutcome("projection_unavailable");
   if (matches.length !== 1 || !isRecord(matches[0])) return unknownOutcome("projection_ambiguous");
 
@@ -122,4 +126,14 @@ export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: 
     return { status: "held", reason_code: "completion_held", used_for_authority: false, may_execute: false };
   }
   return unknownOutcome("projection_invalid");
+}
+
+/** Maps one D4 Runtime request-bound J assessment into a content-free, non-authority status. */
+export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: string): WebChatTaskOutcome {
+  return projectTaskOutcome(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
+}
+
+/** Maps one owner-submitted WebChat task's J assessment into a content-free, non-authority status. */
+export function projectOwnerTaskOutcome(operationPlans: unknown, requestId: string): WebChatTaskOutcome {
+  return projectTaskOutcome(operationPlans, requestId, WEBCHAT_OWNER_TASK_DIGEST);
 }

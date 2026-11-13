@@ -66,7 +66,7 @@ import {
 
 import type {
   WebChatAboutSurface,
-  WebChatD4RuntimeTaskOutcome,
+  WebChatTaskOutcome,
   WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
@@ -329,8 +329,8 @@ function d4RuntimeIntentPayloadDigest(token: string, runtimeId: string, sessionI
     .digest("hex");
 }
 
-function normalizeD4RuntimeTaskOutcome(value: unknown): WebChatD4RuntimeTaskOutcome {
-  const invalid: WebChatD4RuntimeTaskOutcome = {
+function normalizeTaskOutcome(value: unknown): WebChatTaskOutcome {
+  const invalid: WebChatTaskOutcome = {
     status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
   };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return invalid;
@@ -340,7 +340,7 @@ function normalizeD4RuntimeTaskOutcome(value: unknown): WebChatD4RuntimeTaskOutc
       outcome.used_for_authority !== false || outcome.may_execute !== false) return invalid;
   if (outcome.status === "unknown" && ["projection_unavailable", "projection_ambiguous", "projection_invalid"].includes(String(outcome.reason_code)) &&
       outcome.completion_evidence === undefined) {
-    return { status: "unknown", reason_code: outcome.reason_code as WebChatD4RuntimeTaskOutcome["reason_code"],
+    return { status: "unknown", reason_code: outcome.reason_code as WebChatTaskOutcome["reason_code"],
       used_for_authority: false, may_execute: false };
   }
   if (outcome.status === "in_progress" && outcome.reason_code === "completion_pending" &&
@@ -1103,13 +1103,22 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
       try {
         const status = submissionStore.getStatus({ submission_id: submissionId });
+        const taskOutcome = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionOutcome
+          ? normalizeTaskOutcome(await this.opts.onOwnerTaskSubmissionOutcome({ request_id: status.request_id }).catch(() => ({
+              status: "unknown" as const,
+              reason_code: "projection_unavailable" as const,
+              used_for_authority: false as const,
+              may_execute: false as const,
+            })))
+          : undefined;
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
         res.end(JSON.stringify(status
-          ? { found: true, request_id: status.request_id, state: status.state }
+          ? { found: true, request_id: status.request_id, state: status.state,
+              ...(taskOutcome ? { task_outcome: taskOutcome } : {}) }
           : { found: false }));
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1634,7 +1643,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           scope_digest: scopeDigest,
         });
         const taskOutcome = status && this.opts.onD4RuntimeIntentTaskOutcome
-          ? normalizeD4RuntimeTaskOutcome(await this.opts.onD4RuntimeIntentTaskOutcome({ request_id: status.request_id }).catch(() => ({
+          ? normalizeTaskOutcome(await this.opts.onD4RuntimeIntentTaskOutcome({ request_id: status.request_id }).catch(() => ({
               status: "unknown" as const,
               reason_code: "projection_unavailable" as const,
               used_for_authority: false as const,

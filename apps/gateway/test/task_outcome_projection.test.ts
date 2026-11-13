@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { projectD4RuntimeTaskOutcome } from "../src/d4_runtime_task_outcome.js";
+import { projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "../src/task_outcome_projection.js";
 
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
 const rulesDigest = "a".repeat(64);
@@ -20,10 +20,10 @@ function outcome(status: string, reason_code: string, assessment: Record<string,
   };
 }
 
-function plans(taskOutcome: unknown, id = requestId) {
+function plans(taskOutcome: unknown, id = requestId, actor = "d4-runtime-adapter-token-holder") {
   return { plans: [{
     request_id: id,
-    owner_identity_digest: operationPlanDigest("d4-runtime-adapter-token-holder"),
+    owner_identity_digest: operationPlanDigest(actor),
     channel_identity_digest: operationPlanDigest("webchat"),
     task_outcome: taskOutcome,
   }] };
@@ -98,5 +98,30 @@ describe("D4 Runtime task outcome projection", () => {
     const wrongOwner = plans(satisfied).plans[0]!;
     expect(projectD4RuntimeTaskOutcome({ plans: [{ ...wrongOwner, owner_identity_digest: "0".repeat(64) }] }, requestId))
       .toMatchObject({ status: "unknown", reason_code: "projection_unavailable" });
+  });
+
+  it("binds owner-submission projection to the owner-token actor, not the D4 Runtime actor", () => {
+    const completed = outcome("achieved", "goal_completion_rules_satisfied", {
+      status: "rules_satisfied",
+      reason_code: "rules_satisfied",
+      rules_digest: rulesDigest,
+      rule_count: 1,
+      satisfied_rule_count: 1,
+      evidence_digest: evidenceDigest,
+    });
+
+    expect(projectOwnerTaskOutcome(plans(completed, requestId, "webchat-owner-token-holder"), requestId)).toMatchObject({
+      status: "achieved",
+      reason_code: "goal_completion_rules_satisfied",
+      completion_evidence: { rules_digest: rulesDigest, evidence_digest: evidenceDigest, rule_count: 1 },
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projectOwnerTaskOutcome(plans(completed), requestId)).toMatchObject({
+      status: "unknown",
+      reason_code: "projection_unavailable",
+      used_for_authority: false,
+      may_execute: false,
+    });
   });
 });

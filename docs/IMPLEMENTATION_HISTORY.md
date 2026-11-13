@@ -4739,3 +4739,11 @@ The verified implementation commit 83393469f2766d63589007b6118575e4ff251af1 was 
 `@blue-tanuki/core typecheck`、`git diff --check`はPASS。最初の`docs:check`は前工程で変更済み`install/resident/README.md`の登録hashが古くFAILしたため、意味や負債状態を変えず当該SHAだけを`規定/移行台帳.json`へ同期し再実行PASS。日本語基底移行負債75件は維持。選択Vitest 4件PASS：Operation Coreでprofile受理とraw command拒否、adapterでprofile opt-in拒否とWindows native isolationによるexit code 23／process tree empty／本文なしを確認。各選択実行は2 tests PASSで、残り114 testsはskip。Gateway全工程のHDS／L3／Approval／Broker/M疎通、Linux native provider、full suite、QE_QC／QAはNOT_RUN。合成processは終了し、テスト専用Temp rootはtest cleanup済み。使用者データ／credential／実provider／外部作用／別repoは対象外。
 
 実装・active instruction・履歴・既存移行負債hash同期を一単位でGitHub `main`へcommit／fast-forward pushした。closeout後のlocal／`origin/main`／GitHub `main`は一致し、復旧ref currentはfinal main、previousは開始main=`8233761b3b533d707e39932e6e442886a4a75c5a`へ同期する。protected untracked attachments／Linux isolation `target/`とstale worktree metadataは変更しない。
+
+## 2026-11-13 — owner task statusからrequest-bound J outcomeへの接続
+
+Owner-tokenで照会する`/owner/task-submission-status`に、同一submissionのrequest IDへ束縛したHDS J task outcomeをdigest-onlyで追加した。projectionはWebChat channelと`webchat-owner-token-holder` actorを厳密照合し、D4 Runtime actor、plan欠落／重複／不正形、snapshot unavailableを達成へ昇格させない。`rejected` submissionはJ result projectionを行わない。WebChat response normalizerはraw追加fieldを拒否し、Control CenterはJ explicit rules/evidence digestを検証してRuntime tokenなしでも限定結果を表示する。J achieved時のみ、handlerがdispatch中でないことを併せて次submission操作を解放する。
+
+WebChat／Gateway typecheck・buildはPASS。Owner submission status／Control Center focused testsは2/2 PASS（WebChat fileの他132件はNOT_RUN）。共通J outcome projection testsは4/4 PASS。`pnpm docs:check`と`git diff --check`はPASS。docs checkは日本語基底移行負債75件の既存継続を報告した。無filterのWebChat全file実行は誤操作で、130 passed／4 failedを報告した。変更したstatus UI harnessの失敗1件は修正しfocused rerun PASS。その他3件はRecovery scope applicability、app shell copy、owner L3 selectorで、今回のdiffから外れるため原因は未調査。全suite／全体QC／QAの根拠には使わない。
+
+HDS-J／Approval／Broker／Mのauthority・writer、owner explicit rules、C08.03 live provider HOLD、OD-03外部作用HOLD、P13公開／出荷GO、5OS全体、product `SYSTEM_SHAPED`／`BUILD_COVERED`は変更なし／未成立。D4-Pocketの現在mainは読み取りのみで、別repoには書き込んでいない。test-owned in-memory fixture以外の新規persistent/temporary assetなし。ignored WebChat／Gateway `dist`は稼働開発物として保持し、保護attachmentsとLinux `target/`は未変更。
