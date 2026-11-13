@@ -59,6 +59,32 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<b
   return predicate();
 }
 
+function mountOpenProcessSummary(mount: string): string {
+  const result = spawnSync("/usr/sbin/lsof", ["-nP", "-w", "-Fpc", "+D", mount], {
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 256 * 1024,
+    windowsHide: true,
+  });
+  if (result.error) return result.error.message === "spawnSync /usr/sbin/lsof ETIMEDOUT" ? "timed-out" : "unavailable";
+  if (typeof result.stdout !== "string") return `unavailable-exit-${String(result.status)}`;
+
+  const processes: Array<{ pid: string; command: string }> = [];
+  let current: { pid: string; command: string } | undefined;
+  for (const field of result.stdout.split(/\r?\n/u)) {
+    if (field.startsWith("p")) {
+      if (current?.pid && current.command) processes.push(current);
+      current = { pid: field.slice(1), command: "" };
+    } else if (field.startsWith("c") && current) {
+      current.command = field.slice(1);
+    }
+  }
+  if (current?.pid && current.command) processes.push(current);
+  const unique = [...new Map(processes.map((process) => [`${process.pid}:${process.command}`, process])).values()];
+  if (unique.length === 0) return result.status === 0 ? "none-reported" : `none-reported-exit-${String(result.status)}`;
+  return unique.slice(0, 12).map(({ pid, command }) => `${command}:${pid}`).join(",");
+}
+
 async function detachReadOnlyImage(mount: string): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -70,7 +96,8 @@ async function detachReadOnlyImage(mount: string): Promise<void> {
       if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  throw new Error(lastError instanceof Error ? lastError.message : "native app DMG detach failed after five normal attempts");
+  const detail = lastError instanceof Error ? lastError.message : "native app DMG detach failed after five normal attempts";
+  throw new Error(`${detail}; mount open processes=${mountOpenProcessSummary(mount)}`);
 }
 
 function minimalAppEnvironment(): NodeJS.ProcessEnv {
