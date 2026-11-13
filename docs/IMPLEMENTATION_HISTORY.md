@@ -2,6 +2,29 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。
 
+## 2026-11-14 — rev5.0 P2 QE_BUILD / macOS native app copied-launch consumer
+
+Hosted macOS x64／arm64のBUILD runnerで、native app DMGをread-onlyで検証し、内包するBlueTanuki.appをrunner専用の一時Applications領域へcopyした。DMGをnormal detachしてからcopy版をAppKitのopenで起動し、終了と起動前後の製品状態不変を確認する経路にした。以前のrun #19〜#22ではarm64の対象smokeは成功した一方、x64はアプリ停止後のDMG detachがResource busyで失敗した。強制detachは使わず、利用者向けREADMEのcopy後起動手順に沿ってconsumerを組み直した。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| GitHub Actions manual workflow_dispatch run | [#23](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43511981998)、source SHA=75a4cc6f04b89803ced9a396d457b7f7cd73b982、overall success。 |
+| macOS arm64 | workspace build、native payload、one-file installer、DMG生成／read-only検証、DMG detach前後の隔離copy、copy版app起動／停止、artifact保存がPASS。ログにdetach-before-launch、process started/stopped、native app start/quit smoke passを記録。 |
+| macOS x64 | workspace build、native payload、one-file installer、DMG生成／read-only検証、DMG detach前後の隔離copy、copy版app起動／停止、artifact保存がPASS。以前のResource busyはこの経路で再現しなかった。 |
+| Linux job／installer実導入／update・recovery・logs・uninstall lifecycle | workflow条件によりSKIPPED。 |
+| ローカル strict TypeScript／docs:check／workflow YAML parse／git diff check | PASS。full suiteとQE_QC／QE_QAはNOT_RUN。 |
+
+保存artifactはrun #23に固定され、いずれも2026-11-20 UTCに期限切れとなる。
+- arm64: ID=14079735149、ZIP=173790672 bytes、SHA-256=d3ef1a6ac01c523f4e77b0a801e17ca99f43b0085d79e66ab022466a6af3a331、期限=2026-11-20T21:37:27Z。
+- x64: ID=14078119766、ZIP=182964280 bytes、SHA-256=90f2bb294bb3ac9ccd4ff988304c942dca7a657b3b61ed30dcff2e22a0892da2、期限=2026-11-20T21:42:54Z。
+
+証拠は未署名Hosted runner内の合成設定によるpackage・DMG・隔離copy版appの起動／停止に限る。実Applicationsへの導入、画面操作の機能確認、Setup／Uninstall、Gateway／Control Center、OS権限／Keychain、ログイン／再起動、Gatekeeper、署名／公証、Linux、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA、公開／出荷GOは証明しない。Actions artifactsは一時保管で恒久配布物ではない。
+
+ローカルPCにDMG、mount、build outputは残していない。添付領域、未追跡のLinux isolation targetと古いWindows worktree metadata／ACLは変更せず保持した。外部作用、実provider、他repo変更なし。source SHA=75a4cc6f04b89803ced9a396d457b7f7cd73b982をGitHub mainへpush済み。closeout後にlocal／remote mainの一致とrecovery二世代を照合した。
+
+次はrev5.0 P2全体BUILDを続け、現行sourceからBLUE-ownedの次consumer gapを選ぶ。macOSの隔離app smokeは局所BUILD証拠として保持し、実installed lifecycleや製品全体成立へ拡張しない。製品全体SYSTEM_SHAPED／BUILD_COVERED前にQE_QC／QE_QAへ移らない。
+
+
 ## 2026-11-14 — rev5.0 P2 SAFE_MIN / CLI inbound diagnostic log privacy
 
 通常CLI one-shotの`inbound`運用ログがraw依頼本文を記録していたため、本文を除きUTF-8 byte数とSHA-256へ置き換えた。organization route既存の本文非記録を維持する。CLI回答表示、HDS処理、外部作用、memory/historyの契約は変更していない。
