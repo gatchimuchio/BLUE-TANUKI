@@ -77,6 +77,7 @@ export interface SetupResult {
   secret_storage: {
     llm_api_key: SetupSecretStorageResult;
     composio_api_key: SetupSecretStorageResult;
+    d4_runtime_token: SetupSecretStorageResult;
   };
   doctor?: DoctorReport;
 }
@@ -480,6 +481,55 @@ function protectSetupComposioApiKey(
   }
 }
 
+function protectSetupD4RuntimeToken(
+  config: BlueTanukiSetupConfig,
+  outputPath: string,
+  env: NodeJS.ProcessEnv,
+  opts: SetupSecretStorageOptions = {},
+): SetupSecretStorageResult {
+  const plaintext = config.d4_runtime?.token;
+  const key = "BLUE_TANUKI_D4_RUNTIME_TOKEN" as const;
+  if (!plaintext) {
+    return {
+      status: "not_supplied",
+      key,
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No new D4 Runtime token was supplied during setup.",
+    };
+  }
+  const platform = opts.platform ?? process.platform;
+  try {
+    const stored = storeBlueTanukiSecret(key, plaintext, {
+      envFilePath: outputPath,
+      env,
+      platform,
+      protector: opts.protector,
+      keyringFactory: opts.keyringFactory,
+    });
+    config.d4_runtime ??= {};
+    delete config.d4_runtime.token;
+    config.d4_runtime.token_ref = stored.ref;
+    return {
+      status: "stored",
+      key,
+      storage: stored.storage,
+      os_protected: true,
+      used_for_authority: false,
+      evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+      detail: `${key} stored via ${secretRefKey(key)} using ${stored.storage}.`,
+    };
+  } catch (error) {
+    throw new Error(
+      `OS-protected secret storage failed; refusing to write plaintext ${key}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 export async function runSetupCommand(
   args: string[] = process.argv.slice(2),
   io: SetupCommandIO = {},
@@ -492,6 +542,12 @@ export async function runSetupCommand(
   const config = opts.yes
     ? buildSetupConfigFromOptions(opts, cwd)
     : await promptForConfig(opts, { cwd, env, stdin, stdout });
+  config.d4_runtime = {
+    runtime_id: env.BLUE_TANUKI_D4_RUNTIME_ID,
+    token: env.BLUE_TANUKI_D4_RUNTIME_TOKEN,
+    token_ref: env.BLUE_TANUKI_D4_RUNTIME_TOKEN_REF,
+  };
+  validateSetupConfig(config);
   const outputPath = resolveFrom(
     cwd,
     opts.output ?? path.join(".blue-tanuki", "blue-tanuki.env"),
@@ -506,6 +562,12 @@ export async function runSetupCommand(
     io.secret_storage,
   );
   const composioSecretStorage = protectSetupComposioApiKey(
+    config,
+    outputPath,
+    env,
+    io.secret_storage,
+  );
+  const d4RuntimeSecretStorage = protectSetupD4RuntimeToken(
     config,
     outputPath,
     env,
@@ -534,6 +596,7 @@ export async function runSetupCommand(
     secret_storage: {
       llm_api_key: secretStorage,
       composio_api_key: composioSecretStorage,
+      d4_runtime_token: d4RuntimeSecretStorage,
     },
     doctor,
   };

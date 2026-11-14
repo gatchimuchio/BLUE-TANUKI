@@ -403,6 +403,57 @@ export function protectComposioApiKeyForEnvFile(
   };
 }
 
+export function protectD4RuntimeTokenForEnvFile(
+  config: BlueTanukiSetupConfig,
+  envFilePath: string,
+  env: Env,
+  opts: SettingsSecretStorageOptions | NodeJS.Platform = {},
+): SettingsSecretStorageResult {
+  const options = typeof opts === "string" ? { platform: opts } : opts;
+  const key = "BLUE_TANUKI_D4_RUNTIME_TOKEN" as const;
+  const plaintext = config.d4_runtime?.token;
+  if (!plaintext) {
+    return {
+      status: "not_supplied",
+      key,
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No new D4 Runtime token was supplied in this settings update.",
+    };
+  }
+  const platform = options.platform ?? process.platform;
+  let stored: LlmSecretStoreResult;
+  try {
+    stored = storeBlueTanukiSecret(key, plaintext, {
+      envFilePath,
+      env,
+      platform,
+      protector: options.protector,
+      keyringFactory: options.keyringFactory,
+    });
+  } catch (error) {
+    throw new Error(
+      `OS-protected secret storage failed; refusing to write plaintext ${key}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  config.d4_runtime ??= {};
+  delete config.d4_runtime.token;
+  config.d4_runtime.token_ref = stored.ref;
+  return {
+    status: "stored",
+    key,
+    storage: stored.storage,
+    os_protected: true,
+    used_for_authority: false,
+    evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+    detail: `${key} stored via ${secretRefKey(key)} using ${stored.storage}.`,
+  };
+}
+
 function candidateEnvFromBody(body: Record<string, unknown>, env: Env): Env {
   const nextConfig = applySettingsPatch(setupConfigFromEnv(env), body);
   return { ...env, ...setupConfigToEnv(nextConfig, { source_env: env }) };
@@ -417,6 +468,7 @@ function redactKnownSecretValues(message: string, env: Env): string {
     "OPENROUTER_API_KEY",
     "LLM_API_KEY",
     "COMPOSIO_API_KEY",
+    "BLUE_TANUKI_D4_RUNTIME_TOKEN",
   ]) {
     const value = env[key];
     if (value && value.length >= 6) {

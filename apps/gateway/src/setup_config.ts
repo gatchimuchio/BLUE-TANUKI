@@ -54,6 +54,12 @@ export interface SetupMcpConfig {
   endpoint?: string;
 }
 
+export interface SetupD4RuntimeConfig {
+  runtime_id?: string;
+  token?: string;
+  token_ref?: string;
+}
+
 export interface BlueTanukiSetupConfig {
   schema_version: 1;
   llm: SetupLlmConfig;
@@ -72,6 +78,7 @@ export interface BlueTanukiSetupConfig {
     live_execution: boolean;
   };
   mcp: SetupMcpConfig;
+  d4_runtime?: SetupD4RuntimeConfig;
   webchat: SetupWebChatConfig;
   paths: SetupPathConfig;
   settings: {
@@ -194,6 +201,7 @@ export function createDefaultSetupConfig(
       live_execution: false,
     },
     mcp: {},
+    d4_runtime: {},
     webchat: {
       host: "127.0.0.1",
       port: 8787,
@@ -235,6 +243,7 @@ export function validateSetupConfig(
   config.composio.dry_run = config.composio.dry_run !== false;
   config.composio.live_execution = config.composio.live_execution === true;
   config.mcp ??= {};
+  config.d4_runtime ??= {};
   // Legacy schema-v1 setup files did not persist a dedicated runtime state root.
   config.paths.state_root ??= path.resolve(config.paths.session_dir, "..");
   config.paths.failure_memory_dir ??= path.join(path.resolve(config.paths.session_dir), "failure-memory");
@@ -365,6 +374,28 @@ export function validateSetupConfig(
     throw new Error("settings.token must differ from WebChat tokens");
   }
 
+  const runtimeIdSet = isNonEmptyString(config.d4_runtime.runtime_id);
+  const runtimeTokenSet = isNonEmptyString(config.d4_runtime.token);
+  const runtimeTokenRefSet = isNonEmptyString(config.d4_runtime.token_ref);
+  if (runtimeTokenSet && runtimeTokenRefSet) {
+    throw new Error("d4_runtime.token and d4_runtime.token_ref cannot both be set");
+  }
+  if (runtimeIdSet !== (runtimeTokenSet || runtimeTokenRefSet)) {
+    throw new Error("d4_runtime.runtime_id and its protected token must be configured together");
+  }
+  if (runtimeTokenSet) {
+    validateToken(config.d4_runtime.token!, "d4_runtime.token");
+    if (
+      config.d4_runtime.token === config.webchat.token ||
+      config.d4_runtime.token === config.webchat.resume_token ||
+      config.d4_runtime.token === config.webchat.owner_token ||
+      config.d4_runtime.token === config.webchat.maintenance_token ||
+      config.d4_runtime.token === config.settings.token
+    ) {
+      throw new Error("d4_runtime.token must differ from other BLUE-TANUKI credentials");
+    }
+  }
+
   return config;
 }
 
@@ -454,6 +485,11 @@ export function setupConfigFromEnv(
   config.composio.dry_run = parseOptionalBool(env.COMPOSIO_DRY_RUN) ?? true;
   config.composio.live_execution = parseOptionalBool(env.COMPOSIO_LIVE_EXECUTION) ?? false;
   config.mcp.endpoint = env.BLUE_TANUKI_MCP_ENDPOINT;
+  config.d4_runtime = {
+    runtime_id: env.BLUE_TANUKI_D4_RUNTIME_ID,
+    token: env.BLUE_TANUKI_D4_RUNTIME_TOKEN,
+    token_ref: env.BLUE_TANUKI_D4_RUNTIME_TOKEN_REF,
+  };
 
   return validateSetupConfig(config);
 }
@@ -579,6 +615,14 @@ export function setupConfigToEnv(
   env.COMPOSIO_DRY_RUN = config.composio.dry_run ? "true" : "false";
   env.COMPOSIO_LIVE_EXECUTION = config.composio.live_execution ? "true" : "false";
   if (config.mcp.endpoint !== undefined) env.BLUE_TANUKI_MCP_ENDPOINT = config.mcp.endpoint;
+  if (config.d4_runtime?.runtime_id) {
+    env.BLUE_TANUKI_D4_RUNTIME_ID = config.d4_runtime.runtime_id;
+  }
+  if (config.d4_runtime?.token) {
+    env.BLUE_TANUKI_D4_RUNTIME_TOKEN = config.d4_runtime.token;
+  } else if (config.d4_runtime?.token_ref) {
+    env.BLUE_TANUKI_D4_RUNTIME_TOKEN_REF = config.d4_runtime.token_ref;
+  }
 
   return env;
 }
@@ -647,6 +691,9 @@ export function renderSetupEnvFile(
     "COMPOSIO_DRY_RUN",
     "COMPOSIO_LIVE_EXECUTION",
     "BLUE_TANUKI_MCP_ENDPOINT",
+    "BLUE_TANUKI_D4_RUNTIME_ID",
+    "BLUE_TANUKI_D4_RUNTIME_TOKEN",
+    "BLUE_TANUKI_D4_RUNTIME_TOKEN_REF",
   ]) {
     addEnvLine(lines, key, env[key]);
   }

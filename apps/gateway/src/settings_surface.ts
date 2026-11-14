@@ -18,6 +18,7 @@ import {
   applySettingsPatch,
   assessLlmComputeReadiness,
   protectComposioApiKeyForEnvFile,
+  protectD4RuntimeTokenForEnvFile,
   protectLlmApiKeyForEnvFile,
   type LlmComputeReadiness,
   type SettingsSecretStorageOptions,
@@ -25,7 +26,7 @@ import {
   verifyLlmProvisioning,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
-import { llmSecretStorageStatus } from "./secret_store.js";
+import { connectorSecretStorageStatus, llmSecretStorageStatus } from "./secret_store.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { inspectMcpCatalogFromSettings, type McpCatalogProjection } from "./mcp_connection_client.js";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
@@ -128,6 +129,15 @@ export interface SettingsSnapshot {
     };
     composio: ReturnType<typeof composioStatus> & {
       last_tool_call: null;
+    };
+    d4_runtime: {
+      status: "not_configured" | "incomplete_credentials" | "configured_unverified";
+      runtime_id_set: boolean;
+      token_set: boolean;
+      secret_storage: ReturnType<typeof connectorSecretStorageStatus>;
+      live_connection_checked: false;
+      used_for_authority: false;
+      next_action: string;
     };
   };
   webchat: {
@@ -288,6 +298,22 @@ export function buildSettingsSnapshot(
   }
   const mcpRuntimeObservation = mcpObservations.snapshot(mcpEndpoint ?? undefined);
   const mcpRuntimeNextAction = describeMcpRuntimeObservation(mcpRuntimeObservation);
+  const d4RuntimeIdSet = Boolean(envValue(env, "BLUE_TANUKI_D4_RUNTIME_ID"));
+  const d4RuntimeTokenSet = Boolean(envValue(
+    env,
+    "BLUE_TANUKI_D4_RUNTIME_TOKEN",
+    "BLUE_TANUKI_D4_RUNTIME_TOKEN_REF",
+  ));
+  const d4RuntimeStatus = d4RuntimeIdSet && d4RuntimeTokenSet
+    ? "configured_unverified" as const
+    : d4RuntimeIdSet || d4RuntimeTokenSet
+      ? "incomplete_credentials" as const
+      : "not_configured" as const;
+  const d4RuntimeNextAction = d4RuntimeStatus === "configured_unverified"
+    ? "Dedicated Gateway credentials are present. Connectivity is not probed here, and the D4 application consumer still needs its own integration. Restart Gateway after changing the credentials."
+    : d4RuntimeStatus === "incomplete_credentials"
+      ? "Configure BLUE_TANUKI_D4_RUNTIME_ID and BLUE_TANUKI_D4_RUNTIME_TOKEN together, store the token through setup or the OS-protected secret reference, then restart Gateway."
+      : "D4 Runtime endpoints remain disabled until a matching runtime ID and protected token are configured.";
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
@@ -352,6 +378,15 @@ export function buildSettingsSnapshot(
         connection_revoke_available: composio.connection_revoke_available || composioKeyConfigured,
         last_tool_call: null,
       },
+      d4_runtime: {
+        status: d4RuntimeStatus,
+        runtime_id_set: d4RuntimeIdSet,
+        token_set: d4RuntimeTokenSet,
+        secret_storage: connectorSecretStorageStatus(env, "BLUE_TANUKI_D4_RUNTIME_TOKEN"),
+        live_connection_checked: false,
+        used_for_authority: false,
+        next_action: d4RuntimeNextAction,
+      },
     },
     webchat: {
       host: config.webchat.host,
@@ -387,6 +422,7 @@ export async function updateSettingsEnvFile(
   secret_storage: {
     llm_api_key: SettingsSecretStorageResult;
     composio_api_key: SettingsSecretStorageResult;
+    d4_runtime_token: SettingsSecretStorageResult;
   };
 }> {
   const target = envFilePath(env);
@@ -398,6 +434,7 @@ export async function updateSettingsEnvFile(
   const nextConfig = applySettingsPatch(setupConfigFromEnv(baseEnv), body);
   const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
   const composioSecretStorage = protectComposioApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
+  const d4RuntimeSecretStorage = protectD4RuntimeTokenForEnvFile(nextConfig, target, baseEnv, opts);
   const writeResult = await writeEnvFileAtomic(target, renderSetupEnvFile(nextConfig), {
     mode: 0o600,
     backup: true,
@@ -411,6 +448,7 @@ export async function updateSettingsEnvFile(
     secret_storage: {
       llm_api_key: secretStorage,
       composio_api_key: composioSecretStorage,
+      d4_runtime_token: d4RuntimeSecretStorage,
     },
   };
 }
@@ -834,6 +872,12 @@ export function renderSettingsHtml(): string {
             <label>Composio status
               <input id="composio-status" readonly>
             </label>
+            <label>D4 Runtime pairing
+              <input id="d4-runtime-status" readonly>
+            </label>
+            <label>D4 Runtime token storage
+              <input id="d4-runtime-secret-storage" readonly>
+            </label>
             <label>OpenRouter configured
               <input id="openrouter-status" readonly>
             </label>
@@ -856,6 +900,7 @@ export function renderSettingsHtml(): string {
           <p id="slack-next-action" role="status"></p>
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
+          <p id="d4-runtime-next-action" role="status"></p>
           <p id="mcp-runtime-next-action" role="status"></p>
           <p id="mcp-inspection-result" role="status"></p>
           <p class="muted">Runtime observations are saved locally from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
@@ -929,6 +974,9 @@ export function renderSettingsHtml(): string {
       composioLiveExecution: document.querySelector("#composio-live-execution"),
       composioClearApiKey: document.querySelector("#composio-clear-api-key"),
       composioStatus: document.querySelector("#composio-status"),
+      d4RuntimeStatus: document.querySelector("#d4-runtime-status"),
+      d4RuntimeSecretStorage: document.querySelector("#d4-runtime-secret-storage"),
+      d4RuntimeNextAction: document.querySelector("#d4-runtime-next-action"),
       openrouterStatus: document.querySelector("#openrouter-status"),
       nativeFirstStatus: document.querySelector("#native-first-status"),
       slackStatus: document.querySelector("#slack-status"),
@@ -1019,6 +1067,9 @@ export function renderSettingsHtml(): string {
         (snapshot.integrations.composio.configured ? "configured" : "missing") +
         "; dry_run=" + snapshot.integrations.composio.dry_run +
         "; live=" + snapshot.integrations.composio.live_execution_available;
+      fields.d4RuntimeStatus.value = snapshot.integrations.d4_runtime.status.replaceAll("_", " ");
+      fields.d4RuntimeSecretStorage.value = snapshot.integrations.d4_runtime.secret_storage.storage.replaceAll("_", " ");
+      fields.d4RuntimeNextAction.textContent = snapshot.integrations.d4_runtime.next_action;
       fields.openrouterStatus.value =
         (snapshot.integrations.openrouter.configured ? "configured" : "missing") +
         "; key=" + (snapshot.integrations.openrouter.api_key_set ? "set" : "missing");

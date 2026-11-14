@@ -25,7 +25,8 @@ export type ConnectorSecretKey =
   | "DISCORD_BOT_TOKEN"
   | "TELEGRAM_BOT_TOKEN"
   | "MICROSOFT_GRAPH_ACCESS_TOKEN"
-  | "LINE_CHANNEL_ACCESS_TOKEN";
+  | "LINE_CHANNEL_ACCESS_TOKEN"
+  | "BLUE_TANUKI_D4_RUNTIME_TOKEN";
 
 export type BlueTanukiSecretKey = LlmSecretKey | ConnectorSecretKey;
 
@@ -104,6 +105,7 @@ export const CONNECTOR_SECRET_KEYS: readonly ConnectorSecretKey[] = [
   "TELEGRAM_BOT_TOKEN",
   "MICROSOFT_GRAPH_ACCESS_TOKEN",
   "LINE_CHANNEL_ACCESS_TOKEN",
+  "BLUE_TANUKI_D4_RUNTIME_TOKEN",
 ];
 
 export const BLUE_TANUKI_SECRET_KEYS: readonly BlueTanukiSecretKey[] = [

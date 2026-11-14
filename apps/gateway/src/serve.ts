@@ -1286,7 +1286,7 @@ async function serveWithOwnerLease(
   const dispatcher = new OutboundDispatcher();
 
   const port = parseInt(process.env.WEBCHAT_PORT ?? "8787", 10);
-  const d4RuntimeToken = process.env.BLUE_TANUKI_D4_RUNTIME_TOKEN;
+  const d4RuntimeToken = resolveSecretMaterial(process.env, "BLUE_TANUKI_D4_RUNTIME_TOKEN");
   const d4RuntimeId = process.env.BLUE_TANUKI_D4_RUNTIME_ID;
   if (Boolean(d4RuntimeToken) !== Boolean(d4RuntimeId)) {
     throw new Error("BLUE_TANUKI_D4_RUNTIME_TOKEN and BLUE_TANUKI_D4_RUNTIME_ID must be configured together");
