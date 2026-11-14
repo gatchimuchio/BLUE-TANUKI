@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE 最終対応OS（5OS）
 
-2026-11-13 rev5.0。**新AGI製品の完成対象はWindows、Linux、macOS、Android、iOS**。旧v1.0 RCではMobile機能が未搭載であり、これを現在の5OS完成証拠に転用しない。全OS入口と必要な機能を一つの全体実装で結び、`BUILD_COVERED`後にOS別QCを行う。
+2026-11-14 現行rev5.3。**新AGI製品の完成対象はWindows、Linux、macOS、Android、iOS**。旧v1.0 RCではMobile機能が未搭載であり、これを現在の5OS完成証拠に転用しない。全431要求・全機能・全OS入口を常時一つの全体施工の対象にして結び、局所BUILD_BATCH選定で範囲を限定しない。`BUILD_COVERED`後にOS別QCを行う。現行施工条件は[三点正本](QE_CURRENT_AUTHORITY.md)を参照する。
 
 ## 対応範囲と区分
 

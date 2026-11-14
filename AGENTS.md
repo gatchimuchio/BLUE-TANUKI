@@ -14,11 +14,11 @@
 
 owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報と三文書の実体は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) から参照する。2026-11-14のowner指示により、技術設計・三点正本・要求対応表について従来の非公開・Public Git転載禁止条件を廃止した。文書の公開と製品の出荷GO、実資格情報・実運転データの保護、他repo変更・実外部作用の権限は別である。ownerが新しい三点一組を指定したら、manifestと三文書のhashを照合し現行ピンを更新する。旧版・旧pin・完了した作業は履歴として保持し、通常作業で旧版を現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合だけ参照する。現行三点正本や実リポジトリが読めなければ推測で補わず、欠落条件を明記する。リポジトリに存在しない外部理論の原点資料を施工上の要求・欠損・公開判断へ加えない。
 
-現行rev5.2は、製品内のHDS判断・関係処理・学習の実装契約と、BLUE Runtimeの有限なJ/M状態・安全採否を区別し、製品外の理論原点資料を必要資料としない。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
+現行rev5.3は、製品内のHDS判断・関係処理・学習の実装契約と、BLUE Runtimeの有限なJ/M状態・安全採否を区別し、製品外の理論原点資料を必要資料としない。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
 
 本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
 
-規定改修だけでは製品実装を再開しない。現行ownerの開発委任に従い、最新正本と現物を再照合してBLUE本体のQE_BUILDを進める。C08.03の実provider検証保留、D4Pocket／ミニドラの別repo変更に必要な別途許可、P13の公開保留を維持する。
+**三点セットの作成・提出はGitHub反映の許可ではない。** 2026-11-14のowner明示指示によるrev5.3現行採用・AGENTS.md等の直接改修は、製品本体の施工開始とは区別する。製品施工は別途有効な開発委任と現行三点正本に従う。C08.03の実provider検証保留、D4Pocket／ミニドラの別repo変更に必要な別途許可、P13の製品出荷保留を維持する。
 
 ## 1. 日本語基底
 
@@ -51,8 +51,8 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 
 1. 上位の安全・実行環境・権限境界。
 2. 現在のowner/userの明示指示。工程方法論の変更は指示を反映するが、HDS-BRAIN、Approval、監査、復旧、release gate、owner GO、operator安全を無断で弱めない。
-3. 本AGENTS.mdの共通規律および固有規律。近傍AGENTS.override.md／AGENTS.mdは対象固有の安全条件を限定・強化できるが、QEの主従・順序を無言で逆転させない。
-4. ownerが最新版と明示した仕様書・工程表・施工指示書の三点一組。追加の独立したactive implementation instructionを正本化しない。日本語の意味正本は規定/00_日本語基底規定.mdを確認する。
+3. ownerが最新版と明示した仕様書・工程表・施工指示書の三点一組。**製品の要求・全体工程・施工対象・完了条件の唯一の正本**。追加の独立したactive implementation instructionを正本化しない。日本語意味正本は規定/00_日本語基底規定.mdを確認する。
+4. 本AGENTS.mdと近傍AGENTS.override.md／AGENTS.mdは共通の安全・権限・証拠・環境・Git保全の規律。三点正本の全体一括施工を局所BUILD_BATCH選定方式へ変更できない。対象固有の安全条件は限定・強化できる。
 5. 契約・コード・試験・現物を観測した進捗。旧版、過去会話、他repoの完成値は履歴や反証材料であり、現行証拠ではない。
 
 毎作業の最新HEAD、dirty state、現行指示を再確認する。rev1.1のNOT_STARTEDや古いSHAで現行成果を上書き・消去しない。過去の作業履歴や公開ロードマップに旧来の「毎小単位の詳細試験・品質保証・Git完結」が残る場合、それらは当時の記録であり、現行三点正本のQE工程を上書きしない。**実資格情報・実運転データ・実行権限・出荷条件については保護を維持する。**
@@ -74,7 +74,7 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 
 独立した作業の開始・切替・再開、およびセッション・担当の交代時には、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) で現行一組の版・文書名・hashを確定し、三文書すべてと適用AGENTS.mdを読み直す。読む三文書はその現行pinが指す一組だけとする。ownerの現行原文指示、最新HEAD・差分、今回の対象コードも再確認する。過去の仕様書・工程表・施工指示書、完了記録、進捗履歴全体はログとして保持するが、通常の作業開始時に一覧化・再読しない。今回の依存・変更系譜・矛盾を解くために必要な場合に限り、該当する記録の必要部分を参照する。前回の状態を記憶だけで確定せず、現行正本と現物から再構成する。連続する一作業内の小単位切替では関係する節と実物を再同期し、QC／QAや全テスト、バックアップ回転を挟まない。
 
-198の小単位は実装漏れ防止の索引であり、工程の主成果は次consumerをつないだBUILD_BATCH単位の実経路である。各小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの状態と、次に実装すべきproducer・consumerを記録する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
+198の小単位は実装漏れ防止の索引であり、**常時実行対象は431要求・全機能・全5OS・全producer／consumerを含む製品全域の一括施工**とする。小単位や直近の未接続consumerを「次に選ぶ独立施工案件」にしない。各単位のCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYは全域残差を把握するためだけに保持する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
 
 作業開始時に対象・目的・到達状態・依存・現在許可された作用を記述し、関連コード、既存検査、契約・責任境界を確認する。関連しないrefactor、依存更新、独自wrapper、実装されないschema増殖、非必要な抽象化を禁止する。read-onlyの調査subagentは並列利用できるが、同一work blockの編集・Git操作・正本確定は単一writerへ集約する。他者の差分をreset、revert、clean、上書きで消さない。
 
@@ -308,9 +308,9 @@ P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのま�
 
 工程状態は現行三点正本のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
 
-BUILD_BATCHはP2全体施工内の技術的checkpointとGit保全単位であり、198区分に閉じた局所工程・QC/QA完了・全体達成gateではない。全要求・5OS入口・能力間の実consumerを一つの施工計画にまとめ、未接続を見つけたらその全体工事へ結び付ける。各独立した作業の開始・再開時には現行三点セット全文と適用AGENTS.mdを読み直し、同じ施工単位内では関係する節・現物を再同期する。閉じた記録は履歴として保持し、必要時だけ参照する。型・schema・mockだけで実物完遂と報告しない。
+旧BUILD_BATCH識別子は**過去の施工履歴**に限って参照し、今後の施工選択・個別完了・次工程への合否判定には使わない。途中保存のGit checkpointは必要時に設けてよいが、施工対象は終始、全要求・全機能・全5OSの製品全域である。未接続consumerは同じ全域施工の残差として接続する。独立した作業の開始・再開時には現行三点セット全文と適用AGENTS.mdを読み直す。履歴は必要時だけ参照し、型・schema・mockだけで完遂と報告しない。
 
-大きなバッチ指示には、目的・現状・次consumer、対象／非対象、関係単位ID、安全条件、停止条件、必要な技術確認、Git復元点、再同期条件を明示する。旧指示書の16節は利用してよいが、全小単位への品質票作成義務にはしない。
+施工指示は現行三点正本へ一元化し、別の「次の局所BUILD_BATCH指示書」を生成・選択しない。作業中断・再開の記録には全域の目的、完成状態、全機能・全OSの残差、安全条件、停止条件、必要な技術確認、Git復元点、再同期条件を含める。198索引は追跡と後段QC候補のために使う。
 
 本規定の採用だけで製品作業を再開しない。最新owner停止指示、C08.03実provider試験の保留、別repo・実業務・公開行為の限定承認を維持する。
 
@@ -318,29 +318,29 @@ BUILD_BATCHはP2全体施工内の技術的checkpointとGit保全単位であり
 
 ### 1. BUILDとQC・QAの責務
 
-小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの途中成果であり、全test・QA合格・全体検査・個別のcommit/pushを閉鎖条件にしない。BUILD_BATCHは意味のある縦断機能の接続を一つの施工・保全単位とする。BUILD_COVEREDの後で初めて全体QE_QCへ進み、欠陥を根本原因から修正・再検査する。QAはその結果を個別対象に限定して評価し、owner GOは独立する。
+小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの途中成果であり、全test・QA合格・全体検査・個別commit/pushを閉鎖条件にしない。必要な途中Git保全は全域施工の継続を支える技術操作であり、新たな局所施工の選定条件ではない。BUILD_COVERED後に全体QE_QC、根因修正・再検査、対象別QAへ進む。owner GOは独立する。
 
 ### 2. 安全を維持した実装中の最小確認
 
 QE_BUILD中に必要なのは、構文・型・変更したproducer／consumerの疎通と作業継続を阻む欠陥の除去である。重大なAuthority、Approval、秘密、監査、非冪等外部作用を変更する場合は、無権限実行を防ぐため必要な局所否定確認をその場で行う。危険な作用経路は保護が確認できるまでdisable／SUSPENDとし、実credentialや実外部作用を使用しない。既存test・検査・保護を削除・恒久skipして進行を速くしたことにはしない。
 
-バッチ境界では対象の型検査・必要なbuild・接続部分の短時間smoke・差分チェックを実施する。環境復元または依存変更時はfrozen lockfileを照合する。HDS権限中核を変更したバッチでは関連するstandaloneと安全確認を行う。全体pnpm test、全数conformance、故障注入、耐久、性能、全OS、競合比較は完成した実物を対象とするQE_QCへ配置する。release経路に関する別の必須保護検査・GA／bundle／verify、ownerの実機検査は省略しない。
+必要なGit checkpointでは対象の型検査・必要なbuild・接続部分の短時間smoke・差分チェックを実施する。環境復元または依存変更時はfrozen lockfileを照合する。HDS権限中核を変更したバッチでは関連するstandaloneと安全確認を行う。全体pnpm test、全数conformance、故障注入、耐久、性能、全OS、競合比較は完成した実物を対象とするQE_QCへ配置する。release経路に関する別の必須保護検査・GA／bundle／verify、ownerの実機検査は省略しない。
 
 実行すべき対象確認の例：pnpm typecheck、pnpm build、pnpm exec vitest run <対象のtest file>、pnpm hds:standalone。QE_QCの開始後にpnpm test、pnpm docs:check、pnpm validate:repo-health、pnpm run doctor、pnpm validate:packaging、必要なsmoke／実機を実施する。規定・文書更新では変更に関係するdocs:check／日本語基底監査、release変更ではGA／bundle／verifyを必ず扱う。実行不能ならNOT_RUNと根拠を記録し、公開保証へ昇格させない。
 
-### 3. 実装バッチでの仕上げ
+### 3. 全域施工の途中記録
 
-バッチが前進させた実挙動、未接続の残差、次consumerを記録する。関連するcode・contract・必要なdocs／履歴をバッチ単位で整合させ、一小単位ごとの文書更新儀式・全体QC・品質保証を廃止する。無関係なrefactor、不要な抽象化、一時物は除去し、安全を壊す既知欠陥は即修正または遮断する。
+全域施工が前進させた実挙動と全機能・全OSの未接続残差を記録する。関連するcode・contract・必要なdocs／履歴は整合させ、一小単位ごとの文書更新儀式・全体QC・品質保証を廃止する。無関係なrefactor、不要な抽象化、一時物は除去し、安全を壊す既知欠陥は即修正または遮断する。
 
 ### 4. Git運用と復旧点（D4Pocket方式）
 
-mainを唯一の開発正本とし、単一writerがBUILD_BATCHまたは統治改訂の編集前にorigin/main、ローカルHEAD、dirty差分と他writerを確認する。小単位の切替ごとにバックアップ世代を回さない。
+mainを唯一の開発正本とし、単一writerが製品の全域施工または統治改訂の編集前にorigin/main、ローカルHEAD、dirty差分と他writerを確認する。小単位の切替ごとにバックアップ世代を回さない。
 
 **D4Pocketと統一する正規方式は、ローカル復旧用branch二本（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）とGitHub上のPR-neutralなtag二本（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）。** 現backup-mainをprevへ退避し、編集前mainをbackup-mainへ保存する。確認済みの旧remote tag SHAを期待値とするforce-with-leaseで二本を原子的にpushし、tag二本のremote SHAとmainを照合する。GitHub上の同名backup branchを正規世代として維持しない。
 
 **移行状態はMIGRATION_COMPLETE（2026-10-12）。** remote backup tag二本への保存とSHA照合後、旧remote backup branch二本を期待SHA付きatomic pushで整理した。local recovery branch二本とremote tag二本は同じ二世代に揃っている。完了時SHA、手順、検証証拠はdocs/BACKUP_REF_MIGRATION.mdを参照する。今後もref競合、他writer更新、照合不足があれば変更を止め、完了宣言しない。
 
-BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは、確認・権限なく実施しない。secret、credential、個人情報、実運転状態、no-store review本文、監査raw、debug一時物をGitに混ぜない。公開可能な技術設計・QE/HDS施工文書をこれらと同一視しない。reset --hard／cleanで既存作業を消さない。
+明示委任された作業の実際のGit保全時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。**三点文書の作成・提出だけでpushを起動しない。** tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは確認・権限なく実施しない。secret、credential、個人情報、実運転状態、no-store review本文、監査raw、debug一時物をGitに混ぜない。公開可能な技術設計・QE/HDS施工文書をこれらと同一視しない。reset --hard／cleanで既存作業を消さない。
 
 ### 5. 旧規定との移行
 
@@ -386,20 +386,20 @@ owner 指示により、通常の編集・ビルド・テスト・起動・Git �
 
 ## 24. 毎タスクでの正本確認・目的再同期
 
-毎作業および小単位を開始・切替・再開するたびに以下を行う。
+独立作業の開始・切替・再開時に以下を行う。全域施工中の小単位参照は再読の手掛かりであって、別の作業開始や施工選定ではない。
 
 1. 最新owner原文指示、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) の現行版・文書名・hash、rootと最寄りのAGENTS.mdを確認する。独立した作業の開始・切替・再開時は、現行ピンが指す仕様書・工程表・施工指示書の三文書すべてと適用AGENTS.mdを読み直す。同一作業内の連続した小単位切替では、関係する節と現物を再同期する。前回の状態は記憶だけで確定せず、現行ピンと現物から再構成する。旧版・完了記録・進捗履歴全体はログとして保持し、依存・変更系譜・矛盾の確認に必要な場合だけ該当箇所を参照する。
 2. 現在のmain HEAD、remote、dirty差分、ownerや他writerの作業と未決作用、実資格・個人データの扱いを確認する。
-3. 今回の対象、目的、作用、入出力、次consumer、期待する観測、安全保護、停止条件を短く固定する。
+3. 今回の全域施工対象、目的、作用、入出力、全機能・全OSの接続状態、期待する観測、安全保護、停止条件を固定する。
 4. 関連contract／本番呼出し先／局所testを確認し、必要十分なコードを連結する。次の実装を進められない欠陥は直す。
-5. CODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYと次の接続箇所を残し、切れ目で指示を再読する。小単位ごとのQC・QA・全suite・Git世代回転は挟まない。
-6. BUILD_BATCHの終了時だけ、§21の限定技術確認・Git閉包・報告を行う。ownerの停止指示や危険な未承認作用があれば続行しない。
+5. CODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYを全域残差として記録し、切れ目で指示を再読する。小単位ごとのQC・QA・全suite・Git世代回転は挟まない。
+6. 必要なGit checkpointでのみ§21の限定技術確認・Git閉包・報告を行い、製品全域の施工を継続する。ownerの停止指示や危険な未承認作用があれば該当作用を停止する。
 
 初回には規定/00_日本語基底規定.md、SECURITY.md、AUDIT.md、CONFIG.md、README.md、CHANGELOG.md、docs/作業標準要領.mdも必要に応じて確認する。以後の再読はAGENTS・現行目的と指示・影響コードを必須とし、無関係な全文書の再生成を義務化しない。作業の中断点はモデル内部の消去保証ではなく、正本と現物から状態を作り直すためのものとする。
 
 ## 25. 最終報告
 
-BUILD中の報告は次を中心に簡潔にする：QE_STAGE、BUILD_BATCHと単位ID、実際に通るようになった仕事／consumer、未接続のBUILD_GAP、次の接続点、安全境界、行った技術確認と未実施、原因分類、実際のmain HEAD、commit/push、remote HEAD、backup refsと復元点。細分化した小単位のQA合格を成果として報告しない。
+BUILD中の報告は次を中心に簡潔にする：QE_STAGE、431要求・全機能・5OSの全域施工状態、実際に通るようになった仕事／consumer、全域のBUILD_GAP、安全境界、行った技術確認と未実施、原因分類、実際のmain HEAD、commit/push、remote HEAD、backup refsと復元点。旧BUILD_BATCHと単位IDは履歴識別にのみ使用する。細分化した小単位のQA合格を成果として報告しない。
 
 QE_QCでは対象実物・版・環境・機能母集団、欠陥と根因、修正と再検査、未観測の範囲を報告する。QE_QAでは個別の対象・版・OS・条件・証拠源と、QA_SCOPED／QA_NOT_ESTABLISHEDを記録する。製品releaseに必要なowner GOは独立に扱う。
 

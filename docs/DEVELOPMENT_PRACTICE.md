@@ -4,4 +4,4 @@
 
 独立した各作業の開始・切替・再開時には現行ピン、適用規定、owner最新原文指示、HEAD・差分を確認し、固定された最新の三点正本全文を読み直す。同一作業内の連続する小単位では関係する節を再同期する。旧版や完了済みの作業は履歴ログとして保持し、依存・変更系譜・矛盾を確認する必要がある時だけ該当箇所を参照する。
 
-path classification、証拠源、contract-to-runtime接続、工程順序、BUILD_BATCH、Git保全、C08.03とP13の保留条件の詳細は上記の現行規定と指示に従う。履歴として固定されたref移行記録は [`BACKUP_REF_MIGRATION.md`](BACKUP_REF_MIGRATION.md) を参照する。
+path classification、証拠源、contract-to-runtime接続、全域一括施工・途中Git保全、C08.03とP13の保留条件の詳細は上記の現行規定と指示に従う。履歴として固定されたref移行記録は [`BACKUP_REF_MIGRATION.md`](BACKUP_REF_MIGRATION.md) を参照する。

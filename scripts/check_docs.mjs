@@ -10,9 +10,9 @@ const requiredDocs = [
   "docs/BACKUP_REF_MIGRATION.md",
   "docs/QE_CURRENT_AUTHORITY.md",
   "docs/qe/現行/MANIFEST.json",
-  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_2.json",
-  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_2.json",
-  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_2.json",
+  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_3.json",
+  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_3.json",
+  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_3.json",
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -144,10 +144,10 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 // QE規定の現行文書間の構造的一致を確認する。
 // 文書整合だけを確認し、製品のQC/QAや実機成功は証明しない。
 const qeGovernanceRequired = {
-  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべて", "履歴", "MANIFEST.json"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main"],
+  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE", "三点セットの作成・提出はGitHub反映の許可ではない"],
+  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "現行ピンの三文書すべて", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
+  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべて", "履歴", "MANIFEST.json", "rev5.3", "次の局所BUILD_BATCH選定"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main", "rev5.3"],
   "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ", "最新の三点正本全文を読み直す"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
   "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],
@@ -165,7 +165,8 @@ for (const [rel, tokens] of Object.entries(qeGovernanceRequired)) {
 }
 const qeGovernanceForbidden = {
   "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "現行remote backupの正本はrefs/heads"],
-  "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う"],
+  "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う", "現行はrev5.2の三点正本"],
+  "AGENTS.md": ["現行rev5.2は", "BUILD_BATCHはP2全体施工内の技術的checkpoint", "BUILD_BATCH終了時に限定commitをmainへpushし"],
   "docs/DEVELOPMENT_PRACTICE.md": ["三点正本は今回に必要な節だけ読む", "三点全文の再読は新版指定", "現行二世代remote backupの正本はrefs/heads"],
   "docs/NON_GOALS.md": ["- No ClawHub compatibility"],
   "docs/STRATEGY_FRAME.md": [
@@ -187,8 +188,8 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
 const qeManifest = JSON.parse(read("docs/qe/現行/MANIFEST.json"));
 const qeCanonicalFiles = Object.keys(qeManifest.文書 ?? {});
 const qeParsed = {};
-if (qeManifest.版 !== "5.2" || qeManifest.公開 !== true || qeCanonicalFiles.length !== 3) {
-  failures.push("現行QE公開manifestがrev5.2・公開三文書ではない");
+if (qeManifest.版 !== "5.3" || qeCanonicalFiles.length !== 3) {
+  failures.push("現行QE manifestがrev5.3・三文書ではない");
 }
 const activeNames = fs.readdirSync(path.join(root, "docs/qe/現行")).filter(file => /^0[1-3]_.*\.json$/.test(file)).sort();
 if (JSON.stringify(activeNames) !== JSON.stringify([...qeCanonicalFiles].sort())) {
@@ -201,8 +202,12 @@ for (const file of qeCanonicalFiles) {
   const doc = JSON.parse(read(rel));
   qeParsed[file.slice(0, 2)] = doc;
   if (actualHash !== qeManifest.文書[file].SHA256) failures.push(`${rel}: manifest SHA-256不一致`);
-  if (doc.識別?.版 !== "5.2" || doc.識別?.公開 !== true || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
-    failures.push(`${rel}: 旧版または非公開規則が現行三点正本に残存`);
+  if (doc.識別?.版 !== "5.3" || doc.識別?.公開 !== true || /未採用|リポジトリ未反映/.test(doc.識別?.状態 ?? "") || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
+    failures.push(`${rel}: 旧版・未採用状態または非公開規則が現行三点正本に残存`);
+  }
+  if (doc.版管理?.採用記録?.対象?.includes("gatchimuchio/BLUE-TANUKI") !== true ||
+      doc.権限境界_rev5_3?.リポジトリ反映?.includes("個別命令") !== true) {
+    failures.push(`${rel}: 指示者による明示的なリポジトリ採用と製品施工の分離が欠落`);
   }
   if (!read("docs/QE_CURRENT_AUTHORITY.md").includes(actualHash)) {
     failures.push(`${rel}: 現行ピンにSHA-256がない`);
@@ -248,6 +253,12 @@ if (qeSpec && qePlan && qeWork) {
   if (!qeWork.最初に実行する命令_rev5?.施工?.includes("全製品") ||
       !qePlan.施工方式_rev5?.全体施工?.includes("一工程")) {
     failures.push("全域一括施工の現行工程・指示が欠落");
+  }
+  if (!qeWork.LLM読取規約?.注意?.includes("現行repo pin") ||
+      !qeWork.施工起動ゲート_rev5_3?.未委任状態?.includes("製品実装は未委任") ||
+      !qePlan.根拠参照?.三点の所在?.includes("docs/qe/現行") ||
+      /提出候補|未反映/.test(qeSpec.版管理?.本版 ?? "")) {
+    failures.push("rev5.3現行採用後も提出ZIPの未採用状態・施工権限混同が残存");
   }
 }
 if (exists("docs/IMPLEMENTATION_INSTRUCTIONS.md")) {

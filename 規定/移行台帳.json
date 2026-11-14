@@ -2,7 +2,7 @@
   "schema_version": 1,
   "state": "規定成立・移行中",
   "strict_ready": false,
-  "debt_count": 75,
+  "debt_count": 74,
   "generated_from_commit": "703fe34600036ec76335f0756178296981e55ee4",
   "method": "規範的 Markdown 散文の候補抽出後に人間可読の資産単位で固定する。文字比率は発見信号に限る。",
   "classification": "日本語基底未成立",
@@ -10,7 +10,6 @@
   "next_action": "意味と境界を日本語で再成立させ、監査後に移行台帳から除く。",
   "debts": [
     { "path": "AUDIT.md", "sha256": "be19096bae5d022ba0ed72a34ca6c7d7bf3fd758fb8e494514290cb4ce6f5608" },
-    { "path": "CHANGELOG.md", "sha256": "6283ff9859ffe3bf195c5a7b54890f1570913646341721c5c8e3d5e6371c73e7" },
     { "path": "CLAIM.md", "sha256": "02d7f591f16f31099117c8eba386539697f7b5c7e0c6c6acddef2c25f0dcc757" },
     { "path": "CONFIG.md", "sha256": "5ab6ff6460561b702147201565c7cfa4c0e2fdccc2d23685ac4b16a1b98dc03e" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
