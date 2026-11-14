@@ -106,6 +106,8 @@ pnpm gateway:serve
 
 通常CLIの一回実行では、ownerが指定する達成規則JSONを標準入力から渡せる。`--goal-completion-rules-stdin` は非空のtaskと併用し、最大128 KiBのUTF-8 JSONを `blue-tanuki.goal-completion-rules.v1` として検証する。規則付きtaskは内部owner `plan:compute` requestとしてHDSへ渡し、Executor feedback後に同じrequest ID・規則digestへ一致するJ/M達成状態だけをCLIへ表示する。J/M状態や根拠が不足・不一致・曖昧な場合は達成と表示せず、達成規則は作用の実行許可を作らない。規則本文は同一taskのJ OperationPlanに保持されるため、認証情報や秘密を含めない。条件値をプロセス引数へ置かず、JSONを標準入力で渡す。`--organize` とは併用できない。
 
+資料整理の入力本文は、shell履歴やprocess argumentへ内容を置かない `--organize-stdin` でも渡せる。UTF-8を厳密に検査し、空入力・12,000 UTF-16コード単位超・48,000 byte超・追加のinline引数を拒否する。例: `Get-Content -Raw .\source.txt | pnpm gateway -- --organize-stdin`（PowerShell）、`pnpm gateway -- --organize-stdin < source.txt`（POSIX shell）。既存の `--organize <本文>` は互換用に残るため、秘密や個人情報を含む本文には使わない。
+
 規則付きCLI要求は、Gatewayと共有する `BLUE_TANUKI_STATE_ROOT` のprivate J/M状態へ保存される。初回projectionに表示される `計画照会ID digest` を使い、`--goal-completion-status <digest>` で後から同じ状態を読める。このstatus照会は新しいtaskや計算を作らず、LLM／Executorも外部作用も呼ばない。検証済みM receiptの再照合と監査記録は行う。Control CenterでCLI由来の計画をレビューする際は、既存のowner再認証と元owner・channel束縛を使う。照会IDはdigestのみで、計画本文・規則本文は表示しない。
 
 ## 公開技術RCの機能範囲

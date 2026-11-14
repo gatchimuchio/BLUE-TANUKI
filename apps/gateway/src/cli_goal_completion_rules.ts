@@ -7,6 +7,7 @@ import {
 
 export const CLI_GOAL_COMPLETION_RULES_STDIN_FLAG = "--goal-completion-rules-stdin";
 export const CLI_GOAL_COMPLETION_STATUS_FLAG = "--goal-completion-status";
+export const CLI_ORGANIZE_STDIN_FLAG = "--organize-stdin";
 export const CLI_GOAL_COMPLETION_RULES_MAX_BYTES = 128 * 1024;
 
 export interface CliGoalCompletionStatusArguments {
@@ -95,7 +96,7 @@ export function cliGoalCompletionRulesRequested(args: readonly string[]): boolea
 /** Open durable J/M plan state for CLI requests that create or inspect a plan. */
 export function cliRequestNeedsOperationPlanState(args: readonly string[]): boolean {
   if (cliGoalCompletionRulesRequested(args) || parseCliGoalCompletionStatusArguments(args)) return true;
-  if (args.includes("--organize")) return false;
+  if (args.includes("--organize") || args.includes(CLI_ORGANIZE_STDIN_FLAG)) return false;
 
   const request = args.filter((arg) => ![
     "--goal-completion-rules-stdin",
@@ -106,6 +107,7 @@ export function cliRequestNeedsOperationPlanState(args: readonly string[]): bool
     "--audit-verify",
     "--json",
     "--organize",
+    CLI_ORGANIZE_STDIN_FLAG,
   ].includes(arg)).join(" ").trim();
   return request === "plan:compute" || request.startsWith("plan:compute ");
 }

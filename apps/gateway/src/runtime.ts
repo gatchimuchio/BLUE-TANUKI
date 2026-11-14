@@ -5,6 +5,7 @@ import {
   FailureMemoryStore,
   HDSUpperController,
   LongTermMemoryStore,
+  DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
 } from "@blue-tanuki/hds-brain";
@@ -28,6 +29,7 @@ import {
   cliGoalCompletionRulesRequested,
   cliRequestNeedsOperationPlanState,
   CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
+  CLI_ORGANIZE_STDIN_FLAG,
   parseCliGoalCompletionStatusArguments,
   readCliGoalCompletionRulesInput,
 } from "./cli_goal_completion_rules.js";
@@ -164,8 +166,9 @@ async function runCliWithExecutionStore(
   const requestArgs = completionRulesRequested
     ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
     : goalCompletionStatus?.remaining_args ?? cleanArgs;
-  if (completionRulesRequested && requestArgs.includes("--organize")) {
-    throw new Error("--goal-completion-rules-stdin cannot be combined with --organize");
+  if (completionRulesRequested &&
+      (requestArgs.includes("--organize") || requestArgs.includes(CLI_ORGANIZE_STDIN_FLAG))) {
+    throw new Error("--goal-completion-rules-stdin cannot be combined with document organization input");
   }
   if (goalCompletionStatus && requestArgs.length > 0) {
     throw new Error("--goal-completion-status accepts only a request digest");
@@ -177,9 +180,25 @@ async function runCliWithExecutionStore(
     ? await readCliGoalCompletionRulesInput(process.stdin)
     : undefined;
   const organizeIndex = requestArgs.indexOf("--organize");
-  const organizationSource = organizeIndex >= 0
-    ? requestArgs.slice(organizeIndex + 1).join(" ").trim()
-    : null;
+  const organizeStdinCount = requestArgs.filter((arg) => arg === CLI_ORGANIZE_STDIN_FLAG).length;
+  if (organizeStdinCount > 1) throw new Error("--organize-stdin cannot be repeated");
+  const organizeStdinRequested = organizeStdinCount === 1;
+  if (organizeIndex >= 0 && organizeStdinRequested) {
+    throw new Error("--organize and --organize-stdin cannot be combined");
+  }
+  let organizationSource: string | null = null;
+  if (organizeIndex >= 0) {
+    organizationSource = requestArgs.slice(organizeIndex + 1).join(" ").trim();
+  } else if (organizeStdinRequested) {
+    const extraArgs = requestArgs.filter((arg) => arg !== CLI_ORGANIZE_STDIN_FLAG);
+    if (extraArgs.length > 0) {
+      throw new Error("--organize-stdin does not accept inline source text or additional arguments");
+    }
+    if (process.stdin.isTTY) {
+      throw new Error("--organize-stdin requires piped UTF-8 source text on stdin");
+    }
+    organizationSource = await readCliDocumentOrganizationSource(process.stdin);
+  }
   if (organizeIndex >= 0 && !organizationSource) {
     throw new Error("--organize requires owner-provided source text after the flag");
   }
@@ -192,7 +211,8 @@ async function runCliWithExecutionStore(
         a !== "--audit-dump" &&
         a !== "--audit-verify" &&
         a !== "--json" &&
-        a !== "--organize",
+        a !== "--organize" &&
+        a !== CLI_ORGANIZE_STDIN_FLAG,
     )
     .join(" ")
     .trim();
@@ -689,4 +709,33 @@ async function runCliWithExecutionStore(
   } finally {
     hds.closeOperationPlanMemory();
   }
+}
+
+async function readCliDocumentOrganizationSource(input: AsyncIterable<Uint8Array>): Promise<string> {
+  const maxBytes = DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS * 4;
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  for await (const chunk of input) {
+    totalBytes += chunk.byteLength;
+    if (totalBytes > maxBytes) throw new Error("cli_document_organization_source_too_large");
+    chunks.push(chunk);
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("cli_document_organization_source_invalid_utf8");
+  }
+  if (!source.trim() || source.length > DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS) {
+    throw new Error("cli_document_organization_source_length_invalid");
+  }
+  return source;
 }
