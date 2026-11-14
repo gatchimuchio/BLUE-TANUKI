@@ -114,12 +114,26 @@ function Copy-DirectoryContents($Source, $Destination) {
   }
 }
 
-function Expand-BundledNode($PackageRoot, $InstallRootResolved) {
+function Expand-BundledNode($PackageRoot, $InstallRootResolved, $PackageManifest) {
   $runtimePackageRoot = Join-Path $PackageRoot "runtime"
-  $nodeZip = Get-ChildItem -LiteralPath $runtimePackageRoot -Filter "node-v*-win-x64.zip" -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-  if (-not $nodeZip) {
-    Fail "bundled Windows Node runtime zip not found under $runtimePackageRoot"
+  $nodeRuntime = $PackageManifest.node_runtime
+  $version = [string]$nodeRuntime.version
+  $archiveName = [string]$nodeRuntime.archive
+  $expectedSha256 = [string]$nodeRuntime.sha256
+  if ($nodeRuntime.bundled -ne $true -or $version -notmatch '^\d+\.\d+\.\d+$' -or
+      $archiveName -cne "node-v$version-win-x64.zip" -or $expectedSha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+      [string]$nodeRuntime.source -cne "https://nodejs.org/dist/v$version/$archiveName" -or
+      [string]$nodeRuntime.shasums_source -cne "https://nodejs.org/dist/v$version/SHASUMS256.txt") {
+    Fail "Packaged Node runtime manifest is invalid. No installed files were changed."
+  }
+  $nodeArchives = @(Get-ChildItem -LiteralPath $runtimePackageRoot -File -Filter "node-v*-win-x64.zip" -ErrorAction SilentlyContinue)
+  if ($nodeArchives.Count -ne 1 -or $nodeArchives[0].Name -cne $archiveName) {
+    Fail "Packaged Windows Node runtime archive does not match its manifest. No installed files were changed."
+  }
+  $nodeZip = $nodeArchives[0]
+  $actualSha256 = Get-Sha256HexFromFile -Path $nodeZip.FullName
+  if (-not [string]::Equals($actualSha256, $expectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail "Packaged Windows Node runtime SHA-256 does not match its manifest. No installed files were changed."
   }
   $runtimeInstallRoot = Join-Path $InstallRootResolved "runtime"
   New-Item -ItemType Directory -Force -Path $runtimeInstallRoot | Out-Null
@@ -420,7 +434,7 @@ try {
   New-Item -ItemType Directory -Path $stageRoot | Out-Null
 
   Copy-DirectoryContents $sourceApp $stageRoot
-  Expand-BundledNode $packageRoot $stageRoot
+  Expand-BundledNode $packageRoot $stageRoot $packageManifest
   Copy-DirectoryContents $sourceLaunchers $stageRoot
   Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $stageRoot 'blue-tanuki-package-manifest.json')
   Write-InstallMetadata $stageRoot $installRootResolved $dataRootResolved $version $manifestSha256
