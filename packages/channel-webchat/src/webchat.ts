@@ -1395,8 +1395,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           (canvasTaskReference.kind === "valid" && (!ownerTaskCanvasArtifact ||
             !submittedCanvasArtifactReference ||
             !sameCanvasArtifactReference(canvasTaskReference.reference, submittedCanvasArtifactReference))) ||
-          (canvasTaskReference.kind !== "valid" && ownerTaskCanvasArtifact !== undefined) ||
-          (ownerTaskAudio !== undefined && ownerTaskCanvasArtifact !== undefined)) {
+          (canvasTaskReference.kind !== "valid" && ownerTaskCanvasArtifact !== undefined)) {
         ownerTaskImage?.data.fill(0);
         ownerTaskAudio?.data.fill(0);
         ownerTaskCanvasArtifact?.data.fill(0);

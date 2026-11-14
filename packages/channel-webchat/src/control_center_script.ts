@@ -1639,7 +1639,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const audioInput = byId("owner-task-audio");
         const audioFile = audioInput.files && audioInput.files.length === 1 ? audioInput.files[0] : null;
         if (audioInput.files && audioInput.files.length > 1) throw new Error("音声ファイルは1件だけ選択してください");
-        if (audioFile && canvasArtifactInput) throw new Error("音声とCanvas成果物は同じowner taskへ添付できません");
         const imageInput = byId("owner-task-image");
         const imageFile = imageInput.files && imageInput.files.length === 1 ? imageInput.files[0] : null;
         let imagePayload;

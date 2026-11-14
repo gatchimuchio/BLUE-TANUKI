@@ -933,9 +933,10 @@ export function selectGatewayInboundEphemeralContext(
     (ephemeralContext.ephemeral_audio?.length ?? 0) === 0 &&
     (canvasArtifact === undefined || validOwnerTaskCanvasArtifact);
   const ownerTaskAudio = ownerTaskProjection && validOwnerTaskAudio &&
+    ephemeralContext.require_audio_task_compute === true &&
     ephemeralContext.ephemeral_images.length <= 1 &&
     (ephemeralContext.ephemeral_images.length === 0 || validOwnerTaskImage) &&
-    canvasArtifact === undefined;
+    (canvasArtifact === undefined || validOwnerTaskCanvasArtifact);
   const ownerAudioTranscription = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
     request.user === "webchat-owner-token-holder" &&
     request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
