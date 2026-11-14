@@ -32,6 +32,7 @@ import {
   googleDriveTrashTargetIdentityDigest,
   githubIssueCreateRequestPayloadDigest,
   githubIssueUpdateRequestPayloadDigest,
+  githubPullRequestUpdateRequestPayloadDigest,
   githubIssueCloseRequestPayloadDigest,
   githubIssueReopenRequestPayloadDigest,
   githubIssueLabelRequestPayloadDigest,
@@ -248,7 +249,7 @@ export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v6";
     readonly operation: "github.write";
-    readonly operation_name: "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create";
+    readonly operation_name: "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create";
     readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
     readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
     readonly http_status: number | null;
@@ -1177,6 +1178,16 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     return githubIssueUpdateRequestPayloadDigest({ owner, repo, issue_number: number,
       ...(title === undefined ? {} : { title }), ...(body === undefined ? {} : { body }) });
   }
+  if (operation === "pr.update") {
+    const number = parameters.number;
+    const title = githubWriteText(parameters, "title", 256);
+    if (Object.hasOwn(parameters, "title") && title === undefined ||
+        typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
+        title === undefined && body === undefined ||
+        !allowedKeys(["operation", "owner", "repo", "number", "title", "body"])) return undefined;
+    return githubPullRequestUpdateRequestPayloadDigest({ owner, repo, pull_request_number: number,
+      ...(title === undefined ? {} : { title }), ...(body === undefined ? {} : { body }) });
+  }
   if (operation === "issue.close") {
     const number = parameters.number;
     if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
@@ -1341,6 +1352,8 @@ function githubWriteResultMatches(
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
     : parameters.operation === "issue.update" && typeof number === "number"
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : parameters.operation === "pr.update" && typeof number === "number"
+        ? { method: "PATCH", path: `/repos/${owner}/${repo}/pulls/${number}`, status: 200 }
       : parameters.operation === "issue.close" && typeof number === "number"
         ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
       : parameters.operation === "issue.reopen" && typeof number === "number"
@@ -1397,6 +1410,12 @@ function githubWriteResultMatches(
     return Object.keys(result).sort().join(",") === "id,locked,number,state,title" &&
       Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.number === parameters.number &&
       (result.state === "open" || result.state === "closed") && typeof result.locked === "boolean" &&
+      typeof result.title === "string" && result.title.length > 0 && result.title.length <= 256;
+  }
+  if (parameters.operation === "pr.update") {
+    return Object.keys(result).sort().join(",") === "id,locked,number,state,title" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.number === parameters.number &&
+      result.state === "open" && result.locked === false &&
       typeof result.title === "string" && result.title.length > 0 && result.title.length <= 256;
   }
   if (parameters.operation === "issue.close") {
@@ -5522,7 +5541,7 @@ export class OperationPlanLedger {
         : binding.status === "provider_rejected" ? "provider_rejected" : null;
       if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
           !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
-        !["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.create", "pr.merge", "pr.review.submit", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
+        !["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.create", "pr.merge", "pr.review.submit", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
           committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
           committedObservation.record_type !== "github_write_outcome_observation" ||
           committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
@@ -5566,7 +5585,7 @@ export class OperationPlanLedger {
         memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
         observed_at_ms: binding.result_observed_at_ms,
         operation: "github.write",
-        operation_name: operationName as "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create",
+        operation_name: operationName as "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create",
         status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
         mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
         provider_result_digest: summary?.provider_result_digest ?? null,

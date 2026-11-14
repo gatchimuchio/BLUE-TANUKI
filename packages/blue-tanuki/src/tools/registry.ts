@@ -71,6 +71,37 @@ export interface GitHubIssueUpdateContentReview {
   may_execute: false;
 }
 
+/** No-store projection of one exact, plan-bound pull request title/body update. */
+export interface GitHubPullRequestUpdateContentReview {
+  kind: "github_pull_request_update";
+  operation: "github.write.pr.update";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  pull_request_id: number;
+  pull_request_number: number;
+  pull_request_state: "open";
+  pull_request_locked: false;
+  pull_request_updated_at: string;
+  pull_request_head_sha: string;
+  pull_request_base_sha: string;
+  current_title: string;
+  current_body: string | null;
+  requested_title?: string;
+  requested_body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** No-store review projection for closing one exact open, unlocked GitHub issue. */
 export interface GitHubIssueCloseContentReview {
   kind: "github_issue_close";
@@ -861,7 +892,7 @@ export type ToolContentReview = GmailDraftContentReview | GmailWriteContentRevie
   MemoryPersonalizationStopContentReview | McpCallContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
-  GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview |
+  GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubPullRequestUpdateContentReview | GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview |
   GitHubPullRequestCommentCreateContentReview |
   GitHubPullRequestCreateContentReview |
   GitHubPullRequestMergeContentReview |

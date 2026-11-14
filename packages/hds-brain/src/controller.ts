@@ -59,6 +59,8 @@ import {
   githubIssueCreateRequestPayloadDigest,
   githubIssueUpdateTargetIdentityDigest,
   githubIssueUpdateRequestPayloadDigest,
+  githubPullRequestUpdateTargetIdentityDigest,
+  githubPullRequestUpdateRequestPayloadDigest,
   githubIssueCloseTargetIdentityDigest,
   githubIssueCloseRequestPayloadDigest,
   githubIssueReopenTargetIdentityDigest,
@@ -4000,7 +4002,7 @@ ${planControl.question}`,
       const planBindingDigest = operation_plan_binding_digest;
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
-          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" && operation !== "issue.comment.create" &&
+          (operation !== "issue.create" && operation !== "issue.update" && operation !== "pr.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" && operation !== "issue.comment.create" &&
             operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" && operation !== "pr.comment.create" && operation !== "code.push" &&
             operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
@@ -4054,6 +4056,22 @@ ${planControl.question}`,
         targetIdentityDigest = githubIssueUpdateTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
           issue_number: observation.issue_number });
+      } else if (operation === "pr.update") {
+        const pullRequestNumber = positiveNumber("number");
+        const title = optionalText("title");
+        const body = optionalText("body");
+        if ((title === undefined && body === undefined) || (title !== undefined && title.length > 256) ||
+            (body !== undefined && body.length > 500_000) || observation.operation !== "pr.update" ||
+            observation.pull_request_number !== pullRequestNumber || observation.pull_request_state !== "open" ||
+            observation.pull_request_locked) {
+          throw new Error("HDS github.write pr.update parameters or observed target are invalid");
+        }
+        requestPayloadDigest = githubPullRequestUpdateRequestPayloadDigest({ owner, repo,
+          pull_request_number: pullRequestNumber,
+          ...(title === undefined ? {} : { title }), ...(body === undefined ? {} : { body }) });
+        targetIdentityDigest = githubPullRequestUpdateTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
+          pull_request_number: observation.pull_request_number });
       } else if (operation === "issue.close") {
         const issueNumber = positiveNumber("number");
         if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "max_bytes"].includes(key)) ||

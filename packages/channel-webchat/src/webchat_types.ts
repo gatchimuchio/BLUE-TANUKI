@@ -957,6 +957,37 @@ export interface WebChatGitHubIssueUpdateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubPullRequestUpdateContentReview {
+  kind: "github_pull_request_update";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.pr.update";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  pull_request_id: number;
+  pull_request_number: number;
+  pull_request_state: "open";
+  pull_request_locked: false;
+  pull_request_updated_at: string;
+  pull_request_head_sha: string;
+  pull_request_base_sha: string;
+  current_title: string;
+  current_body: string | null;
+  requested_title?: string;
+  requested_body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubIssueCloseContentReview {
   kind: "github_issue_close";
   command_id: string;
@@ -1333,7 +1364,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGoogleDriveFileUpdateContentReview | WebChatGoogleDrivePermissionCreateContentReview |
   WebChatGoogleDrivePublicLinkCreateContentReview |
   WebChatGoogleDriveFileTrashContentReview | WebChatGitHubIssueCreateContentReview |
-  WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCloseContentReview | WebChatGitHubIssueReopenContentReview | WebChatGitHubIssueLabelContentReview | WebChatGitHubIssueCommentCreateContentReview |
+  WebChatGitHubIssueUpdateContentReview | WebChatGitHubPullRequestUpdateContentReview | WebChatGitHubIssueCloseContentReview | WebChatGitHubIssueReopenContentReview | WebChatGitHubIssueLabelContentReview | WebChatGitHubIssueCommentCreateContentReview |
   WebChatGitHubPullRequestCommentCreateContentReview |
   WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
   WebChatGitHubPullRequestMergeContentReview |

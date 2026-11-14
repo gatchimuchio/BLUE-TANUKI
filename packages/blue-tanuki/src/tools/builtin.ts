@@ -16,6 +16,7 @@ import {
   FileEditTargetVersionObservationSchema,
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
+  GitHubPullRequestUpdateTargetVersionObservationSchema,
   GitHubIssueCloseTargetVersionObservationSchema,
   GitHubIssueReopenTargetVersionObservationSchema,
   GitHubIssueLabelTargetVersionObservationSchema,
@@ -36,6 +37,8 @@ import {
   githubIssueCreateTargetIdentityDigest,
   githubIssueUpdateRequestPayloadDigest,
   githubIssueUpdateTargetIdentityDigest,
+  githubPullRequestUpdateRequestPayloadDigest,
+  githubPullRequestUpdateTargetIdentityDigest,
   githubIssueCloseRequestPayloadDigest,
   githubIssueCloseTargetIdentityDigest,
   githubIssueReopenRequestPayloadDigest,
@@ -64,6 +67,7 @@ import {
   type FileEditTargetVersionObservation,
   type GitHubIssueCreateTargetVersionObservation,
   type GitHubIssueUpdateTargetVersionObservation,
+  type GitHubPullRequestUpdateTargetVersionObservation,
   type GitHubIssueCloseTargetVersionObservation,
   type GitHubIssueReopenTargetVersionObservation,
   type GitHubIssueLabelTargetVersionObservation,
@@ -78,6 +82,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
   type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview,
+  type GitHubPullRequestUpdateContentReview,
   type GitHubIssueCloseContentReview,
   type GitHubIssueReopenContentReview,
   type GitHubIssueLabelContentReview,
@@ -1088,6 +1093,26 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
     };
   }
 
+  if (operation === "pr.update") {
+    const number = requiredPositiveIntArg(args, "number", 1_000_000);
+    const body: Record<string, unknown> = {};
+    const title = stringArg(args, "title", false);
+    const pullRequestBody = githubOptionalBody(args);
+    if (title !== undefined) body.title = title;
+    if (pullRequestBody !== undefined) body.body = pullRequestBody;
+    if (Object.keys(body).length === 0 || Object.keys(args).some((key) =>
+      !["operation", "owner", "repo", "number", "title", "body", "max_bytes"].includes(key))) {
+      throw new Error("pr.update requires a title or body and accepts no state changes; mutation_sent=false");
+    }
+    return {
+      operation,
+      method: "PATCH",
+      path: `/repos/${ownerPath}/${repoPath}/pulls/${number}`,
+      body,
+      repo,
+    };
+  }
+
   if (operation === "pr.create") {
     const head = stringArg(args, "head")!;
     const base = stringArg(args, "base")!;
@@ -1223,7 +1248,7 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
   }
 
   throw new Error(
-    "operation must be issue.create, issue.update, issue.close, issue.reopen, issue.label, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, or release.draft.create",
+    "operation must be issue.create, issue.update, pr.update, issue.close, issue.reopen, issue.label, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, or release.draft.create",
   );
 }
 
@@ -1803,6 +1828,7 @@ export async function invokeGitHubWrite(
   if (route.operation === "issue.close") return await invokeGitHubIssueClose(args, opts);
   if (route.operation === "issue.reopen") return await invokeGitHubIssueReopen(args, opts);
   if (route.operation === "issue.update") return await invokeGitHubIssueUpdate(args, opts);
+  if (route.operation === "pr.update") return await invokeGitHubPullRequestUpdate(args, opts);
   if (route.operation === "issue.label") return await invokeGitHubIssueLabel(args, opts);
   if (route.operation === "issue.comment.create") return await invokeGitHubIssueCommentCreate(args, opts);
   if (route.operation === "pr.comment.create") return await invokeGitHubPullRequestCommentCreate(args, opts);
@@ -3727,6 +3753,171 @@ export async function inspectGitHubIssueUpdateContentReview(args: Record<string,
   return { ...base, review_digest: sha256Hex(base) };
 }
 
+export async function inspectGitHubPullRequestUpdateTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubPullRequestUpdateTargetVersionObservation> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.update") throw new Error("github.write pr.update target route mismatch");
+  if (Object.keys(args).some((key) =>
+    !["operation", "owner", "repo", "number", "title", "body", "max_bytes"].includes(key))) {
+    throw new Error("github.write pr.update contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write pr.update target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const pullRequestNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.update target inspection");
+  const repositoryResponse = await readRequest({
+    path: "/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo), maxBytes, token,
+  }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "pr.update target repository");
+  const repositoryId = repository.id;
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerLogin = isRecord(repository.owner) && typeof repository.owner.login === "string" ? repository.owner.login : "";
+  const isPrivate = repository.private;
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      fullName.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
+      repositoryName.toLowerCase() !== repo.toLowerCase() || ownerLogin.toLowerCase() !== owner.toLowerCase() ||
+      typeof isPrivate !== "boolean") {
+    throw new Error("github.write pr.update repository identity or visibility is incomplete or mismatched");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.update target inspection");
+  const pullRequestResponse = await readRequest({ path: route.path, maxBytes, token }, opts.signal);
+  const pullRequest = requireGitHubJsonRecord(pullRequestResponse, "pr.update target pull request");
+  const pullRequestId = pullRequest.id;
+  const observedNumber = pullRequest.number;
+  const state = pullRequest.state;
+  const locked = pullRequest.locked;
+  const updatedAt = pullRequest.updated_at;
+  const title = pullRequest.title;
+  const body = pullRequest.body;
+  const headSha = isRecord(pullRequest.head) ? pullRequest.head.sha : undefined;
+  const baseSha = isRecord(pullRequest.base) ? pullRequest.base.sha : undefined;
+  if (typeof pullRequestId !== "number" || !Number.isSafeInteger(pullRequestId) || pullRequestId <= 0 ||
+      observedNumber !== pullRequestNumber || state !== "open" || locked !== false ||
+      typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt)) ||
+      typeof title !== "string" || title.length === 0 || title.length > 65_536 ||
+      (body !== null && typeof body !== "string") || (typeof body === "string" && body.length > 500_000) ||
+      typeof headSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(headSha) ||
+      typeof baseSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha)) {
+    throw new Error("github.write pr.update target state is incomplete or mismatched; mutation_sent=false");
+  }
+  return GitHubPullRequestUpdateTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "pr.update",
+    repository_id: repositoryId,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: fullName,
+    repository_visibility: isPrivate ? "private" : "public",
+    pull_request_id: pullRequestId,
+    pull_request_number: observedNumber,
+    pull_request_state: "open",
+    pull_request_locked: false,
+    pull_request_updated_at: updatedAt,
+    pull_request_title: title,
+    pull_request_body: body,
+    pull_request_head_sha: headSha,
+    pull_request_base_sha: baseSha,
+    target_identity_digest: githubPullRequestUpdateTargetIdentityDigest({
+      repository_id: repositoryId, canonical_full_name: fullName,
+      pull_request_id: pullRequestId, pull_request_number: observedNumber,
+    }),
+    request_payload_digest: githubPullRequestUpdateRequestPayloadDigest({
+      owner, repo, pull_request_number: pullRequestNumber,
+      ...(typeof route.body.title === "string" ? { title: route.body.title } : {}),
+      ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+    }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+export function assertGitHubPullRequestUpdateTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubPullRequestUpdateTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "pr.update") throw new Error("github.write pr.update target observation has another operation");
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const pullRequestNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const payloadDigest = githubPullRequestUpdateRequestPayloadDigest({
+    owner, repo, pull_request_number: pullRequestNumber,
+    ...(typeof route.body.title === "string" ? { title: route.body.title } : {}),
+    ...(typeof route.body.body === "string" ? { body: route.body.body } : {}),
+  });
+  if (Object.keys(args).some((key) =>
+      !["operation", "owner", "repo", "number", "title", "body", "max_bytes"].includes(key)) ||
+      route.operation !== "pr.update" || observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== (owner + "/" + repo).toLowerCase() ||
+      observation.pull_request_number !== pullRequestNumber || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest || observation.pull_request_state !== "open" ||
+      observation.pull_request_locked ||
+      observation.target_identity_digest !== githubPullRequestUpdateTargetIdentityDigest({
+        repository_id: observation.repository_id, canonical_full_name: observation.canonical_full_name,
+        pull_request_id: observation.pull_request_id, pull_request_number: observation.pull_request_number,
+      }) || observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write pr.update target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubPullRequestUpdateContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubPullRequestUpdateContentReview> {
+  const observation = await inspectGitHubPullRequestUpdateTargetVersion(args, opts);
+  const route = githubWriteRoute(args);
+  const base = {
+    kind: "github_pull_request_update" as const,
+    operation: "github.write.pr.update" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    pull_request_id: observation.pull_request_id,
+    pull_request_number: observation.pull_request_number,
+    pull_request_state: observation.pull_request_state,
+    pull_request_locked: observation.pull_request_locked,
+    pull_request_updated_at: observation.pull_request_updated_at,
+    pull_request_head_sha: observation.pull_request_head_sha,
+    pull_request_base_sha: observation.pull_request_base_sha,
+    current_title: observation.pull_request_title,
+    current_body: observation.pull_request_body,
+    ...(typeof route.body.title === "string" ? { requested_title: route.body.title } : {}),
+    ...(typeof route.body.body === "string" ? { requested_body: route.body.body } : {}),
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(
+      canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
 export async function inspectGitHubIssueCloseTargetVersion(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
@@ -5180,6 +5371,85 @@ async function invokeGitHubIssueUpdate(args: Record<string, unknown>, opts: GitH
     provider_data_is_untrusted: true,
     used_for_authority: false,
     may_execute: false,
+  };
+}
+
+async function invokeGitHubPullRequestUpdate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const env = opts.env ?? process.env;
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.update") throw new Error("github.write pr.update route mismatch; mutation_sent=false");
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write pr.update requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+  }
+  const expected = assertGitHubPullRequestUpdateTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const current = await inspectGitHubPullRequestUpdateTargetVersion(args, {
+    env, signal: opts.signal, command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    ...(opts.read_request ? { read_request: opts.read_request } : {}),
+  });
+  if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write pr.update target changed after review; mutation_sent=false; outcome=stale");
+  }
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.update");
+  let response: GitHubWriteResponse;
+  try {
+    response = await request({ method: "PATCH", path: route.path, body: route.body, maxBytes, token }, opts.signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "provider_request_failed";
+    throw new Error("github.write pr.update outcome_unknown; do not retry automatically; check GitHub before a new Owner decision; " + message);
+  }
+  const data = parseJsonOrText(response.body);
+  if (!response.ok || response.status !== 200 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
+    const explicitRejection = !response.ok && !response.truncated &&
+      [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+    if (explicitRejection) {
+      return {
+        schema_version: "blue-tanuki.github-write-result.v1",
+        operation: "pr.update", api_host: "api.github.com", repo: route.repo,
+        repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+        request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+        operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method,
+        path: route.path, status: response.status, mutation_status: "provider_rejected",
+        result_digest: sha256Hex(data), retry_permitted: false,
+        next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+        provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+      };
+    }
+    const message = isRecord(data) ? optionalString(data.message) : null;
+    throw new Error("github.write pr.update outcome_unknown; HTTP " + response.status +
+      "; do not retry automatically; check GitHub before a new Owner decision" + (message ? "; message=" + message : ""));
+  }
+  const pullRequest = isRecord(data) ? data : null;
+  const headSha = pullRequest && isRecord(pullRequest.head) ? pullRequest.head.sha : undefined;
+  const baseSha = pullRequest && isRecord(pullRequest.base) ? pullRequest.base.sha : undefined;
+  const desiredTitle = typeof route.body.title === "string" ? route.body.title : expected.pull_request_title;
+  const desiredBody = typeof route.body.body === "string" ? route.body.body : expected.pull_request_body;
+  if (!pullRequest || pullRequest.id !== expected.pull_request_id || pullRequest.number !== expected.pull_request_number ||
+      pullRequest.title !== desiredTitle || pullRequest.body !== desiredBody || pullRequest.state !== "open" ||
+      pullRequest.locked !== false || headSha !== expected.pull_request_head_sha || baseSha !== expected.pull_request_base_sha ||
+      typeof pullRequest.updated_at !== "string" || !Number.isFinite(Date.parse(pullRequest.updated_at))) {
+    throw new Error("github.write pr.update response did not confirm the reviewed pull request and exact content; outcome_unknown; do not retry automatically");
+  }
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1", operation: "pr.update", api_host: "api.github.com",
+    repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
+    status: response.status, mutation_status: "provider_accepted", content_type: response.content_type,
+    truncated: response.truncated, rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id, result_digest: sha256Hex(data),
+    result: { id: pullRequest.id, number: pullRequest.number, title: pullRequest.title,
+      state: pullRequest.state, locked: pullRequest.locked },
+    provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
   };
 }
 
@@ -7279,6 +7549,14 @@ export const githubWriteTool: Tool = {
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
     }
+    if (githubOperation(args) === "pr.update") {
+      return await inspectGitHubPullRequestUpdateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "issue.close") {
       return await inspectGitHubIssueCloseTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -7329,7 +7607,7 @@ export const githubWriteTool: Tool = {
       ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
     });
   },
-  async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
+  async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubPullRequestUpdateContentReview |
     GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
     GitHubPullRequestMergeContentReview | GitHubPullRequestReviewSubmitContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
     if (githubOperation(args) === "release.draft.create") {
@@ -7374,6 +7652,14 @@ export const githubWriteTool: Tool = {
     }
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "pr.update") {
+      return await inspectGitHubPullRequestUpdateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),

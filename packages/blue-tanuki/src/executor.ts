@@ -22,6 +22,7 @@ import {
   GoogleDrivePublicLinkCreateTargetVersionObservationSchema,
   GoogleDriveTrashTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
+  GitHubPullRequestUpdateTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
@@ -80,7 +81,8 @@ import {
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, Tool, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
-import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubIssueCloseTargetVersion,
+import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubPullRequestUpdateTargetVersion,
+  assertGitHubIssueCloseTargetVersion,
   assertGitHubIssueReopenTargetVersion,
   assertGitHubIssueLabelTargetVersion,
   assertGitHubIssueCommentCreateTargetVersion,
@@ -331,6 +333,8 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues` }
       : (operation === "issue.update" || operation === "issue.close" || operation === "issue.reopen") && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}` }
+      : operation === "pr.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+        ? { method: "PATCH", path: `/repos/${owner}/${repo}/pulls/${number}` }
       : issueLabelAction && validCommentNumber
         ? { method: args.action === "add" ? "POST" : "DELETE",
           path: `/repos/${owner}/${repo}/issues/${number}/labels${args.action === "remove" ? `/${encodeURIComponent(args.label as string)}` : ""}` }
@@ -393,8 +397,10 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
     !/[\u0000-\u001f\u007f]/.test(args.label);
   const route = operation === "issue.create"
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
-    : (operation === "issue.update" || operation === "issue.close" || operation === "issue.reopen") && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+      : (operation === "issue.update" || operation === "issue.close" || operation === "issue.reopen") && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : operation === "pr.update" && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
+        ? { method: "PATCH", path: `/repos/${owner}/${repo}/pulls/${number}`, status: 200 }
       : issueLabelAction && validCommentNumber
         ? { method: args.action === "add" ? "POST" : "DELETE",
           path: `/repos/${owner}/${repo}/issues/${number}/labels${args.action === "remove" ? `/${encodeURIComponent(args.label as string)}` : ""}`, status: 200 }
@@ -450,6 +456,12 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
       Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && summary.number === args.number &&
       (summary.state === "open" || summary.state === "closed") && typeof summary.locked === "boolean" &&
       typeof summary.title === "string" && summary.title.length > 0 && summary.title.length <= 256;
+  }
+  if (operation === "pr.update") {
+    return Object.keys(summary).sort().join(",") === "id,locked,number,state,title" &&
+      Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && summary.number === args.number &&
+      summary.state === "open" && summary.locked === false &&
+      typeof summary.title === "string" && summary.title.length > 0 && summary.title.length <= 65_536;
   }
   if (operation === "issue.close") {
     return Object.keys(summary).sort().join(",") === "id,locked,number,state" &&
@@ -704,7 +716,7 @@ function approveCommandForExecution(
       const args = snapshot.payload.arguments;
       if (!hds_binding?.operation_plan_binding_digest || observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
-          (args.operation !== "issue.create" && args.operation !== "issue.update" && args.operation !== "issue.close" && args.operation !== "issue.reopen" && args.operation !== "issue.label" &&
+          (args.operation !== "issue.create" && args.operation !== "issue.update" && args.operation !== "pr.update" && args.operation !== "issue.close" && args.operation !== "issue.reopen" && args.operation !== "issue.label" &&
             args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create" && args.operation !== "pr.merge" && args.operation !== "pr.review.submit" &&
             args.operation !== "code.push" && args.operation !== "release.draft.create")) {
         throw new Error("Executor approval rejected: github.write target version does not match command or Operation Plan");
@@ -714,6 +726,9 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "issue.update") {
         assertGitHubIssueUpdateTargetVersion(args, observation, operationPlanDigest(snapshot),
+          hds_binding.operation_plan_binding_digest);
+      } else if (args.operation === "pr.update") {
+        assertGitHubPullRequestUpdateTargetVersion(args, GitHubPullRequestUpdateTargetVersionObservationSchema.parse(observation), operationPlanDigest(snapshot),
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "issue.close") {
         assertGitHubIssueCloseTargetVersion(args, observation, operationPlanDigest(snapshot),
@@ -788,6 +803,7 @@ function approveCommandForExecution(
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "github.write" &&
       ((snapshot.payload.arguments.operation !== "issue.create" && snapshot.payload.arguments.operation !== "issue.update" &&
+        snapshot.payload.arguments.operation !== "pr.update" &&
         snapshot.payload.arguments.operation !== "issue.close" &&
         snapshot.payload.arguments.operation !== "issue.reopen" &&
         snapshot.payload.arguments.operation !== "issue.label" &&
@@ -1020,7 +1036,7 @@ export class Executor {
     }
     if (command.payload.tool_name === "github.write") {
       const operation = command.payload.arguments.operation;
-      if (!operationPlanBindingDigest || (operation !== "issue.create" && operation !== "issue.update" &&
+      if (!operationPlanBindingDigest || (operation !== "issue.create" && operation !== "issue.update" && operation !== "pr.update" &&
           operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" &&
           operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" &&
           operation !== "code.push" && operation !== "release.draft.create")) {
@@ -1038,6 +1054,9 @@ export class Executor {
       const args = command.payload.arguments;
       if (operation === "issue.update") {
         return Object.freeze(assertGitHubIssueUpdateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
+      }
+      if (operation === "pr.update") {
+        return Object.freeze(assertGitHubPullRequestUpdateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
       }
       if (operation === "issue.close") {
         return Object.freeze(assertGitHubIssueCloseTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
@@ -1429,6 +1448,7 @@ export class Executor {
     if (command.payload.tool_name === "github.write") {
       if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
           (command.payload.arguments.operation !== "issue.create" && command.payload.arguments.operation !== "issue.update" &&
+            command.payload.arguments.operation !== "pr.update" &&
             command.payload.arguments.operation !== "issue.close" &&
             command.payload.arguments.operation !== "issue.reopen" &&
             command.payload.arguments.operation !== "issue.label" &&
@@ -1458,7 +1478,7 @@ export class Executor {
       });
       assertNotCancelled();
       const githubReview = review as Extract<ToolContentReview, {
-        kind: "github_issue_create" | "github_issue_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_label" | "github_issue_comment_create" |
+        kind: "github_issue_create" | "github_issue_update" | "github_pull_request_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_label" | "github_issue_comment_create" |
           "github_pull_request_comment_create" | "github_pull_request_create" | "github_pull_request_merge" | "github_pull_request_review_submit" | "github_code_push" |
           "github_release_draft_create"
       }>;
@@ -1717,6 +1737,26 @@ export class Executor {
             githubReview.body !== requestedBody || githubReview.draft !== true || githubReview.prerelease !== false ||
             githubReview.assets_added !== false || githubReview.release_published !== false) {
           throw new Error("github.write release.draft.create content review returned evidence for another command, target, or plan source");
+        }
+        return githubReview;
+      }
+      if (githubReview.kind === "github_pull_request_update") {
+        const pullRequestObservation = observation.operation === "pr.update" ? observation : undefined;
+        const requestedTitle = typeof args.title === "string" ? args.title : undefined;
+        const requestedBody = typeof args.body === "string" ? args.body : undefined;
+        if (!pullRequestObservation || command.payload.arguments.operation !== "pr.update" ||
+            githubReview.operation !== "github.write.pr.update" || commonMismatch ||
+            githubReview.pull_request_id !== pullRequestObservation.pull_request_id ||
+            githubReview.pull_request_number !== pullRequestObservation.pull_request_number ||
+            githubReview.pull_request_state !== "open" || pullRequestObservation.pull_request_state !== "open" ||
+            githubReview.pull_request_locked !== false || pullRequestObservation.pull_request_locked ||
+            githubReview.pull_request_updated_at !== pullRequestObservation.pull_request_updated_at ||
+            githubReview.pull_request_head_sha !== pullRequestObservation.pull_request_head_sha ||
+            githubReview.pull_request_base_sha !== pullRequestObservation.pull_request_base_sha ||
+            githubReview.current_title !== pullRequestObservation.pull_request_title ||
+            githubReview.current_body !== pullRequestObservation.pull_request_body ||
+            githubReview.requested_title !== requestedTitle || githubReview.requested_body !== requestedBody) {
+          throw new Error("github.write pr.update content review returned evidence for another command, target, or plan source");
         }
         return githubReview;
       }
