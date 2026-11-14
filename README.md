@@ -108,6 +108,8 @@ pnpm gateway:serve
 
 資料整理の入力本文は、shell履歴やprocess argumentへ内容を置かない `--organize-stdin` でも渡せる。UTF-8を厳密に検査し、空入力・12,000 UTF-16コード単位超・48,000 byte超・追加のinline引数を拒否する。例: `Get-Content -Raw .\source.txt | pnpm gateway -- --organize-stdin`（PowerShell）、`pnpm gateway -- --organize-stdin < source.txt`（POSIX shell）。既存の `--organize <本文>` は互換用に残るため、秘密や個人情報を含む本文には使わない。
 
+CLIの一回実行中にCtrl+C（SIGINT）またはSIGTERMを受けると、実行中のExecutorへ中断要求を渡し、その戻り値に従って実行結果または結果不明を記録する。これはworker停止や外部作用の取消完了を意味しない。処理結果が未確定の可能性を表示して終了し、同じ仕事を再送する前にタスク状態を確認する。終了コードはSIGINTで130、SIGTERMで143。
+
 規則付きCLI要求は、Gatewayと共有する `BLUE_TANUKI_STATE_ROOT` のprivate J/M状態へ保存される。初回projectionに表示される `計画照会ID digest` を使い、`--goal-completion-status <digest>` で後から同じ状態を読める。このstatus照会は新しいtaskや計算を作らず、LLM／Executorも外部作用も呼ばない。検証済みM receiptの再照合と監査記録は行う。Control CenterでCLI由来の計画をレビューする際は、既存のowner再認証と元owner・channel束縛を使う。照会IDはdigestのみで、計画本文・規則本文は表示しない。
 
 ## 公開技術RCの機能範囲

@@ -634,8 +634,29 @@ async function runCliWithExecutionStore(
   }
   let executionAdmissionLease: { release(): void } | undefined;
   let feedback: Awaited<ReturnType<Executor["execute"]>>;
+  let requestedStopSignal: NodeJS.Signals | undefined;
+  const commandAbortController = new AbortController();
+  const requestCommandStop = (signal: NodeJS.Signals): void => {
+    if (requestedStopSignal) return;
+    requestedStopSignal = signal;
+    gatewayLog.warn("CLI command stop requested; execution and external outcome may remain unknown", {
+      signal,
+      request_id: inbound.id,
+      command_id: command.id,
+      used_for_authority: false,
+    });
+    try {
+      process.stderr.write("停止要求を受け付けました。実行経路へ中断を伝え、安全な結果記録を待っています。\n");
+    } catch { /* console failure must not prevent cancellation */ }
+    commandAbortController.abort(new Error("cli_command_stop_requested"));
+  };
+  const onSigint = (): void => requestCommandStop("SIGINT");
+  const onSigterm = (): void => requestCommandStop("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
   try {
     feedback = await executor.execute(approvedCommand, {
+      signal: commandAbortController.signal,
       save_result_delivery: planBound,
       before_execute: () => {
         const admission = resourceBackpressure.tryAcquireExecution();
@@ -644,13 +665,16 @@ async function runCliWithExecutionStore(
       },
     });
   } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    if (requestedStopSignal) process.exitCode = requestedStopSignal === "SIGINT" ? 130 : 143;
     executionAdmissionLease?.release();
   }
   if (planBound) {
     gatewayLog.info("CLI saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
   }
-  if (feedback.status === "failed") {
+  if (feedback.status === "failed" && !requestedStopSignal) {
     for (const signature of extractFailureSignatures({
       kind: "command_result",
       command,
@@ -673,17 +697,22 @@ async function runCliWithExecutionStore(
     target_surface: "cli",
     request_id: inbound.id,
     development_handoff_store: developmentHandoffStore,
-    ...(goalCompletionRules ? { rendered_output_after_feedback: () => renderCurrentCliGoalCompletionProjection({
+    ...(requestedStopSignal ? { rendered_output_override:
+      `停止要求（${requestedStopSignal}）を受け付けました。実行停止と外部作用の結果は未確認の可能性があります。` +
+      `重複実行の前に、同じrequest_idに結び付く現在状態を確認してください。\nrequest_id=${inbound.id}` } :
+      goalCompletionRules ? { rendered_output_after_feedback: () => renderCurrentCliGoalCompletionProjection({
       hds,
       request_id: inbound.id,
       rules: goalCompletionRules,
-    }) } : {}),
+      }) } : {}),
   });
   const output = finalized.rendered_output;
 
-  if (goalCompletionRules && output) {
+  if (requestedStopSignal && output) {
     process.stdout.write(`${output}\n`);
-  } else if (feedback.status === "success" && command.type === "llm_call") {
+  } else if (goalCompletionRules && output) {
+    process.stdout.write(`${output}\n`);
+  } else if (!requestedStopSignal && feedback.status === "success" && command.type === "llm_call") {
     const result = finalized.reviewed_feedback.result as {
       content: string;
       model: string;
@@ -695,10 +724,10 @@ async function runCliWithExecutionStore(
     });
     coreLog.info("llm.content", { content: result.content });
   } else if (feedback.status === "failed") {
-    coreLog.error("error", { error: feedback.error });
+    coreLog.error("error", { error: requestedStopSignal ? "cli_command_interrupted" : feedback.error });
   }
 
-  if (output && command.type !== "llm_call" && !goalCompletionRules) {
+  if (output && command.type !== "llm_call" && !goalCompletionRules && !requestedStopSignal) {
     coreLog.info("command.output", { content: output });
   }
 
