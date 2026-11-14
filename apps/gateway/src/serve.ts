@@ -79,7 +79,10 @@ import { GatewayLineEventStore } from "./line_event_store.js";
 import { GatewayWebChatOwnerTaskStore } from "./webchat_owner_task_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
-import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
+import {
+  inspectMcpToolPlanningCatalogFromEnvironment,
+  registerMcpCallToolFromEnvironment,
+} from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 import { approvalRecoveryCommandIdDigest, GatewayApprovalRecoveryStore } from "./approval_recovery_store.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -109,6 +112,7 @@ import type {
 import {
   canonicalFileDeleteTargetVersionObservation,
   canonicalFileEditTargetVersionObservation,
+  OperationPlanComputeInputSchema,
   OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
@@ -1051,6 +1055,26 @@ export async function serve(): Promise<ServeShutdown> {
     mcpRuntimeObservations?.close();
     ownerLease.close();
     throw error;
+  }
+}
+
+function requestIncludesMcpPlanningCatalog(rawRequest: unknown): boolean {
+  const boundary = parseInboundRequestAtBoundary(rawRequest);
+  if (!boundary.ok) return false;
+  const request = boundary.request;
+  if (!isGatewayInternalInboundRequest(request) || request.channel !== "webchat" ||
+      request.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
+      request.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+      request.metadata?.["blue_tanuki.trust_level"] !== "owner") {
+    return false;
+  }
+  const match = /^plan:compute\s+([\s\S]+)$/i.exec(request.content.trim());
+  if (!match) return false;
+  try {
+    const parsed = OperationPlanComputeInputSchema.safeParse(JSON.parse(match[1]!) as unknown);
+    return parsed.success && parsed.data.include_mcp_catalog === true;
+  } catch {
+    return false;
   }
 }
 
@@ -6987,10 +7011,24 @@ async function serveWithOwnerLease(
       caller: authorityReq,
       lookupExecutionReceipt: (commandKey) => executionStore.lookupCommand(commandKey),
     });
+    let planComputeMcpCatalogContext:
+      Awaited<ReturnType<typeof inspectMcpToolPlanningCatalogFromEnvironment>> | undefined;
+    let planComputeMcpCatalogRefreshFailed = false;
+    if (requestIncludesMcpPlanningCatalog(decisionInput)) {
+      try {
+        planComputeMcpCatalogContext = await inspectMcpToolPlanningCatalogFromEnvironment(process.env);
+      } catch {
+        planComputeMcpCatalogRefreshFailed = true;
+      }
+    }
     const decisionOptions = {
       ...(documentCoordinator ? { transient_content: "document_organization" as const } : {}),
       ...(selectedFileStateRefresh.status === "failed"
         ? { plan_compute_source_refresh_failure: selectedFileStateRefresh.reason } : {}),
+      ...(planComputeMcpCatalogContext
+        ? { plan_compute_mcp_catalog_context: planComputeMcpCatalogContext } : {}),
+      ...(planComputeMcpCatalogRefreshFailed
+        ? { plan_compute_mcp_catalog_refresh_failure: "plan_compute_mcp_catalog_inspection_failed" as const } : {}),
     };
     const { log, command } = hds.decide(hdsDecisionInput,
       Object.keys(decisionOptions).length > 0 ? decisionOptions : undefined);

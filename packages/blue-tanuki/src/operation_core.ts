@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
   inspectOperationPlanAdapterRegistry,
   getOperationDescriptor,
@@ -85,7 +86,7 @@ export function inspectOperationCorePlannerOutput(
   const envelope = plannerEnvelope(parsed);
   if (!envelope && !plannerLike(parsed)) return { kind: "none" };
 
-  const plan = OperationPlanSchema.safeParse(envelope?.plan ?? parsed);
+  const plan = OperationPlanSchema.safeParse(normalizeMcpArgumentDigestCandidate(envelope?.plan ?? parsed));
   if (!plan.success) {
     const issue = plan.error.issues[0];
     const location = issue?.path.length ? issue.path.join(".") : "<root>";
@@ -167,6 +168,48 @@ function plannerEnvelope(value: unknown): { plan: unknown; goal_purpose_relation
     ...(Object.prototype.hasOwnProperty.call(object, "goal_purpose_relation")
       ? { goal_purpose_relation: object.goal_purpose_relation }
       : {}) };
+}
+
+/**
+ * C can select tool arguments, but must not be relied on to compute a canonical digest.
+ * Fill only the explicit non-authority marker; a supplied nonmatching digest is left intact
+ * so the ordinary plan validator rejects it.
+ */
+function normalizeMcpArgumentDigestCandidate(value: unknown): unknown {
+  const plan = asPlannerRecord(value);
+  if (!plan || !Array.isArray(plan.steps)) return value;
+  let planChanged = false;
+  const steps = plan.steps.map((rawStep) => {
+    const step = asPlannerRecord(rawStep);
+    const parameters = step ? asPlannerRecord(step.parameters) : undefined;
+    if (!step || step.operation !== "mcp.call" || step.adapter !== "external_api" ||
+        !parameters || parameters.profile !== "native-live" || !asPlannerRecord(parameters.arguments)) return rawStep;
+    const preparation = asPlannerRecord(step.preparation);
+    if (!preparation || !Array.isArray(preparation.validation)) return rawStep;
+    let stepChanged = false;
+    const validation = preparation.validation.map((rawValidation) => {
+      const item = asPlannerRecord(rawValidation);
+      if (!item || item.method !== "mcp_call_result_matches") return rawValidation;
+      const expected = asPlannerRecord(item.expected);
+      if (!expected || (expected.arguments_sha256 !== undefined &&
+          expected.arguments_sha256 !== "__computed_by_operation_core__")) return rawValidation;
+      stepChanged = true;
+      return { ...item, expected: {
+        ...expected,
+        arguments_sha256: operationPlanDigest(parameters.arguments),
+      } };
+    });
+    if (!stepChanged) return rawStep;
+    planChanged = true;
+    return { ...step, preparation: { ...preparation, validation } };
+  });
+  return planChanged ? { ...plan, steps } : value;
+}
+
+function asPlannerRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function rawCommandKeyPath(value: unknown, path: readonly string[] = []): string | null {

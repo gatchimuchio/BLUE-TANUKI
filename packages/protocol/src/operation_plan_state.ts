@@ -300,6 +300,43 @@ export const OperationPlanComputeParentSchema = z.object({
   revision_digest: Digest,
 }).strict();
 export type OperationPlanComputeParent = z.infer<typeof OperationPlanComputeParentSchema>;
+
+const OperationPlanMcpCatalogObjectKeySchema = z.string().refine(
+  (key) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
+  "dangerous object key is not allowed",
+);
+const OperationPlanMcpCatalogToolSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  title: z.string().max(200).nullable(),
+  description: z.string().max(2_048).nullable(),
+  input_schema: z.record(OperationPlanMcpCatalogObjectKeySchema, OperationJsonValueSchema),
+  input_schema_sha256: Digest,
+}).strict();
+
+/** Explicitly selected, short-lived MCP tool metadata supplied to C as untrusted planning data only. */
+export const OperationPlanMcpCatalogContextSchema = z.object({
+  schema_version: z.literal("blue-tanuki.operation-plan-mcp-catalog-context.v1"),
+  protocol_version: z.string().trim().min(1).max(64),
+  transport: z.literal("streamable_http"),
+  connection_digest: Digest,
+  catalog_digest: Digest,
+  catalog_completeness: z.literal("unknown"),
+  tools: z.array(OperationPlanMcpCatalogToolSchema).max(128),
+  source_is_untrusted: z.literal(true),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((context, validation) => {
+  try {
+    const serialized = JSON.stringify(context);
+    if (new TextEncoder().encode(serialized).byteLength > 48 * 1024) {
+      validation.addIssue({ code: "custom", message: "plan_compute_mcp_catalog_context_too_large" });
+    }
+  } catch {
+    validation.addIssue({ code: "custom", message: "plan_compute_mcp_catalog_context_invalid" });
+  }
+});
+export type OperationPlanMcpCatalogContext = z.infer<typeof OperationPlanMcpCatalogContextSchema>;
+
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),
@@ -307,6 +344,7 @@ export const OperationPlanComputeInputSchema = z.object({
   parent_plan: OperationPlanComputeParentSchema.optional(),
   source_citation_request_id: z.string().trim().min(1).max(128).optional(),
   source_observation_refs: z.array(OperationPlanComputeSourceObservationReferenceSchema).max(8).optional(),
+  include_mcp_catalog: z.boolean().optional(),
 }).strict().superRefine((input, context) => {
   if (!input.goal_purpose_binding && !input.source_citation_request_id) {
     context.addIssue({ code: "custom", message: "plan_compute_context_binding_required" });

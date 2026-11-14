@@ -3,8 +3,10 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import type { Tool, ToolRegistry } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSchema,
-  McpCallTargetVersionObservationSchema, requireToolOperationDescriptor,
-  type OperationPlan, type McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
+  McpCallTargetVersionObservationSchema, OperationPlanMcpCatalogContextSchema,
+  requireToolOperationDescriptor,
+  type OperationJsonValue, type OperationPlan, type McpCallTargetVersionObservation,
+  type OperationPlanMcpCatalogContext } from "@blue-tanuki/protocol";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
 import { mcpRuntimeObservationStore, type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 
@@ -12,6 +14,9 @@ export const BLUE_TANUKI_MCP_PROTOCOL_VERSION = "2026-07-28" as const;
 export const BLUE_TANUKI_MCP_TRANSPORT = "streamable_http" as const;
 
 const MAX_CATALOG_ITEMS = 128;
+const MAX_MCP_PLANNING_CATALOG_BYTES = 48 * 1024;
+const MAX_MCP_PLANNING_SCHEMA_DEPTH = 12;
+const MAX_MCP_PLANNING_SCHEMA_NODES = 4_096;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_PROPOSAL_ARGUMENT_BYTES = 64 * 1024;
 // Keep transport requests bounded below the Executor's 10-second operation timeout,
@@ -81,7 +86,7 @@ export async function inspectMcpCatalog(options: McpCatalogInspectionOptions): P
   const endpoint = parseLoopbackMcpEndpoint(options.endpoint);
   const client = await connectMcpClient(endpoint, options.fetch, options.signal);
   try {
-    return await projectMcpCatalog(client, endpoint);
+    return projectMcpCatalog(await readMcpCatalogSnapshot(client), endpoint);
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -97,6 +102,129 @@ export function inspectMcpCatalogFromSettings(
     fetch: globalThis.fetch.bind(globalThis) as McpFetch,
     ...(signal ? { signal } : {}),
   });
+}
+
+/**
+ * Reads bounded catalog metadata to bind the planning context to the same digest used by the
+ * executor. Only tool definitions are returned to C; no tool is invoked and no resource or prompt
+ * content is read.
+ */
+export async function inspectMcpToolPlanningCatalog(
+  options: McpCatalogInspectionOptions,
+): Promise<OperationPlanMcpCatalogContext> {
+  const endpoint = parseLoopbackMcpEndpoint(options.endpoint);
+  const client = await connectMcpClient(endpoint, options.fetch, options.signal);
+  try {
+    const snapshot = await readMcpCatalogSnapshot(client);
+    const catalog = projectMcpCatalog(snapshot, endpoint);
+    const listedTools = snapshot.tools;
+    if (listedTools.length > MAX_CATALOG_ITEMS) throw new Error("mcp_catalog_planning_context_invalid");
+    const tools = listedTools.map((tool) => ({
+      name: requireMcpPlanningText(tool.name, 200),
+      title: optionalMcpPlanningText(tool.title, 200),
+      description: optionalMcpPlanningText(tool.description, 2_048),
+      input_schema: sanitizeMcpPlanningSchema(tool.inputSchema),
+      input_schema_sha256: digestJson(tool.inputSchema),
+    }));
+    if (new Set(tools.map((tool) => tool.name)).size !== tools.length) {
+      throw new Error("mcp_catalog_planning_context_invalid");
+    }
+    const context = OperationPlanMcpCatalogContextSchema.parse({
+      schema_version: "blue-tanuki.operation-plan-mcp-catalog-context.v1" as const,
+      protocol_version: BLUE_TANUKI_MCP_PROTOCOL_VERSION,
+      transport: BLUE_TANUKI_MCP_TRANSPORT,
+      connection_digest: catalog.connection_digest,
+      catalog_digest: catalog.catalog_digest,
+      catalog_completeness: "unknown" as const,
+      tools,
+      source_is_untrusted: true as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    });
+    if (Buffer.byteLength(JSON.stringify(context), "utf8") > MAX_MCP_PLANNING_CATALOG_BYTES) {
+      throw new Error("mcp_catalog_planning_context_invalid");
+    }
+    return context;
+  } catch {
+    throw new Error("mcp_catalog_planning_context_invalid");
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+export function inspectMcpToolPlanningCatalogFromEnvironment(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<OperationPlanMcpCatalogContext> {
+  const endpoint = env.BLUE_TANUKI_MCP_ENDPOINT?.trim();
+  if (!endpoint) return Promise.reject(new Error("mcp_catalog_planning_endpoint_unavailable"));
+  return inspectMcpToolPlanningCatalog({
+    endpoint,
+    fetch: globalThis.fetch.bind(globalThis) as McpFetch,
+  });
+}
+
+function requireMcpPlanningText(value: unknown, limit: number): string {
+  const text = optionalMcpPlanningText(value, limit);
+  if (!text) throw new Error("mcp_catalog_planning_context_invalid");
+  return text;
+}
+
+function optionalMcpPlanningText(value: unknown, limit: number): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Error("mcp_catalog_planning_context_invalid");
+  const normalized = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, " ").trim();
+  if (normalized.length > limit) throw new Error("mcp_catalog_planning_context_invalid");
+  return normalized || null;
+}
+
+function sanitizeMcpPlanningSchema(value: unknown): Record<string, OperationJsonValue> {
+  const sanitized = sanitizeMcpPlanningJsonValue(value, { nodes: 0 }, 0);
+  if (sanitized === null || Array.isArray(sanitized) || typeof sanitized !== "object") {
+    throw new Error("mcp_catalog_planning_context_invalid");
+  }
+  const parsed = OperationJsonValueSchema.parse(sanitized);
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("mcp_catalog_planning_context_invalid");
+  }
+  return parsed as Record<string, OperationJsonValue>;
+}
+
+function sanitizeMcpPlanningJsonValue(
+  value: unknown,
+  budget: { nodes: number },
+  depth: number,
+): OperationJsonValue {
+  budget.nodes++;
+  if (depth > MAX_MCP_PLANNING_SCHEMA_DEPTH || budget.nodes > MAX_MCP_PLANNING_SCHEMA_NODES) {
+    throw new Error("mcp_catalog_planning_context_invalid");
+  }
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.length > 4_096) throw new Error("mcp_catalog_planning_context_invalid");
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("mcp_catalog_planning_context_invalid");
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 512) throw new Error("mcp_catalog_planning_context_invalid");
+    return value.map((item) => sanitizeMcpPlanningJsonValue(item, budget, depth + 1));
+  }
+  if (typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null)) {
+    throw new Error("mcp_catalog_planning_context_invalid");
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 128) throw new Error("mcp_catalog_planning_context_invalid");
+  const result: Record<string, OperationJsonValue> = Object.create(null) as Record<string, OperationJsonValue>;
+  for (const [key, child] of entries) {
+    if (!key || key.length > 256 || key === "__proto__" || key === "prototype" || key === "constructor") {
+      throw new Error("mcp_catalog_planning_context_invalid");
+    }
+    result[key] = sanitizeMcpPlanningJsonValue(child, budget, depth + 1);
+  }
+  return result;
 }
 
 async function connectMcpClient(endpoint: URL, fetcher: McpFetch, signal?: AbortSignal): Promise<Client> {
@@ -117,18 +245,27 @@ async function connectMcpClient(endpoint: URL, fetcher: McpFetch, signal?: Abort
   }
 }
 
-async function projectMcpCatalog(client: Client, endpoint: URL): Promise<McpCatalogProjection> {
+async function readMcpCatalogSnapshot(client: Client) {
   const [toolPage, resourcePage, resourceTemplatePage, promptPage] = await Promise.all([
     client.listTools(),
     client.listResources(),
     client.listResourceTemplates(),
     client.listPrompts(),
   ]);
-  const tools = toolPage.tools ?? [];
-  const resources = resourcePage.resources ?? [];
-  const resourceTemplates = resourceTemplatePage.resourceTemplates ?? [];
-  const prompts = promptPage.prompts ?? [];
-  const serverInfo = client.getServerVersion();
+  return {
+    tools: toolPage.tools ?? [],
+    resources: resourcePage.resources ?? [],
+    resource_templates: resourceTemplatePage.resourceTemplates ?? [],
+    prompts: promptPage.prompts ?? [],
+    server_info: client.getServerVersion(),
+  };
+}
+
+function projectMcpCatalog(
+  snapshot: Awaited<ReturnType<typeof readMcpCatalogSnapshot>>,
+  endpoint: URL,
+): McpCatalogProjection {
+  const { tools, resources, resource_templates: resourceTemplates, prompts, server_info: serverInfo } = snapshot;
   const projection = {
     schema_version: "blue-tanuki.mcp-catalog-projection.v1",
     protocol_version: BLUE_TANUKI_MCP_PROTOCOL_VERSION,
@@ -380,7 +517,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       let catalogObserved = false;
       try {
         client = await connect(inspectOptions.signal);
-        const catalog = await projectMcpCatalog(client, getEndpoint());
+        const catalog = projectMcpCatalog(await readMcpCatalogSnapshot(client), getEndpoint());
         runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
         const candidate = parseMcpCallArguments(args);
@@ -424,7 +561,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       let catalogObserved = false;
       try {
         client = await connect(ctx.signal);
-        const catalog = await projectMcpCatalog(client, getEndpoint());
+        const catalog = projectMcpCatalog(await readMcpCatalogSnapshot(client), getEndpoint());
         runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
         assertCandidateMatchesCatalog(candidate, catalog);
