@@ -9,6 +9,10 @@
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
 
+### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / Windows installed package startup consumer
+
+GitHub Actionsのmanual `workflow_dispatch` run [#13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43531411120)、source SHA=`24fc911c875bf31d5ff1af9937910761b3104257`で、Windows Server 2022 hosted runner上のworkspace build／Windows package verify、IExpress payload抽出、Setup、installed Gateway health／停止、synthetic data Purgeを確認した。Uninstallは成功したがrunnerがDesktop folderを解決できずwarningを出した。実`.exe`起動・実画面操作・owner PC・full lifecycleはNOT_RUN。全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。artifactは0件、ローカル生成物なし。詳細・hash・scopeは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。
+
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle
 
 GitHub Actionsの手動 workflow_dispatch run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)、source SHA=a9e26f7ae427e1973a2b1519d393f9a1446cdb64で、macOS x64／arm64 hosted runnerのnative package build、DMG検証、Setup、Gateway／WebChat入口、更新回復、通常Uninstall後のデータ保持、再導入、隔離PurgeまでPASS。artifact 2件を7日保持設定でGitHub Actionsに保存した。/appはHTTP 200であり実画面操作ではない。owner device QA、host reboot、Keychain、署名・公証、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。macOS shell isolationは未提供のためshell.execをfail-closedで無効維持。詳細、package／artifact hash、保護したローカル資産は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。rev5.0 P2全体BUILDを継続する。

@@ -5061,3 +5061,33 @@ Setup／runtime／synthetic dataはhosted runnerの隔離Tempに限定し、Gate
 開始時local／`origin/main`／GitHub `main`=a9e26f7ae427e1973a2b1519d393f9a1446cdb64、recovery current／previous=a9e26f7ae427e1973a2b1519d393f9a1446cdb64／79dfca35c375a659d6840ad6f071ce79a8367006。runは開始時main SHAへ固定。開始時に`git fetch origin main`は`.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanup Permission deniedを返したが、read-only `git ls-remote`でremote mainと両tagを直接照合し、local／remote SHAとrecovery refsの一致を確認した。作業開始時はtracked差分なし。closeoutはdocs-only fast-forward pushとしてmainへ反映し、終了時SHA・recovery 2世代をreadback確認する。
 
 次の独立作業もrev5.0 P2全体BUILDを続け、最新sourceからBlue-owned producer→consumer gapを選ぶ。Mobile→D4→BLUEは別repo限定委任待ち、C08.03実provider、OD-03 live作用、P13 owner公開GOは保留する。
+
+## 2026-11-14 — rev5.0 QE_BUILD / Windows hosted installed package startup consumer
+
+### 対象と目的
+
+対象はWindows x64 hosted runner上のBLUE-TANUKI installer package、Setup、installed Launcher／Gateway、Uninstall。目的はpackageからのSetup、通常のGateway起動・停止、および隔離合成dataのPurgeを既存consumerへ接続して確認すること。これはP2全体実装のBUILD_BATCHであり、QE_QC／QE_QAではない。製品全体の`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`を維持する。
+
+### 変更と実行条件
+
+前段のrun #11はcleanup Uninstall失敗を握りつぶしstartup smokeを成功表示していた。このbatchでは`scripts/smoke_windows_installed.ts`がUninstall failureをjob failureとして返し、product stateを検証してから一時treeを消し、cleanup成功後にだけPASS markerを出すようにした。`BlueTanukiUninstall.ps1`はRoaming AppDataまたはDesktop folderを解決できないhostで空pathへ`Join-Path`せず、ショートカットを保持してwarningを出す。Uninstall error時の位置・stack診断も追加した。変更はcommit `da427c2953e5b26a6a6117b02c83a3041aafbc27`と`24fc911c875bf31d5ff1af9937910761b3104257`に含まれ、両方mainへpush済み。
+
+最終検証はGitHub Actions manual `workflow_dispatch` run [#13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43531411120)、job ID `132249771784`、`refs/heads/main`、source SHA=`24fc911c875bf31d5ff1af9937910761b3104257`、Windows Server 2022 Datacenter、Node 22.23.3、pnpm 9.12.0。workspace build、package build／verification、IExpress embedded payloadの検証・抽出、embedded Setup commandからのSetup、post-install doctor、installed Launcher start、`/healthz` readiness、Launcher stop、`Uninstall -PurgeData -Quiet`がPASS。smoke scriptはUninstall status `exit_code=0`、install/data root不在、registry key不在、staging残骸なしを確認し、最後に専用一時rootを削除した。末尾marker `windows_installed_startup_smoke=pass`。
+
+### 成果物・証拠の範囲
+
+| 成果物 | SHA-256 | 結果 |
+|---|---|---|
+| Windows installer ZIP（4,006 entries） | `95b9aea3e643467d347c8d40f6900a3cd18333f9413e6771dcbf3893dddb3a9d` | verify PASS |
+| Embedded Setup command | `c2273499c7e3b1e167cd714059de7b6ee5070ba23f4ed272fe5cd98e884d0da1` | verify／実行 PASS |
+| IExpress EXE | `3756f2e4367ad4bba2cff3d4e6a509c52b9a00b2266f0c277936e601b8b061e5` | verify／payload extraction PASS |
+
+Setupはisolated install／data rootへ`-NoLaunch`で入り、Desktop shortcutを要求していない。runnerのDesktop folderは解決不能で、Uninstallは保持warningを出したが、Desktop path上に対する作成・削除はこのrunでは行っていない。Start Menu entryの作成とproduct Uninstall／registry cleanupを検証した。workflow artifactは0件。package、install、synthetic dataを含むrun生成物はhosted runner上で削除済み。ローカルbuild outputはなく、protected attachmentとLinux `target/`は保持、D4-Pocket／MINIDORAの別repo変更もない。
+
+このrunは`--startup-only`であり、IExpress EXEそのものを起動せず、検証・抽出したembedded Setup commandを実行した。実GUI、owner Windows PC、update／rollback、normal uninstall後のdata保持、full lifecycle、full suite、全OS、実provider、外部作用、製品全体の完成、QE_QC／QE_QA、公開・出荷GOを証明しない。credentialなしのstub providerのみ。
+
+### Gitと次consumer
+
+run開始時local／`origin/main`／GitHub `main`=`24fc911c875bf31d5ff1af9937910761b3104257`、recovery current／previous=`24fc911c875bf31d5ff1af9937910761b3104257`／`da427c2953e5b26a6a6117b02c83a3041aafbc27`。このcloseoutは上記mainへのdocs-only fast-forwardとし、終了時remote/local mainとrecovery二世代の読戻しを行う。stale `.git/worktrees` metadataのACLや削除経路は変更しない。
+
+rev5.0 P2全体BUILDを継続する。次consumerは最新sourceからBlue-owned producer→consumer gapを選び直す。Mobile→D4→BLUE別repo変更、C08.03実provider、OD-03 live外部作用、P13 owner公開GOは保留を維持する。

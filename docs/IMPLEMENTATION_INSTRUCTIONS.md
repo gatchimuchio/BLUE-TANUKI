@@ -2,7 +2,20 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle (2026-11-14)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed package startup consumer (2026-11-14)
+
+主語はWindows x64の製品IExpress package、Setup、installed Launcher／Gateway、Uninstallである。目的は隔離hosted runnerで実packageからSetupを通し、Gateway起動・停止と合成データのPurgeまで既存consumerを接続確認すること。smokeのcleanup失敗を隠していた判定を修復し、Windows Uninstallはprofile folderを解決できない場合に空pathへ触れず、shortcutを保持して診断を出すようにした。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / Windows installed package startup and cleanup consumer。
+- **STATUS:** CLOSED（manual workflow_dispatch run [#13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43531411120) success、job `Build and exercise the installed Windows entrypoint`、source SHA=`24fc911c875bf31d5ff1af9937910761b3104257`）。
+- **CHECK_SCOPE:** Windows Server 2022 Datacenter、Node 22.23.3、pnpm 9.12.0。workspace buildとWindows package build／verificationはPASS。installer ZIPは4,006 entries、SHA-256=`95b9aea3e643467d347c8d40f6900a3cd18333f9413e6771dcbf3893dddb3a9d`。Setup command SHA-256=`c2273499c7e3b1e167cd714059de7b6ee5070ba23f4ed272fe5cd98e884d0da1`、IExpress EXE SHA-256=`3756f2e4367ad4bba2cff3d4e6a509c52b9a00b2266f0c277936e601b8b061e5`。EXEの埋込payload検証・抽出、抽出済みSetup、post-install doctor、Launcher起動と`/healthz`、停止、`Uninstall -PurgeData -Quiet`はPASS。cleanup status `exit_code=0`、install/data root・uninstall／autostart registry entry・staging残骸の消失を確認後、smoke専用一時rootも削除した。
+- **RUNNER_CONDITION:** Desktop folderがWindows runnerから解決できず、UninstallはDesktop shortcutを保持した旨のwarningを出した。Setupには`-DesktopShortcut`を渡しておらずDesktop shortcutを要求していないため、このrunでDesktop path上のshortcut作成・削除は行っていない。Start Menu入口はpackage Setupから作成された。
+- **EVIDENCE_LIMIT:** smokeは`--startup-only`。IExpress EXE自体の起動は行わず、埋込command payloadを検証・抽出した後、そのSetup commandを実行した。実GUI操作、ownerのWindows PC、更新／rollback、normal uninstall後のユーザーデータ保持、full lifecycle、全suite、OS別QA、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOの証拠ではない。stub providerを使いcredential・実provider・外部作用は不使用。
+- **LOCAL_ASSET_STATUS:** package／install／合成dataはhosted runnerの一時rootだけに生成し、uninstall後に削除済み。run artifactは0件。ローカルbuild outputなし。protected `.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`を保持・未変更。別repo変更なし。
+- **GIT_STATUS:** 開始時local／`origin/main`／GitHub `main`=`24fc911c875bf31d5ff1af9937910761b3104257`、recovery current／previous=`24fc911c875bf31d5ff1af9937910761b3104257`／`da427c2953e5b26a6a6117b02c83a3041aafbc27`。本記録はdocs-only fast-forwardでmainへ反映し、終了時のmain・local・recovery refsを照合する。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体BUILDを継続し、次の独立単位は最新sourceからBlue-owned producer→consumer gapを選ぶ。Mobile→D4→BLUEの別repo変更、C08.03実provider、OD-03 live作用、P13 owner公開GOは保留する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle (2026-11-14)
 
 主語はmacOS x64／arm64の製品DMG／一体型installer、Setup、Launcher、installed Gateway／WebChat入口、更新・復旧・Uninstallである。目的はmacOS別hosted runnerに実packageを導入し、既存の製品入口から通常起動・停止、synthetic仕事、更新回復、データ保持・Purgeまでつなぐこと。製品コードは変更していない。
 
