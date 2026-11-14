@@ -5188,3 +5188,21 @@ rev5.0 P2全体BUILDを継続する。次consumerは最新sourceからBlue-owned
 実装commit=`8f02ea9901b122908c43f72359826b6de2d50ee6`、Setup endpoint整合=`e67425ba3068066efd23821b5ebae6a4b8e9c901`、profile cleanup=`b1b9b7040ddd2a93d51b11f96441eedc9083a230`。最終runを実行した正確なsource SHAをGitHub `main`へfast-forward push済み。docs closeout後の最終main／recovery refsを照合する。
 
 task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`を保護し未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupはPermission deniedのため、metadata／ACLを変更せず保留した。D4-Pocket／MINIDORA変更なし。次の単位もrev5.0 P2全体BUILDから最新sourceにあるBlue-owned producer→consumer gapを選ぶ。
+
+## 2026-11-15 — rev5.3 QE_BUILD / GitHub pull request title/body update
+
+**対象・目的:** HDSが承認するGitHub writeのうち、既存Issueのtitle/body updateでは対象PRが明示拒否されるBUILD_GAPを解消し、既存pull requestのtitle/bodyだけを更新する独立した`pr.update`経路を作る。
+
+`pr.update`を既存`issue.update`と分け、open・unlockedのPRに限定した。target observationはrepository ID／canonical identity／visibility、PR ID／number／state／lock／updated time、現在のtitle/body、Head/Base SHAを保持し、target identityと要求payloadをOperation Plan／HDS command bindingへ結び付ける。ExecutorとGatewayへoperation／result／review-kindの照合を追加した。Owner向けno-store L3 reviewは変更前後のtitle/body、PR identity、Head/Base SHA、GitHub通知の可能性を表示し、本文をHTMLとして解釈しない。実行時はreview後に同一targetを再観測し、一回のPATCH後に同じPR／同じHead/Baseと正確なtitle/bodyを応答で照合する。結果projectionは本文を返さずdigestと限定summaryだけを持つ。
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| `pnpm exec tsc -b --pretty false` | PASS。workspace TypeScript project referencesをbuild。生成されたworkspace `dist/`はローカル開発用として保持。 |
+| `git diff --check` | PASS。 |
+| unit／integration test、Gateway process実行、実GitHub API／credential、PR実外部更新、全体suite、5OS、全体QC／QA | NOT_RUN。 |
+
+**状態・限界:** protocol→Operation Plan→HDS→Executor→Gateway→Owner review UIとresult validationのsource pathを接続した。確認は型buildと差分形式に限られ、served runtime、無権限拒否経路、実GitHub providerは観測していない。QE_BUILD P2の全431要求・全機能・全5OSの一部分で、`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、P13 `PENDING_OWNER_GO`。C08.03実provider、実外部業務作用、別repo変更、公開／出荷GOは行っていない。
+
+資産分類：変更した10 source filesと本記録をGit管理。workspace `dist/`はTypeScript build出力として継続開発用に保持。作業前からある`.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は未変更・未stage。秘密／credentialの使用なし。D4-PocketのCodex作業領域は稼働中と確認し、同repoへ変更なし。
+
+作業開始local／origin／GitHub `main`=`fe110b71d1fce17072f3d3a8d8595c8e8e23836d`。実装commit `c5f1123e96b60ca03fd114490612d3b3a3c13458`を`main`へfast-forward pushし、GitHub `refs/heads/main`とlocal HEADの一致をreadbackした。編集前のlocal recovery branch／remote tag current=`fe110b71d1fce17072f3d3a8d8595c8e8e23836d`、previous=`df12b219aab55cdbc84bd00047b4b2a5175c155b`は二世代を保全しlocal／remote一致を確認。fetchとcommitの後処理で既存stale worktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の削除がPermission deniedになったが、Git操作は成功。metadata／ACLを変更・迂回せず保留した。
