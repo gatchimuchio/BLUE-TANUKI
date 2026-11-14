@@ -4794,6 +4794,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
         const snapshot = await readGmailDraftSnapshot(args, {
           ...options,
           ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
+          ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
         });
         return snapshot.content_review;
       }
@@ -4804,6 +4805,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
       const effectiveOptions: GoogleWriteOptions = {
         ...options,
         ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
+        ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
       };
       if (operation === "message.trash") {
         const snapshot = await readGmailMessageMetadataSnapshot(args, effectiveOptions);
@@ -5033,21 +5035,21 @@ export function createGoogleCalendarWriteTool(
       }
       if (args.operation === "event.update") {
         const plan = calendarEventUpdatePlan(args);
-        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
+        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
         return calendarUpdateContentReview(plan, current.observation, commandDigest);
       }
       if (args.operation === "event.delete") {
         const plan = calendarEventDeletePlan(args);
-        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
+        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
         return calendarDeleteContentReview(plan, current.observation, commandDigest);
       }
       if (args.operation === "event.invite") {
         const plan = calendarEventInvitePlan(args);
-        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
+        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
         return calendarInviteContentReview(plan, current, commandDigest);
       }
       const plan = calendarEventCreatePlan(args);
-      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));
+      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
       return calendarCreateContentReview(args, plan, current, commandDigest);
     },
     async invoke(args: Record<string, unknown>, context: ToolContext): Promise<unknown> {
@@ -5123,6 +5125,7 @@ export const googleDriveWriteTool: Tool = {
       GoogleDrivePermissionCreateContentReview | GoogleDrivePublicLinkCreateContentReview | GoogleDriveFileTrashContentReview> {
     return await inspectGoogleDriveWriteContentReview(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
+      ...(resolverOptions.signal ? { signal: resolverOptions.signal } : {}),
       ...(resolverOptions.operation_plan_binding_digest
         ? { operation_plan_binding_digest: resolverOptions.operation_plan_binding_digest } : {}),
       ...(resolverOptions.command_digest ? { command_digest: resolverOptions.command_digest } : {}),

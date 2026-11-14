@@ -1197,7 +1197,8 @@ export type WebChatApprovalContentReviewValidation =
   | "valid"
   | "required"
   | "stale"
-  | "unavailable";
+  | "unavailable"
+  | "cancelled";
 
 export interface WebChatApprovalGrantItem {
   id: string;

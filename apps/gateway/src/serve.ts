@@ -1862,6 +1862,9 @@ async function serveWithOwnerLease(
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
     memory_judgment_reassessment_proposal?: PendingApproval["memory_judgment_reassessment_proposal"];
     quiet_approval_notice?: boolean;
+    execution_controller?: AbortController;
+    execution_registered?: boolean;
+    finish_execution_registry_on_return?: boolean;
   };
   async function executeAndEcho(
     cmd: ExecuteCommand,
@@ -1872,16 +1875,20 @@ async function serveWithOwnerLease(
   ): Promise<{ status: string }> {
     const isBrokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
-    const executionController = new AbortController();
-    let taskExecutionRegistered = false;
+    const executionController = opts.execution_controller ?? new AbortController();
+    let taskExecutionRegistered = opts.execution_registered ?? false;
     let resolveFinalization!: () => void;
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
     if (!isBrokerRestore) activeCommandFinalizations.add(finalization);
     try {
       return await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext, executionController,
-        () => { taskExecutionRegistered = true; });
+        () => {
+          if (taskExecutionRegistered) return;
+          activeTaskExecutions.register(cmd.id, executionController);
+          taskExecutionRegistered = true;
+        });
     } finally {
-      if (taskExecutionRegistered) {
+      if (taskExecutionRegistered && opts.finish_execution_registry_on_return !== false) {
         recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
       }
       if (!isBrokerRestore) activeCommandFinalizations.delete(finalization);
@@ -2311,7 +2318,6 @@ async function serveWithOwnerLease(
       return { status: "canonical_state_restore_in_progress" };
     }
     let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
-    activeTaskExecutions.register(cmd.id, executionController);
     onTaskExecutionRegistered();
     const cancelledBeforeExecutor = (reason: string): { status: string } => {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
@@ -3383,7 +3389,61 @@ async function serveWithOwnerLease(
       ? "failure_memory_gate_changed" : finalized.reviewed_feedback.status };
   }
 
-  async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
+  function pendingApprovalNeedsContentReview(command: ExecuteCommand): boolean {
+    const requiresToolContentReview = command.type === "tool_call" && (
+      command.payload.tool_name === "file.edit" || command.payload.tool_name === "file.delete" ||
+      command.payload.tool_name === "memory.personalization.stop" ||
+      (command.payload.tool_name === "google.calendar.write" &&
+        ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) ||
+      (command.payload.tool_name === "google.drive.write" &&
+        ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(command.payload.arguments.operation))) ||
+      (command.payload.tool_name === "github.write" &&
+        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "code.push", "release.draft.create"].includes(String(command.payload.arguments.operation)))
+    );
+    return isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
+      isBrowserLinkNavigationReviewCommand(command) || isGmailWriteContentReviewCommand(command) ||
+      isGmailDraftSendReviewCommand(command) || isGmailMessageTrashReviewCommand(command) ||
+      requiresToolContentReview;
+  }
+
+  async function resumePendingApproval(
+    command_id: string,
+    verdict: "approve" | "reject" | "block",
+    ctx: WebChatResumeContext,
+  ): Promise<unknown> {
+    const pending = pendingApprovals.get(command_id);
+    if (verdict !== "approve" || !pending || !pendingApprovalNeedsContentReview(pending.command)) {
+      return await resumePendingApprovalCore(command_id, verdict, ctx);
+    }
+
+    const executionController = new AbortController();
+    try {
+      activeTaskExecutions.register(command_id, executionController);
+    } catch (error) {
+      if (error instanceof Error && error.message === "active_task_execution_identity_conflict") {
+        return { executed: false, status: "approval_resolution_in_progress", fresh_request_required: false };
+      }
+      throw error;
+    }
+
+    let resolveFinalization!: () => void;
+    const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
+    activeCommandFinalizations.add(finalization);
+    try {
+      return await resumePendingApprovalCore(command_id, verdict, ctx, executionController);
+    } finally {
+      recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(command_id));
+      activeCommandFinalizations.delete(finalization);
+      resolveFinalization();
+    }
+  }
+
+  async function resumePendingApprovalCore(
+    command_id: string,
+    verdict: "approve" | "reject" | "block",
+    ctx: WebChatResumeContext,
+    executionController?: AbortController,
+  ): Promise<unknown> {
     if (canonicalStoreRestoreMaintenanceCommandId) {
       return { executed: false, status: "canonical_state_restore_in_progress" };
     }
@@ -3423,6 +3483,20 @@ async function serveWithOwnerLease(
       RECOVERY_TOOL_NAMES.includes(pending.command.payload.tool_name as RecoveryToolName)
       ? "webchat-resume-token-holder"
       : ctx.actor;
+    const cancellationBeforeExecution = (contentReviewCompleted = false) => {
+      const event = contentReviewCompleted
+        ? "approval_cancelled_before_execution"
+        : "approval_content_review_cancelled";
+      recordApprovalHistory(event, pending.command, pending.log, pending.origin,
+        approvalActor, pending.evaluation, {
+          cancellation_requested: true,
+          content_review_completed: contentReviewCompleted,
+          executor_started: false,
+          used_for_authority: false,
+          may_execute: false,
+        });
+      return { executed: false, pending: true, status: event };
+    };
     if (executorCommandDigest(pending.command) !== pending.command_digest) {
       resolveCronApprovalHandoff(pending, "cancelled");
       discardPendingApproval(command_id);
@@ -3484,23 +3558,13 @@ async function serveWithOwnerLease(
         return { approval: "approve", executed: false, status: "failure_memory_gate_changed", fresh_request_required: true };
       }
     }
-    const requiresToolContentReview = pending.command.type === "tool_call" && (
-      pending.command.payload.tool_name === "file.edit" || pending.command.payload.tool_name === "file.delete" ||
-      pending.command.payload.tool_name === "memory.personalization.stop" ||
-      (pending.command.payload.tool_name === "google.calendar.write" &&
-        ["event.create", "event.update", "event.delete", "event.invite"].includes(String(pending.command.payload.arguments.operation))) ||
-      (pending.command.payload.tool_name === "google.drive.write" &&
-        ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(pending.command.payload.arguments.operation))) ||
-      (pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)))
-    );
-    if (verdict === "approve" && (isBrowserFormInputReviewCommand(pending.command) ||
-        isBrowserFormGetReviewCommand(pending.command) ||
-        isBrowserLinkNavigationReviewCommand(pending.command) ||
-        isGmailWriteContentReviewCommand(pending.command) ||
-        isGmailDraftSendReviewCommand(pending.command) || isGmailMessageTrashReviewCommand(pending.command) ||
-        requiresToolContentReview)) {
-      const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
+    if (verdict === "approve" && pendingApprovalNeedsContentReview(pending.command)) {
+      const contentReview = await validatePendingApprovalContentReview(
+        command_id, ctx.content_review_digest, executionController?.signal,
+      );
+      if (executionController?.signal.aborted || contentReview === "cancelled") {
+        return cancellationBeforeExecution(contentReview === "valid");
+      }
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
       }
@@ -3521,8 +3585,10 @@ async function serveWithOwnerLease(
         validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
       return { executed: false, pending: true, status: "approval_content_review_required" };
     }
+    if (executionController?.signal.aborted) return cancellationBeforeExecution(true);
     if (verdict === "approve" && emergencyStop.active) {
       const issued = await webchat.issueResumeApprovalToken(command_id);
+      if (executionController?.signal.aborted) return cancellationBeforeExecution(true);
       let recoveryState: ReturnType<GatewayApprovalRecoveryStore["state"]>;
       try {
         recoveryState = approvalRecoveryStore.state(command_id);
@@ -3607,6 +3673,7 @@ async function serveWithOwnerLease(
         approval_token_reissued: Boolean(issued?.token),
       };
     }
+    if (executionController?.signal.aborted) return cancellationBeforeExecution(true);
     let resolutionStarted = false;
     try {
       resolutionStarted = approvalRecoveryStore.beginResolution(command_id);
@@ -3906,6 +3973,11 @@ async function serveWithOwnerLease(
       const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
         skip_approval: true,
         actor: approvalActor,
+        ...(executionController ? {
+          execution_controller: executionController,
+          execution_registered: true,
+          finish_execution_registry_on_return: false,
+        } : {}),
         failure_memory_gate_digest: pending.failure_memory_gate_digest,
         failure_memory_gate_actor: pending.failure_memory_gate_actor,
         approval_evaluation: pending.evaluation,
@@ -3936,6 +4008,10 @@ async function serveWithOwnerLease(
       if (r.status === "failure_memory_gate_changed") {
         completeApprovalResolution(command_id);
         return { approval: "approve", executed: false, status: r.status, fresh_request_required: true };
+      }
+      if (r.status === "task_cancelled_during_target_version_preflight") {
+        completeApprovalResolution(command_id);
+        return { approval: "approve", executed: false, executor_started: false, status: r.status };
       }
       completeApprovalResolution(command_id);
       return { approval: "approve", executed: true, status: r.status };
@@ -5580,9 +5656,11 @@ async function serveWithOwnerLease(
   async function validatePendingApprovalContentReview(
     command_id: string,
     content_review_digest: string | undefined,
+    signal?: AbortSignal,
   ): Promise<WebChatApprovalContentReviewValidation> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
+    if (signal?.aborted) return "cancelled";
     if (isBrowserFormInputReviewCommand(pending.command)) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -5643,7 +5721,8 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         return current && "kind" in current && current.kind === "memory_personalization_stop" &&
           current.command_digest === operationPlanDigest(pending.command) &&
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
@@ -5651,7 +5730,7 @@ async function serveWithOwnerLease(
           current.target_version_digest === pending.content_review_memory_personalization_target_version_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete") {
@@ -5662,13 +5741,14 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         return current && "kind" in current && current.kind === "file_delete_target" &&
           current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_file_delete_target_version_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit") {
@@ -5679,12 +5759,13 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         return current && "diff" in current && current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_file_edit_target_version_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "github.write" &&
@@ -5696,7 +5777,8 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         const expectedKind = pending.command.payload.arguments.operation === "issue.update"
           ? "github_issue_update" : pending.command.payload.arguments.operation === "issue.close"
             ? "github_issue_close" : pending.command.payload.arguments.operation === "issue.reopen"
@@ -5713,7 +5795,7 @@ async function serveWithOwnerLease(
           current.target_version_digest === pending.content_review_github_target_version_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.drive.write" &&
@@ -5729,7 +5811,8 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         const expectedKind = pending.command.payload.arguments.operation === "file.trash"
           ? "google_drive_file_trash" : pending.command.payload.arguments.operation === "file.update"
             ? "google_drive_file_update" : pending.command.payload.arguments.operation === "permissions.create"
@@ -5742,7 +5825,7 @@ async function serveWithOwnerLease(
           current.target_version_digest === pending.content_review_drive_target_version_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "google.calendar.write" &&
@@ -5753,7 +5836,8 @@ async function serveWithOwnerLease(
       if (content_review_digest !== pending.content_review_digest) return "stale";
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
-        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
         const expectedKind = pending.command.payload.arguments.operation === "event.update"
           ? "google_calendar_event_update" : pending.command.payload.arguments.operation === "event.delete"
             ? "google_calendar_event_delete" : pending.command.payload.arguments.operation === "event.invite"
@@ -5763,7 +5847,7 @@ async function serveWithOwnerLease(
           current.review_digest === pending.content_review_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (pending.goal_purpose_proposal) {
@@ -5775,18 +5859,20 @@ async function serveWithOwnerLease(
         hds.operationPlanCommandIsCurrent(pending.command);
       if (!pending.content_review_provider_state_digest) return "required";
       try {
-        const snapshot = await executor.inspectCommandContentReview(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, undefined, signal);
+        if (signal?.aborted) return "cancelled";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_trash") return "unavailable";
         const validation = validateGmailMessageTrashContentReview(pending.command, pending.command_digest, current,
           pending.content_review_digest, content_review_digest, snapshot);
         if (validation !== "valid") return validation;
         if (snapshot.provider_state_digest !== pending.content_review_provider_state_digest) return "stale";
         const observation = await executor.inspectCommandTargetVersion(pending.command, undefined,
-          hds.getExecutionOperationPlanBindingDigest(pending.command));
+          hds.getExecutionOperationPlanBindingDigest(pending.command), signal);
+        if (signal?.aborted) return "cancelled";
         return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
           observation.provider_state_digest === pending.content_review_provider_state_digest ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (isGmailMessageModifyReviewCommand(pending.command)) {
@@ -5794,18 +5880,20 @@ async function serveWithOwnerLease(
         hds.operationPlanCommandIsCurrent(pending.command);
       if (!pending.content_review_provider_state_digest) return "required";
       try {
-        const snapshot = await executor.inspectCommandContentReview(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, undefined, signal);
+        if (signal?.aborted) return "cancelled";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_modify") return "unavailable";
         const validation = validateGmailMessageModifyContentReview(pending.command, pending.command_digest, current,
           pending.content_review_digest, content_review_digest, snapshot);
         if (validation !== "valid") return validation;
         if (snapshot.provider_state_digest !== pending.content_review_provider_state_digest) return "stale";
         const observation = await executor.inspectCommandTargetVersion(pending.command, undefined,
-          hds.getExecutionOperationPlanBindingDigest(pending.command));
+          hds.getExecutionOperationPlanBindingDigest(pending.command), signal);
+        if (signal?.aborted) return "cancelled";
         return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
           observation.provider_state_digest === pending.content_review_provider_state_digest ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (isGmailDraftSendReviewCommand(pending.command)) {
@@ -5824,12 +5912,14 @@ async function serveWithOwnerLease(
           pending.command,
           undefined,
           hds.getExecutionOperationPlanBindingDigest(pending.command),
+          signal,
         );
+        if (signal?.aborted) return "cancelled";
         return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
           observation.provider_state_digest === pending.content_review_provider_state_digest
           ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     if (isGmailWriteContentReviewCommand(pending.command)) {
@@ -5842,11 +5932,12 @@ async function serveWithOwnerLease(
       let snapshot: Parameters<typeof projectGmailWriteContentReview>[2];
       if (needsVerifiedSnapshot) {
         try {
-          const observed = await executor.inspectCommandContentReview(pending.command);
+          const observed = await executor.inspectCommandContentReview(pending.command, undefined, undefined, signal);
+          if (signal?.aborted) return "cancelled";
           if (!observed || !("kind" in observed) || observed.kind !== "gmail_write_content") return "unavailable";
           snapshot = observed;
         } catch {
-          return "unavailable";
+          return signal?.aborted ? "cancelled" : "unavailable";
         }
       }
       const validation = validateGmailWriteContentReview(pending.command, pending.command_digest, current,
@@ -5855,11 +5946,12 @@ async function serveWithOwnerLease(
       if (!pending.content_review_provider_state_digest) return "required";
       try {
         const observation = await executor.inspectCommandTargetVersion(pending.command, undefined,
-          hds.getExecutionOperationPlanBindingDigest(pending.command));
+          hds.getExecutionOperationPlanBindingDigest(pending.command), signal);
+        if (signal?.aborted) return "cancelled";
         return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
           observation.provider_state_digest === pending.content_review_provider_state_digest ? "valid" : "stale";
       } catch {
-        return "unavailable";
+        return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
     return "not_required";

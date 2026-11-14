@@ -177,6 +177,7 @@ export interface FileWriteOptions {
 
 export interface FileDeleteOptions {
   env?: Env;
+  signal?: AbortSignal;
   expected_target_version?: FileDeleteTargetVersionObservation;
   operation_plan_binding_digest?: string;
   command_digest?: string;
@@ -184,6 +185,7 @@ export interface FileDeleteOptions {
 
 export interface FileEditOptions {
   env?: Env;
+  signal?: AbortSignal;
   expected_target_version?: FileEditTargetVersionObservation;
   operation_plan_binding_digest?: string;
   command_digest?: string;

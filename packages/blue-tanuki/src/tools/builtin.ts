@@ -5541,8 +5541,9 @@ interface ResolvedFileDeleteTargetVersion {
 /** J計画で選ばれた、sandbox内の単一regular file削除対象をdigestだけで観測する。 */
 async function resolveFileDeleteTargetVersion(
   args: Record<string, unknown>,
-  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest">,
+  opts: Pick<FileDeleteOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest">,
 ): Promise<ResolvedFileDeleteTargetVersion> {
+  assertToolExecutionNotCancelled(opts.signal, "file.delete target inspection");
   const pathArg = stringArg(args, "path")!;
   if (!opts.command_digest || !opts.operation_plan_binding_digest ||
       !/^[a-f0-9]{64}$/.test(opts.command_digest) || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest) ||
@@ -5574,6 +5575,7 @@ async function resolveFileDeleteTargetVersion(
     let totalBytes = 0;
     let position = 0;
     while (totalBytes <= maxBytes) {
+      assertToolExecutionNotCancelled(opts.signal, "file.delete target inspection");
       const chunk = Buffer.alloc(Math.min(64_000, maxBytes + 1 - totalBytes));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
       if (bytesRead === 0) break;
@@ -5587,6 +5589,7 @@ async function resolveFileDeleteTargetVersion(
   } finally {
     await handle.close();
   }
+  assertToolExecutionNotCancelled(opts.signal, "file.delete target inspection");
   const after = await fs.lstat(filepath, { bigint: true });
   if (!after.isFile() || fileDeleteStatIdentity(after) !== openedIdentity || contents.length > maxBytes) {
     throw new Error("file.delete target changed while being observed");
@@ -5615,7 +5618,7 @@ async function resolveFileDeleteTargetVersion(
 
 export async function inspectFileDeleteTargetVersion(
   args: Record<string, unknown>,
-  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+  opts: Pick<FileDeleteOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileDeleteTargetVersionObservation> {
   return (await resolveFileDeleteTargetVersion(args, opts)).observation;
 }
@@ -5623,8 +5626,9 @@ export async function inspectFileDeleteTargetVersion(
 /** No-store owner projection for the exact sandbox-relative file selected for deletion. */
 export async function inspectFileDeleteContentReview(
   args: Record<string, unknown>,
-  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+  opts: Pick<FileDeleteOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileDeleteTargetContentReview> {
+  assertToolExecutionNotCancelled(opts.signal, "file.delete content review");
   if (!opts.command_digest || !opts.operation_plan_binding_digest) {
     throw new Error("file.delete content review requires the selected Operation Plan binding");
   }
@@ -5760,10 +5764,15 @@ interface ResolvedFileEditTargetVersion {
   readonly observation: FileEditTargetVersionObservation;
 }
 
-async function readBoundedFileHandle(handle: Awaited<ReturnType<typeof fs.open>>, maxBytes: number): Promise<Buffer> {
+async function readBoundedFileHandle(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   while (total <= maxBytes) {
+    assertToolExecutionNotCancelled(signal, "file target inspection");
     const length = Math.min(64_000, maxBytes + 1 - total);
     if (length <= 0) break;
     const chunk = Buffer.alloc(length);
@@ -5801,8 +5810,9 @@ function assertPlannedFileEditPath(pathArg: string): void {
 
 async function resolveFileEditTargetVersion(
   args: Record<string, unknown>,
-  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest">,
+  opts: Pick<FileEditOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest">,
 ): Promise<ResolvedFileEditTargetVersion> {
+  assertToolExecutionNotCancelled(opts.signal, "file.edit target inspection");
   const pathArg = stringArg(args, "path")!;
   const search = stringArg(args, "search")!;
   const replace = stringArg(args, "replace")!;
@@ -5836,7 +5846,8 @@ async function resolveFileEditTargetVersion(
     if (!openedStat.isFile() || fileEditStatIdentity(openedStat) !== fileEditStatIdentity(beforeStat)) {
       throw new Error("file.edit target changed while being observed");
     }
-    beforeBuffer = await readBoundedFileHandle(handle, maxBytes);
+    beforeBuffer = await readBoundedFileHandle(handle, maxBytes, opts.signal);
+    assertToolExecutionNotCancelled(opts.signal, "file.edit target inspection");
     if (beforeBuffer.includes(0)) throw new Error("file.edit refuses binary-looking files");
     const before = beforeBuffer.toString("utf8");
     if (!Buffer.from(before, "utf8").equals(beforeBuffer)) throw new Error("file.edit requires valid UTF-8 input");
@@ -5885,7 +5896,7 @@ async function resolveFileEditTargetVersion(
 
 export async function inspectFileEditTargetVersion(
   args: Record<string, unknown>,
-  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+  opts: Pick<FileEditOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileEditTargetVersionObservation> {
   return (await resolveFileEditTargetVersion(args, opts)).observation;
 }
@@ -5922,13 +5933,15 @@ function fileEditReplacementDiff(relativePath: string, before: string, search: s
 
 export async function inspectFileEditContentReview(
   args: Record<string, unknown>,
-  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+  opts: Pick<FileEditOptions, "env" | "signal" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileEditDiffContentReview> {
+  assertToolExecutionNotCancelled(opts.signal, "file.edit content review");
   if (!opts.command_digest || !/^[a-f0-9]{64}$/.test(opts.command_digest) ||
       !opts.operation_plan_binding_digest || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest)) {
     throw new Error("file.edit content review requires a bound command and Operation Plan source");
   }
   const resolved = await resolveFileEditTargetVersion(args, opts);
+  assertToolExecutionNotCancelled(opts.signal, "file.edit content review");
   const search = stringArg(args, "search")!;
   const replace = stringArg(args, "replace")!;
   const diff = fileEditReplacementDiff(resolved.relative_path, resolved.before_buffer.toString("utf8"), search, replace,
@@ -6064,7 +6077,7 @@ export const fileDeleteTool: Tool = {
   description: "Delete one regular file under BLUE_TANUKI_FILE_ROOT after final review and target recheck.",
   required_capabilities: requireToolOperationDescriptor("file.delete").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
-    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
+    env?: Env; signal?: AbortSignal; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileDeleteTargetVersionObservation> {
     return await inspectFileDeleteTargetVersion(args, options);
   },
@@ -6092,7 +6105,7 @@ export const fileEditTool: Tool = {
   description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT. After an owner-reviewed edit, run only a requested test with shell.exec using same_workspace_as_file_root=true and summary_only=true, then reread the same path with file.search. A failed test never triggers automatic restoration; recovery requires a fresh owner-reviewed inverse edit against the current file version.",
   required_capabilities: requireToolOperationDescriptor("file.edit").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
-    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
+    env?: Env; signal?: AbortSignal; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileEditTargetVersionObservation> {
     return await inspectFileEditTargetVersion(args, options);
   },
@@ -6228,6 +6241,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6235,6 +6249,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "code.push") {
       return await inspectGitHubCodePushContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6242,6 +6257,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "pr.create") {
       return await inspectGitHubPullRequestCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6249,6 +6265,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6256,6 +6273,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.close") {
       return await inspectGitHubIssueCloseContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6263,6 +6281,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.reopen") {
       return await inspectGitHubIssueReopenContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6270,6 +6289,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.comment.create") {
       return await inspectGitHubIssueCommentCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6277,6 +6297,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "pr.comment.create") {
       return await inspectGitHubPullRequestCommentCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6286,6 +6307,7 @@ export const githubWriteTool: Tool = {
     }
     return await inspectGitHubIssueCreateContentReview(args, {
       ...(options.env ? { env: options.env } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.command_digest ? { command_digest: options.command_digest } : {}),
       ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
     });

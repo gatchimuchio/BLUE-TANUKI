@@ -795,6 +795,7 @@ export interface Tool {
   /** No-store content/target projection revealed only through the authenticated owner-review endpoint. */
   inspect_content_review?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
+    signal?: AbortSignal;
     operation_plan_binding_digest?: string;
     command_digest?: string;
   }): Promise<ToolContentReview>;

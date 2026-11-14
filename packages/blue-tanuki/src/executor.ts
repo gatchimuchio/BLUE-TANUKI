@@ -1198,7 +1198,12 @@ export class Executor {
   /** Exact content projection for a bound local edit or the registered Gmail draft adapter. */
   async inspectCommandContentReview(command: ExecuteCommand,
     env?: Readonly<Record<string, string | undefined>>,
-    operationPlanBindingDigest?: string): Promise<ToolContentReview | undefined> {
+    operationPlanBindingDigest?: string,
+    signal?: AbortSignal): Promise<ToolContentReview | undefined> {
+    const assertNotCancelled = (): void => {
+      if (signal?.aborted) throw new Error("content_review_inspection_cancelled");
+    };
+    assertNotCancelled();
     if (command.type !== "tool_call") return undefined;
     if (command.payload.tool_name === "memory.personalization.stop") {
       if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
@@ -1208,14 +1213,16 @@ export class Executor {
       if (!tool || !isMemoryPersonalizationStopTool(tool) || !tool.inspect_content_review) {
         throw new Error("memory.personalization.stop content review requires the registered built-in adapter");
       }
-      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest);
+      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest, signal);
       if (!observation || observation.schema_version !== "blue-tanuki.memory-personalization-target-version.v1") {
         throw new Error("memory.personalization.stop content review could not obtain verified target evidence");
       }
       const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       if (!("kind" in review) || review.kind !== "memory_personalization_stop") {
         throw new Error("memory.personalization.stop content review returned an unsupported projection");
       }
@@ -1247,9 +1254,11 @@ export class Executor {
       }
       const review = await tool.inspect_content_review(command.payload.arguments, {
         ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       if (!("diff" in review) || review.command_digest !== operationPlanDigest(command) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
           !/^[a-f0-9]{64}$/.test(review.review_digest) || !/^[a-f0-9]{64}$/.test(review.target_version_digest) ||
@@ -1275,15 +1284,17 @@ export class Executor {
         throw new Error("github.write content review requires the registered built-in adapter");
       }
       const args = command.payload.arguments;
-      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest);
+      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest, signal);
       if (!observation || observation.schema_version !== "blue-tanuki.github-write-target-version.v1") {
         throw new Error("github.write content review could not obtain bound repository evidence");
       }
       const review = await tool.inspect_content_review(args, {
         ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       const githubReview = review as Extract<ToolContentReview, {
         kind: "github_issue_create" | "github_issue_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_comment_create" |
           "github_pull_request_comment_create" | "github_pull_request_create" | "github_code_push" |
@@ -1487,9 +1498,11 @@ export class Executor {
       }
       const review = await tool.inspect_content_review(command.payload.arguments, {
         ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
         ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       const validCreateReview = "kind" in review && review.kind === "google_calendar_event_create" &&
         /^[a-f0-9]{64}$/.test(review.availability_result_digest);
       const validUpdateReview = "kind" in review && review.kind === "google_calendar_event_update" &&
@@ -1534,9 +1547,11 @@ export class Executor {
       }
       const review = await tool.inspect_content_review(command.payload.arguments, {
         ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       const args = command.payload.arguments;
       if (args.operation === "file.trash") {
         const validTrashReview = "kind" in review && review.kind === "google_drive_file_trash" &&
@@ -1668,9 +1683,11 @@ export class Executor {
       }
       const review = await tool.inspect_content_review(command.payload.arguments, {
         ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
+      assertNotCancelled();
       const requestedMaxBytes = command.payload.arguments.max_bytes ?? 256_000;
       if (!("kind" in review) || review.kind !== "file_delete_target" ||
           review.command_digest !== operationPlanDigest(command) ||
@@ -1697,8 +1714,10 @@ export class Executor {
     }
     const review = await tool.inspect_content_review(command.payload.arguments, {
       ...(env ? { env } : {}),
+      ...(signal ? { signal } : {}),
       command_digest: operationPlanDigest(command),
     });
+    assertNotCancelled();
     if (gmailOperation === "message.trash") {
       const expectedKeys = ["account_email", "command_digest", "internal_date", "kind", "label_ids", "may_execute",
         "message_id", "operation", "provider_state_digest", "request_payload_digest", "review_digest", "size_estimate",
