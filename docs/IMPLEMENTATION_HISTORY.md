@@ -5091,3 +5091,26 @@ Setupはisolated install／data rootへ`-NoLaunch`で入り、Desktop shortcut�
 run開始時local／`origin/main`／GitHub `main`=`24fc911c875bf31d5ff1af9937910761b3104257`、recovery current／previous=`24fc911c875bf31d5ff1af9937910761b3104257`／`da427c2953e5b26a6a6117b02c83a3041aafbc27`。このcloseoutは上記mainへのdocs-only fast-forwardとし、終了時remote/local mainとrecovery二世代の読戻しを行う。stale `.git/worktrees` metadataのACLや削除経路は変更しない。
 
 rev5.0 P2全体BUILDを継続する。次consumerは最新sourceからBlue-owned producer→consumer gapを選び直す。Mobile→D4→BLUE別repo変更、C08.03実provider、OD-03 live外部作用、P13 owner公開GOは保留を維持する。
+## 2026-11-14 — rev5.0 QE_BUILD / Windows direct IExpress launch and isolated cleanup
+
+### 対象と目的
+
+対象はWindows x64 hosted runner上のBLUE-TANUKI IExpress package、Setup、installed Launcher／Gateway、Uninstall、およびsmoke専用Control Center browser profileである。目的はIExpress EXEを直接起動する実consumer経路を検査し、Setup既定値、Start Menu entry、Gateway起動・停止、Purge Uninstall、smoke一時状態の削除までを確認すること。これはrev5.0 P2全体施工のQE_BUILD BUILD_BATCHで、製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始を維持する。
+
+### 変更と検証
+
+`scripts/smoke_windows_installed.ts`は、当該runが起動したEdge processのcommand lineがsmoke固有Control Center URLを含む場合だけをcleanup対象とし、そのprocess終了後にsmoke専用isolated browser profileを削除する。通常のEdge processやowner profileには作用しない。Setupの既定endpointは`127.0.0.1:8787`だが、先行smokeはinherited ephemeral portを期待していたため、smoke側を製品Setup既定値へ合わせた。
+
+最終検証はGitHub Actions `workflow_dispatch` run [#43539706746](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43539706746)、job `Build and exercise the installed Windows entrypoint`、hosted Windows Server 2022、source SHA=`b1b9b7040ddd2a93d51b11f96441eedc9083a230`。対象vitest 21/21 PASS、`scripts/smoke_windows_installed.ts`のTypeScript no-emit check PASS、cleanup PowerShell syntax probe PASS、`git diff --check` PASS。直接起動したIExpress EXEからSetupし、Start Menu entry、Gateway起動と`/healthz`、Launcher停止、`Uninstall -PurgeData -Quiet`、隔離browser cleanupまでPASSした。最後に`windows_installed_startup_smoke=pass`が記録された。run artifactsは0件で、package／install／synthetic data／browser profileはrunner隔離領域内で処理された。
+
+### 診断履歴と証拠限界
+
+先行run [#43536285729](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43536285729)はSetup既定portとsmoke期待値の不一致を検出した。run [#43537864527](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43537864527)は製品経路通過後のcleanupでEdgeがisolated profile DBをロックした。両方とも失敗のままとし、同条件を修正して最終runで再検証した。
+
+この証拠は一つのWindows Server 2022 hosted imageにおけるQE_BUILD consumer smokeに限る。owner PCのGUI、全Windows環境、更新／rollback、normal uninstall後のuser data保持、全suite、他OS、実provider／credential、外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOは証明しない。署名状態とdistribution statusは変更していない。
+
+### Git・ローカル資産・次工程
+
+実装commit=`8f02ea9901b122908c43f72359826b6de2d50ee6`、Setup endpoint整合=`e67425ba3068066efd23821b5ebae6a4b8e9c901`、profile cleanup=`b1b9b7040ddd2a93d51b11f96441eedc9083a230`。最終runを実行した正確なsource SHAをGitHub `main`へfast-forward push済み。docs closeout後の最終main／recovery refsを照合する。
+
+task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`を保護し未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupはPermission deniedのため、metadata／ACLを変更せず保留した。D4-Pocket／MINIDORA変更なし。次の単位もrev5.0 P2全体BUILDから最新sourceにあるBlue-owned producer→consumer gapを選ぶ。

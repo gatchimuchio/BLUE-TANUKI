@@ -2,7 +2,21 @@
 
 この文書で現行指示として適用するのは先頭の「現行BUILD_BATCH」または「現在の阻害状態」節だけ。先頭に完了記録しかない場合、次の作業開始時に現行三点セットと実物から次のBUILD_BATCHを選定する。後続の前段記録は時点付きログであり、現在の作業範囲や工程順として適用しない。完了作業の詳細履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保管する。
 
-## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed package startup consumer (2026-11-14)
+## 直近完了BUILD_BATCH — rev5.0 QE_BUILD / Windows direct IExpress launch and isolated cleanup (2026-11-14)
+
+主語はWindows x64製品IExpress package、直接起動されたSetup、installed Launcher／Gateway、Uninstall、およびsmokeが生成する隔離Control Center browser profileである。目的はIExpress EXEを通常ユーザー起動し、Setup既定値、Start Menu入口、Gateway起動・停止、Purge Uninstallと一時状態の片付けまでを同じ製品consumer経路で確認すること。smokeが隔離browser profileを消せずcleanup失敗となった原因を修復し、製品Uninstallや他のブラウザ利用者を対象にしないcleanupに限定した。
+
+- **UNIT_ID:** rev5.0 P2 QE_BUILD / Windows direct IExpress launch, installed startup, and isolated cleanup consumer。
+- **STATUS:** CLOSED（manual `workflow_dispatch` run [#43539706746](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43539706746)、job `Build and exercise the installed Windows entrypoint` success、source SHA=`b1b9b7040ddd2a93d51b11f96441eedc9083a230`）。
+- **CHANGES:** `scripts/smoke_windows_installed.ts`で新規起動したEdge processのcommand lineが当該smoke専用Control Center URLを含む場合だけを記録・終了し、その終了を確認後に隔離profileを削除するようにした。通常利用中のEdge processやprofileを列挙・終了せず、smokeは隔離されたWindows user data／install rootを使う。IExpressを直接起動する経路を対象化し、Setup default endpoint `127.0.0.1:8787`とsmoke期待値を一致させた。
+- **CHECK_SCOPE:** Windows Server 2022 hosted runner。対象vitest `install/installer/test/windows_product_installer.test.ts` 21/21 PASS、対象smoke TypeScript `tsc --noEmit` PASS、生成cleanup PowerShellのsyntax probe PASS、`git diff --check` PASS。workflowは実IExpress EXEをWindows user processとして起動し、Setup、Start Menu entry、installed Gateway `/healthz`、stop、`Uninstall -PurgeData -Quiet`を通し、isolated browser cleanup後に `windows_installed_startup_smoke=pass` を出力した。各installer／data／browser profileはrunner隔離領域内に限定。
+- **DIAGNOSTIC_RUNS:** run [#43536285729](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43536285729)は既定port不一致を検出、run [#43537864527](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43537864527)は製品経路通過後、終了時Edgeが隔離profile DBをロックしたためcleanupで失敗した。両runはPASSとして数えず、各原因を修正した後、同条件の最終run #43539706746で再実行した。
+- **EVIDENCE_LIMIT:** hosted Windows Server 2022のQE_BUILD smoke証拠。owner PCのGUI操作、全Windows環境、更新／rollback、normal uninstall後のuser data保持、全suite、他OS、実provider／credential、live external action、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOを証明しない。署名・配布状態は変更していない。
+- **LOCAL_ASSET_STATUS:** このwork unitがローカルに生成した一時物はなし。protected `.codex-attachments/`、`.codex-remote-attachments/`と既存untracked Linux isolation `target/`は保持・未変更。stale `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の自動cleanupがPermission deniedとなったため、metadata／ACLを迂回せず保留。D4-Pocket／MINIDORA変更なし。
+- **GIT_STATUS:** 対象実装commit `8f02ea9901b122908c43f72359826b6de2d50ee6`、既定port整合commit `e67425ba3068066efd23821b5ebae6a4b8e9c901`、isolated browser cleanup修正commit `b1b9b7040ddd2a93d51b11f96441eedc9083a230`を検証run前に一時branchへpushし、最終runの正確なsource SHA `b1b9b7040ddd2a93d51b11f96441eedc9083a230`を確認後、同SHAをGitHub `main`へfast-forward pushした。docs closeout後にlocal／remote `main`と復旧二世代を再読戻しする。
+- **NEXT_REQUIRED_CONSUMER:** rev5.0 P2全体BUILDを継続し、次の独立単位では現行sourceからBlue-owned producer→consumer gapを選ぶ。製品全体の`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始を維持する。C08.03実provider、別repo変更、OD-03 live外部作用、P13 owner公開GOは保留する。
+
+## 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed package startup consumer (2026-11-14)
 
 主語はWindows x64の製品IExpress package、Setup、installed Launcher／Gateway、Uninstallである。目的は隔離hosted runnerで実packageからSetupを通し、Gateway起動・停止と合成データのPurgeまで既存consumerを接続確認すること。smokeのcleanup失敗を隠していた判定を修復し、Windows Uninstallはprofile folderを解決できない場合に空pathへ触れず、shortcutを保持して診断を出すようにした。
 
