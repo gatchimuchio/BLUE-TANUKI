@@ -28,7 +28,7 @@
 | **目標とする製品範囲** | Windows、Linux、macOS、Android、iOSの5OS。現在の対応・到達実績と、今後の完成目標は別 |
 | **未成立の全体条件** | 全能力の<code>BUILD_COVERED</code>、実物全体のQE_QC、対象別QE_QA、5OS製品受入、GA／owner GO |
 
-この表は、新QE開発の局所成果を**製品全体の完成・AGI達成・5OS出荷可能**と読み替えるものではありません。旧RCのP13は<code>PENDING_OWNER_GO</code>、<code>public_claim_allowed=false</code>のままです。[公開ロードマップ](docs/ROADMAP.md)と[実装進捗](docs/開発進捗.md)が現在の工程・根拠を示します。非公開の内部理論・施工正本・秘密・生の運転証拠は公開しません。
+この表は、新QE開発の局所成果を**製品全体の完成・AGI達成・5OS出荷可能**と読み替えるものではありません。旧RCのP13は<code>PENDING_OWNER_GO</code>、<code>public_claim_allowed=false</code>のままです。[現行三点正本](docs/QE_CURRENT_AUTHORITY.md)は仕様・工程・施工指示を公開し、[ロードマップ](docs/ROADMAP.md)と[実装進捗](docs/開発進捗.md)が工程・根拠を示します。実資格・個人情報・生の運転証拠は公開しません。
 
 ---
 

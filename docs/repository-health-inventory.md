@@ -26,11 +26,11 @@
 | `install/windows/install.ps1` / `install/windows/uninstall.ps1` | PREVIEW | Windows source installer helpers; not core release claim |
 | `install/installer` | PREVIEW | guided installer acceleration; not an authority path |
 | `install/resident` | CORE | resident launch helper required by portable install launchers; not authority core |
-| `docs/IMPLEMENTATION_INSTRUCTIONS.md` | CORE | active implementation source of truth |
+| `docs/QE_CURRENT_AUTHORITY.md` + `docs/qe/現行/*` | CORE | 現行QE三点正本・manifest・唯一の正本ポインタ |
 | `docs/known-environment-failures.md` | CORE | validation failure classification |
 | `docs/history/*` | ARCHIVE | historical phase evidence, not active release instruction |
 | `docs/phase*.md` | ARCHIVE | historical phase reports unless referenced by release gates |
-| `docs/ROADMAP.md` | ARCHIVE | high-level context only; active file is implementation instructions |
+| `docs/ROADMAP.md` | ARCHIVE | high-level context and historical progress, not an additional active instruction |
 | root `package.json`, `pnpm-workspace.yaml`, `tsconfig*.json`, `vitest.config.ts` | CORE | workspace, validation, build/test graph |
 
 ## Scripts

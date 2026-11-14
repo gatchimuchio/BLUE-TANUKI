@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const root = process.cwd();
 
@@ -7,7 +8,11 @@ const requiredDocs = [
   "AGENTS.md",
   "docs/PLATFORM_TARGETS_QE.md",
   "docs/BACKUP_REF_MIGRATION.md",
-  "docs/IMPLEMENTATION_INSTRUCTIONS.md",
+  "docs/QE_CURRENT_AUTHORITY.md",
+  "docs/qe/現行/MANIFEST.json",
+  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_1.json",
+  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_1.json",
+  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_1.json",
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -141,8 +146,7 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 const qeGovernanceRequired = {
   "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
   "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべてと適用AGENTS.md", "履歴ログ"],
-  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE_BUILD", "BUILD_BATCH", "BUILD_GAP", "三点セットの全文を読み直す", "PENDING_OWNER_GO", "MIGRATION_COMPLETE"],
+  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべて", "履歴", "MANIFEST.json"],
   "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main"],
   "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ", "最新の三点正本全文を読み直す"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
@@ -161,7 +165,6 @@ for (const [rel, tokens] of Object.entries(qeGovernanceRequired)) {
 }
 const qeGovernanceForbidden = {
   "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "現行remote backupの正本はrefs/heads"],
-  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["D01.02だけを実施する", "検証後に二世代backup branchを回す"],
   "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う"],
   "docs/DEVELOPMENT_PRACTICE.md": ["三点正本は今回に必要な節だけ読む", "三点全文の再読は新版指定", "現行二世代remote backupの正本はrefs/heads"],
   "docs/NON_GOALS.md": ["- No ClawHub compatibility"],
@@ -177,6 +180,47 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
   const body = read(rel);
   for (const pattern of patterns) {
     if (body.includes(pattern)) failures.push(`${rel}: 廃止済みの現行施工・設計規則が残存: ${pattern}`);
+  }
+}
+
+// 公開された三点正本を唯一の現行施工指示として照合する。旧版のhistoryは対象外。
+const qeManifest = JSON.parse(read("docs/qe/現行/MANIFEST.json"));
+const qeCanonicalFiles = Object.keys(qeManifest.文書 ?? {});
+const qeParsed = {};
+if (qeManifest.版 !== "5.1" || qeManifest.公開 !== true || qeCanonicalFiles.length !== 3) {
+  failures.push("現行QE公開manifestがrev5.1・公開三文書ではない");
+}
+for (const file of qeCanonicalFiles) {
+  const rel = `docs/qe/現行/${file}`;
+  if (!exists(rel)) continue;
+  const actualHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, rel))).digest("hex");
+  const doc = JSON.parse(read(rel));
+  qeParsed[file.slice(0, 2)] = doc;
+  if (actualHash !== qeManifest.文書[file].SHA256) failures.push(`${rel}: manifest SHA-256不一致`);
+  if (doc.識別?.版 !== "5.1" || doc.識別?.公開 !== true || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
+    failures.push(`${rel}: 非公開規則が現行三点正本に残存`);
+  }
+  if (!read("docs/QE_CURRENT_AUTHORITY.md").includes(actualHash)) {
+    failures.push(`${rel}: 現行ピンにSHA-256がない`);
+  }
+}
+const qeActualCounts = {
+  要求: qeParsed["01"]?.要求?.length,
+  親成果: qeParsed["02"]?.親成果?.length,
+  施工単位: qeParsed["02"]?.施工単位?.length,
+  親QC候補: qeParsed["03"]?.親QC候補?.length,
+  局所QC候補: qeParsed["03"]?.局所QC候補?.length,
+  競合能力基準: qeParsed["01"]?.競合能力基準?.length,
+};
+for (const [name, count] of Object.entries(qeActualCounts)) {
+  if (count !== qeManifest.母集団?.[name]) failures.push(`QE現行正本母集団 ${name}: ${count} != ${qeManifest.母集団?.[name]}`);
+}
+if (exists("docs/IMPLEMENTATION_INSTRUCTIONS.md")) {
+  failures.push("廃止済みの第四施工指示書が復活している");
+}
+for (const rel of ["AGENTS.md", "README.md", "docs/INDEX.md", "docs/ROADMAP.md", "docs/作業標準要領.md", "docs/DEVELOPMENT_PRACTICE.md"]) {
+  if (/\]\(IMPLEMENTATION_INSTRUCTIONS\.md\)/.test(read(rel))) {
+    failures.push(`${rel}: 削除済み第四施工指示書へのリンクが残存`);
   }
 }
 

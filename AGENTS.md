@@ -12,7 +12,7 @@
 
 **開発順：全体設計 → 一気通貫で全体実装 → システムの結合形状成立 → 実物へのQC（観測・全体検査・原因分析・改善・再検査） → 対象別QA → ownerの独立した公開・出荷判断。** 先に局所の品質保証を198回完成させて製品を組み上げる方式は採用しない。安全第一・品質第二を維持し、安全・承認・秘密・監査・停止の保護は実装中も常時有効にする。
 
-owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) 一か所だけで管理する。ownerが新しい三点一組を指定したら、配布manifestと三文書それぞれのhashを照合し、この唯一の現行ピンを新版へ置き換える。旧版の三点・旧pin・完了した作業や実装は履歴ログとして保持するが、通常作業では旧版群や完了ログを列挙・再読せず、現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合に限り、該当部分を参照する。内部原典や全要求対応表はPublicリポジトリへ転載しない。作業時に内部正本へアクセスできなければ推測で補わず、現行repoの実物と公開可能な要求から作業可能範囲を確定し、欠落条件を明記する。
+owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報と三文書の実体は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) から参照する。2026-11-14のowner指示により、設計原典・三点正本・要求対応表について従来の非公開・Public Git転載禁止条件を廃止した。文書の公開と製品の出荷GO、実資格情報・実運転データの保護、他repo変更・実外部作用の権限は別である。ownerが新しい三点一組を指定したら、manifestと三文書のhashを照合し現行ピンを更新する。旧版・旧pin・完了した作業は履歴として保持し、通常作業で旧版を現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合だけ参照する。正本や原典にアクセスできなければ推測で補わず、欠落条件を明記する。
 
 2026-11-13にowner採用された現行rev5.0は、HDS Frameworkの意味・関係・反証・学習・原理候補と、BLUE Runtimeの有限なJ/M状態・安全採否を分離する。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
 
@@ -52,10 +52,10 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 1. 上位の安全・実行環境・権限境界。
 2. 現在のowner/userの明示指示。工程方法論の変更は指示を反映するが、HDS-BRAIN、Approval、監査、復旧、release gate、owner GO、operator安全を無断で弱めない。
 3. 本AGENTS.mdの共通規律および固有規律。近傍AGENTS.override.md／AGENTS.mdは対象固有の安全条件を限定・強化できるが、QEの主従・順序を無言で逆転させない。
-4. ownerが最新版と明示した仕様書・工程表・指示書と、適合するactive implementation instruction。日本語の意味正本は規定/00_日本語基底規定.mdを確認する。
+4. ownerが最新版と明示した仕様書・工程表・施工指示書の三点一組。追加の独立したactive implementation instructionを正本化しない。日本語の意味正本は規定/00_日本語基底規定.mdを確認する。
 5. 契約・コード・試験・現物を観測した進捗。旧版、過去会話、他repoの完成値は履歴や反証材料であり、現行証拠ではない。
 
-毎作業の最新HEAD、dirty state、現行指示を再確認する。rev1.1のNOT_STARTEDや古いSHAで現行成果を上書き・消去しない。既存のdocs/作業標準要領.md、docs/IMPLEMENTATION_INSTRUCTIONS.md、docs/ROADMAP.mdに旧来の「毎小単位の詳細試験・品質保証・Git完結」が残る場合、工程方法は本規定のQEに従い、後続の規定同期対象として差分を記録する。**安全・秘密・実行権限・出荷条件については常に強い保護を維持する。**
+毎作業の最新HEAD、dirty state、現行指示を再確認する。rev1.1のNOT_STARTEDや古いSHAで現行成果を上書き・消去しない。過去の作業履歴や公開ロードマップに旧来の「毎小単位の詳細試験・品質保証・Git完結」が残る場合、それらは当時の記録であり、現行三点正本のQE工程を上書きしない。**実資格情報・実運転データ・実行権限・出荷条件については保護を維持する。**
 
 「HDSで判断」「品質を高く」などの抽象指示だけを施工命令としない。対象、目的、入力、作用、正本所有、採否、後続consumer、結果観測・帰還、成立条件を操作として特定する。反論・追加形式・定量化は元の対象と因果に関係する場合にだけ要求する。工学的な妥当性は現在の根拠・整合・因果・現実適合と更新可能性で判断し、形式的留保だけを停止理由にしない。
 
@@ -72,7 +72,7 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 
 ## 5. 作業開始と意図的な切れ目
 
-独立した作業の開始・切替・再開、およびセッション・担当の交代時には、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) で現行一組の版・文書名・hashを確定し、三文書すべてと適用AGENTS.mdを読み直す。読む三文書はその現行pinが指す一組だけとする。owner指示、active指示、最新HEAD・差分、今回の対象コードも再確認する。過去の仕様書・工程表・施工指示書、完了記録、進捗履歴全体はログとして保持するが、通常の作業開始時に一覧化・再読しない。今回の依存・変更系譜・矛盾を解くために必要な場合に限り、該当する記録の必要部分を参照する。前回の状態を記憶だけで確定せず、現行正本と現物から再構成する。連続する一作業内の小単位切替では関係する節と実物を再同期し、QC／QAや全テスト、バックアップ回転を挟まない。
+独立した作業の開始・切替・再開、およびセッション・担当の交代時には、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) で現行一組の版・文書名・hashを確定し、三文書すべてと適用AGENTS.mdを読み直す。読む三文書はその現行pinが指す一組だけとする。ownerの現行原文指示、最新HEAD・差分、今回の対象コードも再確認する。過去の仕様書・工程表・施工指示書、完了記録、進捗履歴全体はログとして保持するが、通常の作業開始時に一覧化・再読しない。今回の依存・変更系譜・矛盾を解くために必要な場合に限り、該当する記録の必要部分を参照する。前回の状態を記憶だけで確定せず、現行正本と現物から再構成する。連続する一作業内の小単位切替では関係する節と実物を再同期し、QC／QAや全テスト、バックアップ回転を挟まない。
 
 198の小単位は実装漏れ防止の索引であり、工程の主成果は次consumerをつないだBUILD_BATCH単位の実経路である。各小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの状態と、次に実装すべきproducer・consumerを記録する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
 
@@ -141,7 +141,7 @@ schema、interface、protocol、adapter contract、capability、manifest、polic
 - agent-driven authority core、emotion機能、WhatsApp first-party core、危険なthird-party skillの無審査実行、権限の隠れた昇格、black-box authorityを追加しない。
 - OpenClaw／Museの機能全体を包含する開発目的は保持する。ClawHub等の無審査直接実行型互換は禁止するが、安全・隔離・権限を満たす互換Adapterは将来の個別施工対象として評価する。channel数の誇示を品質指標にせず、未包含機能を黙って要求母集団から削除しない。
 - CLI-only最終UX、無審査preview昇格、GA／完全上位互換の未実証公開主張を行わない。
-- Public Gitに非公開HDS原典、内部QE施工ZIP・対応表、実資格・秘密・運転状態・raw証拠を入れない。公開可能な規律と非公開の技術詳細を分ける。
+- 設計・原理・HDS・QEの技術文書は公開可能とする。実資格、トークン、利用者の運転状態、個人情報、no-store review本文、機微なraw証拠はPublic Gitに入れない。文書公開と実データの漏洩防止を分ける。
 
 実装上の安全・秘密・認可に不足がある機能は無効・保留にするが、設計済み全体目的から消したことにはしない。
 
@@ -292,7 +292,7 @@ Mobileの招待・device credential等の秘密はnative境界に置き、Dart�
 
 「MobileクライアントがDesktop Brokerを経由して仕事を行う」ことと「Mobile端末単独でC/J/Mや実作用を稼働させる」ことは別能力。後者を本規定だけで実装済み・必要条件成立とは扱わない。
 
-従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行pinが指す非公開QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後に各OSの規格・権限・配布契約に沿ってQC／QAを独立に行い、AndroidとiOSの証拠を相互代用しない。物理機能・署名・Store等、仮想環境で再現できない条件は別に未確認範囲を示す。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
+従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後に各OSの規格・権限・配布契約に沿ってQC／QAを独立に行い、AndroidとiOSの証拠を相互代用しない。物理機能・署名・Store等、仮想環境で再現できない条件は別に未確認範囲を示す。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
 
 ## 19. 競合比較・互換性と公開境界
 
@@ -304,7 +304,7 @@ P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのま�
 
 ## 20. QE施工運転・全域設計と全体一括実装
 
-現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書を正本とする。現行rev5.0はP0全域実物棚卸し→P1全域設計→P2全体一括実装を一つの施工経路として進め、依存consumerを同時に制作・結線する。docs/IMPLEMENTATION_INSTRUCTIONS.mdは現在の全体施工状態、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdと閉じたbatch記録は履歴を持つ。旧版に残る局所工程・全OS物理実機必須・毎小単位のQC/QAはrev5.0で上書きし、安全・権限・秘密・公開・出荷の保護は維持する。
+現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書の三点だけを正本とする。現行版はP0全域実物棚卸し→P1全域設計→P2全体一括実装を一つの施工経路として進め、依存consumerを同時に制作・結線する。docs/QE_CURRENT_AUTHORITY.mdは三点実体への唯一の現行ポインタ、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdと閉じたbatch記録は履歴とする。旧版の局所工程・全OS物理実機必須・毎小単位QC/QAは現行三点で上書きし、実行権限・実資格・出荷GOは別に保護する。
 
 工程状態はrev5.0のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
 
@@ -380,7 +380,7 @@ owner 指示により、通常の編集・ビルド・テスト・起動・Git �
 - unsupported / unsafe path を first-party 外として明示する
 - non-goals と gap を完成機能から区別する
 - current implementation と target state、first-run と permanent-use を分ける
-- private HDS/source-philosophy や sealed core details を公開 process docs へ展開しない
+- HDS原理・技術仕様・コア設計の公開を一律に禁止しない。公開対象の技術文書と、実資格・実運転・個人データを分別する
 - active docs を日本語正本化し、固定識別子だけを必要範囲で併記する
 - 過去文書は現行仕様として無言再利用しない
 
@@ -388,8 +388,8 @@ owner 指示により、通常の編集・ビルド・テスト・起動・Git �
 
 毎作業および小単位を開始・切替・再開するたびに以下を行う。
 
-1. 最新owner指示、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) の現行版・文書名・hash、rootと最寄りのAGENTS.md、およびactive指示を確認する。独立した作業の開始・切替・再開時は、現行ピンが指す仕様書・工程表・施工指示書の三文書すべてと適用AGENTS.mdを読み直す。同一作業内の連続した小単位切替では、関係する節と現物を再同期する。前回の状態は記憶だけで確定せず、現行ピンと現物から再構成する。旧版・完了記録・進捗履歴全体はログとして保持し、依存・変更系譜・矛盾の確認に必要な場合だけ該当箇所を参照する。
-2. 現在のmain HEAD、remote、dirty差分、ownerや他writerの作業と未決作用、私有資料の扱いを確認する。
+1. 最新owner原文指示、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) の現行版・文書名・hash、rootと最寄りのAGENTS.mdを確認する。独立した作業の開始・切替・再開時は、現行ピンが指す仕様書・工程表・施工指示書の三文書すべてと適用AGENTS.mdを読み直す。同一作業内の連続した小単位切替では、関係する節と現物を再同期する。前回の状態は記憶だけで確定せず、現行ピンと現物から再構成する。旧版・完了記録・進捗履歴全体はログとして保持し、依存・変更系譜・矛盾の確認に必要な場合だけ該当箇所を参照する。
+2. 現在のmain HEAD、remote、dirty差分、ownerや他writerの作業と未決作用、実資格・個人データの扱いを確認する。
 3. 今回の対象、目的、作用、入出力、次consumer、期待する観測、安全保護、停止条件を短く固定する。
 4. 関連contract／本番呼出し先／局所testを確認し、必要十分なコードを連結する。次の実装を進められない欠陥は直す。
 5. CODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYと次の接続箇所を残し、切れ目で指示を再読する。小単位ごとのQC・QA・全suite・Git世代回転は挟まない。
@@ -410,5 +410,5 @@ QE_QCでは対象実物・版・環境・機能母集団、欠陥と根因、修
 - D4Pocket（旧GUI-Shell）のAGENTS.mdの2026-10-12確認版から：正本と現物照合、作業の限定、安全優先、証拠分類、信頼境界、通常経路最小化、環境差、wrapper説明責任、single writer、owner GO独立を抽出した。
 - 移植しない：D4固有のFlutter／Rust／Swift／Windows／macOS transport実装、D4の閉鎖済み工程、D4用試験成功値、別repoへの書込権。
 - ownerの現行開発方針から：毎タスクAGENTS.md・指示書を再読して目的ドリフトを抑制し、切れ目を意図的に設ける。ただし一気通貫実装を最優先とし、QCと対象別QAを後段に配置する。
-- 本文の既存§§12〜18にあるHDS-BRAIN standalone、L3、Approval、audit、memory非権限、Runtime Invariants、channel／plugin／operator境界は継続適用する。原理の非公開詳細をPublic Gitへ持ち込まない。
+- 本文の既存§§12〜18にあるHDS-BRAIN standalone、L3、Approval、audit、memory非権限、Runtime Invariants、channel／plugin／operator境界は継続適用する。原理文書の公開可否と運転上の安全境界を混同しない。
 

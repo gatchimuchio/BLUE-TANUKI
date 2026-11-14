@@ -1,26 +1,27 @@
 # QE 現行正本ポインタ
 
-このページが、owner指定のQE三点セットについて公開リポジトリ内で参照する唯一の現行ピンである。仕様本文・工程表本文・施工指示書本文、内部原典、要求対応表はPublic Gitへ複製しない。
+このページがBLUE-TANUKIの現行QE三点正本を一意に指す。三文書は公開リポジトリに実体を置き、Codexはここから直接読み込む。第四の独立した施工指示書は置かない。文書公開は製品の公開・出荷GOや実外部作用の許可ではない。
 
 ## 現行セット
 
-- owner指定版：BLUE-TANUKI QE三点セット rev5.0（2026-11-13）
-- owner採用日：2026-11-13
-- 配布ZIP SHA-256：`B931D04AC4CB5EF364261BB6672238189B148C84923E2716ACDE3B5AB1169DF8`
-- 配布 `MANIFEST.json` SHA-256：`4DEB56A00A2AFE513AA68FFE345F69A61A5CDFE4BDDB5BDE932E347167C70941`
-- 仕様書 `01_BLUE-TANUKI_統合仕様書_rev5_0.json` SHA-256：`9B4E9F8D2183150D6CB3D9C2763CD43BFC21D6218C30B6CD99AFAECCF8588961`
-- 工程表 `02_BLUE-TANUKI_全体施工工程表_rev5_0.json` SHA-256：`05F46C201FC9176AF1AAA0DEDF5E0289E439984FE944F25AF774E556EE2A253B`
-- 施工指示書 `03_BLUE-TANUKI_Codex施工指示書_rev5_0.json` SHA-256：`AD6F35BCC99C8C9ABAC477E0BE4DD074EB344BA2E6B395C1DF1B733435261439`
-- 同梱の継承監査資料SHA-256（証拠・非正本）：`98FA46256ED3FC72A82929D8081DEE139E29CB6F17E98930025948AA0FA5A31F`
+- 技術基底：ownerが2026-11-13に採用したQE三点セットrev5.0。
+- 公開制約の撤廃：ownerの2026-11-14指示。技術・施工内容と母集団を継承し、文書公開制約と旧正本判定文言だけを改訂したrev5.1を現行とする。
+- 公開改訂manifest：[MANIFEST.json](qe/現行/MANIFEST.json)。旧rev5.0原本hash、変更箇所、三文書hash、母集団を保持する。
+- 仕様書：[01_BLUE-TANUKI_統合仕様書_rev5_1.json](qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_1.json) — SHA-256 `dc970de3010d0e849efcdb7c36fc2d23ba3f994cfaa2c47650f8e28776f6b955`。
+- 工程表：[02_BLUE-TANUKI_全体施工工程表_rev5_1.json](qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_1.json) — SHA-256 `4af5642800b63ccb9547005dc2ace3123613797f1ba5b8443c22680bddcf21e8`。
+- 施工指示書：[03_BLUE-TANUKI_Codex施工指示書_rev5_1.json](qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_1.json) — SHA-256 `245c503a6f37929624f50fd18c21b67c7f591ccb17388c1a8e76a7f14992609e`。
 
-ownerの「コレで作業しろ」という指定をrev5.0採用指示として扱い、本pinを更新した。manifestの「候補・owner未採用」は配布時点の状態であり、本指示によりrev5.0は内部施工正本として発効した。これは製品出荷GO、外部公開、他repo書込み、使用者のL3同意を意味しない。ZIP・manifest・四同梱ファイルのhash／byte数、三文書の版・主語・目的、431要求・65親成果・198索引・260親QC・396局所QC・61競合基準の件数／一意性／相互参照を照合した。改訂対照62件は監査資料の件数と一致し、全要求・施工単位・QC・競合IDの順序はrev4.0から維持されている。新manifestの継承旧版hashは直前のrev4.0 pinと一致する。採用時のlocal `main`、`origin/main`、GitHub `main` は `71addd5e6172a098b195ffdd6e97afeb2637d1ae` で一致し、復旧branchとremote tag二世代を照合した。ZIP本文・内部原典・要求対応表・監査資料本文はPublic Gitへ転載しない。
+旧rev5.0の原本SHA-256は仕様書`9b4e9f8d2183150d6cb3d9c2763cd43bfc21d6218c30b6cd99afaeccf8588961`、工程表`05f46c201fc9176af1aaa0dedf5e0289e439984fe944f25af774e556ee2a253b`、施工指示書`ad6f35bcc99c8c9abac477e0be4dd074eb344ba2e6b395c1df1b733435261439`。旧ZIP・MANIFESTと監査の当時証拠は履歴として保持し、現行技術規範へ自動昇格させない。
 
-rev5.0の現行工程は全域設計から全体一括施工を続け、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC・OS別QAへ進む。Windows実PCを最終確認に使い、他OSは各OS契約に忠実な仮想環境で個別に確認する。製品状態はQE_BUILD、`SYSTEM_SHAPED=false`、`BUILD_COVERED=false`、QE_QC／QE_QA未成立、P13 `PENDING_OWNER_GO` のままである。
+## 効力と責任境界
 
-旧rev3.1のpinと作業履歴はGit履歴に保持する。rev5.0の公開pinは三点セットの内部施工正本を識別するだけで、package本体の公開、実GitHub送信、他repo変更、Rust authority cutover、QE_QC／QE_QA、公開・出荷GOを成立させない。
+1. 現行の設計・工程・施工命令は上記三文書のみ。`AGENTS.md`は共通の安全・権限・監査規律、`docs/作業標準要領.md`はその運用説明、`docs/ROADMAP.md`と`docs/IMPLEMENTATION_HISTORY.md`は工程要約と履歴であり、独立した第四施工指示を発行しない。
+2. rev5.0原本の「公開不可」「三文書・原典・要求をPublic Gitへ転載しない」等の旧制約は2026-11-14指示により失効した。rev5.1の改訂原文対照や施工索引に残る古い文言は当時の履歴証拠であって現在の禁止命令ではない。原典・設計・QE要求対応表を公開できる。
+3. 実資格情報、利用者の個人情報・運転状態、no-store review本文は引き続き保護する。HDS権限、Approval、L3、Broker、監査、fail-closed、他repo変更の権限は弱めない。製品公開・配布・GAは独立したowner GO待ち（P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`）。
+4. rev5.1は要求431・親成果65・施工索引198・親QC260・局所QC396・競合基準61を継承する。施工は全体躯体・全5OS実入口と相互結線を先行し、`SYSTEM_SHAPED`／`BUILD_COVERED`後にQE_QC・OS別QE_QAへ進む。Windows実PCと他4OSの仮想／公式シミュレータ等で指定された規格適合条件を検査する。
 
-## 更新と参照
+## 作業開始・正本更新
 
-ownerがさらに新しい三点一組を指定した場合、配布manifestと三文書それぞれのSHA-256を照合し、この唯一の現行pinを置き換える。旧セットと完了済み施工記録は履歴ログとして保持し、通常作業では現行正本として再読しない。
+独立した作業の開始・切替・再開時は、この現行ピン、manifest、三文書すべて、適用AGENTS.md、owner最新原文指示、実main HEAD・差分を照合する。過去の完了ログから「次の局所BUILD_BATCH」を独立した施工命令として選ばない。完了済み履歴は依存・変更根拠・矛盾の監査時だけ参照する。
 
-独立した作業の開始・切替・再開時は、この現行ピンが示す三文書すべてと適用AGENTS.mdを読み、active instruction、最新HEAD・差分も確認する。パッケージに記録された古い観測HEADや旧工程状態を現行repoへ書き戻さない。
+ownerがさらに新しい三点一組を指定した場合、三文書とmanifestのSHA-256を照合してこの唯一の現行ピンを更新する。旧版と履歴は消去・改竄しない。ここに記載した製品工程状態は公開方針改訂時点の認識であり、現在の実装状態は毎回コード・test・実行証拠から再観測する。

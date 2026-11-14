@@ -10,7 +10,7 @@
   "next_action": "意味と境界を日本語で再成立させ、監査後に移行台帳から除く。",
   "debts": [
     { "path": "AUDIT.md", "sha256": "be19096bae5d022ba0ed72a34ca6c7d7bf3fd758fb8e494514290cb4ce6f5608" },
-    { "path": "CHANGELOG.md", "sha256": "1f298adf76514c47755726ca3655bcf99d7fb054e1257bba0a0c45c54dbb73dd" },
+    { "path": "CHANGELOG.md", "sha256": "1218e17366167a0a1563bf73802dc8e3914cfb3c9f351cf72b1ac4a74855ecbb" },
     { "path": "CLAIM.md", "sha256": "02d7f591f16f31099117c8eba386539697f7b5c7e0c6c6acddef2c25f0dcc757" },
     { "path": "CONFIG.md", "sha256": "5ab6ff6460561b702147201565c7cfa4c0e2fdccc2d23685ac4b16a1b98dc03e" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
@@ -60,7 +60,7 @@
     { "path": "docs/plugin-manifest.md", "sha256": "fb2c58a03c4e66b8f74641cdac99dd55da34b1794bc5e728336b5674a34535a3" },
     { "path": "docs/preview-scope.md", "sha256": "63cbd23221ed6560759c2139738ca04baf0abd8f827f791fff48d567e45be6a9" },
     { "path": "docs/production-import-graph.md", "sha256": "530f3b82de5081d6b08e3cc77584a5527ad043a37027a1fd4afb9bd4c840181d" },
-    { "path": "docs/repository-health-inventory.md", "sha256": "19aa47bc2f91d6a6ceda54ad44c0184486d5d81506827ebcf2726e298b729a04" },
+    { "path": "docs/repository-health-inventory.md", "sha256": "604e42bb4a9e218a7924483a7d12c959163c6dee346408233960ffe5c88fd42b" },
     { "path": "docs/repository-health-phase4-final-commissioning.md", "sha256": "dbcea89474397a28e299071d3cc92db424c44ad60618f6ed265a0e4987a5cd48" },
     { "path": "docs/RESIDENT_APP_GUIDE.md", "sha256": "7da24d0daff4250e71f558b7ebfb8b2607cd1229caf56b78ec96dafa4fd95a44" },
     { "path": "docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md", "sha256": "591194cb6b995898857dead9a188ba2804591a9bb01e323a9a4dd40cd853bd0e" },

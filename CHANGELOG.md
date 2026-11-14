@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-14 — QE公開制約撤廃と三点正本の直接参照
+
+- owner指示により、技術原典・HDS/QE仕様・全要求対応表の非公開制約を撤廃。rev5.0（2026-11-13採用）の技術母集団と実装工程を保持し、公開整合rev5.1三点正本を`docs/qe/現行/`に配置してhashで固定した。
+- 削除済みの旧第四施工指示書を現行運用・INDEX・文書検査から除外。過去の実装ログは歴史資料として保持し、現行施工命令へ昇格させない。
+- 実資格・個人情報・実運転状態の保護、独立Approval／L3、P13 ownerの製品出荷GOは従来どおり維持。製品実装・QAの成立を主張しない。
+
 ## 2026-10-18 — QEB-03-E03.03 Cron台帳のread-only復旧検査
 
 - Cronのinbox／outbox／approval-handoff台帳を、runtime storeを初期化せずread-onlyで検査し、検証済み・不整合・孤立・未決・省略の件数を`--recovery-inspect`、Recovery Operator、Control Centerへ接続する。

@@ -13,7 +13,7 @@
 ## 0. 文書の位置づけ
 
 - 本書は **旧v1.0 RCの製品完成スコープのロードマップ** として、`docs/ROADMAP.md`（v9, Band A–F）の「製品完成」に関する記述を上書きする。
-- 実装指示の source of truth は引き続き `docs/IMPLEMENTATION_INSTRUCTIONS.md` + `AGENTS.md`。**当時の本書採用後に予定された最初のCodexタスクは、両文書へのP系列反映と `docs/ROADMAP.md` への置換宣言の追記**とする。
+- **履歴注記：** この文書策定当時は独立施工指示書をsource of truthとしていたが、2026-11-14に廃止。現行の設計・工程・施工正本は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)から直接読む三点セットのみ。本書のP系列は旧v1.0 RCの記録である。
 - 命名規則: 製品PhaseはP1〜P13。既存の Phase X-SY 系列・Band A–F とは衝突させない。各P-Phase内のCodex指示は従来通り機能塊単位（Phase Pn-S1, Pn-S2…）で起票する。
 - 開発運用は従来原則を維持: single-track（Codexセッションは直列。本書の「並列可」は依存関係上の着手順自由を意味し、同時並走を意味しない）、機能塊間でのみ監査を挟む。
 

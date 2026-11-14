@@ -2,7 +2,7 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。ownerは2026-11-13にrev5.0を採用し、唯一の現行pinを[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)へ更新した。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。ownerは2026-11-13にrev5.0を採用し、2026-11-14に技術文書の非公開制約を撤廃した。公開整合版rev5.1の三点正本は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)から直接読む。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
 工程は全域棚卸し・設計からP2全体一括実装を継続し、全体の`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC、OS別QAへ進む。198索引は実装traceであり、局所完了gateではない。Windowsは所有PCで最終確認し、他4OSはOS契約に忠実な仮想環境で独立に検査する。仮想で再現できない物理条件は別に未確認として扱う。
 
@@ -11,15 +11,15 @@
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / Windows installed package startup consumer
 
-GitHub Actionsのmanual `workflow_dispatch` run [#13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43531411120)、source SHA=`24fc911c875bf31d5ff1af9937910761b3104257`で、Windows Server 2022 hosted runner上のworkspace build／Windows package verify、IExpress payload抽出、Setup、installed Gateway health／停止、synthetic data Purgeを確認した。Uninstallは成功したがrunnerがDesktop folderを解決できずwarningを出した。実`.exe`起動・実画面操作・owner PC・full lifecycleはNOT_RUN。全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。artifactは0件、ローカル生成物なし。詳細・hash・scopeは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。
+GitHub Actionsのmanual `workflow_dispatch` run [#13](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43531411120)、source SHA=`24fc911c875bf31d5ff1af9937910761b3104257`で、Windows Server 2022 hosted runner上のworkspace build／Windows package verify、IExpress payload抽出、Setup、installed Gateway health／停止、synthetic data Purgeを確認した。Uninstallは成功したがrunnerがDesktop folderを解決できずwarningを出した。実`.exe`起動・実画面操作・owner PC・full lifecycleはNOT_RUN。全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。artifactは0件、ローカル生成物なし。詳細・hash・scopeは[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / macOS native installed product lifecycle
 
-GitHub Actionsの手動 workflow_dispatch run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)、source SHA=a9e26f7ae427e1973a2b1519d393f9a1446cdb64で、macOS x64／arm64 hosted runnerのnative package build、DMG検証、Setup、Gateway／WebChat入口、更新回復、通常Uninstall後のデータ保持、再導入、隔離PurgeまでPASS。artifact 2件を7日保持設定でGitHub Actionsに保存した。/appはHTTP 200であり実画面操作ではない。owner device QA、host reboot、Keychain、署名・公証、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。macOS shell isolationは未提供のためshell.execをfail-closedで無効維持。詳細、package／artifact hash、保護したローカル資産は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。rev5.0 P2全体BUILDを継続する。
+GitHub Actionsの手動 workflow_dispatch run [#25](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43519748822)、source SHA=a9e26f7ae427e1973a2b1519d393f9a1446cdb64で、macOS x64／arm64 hosted runnerのnative package build、DMG検証、Setup、Gateway／WebChat入口、更新回復、通常Uninstall後のデータ保持、再導入、隔離PurgeまでPASS。artifact 2件を7日保持設定でGitHub Actionsに保存した。/appはHTTP 200であり実画面操作ではない。owner device QA、host reboot、Keychain、署名・公証、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。macOS shell isolationは未提供のためshell.execをfail-closedで無効維持。詳細、package／artifact hash、保護したローカル資産は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。rev5.0 P2全体BUILDを継続する。
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / Linux native packaged installed lifecycle
 
-Ubuntu 24.04.5 hosted runnerのmanual `workflow_dispatch` run [#24](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43515570476)、source SHA=`79dfca35c375a659d6840ad6f071ce79a8367006`で、workspace／Linux packages build、tar.gz Setup、resident起動、`/healthz`・`/app` HTTP 200、synthetic first message、update rollback／interrupted-update recovery、normal uninstall時のdata保持、isolated PurgeまでPASS。`.run`はbuild／verifyのみ。Hosted runner上の限定consumer evidenceであり、実GUI、物理Linux、全suite、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。Artifactsは保持なし。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。
+Ubuntu 24.04.5 hosted runnerのmanual `workflow_dispatch` run [#24](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43515570476)、source SHA=`79dfca35c375a659d6840ad6f071ce79a8367006`で、workspace／Linux packages build、tar.gz Setup、resident起動、`/healthz`・`/app` HTTP 200、synthetic first message、update rollback／interrupted-update recovery、normal uninstall時のdata保持、isolated PurgeまでPASS。`.run`はbuild／verifyのみ。Hosted runner上の限定consumer evidenceであり、実GUI、物理Linux、全suite、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未確認。Artifactsは保持なし。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[作業履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / macOS native app copied-launch consumer
 
@@ -27,11 +27,11 @@ macOS x64／arm64 Hosted runnerで、read-only DMGの検証、appをrunner専用
 
 ### 記録済みBUILD_BATCH — rev5.0 QE_BUILD / CLI受信内容の運用ログ除外
 
-通常CLI依頼のdiagnostic `inbound` recordからraw textを除き、content SHA-256とUTF-8 byte数だけを残す。Gateway package typecheckと`git diff --check`はPASS。実CLI log、provider、外部作用、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの証拠ではない。implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へpush済み。詳細と終端refは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。
+通常CLI依頼のdiagnostic `inbound` recordからraw textを除き、content SHA-256とUTF-8 byte数だけを残す。Gateway package typecheckと`git diff --check`はPASS。実CLI log、provider、外部作用、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの証拠ではない。implementation commit=`8c7ad15cad69c4e65f2a006e526cc055a46d2537`をGitHub `main`へpush済み。詳細と終端refは[当時の施工履歴](IMPLEMENTATION_HISTORY.md)に記録する。
 
 ### 前段完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / Gateway serve smoke子process環境隔離
 
-serve smokeのGateway／audit-dump子processを、OS実行に必要な限定環境と合成設定だけで起動するよう変更した。親のprovider/channel credential、`BLUE_TANUKI_ENV_FILE`、`PNPM_BIN`、Node preload、proxy、利用者固有Gateway設定は継承しない。strict typecheckと、存在しないenv-file／pnpm pathおよびsynthetic `LLM_API_KEY`を親へ与えたstub／loopback smokeがPASS。audit JSONL 8件とchain検証を確認し、Temp root削除・listener消失を確認した。実providerや外部作用の証拠ではない。GitHub main SHAと復旧refは[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。
+serve smokeのGateway／audit-dump子processを、OS実行に必要な限定環境と合成設定だけで起動するよう変更した。親のprovider/channel credential、`BLUE_TANUKI_ENV_FILE`、`PNPM_BIN`、Node preload、proxy、利用者固有Gateway設定は継承しない。strict typecheckと、存在しないenv-file／pnpm pathおよびsynthetic `LLM_API_KEY`を親へ与えたstub／loopback smokeがPASS。audit JSONL 8件とchain検証を確認し、Temp root削除・listener消失を確認した。実providerや外部作用の証拠ではない。GitHub main SHAと復旧refは[当時の施工履歴](IMPLEMENTATION_HISTORY.md)に記録する。
 
 ### 前段完了BUILD_BATCH — rev5.0 P2 SAFE_MIN / Gateway serve smoke状態分離と終了確認
 
@@ -39,85 +39,85 @@ serve smokeのGateway／audit-dump子processを、OS実行に必要な限定環�
 
 最終`pnpm smoke:serve`はstub・loopbackのみでGateway起動、WebSocket hello、inbound応答、監査JSONL 8件、audit-dump hash-chain検証までPASS。Workspace TypeScript project-reference build、runner単体strict typecheck、`git diff --check`もPASS。これはserve／応答／監査の短いSAFE_MIN smokeで、J/M達成・D4 consumer・実provider／外部作用・installed製品・5OS・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`・QE_QC／QE_QAの証拠ではない。
 
-implementation commit=`e7538c7f606af18e44e75ca42e5d4da2e766db96`をGitHub `main`へpush済み。手動isolated probe（18 files／505,501 bytes）はWindows標準Recycle Binへ移動済み。既存stateと保護対象は保持し、D4／MINIDORA別repo変更、実provider、外部作用、P13 GOは行っていない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+implementation commit=`e7538c7f606af18e44e75ca42e5d4da2e766db96`をGitHub `main`へpush済み。手動isolated probe（18 files／505,501 bytes）はWindows標準Recycle Binへ移動済み。既存stateと保護対象は保持し、D4／MINIDORA別repo変更、実provider、外部作用、P13 GOは行っていない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / D4 Runtime同一依頼の中止要求をBlue Gatewayへ接続 (P2)
 
 Blue WebChatに`POST /runtime/intent/cancel`を追加し、専用D4 Runtime Bearer、登録runtime、session-scoped private submissionからrequest IDを解決する。GatewayはD4 Runtime owner digest／WebChat channel digestを持つHDS planの同一request bindingとactive execution registryを照合し、現在実行中commandが一意の場合だけ既存AbortSignalへ中止要求を送る。外部入力のcommand IDは受けない。不存在、別session、settled、欠落・複数bindingは拒否する。応答は中止要求とsignal状態を示すだけで、Executor終了・worker停止・外部処理停止を断定しない。監査はresume／D4 Runtimeのtoken種別を要求からsettlementまで保持する。
 
-Workspace TypeScript project-reference build、WebChat endpoint対象1件、Gateway binding／registry／監査store 18件、`pnpm docs:check`、`git diff --check`はPASS。WebChat `webchat.test.ts`全135件中132件PASS／3件FAILで、FAILは未変更のControl Center recovery scope DOM fixtureに限られる。実D4 client・他repo・実provider・外部作用は未使用。本producerはsource-level `CODE_PRESENT`で、D4アプリconsumerは未接続。5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。実装commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpush済み。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Workspace TypeScript project-reference build、WebChat endpoint対象1件、Gateway binding／registry／監査store 18件、`pnpm docs:check`、`git diff --check`はPASS。WebChat `webchat.test.ts`全135件中132件PASS／3件FAILで、FAILは未変更のControl Center recovery scope DOM fixtureに限られる。実D4 client・他repo・実provider・外部作用は未使用。本producerはsource-level `CODE_PRESENT`で、D4アプリconsumerは未接続。5OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。実装commit=`2fdc70167b4844625ce4e73407f19c29b5504170`をGitHub `main`へpush済み。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue reopenをplan-bound L3へ接続 (F05 follow-up)
 
 `github.write issue.reopen`を`issue.close`／本文更新から独立した単一操作として実装した。対象はallowlist内のexact repositoryにあるclosed・未ロック・非PR Issue一件。closed状態のtarget observationと独立digestをOperation Plan、HDS、Executorへ結び、no-store L3 reviewにclosed→open、Issue identity、title、観測時刻、通知可能性を表示する。review後とPATCH直前にRepository／Issueを再観測し、変化時は送信しない。PATCHは単回で、同一Issueのopen状態を応答照合する。既知拒否と結果不明を分離し、結果不明時に自動再送しない。結果projectionは既存Executor／Gateway／J/M帰還へ接続した。
 
-TypeScript project-reference build、`git diff --check`はPASS。test suite、package/native build、Gateway runtime、合成GitHub API、実GitHub／credential／外部作用はNOT_RUN。source-level `CODE_PRESENT`でありruntime `WIRED`や製品全体完成の証拠ではない。5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+TypeScript project-reference build、`git diff --check`はPASS。test suite、package/native build、Gateway runtime、合成GitHub API、実GitHub／credential／外部作用はNOT_RUN。source-level `CODE_PRESENT`でありruntime `WIRED`や製品全体完成の証拠ではない。5OS、`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、P13 owner GOは未成立。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / GitHub Issue closeをplan-bound L3へ接続 (F05)
 
 `github.write issue.close`を本文更新と独立したoperationとして追加した。対象はallowlist内のexact repositoryにあるopen・未ロック・非PRの一件だけ。target observation、repo／Issue identity、close payload、Operation Plan、no-store L3 owner reviewを束縛し、review後・単回PATCH直前にrepoとIssueを再観測する。accepted responseは同一Issueがclosedになったことを検証し、provider rejection／outcome unknownを分離してunknown時に自動再送しない。結果は既存Executor／Gateway／J/M保存・同一Owner照会へ送る。
 
-全workspace typecheck、15-project build、`git diff --check`はPASS。test suite、Gateway process／合成API、実GitHub／credential／外部作用はNOT_RUN。従って新経路はsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証していない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。実装commit=`13c7c46`はGitHub mainへpush済み。docs closeoutと最終recovery refsは施工指示書に記録する。保護添付は保持し、workspace buildがLinux isolation `target/`を実行したため既存untracked targetは削除せず保留する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+全workspace typecheck、15-project build、`git diff --check`はPASS。test suite、Gateway process／合成API、実GitHub／credential／外部作用はNOT_RUN。従って新経路はsource-level `CODE_PRESENT`であり、runtime `WIRED`を実証していない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、5OS、公開・出荷GOは未成立。実装commit=`13c7c46`はGitHub mainへpush済み。docs closeoutと最終recovery refsは施工指示書に記録する。保護添付は保持し、workspace buildがLinux isolation `target/`を実行したため既存untracked targetは削除せず保留する。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Control Center初回起動のローカル認証引継ぎ (G02.02)
 
-Windows／Unix launcherからmanaged GatewayのWebChat tokenをloopbackだけで短時間の単回ticketへ束縛し、Control Centerがsame-origin no-store交換後に既存password入力とsessionStorageを設定してWebChatへ接続する。Unixは専用non-proxy HTTP agentと4秒timeout、Windowsはproxy・redirect無効を使う。URL・出力へstatic credentialを載せず、仕事送信や承認は行わない。WebChat／Gateway typecheck、WebChat build、生成script構文、PowerShell AST／dummy header設定、POSIX shell／inline Node構文、`git diff --check`はPASS。test suite・実Gateway／HTTP・installed GUI・全G02／P2・BUILD_COVERED・QC／QAはNOT_RUN／未成立。これは初回画面のsource-level producer→consumer接続で、G02全体・製品完成の証拠ではない。最新実装commit=`f45506e6d87b58eadd03eb20798e3fd36db435cb`までGitHub mainへpush済み。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Windows／Unix launcherからmanaged GatewayのWebChat tokenをloopbackだけで短時間の単回ticketへ束縛し、Control Centerがsame-origin no-store交換後に既存password入力とsessionStorageを設定してWebChatへ接続する。Unixは専用non-proxy HTTP agentと4秒timeout、Windowsはproxy・redirect無効を使う。URL・出力へstatic credentialを載せず、仕事送信や承認は行わない。WebChat／Gateway typecheck、WebChat build、生成script構文、PowerShell AST／dummy header設定、POSIX shell／inline Node構文、`git diff --check`はPASS。test suite・実Gateway／HTTP・installed GUI・全G02／P2・BUILD_COVERED・QC／QAはNOT_RUN／未成立。これは初回画面のsource-level producer→consumer接続で、G02全体・製品完成の証拠ではない。最新実装commit=`f45506e6d87b58eadd03eb20798e3fd36db435cb`までGitHub mainへpush済み。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Linux・macOS installed Gateway health-gated Control Center入口 (G02.01/G02.03)
 
-Linux／macOS共通のinstalled launcherで、resident起動・再起動・safe mode後にmanaged process identityを再照合し、local `/healthz`=200を最大15秒待つようにした。Control Centerの各入口は開く直前にもhealthを確認し、未readyなら開かずDoctor／ログを案内する。失敗後もmanaged process、DataRoot、ユーザーデータを保持する。POSIX shell構文、inline Node probe構文、`git diff --check`、`corepack pnpm docs:check`はPASS。docs checkは日本語基底の既存移行負債75件を注意表示した。test、Linux／macOS installed runtime・GUI、全体G02／P2、QE_QC／QE_QAはNOT_RUN／未成立。これはG02入口のsource-level P2 BUILDであり、製品完成の証拠ではない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Linux／macOS共通のinstalled launcherで、resident起動・再起動・safe mode後にmanaged process identityを再照合し、local `/healthz`=200を最大15秒待つようにした。Control Centerの各入口は開く直前にもhealthを確認し、未readyなら開かずDoctor／ログを案内する。失敗後もmanaged process、DataRoot、ユーザーデータを保持する。POSIX shell構文、inline Node probe構文、`git diff --check`、`corepack pnpm docs:check`はPASS。docs checkは日本語基底の既存移行負債75件を注意表示した。test、Linux／macOS installed runtime・GUI、全体G02／P2、QE_QC／QE_QAはNOT_RUN／未成立。これはG02入口のsource-level P2 BUILDであり、製品完成の証拠ではない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / Windows installed Gateway health-gated Control Center入口 (G02.01/G02.03)
 
-Windows installed launcherが、managed Gatewayの`/healthz`=200を確認してからControl Centerを開くようにした。既存process・新規processの両方で最大15秒待ち、未readyならブラウザーを開かず、process／ユーザーデータを保持したままDoctorとログを案内する。PowerShell AST構文確認と`git diff --check`はPASS。tests、installed HTTP／GUI smoke、製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはWindows通常入口のP2 BUILDであり、全lifecycleや製品完成の証拠ではない。次はP2全体実装を続ける。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Windows installed launcherが、managed Gatewayの`/healthz`=200を確認してからControl Centerを開くようにした。既存process・新規processの両方で最大15秒待ち、未readyならブラウザーを開かず、process／ユーザーデータを保持したままDoctorとログを案内する。PowerShell AST構文確認と`git diff --check`はPASS。tests、installed HTTP／GUI smoke、製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはWindows通常入口のP2 BUILDであり、全lifecycleや製品完成の証拠ではない。次はP2全体実装を続ける。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — rev5.0 QE_BUILD / F06.02フォーム入力と最終GETの二段階L3
 
-既存`browser.automation`を`form_fill`と`form_submit`の別段階に分けた。前者はL3確認後のephemeral DOM fillのみで、後者は同じrequest／owner／payload／form stateへ結ぶ短期・単回の非権威receipt、再取得・完全state照合、別L3確認を必須にし、Gateway停止条件を実GETの直前に再確認する。外部GETの効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。Core／Gateway typecheck、Core emit、WebChat build、Control Center script構文、`git diff --check`はPASS。test suite、runtime往復、実Web／HTTP、実provider、全F06・製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはsource-levelの`CODE_PRESENT`であり、製品全体の完成を示さない。次はP2全体実装を継続する。G09.01はD4別repo限定委任待ち。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+既存`browser.automation`を`form_fill`と`form_submit`の別段階に分けた。前者はL3確認後のephemeral DOM fillのみで、後者は同じrequest／owner／payload／form stateへ結ぶ短期・単回の非権威receipt、再取得・完全state照合、別L3確認を必須にし、Gateway停止条件を実GETの直前に再確認する。外部GETの効果は未分類、redirect・credential・Cookie・JavaScript・download・自動再送なし。Core／Gateway typecheck、Core emit、WebChat build、Control Center script構文、`git diff --check`はPASS。test suite、runtime往復、実Web／HTTP、実provider、全F06・製品全体BUILD_COVERED、QE_QC／QE_QAはNOT_RUN／未成立。これはsource-levelの`CODE_PRESENT`であり、製品全体の完成を示さない。次はP2全体実装を継続する。G09.01はD4別repo限定委任待ち。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / GitHub release draft annotated tag chain (F05.02)
 
-`github.write release.draft.create` now resolves nested annotated tag objects through a bounded 16-step chain to the exact requested commit. The target inspection and post-create readback share the resolver. Cycles, invalid or non-commit targets, and deeper chains fail closed. Operation Plan, no-store L3 review, the one-POST boundary, and no automatic retry for uncertain results remain unchanged. Core typecheck, `pnpm docs:check`, and `git diff --check` PASS; the 75 existing Japanese-base migration items remain a notice. Tests, workspace build, real GitHub API, external effects, full F05 and product-wide `SYSTEM_SHAPED`／`BUILD_COVERED`, QE_QC／QE_QA are NOT_RUN or not established. This is `CODE_PRESENT`, not runtime evidence. G09.01 remains `BLOCKED_AUTHORITY` pending separate D4 adapter delegation. Details: [current implementation state](IMPLEMENTATION_INSTRUCTIONS.md) and [history](IMPLEMENTATION_HISTORY.md).
+`github.write release.draft.create` now resolves nested annotated tag objects through a bounded 16-step chain to the exact requested commit. The target inspection and post-create readback share the resolver. Cycles, invalid or non-commit targets, and deeper chains fail closed. Operation Plan, no-store L3 review, the one-POST boundary, and no automatic retry for uncertain results remain unchanged. Core typecheck, `pnpm docs:check`, and `git diff --check` PASS; the 75 existing Japanese-base migration items remain a notice. Tests, workspace build, real GitHub API, external effects, full F05 and product-wide `SYSTEM_SHAPED`／`BUILD_COVERED`, QE_QC／QE_QA are NOT_RUN or not established. This is `CODE_PRESENT`, not runtime evidence. G09.01 remains `BLOCKED_AUTHORITY` pending separate D4 adapter delegation. Details: [historical implementation record](IMPLEMENTATION_HISTORY.md) and [history](IMPLEMENTATION_HISTORY.md).
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows installer MAX_PATH recovery (G02.01, G02.03)
 
-IExpressからSetupへ進むWindows実パッケージで、Chromium同梱ファイルの260文字超パスにより自己展開とSetup stage copyが失敗した。自己展開work/extract pathとSetup stage/rollback suffixを短縮し、旧32-hex rollback復旧互換を維持した。focused safe-target test、Windows package build/verify、isolated startup-only install→stub Gateway health/stop→normal uninstall、`validate:packaging`、`docs:check`、`git diff --check`はPASS。これはG02.01/G02.03の限定BUILD consumer確認であり、更新/rollback/user data、GUI、全suite、他OS、実provider、製品全体の成立やQC/QAを示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+IExpressからSetupへ進むWindows実パッケージで、Chromium同梱ファイルの260文字超パスにより自己展開とSetup stage copyが失敗した。自己展開work/extract pathとSetup stage/rollback suffixを短縮し、旧32-hex rollback復旧互換を維持した。focused safe-target test、Windows package build/verify、isolated startup-only install→stub Gateway health/stop→normal uninstall、`validate:packaging`、`docs:check`、`git diff --check`はPASS。これはG02.01/G02.03の限定BUILD consumer確認であり、更新/rollback/user data、GUI、全suite、他OS、実provider、製品全体の成立やQC/QAを示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / browser.read attachment and non-text response guard
 
-`browser.read`はHTTP応答の`Content-Disposition`と`Content-Type`を本文処理前に確認し、attachment、PDF等の非text、型不明の本文をCへ返さない。filename・本文を含まない固定拒否と自動再試行なしを保つ。`http.fetch`の戻り値契約、ファイル保存、download／upload quarantineは変えていない。focused file tests 104件PASS／6件skip、Core typecheck、`pnpm docs:check`、`git diff --check` PASS。実HTTP／Playwright、installed製品、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`browser.read`内の限定コード接続であり、F06／製品全体の成立を示さない。Android／iOSのclient・installer treeは現行repoに見当たらず、G09／G10のnative product entryが次の全体施工対象。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+`browser.read`はHTTP応答の`Content-Disposition`と`Content-Type`を本文処理前に確認し、attachment、PDF等の非text、型不明の本文をCへ返さない。filename・本文を含まない固定拒否と自動再試行なしを保つ。`http.fetch`の戻り値契約、ファイル保存、download／upload quarantineは変えていない。focused file tests 104件PASS／6件skip、Core typecheck、`pnpm docs:check`、`git diff --check` PASS。実HTTP／Playwright、installed製品、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`browser.read`内の限定コード接続であり、F06／製品全体の成立を示さない。Android／iOSのclient・installer treeは現行repoに見当たらず、G09／G10のnative product entryが次の全体施工対象。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / browser form response download quarantine
 
-form GET応答の`Content-Disposition`を取得し、`attachment`とPDF等の非テキスト応答を本文・ファイル名を返さず拒否する。結果不明・自動再送なしを保ち、ダウンロード保存や自動実行は行わない。download／uploadは引き続きquarantine。限定拒否testとCore typecheckはPASS。実HTTP／Playwright／保存経路、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは限定`CODE_PRESENT`であり、browser download機能やF06／製品全体の成立を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+form GET応答の`Content-Disposition`を取得し、`attachment`とPDF等の非テキスト応答を本文・ファイル名を返さず拒否する。結果不明・自動再送なしを保ち、ダウンロード保存や自動実行は行わない。download／uploadは引き続きquarantine。限定拒否testとCore typecheckはPASS。実HTTP／Playwright／保存経路、全suite、他OS、QE_QC／QE_QAはNOT_RUN。これは限定`CODE_PRESENT`であり、browser download機能やF06／製品全体の成立を示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / browser.automationの送信先束縛付き検索GET
 
-`browser.automation action=form_submit`は、一意なaccessible `search`領域内のboundedな同一origin GETだけを扱う。未対応・submit override・制約違反を拒否し、送信元・送信先・入力値をL3 no-store reviewへ束縛する。レビューと結果に外部効果未分類を明示し、GETでの状態変更可能性、購入・確定等を自動判別できないこと、結果不明時の自動再送なしをownerへ示す。JavaScript／service worker無効、公開IPへ固定したtransport、browser network遮断を維持する。provider-free focused tests／型検査／WebChat package buildはPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`CODE_PRESENT`限定で、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+`browser.automation action=form_submit`は、一意なaccessible `search`領域内のboundedな同一origin GETだけを扱う。未対応・submit override・制約違反を拒否し、送信元・送信先・入力値をL3 no-store reviewへ束縛する。レビューと結果に外部効果未分類を明示し、GETでの状態変更可能性、購入・確定等を自動判別できないこと、結果不明時の自動再送なしをownerへ示す。JavaScript／service worker無効、公開IPへ固定したtransport、browser network遮断を維持する。provider-free focused tests／型検査／WebChat package buildはPASS。実Playwright／HTTP、full suite、他OS、QE_QC／QE_QAはNOT_RUN。これは`CODE_PRESENT`限定で、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / CLI達成規則→共有J/M→Control Center再認証→CLI状態照会
 
-CLIのowner明示達成規則を、`serve`と同じprivate OperationPlan／result-M stateへ保持する。再起動後、既存Control Centerがplanをowner再認証reviewへ渡し、検証済みresultとM receiptを反映する。`--goal-completion-status <request-id-digest>`はHDS no-op／output auditを通るdigest-onlyの読取照会で、task・規則・結果本文や実行権限を返さない。達成・不一致・曖昧な対応付けの3ケースとControl Center再認証引継ぎはprovider-free fixtureでPASS。これは限定`WIRED` consumerであり、runCli process全体、実人間認証、実provider、installed製品、外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを証明しない。Windows-firstのP2全体施工を続ける。C08.03実provider、OD-03 live外部作用、別repo変更、P13公開／出荷GOは保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+CLIのowner明示達成規則を、`serve`と同じprivate OperationPlan／result-M stateへ保持する。再起動後、既存Control Centerがplanをowner再認証reviewへ渡し、検証済みresultとM receiptを反映する。`--goal-completion-status <request-id-digest>`はHDS no-op／output auditを通るdigest-onlyの読取照会で、task・規則・結果本文や実行権限を返さない。達成・不一致・曖昧な対応付けの3ケースとControl Center再認証引継ぎはprovider-free fixtureでPASS。これは限定`WIRED` consumerであり、runCli process全体、実人間認証、実provider、installed製品、外部作用、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを証明しない。Windows-firstのP2全体施工を続ける。C08.03実provider、OD-03 live外部作用、別repo変更、P13公開／出荷GOは保留。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows package-local browser runtime consumer
 
-Windows製品ZIPへPlaywright Core 1.65.0と一致するChromium／Headless Shellを同梱し、manifestで実binary path、sandbox、preview既定無効を束縛した。Verifierはbrowser binaryとlicense/notice entry、ZIP／CMD／IExpress EXEのSHA・埋込関係・EXE抽出を確認。workspace typecheck／buildとWindows package verifierはPASS（ZIP 4,295 entries）。browser launch、外部HTTP、Setup executionはNOT_RUN。Windows package consumerのみ`WIRED`、他OS browserとF06全域は`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA未成立。unsigned installerの公開・配布は保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Windows製品ZIPへPlaywright Core 1.65.0と一致するChromium／Headless Shellを同梱し、manifestで実binary path、sandbox、preview既定無効を束縛した。Verifierはbrowser binaryとlicense/notice entry、ZIP／CMD／IExpress EXEのSHA・埋込関係・EXE抽出を確認。workspace typecheck／buildとWindows package verifierはPASS（ZIP 4,295 entries）。browser launch、外部HTTP、Setup executionはNOT_RUN。Windows package consumerのみ`WIRED`、他OS browserとF06全域は`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QC／QA未成立。unsigned installerの公開・配布は保留。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / browser preview同一origin link navigation
 
-`browser.automation` previewに、完全一致・一意なaccessible linkの同一origin HTTP(S) navigationを追加した。JavaScript click handlerは実行せず、browser interception必須、GET／HEADのみ、public-address guard、credentialなし、download無効、L3、既定無効を維持。form submit／download／uploadは未実装・quarantine。Core typecheck／build PASS。Playwright package／browser未導入のため実browser smokeはNOT_RUNであり、このsliceは`CODE_PRESENT`に限る。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+`browser.automation` previewに、完全一致・一意なaccessible linkの同一origin HTTP(S) navigationを追加した。JavaScript click handlerは実行せず、browser interception必須、GET／HEADのみ、public-address guard、credentialなし、download無効、L3、既定無効を維持。form submit／download／uploadは未実装・quarantine。Core typecheck／build PASS。Playwright package／browser未導入のため実browser smokeはNOT_RUNであり、このsliceは`CODE_PRESENT`に限る。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 直近完了BUILD_BATCH — QE_BUILD / rev5.0 Linux x64 hosted installed lifecycle consumer
 
-最新main SHA=`37ca041caa573956b3181f11b51032123df2175f`の既存manual `workflow_dispatch` run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)をUbuntu 24.04.5 LTS x86_64上で実行。package build／verify、隔離Setup・bundled runtime・Gateway／Control Center health／app、synthetic first message、Repair、port conflict、Approval／Audit／crash recovery、update失敗rollback・中断復旧、通常Uninstall後の合成state保持、再導入、明示PurgeまでPASS。Linux installer SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。provider=stub、資格情報・実provider・外部作用なし。Actions artifactなし、隔離runner rootはcleanup済み。runnerではLinux isolationに必要な構成要素のいずれかが利用できず、`shell.exec`は無効・fail-closed。distribution別QA、owner実機、OS login／reboot、全suite、5OS QA、製品全体BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+最新main SHA=`37ca041caa573956b3181f11b51032123df2175f`の既存manual `workflow_dispatch` run [#15](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43316577235)をUbuntu 24.04.5 LTS x86_64上で実行。package build／verify、隔離Setup・bundled runtime・Gateway／Control Center health／app、synthetic first message、Repair、port conflict、Approval／Audit／crash recovery、update失敗rollback・中断復旧、通常Uninstall後の合成state保持、再導入、明示PurgeまでPASS。Linux installer SHA-256=`d1fd47962e4df1dc8abf459990627821ae41034c796eeedfa7936a8bfa9caec3`。provider=stub、資格情報・実provider・外部作用なし。Actions artifactなし、隔離runner rootはcleanup済み。runnerではLinux isolationに必要な構成要素のいずれかが利用できず、`shell.exec`は無効・fail-closed。distribution別QA、owner実機、OS login／reboot、全suite、5OS QA、製品全体BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / rev5.0 G04 macOS x64／arm64 installed lifecycle
 
-既存manual workflow [run #14](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958)をSHA=`4b4f25b7b5becf06c245124b5b64594f3e9dc897`へ固定して両architectureを実行。Setup・Gateway／GUI・stub first message・update failure rollback／中断復旧・通常Uninstall後の合成state保持・再導入・明示PurgeまでPASS。47分39秒、Actions artifactなし。host reboot、owner実機QA、署名／notarization、full suite、全体QC／QAはNOT_RUN。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+既存manual workflow [run #14](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43305145958)をSHA=`4b4f25b7b5becf06c245124b5b64594f3e9dc897`へ固定して両architectureを実行。Setup・Gateway／GUI・stub first message・update failure rollback／中断復旧・通常Uninstall後の合成state保持・再導入・明示PurgeまでPASS。47分39秒、Actions artifactなし。host reboot、owner実機QA、署名／notarization、full suite、全体QC／QAはNOT_RUN。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows EXEから隔離Setup・Gateway startup consumerへ接続
 
-IExpress EXEの実CMDを埋込ZIPとhash照合し、そのCMDから既存Windows installed smokeの隔離InstallRoot／DataRootへSetupを接続した。Windows x64 hostでZIP 3,553 entries、CMD／EXE manifest・SHA、PE/CAB、埋込ZIP照合がPASS。実EXEからの抽出・Setup・post-install doctor・stub Gateway起動／health／停止、正規Uninstall/Purge、registry消失までisolated smokeでPASSした。通常GUI/default launchとfull lifecycleはNOT_RUN。provider credential／外部作用なし。生成10 files・174,749,451 bytesは非OneDrive Tempに保持し、OneDrive上の既存Windows artifactは書き換えていない。初回smokeが既存`.codex-tmp` reparse-point logを79-byte開始記録へ更新したため内容前状態は保留し、後続smokeのWorkRootを隔離して再書込みなしを確認した。source bundle archive生成、全suite、全OS QA、QE_QC／QE_QA、公開・配布も未実施。candidateは未署名で公開・配布保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+IExpress EXEの実CMDを埋込ZIPとhash照合し、そのCMDから既存Windows installed smokeの隔離InstallRoot／DataRootへSetupを接続した。Windows x64 hostでZIP 3,553 entries、CMD／EXE manifest・SHA、PE/CAB、埋込ZIP照合がPASS。実EXEからの抽出・Setup・post-install doctor・stub Gateway起動／health／停止、正規Uninstall/Purge、registry消失までisolated smokeでPASSした。通常GUI/default launchとfull lifecycleはNOT_RUN。provider credential／外部作用なし。生成10 files・174,749,451 bytesは非OneDrive Tempに保持し、OneDrive上の既存Windows artifactは書き換えていない。初回smokeが既存`.codex-tmp` reparse-point logを79-byte開始記録へ更新したため内容前状態は保留し、後続smokeのWorkRootを隔離して再書込みなしを確認した。source bundle archive生成、全suite、全OS QA、QE_QC／QE_QA、公開・配布も未実施。candidateは未署名で公開・配布保留。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / Windows x64単体EXE生成・抽出検証
 
@@ -125,75 +125,75 @@ IExpress EXEの実CMDを埋込ZIPとhash照合し、そのCMDから既存Windows
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G04.01 macOS x64・arm64単体Setup生成
 
-Windows hostで`.command`の実行属性が失われ、product verifierが拒否する欠陥を閉じた。Windowsから非Windows installerを要求した場合の事前guardと、Unix hostでの`chmod`後mode確認を追加。manual `workflow_dispatch`の`package-only` scopeでMac x64／arm64のnative build、archive／single-file Setup verifierがPASSした（run #13、attempt 2、SHA=`83393469f2766d63589007b6118575e4ff251af1`）。archiveは両arch 3,740 entries、x64 archive／Setup SHA-256=`6fe7c6d6533ff5f984d2d53da70eefba73ee3772d7302c21cef3b428bfe22f27`／`70df5c9b6c1826e88b7b4f2ec7c683a8c6e74dabcec223a933f25890692c4b02`、arm64=`dd4f36f9815fb60670bd3c7f44d5db6c1aa577728776b1b62d2a99ab8156ab88`／`2267a3b49f2d85ba15da9db9e88d2a4ea59fafb91cc2f5a443dd996a6b11b59d`。install lifecycle、署名・notarization、shell isolation、runtime、5OS QA、QE_QC／QE_QAはNOT_RUN。Windows生成の不正な6 artifact（173,001,743 bytes）はOneDrive同期状態不明のため保持・保留。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Windows hostで`.command`の実行属性が失われ、product verifierが拒否する欠陥を閉じた。Windowsから非Windows installerを要求した場合の事前guardと、Unix hostでの`chmod`後mode確認を追加。manual `workflow_dispatch`の`package-only` scopeでMac x64／arm64のnative build、archive／single-file Setup verifierがPASSした（run #13、attempt 2、SHA=`83393469f2766d63589007b6118575e4ff251af1`）。archiveは両arch 3,740 entries、x64 archive／Setup SHA-256=`6fe7c6d6533ff5f984d2d53da70eefba73ee3772d7302c21cef3b428bfe22f27`／`70df5c9b6c1826e88b7b4f2ec7c683a8c6e74dabcec223a933f25890692c4b02`、arm64=`dd4f36f9815fb60670bd3c7f44d5db6c1aa577728776b1b62d2a99ab8156ab88`／`2267a3b49f2d85ba15da9db9e88d2a4ea59fafb91cc2f5a443dd996a6b11b59d`。install lifecycle、署名・notarization、shell isolation、runtime、5OS QA、QE_QC／QE_QAはNOT_RUN。Windows生成の不正な6 artifact（173,001,743 bytes）はOneDrive同期状態不明のため保持・保留。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / macOS x64・arm64配布物のMCP runtime依存閉包
 
-Unix package builderが固定されたOneDrive同期配下のstage／runtime cacheを再帰削除・書換えし得るため、作業前から存在したreparse point領域を保持し、builderの作業rootとarchive cacheをOS Temp下の一意rootへ分離した。Windows host上でmacOS x64／arm64 unsigned installerを生成し、各3,746 entriesのpackage verifierがMCP runtime closureを含めPASSした。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。実macOS host／署名／installed runtime／shell isolation、5OS QA、QE_QC／QE_QAはNOT_RUN。Temp stage 2件・299,699,109 bytesはWindowsごみ箱へ移動、`release/macos`の7 artifact・128,065,469 bytesは保持。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Unix package builderが固定されたOneDrive同期配下のstage／runtime cacheを再帰削除・書換えし得るため、作業前から存在したreparse point領域を保持し、builderの作業rootとarchive cacheをOS Temp下の一意rootへ分離した。Windows host上でmacOS x64／arm64 unsigned installerを生成し、各3,746 entriesのpackage verifierがMCP runtime closureを含めPASSした。x64 SHA-256=`82da499365d7c5f33e2d2d7a0e2f5b9d983d4602e9f8410bf093e90f24e83d72`、arm64 SHA-256=`1bf94858f60d08f2b2e94f2ec4fdcf435f6182a1a6dd5f7b2f64d6394773cfb8`。実macOS host／署名／installed runtime／shell isolation、5OS QA、QE_QC／QE_QAはNOT_RUN。Temp stage 2件・299,699,109 bytesはWindowsごみ箱へ移動、`release/macos`の7 artifact・128,065,469 bytesは保持。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 直近完了BUILD_BATCH — QE_BUILD / Windows・Linux配布物のMCP runtime依存閉包
 
 package builderがMCP clientとruntime依存一式を配置せず、Windows installed Gatewayの起動が失敗する欠陥を修正した。clientを現行package.jsonの`2.4.0`に固定し、core／transitive modulesとzod v4を隔離配置する。Windows／Unix package verifierを拡張し、Windows smokeにSetup→起動health→停止だけの隔離モードを追加した。
 
-Windows package verifier（3,549 entries）とWindows installed `--startup-only` smokeがPASS。Linux isolation binaryはWSL Ubuntu 24.04で生成し、Linux package verifierも3,750 entriesでPASS。Windows ZIP SHA-256=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、Linux tar.gz SHA-256=`a855bcba57a8be87498eadcf50d83ae60f43004aaf0cbc742753a4656ae56b58`。native Linux／macOS runtime、full lifecycle、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とする。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+Windows package verifier（3,549 entries）とWindows installed `--startup-only` smokeがPASS。Linux isolation binaryはWSL Ubuntu 24.04で生成し、Linux package verifierも3,750 entriesでPASS。Windows ZIP SHA-256=`93d271176edd1cbb4945a98d732c2a39e4cb83432f5a2522377d6a309002f238`、Linux tar.gz SHA-256=`a855bcba57a8be87498eadcf50d83ae60f43004aaf0cbc742753a4656ae56b58`。native Linux／macOS runtime、full lifecycle、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とする。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 直近完了BUILD_BATCH — QE_BUILD / CR-0 Linux・macOS開発用Uninstall停止確認
 
 Linux／macOSの開発用source Uninstallでresident停止の終了コードを握りつぶさず、停止またはautostart解除の失敗時にinstall／launcher／dataを保持する。resident管理scriptの欠落、PID不正、別processとのPID衝突、SIGTERM後の終了未確認もfail-closedとする。resident helperは対象PIDのcommand signatureを照合し、SIGTERM後最大10秒待ってからPID記録を除去する。製品package版UninstallとG03 installed-linuxの実証範囲は変更しない。
 
-WSL Ubuntu 24.04で4 shell fileの`sh -n`、`safe_target_unix.sh`（`unix_target_guard=pass`）、resident／source entrypointのfocused Vitest 14/14、`git diff --check`がPASS。管理script欠落・停止失敗・autostart解除失敗、無関係PID・不正PID、実synthetic Node processのstop／10秒timeoutを確認した。fixture root／processはcleanup後残存なし。native macOS／installed Linux・macOS、実利用者データ、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。このsource development consumerだけを`WIRED`とする。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
+WSL Ubuntu 24.04で4 shell fileの`sh -n`、`safe_target_unix.sh`（`unix_target_guard=pass`）、resident／source entrypointのfocused Vitest 14/14、`git diff --check`がPASS。管理script欠落・停止失敗・autostart解除失敗、無関係PID・不正PID、実synthetic Node processのstop／10秒timeoutを確認した。fixture root／processはcleanup後残存なし。native macOS／installed Linux・macOS、実利用者データ、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。このsource development consumerだけを`WIRED`とする。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの読み戻し・J/M結果帰還
 
-既存Gmail `draft.create`の一回作用後に`drafts.get?format=metadata`を行い、作成したdraft／message identity、source thread、`DRAFT` stateを照合するconsumerを接続した。Jのv2結果validator、L3 target identity、digest-only M receipt、Gateway再起動後のowner結果表示も束ねた。不一致・読戻し失敗時は`outcome_unknown`として停止し、自動再送・成功表示をしない。合成transport focused testsは3 filesで35件PASS（HDS 5、Adapter 28、Gateway 2 selected／92 skipped）。workspace typecheck、15-project build、`docs:check`、`git diff --check`の最終値は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)に記録する。実Gmail／credential／draft作成・send、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerだけを`WIRED`とし、F02.02全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は示さない。
+既存Gmail `draft.create`の一回作用後に`drafts.get?format=metadata`を行い、作成したdraft／message identity、source thread、`DRAFT` stateを照合するconsumerを接続した。Jのv2結果validator、L3 target identity、digest-only M receipt、Gateway再起動後のowner結果表示も束ねた。不一致・読戻し失敗時は`outcome_unknown`として停止し、自動再送・成功表示をしない。合成transport focused testsは3 filesで35件PASS（HDS 5、Adapter 28、Gateway 2 selected／92 skipped）。workspace typecheck、15-project build、`docs:check`、`git diff --check`の最終値は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)に記録する。実Gmail／credential／draft作成・send、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerだけを`WIRED`とし、F02.02全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は示さない。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / G02.03 Windows製品Uninstallの動的削除対象再照合
 
 現行mainにあった停止後のInstallRoot managed inventory再検証と、明示`-PurgeData`時のDataRoot再検証をWindows上のfocused fixtureで再実行した。synthetic launcherが停止中にInstallRootへfileを追加するケースと、Purge対象へjunctionを作るケースがともに削除前にexit 1で停止し、InstallRoot／DataRoot／外部sentinelが保持された。製品コードの追加・owner data・installed productへの作用はない。
 
-`install/installer/test/windows_product_installer.test.ts` focused test 1件PASS（同file 20件skip）。fixture cleanup、`docs:check`、`git diff --check`はPASS。実installed product、OS reboot、native installed QA、G02.03全体、全suite、QE_QC／QE_QAはNOT_RUN。この限定再観測だけをG02.03の`WIRED` evidenceとし、完了範囲へ拡張しない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+`install/installer/test/windows_product_installer.test.ts` focused test 1件PASS（同file 20件skip）。fixture cleanup、`docs:check`、`git diff --check`はPASS。実installed product、OS reboot、native installed QA、G02.03全体、全suite、QE_QC／QE_QAはNOT_RUN。この限定再観測だけをG02.03の`WIRED` evidenceとし、完了範囲へ拡張しない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 owner選択済みGmail identityから返信draft候補へのJ内束縛
 
-ownerが`gmail.read`結果から選択したidentity digestをCの外でJへ渡し、`OperationPlanLedger.retainCandidate`が同一owner／channel／task／revisionの未期限・verified read resultと照合した後、単一`draft.create`候補へsource message IDを内部束縛する。メール内容やprovider IDはC、projection、M receiptへ渡さず、添付候補とsource不一致を拒否し、返信thread確認付きresult validationを適用する。`operation_plan_gmail_reply.test.ts` 5/5、HDS typecheck、HDS standalone、`git diff --check`はPASS。served Gateway全経路、実provider／credential／draft作成、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+ownerが`gmail.read`結果から選択したidentity digestをCの外でJへ渡し、`OperationPlanLedger.retainCandidate`が同一owner／channel／task／revisionの未期限・verified read resultと照合した後、単一`draft.create`候補へsource message IDを内部束縛する。メール内容やprovider IDはC、projection、M receiptへ渡さず、添付候補とsource不一致を拒否し、返信thread確認付きresult validationを適用する。`operation_plan_gmail_reply.test.ts` 5/5、HDS typecheck、HDS standalone、`git diff --check`はPASS。served Gateway全経路、実provider／credential／draft作成、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定consumerのみ`WIRED`とし、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.01 Gmail read Adapter identity・信頼境界確認
 
-既存`invokeGmailRead`へsynthetic transportを通し、profile由来mailbox、message／thread／attachment identity、To/Cc/Bcc/Reply-To claimsを確認した。recipient claims、subject、snippet、attachment metadataは非信頼データ、human-owner relationは未確認とし、本文／raw MIME／添付bytesは返さない。unexpected message-part body bytesは拒否する。focused Adapter tests 2/2、core typecheck/build PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。Gateway runtime／実Google provider・credential、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定producerだけを`WIRED`とし、F02.01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+既存`invokeGmailRead`へsynthetic transportを通し、profile由来mailbox、message／thread／attachment identity、To/Cc/Bcc/Reply-To claimsを確認した。recipient claims、subject、snippet、attachment metadataは非信頼データ、human-owner relationは未確認とし、本文／raw MIME／添付bytesは返さない。unexpected message-part body bytesは拒否する。focused Adapter tests 2/2、core typecheck/build PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。Gateway runtime／実Google provider・credential、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。この限定producerだけを`WIRED`とし、F02.01全体や製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 通常Gmail message.send結果帰還
 
 通常`message.send`を既存Gateway／Approval Gate／Executor／HDS-J/M／Control Centerのconsumerへ接続した。owner指定の宛先・Reply-To・件名・本文・選択添付と認証mailboxをdigestで束縛してno-store high/L3 reviewへ表示し、作用直前にaccount・要求を再照合して一回送信する。送信後は同じmailbox・返却message・threadを読み直して`SENT`を確認し、Jの結果validationとdigest-only M receipt、Gateway／J/M再起動後のowner照会までを接続した。不明・不一致・`SENT`未確認では結果不明で停止し、自動再送しない。
 
-Focused tests 13/13 PASS（5 files、296 skipped）。workspace `tsc -b`と15-project `build` PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。実Gmail／credential／送信、live Gateway、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の通常`message.send`限定consumerであり、F02.02全体・実provider接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Focused tests 13/13 PASS（5 files、296 skipped）。workspace `tsc -b`と15-project `build` PASS。`docs:check` PASS（既存日本語基底移行負債75件を注意表示、license gate PASS）、`git diff --check` PASS。実Gmail／credential／送信、live Gateway、全suite、5OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の通常`message.send`限定consumerであり、F02.02全体・実provider接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / C08.02 明示達成規則と検証済みJ/M根拠
 
 owner明示規則をtask identity／規則digestへ束縛し、同一revisionの一意なstep、検証済みoperation result、M receiptの一致時だけJが達成を記録する既存経路を再確認した。規則欠落・結果不一致・複数stepへの曖昧mappingはheldとなり、達成sealを作らない。達成後は同一taskの次stepを拒否し、Gateway再起動後も状態を復元する。GoalProjectionにはauthenticated owner規則のdigest参照だけを投影し、他のgoal要素はunknownを保つ。
 
-この単位では並行実装を増やさず、served owner入力からJ/Mへの接続を合成fixtureで確認した。`operation_plan_runtime.test.ts`は一致／不一致／曖昧mapping 3件PASS（47 skipped）、served Gateway owner taskは1件PASS（7 skipped）、WebChat task formは1件PASS、GoalProjectionは5件PASS。全workspace `typecheck`、15-project `build`、`docs:check`、`git diff --check`もPASS。日本語基底の既存移行負債75件は注意表示。実provider／live外部作用、full suite、5OS QA、QE_QC／QE_QA、release／owner GOはNOT_RUN。この限定consumerだけを`WIRED`とする。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+この単位では並行実装を増やさず、served owner入力からJ/Mへの接続を合成fixtureで確認した。`operation_plan_runtime.test.ts`は一致／不一致／曖昧mapping 3件PASS（47 skipped）、served Gateway owner taskは1件PASS（7 skipped）、WebChat task formは1件PASS、GoalProjectionは5件PASS。全workspace `typecheck`、15-project `build`、`docs:check`、`git diff --check`もPASS。日本語基底の既存移行負債75件は注意表示。実provider／live外部作用、full suite、5OS QA、QE_QC／QE_QA、release／owner GOはNOT_RUN。この限定consumerだけを`WIRED`とする。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 既存Gmail draft.sendの検証済み結果帰還
 
 既存Gmail `draft.send`に、レビュー済みthread IDの送信要求、作用直前draft state再照合、送信後account／thread／`SENT` readback、HDS result validation、digest-only M receipt、再起動後owner projectionを接続した。結果不明・thread不一致・`SENT`未確認では停止し、自動再送しない。送信を示すowner projectionはdigestだけを表示し、本文・raw MIME・provider IDを出さない。
 
-Focused tests 8/8 PASS（4 files、157 skipped）。全workspace typecheck、15-project build、`docs:check`、終端`git diff --check` PASS。日本語基底ゲートは既存移行負債75件を注意表示、license gate PASS。初回の広範runはGateway runtime内の7件の既存5／10秒timeoutで停止したため判定に用いず、対象を絞ったrerunを最終証拠とする。実Gmail credential／API／送信、live Gateway、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。実装commit `76d99e28d8f80adb850599a4d2bb1cf21e556975`は`c8eb174d31574a01c2e92ade57d726fa5843bf50`から`main`へfast-forward push済み。これはF02.02の限定`WIRED`consumerであり、`message.send`、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Focused tests 8/8 PASS（4 files、157 skipped）。全workspace typecheck、15-project build、`docs:check`、終端`git diff --check` PASS。日本語基底ゲートは既存移行負債75件を注意表示、license gate PASS。初回の広範runはGateway runtime内の7件の既存5／10秒timeoutで停止したため判定に用いず、対象を絞ったrerunを最終証拠とする。実Gmail credential／API／送信、live Gateway、full suite、5OS QA、QE_QC／QE_QAはNOT_RUN。実装commit `76d99e28d8f80adb850599a4d2bb1cf21e556975`は`c8eb174d31574a01c2e92ade57d726fa5843bf50`から`main`へfast-forward push済み。これはF02.02の限定`WIRED`consumerであり、`message.send`、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail返信下書きの選択thread結合
 
 既存Gmail `draft.create`にOwner明示source message IDを使ったthread-aware返信draft consumerを接続した。HDSはhigh/L3、明示宛先、source IDのowner task明記、thread-confirmed結果検証を要求する。Adapterはmetadataだけからsource thread／Subject／RFC `Message-ID`／`References`を束縛し、同じSubjectとGmail `threadId`、RFC返信headerを持つ下書き一件だけを作る。Control Centerのresume-authenticated no-store reviewにsource identityとthreadを表示し、Mへはdigest限定resultだけを返す。結果不明・source state変化・thread不一致では自動再送しない。
 
-Focused tests 32/32 PASS（Gmail target/version、Gateway review projection、HDS owner-ID/result validation、WebChat review route／Control Center rendererを合成fixtureで確認。誤thread応答の自動再送禁止も確認）。workspace typecheck、15-project build、generated script parse／safety、`docs:check`はPASS（日本語基底の既存移行負債75件を注意表示、license PASS）。`git diff --check`は終端確認でPASS。実Gmail／credential／送信、live Gateway、full suite、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、通常下書き・送信全体、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。C08.03実provider、OD-03外部作用、D4／ミニドラ別repo変更、P13公開GOの保留を維持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Focused tests 32/32 PASS（Gmail target/version、Gateway review projection、HDS owner-ID/result validation、WebChat review route／Control Center rendererを合成fixtureで確認。誤thread応答の自動再送禁止も確認）。workspace typecheck、15-project build、generated script parse／safety、`docs:check`はPASS（日本語基底の既存移行負債75件を注意表示、license PASS）。`git diff --check`は終端確認でPASS。実Gmail／credential／送信、live Gateway、full suite、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、通常下書き・送信全体、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。C08.03実provider、OD-03外部作用、D4／ミニドラ別repo変更、P13公開GOの保留を維持する。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F02.02 Gmail message.trash・message.modify結果帰還consumer
 
-既存Gmail write／Approval Gate／Executor／HDS-J/M／Control Centerへ単一messageのTrash移動と既存user label変更を接続した。本文／raw MIMEをreview・Mへ出さず、high/L3 no-store確認、作用前の対象状態再照合、単回provider request、後状態の再読込、結果不明時の自動再送禁止を維持する。synthetic Gateway経路では検証済み結果、digest限定M receipt、J/M再起動、owner帰還まで確認した。focused test 10件、workspace typecheck、15-project build、`docs:check`、`git diff --check`はPASS。全workspace suite、実Gmail／credential／外部作用、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、provider実接続、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次の独立batchは現行rev4.0と最新HEADから選定する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+既存Gmail write／Approval Gate／Executor／HDS-J/M／Control Centerへ単一messageのTrash移動と既存user label変更を接続した。本文／raw MIMEをreview・Mへ出さず、high/L3 no-store確認、作用前の対象状態再照合、単回provider request、後状態の再読込、結果不明時の自動再送禁止を維持する。synthetic Gateway経路では検証済み結果、digest限定M receipt、J/M再起動、owner帰還まで確認した。focused test 10件、workspace typecheck、15-project build、`docs:check`、`git diff --check`はPASS。全workspace suite、実Gmail／credential／外部作用、他OS QA、QE_QC／QE_QAはNOT_RUN。これはF02.02の限定`WIRED`consumerであり、provider実接続、F02.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を示さない。次の独立batchは現行rev4.0と最新HEADから選定する。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — QE_BUILD / F08.03 MCP runtime観測のConnections設定consumer
 
 実MCPの通常経路から、catalog到達・dispatch中・応答受領・結果不明をendpoint digestに束縛したprocess-local observationへ接続し、認証済みConnections SettingsSnapshot／Loadでownerへ表示する。設定画面は通信probeもserver起動もしない。結果不明は自動再送せず、対象とserver evidenceを確認する案内を出す。response受領を外部作用完了の証明にはしない。endpoint、tool名、arguments、response body、raw errorは保存・表示しない。
 
-Gateway対象試験21/21（SettingsSurface 16、実SDK MCP process 5）、Gateway typecheck、`git diff --check`はPASS。現行repoには`BLUE_TANUKI_MCP_ENDPOINT`以外の既存server定義・移行元を確認できなかったため、移行形式を推測で追加しない。これはF08.03の限定WIRED sliceであり、永続復旧、health monitoring、process管理、全MCP互換、実資格／provider／外部業務作用、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAを成立させない。G09.01 Android→D4→BLUEは別repo権限がないためBLOCKED_AUTHORITYを維持する。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+Gateway対象試験21/21（SettingsSurface 16、実SDK MCP process 5）、Gateway typecheck、`git diff --check`はPASS。現行repoには`BLUE_TANUKI_MCP_ENDPOINT`以外の既存server定義・移行元を確認できなかったため、移行形式を推測で追加しない。これはF08.03の限定WIRED sliceであり、永続復旧、health monitoring、process管理、全MCP互換、実資格／provider／外部業務作用、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAを成立させない。G09.01 Android→D4→BLUEは別repo権限がないためBLOCKED_AUTHORITYを維持する。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — G03.03 Linux native installed lifecycle consumer
 
@@ -207,23 +207,23 @@ G09.01 Android native producer→D4 Adapter→BLUE ingressは、D4別repoの限�
 
 `github.write release.draft.create`を、既存のtag／commit観測、独立`github:release.write`能力、HDS／Operation Plan、Executor、GatewayのL3 no-store review、Control Center、結果receiptまで接続した。既存tagが指すcommitとrelease不存在を作用前に再確認し、作成後にtagとdraft releaseをreadbackする。draft／非prerelease／release notes生成なし／assetなしを固定し、通知可能性と非原子的観測をreviewに表示する。明示拒否と結果不明を分け、結果不明は自動再送しない。
 
-workspace typecheck、15 project build、core fixture 98 passed／6 skipped、HDS 2 passed、WebChat 1 passed、Gateway loopback serve 4 passed／84 skipped、`docs:check`、`git diff --check`はPASS。Gateway試験は合成providerであり、実GitHub credential／APIや実releaseは未使用。全workspace suite、owner browser、5OS QA、QE_QC／QE_QAはNOT_RUN。このrelease作成sliceのみ`WIRED`とし、F05.02全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。詳細は[最新施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[履歴](IMPLEMENTATION_HISTORY.md)。次はG09.01 Android entryとD4 mobile contractのread-only照合。
+workspace typecheck、15 project build、core fixture 98 passed／6 skipped、HDS 2 passed、WebChat 1 passed、Gateway loopback serve 4 passed／84 skipped、`docs:check`、`git diff --check`はPASS。Gateway試験は合成providerであり、実GitHub credential／APIや実releaseは未使用。全workspace suite、owner browser、5OS QA、QE_QC／QE_QAはNOT_RUN。このrelease作成sliceのみ`WIRED`とし、F05.02全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[履歴](IMPLEMENTATION_HISTORY.md)。次はG09.01 Android entryとD4 mobile contractのread-only照合。
 
 ### 前段完了BUILD_BATCH — G02.03 Windows installed lifecycleの秘密分離・inventory照合
 
-smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。managed-tree inventoryのentry蓄積を`List[object].Add`へ変更し、各entryごとの配列複製を避けつつ、個別SHA-256、reparse拒否、path正規化、最終sortを維持した。Windows 11 Home x64の修正後installed smokeは終了コード0で、Setup／Repair、通常利用、Approval／Audit tamper拒否、crash recovery、stop／doctor／restart／safe-mode、update failure rollback、rollback後の旧install／設定／DataRoot保持、中断後の復旧と更新再開、通常Uninstall後のDataRoot保持、再導入、隔離rootの明示PurgeまでPASSした。初回runの600,000ms ETIMEDOUTは修正後の単一runで再現しなかったが、原因を性能改善と断定せず広範な性能評価にも拡張しない。provider=stub、実LLM／secret／外部作用なし。HKCU Run readbackはPASSしたがWindows本体の再起動は未実施。製品全体QE_BUILDは継続し、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)。
+smoke runnerの5 spawn siteから親process環境全体を渡さず、Windows system pathとrun専用profile／APPDATA／TEMPだけを渡すallowlistを接続した。managed-tree inventoryのentry蓄積を`List[object].Add`へ変更し、各entryごとの配列複製を避けつつ、個別SHA-256、reparse拒否、path正規化、最終sortを維持した。Windows 11 Home x64の修正後installed smokeは終了コード0で、Setup／Repair、通常利用、Approval／Audit tamper拒否、crash recovery、stop／doctor／restart／safe-mode、update failure rollback、rollback後の旧install／設定／DataRoot保持、中断後の復旧と更新再開、通常Uninstall後のDataRoot保持、再導入、隔離rootの明示PurgeまでPASSした。初回runの600,000ms ETIMEDOUTは修正後の単一runで再現しなかったが、原因を性能改善と断定せず広範な性能評価にも拡張しない。provider=stub、実LLM／secret／外部作用なし。HKCU Run readbackはPASSしたがWindows本体の再起動は未実施。製品全体QE_BUILDは継続し、BUILD_COVERED／QE_QC／QE_QAは未成立。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — F17.03 CanvasからJ/Broker/sandbox/M receiptまでの限定synthetic consumer
 
 2026-11-11、既存WebChat/GatewayのCanvas経路を合成CからJの委任目的関係・plan step審査、Approval Gate、隔離sandbox file.write、bytes結果照合、M receipt、owner明示達成規則、Gateway再起動後の復元まで一つのtaskで通す統合testを実行しPASSした。実環境はlocalhost Gatewayと固有Temp root、synthetic backend、fixture tokenのみ。試験は1件PASS／同file内7件skip。Temp root cleanupと元path不在を確認した。
 
-これはF17.03の限定synthetic WIRED consumerで、実人間L3操作・実ブラウザー操作・実LLM/provider・外部書込み・実ユーザーデータを証明しない。製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。次の独立作業は現行rev4.0とHEADからローカル隔離で進められる全体接続を選ぶ。詳細は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)と[実装履歴](IMPLEMENTATION_HISTORY.md)。
+これはF17.03の限定synthetic WIRED consumerで、実人間L3操作・実ブラウザー操作・実LLM/provider・外部書込み・実ユーザーデータを証明しない。製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。次の独立作業は現行rev4.0とHEADからローカル隔離で進められる全体接続を選ぶ。詳細は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)と[実装履歴](IMPLEMENTATION_HISTORY.md)。
 
 ### 前段完了BUILD_BATCH — F04.02 Google Drive公開リンクreader共有の限定consumer
 
 `google.drive.write`へ専用`permissions.create.public_link`を接続した。Owner taskで対象と「リンクを知る全員へのreader公開」を明示し、`allow_file_discovery=false`を固定する。認証Owner所有のMy Drive `text/plain`一件だけを対象とし、既存公開grant・版／本文／アクセスscope変化は拒否する。no-store L3 reviewで公開本文全体とACLを示し、作用直前と作用後にpermission・版・本文を再読して確認する。失敗時は自動再送／自動取消を行わず、公開状態が残る可能性を返す。
 
-protocol／HDS-BRAIN／core／Gateway／channel-webchat buildはPASS。合成provider fixture 5件PASS。実provider／credential／Drive共有／served UI／全suite／QE_QC／QE_QAはNOT_RUN。これはF04.02の限定`WIRED` sliceであり、F04親成果・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。実装は[最新の施工状態](IMPLEMENTATION_INSTRUCTIONS.md)、詳細証拠は[実装履歴](IMPLEMENTATION_HISTORY.md)に記録する。次の独立作業はrev4.0と最新HEADから選定する。
+protocol／HDS-BRAIN／core／Gateway／channel-webchat buildはPASS。合成provider fixture 5件PASS。実provider／credential／Drive共有／served UI／全suite／QE_QC／QE_QAはNOT_RUN。これはF04.02の限定`WIRED` sliceであり、F04親成果・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`へ拡張しない。実装は[当時の施工履歴](IMPLEMENTATION_HISTORY.md)、詳細証拠は[実装履歴](IMPLEMENTATION_HISTORY.md)に記録する。次の独立作業はrev4.0と最新HEADから選定する。
 
 ### 前段完了BUILD_BATCH — F04.01 Google Docs本文を資料整理consumerへ接続
 
@@ -323,7 +323,7 @@ WebChat相関の選択test 1件PASS（他122件skip）、channel-webchat依存3 
 
 Blue Gatewayの専用Runtime credentialで、登録済みruntime IDとsession参照を検証し、sessionをHMAC digest scopeへ変換して単回WebSocket ticketを発行する。ticketで同じsession scopeへ接続した場合だけintentをHDSへ渡し、HDSの既存`channel_send`を同じscopeへ返す。応答経路が未接続なら`409 not_dispatched`でHDS handlerを呼ばない。HTTP `202`は入力受付だけを示す。
 
-この状態はBlue側transportの限定`WIRED`。D4 Runtime側producer／receiver、runtime/session/workspace登録の実結合、切断・再起動後の復帰は未接続であり、D03.01全体・D4接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。直近の確認記録は[`開発進捗.md`](開発進捗.md)と[`IMPLEMENTATION_INSTRUCTIONS.md`](IMPLEMENTATION_INSTRUCTIONS.md)を参照する。C08.02の達成判定はowner明示規則・検証済み結果・M receiptを使う既存J経路を確認済みのため重複実装しない。D4 Pocketの他writer差分はそのrepoで保持し、このrepoから変更しない。
+この状態はBlue側transportの限定`WIRED`。D4 Runtime側producer／receiver、runtime/session/workspace登録の実結合、切断・再起動後の復帰は未接続であり、D03.01全体・D4接続・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。直近の確認記録は[`開発進捗.md`](開発進捗.md)と[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)を参照する。C08.02の達成判定はowner明示規則・検証済み結果・M receiptを使う既存J経路を確認済みのため重複実装しない。D4 Pocketの他writer差分はそのrepoで保持し、このrepoから変更しない。
 
 ### 前段BUILD_BATCH — E04.03 FailureMemory条件変化の再評価を承認・実行consumerへ接続（限定WIRED）
 
@@ -579,7 +579,7 @@ Windows隔離合成Gateway processで、L3目的変更審査を通過した合�
 
 Control Centerは保存済みの最新`submission_id`を送信IDとして復元し、status照会前の別ID切替を出さない。現在の依頼IDについてGateway受付状態とRuntime相関を確認してから専用操作を表示する（Gatewayが明示した`rejected`は非dispatch状態としてstatus確認後に切替可能）。照会ID選択、owner token、Runtime tokenを変更すると表示を無効にして再確認を要求する。明示切替時は新UUIDをsession/localStorageへ保存する。依頼本文・結果・tokenの永続化、再送・再配信・外部作用は追加していない。
 
-WebChat package typecheck/build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。実ブラウザー再起動とGateway `dispatching`中のprocess killはNOT_RUN。詳細は`docs/IMPLEMENTATION_INSTRUCTIONS.md`の同日BUILD記録を参照。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+WebChat package typecheck/build、生成`CONTROL_CENTER_SCRIPT`構文解析、`pnpm docs:check`、`git diff --check`はPASS。`docs:check`では日本語基底移行負債76件の既存注意を確認。実ブラウザー再起動とGateway `dispatching`中のprocess killはNOT_RUN。詳細は`docs/IMPLEMENTATION_HISTORY.md`の同日BUILD記録を参照。E2E-01全体・製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
 ### 2026-11-01 E2E-01 owner選択済み状態観測の再利用
 
@@ -661,6 +661,6 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 ## 維持する境界
 
-独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。
+独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。技術原典・QE三点・要求対応表は公開可能とし、別のactive施工指示書を置かない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。
 
 Approval Gate／L3、Brokerの現在権限、Mの非権限性、監査、秘密、停止・復旧、fail-closedを維持する。Gitはmain一本、Windows通常開発、単一writer、local復旧branch二世代／remote backup tag二世代。backup-ref migrationは`MIGRATION_COMPLETE`で、closeout時はremoteの`refs/tags/codex/backup-main`と`refs/tags/codex/backup-main-prev`を実SHAで照合する。意味あるBUILD_BATCHの末に限定commit／pushとremote/ref照合を行う。
