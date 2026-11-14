@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。2026-11-14に削除した旧第四施工指示書への記述は当時の文書変更履歴であり、復活や参照を要求しない。技術原典・QE三点の旧非公開制約も失効済みである。
 
+## 2026-11-14 — rev5.3 QE_BUILD / WebChat owner-task audio input
+
+**対象・目的:** WebChat owner taskで、task文面と現行の委任目的に明示的に添付された音声を、許可済みC modelで一回の計算入力として扱えるようにし、文字起こしのみの応答へ誤って降格しない。
+
+`/owner/task-compute`に音声1件（最大20 MiB）の検証・payload digest・ephemeral transfer・buffer zeroingを接続し、画像1枚との同一task併用を許可した。Canvas成果物と音声はWebChatとGateway双方で拒否する。owner-task投影に限ってExecutorへ`require_audio_task_compute`を渡し、明示allowlist modelの能力不足または音声欠落ならprovider呼出し前に失敗させる。Gatewayの媒体受入をowner actor／trust／surface／projectionへ厳密に束縛し、transcription専用projectionは従来どおりowner確認用として独立させた。UIとrunbookに必要な設定、保持・権限境界を記した。日本語基底移行負債74件は維持した。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| workspace `pnpm exec tsc -b --pretty false` | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債74件は継続。 |
+| test suite、browser／served Gateway実起動、実provider／credential、外部作用、5OS、全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+**状態・限界:** 所有owner task入口→Gateway media境界→Executor capability gate→既存音声task provider契約のsource pathを接続。実画面操作やprovider／modelの実対応は未確認で、C08／F16全体や製品全体の成立を示さない。音声task modelと併用時の画像modelはowner設定が必要。D4-Pocket／MINIDORA、実資格・外部作用、公開／出荷判断は変更なし。開始・復旧 current=`ac0e7ed2abc8c6d9eeed1f6040c2972377b4c819`、開始 previous=`8253428bd29448981b2a05698a538b41ce858453`。implementation commit=`1f57ca0ad6ae0c9714211733011d64fb0098595e`をGitHub `main`へpush/readback済み。implementation後のlocal recovery branch／tag・remote backup tagはcurrent=`1f57ca0ad6ae0c9714211733011d64fb0098595e`、previous=`ac0e7ed2abc8c6d9eeed1f6040c2972377b4c819`。protected attachmentsとLinux isolation `target/`は保持した。
+
 ## 2026-11-14 — rev5.3 QE_BUILD / 明示許可modelの音声要求をCへ渡す
 
 **対象・目的:** BLUE-TANUKIのGateway受信音声を、音声文字起こし専用の既存契約を維持しながら、ownerが別途明示許可したOpenAI-compatible provider/modelだけ通常のCタスク入力として扱えるようにする。音声由来内容を本人確認・承認・権限へ昇格させず、音声と画像の同時要求も明示能力がある場合のみ同じC計算へ渡す。
