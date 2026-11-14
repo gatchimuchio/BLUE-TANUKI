@@ -582,6 +582,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(shell).toContain('title="隔離された生成UIプレビュー" sandbox=""');
     expect(shell).toContain("GatewayローカルのJ Operation Plan SQLiteへ永続保存されます");
     expect(shell).toContain("この画面では保持期間や削除を管理しません");
+    expect(shell).toContain('id="owner-task-include-mcp-catalog"');
+    expect(shell).toContain("この計画のC providerへ送信します");
     expect(CONTROL_CENTER_SCRIPT).toContain('role === "assistant" && bubble && isCanvasPreviewContent(text)');
     expect(CONTROL_CENTER_SCRIPT).toContain("escapeHtml(text)");
   });
@@ -613,12 +615,14 @@ describe("WebChatChannel — Control Center shell", () => {
       version: 1, source: { surface: "webchat-assistant-reply", request_id: "assistant-request-1" },
       used_for_authority: false });
 
-    const nodes: Record<string, { value: string; textContent?: string; className?: string; open?: boolean;
+    const nodes: Record<string, { value: string; checked?: boolean; textContent?: string; className?: string; open?: boolean;
       close?: () => void; focus?: () => void; files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
       "canvas-preview-action-intent": { value: "Canvas本文をowner-task-note.txtへそのまま新規作成してください。" },
       "owner-task-intent": { value: "", focus() {} },
       "canvas-preview-dialog": { value: "", close() { this.open = false; } },
       "owner-task-token": { value: "owner-token" }, "owner-task-image": { value: "", files: [] },
+      "owner-task-audio": { value: "", files: [] },
+      "owner-task-include-mcp-catalog": { value: "", checked: false },
       "owner-task-completion-rules": { value: JSON.stringify(completionRules) }, "owner-task-goal-ref": {
         value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
       }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
@@ -684,7 +688,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages).toContainEqual(["status", expect.stringContaining("file.write候補では本文と保存先がローカルJ Operation Plan SQLiteへ残ります")]);
   });
 
-  it("submits explicit task completion rules and one ephemeral image through the owner task form", async () => {
+  it("submits explicit task completion rules, MCP catalog opt-in, and one ephemeral image through the owner task form", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function submitOwnerTask(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function postOperationPlanControl(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
@@ -693,12 +697,14 @@ describe("WebChatChannel — Control Center shell", () => {
     const rules = JSON.stringify({ schema_version: "blue-tanuki.goal-completion-rules.v1",
       rules: [{ rule_id: "search-result", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] });
     const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const nodes: Record<string, { value: string; textContent?: string; className?: string;
+    const nodes: Record<string, { value: string; checked?: boolean; textContent?: string; className?: string;
       files?: readonly { type: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }[];
       selectedOptions?: Array<{ dataset: { purposeVersion: string } }> }> = {
       "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Find blue." },
       "owner-task-image": { value: "fixture.png", files: [{ type: "image/png", size: imageBytes.byteLength,
         arrayBuffer: async () => imageBytes.slice().buffer as ArrayBuffer }] },
+      "owner-task-audio": { value: "", files: [] },
+      "owner-task-include-mcp-catalog": { value: "on", checked: true },
       "owner-task-completion-rules": { value: rules }, "owner-task-goal-ref": {
         value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
       }, "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
@@ -720,10 +726,12 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(calls).toEqual([{ token: "owner-token", body: {
       user: "fixture-owner", task: "Find blue.", goal_ref: "goal_0123456789abcdef", purpose_version: 2,
       submission_id: "submission-1", goal_completion_rules: JSON.parse(rules),
+      include_mcp_catalog: true,
       image_input: { media_type: "image/png", data_base64: Buffer.from(imageBytes).toString("base64") },
     } }]);
     expect(nodes["owner-task-completion-rules"]?.value).toBe("");
     expect(nodes["owner-task-image"]?.value).toBe("");
+    expect(nodes["owner-task-include-mcp-catalog"]?.checked).toBe(false);
     expect(renderedSubmissionIds).toEqual(["submission-1"]);
     expect(messages).toEqual([["owner", "Find blue."], ["accepted", "request-1"]]);
   });
@@ -756,16 +764,18 @@ describe("WebChatChannel — Control Center shell", () => {
     const makeSelect = () => ({ value: "", hidden: false, disabled: false, options: [] as Array<{ text: string; value: string }>,
       replaceChildren(...options: Array<{ text: string; value: string }>) { this.options = options; this.value = ""; },
       add(option: { text: string; value: string }) { this.options.push(option); } });
-    const nodes: Record<string, { value: string; textContent?: string; className?: string; hidden?: boolean; disabled?: boolean;
+    const nodes: Record<string, { value: string; checked?: boolean; textContent?: string; className?: string; hidden?: boolean; disabled?: boolean;
       files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }>;
       replaceChildren?: (...options: Array<{ text: string; value: string }>) => void;
       add?: (option: { text: string; value: string }) => void;
       options?: Array<{ text: string; value: string }> }> = {
       "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Do one bounded task." },
       "owner-task-image": { value: "", files: [] }, "owner-task-completion-rules": { value: "" },
+      "owner-task-audio": { value: "", files: [] }, "owner-task-include-mcp-catalog": { value: "", checked: false },
       "owner-task-goal-ref": { value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }] },
       "chat-user": { value: "fixture-owner" }, "owner-task-status": { value: "", textContent: "", className: "" },
       "owner-task-new-submission": { value: "", hidden: true }, "check-owner-task-status": { value: "", hidden: true, disabled: false },
+      "cancel-owner-task-submission": { value: "", hidden: true, disabled: false },
       "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "" },
     };
     const submitted: string[] = [];
@@ -4963,6 +4973,57 @@ describe("WebChatChannel — HTTP inbound", () => {
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(stale.status).toBe(409);
       expect(stale.body).toMatchObject({ accepted: false, status: "submission_id_reused_with_different_input" });
+      expect(ownerCtx.received).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("binds explicit MCP catalog opt-in to an owner task request without enabling tool execution", async () => {
+    const goal = { goal_ref: `goal_${"e".repeat(16)}`, purpose_version: 2,
+      purpose_preview: "Plan with selected MCP metadata", purpose_digest: "f".repeat(64) };
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN,
+      onOwnerTaskGoalOptions: async () => [goal] });
+    const requestBody = {
+      user: "fixture-owner", task: "Plan one bounded fixture MCP call.", goal_ref: goal.goal_ref,
+      purpose_version: goal.purpose_version, submission_id: "55b57dd4-47c2-496e-b60a-d46f5b45f191",
+      include_mcp_catalog: true,
+    };
+    try {
+      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      const invalid = await postJson(ownerCtx.port, "/owner/task-compute", {
+        ...requestBody, submission_id: "55b57dd4-47c2-496e-b60a-d46f5b45f192", include_mcp_catalog: "true",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body).toMatchObject({ accepted: false, error: "invalid_owner_task_input" });
+      expect(ownerCtx.received).toHaveLength(0);
+
+      const accepted = await postJson(ownerCtx.port, "/owner/task-compute", requestBody,
+        { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(ownerCtx.received).toHaveLength(1);
+      const request = ownerCtx.received[0]!;
+      expect(isGatewayInternalInboundRequest(request)).toBe(true);
+      expect(request.metadata).toMatchObject({
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.used_for_authority": false,
+      });
+      expect(JSON.parse(request.content.slice("plan:compute ".length))).toEqual({
+        task: requestBody.task,
+        goal_purpose_binding: { goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+          purpose_digest: goal.purpose_digest },
+        include_mcp_catalog: true,
+      });
+      expect(request.content).not.toContain("execute");
+
+      const replayWithoutOptIn = await postJson(ownerCtx.port, "/owner/task-compute", {
+        ...requestBody, include_mcp_catalog: false,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(replayWithoutOptIn.status).toBe(409);
+      expect(replayWithoutOptIn.body).toMatchObject({ accepted: false,
+        status: "submission_id_reused_with_different_input" });
       expect(ownerCtx.received).toHaveLength(1);
     } finally {
       await ownerCtx.teardown();

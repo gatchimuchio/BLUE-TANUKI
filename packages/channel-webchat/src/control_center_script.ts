@@ -1781,6 +1781,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
         }
         const completionRulesText = byId("owner-task-completion-rules").value.trim();
+        const includeMcpCatalog = byId("owner-task-include-mcp-catalog").checked === true;
         let completionRules;
         if (completionRulesText) {
           try { completionRules = JSON.parse(completionRulesText); }
@@ -1804,6 +1805,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion,
           submission_id: submissionId,
           ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {}),
+          ...(includeMcpCatalog ? { include_mcp_catalog: true } : {}),
           ...(imagePayload ? { image_input: imagePayload } : {}),
           ...(audioPayload ? { audio_input: audioPayload } : {}),
           ...(canvasArtifactInput ? { canvas_artifact_input: canvasArtifactInput } : {})
@@ -1814,6 +1816,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         imageInput.value = "";
         audioInput.value = "";
         byId("owner-task-completion-rules").value = "";
+        byId("owner-task-include-mcp-catalog").checked = false;
         appendChat("owner", task);
         appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);
         status.textContent = result.status === "already_in_progress" || result.status === "already_accepted"

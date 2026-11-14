@@ -1430,11 +1430,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const task = typeof body?.task === "string" ? body.task.trim() : "";
       const goalRef = typeof body?.goal_ref === "string" ? body.goal_ref : "";
       const submissionId = typeof body?.submission_id === "string" ? body.submission_id : "";
+      const hasMcpCatalogSelection = body !== null && Object.prototype.hasOwnProperty.call(body, "include_mcp_catalog");
+      const includeMcpCatalog = body?.include_mcp_catalog === true;
       const hasPurposeVersion = body !== null && Object.prototype.hasOwnProperty.call(body, "purpose_version");
       const requestedPurposeVersion = body?.purpose_version;
       if (!replyTo || replyTo.length > 200 || !task || task.length > 20_000 || !isWellFormedUnicode(task) ||
           !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId) ||
           !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
+          (hasMcpCatalogSelection && typeof body?.include_mcp_catalog !== "boolean") ||
           (hasPurposeVersion && (typeof requestedPurposeVersion !== "number" ||
             !Number.isSafeInteger(requestedPurposeVersion) || requestedPurposeVersion < 2))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1516,6 +1519,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         hasPurposeVersion,
         hasPurposeVersion ? requestedPurposeVersion : null,
         goalCompletionRules ?? null,
+        // Keep the historical digest stable for opt-out requests while binding explicit catalog opt-in.
+        ...(includeMcpCatalog ? ["include_mcp_catalog", true] : []),
         ownerTaskImage ? {
           media_type: ownerTaskImage.media_type,
           byte_length: ownerTaskImage.data.byteLength,
@@ -1592,7 +1597,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           id: requestId,
           channel: "webchat",
           user: OWNER_TOKEN_ACTOR,
-          content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+          content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding,
+            ...(includeMcpCatalog ? { include_mcp_catalog: true } : {}) })}`,
           timestamp: Date.now(),
           session_id: `webchat-owner-task:${requestId}`,
           ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),

@@ -169,6 +169,8 @@ ${CONTROL_CENTER_STYLE}    </style>
               </select>
             </div>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
+            <label><input id="owner-task-include-mcp-catalog" type="checkbox" /> MCP tool catalogを計画入力へ含める</label>
+            <p class="muted">既定はOFFです。有効にすると、設定済みのcredentialless loopback MCP接続からtool名・説明・input schemaを取得し、この計画のC providerへ送信します。resource／prompt本文やcredentialは読み取らず、MCP toolも呼び出しません。出力は未承認の計画候補であり、実行には通常のJ再審査と必要なL3最終確認が残ります。</p>
             <label for="owner-task-image">画像を添付（JPEG/PNG、1枚、最大5 MiB、一時入力）</label>
             <input id="owner-task-image" type="file" accept="image/jpeg,image/png" />
             <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。Canvas成果物本文と画像は同じ仕事へ併せて渡せます。どちらも計算入力に限り、権限・承認根拠にはなりません。</p>
