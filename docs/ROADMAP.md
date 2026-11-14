@@ -2,7 +2,7 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。ownerは2026-11-13にrev5.0を採用し、2026-11-14に技術文書の非公開制約を撤廃した。公開整合版rev5.1の三点正本は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)から直接読む。HDS Frameworkの意味・関係・反証・学習とBLUE Runtimeの有限なJ/M制御を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。2026-11-14のowner指示に基づき、現行はrev5.2の三点正本であり、実体とSHAは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定する。HDS原点資料は本製品の必要資料とせず、製品に実装するHDSの判断・学習・停止とBLUE RuntimeのJ/M状態管理を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
 工程は全域棚卸し・設計からP2全体一括実装を継続し、全体の`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC、OS別QAへ進む。198索引は実装traceであり、局所完了gateではない。Windowsは所有PCで最終確認し、他4OSはOS契約に忠実な仮想環境で独立に検査する。仮想で再現できない物理条件は別に未確認として扱う。
 

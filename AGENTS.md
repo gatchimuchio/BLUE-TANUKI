@@ -12,9 +12,9 @@
 
 **開発順：全体設計 → 一気通貫で全体実装 → システムの結合形状成立 → 実物へのQC（観測・全体検査・原因分析・改善・再検査） → 対象別QA → ownerの独立した公開・出荷判断。** 先に局所の品質保証を198回完成させて製品を組み上げる方式は採用しない。安全第一・品質第二を維持し、安全・承認・秘密・監査・停止の保護は実装中も常時有効にする。
 
-owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報と三文書の実体は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) から参照する。2026-11-14のowner指示により、設計原典・三点正本・要求対応表について従来の非公開・Public Git転載禁止条件を廃止した。文書の公開と製品の出荷GO、実資格情報・実運転データの保護、他repo変更・実外部作用の権限は別である。ownerが新しい三点一組を指定したら、manifestと三文書のhashを照合し現行ピンを更新する。旧版・旧pin・完了した作業は履歴として保持し、通常作業で旧版を現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合だけ参照する。正本や原典にアクセスできなければ推測で補わず、欠落条件を明記する。
+owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報と三文書の実体は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) から参照する。2026-11-14のowner指示により、技術設計・三点正本・要求対応表について従来の非公開・Public Git転載禁止条件を廃止した。文書の公開と製品の出荷GO、実資格情報・実運転データの保護、他repo変更・実外部作用の権限は別である。ownerが新しい三点一組を指定したら、manifestと三文書のhashを照合し現行ピンを更新する。旧版・旧pin・完了した作業は履歴として保持し、通常作業で旧版を現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合だけ参照する。現行三点正本や実リポジトリが読めなければ推測で補わず、欠落条件を明記する。リポジトリに存在しない外部理論の原点資料を施工上の要求・欠損・公開判断へ加えない。
 
-2026-11-13にowner採用された現行rev5.0は、HDS Frameworkの意味・関係・反証・学習・原理候補と、BLUE Runtimeの有限なJ/M状態・安全採否を分離する。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
+現行rev5.2は、製品内のHDS判断・関係処理・学習の実装契約と、BLUE Runtimeの有限なJ/M状態・安全採否を区別し、製品外の理論原点資料を必要資料としない。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
 
 本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
 
@@ -306,7 +306,7 @@ P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのま�
 
 現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書の三点だけを正本とする。現行版はP0全域実物棚卸し→P1全域設計→P2全体一括実装を一つの施工経路として進め、依存consumerを同時に制作・結線する。docs/QE_CURRENT_AUTHORITY.mdは三点実体への唯一の現行ポインタ、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdと閉じたbatch記録は履歴とする。旧版の局所工程・全OS物理実機必須・毎小単位QC/QAは現行三点で上書きし、実行権限・実資格・出荷GOは別に保護する。
 
-工程状態はrev5.0のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
+工程状態は現行三点正本のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
 
 BUILD_BATCHはP2全体施工内の技術的checkpointとGit保全単位であり、198区分に閉じた局所工程・QC/QA完了・全体達成gateではない。全要求・5OS入口・能力間の実consumerを一つの施工計画にまとめ、未接続を見つけたらその全体工事へ結び付ける。各独立した作業の開始・再開時には現行三点セット全文と適用AGENTS.mdを読み直し、同じ施工単位内では関係する節・現物を再同期する。閉じた記録は履歴として保持し、必要時だけ参照する。型・schema・mockだけで実物完遂と報告しない。
 
@@ -340,7 +340,7 @@ mainを唯一の開発正本とし、単一writerがBUILD_BATCHまたは統治�
 
 **移行状態はMIGRATION_COMPLETE（2026-10-12）。** remote backup tag二本への保存とSHA照合後、旧remote backup branch二本を期待SHA付きatomic pushで整理した。local recovery branch二本とremote tag二本は同じ二世代に揃っている。完了時SHA、手順、検証証拠はdocs/BACKUP_REF_MIGRATION.mdを参照する。今後もref競合、他writer更新、照合不足があれば変更を止め、完了宣言しない。
 
-BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは、確認・権限なく実施しない。secret、内部HDS/QE原典、credential、実運転状態、debug一時物をGitに混ぜない。reset --hard／cleanで既存作業を消さない。
+BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは、確認・権限なく実施しない。secret、credential、個人情報、実運転状態、no-store review本文、監査raw、debug一時物をGitに混ぜない。公開可能な技術設計・QE/HDS施工文書をこれらと同一視しない。reset --hard／cleanで既存作業を消さない。
 
 ### 5. 旧規定との移行
 

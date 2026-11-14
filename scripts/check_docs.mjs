@@ -10,9 +10,9 @@ const requiredDocs = [
   "docs/BACKUP_REF_MIGRATION.md",
   "docs/QE_CURRENT_AUTHORITY.md",
   "docs/qe/現行/MANIFEST.json",
-  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_1.json",
-  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_1.json",
-  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_1.json",
+  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_2.json",
+  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_2.json",
+  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_2.json",
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -187,8 +187,12 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
 const qeManifest = JSON.parse(read("docs/qe/現行/MANIFEST.json"));
 const qeCanonicalFiles = Object.keys(qeManifest.文書 ?? {});
 const qeParsed = {};
-if (qeManifest.版 !== "5.1" || qeManifest.公開 !== true || qeCanonicalFiles.length !== 3) {
-  failures.push("現行QE公開manifestがrev5.1・公開三文書ではない");
+if (qeManifest.版 !== "5.2" || qeManifest.公開 !== true || qeCanonicalFiles.length !== 3) {
+  failures.push("現行QE公開manifestがrev5.2・公開三文書ではない");
+}
+const activeNames = fs.readdirSync(path.join(root, "docs/qe/現行")).filter(file => /^0[1-3]_.*\.json$/.test(file)).sort();
+if (JSON.stringify(activeNames) !== JSON.stringify([...qeCanonicalFiles].sort())) {
+  failures.push("現行ディレクトリに現行三点以外の版/不足ファイルが混在");
 }
 for (const file of qeCanonicalFiles) {
   const rel = `docs/qe/現行/${file}`;
@@ -197,8 +201,8 @@ for (const file of qeCanonicalFiles) {
   const doc = JSON.parse(read(rel));
   qeParsed[file.slice(0, 2)] = doc;
   if (actualHash !== qeManifest.文書[file].SHA256) failures.push(`${rel}: manifest SHA-256不一致`);
-  if (doc.識別?.版 !== "5.1" || doc.識別?.公開 !== true || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
-    failures.push(`${rel}: 非公開規則が現行三点正本に残存`);
+  if (doc.識別?.版 !== "5.2" || doc.識別?.公開 !== true || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
+    failures.push(`${rel}: 旧版または非公開規則が現行三点正本に残存`);
   }
   if (!read("docs/QE_CURRENT_AUTHORITY.md").includes(actualHash)) {
     failures.push(`${rel}: 現行ピンにSHA-256がない`);
@@ -214,6 +218,37 @@ const qeActualCounts = {
 };
 for (const [name, count] of Object.entries(qeActualCounts)) {
   if (count !== qeManifest.母集団?.[name]) failures.push(`QE現行正本母集団 ${name}: ${count} != ${qeManifest.母集団?.[name]}`);
+}
+// ID連結と原点資料の責任境界を構造的に検査。歴史的な原文詳細は規範ではない。
+const qeSpec = qeParsed["01"];
+const qePlan = qeParsed["02"];
+const qeWork = qeParsed["03"];
+if (qeSpec && qePlan && qeWork) {
+  const requirementIDs = qeSpec.要求.map(item => item.ID);
+  const unitIDs = qePlan.施工単位.map(item => item.ID);
+  const reqSet = new Set(requirementIDs);
+  const unitSet = new Set(unitIDs);
+  if (reqSet.size !== requirementIDs.length || unitSet.size !== unitIDs.length) failures.push("QE要件/施工索引にID重複");
+  if (JSON.stringify([...requirementIDs].sort()) !== JSON.stringify([...(qeWork.要求ID台帳照合?.["431"] ?? [])].sort())) {
+    failures.push("QE仕様書431要求とCodex指示書の要求ID台帳が不一致");
+  }
+  for (const unit of qePlan.施工単位) {
+    for (const req of unit.要求ID ?? []) if (!reqSet.has(req)) failures.push(`施工単位${unit.ID}に不存在の要求ID: ${req}`);
+  }
+  for (const test of qeWork.局所QC候補) {
+    if (!unitSet.has(test.単位)) failures.push(`局所QC ${test.ID}が不存在の施工単位を参照: ${test.単位}`);
+  }
+  if (Object.hasOwn(qeSpec["HDS有限射影と学習"] ?? {}, "原典") ||
+      (qeSpec["欠損・決定待ち"] ?? []).some(item => item.ID === "OD-02" || /HDS原点|HDS原典/.test(item.事項 ?? "")) ||
+      (qeSpec.要求 ?? []).some(item => /HDS原点|HDS原典/.test(item.成立内容 ?? "")) ||
+      (qePlan.施工単位 ?? []).some(item => /HDS原点|内部HDS原典/.test(item.拒否条件 ?? "")) ||
+      (qeWork.局所QC候補 ?? []).some(item => /HDS原点|内部HDS原典/.test(item.成立条件 ?? ""))) {
+    failures.push("現行製品仕様/施工/検査に不存在のHDS原点資料の依存が復活");
+  }
+  if (!qeWork.最初に実行する命令_rev5?.施工?.includes("全製品") ||
+      !qePlan.施工方式_rev5?.全体施工?.includes("一工程")) {
+    failures.push("全域一括施工の現行工程・指示が欠落");
+  }
 }
 if (exists("docs/IMPLEMENTATION_INSTRUCTIONS.md")) {
   failures.push("廃止済みの第四施工指示書が復活している");

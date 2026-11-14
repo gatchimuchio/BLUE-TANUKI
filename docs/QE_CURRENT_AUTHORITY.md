@@ -1,27 +1,24 @@
-# QE 現行正本ポインタ
+# QE 現行三点正本
 
-このページがBLUE-TANUKIの現行QE三点正本を一意に指す。三文書は公開リポジトリに実体を置き、Codexはここから直接読み込む。第四の独立した施工指示書は置かない。文書公開は製品の公開・出荷GOや実外部作用の許可ではない。
+BLUE-TANUKIの設計・工程・施工命令は、このページが指す**三点一組のみ**。第四の独立施工指示書を作らない。共通規律は`AGENTS.md`、実装現況は現行Git HEADと実コードから観測する。
 
-## 現行セット
+## 現行セット：rev5.2（2026-11-14）
 
-- 技術基底：ownerが2026-11-13に採用したQE三点セットrev5.0。
-- 公開制約の撤廃：ownerの2026-11-14指示。技術・施工内容と母集団を継承し、文書公開制約と旧正本判定文言だけを改訂したrev5.1を現行とする。
-- 公開改訂manifest：[MANIFEST.json](qe/現行/MANIFEST.json)。旧rev5.0原本hash、変更箇所、三文書hash、母集団を保持する。
-- 仕様書：[01_BLUE-TANUKI_統合仕様書_rev5_1.json](qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_1.json) — SHA-256 `dc970de3010d0e849efcdb7c36fc2d23ba3f994cfaa2c47650f8e28776f6b955`。
-- 工程表：[02_BLUE-TANUKI_全体施工工程表_rev5_1.json](qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_1.json) — SHA-256 `4af5642800b63ccb9547005dc2ace3123613797f1ba5b8443c22680bddcf21e8`。
-- 施工指示書：[03_BLUE-TANUKI_Codex施工指示書_rev5_1.json](qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_1.json) — SHA-256 `245c503a6f37929624f50fd18c21b67c7f591ccb17388c1a8e76a7f14992609e`。
+- [仕様書：BLUE-TANUKI統合仕様書](qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_2.json) — SHA-256 `4b2334c6a980ea80a4e5a0c85f105a7a353560716f9eda477cec6902c4cc1218`
+- [工程表：BLUE-TANUKI全体施工工程表](qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_2.json) — SHA-256 `c5cc8e22de4df809613aa1d3480d9d586956d31a5b119e087fb8a4affc92b40f`
+- [指示書：BLUE-TANUKI Codex施工指示書](qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_2.json) — SHA-256 `6742b00fe280dcf7e8fbd71a6726c93170fed120247e9fe963d1e8e9253b9166`
+- [現行MANIFEST・前版のSHA・全変更箇所](qe/現行/MANIFEST.json)
 
-旧rev5.0の原本SHA-256は仕様書`9b4e9f8d2183150d6cb3d9c2763cd43bfc21d6218c30b6cd99afaeccf8588961`、工程表`05f46c201fc9176af1aaa0dedf5e0289e439984fe944f25af774e556ee2a253b`、施工指示書`ad6f35bcc99c8c9abac477e0be4dd074eb344ba2e6b395c1df1b733435261439`。旧ZIP・MANIFESTと監査の当時証拠は履歴として保持し、現行技術規範へ自動昇格させない。
+## 対象・権限
 
-## 効力と責任境界
+1. **仕様書**はBLUE-TANUKI製品の機能・責任境界・必要条件を定める。**工程表**は全体躯体一括施工→全数接続→局所QC→全体QC→原因是正・再検査→OS別QAの順序と出口を定める。**指示書**はCodexが上記全域を自律施工する具体的操作と停止条件を定める。
+2. HDS原点の理論資料は本リポジトリに存在せず、BLUE-TANUKIの必要資料・欠損項目・公開/配布検査対象にしない。実装されたHDS-BRAINおよび製品内に必要なHDS作用の契約と検査は維持する。
+3. 2026-11-14のowner指示により、技術設計・要求・QE三点正本の非公開制約は撤廃済み。製品公開・GA出荷、実credential・秘密鍵・個人情報・no-store本文などの保護、製品利用者のL3同意、別repo書込み、実外部作用の権限はそれぞれ独立する。
+4. 431要求・65親成果・198施工索引・260親QC候補・396局所QC候補・61競合基準の全IDと母集団を継承する。**198索引は198回の個別品質ゲートではない**。五OS（Windows／Linux／macOS／Android／iOS）のインストール後に利用可能な製品を全体実装し、Windowsは所有実PC、他OSは各OSの標準に忠実な仮想環境・公式シミュレータ等で検証する。
+5. この改訂は設計・施工の指示更新であって、実装完成やQC／QAの合格、製品出荷GOではない。現行P13は`PENDING_OWNER_GO`。
 
-1. 現行の設計・工程・施工命令は上記三文書のみ。`AGENTS.md`は共通の安全・権限・監査規律、`docs/作業標準要領.md`はその運用説明、`docs/ROADMAP.md`と`docs/IMPLEMENTATION_HISTORY.md`は工程要約と履歴であり、独立した第四施工指示を発行しない。
-2. rev5.0原本の「公開不可」「三文書・原典・要求をPublic Gitへ転載しない」等の旧制約は2026-11-14指示により失効した。rev5.1の改訂原文対照や施工索引に残る古い文言は当時の履歴証拠であって現在の禁止命令ではない。原典・設計・QE要求対応表を公開できる。
-3. 実資格情報、利用者の個人情報・運転状態、no-store review本文は引き続き保護する。HDS権限、Approval、L3、Broker、監査、fail-closed、他repo変更の権限は弱めない。製品公開・配布・GAは独立したowner GO待ち（P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`）。
-4. rev5.1は要求431・親成果65・施工索引198・親QC260・局所QC396・競合基準61を継承する。施工は全体躯体・全5OS実入口と相互結線を先行し、`SYSTEM_SHAPED`／`BUILD_COVERED`後にQE_QC・OS別QE_QAへ進む。Windows実PCと他4OSの仮想／公式シミュレータ等で指定された規格適合条件を検査する。
+## 更新・履歴
 
-## 作業開始・正本更新
+rev5.1とそれ以前の原文・SHA・出典はGit履歴に保持し、現行の施工命令にはしない。rev5.1の三点SHAは仕様書`dc970de3010d0e849efcdb7c36fc2d23ba3f994cfaa2c47650f8e28776f6b955`、工程表`4af5642800b63ccb9547005dc2ace3123613797f1ba5b8443c22680bddcf21e8`、指示書`245c503a6f37929624f50fd18c21b67c7f591ccb17388c1a8e76a7f14992609e`。
 
-独立した作業の開始・切替・再開時は、この現行ピン、manifest、三文書すべて、適用AGENTS.md、owner最新原文指示、実main HEAD・差分を照合する。過去の完了ログから「次の局所BUILD_BATCH」を独立した施工命令として選ばない。完了済み履歴は依存・変更根拠・矛盾の監査時だけ参照する。
-
-ownerがさらに新しい三点一組を指定した場合、三文書とmanifestのSHA-256を照合してこの唯一の現行ピンを更新する。旧版と履歴は消去・改竄しない。ここに記載した製品工程状態は公開方針改訂時点の認識であり、現在の実装状態は毎回コード・test・実行証拠から再観測する。
+独立した作業の開始・切替・再開時は、この現行ピン・manifest・三文書すべて・適用AGENTS.md・owner原文指示・HEAD/差分を照合する。過去ログの「次の局所BUILD_BATCH」を新しい施工命令へ昇格させず、全域一括実装を施工対象とする。内容・工程・権限に変更が生じれば旧値・新値・根拠・影響を記録し、新しい三点一組のSHAでここを更新する。
