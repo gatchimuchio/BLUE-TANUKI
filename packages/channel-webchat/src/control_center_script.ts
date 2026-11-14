@@ -5229,11 +5229,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         const taskLineageScope = scopeKind === "task_identity";
         const planScopeBindingValid = taskLineageScope
-          ? planDigest === null && matchedPlanCount !== null && matchedPlanCount > 0 &&
+          ? matchedPlanDigests !== null && planDigest === null && matchedPlanCount !== null && matchedPlanCount > 0 &&
             matchedPlanDigests.length === matchedPlanCount && backupTaskIdentityDigest === scopeDigest &&
             backupTaskLineagePlanCount === matchedPlanCount && backupTaskLineageIntegrity === "verified" &&
             backupTaskLineageDependencyStatus !== "unknown" && dependencyScopeStatus === backupTaskLineageDependencyStatus
-          : Boolean(planDigest && matchedPlanCount === 1 && matchedPlanDigests.length === 1 && matchedPlanDigests[0] === planDigest);
+          : Boolean(matchedPlanDigests !== null && planDigest && matchedPlanCount === 1 &&
+            matchedPlanDigests.length === 1 && matchedPlanDigests[0] === planDigest);
         if (rawStatus === "matched" && (reason !== null || !scopeKind || !scopeDigest || !backupDigest || !planScopeBindingValid ||
             storeCount === null || storeCount < 1 || storeCount > 5 ||
             verifiedStoreCount !== storeCount || storeRows.length !== storeCount || !dependencyScopeStatus ||

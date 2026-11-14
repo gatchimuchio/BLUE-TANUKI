@@ -2400,7 +2400,12 @@ describe("WebChatChannel — Control Center shell", () => {
       scope_digest: "a".repeat(64),
       backup_id_digest: "b".repeat(64),
       matched_plan_id_digest: "c".repeat(64),
+      matched_plan_id_digests: ["c".repeat(64)],
       matched_plan_scope_count: 1,
+      backup_task_identity_digest: null,
+      backup_task_lineage_plan_scope_count: null,
+      backup_task_lineage_integrity: "unknown",
+      backup_task_lineage_dependency_status: "unknown",
       store_candidate_count: 1,
       verified_store_candidate_count: 1,
       dependency_scope_status: "observed",
@@ -2418,6 +2423,7 @@ describe("WebChatChannel — Control Center shell", () => {
       may_execute: false,
     };
     expect(evaluate(report)).toMatchObject({ status: "照合成立（復旧可否は未判定）" });
+    expect(evaluate({ ...report, matched_plan_id_digests: undefined })).toMatchObject({ status: "未確認" });
     expect(evaluate({ ...report, store_candidates: [{ ...report.store_candidates[0], related_dependencies: ["memory"] }] }))
       .toMatchObject({ status: "未確認" });
   });
