@@ -538,6 +538,7 @@ function findAotanuAssetRoot(): string {
  *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
+ *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
@@ -554,8 +555,8 @@ function findAotanuAssetRoot(): string {
  *   GET  /approval/emergency-stop auth:Bearer resume-token
  *   POST /approval/emergency-stop body:{action,actor?,reason?} auth:Bearer resume-token
  *   GET  /audit/dump auth:Bearer inbound-token
- *   GET  /authority/trace auth:Bearer inbound-token
- *   GET  /notifications auth:Bearer inbound-token
+ *   GET  /authority/trace auth:Bearer inbound-token または専用D4 Runtime bearer、読取専用
+ *   GET  /notifications auth:Bearer inbound-token または専用D4 Runtime bearer、表示専用
  *   GET  /history auth:Bearer inbound-token
  *   GET  /history/replay auth:Bearer inbound-token
  *   POST /evidence/export body:{actor?} auth:Bearer inbound-token
@@ -2501,6 +2502,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     return bearerTokenMatches(m[1], expected);
   }
 
+  /** D4 Runtimeへ状態・権限trace・通知の投影を許可する。制御・再照合の権限は与えない。 */
+  private checkRuntimeProjectionAuth(req: IncomingMessage): boolean {
+    return this.checkAuth(req, "inbound") || this.checkAuth(req, "d4_runtime");
+  }
+
   private checkSettingsAuth(req: IncomingMessage): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
@@ -2903,7 +2909,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    if (!this.checkRuntimeProjectionAuth(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
@@ -2930,7 +2936,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    if (!this.checkRuntimeProjectionAuth(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
@@ -3013,7 +3019,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    if (!this.checkRuntimeProjectionAuth(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;

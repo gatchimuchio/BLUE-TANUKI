@@ -1809,15 +1809,15 @@ export interface WebChatOptions {
   resume_approval_token_cap?: number;
   /** Optional local settings window/API surface. */
   settings?: WebChatSettingsSurface;
-  /** Optional local runtime/status API surface. Uses the normal inbound bearer token. */
+  /** 任意のruntime/status API。読み取り専用投影はinboundまたは専用D4 Runtime bearerで取得する。 */
   runtime?: WebChatRuntimeSurface;
   /** Optional local approval queue API surface. Uses the resume bearer token. */
   approval?: WebChatApprovalSurface;
   /** Optional local audit dump API surface. Uses the normal inbound bearer token. */
   audit?: WebChatAuditSurface;
-  /** Optional local authority trace API surface. Uses the normal inbound bearer token. */
+  /** 任意の権限trace API。inboundまたは専用D4 Runtime bearerで取得する。 */
   authority?: WebChatAuthoritySurface;
-  /** Optional display-only notification API surface. Uses the normal inbound bearer token. */
+  /** 任意の表示専用通知API。inboundまたは専用D4 Runtime bearerで取得する。 */
   notifications?: WebChatNotificationSurface;
   /** Optional read-only complete-history replay surface. Uses the normal inbound bearer token. */
   history?: WebChatHistorySurface;

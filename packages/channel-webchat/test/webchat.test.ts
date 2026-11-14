@@ -5458,9 +5458,16 @@ describe("WebChatChannel — audit dump API", () => {
 });
 
 describe("WebChatChannel — runtime snapshot API", () => {
-  it("serves safe first-run status only with the inbound token", async () => {
+  it("serves safe first-run status to inbound and dedicated D4 runtime readers", async () => {
+    let reconciliationAttempted = false;
     const ctx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
       runtime: {
+        reconcilePendingResults: async () => {
+          reconciliationAttempted = true;
+          return { ready: true, adopted: 0, deferred: 0, stale_generation_archived: 0,
+            memory_ready: true, result_store_readable: true };
+        },
         getSnapshot: async () => ({
           gateway_status: "running",
           hds_invariants_ok: true,
@@ -5518,6 +5525,27 @@ describe("WebChatChannel — runtime snapshot API", () => {
       expect(JSON.stringify(body)).not.toContain("private schedule content");
       expect(JSON.stringify(body)).not.toContain(RESUME_TOKEN);
       expect(JSON.stringify(body)).not.toContain(TOKEN);
+
+      const d4Reader = await getRaw(ctx.port, "/runtime/snapshot", {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4Reader.status).toBe(200);
+      expect(JSON.parse(d4Reader.text)).toMatchObject({ gateway_status: "running", hds_invariants_ok: true });
+      expect(d4Reader.text).not.toContain(D4_RUNTIME_TOKEN);
+
+      const d4ApprovalList = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4ApprovalList.status).toBe(401);
+      const d4Approval = await postJson(ctx.port, "/approval/cmd-1", { verdict: "approve" }, {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4Approval.status).toBe(401);
+      const d4Reconciliation = await postJson(ctx.port, "/runtime/reconcile-results", {}, {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4Reconciliation.status).toBe(401);
+      expect(reconciliationAttempted).toBe(false);
     } finally {
       await ctx.teardown();
     }
@@ -5591,8 +5619,9 @@ describe("WebChatChannel — runtime snapshot API", () => {
 });
 
 describe("WebChatChannel — authority trace API", () => {
-  it("serves read-only authority trace only with the inbound token", async () => {
+  it("serves read-only authority trace to inbound and dedicated D4 runtime readers", async () => {
     const ctx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
       authority: {
         trace: async () => [
           {
@@ -5691,6 +5720,12 @@ describe("WebChatChannel — authority trace API", () => {
         disposition: "excluded_from_context",
       }));
       expect(body.authority_trace[1]).not.toHaveProperty("claim");
+      const d4Reader = await getRaw(ctx.port, "/authority/trace", {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4Reader.status).toBe(200);
+      expect(JSON.parse(d4Reader.text).authority_trace).toHaveLength(2);
+      expect(d4Reader.text).not.toContain(D4_RUNTIME_TOKEN);
     } finally {
       await ctx.teardown();
     }
@@ -6935,8 +6970,9 @@ describe("WebChatChannel — rate-limit prune", () => {
 });
 
 describe("WebChatChannel - resident notifications API", () => {
-  it("serves display-only notifications only with the inbound token", async () => {
+  it("serves display-only notifications to inbound and dedicated D4 runtime readers", async () => {
     const ctx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
       notifications: {
         list: async () => [
           {
@@ -7006,6 +7042,12 @@ describe("WebChatChannel - resident notifications API", () => {
         result_memory_status: "receipt_confirmed",
       });
       expect(JSON.stringify(body)).not.toContain("approval_token");
+      const d4Reader = await getRaw(ctx.port, "/notifications", {
+        authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
+      });
+      expect(d4Reader.status).toBe(200);
+      expect(JSON.parse(d4Reader.text).notifications).toHaveLength(2);
+      expect(d4Reader.text).not.toContain(D4_RUNTIME_TOKEN);
     } finally {
       await ctx.teardown();
     }
