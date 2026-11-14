@@ -69,6 +69,8 @@ import {
   githubPullRequestCommentCreateRequestPayloadDigest,
   githubPullRequestCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest,
+  githubPullRequestMergeRequestPayloadDigest,
+  githubPullRequestMergeTargetIdentityDigest,
   githubCodePushTargetIdentityDigest,
   githubCodePushRequestPayloadDigest,
   githubReleaseDraftCreateTargetIdentityDigest,
@@ -3956,7 +3958,7 @@ ${planControl.question}`,
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
           (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.comment.create" &&
-            operation !== "pr.create" && operation !== "pr.comment.create" && operation !== "code.push" &&
+            operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.comment.create" && operation !== "code.push" &&
             operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
       }
@@ -4136,6 +4138,27 @@ ${planControl.question}`,
         targetIdentityDigest = githubReleaseDraftCreateTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, tag_name: tagName!, tag_ref_sha: observation.tag_ref_sha,
           tag_ref_type: observation.tag_ref_type, target_commit_sha: targetCommitSha });
+      } else if (operation === "pr.merge") {
+        const pullRequestNumber = positiveNumber("number");
+        const expectedHeadSha = optionalText("expected_head_sha");
+        const mergeMethod = optionalText("merge_method");
+        if (!expectedHeadSha || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+            (mergeMethod !== "merge" && mergeMethod !== "squash" && mergeMethod !== "rebase") ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "number", "expected_head_sha", "merge_method"].includes(key)) ||
+            observation.operation !== "pr.merge" || observation.pull_request_number !== pullRequestNumber ||
+            observation.pull_request_state !== "open" || observation.pull_request_locked || observation.pull_request_draft ||
+            observation.mergeable !== true || observation.mergeable_state !== "clean" ||
+            observation.head_sha !== expectedHeadSha || observation.merge_method !== mergeMethod) {
+          throw new Error("HDS github.write pr.merge parameters or observed pull request are invalid");
+        }
+        requestPayloadDigest = githubPullRequestMergeRequestPayloadDigest({ owner, repo,
+          pull_request_number: pullRequestNumber, expected_head_sha: expectedHeadSha,
+          merge_method: mergeMethod });
+        targetIdentityDigest = githubPullRequestMergeTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
+          head_repository_id: observation.head_repository_id, head_canonical_full_name: observation.head_canonical_full_name,
+          pull_request_number: observation.pull_request_number, head_ref: observation.head_ref,
+          head_sha: observation.head_sha, base_ref: observation.base_ref, base_sha: observation.base_sha });
       } else {
         const title = optionalText("title");
         const body = optionalText("body");

@@ -67,7 +67,7 @@ export interface GitHubReadOptions {
   request?: (target: GitHubReadTarget, signal?: AbortSignal) => Promise<GitHubReadResponse>;
 }
 
-export type GitHubWriteMethod = "POST" | "PATCH";
+export type GitHubWriteMethod = "POST" | "PATCH" | "PUT";
 
 export interface GitHubWriteTarget {
   method: GitHubWriteMethod;

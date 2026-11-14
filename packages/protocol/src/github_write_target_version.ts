@@ -104,6 +104,28 @@ export const GitHubPullRequestCreateTargetVersionObservationSchema = GitHubWrite
   maintainer_can_modify: z.boolean().nullable(),
 }).strict();
 
+/** Plan-bound evidence for merging one exact, clean, open pull request head. */
+export const GitHubPullRequestMergeTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("pr.merge"),
+  pull_request_id: z.number().int().positive().safe(),
+  pull_request_number: z.number().int().positive().max(1_000_000),
+  pull_request_state: z.literal("open"),
+  pull_request_locked: z.literal(false),
+  pull_request_draft: z.literal(false),
+  pull_request_updated_at: z.string().datetime({ offset: true }),
+  pull_request_title: z.string().min(1).max(65_536),
+  head_repository_id: z.number().int().positive().safe(),
+  head_canonical_full_name: z.string().min(3).max(201),
+  head_repository_visibility: z.enum(["public", "private"]),
+  mergeable: z.literal(true),
+  mergeable_state: z.literal("clean"),
+  head_ref: z.string().min(1).max(255),
+  head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  base_ref: z.string().min(1).max(255),
+  base_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  merge_method: z.enum(["merge", "squash", "rebase"]),
+}).strict();
+
 /** One reviewed, create-only file commit to an existing non-default branch. */
 export const GitHubCodePushTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("code.push"),
@@ -131,6 +153,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
+  GitHubPullRequestMergeTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
   GitHubReleaseDraftCreateTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
@@ -143,6 +166,25 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
         (!sameRepository && !value.head_repository_is_fork)) {
       context.addIssue({ code: z.ZodIssueCode.custom,
         message: "pull request head repository must be the base repository or a fork in the same GitHub network" });
+    }
+    return;
+  }
+  if (value.operation === "pr.merge") {
+    const validRef = (ref: string): boolean => {
+      const segments = ref.split("/");
+      return ref === ref.trim() && ref !== "@" && !ref.startsWith("/") && !ref.endsWith("/") &&
+        !ref.includes("//") && !ref.includes("..") && !ref.includes("@{") &&
+        !/[\u0000-\u0020\u007f~^:?*\\\[]/.test(ref) && !ref.endsWith(".") &&
+        segments.every((segment) => segment.length > 0 && segment !== "." && segment !== ".." &&
+          !segment.startsWith(".") && !segment.endsWith(".") && !segment.endsWith(".lock"));
+    };
+    const headRepositoryParts = value.head_canonical_full_name.split("/");
+    const headRepositoryMatchesBaseId = value.head_repository_id === value.repository_id;
+    const headRepositoryMatchesBaseName = value.head_canonical_full_name.toLowerCase() === value.canonical_full_name.toLowerCase();
+    if (headRepositoryMatchesBaseId !== headRepositoryMatchesBaseName ||
+        !validRef(value.head_ref) || !validRef(value.base_ref) || headRepositoryParts.length !== 2 ||
+        headRepositoryParts.some((part) => !/^[A-Za-z0-9_.-]{1,100}$/.test(part) || part === "." || part === "..")) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "pull request merge refs or head repository identity are invalid" });
     }
     return;
   }
@@ -186,6 +228,7 @@ export type GitHubIssueReopenTargetVersionObservation = z.infer<typeof GitHubIss
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
+export type GitHubPullRequestMergeTargetVersionObservation = z.infer<typeof GitHubPullRequestMergeTargetVersionObservationSchema>;
 export type GitHubCodePushTargetVersionObservation = z.infer<typeof GitHubCodePushTargetVersionObservationSchema>;
 export type GitHubReleaseDraftCreateTargetVersionObservation = z.infer<typeof GitHubReleaseDraftCreateTargetVersionObservationSchema>;
 
@@ -486,6 +529,50 @@ export function githubPullRequestCreateRequestPayloadDigest(input: {
     input.base_ref,
     input.draft,
     input.maintainer_can_modify ?? null,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestMergeTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  pull_request_id: number;
+  pull_request_number: number;
+  head_repository_id: number;
+  head_canonical_full_name: string;
+  head_ref: string;
+  head_sha: string;
+  base_ref: string;
+  base_sha: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-merge-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.pull_request_id,
+    input.pull_request_number,
+    input.head_repository_id,
+    input.head_canonical_full_name,
+    input.head_ref,
+    input.head_sha,
+    input.base_ref,
+    input.base_sha,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestMergeRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  pull_request_number: number;
+  expected_head_sha: string;
+  merge_method: "merge" | "squash" | "rebase";
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-merge-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.pull_request_number,
+    input.expected_head_sha,
+    input.merge_method,
   ]), "utf8").digest("hex");
 }
 

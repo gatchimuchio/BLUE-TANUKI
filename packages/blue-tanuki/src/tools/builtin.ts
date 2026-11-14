@@ -21,6 +21,7 @@ import {
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
+  GitHubPullRequestMergeTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
   GitHubReleaseDraftCreateTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
@@ -43,6 +44,8 @@ import {
   githubPullRequestCommentCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest,
   githubPullRequestCreateTargetIdentityDigest,
+  githubPullRequestMergeRequestPayloadDigest,
+  githubPullRequestMergeTargetIdentityDigest,
   githubCodePushRequestPayloadDigest,
   githubCodePushTargetIdentityDigest,
   githubReleaseDraftCreateRequestPayloadDigest,
@@ -60,6 +63,7 @@ import {
   type GitHubIssueCommentCreateTargetVersionObservation,
   type GitHubPullRequestCommentCreateTargetVersionObservation,
   type GitHubPullRequestCreateTargetVersionObservation,
+  type GitHubPullRequestMergeTargetVersionObservation,
   type GitHubCodePushTargetVersionObservation,
   type GitHubReleaseDraftCreateTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
@@ -70,6 +74,7 @@ import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContent
   type GitHubIssueReopenContentReview,
   type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCommentCreateContentReview,
   type GitHubPullRequestCreateContentReview, type GitHubCodePushContentReview,
+  type GitHubPullRequestMergeContentReview,
   type GitHubReleaseDraftCreateContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
@@ -1088,6 +1093,25 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
     };
   }
 
+  if (operation === "pr.merge") {
+    const number = requiredPositiveIntArg(args, "number", 1_000_000);
+    const expectedHeadSha = stringArg(args, "expected_head_sha")!;
+    const mergeMethod = stringArg(args, "merge_method")!;
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+        (mergeMethod !== "merge" && mergeMethod !== "squash" && mergeMethod !== "rebase") ||
+        Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "expected_head_sha",
+          "merge_method", "max_bytes"].includes(key))) {
+      throw new Error("github.write pr.merge requires an exact expected head SHA and explicit merge method; mutation_sent=false");
+    }
+    return {
+      operation,
+      method: "PUT",
+      path: `/repos/${ownerPath}/${repoPath}/pulls/${number}/merge`,
+      body: { sha: expectedHeadSha, merge_method: mergeMethod },
+      repo,
+    };
+  }
+
   if (operation === "code.push") {
     const branch = stringArg(args, "branch")!;
     githubBranchRefArg(branch, "branch");
@@ -1146,7 +1170,7 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
   }
 
   throw new Error(
-    "operation must be issue.create, issue.update, issue.close, issue.reopen, issue.comment.create, pr.create, pr.comment.create, code.push, or release.draft.create",
+    "operation must be issue.create, issue.update, issue.close, issue.reopen, issue.comment.create, pr.create, pr.merge, pr.comment.create, code.push, or release.draft.create",
   );
 }
 
@@ -1730,6 +1754,7 @@ export async function invokeGitHubWrite(
   if (route.operation === "issue.comment.create") return await invokeGitHubIssueCommentCreate(args, opts);
   if (route.operation === "pr.comment.create") return await invokeGitHubPullRequestCommentCreate(args, opts);
   if (route.operation === "pr.create") return await invokeGitHubPullRequestCreate(args, opts);
+  if (route.operation === "pr.merge") return await invokeGitHubPullRequestMerge(args, opts);
   if (route.operation === "code.push") return await invokeGitHubCodePush(args, opts);
   if (route.operation === "release.draft.create") return await invokeGitHubReleaseDraftCreate(args, opts);
   if (route.operation !== "issue.create") {
@@ -2217,6 +2242,146 @@ async function invokeGitHubPullRequestCreate(args: Record<string, unknown>, opts
       ...(typeof pull.maintainer_can_modify === "boolean"
         ? { maintainer_can_modify: pull.maintainer_can_modify } : {}),
     },
+    provider_data_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+async function invokeGitHubPullRequestMerge(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.merge" || route.method !== "PUT") {
+    throw new Error("github.write pr.merge route mismatch; mutation_sent=false");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write pr.merge requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+  }
+  const expected = assertGitHubPullRequestMergeTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const current = await inspectGitHubPullRequestMergeTargetVersion(args, {
+    env,
+    signal: opts.signal,
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    ...(opts.read_request ? { read_request: opts.read_request } : {}),
+  });
+  if (canonicalGitHubWriteTargetVersionObservation(current) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write pr.merge pull request or base branch changed after review; mutation_sent=false; outcome=stale");
+  }
+
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.merge");
+  let response: GitHubWriteResponse;
+  try {
+    response = await request({ method: route.method, path: route.path, body: route.body, maxBytes, token }, opts.signal);
+  } catch {
+    throw new Error("github.write pr.merge outcome_unknown; request may have reached GitHub; do not retry automatically; verify the pull request before a new Owner decision");
+  }
+  const data = parseJsonOrText(response.body);
+  if (!response.ok || response.status !== 200 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
+    const explicitRejection = !response.ok && !response.truncated &&
+      [400, 401, 403, 404, 405, 409, 410, 415, 422].includes(response.status);
+    if (explicitRejection) {
+      return {
+        schema_version: "blue-tanuki.github-write-result.v1",
+        operation: "pr.merge",
+        api_host: "api.github.com",
+        repo: route.repo,
+        repository_id: expected.repository_id,
+        target_identity_digest: expected.target_identity_digest,
+        request_payload_digest: expected.request_payload_digest,
+        command_digest: expected.command_digest,
+        operation_plan_binding_digest: expected.operation_plan_binding_digest,
+        method: route.method,
+        path: route.path,
+        status: response.status,
+        mutation_status: "provider_rejected",
+        result_digest: sha256Hex(data),
+        retry_permitted: false,
+        next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+        provider_data_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    }
+    throw new Error(`github.write pr.merge outcome_unknown; HTTP ${response.status}; do not retry automatically`);
+  }
+
+  const mergeResponse = isRecord(data) ? data : null;
+  const mergeCommitSha = mergeResponse && typeof mergeResponse.sha === "string" ? mergeResponse.sha : "";
+  if (!mergeResponse || mergeResponse.merged !== true ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(mergeCommitSha)) {
+    throw new Error("github.write pr.merge response did not confirm a merged commit; outcome_unknown; do not retry automatically");
+  }
+
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  let after: Record<string, unknown>;
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write pr.merge readback");
+    const readResponse = await readRequest({
+      path: `/repos/${encodeURIComponent(expected.requested_owner)}/${encodeURIComponent(expected.requested_repo)}/pulls/${expected.pull_request_number}`,
+      maxBytes,
+      token,
+    }, opts.signal);
+    after = requireGitHubJsonRecord(readResponse, "pr.merge result readback");
+  } catch {
+    throw new Error("github.write pr.merge outcome_unknown; readback could not confirm the merge; do not retry automatically");
+  }
+  const afterHead = isRecord(after.head) ? after.head : null;
+  const afterHeadRepository = afterHead && isRecord(afterHead.repo) ? afterHead.repo : null;
+  const afterBase = isRecord(after.base) ? after.base : null;
+  const afterBaseRepository = afterBase && isRecord(afterBase.repo) ? afterBase.repo : null;
+  if (after.id !== expected.pull_request_id || after.number !== expected.pull_request_number ||
+      after.state !== "closed" || after.merged !== true || after.merge_commit_sha !== mergeCommitSha ||
+      !afterHead || afterHead.ref !== expected.head_ref || afterHead.sha !== expected.head_sha ||
+      !afterHeadRepository || afterHeadRepository.id !== expected.head_repository_id ||
+      typeof afterHeadRepository.full_name !== "string" ||
+      afterHeadRepository.full_name.toLowerCase() !== expected.head_canonical_full_name.toLowerCase() ||
+      !afterBase || afterBase.ref !== expected.base_ref || !afterBaseRepository ||
+      afterBaseRepository.id !== expected.repository_id ||
+      typeof afterBaseRepository.full_name !== "string" ||
+      afterBaseRepository.full_name.toLowerCase() !== expected.canonical_full_name.toLowerCase()) {
+    throw new Error("github.write pr.merge readback did not confirm the exact reviewed pull request merge; outcome_unknown; do not retry automatically");
+  }
+  const result = {
+    id: expected.pull_request_id,
+    number: expected.pull_request_number,
+    merge_commit_sha: mergeCommitSha,
+    head_repository_id: expected.head_repository_id,
+    head_canonical_full_name: expected.head_canonical_full_name,
+    head_ref: expected.head_ref,
+    head_sha: expected.head_sha,
+    base_ref: expected.base_ref,
+    merge_method: expected.merge_method,
+  };
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1",
+    operation: "pr.merge",
+    api_host: "api.github.com",
+    repo: route.repo,
+    repository_id: expected.repository_id,
+    target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest,
+    command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest,
+    method: route.method,
+    path: route.path,
+    status: response.status,
+    mutation_status: "provider_accepted",
+    content_type: response.content_type,
+    truncated: response.truncated,
+    rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id,
+    result_digest: sha256Hex(result),
+    result,
     provider_data_is_untrusted: true,
     used_for_authority: false,
     may_execute: false,
@@ -2739,6 +2904,207 @@ export async function inspectGitHubPullRequestCreateTargetVersion(
     used_for_authority: false,
     may_execute: false,
   });
+}
+
+export async function inspectGitHubPullRequestMergeTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubPullRequestMergeTargetVersionObservation> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "pr.merge" || route.method !== "PUT") {
+    throw new Error("github.write " + route.operation + " target observation is not implemented; status=BUILD_GAP");
+  }
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "expected_head_sha",
+    "merge_method", "max_bytes"].includes(key))) {
+    throw new Error("github.write pr.merge contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write pr.merge target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const number = requiredPositiveIntArg(args, "number", 1_000_000);
+  const expectedHeadSha = String(route.body.sha);
+  const mergeMethod = route.body.merge_method as "merge" | "squash" | "rebase";
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.merge target inspection");
+  const repositoryResponse = await readRequest({
+    path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, maxBytes, token,
+  }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "pr.merge target repository");
+  const repositoryId = repository.id;
+  const canonicalFullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const repositoryOwner = isRecord(repository.owner) && typeof repository.owner.login === "string"
+    ? repository.owner.login : "";
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      canonicalFullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      repositoryName.toLowerCase() !== repo.toLowerCase() || repositoryOwner.toLowerCase() !== owner.toLowerCase() ||
+      typeof repository.private !== "boolean") {
+    throw new Error("github.write pr.merge repository identity or visibility is incomplete or mismatched; mutation_sent=false");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "github.write pr.merge pull request inspection");
+  const pullResponse = await readRequest({ path: route.path, maxBytes, token }, opts.signal);
+  const pull = requireGitHubJsonRecord(pullResponse, "pr.merge pull request");
+  const head = isRecord(pull.head) ? pull.head : null;
+  const headRepository = head && isRecord(head.repo) ? head.repo : null;
+  const base = isRecord(pull.base) ? pull.base : null;
+  const baseRepository = base && isRecord(base.repo) ? base.repo : null;
+  const headRef = head && typeof head.ref === "string" ? head.ref : "";
+  const headSha = head && typeof head.sha === "string" ? head.sha : "";
+  const headRepositoryId = headRepository?.id;
+  const headCanonicalFullName = typeof headRepository?.full_name === "string" ? headRepository.full_name : "";
+  const headRepositoryName = typeof headRepository?.name === "string" ? headRepository.name : "";
+  const headRepositoryOwner = headRepository && isRecord(headRepository.owner) && typeof headRepository.owner.login === "string"
+    ? headRepository.owner.login : "";
+  const headRepositoryPrivate = headRepository?.private;
+  const baseRef = base && typeof base.ref === "string" ? base.ref : "";
+  const baseSha = base && typeof base.sha === "string" ? base.sha : "";
+  const updatedAt = pull.updated_at;
+  if (typeof pull.id !== "number" || !Number.isSafeInteger(pull.id) || pull.id <= 0 || pull.number !== number ||
+      pull.state !== "open" || pull.locked !== false || pull.merged !== false || pull.draft !== false ||
+      typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt)) ||
+      typeof pull.title !== "string" || pull.title.length === 0 || pull.title.length > 65_536 ||
+      pull.mergeable !== true || pull.mergeable_state !== "clean" ||
+      !headRef || headRef.length > 255 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(headSha) ||
+      !headRepository || typeof headRepositoryId !== "number" || !Number.isSafeInteger(headRepositoryId) || headRepositoryId <= 0 ||
+      typeof headRepositoryPrivate !== "boolean" ||
+      headCanonicalFullName.toLowerCase() !== `${headRepositoryOwner}/${headRepositoryName}`.toLowerCase() ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(headRepositoryOwner) || !/^[A-Za-z0-9_.-]{1,100}$/.test(headRepositoryName) ||
+      headRepositoryOwner === "." || headRepositoryOwner === ".." || headRepositoryName === "." || headRepositoryName === ".." ||
+      !baseRef || baseRef.length > 255 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha) ||
+      !baseRepository || baseRepository.id !== repositoryId ||
+      typeof baseRepository.full_name !== "string" || baseRepository.full_name.toLowerCase() !== canonicalFullName.toLowerCase()) {
+    throw new Error("github.write pr.merge requires the exact open, unlocked, non-draft, clean pull request; mutation_sent=false; status=BLOCKED_AUTHORITY");
+  }
+  if (headSha !== expectedHeadSha) {
+    throw new Error("github.write pr.merge head SHA changed from the explicitly reviewed expected SHA; mutation_sent=false; outcome=stale");
+  }
+  return GitHubPullRequestMergeTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "pr.merge",
+    repository_id: repositoryId,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: canonicalFullName,
+    repository_visibility: repository.private ? "private" : "public",
+    pull_request_id: pull.id,
+    pull_request_number: number,
+    pull_request_state: "open",
+    pull_request_locked: false,
+    pull_request_draft: false,
+    pull_request_updated_at: updatedAt,
+    pull_request_title: pull.title,
+    head_repository_id: headRepositoryId,
+    head_canonical_full_name: headCanonicalFullName,
+    head_repository_visibility: headRepositoryPrivate ? "private" : "public",
+    mergeable: true,
+    mergeable_state: "clean",
+    head_ref: headRef,
+    head_sha: headSha,
+    base_ref: baseRef,
+    base_sha: baseSha,
+    merge_method: mergeMethod,
+    target_identity_digest: githubPullRequestMergeTargetIdentityDigest({ repository_id: repositoryId,
+      canonical_full_name: canonicalFullName, pull_request_id: pull.id, pull_request_number: number,
+      head_repository_id: headRepositoryId, head_canonical_full_name: headCanonicalFullName,
+      head_ref: headRef, head_sha: headSha, base_ref: baseRef, base_sha: baseSha }),
+    request_payload_digest: githubPullRequestMergeRequestPayloadDigest({ owner, repo,
+      pull_request_number: number, expected_head_sha: expectedHeadSha, merge_method: mergeMethod }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+export function assertGitHubPullRequestMergeTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubPullRequestMergeTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "pr.merge") throw new Error("github.write pr.merge target observation has another operation");
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const number = requiredPositiveIntArg(args, "number", 1_000_000);
+  const expectedHeadSha = stringArg(args, "expected_head_sha")!;
+  const mergeMethod = stringArg(args, "merge_method")!;
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "expected_head_sha",
+        "merge_method", "max_bytes"].includes(key)) || route.operation !== "pr.merge" || route.method !== "PUT" ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      observation.pull_request_number !== number || observation.pull_request_state !== "open" ||
+      observation.pull_request_locked || observation.pull_request_draft || !observation.mergeable ||
+      observation.mergeable_state !== "clean" || observation.head_sha !== expectedHeadSha ||
+      observation.merge_method !== mergeMethod || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== githubPullRequestMergeRequestPayloadDigest({ owner, repo,
+        pull_request_number: number, expected_head_sha: expectedHeadSha,
+        merge_method: mergeMethod as "merge" | "squash" | "rebase" }) ||
+      observation.target_identity_digest !== githubPullRequestMergeTargetIdentityDigest({ repository_id: observation.repository_id,
+        canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
+        head_repository_id: observation.head_repository_id, head_canonical_full_name: observation.head_canonical_full_name,
+        pull_request_number: observation.pull_request_number, head_ref: observation.head_ref,
+        head_sha: observation.head_sha, base_ref: observation.base_ref, base_sha: observation.base_sha }) ||
+      observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write pr.merge target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubPullRequestMergeContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubPullRequestMergeContentReview> {
+  const observation = await inspectGitHubPullRequestMergeTargetVersion(args, opts);
+  const base = {
+    kind: "github_pull_request_merge" as const,
+    operation: "github.write.pr.merge" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    pull_request_id: observation.pull_request_id,
+    pull_request_number: observation.pull_request_number,
+    pull_request_state: observation.pull_request_state,
+    pull_request_locked: observation.pull_request_locked,
+    pull_request_draft: observation.pull_request_draft,
+    pull_request_updated_at: observation.pull_request_updated_at,
+    pull_request_title: observation.pull_request_title,
+    head_repository_id: observation.head_repository_id,
+    head_canonical_full_name: observation.head_canonical_full_name,
+    head_repository_visibility: observation.head_repository_visibility,
+    mergeable: observation.mergeable,
+    mergeable_state: observation.mergeable_state,
+    head_ref: observation.head_ref,
+    head_sha: observation.head_sha,
+    base_ref: observation.base_ref,
+    base_sha: observation.base_sha,
+    expected_head_sha: String(args.expected_head_sha),
+    merge_method: observation.merge_method,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    merge_effect: "merge_reviewed_head_into_base_branch" as const,
+    workflow_effect: "repository_workflows_may_run" as const,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    publication_effect: "visible_to_repository_audience" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
 }
 
 export function assertGitHubPullRequestCreateTargetVersion(args: Record<string, unknown>, value: unknown,
@@ -6185,6 +6551,14 @@ export const githubWriteTool: Tool = {
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
     }
+    if (githubOperation(args) === "pr.merge") {
+      return await inspectGitHubPullRequestMergeTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -6237,7 +6611,7 @@ export const githubWriteTool: Tool = {
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
     GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
-    GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
+    GitHubPullRequestMergeContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -6256,6 +6630,14 @@ export const githubWriteTool: Tool = {
     }
     if (githubOperation(args) === "pr.create") {
       return await inspectGitHubPullRequestCreateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "pr.merge") {
+      return await inspectGitHubPullRequestMergeContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),

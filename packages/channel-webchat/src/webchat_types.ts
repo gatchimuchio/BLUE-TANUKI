@@ -1114,6 +1114,47 @@ export interface WebChatGitHubPullRequestCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubPullRequestMergeContentReview {
+  kind: "github_pull_request_merge";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.pr.merge";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  pull_request_id: number;
+  pull_request_number: number;
+  pull_request_state: "open";
+  pull_request_locked: false;
+  pull_request_draft: false;
+  pull_request_updated_at: string;
+  pull_request_title: string;
+  head_repository_id: number;
+  head_canonical_full_name: string;
+  head_repository_visibility: "public" | "private";
+  mergeable: true;
+  mergeable_state: "clean";
+  head_ref: string;
+  head_sha: string;
+  base_ref: string;
+  base_sha: string;
+  expected_head_sha: string;
+  merge_method: "merge" | "squash" | "rebase";
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  merge_effect: "merge_reviewed_head_into_base_branch";
+  workflow_effect: "repository_workflows_may_run";
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "visible_to_repository_audience";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubCodePushContentReview {
   kind: "github_code_push";
   command_id: string;
@@ -1190,6 +1231,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGitHubIssueUpdateContentReview | WebChatGitHubIssueCloseContentReview | WebChatGitHubIssueReopenContentReview | WebChatGitHubIssueCommentCreateContentReview |
   WebChatGitHubPullRequestCommentCreateContentReview |
   WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
+  WebChatGitHubPullRequestMergeContentReview |
   WebChatGitHubReleaseDraftCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =

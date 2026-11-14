@@ -80,7 +80,8 @@ import type { BrokerTargetVersionObservation, GmailDraftContentReview, Tool, Too
 import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubIssueCloseTargetVersion,
   assertGitHubIssueReopenTargetVersion,
   assertGitHubIssueCommentCreateTargetVersion,
-  assertGitHubPullRequestCommentCreateTargetVersion, assertGitHubPullRequestCreateTargetVersion, assertGitHubCodePushTargetVersion,
+  assertGitHubPullRequestCommentCreateTargetVersion, assertGitHubPullRequestCreateTargetVersion,
+  assertGitHubPullRequestMergeTargetVersion, assertGitHubCodePushTargetVersion,
   assertGitHubReleaseDraftCreateTargetVersion,
   brokerFileResourceLockDigest, fileDeleteTool, fileEditTool,
   fileSearchTool, fileWriteTool, gmailWriteTool, googleCalendarWriteTool, googleDriveWriteTool, githubWriteTool,
@@ -326,6 +327,8 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
         : inlinePullRequestComment && validCommentNumber
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments` }
         : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls` }
+        : operation === "pr.merge" && target.operation === "pr.merge" && validCommentNumber
+          ? { method: "PUT", path: `/repos/${owner}/${repo}/pulls/${number}/merge` }
         : operation === "code.push" && target.operation === "code.push"
           ? { method: "POST", path: "/graphql" }
           : operation === "release.draft.create" && target.operation === "release.draft.create"
@@ -342,7 +345,7 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
     result.request_payload_digest === target.request_payload_digest && result.command_digest === target.command_digest &&
     result.operation_plan_binding_digest === target.operation_plan_binding_digest &&
     result.method === route.method && result.path === route.path &&
-    [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(result.status)) &&
+    [400, 401, 403, 404, 405, 409, 410, 415, 422].includes(Number(result.status)) &&
     result.mutation_status === "provider_rejected" && typeof result.result_digest === "string" &&
     /^[a-f0-9]{64}$/.test(result.result_digest) && result.retry_permitted === false &&
     result.next_action === "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision." &&
@@ -379,6 +382,8 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
         : inlinePullRequestComment && validCommentNumber
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/comments`, status: 201 }
         : operation === "pr.create" ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 }
+        : operation === "pr.merge" && target.operation === "pr.merge" && validCommentNumber
+          ? { method: "PUT", path: `/repos/${owner}/${repo}/pulls/${number}/merge`, status: 200 }
         : operation === "code.push" && target.operation === "code.push"
           ? { method: "POST", path: "/graphql", status: 200 }
           : operation === "release.draft.create" && target.operation === "release.draft.create"
@@ -442,6 +447,17 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
       summary.tag_name === args.tag_name && summary.target_commit_sha === target.target_commit_sha &&
       summary.target_commit_sha === args.target_commit_sha && summary.name === args.name &&
       summary.draft === true && summary.prerelease === false;
+  }
+  if (operation === "pr.merge" && target.operation === "pr.merge") {
+    return Object.keys(summary).sort().join(",") === "base_ref,head_canonical_full_name,head_ref,head_repository_id,head_sha,id,merge_commit_sha,merge_method,number" &&
+      Number.isSafeInteger(summary.id) && (summary.id as number) > 0 && summary.id === target.pull_request_id &&
+      summary.number === target.pull_request_number && summary.number === args.number &&
+      summary.head_repository_id === target.head_repository_id &&
+      summary.head_canonical_full_name === target.head_canonical_full_name &&
+      summary.head_ref === target.head_ref && summary.head_sha === target.head_sha &&
+      summary.head_sha === args.expected_head_sha && summary.base_ref === target.base_ref &&
+      typeof summary.merge_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(summary.merge_commit_sha) &&
+      summary.merge_method === target.merge_method && summary.merge_method === args.merge_method;
   }
   const expectedDraft = args.draft ?? false;
   const expectedHeadRepository = typeof args.head_repository === "string"
@@ -642,7 +658,7 @@ function approveCommandForExecution(
       if (!hds_binding?.operation_plan_binding_digest || observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
           (args.operation !== "issue.create" && args.operation !== "issue.update" && args.operation !== "issue.close" && args.operation !== "issue.reopen" &&
-            args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create" &&
+            args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create" && args.operation !== "pr.merge" &&
             args.operation !== "code.push" && args.operation !== "release.draft.create")) {
         throw new Error("Executor approval rejected: github.write target version does not match command or Operation Plan");
       }
@@ -660,6 +676,9 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "pr.create") {
         assertGitHubPullRequestCreateTargetVersion(args, observation, operationPlanDigest(snapshot),
+          hds_binding.operation_plan_binding_digest);
+      } else if (args.operation === "pr.merge") {
+        assertGitHubPullRequestMergeTargetVersion(args, observation, operationPlanDigest(snapshot),
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "pr.comment.create") {
         assertGitHubPullRequestCommentCreateTargetVersion(args, observation, operationPlanDigest(snapshot),
@@ -721,6 +740,7 @@ function approveCommandForExecution(
         snapshot.payload.arguments.operation !== "issue.comment.create" &&
         snapshot.payload.arguments.operation !== "pr.comment.create" &&
         snapshot.payload.arguments.operation !== "pr.create" &&
+        snapshot.payload.arguments.operation !== "pr.merge" &&
         snapshot.payload.arguments.operation !== "code.push" &&
         snapshot.payload.arguments.operation !== "release.draft.create") ||
         !hds_binding?.operation_plan_binding_digest ||
@@ -947,7 +967,7 @@ export class Executor {
       const operation = command.payload.arguments.operation;
       if (!operationPlanBindingDigest || (operation !== "issue.create" && operation !== "issue.update" &&
           operation !== "issue.close" && operation !== "issue.reopen" &&
-          operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create" &&
+          operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create" && operation !== "pr.merge" &&
           operation !== "code.push" && operation !== "release.draft.create")) {
         throw new Error("github.write target version resolver requires a supported selected Operation Plan binding");
       }
@@ -979,6 +999,9 @@ export class Executor {
       }
       if (operation === "pr.create") {
         return Object.freeze(assertGitHubPullRequestCreateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
+      }
+      if (operation === "pr.merge") {
+        return Object.freeze(assertGitHubPullRequestMergeTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
       }
       if (operation === "code.push") {
         return Object.freeze(assertGitHubCodePushTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
@@ -1275,6 +1298,7 @@ export class Executor {
             command.payload.arguments.operation !== "issue.comment.create" &&
             command.payload.arguments.operation !== "pr.comment.create" &&
             command.payload.arguments.operation !== "pr.create" &&
+            command.payload.arguments.operation !== "pr.merge" &&
             command.payload.arguments.operation !== "code.push" &&
             command.payload.arguments.operation !== "release.draft.create")) {
         throw new Error("github.write content review requires a supported Operation Plan binding");
@@ -1297,7 +1321,7 @@ export class Executor {
       assertNotCancelled();
       const githubReview = review as Extract<ToolContentReview, {
         kind: "github_issue_create" | "github_issue_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_comment_create" |
-          "github_pull_request_comment_create" | "github_pull_request_create" | "github_code_push" |
+          "github_pull_request_comment_create" | "github_pull_request_create" | "github_pull_request_merge" | "github_code_push" |
           "github_release_draft_create"
       }>;
       const { review_digest, ...reviewBase } = githubReview;
@@ -1434,6 +1458,33 @@ export class Executor {
             githubReview.publication_effect !== "visible_to_repository_audience" ||
             githubReview.creation_is_reversible !== false) {
           throw new Error("github.write pr.create content review returned evidence for another command, target, or plan source");
+        }
+        return githubReview;
+      }
+      if (githubReview.kind === "github_pull_request_merge") {
+        const mergeObservation = observation.operation === "pr.merge" ? observation : undefined;
+        if (!mergeObservation || command.payload.arguments.operation !== "pr.merge" ||
+            githubReview.operation !== "github.write.pr.merge" || commonMismatch ||
+            githubReview.pull_request_id !== mergeObservation.pull_request_id ||
+            githubReview.pull_request_number !== mergeObservation.pull_request_number ||
+            githubReview.pull_request_number !== args.number ||
+            githubReview.pull_request_state !== "open" || githubReview.pull_request_locked !== false ||
+            githubReview.pull_request_draft !== false || githubReview.mergeable !== true ||
+            githubReview.mergeable_state !== "clean" ||
+            githubReview.pull_request_updated_at !== mergeObservation.pull_request_updated_at ||
+            githubReview.pull_request_title !== mergeObservation.pull_request_title ||
+            githubReview.head_repository_id !== mergeObservation.head_repository_id ||
+            githubReview.head_canonical_full_name !== mergeObservation.head_canonical_full_name ||
+            githubReview.head_repository_visibility !== mergeObservation.head_repository_visibility ||
+            githubReview.head_ref !== mergeObservation.head_ref || githubReview.head_sha !== mergeObservation.head_sha ||
+            githubReview.head_sha !== args.expected_head_sha || githubReview.expected_head_sha !== args.expected_head_sha ||
+            githubReview.base_ref !== mergeObservation.base_ref || githubReview.base_sha !== mergeObservation.base_sha ||
+            githubReview.merge_method !== mergeObservation.merge_method || githubReview.merge_method !== args.merge_method ||
+            githubReview.merge_effect !== "merge_reviewed_head_into_base_branch" ||
+            githubReview.workflow_effect !== "repository_workflows_may_run" ||
+            githubReview.notification_effect !== "github_api_may_trigger_notifications" ||
+            githubReview.publication_effect !== "visible_to_repository_audience") {
+          throw new Error("github.write pr.merge content review returned evidence for another command, target, or plan source");
         }
         return githubReview;
       }

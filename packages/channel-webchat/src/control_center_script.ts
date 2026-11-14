@@ -7408,6 +7408,94 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub pull requestの公開先・branch・本文を再確認";
           return;
         }
+        if (review.kind === "github_pull_request_merge") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          const validRef = function (value) {
+            return typeof value === "string" && value.length > 0 && value.length <= 255 && value === value.trim() &&
+              value !== "@" && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") &&
+              !value.includes("..") && !value.includes("@{") && !/[\\u0000-\\u0020\\u007f~^:?*\\\[]/.test(value) &&
+              !value.endsWith(".") && value.split("/").every(function (segment) {
+                return segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith(".") &&
+                  !segment.endsWith(".") && !segment.endsWith(".lock");
+              });
+          };
+          if (review.command_id !== commandId || review.operation !== "github.write.pr.merge" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.merge_effect !== "merge_reviewed_head_into_base_branch" ||
+              review.workflow_effect !== "repository_workflows_may_run" ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              review.publication_effect !== "visible_to_repository_audience" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.pull_request_id) || review.pull_request_id <= 0 ||
+              !Number.isSafeInteger(review.pull_request_number) || review.pull_request_number <= 0 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              review.pull_request_state !== "open" || review.pull_request_locked !== false ||
+              review.pull_request_draft !== false || review.mergeable !== true || review.mergeable_state !== "clean" ||
+              typeof review.pull_request_updated_at !== "string" || !Number.isFinite(Date.parse(review.pull_request_updated_at)) ||
+              typeof review.pull_request_title !== "string" || review.pull_request_title.length === 0 || review.pull_request_title.length > 65536 ||
+              !Number.isSafeInteger(review.head_repository_id) || review.head_repository_id <= 0 ||
+              typeof review.head_canonical_full_name !== "string" || review.head_canonical_full_name.length < 3 ||
+              review.head_canonical_full_name.length > 201 ||
+              ((review.head_repository_id === review.repository_id) !==
+                (review.head_canonical_full_name.toLowerCase() === review.canonical_full_name.toLowerCase())) ||
+              (review.head_repository_visibility !== "public" && review.head_repository_visibility !== "private") ||
+              !validRef(review.head_ref) || !validRef(review.base_ref) ||
+              !isCommitSha(review.head_sha) || !isCommitSha(review.base_sha) ||
+              review.expected_head_sha !== review.head_sha ||
+              (review.merge_method !== "merge" && review.merge_method !== "squash" && review.merge_method !== "rebase")) {
+            throw new Error("GitHub pull request mergeの対象・head SHA・merge方式がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub pull requestのmerge（repository変更作用）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name + " (ID " + review.repository_id + ")"],
+            ["可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Pull request", "#" + review.pull_request_number + " (ID " + review.pull_request_id + ") — " + review.pull_request_title],
+            ["状態", "open / unlocked / non-draft / mergeable=clean"],
+            ["最終更新", review.pull_request_updated_at],
+            ["Head repository", review.head_canonical_full_name + " (ID " + review.head_repository_id + ") — " +
+              (review.head_repository_visibility === "public" ? "Public" : "Private")],
+            ["Head", review.head_ref + " @ " + review.head_sha],
+            ["Base", review.base_ref + " @ " + review.base_sha],
+            ["明示したexpected head SHA", review.expected_head_sha],
+            ["Merge方式", review.merge_method],
+            ["作用", "確認したheadをbase branchへmergeします。repositoryの履歴と内容が変わります。"],
+            ["Repository workflows", "対象repositoryでmerge後に起動するよう設定されたworkflowがあれば実行される可能性があります。workflow内容・後続作用はこのreviewで未検査です。"],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "PRとrepositoryは承認前・作用直前に再読取しますが観測と作用は非原子的です。作用APIにはhead SHAを条件として渡しますが、base SHAは作用時に条件指定できません。通信やreadbackで結果を確定できない場合は自動再送しません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub pull requestの対象・head/base SHA・merge方式を再確認";
+          return;
+        }
         if (review.kind === "github_code_push") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };

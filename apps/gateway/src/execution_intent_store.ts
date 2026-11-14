@@ -1384,18 +1384,18 @@ function isGitHubWriteRejectionReceipt(value: unknown): boolean {
     "used_for_authority", "may_execute"].sort();
   return Object.keys(result).sort().join("\0") === expectedKeys.join("\0") &&
     result.schema_version === "blue-tanuki.github-write-result.v1" &&
-    ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.create", "pr.comment.create", "code.push", "release.draft.create"].includes(String(result.operation)) &&
+    ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.create", "pr.merge", "pr.comment.create", "code.push", "release.draft.create"].includes(String(result.operation)) &&
     result.api_host === "api.github.com" && typeof result.repo === "string" &&
     Number.isSafeInteger(result.repository_id) && (result.repository_id as number) > 0 &&
     typeof result.target_identity_digest === "string" && /^[a-f0-9]{64}$/.test(result.target_identity_digest) &&
     typeof result.request_payload_digest === "string" && /^[a-f0-9]{64}$/.test(result.request_payload_digest) &&
     typeof result.command_digest === "string" && /^[a-f0-9]{64}$/.test(result.command_digest) &&
     typeof result.operation_plan_binding_digest === "string" && /^[a-f0-9]{64}$/.test(result.operation_plan_binding_digest) &&
-    typeof result.method === "string" && ["POST", "PATCH"].includes(result.method) &&
+    typeof result.method === "string" && ["POST", "PATCH", "PUT"].includes(result.method) &&
     typeof result.path === "string" && (result.operation === "code.push"
       ? result.method === "POST" && result.path === "/graphql"
       : result.path.startsWith("/repos/")) &&
-    [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(result.status)) &&
+    [400, 401, 403, 404, 405, 409, 410, 415, 422].includes(Number(result.status)) &&
     result.mutation_status === "provider_rejected" && typeof result.result_digest === "string" &&
     /^[a-f0-9]{64}$/.test(result.result_digest) && result.retry_permitted === false &&
     result.next_action === "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision." &&
