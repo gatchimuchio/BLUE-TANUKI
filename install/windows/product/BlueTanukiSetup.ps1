@@ -138,6 +138,33 @@ function Expand-BundledNode($PackageRoot, $InstallRootResolved, $PackageManifest
   $runtimeInstallRoot = Join-Path $InstallRootResolved "runtime"
   New-Item -ItemType Directory -Force -Path $runtimeInstallRoot | Out-Null
   Expand-Archive -LiteralPath $nodeZip.FullName -DestinationPath $runtimeInstallRoot -Force
+
+  $expectedNodePath = Join-Path (Join-Path $runtimeInstallRoot "node-v$version-win-x64") "node.exe"
+  $nodeExecutables = @(Get-ChildItem -LiteralPath $runtimeInstallRoot -Recurse -File -Filter "node.exe" -ErrorAction SilentlyContinue)
+  $nodeItem = Get-Item -Force -LiteralPath $expectedNodePath -ErrorAction SilentlyContinue
+  if ($nodeExecutables.Count -ne 1 -or -not $nodeItem -or
+      ($nodeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      -not [string]::Equals([System.IO.Path]::GetFullPath($nodeExecutables[0].FullName),
+        [System.IO.Path]::GetFullPath($expectedNodePath), [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail "Packaged Windows Node runtime did not extract one regular executable at its versioned path. No installed files were changed."
+  }
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $nodeVersionOutput = @()
+  $nodeVersionExitCode = $null
+  try {
+    $ErrorActionPreference = "Continue"
+    $nodeVersionOutput = @(& $expectedNodePath --version 2>&1)
+    $nodeVersionExitCode = $LASTEXITCODE
+  } catch {
+    Fail "Packaged Windows Node runtime could not be started for version verification. No installed files were changed."
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  $actualNodeVersion = ((@($nodeVersionOutput) | ForEach-Object { [string]$_ }) -join "`n").Trim()
+  if ($nodeVersionExitCode -ne 0 -or $actualNodeVersion -cne "v$version") {
+    Fail "Packaged Windows Node runtime version does not match its manifest. No installed files were changed."
+  }
 }
 
 function Invoke-BundledSetup($NodeExe, $InstallRootResolved, $EnvFile, $DataDir) {
