@@ -144,12 +144,16 @@ export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: 
   return projectTaskOutcome(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
 }
 
-export function projectD4RuntimeRequestCommandIds(operationPlans: unknown, requestId: string): D4RuntimeRequestCommandIdsProjection {
+function projectRequestCommandIds(
+  operationPlans: unknown,
+  requestId: string,
+  ownerIdentityDigest: string,
+): D4RuntimeRequestCommandIdsProjection {
   if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
     return { status: "invalid" };
   }
   const plans = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
-    plan.owner_identity_digest === D4_RUNTIME_OWNER_DIGEST && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+    plan.owner_identity_digest === ownerIdentityDigest && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
   if (plans.length === 0) return { status: "not_found" };
   if (plans.length !== 1 || !isRecord(plans[0])) return { status: "ambiguous" };
   const bindings = plans[0].bindings;
@@ -166,6 +170,14 @@ export function projectD4RuntimeRequestCommandIds(operationPlans: unknown, reque
   return { status: "matched", command_ids: [...commandIds] };
 }
 
+export function projectD4RuntimeRequestCommandIds(operationPlans: unknown, requestId: string): D4RuntimeRequestCommandIdsProjection {
+  return projectRequestCommandIds(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
+}
+
+export function projectOwnerTaskRequestCommandIds(operationPlans: unknown, requestId: string): D4RuntimeRequestCommandIdsProjection {
+  return projectRequestCommandIds(operationPlans, requestId, WEBCHAT_OWNER_TASK_DIGEST);
+}
+
 function unknownCancellationStatus(
   reason_code: Extract<WebChatD4RuntimeCancellationStatus, { status: "unknown" }>["reason_code"],
 ): WebChatD4RuntimeCancellationStatus {
@@ -178,12 +190,34 @@ export function projectD4RuntimeCancellationStatus(
   requestId: string,
   observations: readonly TaskExecutionCancellationEvidence[],
 ): WebChatD4RuntimeCancellationStatus {
-  const binding = projectD4RuntimeRequestCommandIds(operationPlans, requestId);
+  return projectTaskCancellationStatus(
+    operationPlans, requestId, observations, D4_RUNTIME_OWNER_DIGEST, "d4_runtime",
+  );
+}
+
+export function projectOwnerTaskCancellationStatus(
+  operationPlans: unknown,
+  requestId: string,
+  observations: readonly TaskExecutionCancellationEvidence[],
+): WebChatD4RuntimeCancellationStatus {
+  return projectTaskCancellationStatus(
+    operationPlans, requestId, observations, WEBCHAT_OWNER_TASK_DIGEST, "owner_task",
+  );
+}
+
+function projectTaskCancellationStatus(
+  operationPlans: unknown,
+  requestId: string,
+  observations: readonly TaskExecutionCancellationEvidence[],
+  ownerIdentityDigest: string,
+  tokenKind: TaskExecutionCancellationEvidence["token_kind"],
+): WebChatD4RuntimeCancellationStatus {
+  const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
   if (binding.status === "not_found") return unknownCancellationStatus("projection_unavailable");
   if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
   if (binding.status === "invalid") return unknownCancellationStatus("projection_invalid");
   const commandIds = new Set(binding.command_ids);
-  const matching = observations.filter((event) => commandIds.has(event.command_id) && event.token_kind === "d4_runtime");
+  const matching = observations.filter((event) => commandIds.has(event.command_id) && event.token_kind === tokenKind);
   if (matching.length === 0) return unknownCancellationStatus("no_recorded_evidence");
 
   const byCommand = new Map<string, TaskExecutionCancellationEvidence[]>();
@@ -250,7 +284,24 @@ export function projectD4RuntimeActiveCommand(
   requestId: string,
   activeCommandIds: ReadonlySet<string>,
 ): D4RuntimeActiveCommandProjection {
-  const binding = projectD4RuntimeRequestCommandIds(operationPlans, requestId);
+  return projectRequestActiveCommand(operationPlans, requestId, activeCommandIds, D4_RUNTIME_OWNER_DIGEST);
+}
+
+export function projectOwnerTaskActiveCommand(
+  operationPlans: unknown,
+  requestId: string,
+  activeCommandIds: ReadonlySet<string>,
+): D4RuntimeActiveCommandProjection {
+  return projectRequestActiveCommand(operationPlans, requestId, activeCommandIds, WEBCHAT_OWNER_TASK_DIGEST);
+}
+
+function projectRequestActiveCommand(
+  operationPlans: unknown,
+  requestId: string,
+  activeCommandIds: ReadonlySet<string>,
+  ownerIdentityDigest: string,
+): D4RuntimeActiveCommandProjection {
+  const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
   if (binding.status === "not_found") return { status: "not_active" };
   if (binding.status === "ambiguous") return { status: "ambiguous" };
   if (binding.status === "invalid") return { status: "invalid" };

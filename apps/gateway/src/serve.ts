@@ -144,6 +144,8 @@ import type {
   WebChatD4RuntimeCancellationStatus,
   WebChatD4RuntimeIntentCancellation,
   WebChatD4RuntimeTaskOutcome,
+  WebChatOwnerTaskCancellation,
+  WebChatOwnerTaskCancellationStatus,
   WebChatAuthorityTraceItem,
   WebChatEvidenceControlContext,
   WebChatHistoryReplayFilter,
@@ -151,7 +153,8 @@ import type {
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
-  projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
+  projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
+  projectOwnerTaskOutcome, projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -4134,6 +4137,46 @@ async function serveWithOwnerLease(
         } catch {
           return projectOwnerTaskOutcome(undefined, request_id);
         }
+      },
+      onOwnerTaskSubmissionCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellationStatus> => {
+        let operationPlans: unknown;
+        try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
+        catch {
+          return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
+        }
+        const binding = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
+        if (binding.status !== "matched") return projectOwnerTaskCancellationStatus(operationPlans, request_id, []);
+        try {
+          const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
+            binding.command_ids, undefined, "owner_task",
+          );
+          return projectOwnerTaskCancellationStatus(operationPlans, request_id, observations);
+        } catch {
+          return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
+        }
+      },
+      onOwnerTaskSubmissionCancellation: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellation | null> => {
+        let operationPlans: unknown;
+        try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
+        catch { return null; }
+        const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
+        const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds);
+        if (binding.status !== "matched") return null;
+        const cancellation = requestTaskExecutionCancellation(binding.command_id, {
+          actor: "webchat-owner-token-holder",
+          token_kind: "owner_task",
+        });
+        return cancellation ? {
+          status: cancellation.status,
+          cancel_request_accepted: true,
+          executor_settled: false,
+          execution_signal_aborted: true,
+          executor_state: "cancel_requested",
+          local_worker_stop: cancellation.local_worker_stop,
+          external_processing_stop: "unknown",
+          used_for_authority: false,
+          may_execute: false,
+        } : null;
       },
       ...(d4RuntimeToken && d4RuntimeId
         ? {

@@ -7,7 +7,7 @@ export type LocalWorkerStopObservation =
   | "process_tree_empty_confirmed"
   | "provider_state_unknown";
 
-export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime";
+export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime" | "owner_task";
 
 export interface ActiveTaskExecutionSnapshot {
   command_id: string;

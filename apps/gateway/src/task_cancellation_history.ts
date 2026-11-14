@@ -56,7 +56,7 @@ export function recoverPendingTaskCancellationHistory(input: {
     if (typeof eventId === "string" && !existingEntries.has(eventId)) existingEntries.set(eventId, entry);
     if (entry.source !== "gateway_task_cancellation" || typeof eventId !== "string" || ledgerEventIds.has(eventId)) continue;
     const eventName = payload.event === "execution_cancel_observed" ? "execution_cancel_observed" : "execution_cancel_requested";
-    if (payload.token_kind !== "resume" && payload.token_kind !== "d4_runtime") {
+    if (payload.token_kind !== "resume" && payload.token_kind !== "d4_runtime" && payload.token_kind !== "owner_task") {
       issues.push({ cancellation_event_id: eventId, event: eventName, reason: "identity_conflict" });
       ledgerBackfillFailures++;
       continue;

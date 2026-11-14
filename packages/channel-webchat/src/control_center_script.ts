@@ -1013,6 +1013,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         select.value = selected;
         select.hidden = ids.length < 2;
         byId("check-owner-task-status").hidden = ids.length === 0;
+        byId("cancel-owner-task-submission").hidden = ids.length === 0;
       }
 
       function pendingOwnerTaskSubmissionId() {
@@ -1231,6 +1232,48 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           evidence.evidence_digest.slice(0, 12) + "）。これは実行権限や公開／出荷判断を作りません。", achieved: true };
       }
 
+      function ownerTaskCancellationSummary(value) {
+        if (value === undefined) return null;
+        if (!isObject(value) || value.used_for_authority !== false || value.may_execute !== false) {
+          return "取消状態projectionが不正なため未確認です。";
+        }
+        if (value.status === "unknown") {
+          const allowed = ["status", "reason_code", "used_for_authority", "may_execute"];
+          if (Object.keys(value).length !== allowed.length || Object.keys(value).some(function (key) {
+            return allowed.indexOf(key) < 0;
+          })) return "取消状態projectionが不正なため未確認です。";
+          if (value.reason_code === "no_recorded_evidence") return null;
+          if (["projection_unavailable", "projection_ambiguous", "projection_invalid"].indexOf(value.reason_code) >= 0) {
+            return "取消状態は未確認です。記録なしを『未取消』へ読み替えていません。";
+          }
+          return "取消状態projectionが不正なため未確認です。";
+        }
+        const localWorkerStops = ["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"];
+        if (value.status === "request_recorded" && value.cancel_request_accepted === true && value.executor_settled === false &&
+            value.executor_status === "unknown" && value.local_worker_stop === "not_observed" &&
+            value.external_processing_stop === "unknown" && Number.isSafeInteger(value.cancel_requested_at_ms) &&
+            Object.keys(value).length === 9 && Object.keys(value).every(function (key) {
+              return ["status", "cancel_request_accepted", "executor_settled", "executor_status", "local_worker_stop",
+                "external_processing_stop", "cancel_requested_at_ms", "used_for_authority", "may_execute"].indexOf(key) >= 0;
+            })) {
+          return "中止要求記録あり。executor終了・worker停止・外部処理停止は未確定です。";
+        }
+        if (value.status === "execution_observed" && value.cancel_request_accepted === true &&
+            typeof value.executor_settled === "boolean" && ["success", "failed", "suspended", "unknown"].indexOf(value.executor_status) >= 0 &&
+            localWorkerStops.indexOf(value.local_worker_stop) >= 0 && value.external_processing_stop === "unknown" &&
+            Number.isSafeInteger(value.cancel_requested_at_ms) && Number.isSafeInteger(value.observed_at_ms) &&
+            value.observed_at_ms >= value.cancel_requested_at_ms && Object.keys(value).length === 10 &&
+            Object.keys(value).every(function (key) {
+              return ["status", "cancel_request_accepted", "executor_settled", "executor_status", "local_worker_stop",
+                "external_processing_stop", "cancel_requested_at_ms", "observed_at_ms", "used_for_authority", "may_execute"]
+                .indexOf(key) >= 0;
+            })) {
+          return "中止要求後のexecutor観測あり（状態: " + value.executor_status + "、worker: " +
+            value.local_worker_stop + "）。外部処理の停止は未確定です。";
+        }
+        return "取消状態projectionが不正なため未確認です。";
+      }
+
       async function checkOwnerTaskSubmissionStatus() {
         const ownerTokenInput = byId("owner-task-token");
         const button = byId("check-owner-task-status");
@@ -1277,11 +1320,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }[result.state];
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
           const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
+          const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
             status.textContent = stateSummary + (taskOutcomeSummary
               ? " " + taskOutcomeSummary.text
-              : " Runtime token未入力のためJ/M plan照合は未実施です。");
+              : " Runtime token未入力のためJ/M plan照合は未実施です。") +
+              (cancellationSummary ? " " + cancellationSummary : "");
             if (taskOutcomeSummary?.achieved && result.state !== "rejected") status.className = "badge good";
             if (isCurrentSubmission && result.state !== "dispatching" && (result.state === "rejected" ||
                 (result.state !== "rejected" && taskOutcomeSummary?.achieved))) {
@@ -1293,7 +1338,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             if (selectionChanged()) return;
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
             if (selectionChanged()) return;
-            status.textContent = stateSummary + " " + correlation;
+            status.textContent = stateSummary + " " + correlation +
+              (cancellationSummary ? " " + cancellationSummary : "");
             if (isCurrentSubmission && result.state !== "dispatching") {
               byId("owner-task-new-submission").hidden = false;
             }
@@ -1304,6 +1350,62 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
           submissionSelect.disabled = wasSubmissionSelectDisabled;
+          button.disabled = false;
+        }
+      }
+
+      async function cancelOwnerTaskSubmission() {
+        const ownerTokenInput = byId("owner-task-token");
+        const button = byId("cancel-owner-task-submission");
+        const status = byId("owner-task-status");
+        const submissionSelect = byId("owner-task-status-submission-id");
+        const ownerToken = ownerTokenInput.value.trim();
+        const submissionId = ownerTaskStatusSubmissionId();
+        if (!ownerToken) throw new Error("中止要求にはowner tokenを入力してください");
+        if (!submissionId) throw new Error("中止対象のowner task依頼IDがありません");
+        const wasSubmissionSelectDisabled = submissionSelect.disabled;
+        const selectionChanged = function () { return ownerTaskStatusSubmissionId() !== submissionId; };
+        button.disabled = true;
+        submissionSelect.disabled = true;
+        byId("check-owner-task-status").disabled = true;
+        status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " の中止可能な実行を照合しています";
+        status.className = "badge warn";
+        try {
+          const response = await fetch("/owner/task-submission-cancel", {
+            method: "POST",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(ownerToken)),
+            body: JSON.stringify({ submission_id: submissionId })
+          });
+          const result = await response.json().catch(function () { return {}; });
+          if (selectionChanged()) return;
+          if (response.status === 404 && result && result.found === false) {
+            throw new Error("Gateway受付記録がありません。未送信の証明ではないため、新しい依頼IDへ切り替えないでください。");
+          }
+          if (response.status === 409 && result && result.found === true && result.accepted === false) {
+            throw new Error("この依頼に結び付く中止可能な実行が一意に確認できず、中止要求は受理されていません。状態を再照会してください。");
+          }
+          const cancellation = result && result.cancellation;
+          const allowedKeys = ["status", "cancel_request_accepted", "executor_settled", "execution_signal_aborted",
+            "executor_state", "local_worker_stop", "external_processing_stop", "used_for_authority", "may_execute"];
+          if (!response.ok || !result || result.found !== true || result.accepted !== true || !isObject(cancellation) ||
+              Object.keys(cancellation).length !== allowedKeys.length || Object.keys(cancellation).some(function (key) {
+                return allowedKeys.indexOf(key) < 0;
+              }) || ["cancel_requested", "already_requested"].indexOf(cancellation.status) < 0 ||
+              cancellation.cancel_request_accepted !== true || cancellation.executor_settled !== false ||
+              cancellation.execution_signal_aborted !== true || cancellation.executor_state !== "cancel_requested" ||
+              ["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
+                .indexOf(cancellation.local_worker_stop) < 0 || cancellation.external_processing_stop !== "unknown" ||
+              cancellation.used_for_authority !== false || cancellation.may_execute !== false) {
+            throw new Error("中止要求応答が不正または未確認です。停止完了とみなしていません。");
+          }
+          status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。中止要求を" +
+            (cancellation.status === "already_requested" ? "既に受理済みです" : "受理しました") +
+            "。executor終了・worker停止・外部処理停止は別途未確定です。状態を再照会してください。";
+          status.className = "badge warn";
+        } finally {
+          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          submissionSelect.disabled = wasSubmissionSelectDisabled;
+          byId("check-owner-task-status").disabled = false;
           button.disabled = false;
         }
       }
@@ -8642,6 +8744,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         checkOwnerTaskSubmissionStatus().catch(function (error) {
           const status = byId("owner-task-status");
           status.textContent = error.message || "依頼状態を確認できませんでした";
+          status.className = "badge bad";
+        });
+      });
+      byId("cancel-owner-task-submission").addEventListener("click", function () {
+        cancelOwnerTaskSubmission().catch(function (error) {
+          const status = byId("owner-task-status");
+          status.textContent = error.message || "中止要求を確認できませんでした。停止完了とは扱っていません。";
           status.className = "badge bad";
         });
       });

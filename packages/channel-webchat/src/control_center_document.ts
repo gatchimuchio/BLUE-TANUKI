@@ -192,9 +192,11 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="">依頼IDを選択</option>
               </select>
               <button id="check-owner-task-status" type="button" hidden>選択した依頼状態を再確認</button>
+              <button id="cancel-owner-task-submission" type="button" hidden>選択した依頼へ中止要求</button>
               <button id="owner-task-new-submission" type="button" hidden>先行依頼を確認後、新しい依頼IDへ切替</button>
               <span id="owner-task-status" class="badge warn" aria-live="polite">未送信</span>
             </div>
+            <p class="muted">中止要求は選択した依頼に結び付く現在実行中の処理へAbortSignalを送ります。受付はexecutorや外部処理の停止完了を示しません。状態を再照会してください。</p>
           </div>
         </section>
 

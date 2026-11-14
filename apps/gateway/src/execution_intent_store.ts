@@ -33,7 +33,7 @@ export interface TaskExecutionCancellationEvidence {
   command_id: string;
   event: "execution_cancel_requested" | "execution_cancel_observed";
   actor: string;
-  token_kind: "resume" | "d4_runtime";
+  token_kind: "resume" | "d4_runtime" | "owner_task";
   observed_at_ms: number;
   cancel_requested_at_ms: number;
   cancel_request_accepted: true;
@@ -281,13 +281,18 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     });
     return pending;
   }
-  /** Read bounded, content-free D4 Runtime cancellation observations for known command bindings. */
-  taskExecutionCancellationEvidenceForCommands(command_ids: readonly string[], limit = MAX_PENDING_TASK_CANCELLATION_EVENTS):
+  /** Read bounded, content-free cancellation observations for known command bindings. */
+  taskExecutionCancellationEvidenceForCommands(
+    command_ids: readonly string[],
+    limit = MAX_PENDING_TASK_CANCELLATION_EVENTS,
+    token_kind: "d4_runtime" | "owner_task" = "d4_runtime",
+  ):
     TaskExecutionCancellationEvidence[] {
     if (!Array.isArray(command_ids) || command_ids.length > 256 ||
         command_ids.some((id) => typeof id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(id)) ||
         new Set(command_ids).size !== command_ids.length || !Number.isSafeInteger(limit) || limit < 1 ||
-        limit > MAX_PENDING_TASK_CANCELLATION_EVENTS) {
+        limit > MAX_PENDING_TASK_CANCELLATION_EVENTS ||
+        (token_kind !== "d4_runtime" && token_kind !== "owner_task")) {
       throw new Error("execution_task_cancellation_query_invalid");
     }
     let observations: TaskExecutionCancellationEvidence[] = [];
@@ -296,7 +301,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       const state = collectTaskExecutionCancellationEvidence(this.db);
       const matching = [...state.events.values()]
         .map((record) => record.event)
-        .filter((event) => event.token_kind === "d4_runtime" && wanted.has(event.command_id));
+        .filter((event) => event.token_kind === token_kind && wanted.has(event.command_id));
       if (matching.length > limit) throw new Error("execution_task_cancellation_query_limit_exceeded");
       observations = matching.map((event) => ({ ...event }));
     });
@@ -792,7 +797,8 @@ function validateTaskExecutionCancellationEvidence(value: unknown): asserts valu
       !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.command_id) ||
       (event.event !== "execution_cancel_requested" && event.event !== "execution_cancel_observed") ||
       typeof event.actor !== "string" || !/^[^\u0000-\u001f\u007f]{1,128}$/.test(event.actor) ||
-      (event.token_kind !== "resume" && event.token_kind !== "d4_runtime") || !isSafeTimestamp(event.observed_at_ms) ||
+      (event.token_kind !== "resume" && event.token_kind !== "d4_runtime" && event.token_kind !== "owner_task") ||
+      !isSafeTimestamp(event.observed_at_ms) ||
       !isSafeTimestamp(event.cancel_requested_at_ms) || event.cancel_request_accepted !== true ||
       typeof event.executor_settled !== "boolean" ||
       !["success", "failed", "suspended", "unknown"].includes(String(event.executor_status)) ||

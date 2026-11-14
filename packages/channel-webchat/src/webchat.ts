@@ -68,6 +68,8 @@ import type {
   WebChatAboutSurface,
   WebChatTaskOutcome,
   WebChatD4RuntimeCancellationStatus,
+  WebChatD4RuntimeIntentCancellation,
+  WebChatOwnerTaskCancellation,
   WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
@@ -485,6 +487,31 @@ function normalizeD4RuntimeCancellationStatus(value: unknown): WebChatD4RuntimeC
   };
 }
 
+function normalizeTaskCancellationAcknowledgement(value: unknown): WebChatD4RuntimeIntentCancellation | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const cancellation = value as Record<string, unknown>;
+  const allowed = ["status", "cancel_request_accepted", "executor_settled", "execution_signal_aborted",
+    "executor_state", "local_worker_stop", "external_processing_stop", "used_for_authority", "may_execute"];
+  if (Object.keys(cancellation).length !== allowed.length || Object.keys(cancellation).some((key) => !allowed.includes(key)) ||
+      (cancellation.status !== "cancel_requested" && cancellation.status !== "already_requested") ||
+      cancellation.cancel_request_accepted !== true || cancellation.executor_settled !== false ||
+      cancellation.execution_signal_aborted !== true || cancellation.executor_state !== "cancel_requested" ||
+      !["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
+        .includes(String(cancellation.local_worker_stop)) || cancellation.external_processing_stop !== "unknown" ||
+      cancellation.used_for_authority !== false || cancellation.may_execute !== false) return null;
+  return {
+    status: cancellation.status,
+    cancel_request_accepted: true,
+    executor_settled: false,
+    execution_signal_aborted: true,
+    executor_state: "cancel_requested",
+    local_worker_stop: cancellation.local_worker_stop as WebChatD4RuntimeIntentCancellation["local_worker_stop"],
+    external_processing_stop: "unknown",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 function isDirectToolShortcutContent(content: string): boolean {
   return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(content.trim());
 }
@@ -512,6 +539,8 @@ function findAotanuAssetRoot(): string {
  *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
+ *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
+ *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
@@ -1153,6 +1182,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           url.pathname === "/owner/audio-transcribe" ||
           url.pathname === "/owner/task-compute" ||
           url.pathname === "/owner/task-submission-status" ||
+          url.pathname === "/owner/task-submission-cancel" ||
           url.pathname === "/owner/goal-purpose-relation-review"
         ? "owner"
         : url.pathname === "/webhook"
@@ -1233,6 +1263,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               may_execute: false as const,
             })))
           : undefined;
+        const cancellation = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionCancellationStatus
+          ? normalizeD4RuntimeCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
+              .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
+                used_for_authority: false as const, may_execute: false as const })))
+          : undefined;
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",
@@ -1240,11 +1275,69 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         });
         res.end(JSON.stringify(status
           ? { found: true, request_id: status.request_id, state: status.state,
-              ...(taskOutcome ? { task_outcome: taskOutcome } : {}) }
+              ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
+              ...(cancellation ? { cancellation } : {}) }
           : { found: false }));
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "owner_task_submission_status_unavailable" }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/owner/task-submission-cancel") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore?.getStatus || !this.opts.onOwnerTaskSubmissionCancellation) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_submission_cancellation_unavailable" }));
+        return;
+      }
+      if (!body || Object.keys(body).some((key) => key !== "submission_id")) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_owner_task_submission_cancel_input" }));
+        return;
+      }
+      const submissionId = typeof body.submission_id === "string" ? body.submission_id : "";
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_owner_task_submission_id" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+      try {
+        const status = submissionStore.getStatus({ submission_id: submissionId });
+        if (!status) {
+          res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ found: false }));
+          return;
+        }
+        if (status.state === "rejected") {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ found: true, accepted: false, error: "owner_task_submission_rejected" }));
+          return;
+        }
+        const cancellation = normalizeTaskCancellationAcknowledgement(
+          await this.opts.onOwnerTaskSubmissionCancellation({ request_id: status.request_id }),
+        );
+        if (!cancellation) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
+          return;
+        }
+        res.writeHead(202, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ found: true, accepted: true, cancellation }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_submission_cancellation_unavailable" }));
       }
       return;
     }

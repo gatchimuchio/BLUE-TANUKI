@@ -84,6 +84,9 @@ export type WebChatD4RuntimeCancellationStatus =
       readonly may_execute: false;
     };
 
+/** The same content-free, non-authority cancellation projection used for an owner task submission. */
+export type WebChatOwnerTaskCancellationStatus = WebChatD4RuntimeCancellationStatus;
+
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
   remember?: boolean;
@@ -1269,6 +1272,9 @@ export interface WebChatD4RuntimeIntentCancellation {
   readonly may_execute: false;
 }
 
+/** The same bounded AbortSignal acknowledgement for an owner-authenticated task submission. */
+export type WebChatOwnerTaskCancellation = WebChatD4RuntimeIntentCancellation;
+
 export interface WebChatActiveExecutionSnapshot {
   command_id: string;
   started_at_ms: number;
@@ -1608,6 +1614,10 @@ export interface WebChatOptions {
   ) => Promise<WebChatD4RuntimeIntentCancellation | null>;
   /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
+  /** Read-only cancellation evidence for the exact authenticated owner task request. */
+  onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
+  /** Request abort for the single active command bound to an authenticated owner task request. */
+  onOwnerTaskSubmissionCancellation?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellation | null>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
   onGoalPurposeChangeProposal?: (input: {
     goal_ref: string;
