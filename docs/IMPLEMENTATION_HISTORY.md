@@ -14,7 +14,7 @@
 | Gateway typecheck／build | PASS。 |
 | CLI process、restart readback、実C/J/M receipt、real provider／credential、外部作用、全workspace suite、5OS、QC／QA | NOT_RUN。 |
 
-**状態・限界:** `WIRED`（Gateway CLI producerから既存永続store初期化までのsource path）。実CLI起動後のrestart復帰とM receipt readbackは未確認で、C08.04全体を成立扱いしない。外部作用、実provider、D4 Pocket／MINIDORAの変更なし。protected attachmentsとLinux isolation `target/`を保持する。作業開始main=`d7f8bc5042021d2d1fe375f9901613bd069e435b`。実装／復旧refの終端readbackはcloseoutで記録する。
+**状態・限界:** `WIRED`（Gateway CLI producerから既存永続store初期化までのsource path）。実CLI起動後のrestart復帰とM receipt readbackは未確認で、C08.04全体を成立扱いしない。外部作用、実provider、D4 Pocket／MINIDORAの変更なし。protected attachmentsとLinux isolation `target/`を保持する。作業開始main=`d7f8bc5042021d2d1fe375f9901613bd069e435b`。実装commit=`d24fb30737508c31898273be9e31ce8195383433`をGitHub `main`へpushし、local／`origin/main`／remote `main`一致、ahead／behind=`0/0`を確認。編集前recovery current／previous=`d7f8bc5042021d2d1fe375f9901613bd069e435b`／`b5e475055b98e9b8ec484d2edb279a87d8dd2419`。実装反映後はlocal backup branch／tagとremote backup tagのcurrent／previousを`d24fb30737508c31898273be9e31ce8195383433`／`d7f8bc5042021d2d1fe375f9901613bd069e435b`へCAS更新してreadback済み。Git commit時のstale Windows worktree metadata cleanup拒否はACL／metadataを変えず保留し、他の未追跡保護領域も保持した。
 
 ## 2026-11-14 — rev5.0 P2 QE_BUILD / macOS native app copied-launch consumer
 
