@@ -600,56 +600,6 @@ async function runCliWithExecutionStore(
   hds.onCommandLifecycle(command.id, "approval_approved", { actor: inbound.user, reason: approvalEval.reason });
 
   let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
-  try {
-    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
-    targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
-  } catch {
-    const reason = command.type === "tool_call" && command.payload.tool_name === "gmail.write"
-      ? "gmail_write_target_version_unavailable"
-      : command.type === "tool_call" && command.payload.tool_name === "file.search"
-        ? "file_search_target_version_unavailable"
-        : command.type === "tool_call" && command.payload.tool_name === "file.write"
-          ? "file_write_target_version_unavailable"
-          : command.type === "tool_call" && command.payload.tool_name === "file.delete"
-            ? "file_delete_target_version_unavailable"
-            : command.type === "tool_call" && command.payload.tool_name === "file.edit"
-              ? "file_edit_target_version_unavailable"
-              : command.type === "tool_call" && command.payload.tool_name === "shell.exec"
-                ? "shell_exec_target_version_unavailable" : "broker_target_version_unavailable";
-    hds.onCommandLifecycle(command.id, "approval_cancelled", {
-      actor: inbound.user,
-      reason,
-    });
-    coreLog.warn("Broker target version preflight failed", { command_id: command.id, reason });
-    return;
-  }
-  const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersionObservation);
-  const approvedCommand = executorApproval.approve(command, {
-    source: "approval_gate",
-    decision: "allow",
-    approved_by: inbound.user,
-    approved_at_ms: Date.now(),
-    upstream_commit_hash: command.upstream_decision.commit_hash,
-    operation: approvalEval.context.operation,
-    risk: approvalEval.risk,
-    final_review_required: approvalEval.final_review_required,
-    reason: approvalEval.reason,
-  }, reviewed.command_digest, hdsBinding, targetVersionObservation);
-  const planBound = hds.isOperationPlanCommand(command.id);
-  const admission = planBound ? executionAdmissionForCommand(command, executorApproval.receipt(approvedCommand)) : undefined;
-  let planAttemptRejection: string | undefined;
-  if (!hds.beginOperationPlanAttempt(command, admission, (reason) => { planAttemptRejection = reason; })) {
-    hds.onCommandLifecycle(command.id, "approval_cancelled", {
-      actor: inbound.user,
-      reason: "plan_attempt_not_admitted",
-    });
-    gatewayLog.warn("CLI operation-plan attempt was not admitted", {
-      reason: planAttemptRejection ?? "plan_attempt_not_admitted",
-      used_for_authority: false,
-    });
-    auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
-    return;
-  }
   let executionAdmissionLease: { release(): void } | undefined;
   let feedback: Awaited<ReturnType<Executor["execute"]>>;
   let requestedStopSignal: NodeJS.Signals | undefined;
@@ -657,14 +607,15 @@ async function runCliWithExecutionStore(
   const requestCommandStop = (signal: NodeJS.Signals): void => {
     if (requestedStopSignal) return;
     requestedStopSignal = signal;
-    gatewayLog.warn("CLI command stop requested; execution and external outcome may remain unknown", {
+    process.exitCode = signal === "SIGINT" ? 130 : 143;
+    gatewayLog.warn("CLI command stop requested", {
       signal,
       request_id: inbound.id,
       command_id: command.id,
       used_for_authority: false,
     });
     try {
-      process.stderr.write("停止要求を受け付けました。実行経路へ中断を伝え、安全な結果記録を待っています。\n");
+      process.stderr.write("停止要求を受け付けました。対象確認中なら実行前に中止し、Executor実行中なら中断を伝えます。\n");
     } catch { /* console failure must not prevent cancellation */ }
     commandAbortController.abort(new Error("cli_command_stop_requested"));
   };
@@ -672,7 +623,84 @@ async function runCliWithExecutionStore(
   const onSigterm = (): void => requestCommandStop("SIGTERM");
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
+  let planBound = false;
   try {
+    let targetVersionAvailable = true;
+    try {
+      const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+      targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
+    } catch {
+      targetVersionAvailable = false;
+    }
+
+    if (requestedStopSignal) {
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: inbound.user,
+        reason: "cli_stop_requested_before_execution",
+      });
+      gatewayLog.warn("CLI stopped before Executor dispatch; read-only target inspection may be unresolved", {
+        signal: requestedStopSignal,
+        request_id: inbound.id,
+        target_inspection: targetVersionAvailable ? "returned" : "unknown",
+        executor_started: false,
+        used_for_authority: false,
+      });
+      try {
+        process.stdout.write(`停止要求を受け付けました。実行前の対象確認中に停止し、Executorは開始していません。\nrequest_id=${inbound.id}\n`);
+      } catch { /* output failure must not change the recorded cancellation */ }
+      auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+      return;
+    }
+
+    if (!targetVersionAvailable) {
+      const reason = command.type === "tool_call" && command.payload.tool_name === "gmail.write"
+        ? "gmail_write_target_version_unavailable"
+        : command.type === "tool_call" && command.payload.tool_name === "file.search"
+          ? "file_search_target_version_unavailable"
+          : command.type === "tool_call" && command.payload.tool_name === "file.write"
+            ? "file_write_target_version_unavailable"
+            : command.type === "tool_call" && command.payload.tool_name === "file.delete"
+              ? "file_delete_target_version_unavailable"
+              : command.type === "tool_call" && command.payload.tool_name === "file.edit"
+                ? "file_edit_target_version_unavailable"
+                : command.type === "tool_call" && command.payload.tool_name === "shell.exec"
+                  ? "shell_exec_target_version_unavailable" : "broker_target_version_unavailable";
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: inbound.user,
+        reason,
+      });
+      coreLog.warn("Broker target version preflight failed", { command_id: command.id, reason });
+      return;
+    }
+
+    const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersionObservation);
+    const approvedCommand = executorApproval.approve(command, {
+      source: "approval_gate",
+      decision: "allow",
+      approved_by: inbound.user,
+      approved_at_ms: Date.now(),
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      operation: approvalEval.context.operation,
+      risk: approvalEval.risk,
+      final_review_required: approvalEval.final_review_required,
+      reason: approvalEval.reason,
+    }, reviewed.command_digest, hdsBinding, targetVersionObservation);
+    planBound = hds.isOperationPlanCommand(command.id);
+    const admission = planBound ? executionAdmissionForCommand(command, executorApproval.receipt(approvedCommand)) : undefined;
+    let planAttemptRejection: string | undefined;
+    if (!hds.beginOperationPlanAttempt(command, admission, (reason) => { planAttemptRejection = reason; })) {
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: inbound.user,
+        reason: "plan_attempt_not_admitted",
+      });
+      gatewayLog.warn("CLI operation-plan attempt was not admitted", {
+        reason: planAttemptRejection ?? "plan_attempt_not_admitted",
+        used_for_authority: false,
+      });
+      auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+      return;
+    }
+
     feedback = await executor.execute(approvedCommand, {
       signal: commandAbortController.signal,
       save_result_delivery: planBound,
@@ -685,7 +713,6 @@ async function runCliWithExecutionStore(
   } finally {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    if (requestedStopSignal) process.exitCode = requestedStopSignal === "SIGINT" ? 130 : 143;
     executionAdmissionLease?.release();
   }
   if (planBound) {
