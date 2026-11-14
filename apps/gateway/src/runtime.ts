@@ -30,8 +30,10 @@ import {
   cliRequestNeedsOperationPlanState,
   CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
   CLI_ORGANIZE_STDIN_FLAG,
+  CLI_TASK_STDIN_FLAG,
   parseCliGoalCompletionStatusArguments,
   readCliGoalCompletionRulesInput,
+  readCliTaskInput,
 } from "./cli_goal_completion_rules.js";
 import { buildAuditLog } from "./audit_config.js";
 import {
@@ -160,8 +162,15 @@ async function runCliWithExecutionStore(
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
+  const taskStdinCount = cleanArgs.filter((arg) => arg === CLI_TASK_STDIN_FLAG).length;
+  if (taskStdinCount > 1) throw new Error("--task-stdin cannot be repeated");
+  const taskStdinRequested = taskStdinCount === 1;
   if (completionRulesRequested && goalCompletionStatus) {
     throw new Error("--goal-completion-status cannot be combined with --goal-completion-rules-stdin");
+  }
+  if (taskStdinRequested && (completionRulesRequested || goalCompletionStatus ||
+      cleanArgs.includes("--organize") || cleanArgs.includes(CLI_ORGANIZE_STDIN_FLAG))) {
+    throw new Error("--task-stdin cannot be combined with goal-completion or document-organization input");
   }
   const requestArgs = completionRulesRequested
     ? cleanArgs.filter((arg) => arg !== CLI_GOAL_COMPLETION_RULES_STDIN_FLAG)
@@ -173,12 +182,20 @@ async function runCliWithExecutionStore(
   if (goalCompletionStatus && requestArgs.length > 0) {
     throw new Error("--goal-completion-status accepts only a request digest");
   }
+  if (taskStdinRequested) {
+    const extraArgs = requestArgs.filter((arg) => arg !== CLI_TASK_STDIN_FLAG && arg !== "--json");
+    if (extraArgs.length > 0) {
+      throw new Error("--task-stdin does not accept inline task text or additional arguments");
+    }
+    if (process.stdin.isTTY) throw new Error("--task-stdin requires piped UTF-8 task text on stdin");
+  }
   if (completionRulesRequested && process.stdin.isTTY) {
     throw new Error("--goal-completion-rules-stdin requires piped UTF-8 JSON on stdin");
   }
   const goalCompletionRules = completionRulesRequested
     ? await readCliGoalCompletionRulesInput(process.stdin)
     : undefined;
+  const taskStdinInput = taskStdinRequested ? await readCliTaskInput(process.stdin) : "";
   const organizeIndex = requestArgs.indexOf("--organize");
   const organizeStdinCount = requestArgs.filter((arg) => arg === CLI_ORGANIZE_STDIN_FLAG).length;
   if (organizeStdinCount > 1) throw new Error("--organize-stdin cannot be repeated");
@@ -212,7 +229,8 @@ async function runCliWithExecutionStore(
         a !== "--audit-verify" &&
         a !== "--json" &&
         a !== "--organize" &&
-        a !== CLI_ORGANIZE_STDIN_FLAG,
+        a !== CLI_ORGANIZE_STDIN_FLAG &&
+        a !== CLI_TASK_STDIN_FLAG,
     )
     .join(" ")
     .trim();
@@ -221,7 +239,7 @@ async function runCliWithExecutionStore(
   }
   const content = organizationSource !== null
     ? `/organize\n${organizationSource}`
-    : userInput || "Hello, BLUE-TANUKI";
+    : taskStdinRequested ? taskStdinInput : userInput || "Hello, BLUE-TANUKI";
 
   const inbound: InboundRequest = goalCompletionStatus
     ? createCliGoalCompletionStatusRequest({ id: randomUUID(), timestamp: Date.now(),

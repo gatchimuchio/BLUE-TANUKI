@@ -106,6 +106,15 @@ pnpm gateway:serve
 
 通常CLIの一回実行では、ownerが指定する達成規則JSONを標準入力から渡せる。`--goal-completion-rules-stdin` は非空のtaskと併用し、最大128 KiBのUTF-8 JSONを `blue-tanuki.goal-completion-rules.v1` として検証する。規則付きtaskは内部owner `plan:compute` requestとしてHDSへ渡し、Executor feedback後に同じrequest ID・規則digestへ一致するJ/M達成状態だけをCLIへ表示する。J/M状態や根拠が不足・不一致・曖昧な場合は達成と表示せず、達成規則は作用の実行許可を作らない。規則本文は同一taskのJ OperationPlanに保持されるため、認証情報や秘密を含めない。条件値をプロセス引数へ置かず、JSONを標準入力で渡す。`--organize` とは併用できない。
 
+一般の一回タスク本文も `--task-stdin` で標準入力から渡せる。最大600,000 UTF-8 byte／200,000 UTF-16 code unitsを受け、空・不正UTF-8・上限超過・本文以外の追加引数を拒否する。規則JSON・達成状態照会・文書整理入力とは同じstdinを共有するため併用できない。PowerShell 7では次のように渡せる:
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -Raw -Encoding utf8 .\task.txt | pnpm gateway -- --task-stdin
+```
+
+POSIX shellでは `pnpm gateway -- --task-stdin < task.txt`。これにより本文をCLI引数へ置かずに通常のC/J処理へ渡す。stdinを使わない既存の位置引数形式も互換のため残る。
+
 資料整理の入力本文は、shell履歴やprocess argumentへ内容を置かない `--organize-stdin` でも渡せる。UTF-8を厳密に検査し、空入力・12,000 UTF-16コード単位超・48,000 byte超・追加のinline引数を拒否する。例: `Get-Content -Raw .\source.txt | pnpm gateway -- --organize-stdin`（PowerShell）、`pnpm gateway -- --organize-stdin < source.txt`（POSIX shell）。既存の `--organize <本文>` は互換用に残るため、秘密や個人情報を含む本文には使わない。
 
 CLIの一回実行中にCtrl+C（SIGINT）またはSIGTERMを受けると、実行中のExecutorへ中断要求を渡し、その戻り値に従って実行結果または結果不明を記録する。これはworker停止や外部作用の取消完了を意味しない。処理結果が未確定の可能性を表示して終了し、同じ仕事を再送する前にタスク状態を確認する。終了コードはSIGINTで130、SIGTERMで143。

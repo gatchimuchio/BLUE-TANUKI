@@ -8,7 +8,10 @@ import {
 export const CLI_GOAL_COMPLETION_RULES_STDIN_FLAG = "--goal-completion-rules-stdin";
 export const CLI_GOAL_COMPLETION_STATUS_FLAG = "--goal-completion-status";
 export const CLI_ORGANIZE_STDIN_FLAG = "--organize-stdin";
+export const CLI_TASK_STDIN_FLAG = "--task-stdin";
 export const CLI_GOAL_COMPLETION_RULES_MAX_BYTES = 128 * 1024;
+export const CLI_TASK_STDIN_MAX_BYTES = 600_000;
+export const CLI_TASK_STDIN_MAX_CODE_UNITS = 200_000;
 
 export interface CliGoalCompletionStatusArguments {
   request_id_digest: string;
@@ -96,6 +99,7 @@ export function cliGoalCompletionRulesRequested(args: readonly string[]): boolea
 /** Open durable J/M plan state for CLI requests that create or inspect a plan. */
 export function cliRequestNeedsOperationPlanState(args: readonly string[]): boolean {
   if (cliGoalCompletionRulesRequested(args) || parseCliGoalCompletionStatusArguments(args)) return true;
+  if (args.includes(CLI_TASK_STDIN_FLAG)) return true;
   if (args.includes("--organize") || args.includes(CLI_ORGANIZE_STDIN_FLAG)) return false;
 
   const request = args.filter((arg) => ![
@@ -110,6 +114,35 @@ export function cliRequestNeedsOperationPlanState(args: readonly string[]): bool
     CLI_ORGANIZE_STDIN_FLAG,
   ].includes(arg)).join(" ").trim();
   return request === "plan:compute" || request.startsWith("plan:compute ");
+}
+
+/** Read one bounded task body from stdin without placing it in argv or shell history. */
+export async function readCliTaskInput(input: AsyncIterable<Uint8Array>): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  for await (const chunk of input) {
+    totalBytes += chunk.byteLength;
+    if (totalBytes > CLI_TASK_STDIN_MAX_BYTES) throw new Error("cli_task_stdin_input_too_large");
+    chunks.push(chunk);
+  }
+
+  const complete = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    complete.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let task: string;
+  try {
+    task = new TextDecoder("utf-8", { fatal: true }).decode(complete);
+  } catch {
+    throw new Error("cli_task_stdin_input_invalid_utf8");
+  }
+  if (!task.trim() || task.length > CLI_TASK_STDIN_MAX_CODE_UNITS) {
+    throw new Error("cli_task_stdin_input_length_invalid");
+  }
+  return task;
 }
 
 export function parseCliGoalCompletionRulesInput(input: Uint8Array): GoalCompletionRules {
