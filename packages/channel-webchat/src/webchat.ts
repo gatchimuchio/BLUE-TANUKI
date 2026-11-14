@@ -1576,6 +1576,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
 
+      const handler = this.handler;
+      if (!handler) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_handler_unavailable" }));
+        return;
+      }
+
       const submissionStore = this.opts.owner_task_submission_store;
       if (!submissionStore || typeof submissionStore.claimD4RuntimeIntent !== "function") {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1669,7 +1676,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         console.error("[webchat] D4 Runtime intent handler error");
         this.notifyD4RuntimeIntentProcessingFailure(sessionScope, claim.request_id);
       };
-      void Promise.resolve().then(() => this.handler?.(inboundReq)).then(() => {
+      void Promise.resolve().then(() => handler(inboundReq)).then(() => {
         try {
           submissionStore.markD4RuntimeIntentHandlerReturned({
             request_id: claim.request_id,
