@@ -375,7 +375,7 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
   const taskMessages = userMessages.filter((message) =>
     !message.content.startsWith(SYNTHETIC_AGENT_CANDIDATE_SET_PREFIX) &&
     !message.content.startsWith(SYNTHETIC_CANVAS_ARTIFACT_USER_PREFIX));
-  if (planInstructions.length !== 1 || purposeContexts.length !== 1 || citationContexts.length !== 0 ||
+  if (planInstructions.length !== 1 || purposeContexts.length > 1 || citationContexts.length !== 0 ||
       taskMessages.length !== 1 || workerMessages.length > 1 || candidateMessages.length > 1 ||
       delegationMessages.length > 1 || canvasArtifactMessages.length > 1 ||
       (workerMessages.length > 0 && canvasArtifactMessages.length > 0) ||
@@ -384,7 +384,11 @@ function findSyntheticFixture(messages: LLMRequest["messages"]): SyntheticPlanFi
 
   const requestId = /固定request_id=([^。\s]{1,200})/u.exec(planInstructions[0]!.content)?.[1];
   if (!requestId) return undefined;
-  const task = taskMessages[0]!.content;
+  const rawTask = taskMessages[0]!.content;
+  // HDS keeps the validated control prefix on the user message it forwards to C.
+  // Match the exact task after that known envelope, without broadening the fixture
+  // to accept task text containing additional instructions or trailing content.
+  const task = rawTask.startsWith("plan:compute ") ? rawTask.slice("plan:compute ".length) : rawTask;
   const canvasTask = task.startsWith(SYNTHETIC_CANVAS_OWNER_TASK_PREFIX);
   if ((canvasArtifactMessages.length === 1 && !canvasTask) ||
       (canvasTask && canvasArtifactMessages.length === 0 && workerMessages.length === 0)) return undefined;

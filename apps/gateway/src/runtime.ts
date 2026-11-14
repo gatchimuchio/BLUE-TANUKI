@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import {
+  CompleteHistoryStore,
   FailureMemoryStore,
   HDSUpperController,
   LongTermMemoryStore,
@@ -17,6 +18,7 @@ import {
   createExecutorApprovalAuthority,
   captureExecutorCommandForApproval,
   createLogger,
+  type AgentWorkerLifecycleEvent,
   type SessionStore,
 } from "@blue-tanuki/core";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
@@ -307,11 +309,56 @@ async function runCliWithExecutionStore(
     assert_execution_owner: () => ownerLease.assertActive(),
     require_hds_execution_binding: true,
   });
+  const completeHistoryFile = process.env.BLUE_TANUKI_COMPLETE_HISTORY_FILE?.trim() || undefined;
+  const completeHistoryMaxEntriesValue = Number(process.env.BLUE_TANUKI_COMPLETE_HISTORY_MAX_ENTRIES);
+  const completeHistoryMaxEntries = Number.isInteger(completeHistoryMaxEntriesValue) &&
+    completeHistoryMaxEntriesValue > 0 ? completeHistoryMaxEntriesValue : undefined;
+  const completeHistory = new CompleteHistoryStore({
+    ...(completeHistoryFile ? { filepath: completeHistoryFile } : {}),
+    ...(completeHistoryMaxEntries ? { max_entries: completeHistoryMaxEntries } : {}),
+  });
   const executor = new Executor({
     llm,
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     approval_authority: executorApproval,
+    on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
+      try {
+        const entry = completeHistory.append({
+          kind: "audit_history",
+          command_id: event.parent_command_id,
+          actor: "executor",
+          source: "executor_agent_worker",
+          timestamp: event.observed_at_ms,
+          payload: {
+            schema_version: event.schema_version,
+            parent_command_digest: event.parent_command_digest,
+            child_task_digest: event.child_task_digest,
+            role: event.role,
+            state: event.state,
+            observed_at_ms: event.observed_at_ms,
+            ...(event.output_observed ? { output_observed: true } : {}),
+            ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
+            ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
+            used_for_authority: false,
+            may_execute: false,
+          },
+        });
+        if (!entry) gatewayLog.error("agent worker lifecycle evidence unavailable", {
+          command_id: event.parent_command_id,
+          child_task_digest: event.child_task_digest,
+          state: event.state,
+        });
+        return entry !== null;
+      } catch {
+        gatewayLog.error("agent worker lifecycle evidence unavailable", {
+          command_id: event.parent_command_id,
+          child_task_digest: event.child_task_digest,
+          state: event.state,
+        });
+        return false;
+      }
+    },
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
       host_audience_digest: ownerLease.hostAudienceDigest, env: process.env }),
     session_store,
