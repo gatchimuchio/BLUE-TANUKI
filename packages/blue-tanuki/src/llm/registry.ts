@@ -446,13 +446,24 @@ export class LLMRegistry implements LLMBackend {
           ...req,
           backend_hint: undefined,
         }, signal);
+        // AbortSignalを無視するproviderがowner取消後に応答しても、その応答を健全性の証拠にしない。
+        if (signal?.aborted) throw createLLMAbortError(name, signal);
         this.recordSuccess(name);
         return { ...response, provider: name };
       } catch (error) {
         lastError = error;
+        if (signal?.aborted) {
+          const abortError = createLLMAbortError(name, signal);
+          const abortClassification = classifyLLMError(abortError);
+          // owner取消はproviderの健全性を示さないが、期限切れはtimeoutとして記録する。
+          if (abortClassification.kind !== "cancelled") {
+            this.recordFailure(name, abortClassification.kind, abortClassification.retryable,
+              abortClassification.retry_after_ms);
+          }
+          throw abortError;
+        }
         const classification = classifyLLMError(error);
         this.recordFailure(name, classification.kind, classification.retryable, classification.retry_after_ms);
-        if (signal?.aborted) throw error;
         const mayRetry = classification.retryable && attempt < this.retryPolicy.max_attempts;
         if (!mayRetry) break;
         try {
