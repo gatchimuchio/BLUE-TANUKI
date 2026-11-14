@@ -5010,6 +5010,36 @@ Core typecheck、`pnpm docs:check`、`git diff --check`はPASS。日本語基底
 
 編集前local／`origin/main`／GitHub `main`=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`、ahead／behind=0/0。編集前recovery branch／remote backup tag current／previous=`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`／`5533a0a6b6539b2bf3f9812bc4179de62b759c2a`。実装・状態記録commit=`230c9fff17ada14749320f667d1999af5cae32a8`を`main`へfast-forward push。remote readbackはmain/current/previous=`230c9fff17ada14749320f667d1999af5cae32a8`／`230c9fff17ada14749320f667d1999af5cae32a8`／`b0712ae41d99d3e020b82dcaba7ed11834c2cce5`。remote backup tagは旧SHAへ`--force-with-lease`を指定し二本をatomic更新し、local recovery branchesも完全修飾refと期待旧SHAを指定して更新した。local／remote pairは実装push後に一致。ローカルの同名stale tag refs（`eb521c06cdb1a6d74dd5cd56594d3fefdb0a4980`／`7ce0778257f96f8d367cc6898a805f05aebfb736`）が短縮refを曖昧にするため、削除せず保持し、canonical branch／remote tagは完全修飾refで照合した。fetch／commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` cleanupがPermission deniedとなったが、commit・pushは成功し、metadata／ACLは変更せず残した。closeout docs-only commit後のlocal／origin／GitHub `main`・復旧二世代・保護対象asset最終状態を直接確認する。
 
+## 2026-11-14 — rev5.3 QE_BUILD / デスクトップ製品への保留中4チャネルの実行依存同梱
+
+### 対象と理由
+
+対象はBLUE-TANUKIのWindows／Linux／macOS共通製品配置生成、source bundle、Gateway plugin loaderである。開発目標は全431要求・全5OSを一体として施工するP2。今回の具体的なconsumer gapは、Gatewayとworkspaceには任意のSlack／Discord／Teams／LINE実装がある一方、Desktop product packageの`RUNTIME_PACKAGES`はWebChat／Telegramまでであり、installed productからoptional channel SDKを解決できなかったこと。
+
+### 変更
+
+`PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS`を追加し、4つのoptional channelをWindows／Linux／macOS共通`copyAppLayout`へ登録した。Gatewayのhard dependencyには追加せず、release source bundleでは各package／plugin manifest／built entryを含める一方、core release pathとは別の`preview_runtime_paths`へ記録する。archive verifierはmanifest fieldと4 packageのbuilt entryを検査する。`CHANNEL_PROMOTION_GATE.md`へ同梱の意味と非昇格境界を明記し、既登録日本語基底移行負債のchecksumを同じ内容へ更新した。
+
+`copyRuntimeDependencyClosure`は依存・任意依存・peer dependencyをsource packageの実インストール位置から解決する。package name／versionをmanifestで照合し、source pathがworkspace外を指す場合は停止する。external dependencyは共通app `node_modules`へ共有し、同名異版のときだけconsumer package直下へ配置する。必須依存の欠落・対象OS／CPU非対応・版衝突はfail closed、optional peer／optional dependencyの欠落や対象非対応だけは省略する。循環は`name@version`とdestinationの展開記録で止める。秘密らしいファイルと依存packageの`node_modules`はコピーせず、package宣言からruntime閉包を再構成する。Windowsで観測した`EBUSY`に限り、directory copy全体を最大3回試行する。
+
+### 確認と限界
+
+| QE_BUILD確認 | 結果 |
+|---|---|
+| `pnpm exec tsc -b --pretty false` | PASS。以降の配置確認用build出力を再生成。 |
+| `pnpm validate:packaging` | PASS。 |
+| `pnpm docs:check` | PASS。既存日本語基底移行負債74件を注意として保持。 |
+| Windows x64 `copyAppLayout`→`loadWorkspacePlugins(import_modules=true)` | PASS。13 pluginを実importし、4 channel pluginを確認。runtime credentials／provider callなし。 |
+| `git diff --check` | PASS。 |
+
+最初の一時配置実行は`node_modules/.pnpm/es-abstract@1.24.2`の一ファイル複製で`EBUSY`となり停止した。限定retryを加えた後に同一配置経路を再実行し成功した。権限変更、ACL調整、強制削除は行っていない。これはWindows x64一時配置とplugin importの証拠であり、Windows native isolation binary、正式installer、installed Gateway lifecycle、Linux／macOS package、provider起動、channel live smokeを証明しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、5OS、QE_QC／QE_QA、owner公開／出荷GOは未成立。preview対応の昇格、credential、実外部作用はなし。
+
+### ローカル資産とGit
+
+一時製品配置115,327,128 bytes、検証用一時script、およびlockfile integrityとtarball hashを照合したWindows keyring native packageは検証終了後にTempから消失確認。workspace TypeScript build outputは1096 files／13,161,488 bytes、14個の`tsconfig.tsbuildinfo`は934,778 bytesで、継続開発用として保持。保護`.codex-attachments/`、`.codex-remote-attachments/`、既存untracked Linux isolation `target/`、OneDrive資料、秘密、別repoは未変更。
+
+開始local／`origin/main`／GitHub `main`=`b5e475055b98e9b8ec484d2edb279a87d8dd2419`、ahead／behind=0/0。開始recovery current／previous=`b5e475055b98e9b8ec484d2edb279a87d8dd2419`／`b948948d9697d586596b4e55333037227c2b501a`。実装commit=`0fc18640593943e01c3b056a09dfaff33ac592f6`をGitHub `main`へfast-forward push済み。commit自体は成功したが、Gitによるstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadata自動整理はPermission deniedとなったためACL／metadataを変更せず残した。docs closeout後にmainとrecovery二世代を再読込して記録する。
+
 ## 2026-11-14 — rev5.0 QE_BUILD / Linux native packaged installed lifecycle
 
 主語はBLUE-TANUKI Linux x86_64製品archiveのSetup、Launcher、installed Gateway／Control Center応答、update recovery、Uninstallである。目的は隔離runnerに実packageを導入し、通常起動・停止から更新・復旧・削除まで既存Linux製品consumerを接続すること。
