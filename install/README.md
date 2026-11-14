@@ -189,6 +189,16 @@ unavailable; it does not fall back to the reboot-volatile kernel keyring or a
 plaintext env file. API key values are not printed by the installer, doctor,
 runtime snapshot, or audit output.
 
+To provision the optional D4 Runtime Gateway credential during setup, pass
+`--d4-runtime-id <runtime-id>` and `--d4-runtime-token-env <environment-variable-name>`.
+The named environment variable supplies the token value to setup; do not put the
+token itself in a command argument. Setup stores it in the platform credential
+store and writes only `BLUE_TANUKI_D4_RUNTIME_TOKEN_REF` to the env file. Without
+the token-env option, setup reads `BLUE_TANUKI_D4_RUNTIME_TOKEN` or an existing
+`BLUE_TANUKI_D4_RUNTIME_TOKEN_REF` together with `BLUE_TANUKI_D4_RUNTIME_ID`.
+The ID and token must be present as a pair. This configures only the BLUE Gateway
+endpoint; it does not establish a live connection or the D4 application consumer.
+
 For a non-serving setup pass:
 
 ```bash

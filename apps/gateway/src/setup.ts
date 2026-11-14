@@ -34,6 +34,8 @@ export interface SetupCliOptions {
   endpoint?: string;
   api_key?: string;
   api_key_env?: string;
+  d4_runtime_id?: string;
+  d4_runtime_token_env?: string;
   host?: string;
   port?: number;
   file_root?: string;
@@ -130,6 +132,32 @@ function readFlagValue(arg: string, flag: string): string | undefined {
   return arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : undefined;
 }
 
+function validateEnvironmentVariableName(value: string, flag: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error(`${flag} must be an environment variable name`);
+  }
+  if (value === "BLUE_TANUKI_D4_RUNTIME_TOKEN_REF") {
+    throw new Error(`${flag} must name the raw token value, not its secret reference`);
+  }
+  return value;
+}
+
+function setupD4RuntimeConfig(
+  opts: SetupCliOptions,
+  env: Record<string, string | undefined>,
+): NonNullable<BlueTanukiSetupConfig["d4_runtime"]> {
+  const tokenEnvName = opts.d4_runtime_token_env
+    ? validateEnvironmentVariableName(opts.d4_runtime_token_env, "--d4-runtime-token-env")
+    : "BLUE_TANUKI_D4_RUNTIME_TOKEN";
+  return {
+    runtime_id: opts.d4_runtime_id ?? env.BLUE_TANUKI_D4_RUNTIME_ID,
+    token: env[tokenEnvName],
+    token_ref: opts.d4_runtime_token_env
+      ? undefined
+      : env.BLUE_TANUKI_D4_RUNTIME_TOKEN_REF,
+  };
+}
+
 export function parseSetupArgs(args: string[]): SetupCliOptions {
   const opts: SetupCliOptions = {};
   for (let i = 0; i < args.length; i++) {
@@ -188,6 +216,21 @@ export function parseSetupArgs(args: string[]): SetupCliOptions {
     const keyEnvInline = readFlagValue(arg, "--api-key-env");
     if (arg === "--api-key-env" || keyEnvInline !== undefined) {
       opts.api_key_env = keyEnvInline ?? requireValue(args, i++, "--api-key-env");
+      continue;
+    }
+    const d4RuntimeIdInline = readFlagValue(arg, "--d4-runtime-id");
+    if (arg === "--d4-runtime-id" || d4RuntimeIdInline !== undefined) {
+      const runtimeId = d4RuntimeIdInline ?? requireValue(args, i++, "--d4-runtime-id");
+      if (!runtimeId.trim()) throw new Error("--d4-runtime-id must be non-empty");
+      opts.d4_runtime_id = runtimeId.trim();
+      continue;
+    }
+    const d4RuntimeTokenEnvInline = readFlagValue(arg, "--d4-runtime-token-env");
+    if (arg === "--d4-runtime-token-env" || d4RuntimeTokenEnvInline !== undefined) {
+      opts.d4_runtime_token_env = validateEnvironmentVariableName(
+        d4RuntimeTokenEnvInline ?? requireValue(args, i++, "--d4-runtime-token-env"),
+        "--d4-runtime-token-env",
+      );
       continue;
     }
     const hostInline = readFlagValue(arg, "--host");
@@ -251,6 +294,7 @@ function resolveFrom(cwd: string, value: string): string {
 export function buildSetupConfigFromOptions(
   opts: SetupCliOptions,
   cwd = process.cwd(),
+  env: Record<string, string | undefined> = process.env,
 ): BlueTanukiSetupConfig {
   const baseDir = resolveFrom(cwd, opts.base_dir ?? ".blue-tanuki");
   const config = createDefaultSetupConfig({ base_dir: baseDir });
@@ -267,6 +311,7 @@ export function buildSetupConfigFromOptions(
   if (opts.file_root) config.paths.file_root = resolveFrom(cwd, opts.file_root);
   if (opts.session_dir) config.paths.session_dir = resolveFrom(cwd, opts.session_dir);
   if (opts.audit_dir) config.paths.audit_dir = resolveFrom(cwd, opts.audit_dir);
+  config.d4_runtime = setupD4RuntimeConfig(opts, env);
   return validateSetupConfig(config);
 }
 
@@ -540,13 +585,9 @@ export async function runSetupCommand(
   const stdin = io.stdin ?? process.stdin;
   const stdout = io.stdout ?? process.stdout;
   const config = opts.yes
-    ? buildSetupConfigFromOptions(opts, cwd)
+    ? buildSetupConfigFromOptions(opts, cwd, env)
     : await promptForConfig(opts, { cwd, env, stdin, stdout });
-  config.d4_runtime = {
-    runtime_id: env.BLUE_TANUKI_D4_RUNTIME_ID,
-    token: env.BLUE_TANUKI_D4_RUNTIME_TOKEN,
-    token_ref: env.BLUE_TANUKI_D4_RUNTIME_TOKEN_REF,
-  };
+  config.d4_runtime = setupD4RuntimeConfig(opts, env);
   validateSetupConfig(config);
   const outputPath = resolveFrom(
     cwd,
