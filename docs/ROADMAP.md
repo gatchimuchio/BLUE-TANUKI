@@ -8,6 +8,8 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+MCPのConnections設定では、ownerが明示したときだけ入力済みcredentialless loopback endpointのbounded catalog metadataを5秒以内で取得できる。認証情報は転送せず、toolは呼ばず、serverを起動・停止しない。記録する到達状態は時点付きの非権威観測であり、live healthや作用結果の保証ではない。
+
 
 ## 旧BUILD_BATCH履歴（当時の証拠。現行施工対象・次の着工順序ではない）
 

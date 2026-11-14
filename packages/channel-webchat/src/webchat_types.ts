@@ -112,6 +112,8 @@ export interface WebChatSettingsSurface {
   update?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Verify a candidate LLM configuration without persisting it. */
   verifyLlm?: (body: Record<string, unknown>) => Promise<unknown>;
+  /** Inspect one owner-supplied, credentialless loopback MCP endpoint without calling a tool. */
+  inspectMcpEndpoint?: (endpoint: string) => Promise<unknown>;
 }
 
 export interface WebChatRuntimeSurface {

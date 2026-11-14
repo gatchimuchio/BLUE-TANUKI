@@ -1016,6 +1016,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (url.pathname === "/settings/mcp/inspect") {
+      await this.handleSettingsMcpInspect(req, res);
+      return;
+    }
+
     if (url.pathname === "/runtime/snapshot") {
       await this.handleRuntimeSnapshot(req, res);
       return;
@@ -3450,6 +3455,62 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       "cache-control": "no-store",
     });
     res.end(JSON.stringify({ ok: true, result }));
+  }
+
+  private async handleSettingsMcpInspect(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const responseHeaders = {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    } as const;
+    if (!this.opts.settings) {
+      res.writeHead(404, responseHeaders);
+      res.end(JSON.stringify({ error: "settings_not_configured" }));
+      return;
+    }
+    if (!this.checkSettingsAuth(req)) {
+      res.writeHead(401, responseHeaders);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, responseHeaders);
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (!this.opts.settings.inspectMcpEndpoint) {
+      res.writeHead(501, responseHeaders);
+      res.end(JSON.stringify({ error: "settings_mcp_inspection_not_configured" }));
+      return;
+    }
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 8 * 1024);
+    } catch {
+      res.writeHead(413, responseHeaders);
+      res.end(JSON.stringify({ error: "mcp_endpoint_invalid" }));
+      return;
+    }
+    if (!body || !hasExactKeys(body, ["endpoint"]) || typeof body.endpoint !== "string" ||
+        body.endpoint.length > 2048) {
+      res.writeHead(400, responseHeaders);
+      res.end(JSON.stringify({ error: "mcp_endpoint_invalid" }));
+      return;
+    }
+    try {
+      const result = await this.opts.settings.inspectMcpEndpoint(body.endpoint);
+      res.writeHead(200, responseHeaders);
+      res.end(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "";
+      const invalidEndpoint = reason === "mcp_endpoint_invalid" ||
+        reason === "mcp_endpoint_must_be_credentialless_loopback_streamable_http";
+      res.writeHead(invalidEndpoint ? 400 : 500, responseHeaders);
+      res.end(JSON.stringify({ error: invalidEndpoint ? reason : "mcp_inspection_unavailable" }));
+    }
   }
 }
 

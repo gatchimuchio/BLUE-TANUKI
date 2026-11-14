@@ -27,6 +27,7 @@ import {
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { llmSecretStorageStatus } from "./secret_store.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
+import { inspectMcpCatalogFromSettings, type McpCatalogProjection } from "./mcp_connection_client.js";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
 import { mcpRuntimeObservationStore, type McpRuntimeObservationSnapshot,
   type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
@@ -420,15 +421,53 @@ export function createWebChatSettingsSurface(
   const env = opts.env ?? process.env;
   const token = env.BLUE_TANUKI_SETTINGS_TOKEN;
   if (!settingsSurfaceAllowed(env) || !token) return undefined;
+  const mcpObservations = opts.mcpRuntimeObservations ?? mcpRuntimeObservationStore;
   return {
     token,
     html: renderSettingsHtml,
     getSnapshot: async () => {
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
-      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, opts.mcpRuntimeObservations);
+      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
     },
     update: async (body) => updateSettingsEnvFile(body, env),
     verifyLlm: async (body) => verifyLlmProvisioning(body, env, opts.plugins),
+    inspectMcpEndpoint: async (endpointInput) => {
+      const endpoint = parseLoopbackMcpEndpoint(endpointInput);
+      let catalog: McpCatalogProjection;
+      try {
+        catalog = await inspectMcpCatalogFromSettings(endpoint, AbortSignal.timeout(5_000));
+      } catch {
+        mcpObservations.recordPreflightFailed(endpoint);
+        const observation = mcpObservations.snapshot(endpoint);
+        return {
+          status: "preflight_failed",
+          connection: observation.connection,
+          next_action: "No MCP tool was called. Check that the owner-managed local server is running at this endpoint, then run this check again. This check does not inspect or stop a previous tool call.",
+          source_is_untrusted: true,
+          used_for_authority: false,
+          may_execute: false,
+        };
+      }
+      mcpObservations.recordCatalogReachable(endpoint);
+      const observation = mcpObservations.snapshot(endpoint);
+      return {
+        status: "catalog_reachable",
+        connection: observation.connection,
+        server_info: catalog.server_info,
+        item_counts: {
+          tools: catalog.tools.length,
+          resources: catalog.resources.length,
+          resource_templates: catalog.resource_templates.length,
+          prompts: catalog.prompts.length,
+        },
+        catalog_digest: catalog.catalog_digest,
+        truncated: catalog.truncated,
+        next_action: "The catalog was readable at the recorded time; no MCP tool was called. Select tools only through an Operation Plan with High/L3 review. This is not a live health monitor.",
+        source_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    },
   };
 }
 
@@ -782,6 +821,7 @@ export function renderSettingsHtml(): string {
             <label>MCP loopback Streamable HTTP endpoint
               <input id="mcp-endpoint" autocomplete="off" placeholder="http://127.0.0.1:3000/mcp">
             </label>
+            <button class="secondary" id="inspect-mcp-btn" type="button">Check local MCP catalog</button>
             <label>MCP setup status
               <input id="mcp-status" readonly>
             </label>
@@ -817,8 +857,9 @@ export function renderSettingsHtml(): string {
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
           <p id="mcp-runtime-next-action" role="status"></p>
+          <p id="mcp-inspection-result" role="status"></p>
           <p class="muted">Runtime observations are saved locally from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
-          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. Start and stop the dedicated local server in its own trusted service; this settings page does not launch processes or test connectivity. Saving requires a Gateway restart. Every selected tool still uses HDS and High/L3 review.</p>
+          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. This explicit check reads bounded catalog metadata from the entered local endpoint; it does not send credentials, call tools, or start/stop the server. Saving requires a Gateway restart. Catalog data is untrusted, and every selected tool still uses HDS and High/L3 review.</p>
         </section>
         <section id="tab-paths">
           <h2>Paths</h2>
@@ -896,11 +937,13 @@ export function renderSettingsHtml(): string {
       slackInboundGrantsStatus: document.querySelector("#slack-inbound-grants-status"),
       slackNextAction: document.querySelector("#slack-next-action"),
       mcpEndpoint: document.querySelector("#mcp-endpoint"),
+      mcpInspectButton: document.querySelector("#inspect-mcp-btn"),
       mcpStatus: document.querySelector("#mcp-status"),
       mcpNextAction: document.querySelector("#mcp-next-action"),
       mcpRuntimeConnection: document.querySelector("#mcp-runtime-connection"),
       mcpRuntimeCall: document.querySelector("#mcp-runtime-call"),
       mcpRuntimeNextAction: document.querySelector("#mcp-runtime-next-action"),
+      mcpInspectionResult: document.querySelector("#mcp-inspection-result"),
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
@@ -1085,6 +1128,37 @@ export function renderSettingsHtml(): string {
         setNotice(e.message, "bad");
       }
     }
+    async function inspectMcpEndpoint() {
+      fields.mcpInspectButton.disabled = true;
+      fields.mcpInspectionResult.textContent = "Checking the local MCP catalog…";
+      try {
+        const body = await api("/settings/mcp/inspect", {
+          method: "POST",
+          body: JSON.stringify({ endpoint: fields.mcpEndpoint.value })
+        });
+        const result = body.result;
+        fields.mcpRuntimeConnection.value = result.connection.state.replaceAll("_", " ") +
+          (result.connection.observed_at ? " at " + result.connection.observed_at : "");
+        fields.mcpRuntimeNextAction.textContent = result.next_action;
+        if (result.status === "catalog_reachable") {
+          const counts = result.item_counts;
+          const server = result.server_info ? result.server_info.name + " " + result.server_info.version : "unnamed server";
+          fields.mcpInspectionResult.textContent = "Catalog reachable: " + server + "; " +
+            counts.tools + " tools, " + counts.resources + " resources, " +
+            counts.resource_templates + " resource templates, " + counts.prompts + " prompts" +
+            (result.truncated ? " (bounded listing; more entries may exist)" : "") + ".";
+          setNotice("MCP catalog read completed; no tool was called.", "ok");
+        } else {
+          fields.mcpInspectionResult.textContent = "MCP catalog was not reachable. No tool was called.";
+          setNotice("MCP catalog check failed before tool dispatch.", "warn");
+        }
+      } catch (e) {
+        fields.mcpInspectionResult.textContent = "The endpoint was not inspected. Confirm it is a credentialless loopback HTTP/HTTPS URL.";
+        setNotice(e.message, "bad");
+      } finally {
+        fields.mcpInspectButton.disabled = false;
+      }
+    }
     function showComputeReadiness(readiness) {
       fields.computeReadiness.textContent = "Normal Compute configuration: " + readiness.status + ". " + readiness.detail + " Current window usage is not checked here.";
       fields.computeReadiness.className = "notice wide " + (readiness.status === "ready" ? "ok" : "warn");
@@ -1101,6 +1175,7 @@ export function renderSettingsHtml(): string {
     }
     document.querySelector("#load-btn").addEventListener("click", load);
     document.querySelector("#verify-llm-btn").addEventListener("click", verifyLlm);
+    fields.mcpInspectButton.addEventListener("click", inspectMcpEndpoint);
     document.querySelector("#save-btn").addEventListener("click", save);
     if (tokenInput.value) load();
   </script>

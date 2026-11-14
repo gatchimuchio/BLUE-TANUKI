@@ -87,6 +87,18 @@ export async function inspectMcpCatalog(options: McpCatalogInspectionOptions): P
   }
 }
 
+/** Owner-triggered Settings preflight for a credentialless loopback endpoint. */
+export function inspectMcpCatalogFromSettings(
+  endpoint: string | URL,
+  signal?: AbortSignal,
+): Promise<McpCatalogProjection> {
+  return inspectMcpCatalog({
+    endpoint,
+    fetch: globalThis.fetch.bind(globalThis) as McpFetch,
+    ...(signal ? { signal } : {}),
+  });
+}
+
 async function connectMcpClient(endpoint: URL, fetcher: McpFetch, signal?: AbortSignal): Promise<Client> {
   const client = new Client({ name: "BLUE-TANUKI", version: "1.0.0-rc.1" }, {
     versionNegotiation: { mode: { pin: BLUE_TANUKI_MCP_PROTOCOL_VERSION } },
