@@ -593,6 +593,19 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       "現在のMailbox状態は再読込していません。この結果照会はdraft作成や送信を再実行しません。",
     ].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v12") {
+    return [
+      "保存済みMCP tool結果のdigest-only報告です。Jの結果検証とM receiptを照合済みです。MCP応答本文は保存・返却していません。",
+      `connection digest: ${projection.connection_digest}`,
+      `catalog digest: ${projection.catalog_digest}`,
+      `tool name digest: ${projection.tool_name_digest}`,
+      `input schema digest: ${projection.input_schema_sha256}`,
+      `arguments digest: ${projection.arguments_sha256}`,
+      `untrusted tool result digest: ${projection.tool_result_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "MCP応答は外部由来の非権威データです。この結果照会はtoolを再実行しません。",
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
-  MEMORY_COMMIT_V2_SCHEMA_VERSION, memoryCommitContentDigest, parseMemoryCommitV2,
+  MCP_CALL_POTENTIAL_EFFECTS, MEMORY_COMMIT_V2_SCHEMA_VERSION, memoryCommitContentDigest, parseMemoryCommitV2,
   parseMemoryUpdateReceipt, type MemoryCommitV2, type MemoryCommitJsonValue,
   type MemoryUpdateReceiptV1, type OperationPlanCheckpoint,
 } from "@blue-tanuki/protocol";
@@ -33,6 +34,109 @@ function hasExactKeys(value: Record<string, unknown>, required: readonly string[
 
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function containsMcpSensitiveKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsMcpSensitiveKey);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, nested]) => {
+    const normalized = key.replace(/[A-Z]/gu, (letter) => `_${letter}`).toLowerCase().replace(/[^a-z0-9]/gu, "");
+    return ["access", "refresh", "token", "secret", "password", "credential", "authorization", "apikey",
+      "privatekey", "bearer"].some((part) => normalized.includes(part)) || containsMcpSensitiveKey(nested);
+  });
+}
+
+function verifiedNativeMcpCallBinding(b: Binding): boolean {
+  const step = b.prepared_step;
+  const parameters = step.parameters;
+  const preparation = step.preparation;
+  const validation = preparation?.validation[0];
+  const expected = validation?.expected;
+  if (b.operation !== "mcp.call" || b.status !== "verified" || step.operation !== "mcp.call" ||
+      step.adapter !== "external_api" || step.target.kind !== "external_service" || !parameters ||
+      !hasExactKeys(parameters, ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "tool_name"]) ||
+      parameters.profile !== "native-live" || !isDigest(parameters.connection_digest) ||
+      step.target.id !== `mcp:${parameters.connection_digest}` || !isDigest(parameters.catalog_digest) ||
+      typeof parameters.tool_name !== "string" || parameters.tool_name.length < 1 || parameters.tool_name.length > 200 ||
+      parameters.tool_name.trim() !== parameters.tool_name || /[\u0000-\u001f\u007f]/u.test(parameters.tool_name) ||
+      !isDigest(parameters.input_schema_sha256) || !isRecord(parameters.arguments) ||
+      containsMcpSensitiveKey(parameters.arguments) ||
+      Buffer.byteLength(JSON.stringify(parameters.arguments), "utf8") > 64 * 1024 ||
+      step.effects.length !== MCP_CALL_POTENTIAL_EFFECTS.length ||
+      [...step.effects].sort().join(",") !== [...MCP_CALL_POTENTIAL_EFFECTS].sort().join(",") ||
+      step.permission.risk !== "high" || step.permission.approval_level !== "L3_final_review" ||
+      !step.permission.final_review_required || !step.permission.approval_gate_required ||
+      !step.permission.hds_brain_authority_required || step.command_generated_by_adapter_only ||
+      !preparation || preparation.depends_on.length !== 0 || preparation.bindings.length !== 0 ||
+      preparation.preconditions.length !== 0 || preparation.compensation.available || preparation.validation.length !== 1 ||
+      validation?.method !== "mcp_call_result_matches" || !isRecord(expected) ||
+      !hasExactKeys(expected, ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
+        "schema_version", "tool_name"]) ||
+      expected.schema_version !== "blue-tanuki.mcp-call-result-validation.v1" ||
+      expected.connection_digest !== parameters.connection_digest || expected.catalog_digest !== parameters.catalog_digest ||
+      expected.tool_name !== parameters.tool_name || expected.input_schema_sha256 !== parameters.input_schema_sha256 ||
+      expected.arguments_sha256 !== stableDigest(parameters.arguments) ||
+      stableDigest(validation.target) !== stableDigest(step.target) ||
+      !isDigest(b.execution_admission?.task_identity_digest) || !isDigest(b.command_digest) ||
+      !isDigest(b.executor_command_digest) || !isDigest(b.operation_plan_binding_digest) ||
+      !isDigest(b.revision_digest) || !isDigest(b.step_digest) || !isDigest(b.delivery_digest) ||
+      !isDigest(b.result_digest) || !Number.isSafeInteger(b.result_observed_at_ms) ||
+      (b.result_observed_at_ms ?? -1) < 0) return false;
+  return true;
+}
+
+function mcpCallResultObservation(p: Plan, b: Binding, result: Plan["results"][number]) {
+  const revision = p.revisions.find((entry) => entry.digest === b.revision_digest);
+  const step = revision?.plan.steps.find((entry) => entry.step_id === b.step_id);
+  const parameters = b.prepared_step.parameters;
+  const output = result.output;
+  if (!verifiedNativeMcpCallBinding(b) || !revision || !step || !parameters ||
+      stableDigest(step) !== b.step_digest || stableDigest(step) !== stableDigest(b.prepared_step) ||
+      result.plan_id !== revision.plan.plan_id || result.request_id !== revision.plan.request_id ||
+      result.step_id !== b.step_id || result.operation !== "mcp.call" || result.status !== "succeeded" ||
+      stableDigest(result.target) !== stableDigest(step.target) ||
+      !Number.isSafeInteger(result.observed_at_ms) || result.observed_at_ms !== b.result_observed_at_ms ||
+      !isRecord(output) || !hasExactKeys(output, ["arguments_sha256", "catalog_digest", "connection_digest",
+        "input_schema_sha256", "may_execute", "result", "result_digest", "schema_version",
+        "source_is_untrusted", "tool_name", "used_for_authority"]) ||
+      output.schema_version !== "blue-tanuki.mcp-call-result.v1" ||
+      output.connection_digest !== parameters.connection_digest || output.catalog_digest !== parameters.catalog_digest ||
+      output.tool_name !== parameters.tool_name || output.input_schema_sha256 !== parameters.input_schema_sha256 ||
+      output.arguments_sha256 !== stableDigest(parameters.arguments) || !isDigest(output.result_digest) ||
+      !isRecord(output.result) || stableDigest(output.result) !== output.result_digest ||
+      output.source_is_untrusted !== true || output.used_for_authority !== false || output.may_execute !== false) {
+    throw new Error("plan_memory_mcp_call_result_invalid");
+  }
+  return {
+    schema_version: "mcp-call-outcome-observation.v1",
+    record_type: "mcp_call_outcome_observation",
+    task_identity_digest: b.execution_admission!.task_identity_digest!,
+    plan_id_digest: stableDigest(revision.plan.plan_id),
+    plan_revision_digest: b.revision_digest,
+    step_id_digest: stableDigest(b.step_id),
+    step_digest: b.step_digest,
+    operation: "mcp.call",
+    plan_binding_status: "verified",
+    plan_validation_status: "matched",
+    command_digest: b.command_digest,
+    executor_command_digest: b.executor_command_digest!,
+    operation_plan_binding_digest: b.operation_plan_binding_digest!,
+    connection_digest: parameters.connection_digest,
+    catalog_digest: parameters.catalog_digest,
+    tool_name_digest: stableDigest(parameters.tool_name),
+    input_schema_sha256: parameters.input_schema_sha256,
+    arguments_sha256: output.arguments_sha256,
+    delivery_digest: b.delivery_digest!,
+    result_digest: b.result_digest!,
+    tool_result_digest: output.result_digest,
+    observed_at_ms: result.observed_at_ms,
+    effect_observation: "reported_success",
+    source_is_untrusted: true,
+    adoption_status: "observation_only",
+    used_as_world_truth: false,
+    used_for_authority: false,
+    may_execute: false,
+  } as const;
 }
 
 interface BrowserReadResultObservation {
@@ -149,6 +253,10 @@ export function resultMemoryEligible(b: Binding): boolean {
     if (b.status === "provider_rejected") return b.github_write_result?.mutation_status === "provider_rejected";
     return (b.status === "outcome_unknown" || b.status === "verification_failed") && !b.github_write_result;
   }
+  if (b.operation === "mcp.call") {
+    if (b.status === "verified") return verifiedNativeMcpCallBinding(b);
+    return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
+  }
   const replyDraftReadback = b.prepared_step.operation === "gmail.write" &&
     b.prepared_step.parameters?.operation === "draft.create" &&
     typeof b.prepared_step.parameters.reply_to_message_id === "string" &&
@@ -214,6 +322,7 @@ export function resultObservation(p: Plan, b: Binding) {
   }
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
       !result) throw new Error("plan_memory_observation_not_eligible");
+  if (b.operation === "mcp.call") return mcpCallResultObservation(p, b, result);
   if (b.operation === "file.write" || b.operation === "file.delete" || b.operation === "file.edit") {
     return {
       schema_version: "operation-action-result.v1", record_type: "action_result_observation",

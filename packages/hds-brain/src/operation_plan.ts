@@ -71,8 +71,8 @@ import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 import type { GoalEvaluationRulesReference } from "./goal_projection.js";
-import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, browserReadResultObservation, verifyResultMemoryCommit, receiptForResultCommit,
-  buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
+import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, browserReadResultObservation, resultObservation,
+  verifyResultMemoryCommit, receiptForResultCommit, buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
   verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
 import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, receiptMemoryObservation,
   verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
@@ -330,6 +330,20 @@ export type OperationPlanSavedResultReturnProjection =
     readonly request_payload_digest: string;
     readonly provider_state_digest: string;
     readonly operation_plan_binding_digest: string;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v12";
+    readonly operation: "mcp.call";
+    readonly status: "verified";
+    readonly effect_observation: "reported_success";
+    readonly connection_digest: string;
+    readonly catalog_digest: string;
+    readonly tool_name_digest: string;
+    readonly input_schema_sha256: string;
+    readonly arguments_sha256: string;
+    readonly tool_result_digest: string;
+    readonly operation_plan_binding_digest: string;
+    readonly source_is_untrusted: true;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -5444,6 +5458,7 @@ export class OperationPlanLedger {
     const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
     const binding = bindings.at(-1);
     const githubWrite = step.operation === "github.write";
+    const mcpCall = step.operation === "mcp.call";
     const gmailMessageSend = step.operation === "gmail.write" && step.parameters?.operation === "message.send";
     const gmailDraftSend = step.operation === "gmail.write" && step.parameters?.operation === "draft.send";
     const gmailReplyDraft = step.operation === "gmail.write" && step.parameters?.operation === "draft.create" &&
@@ -5454,7 +5469,7 @@ export class OperationPlanLedger {
       ? ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding?.status ?? "")
       : binding?.status === "verified";
     if (bindings.length !== 1 || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
-        (!githubWrite && !gmailMessageSend && !gmailDraftSend && !gmailReplyDraft && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
+        (!githubWrite && !mcpCall && !gmailMessageSend && !gmailDraftSend && !gmailReplyDraft && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
           step.operation !== "file.write" && step.operation !== "file.delete") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
@@ -5530,6 +5545,43 @@ export class OperationPlanLedger {
         target_identity_digest: summary?.target_identity_digest ?? null,
         request_payload_digest: summary?.request_payload_digest ?? null,
         operation_plan_binding_digest: binding.operation_plan_binding_digest!,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
+    if (mcpCall) {
+      const parameters = step.parameters;
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      const mcpOutput = isFileSearchResultRecord(result.output) ? result.output : undefined;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
+          !parameters || typeof parameters.connection_digest !== "string" ||
+          typeof parameters.catalog_digest !== "string" || typeof parameters.tool_name !== "string" ||
+          typeof parameters.input_schema_sha256 !== "string" || validations.length !== 1 ||
+          !hasConnectedPlanTarget(step) ||
+          !operationPlanResultValidationMatches(validations[0]!, step, result.output, binding) || !mcpOutput ||
+          committedObservation.schema_version !== "mcp-call-outcome-observation.v1" ||
+          committedObservation.record_type !== "mcp_call_outcome_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_observation_mismatch");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v12",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms,
+        operation: "mcp.call", status: "verified", effect_observation: "reported_success",
+        connection_digest: parameters.connection_digest, catalog_digest: parameters.catalog_digest,
+        tool_name_digest: operationPlanDigest(parameters.tool_name), input_schema_sha256: parameters.input_schema_sha256,
+        arguments_sha256: mcpOutput.arguments_sha256 as string,
+        tool_result_digest: mcpOutput.result_digest as string,
+        operation_plan_binding_digest: binding.operation_plan_binding_digest,
+        source_is_untrusted: true,
         used_as_world_truth: false, used_for_authority: false, may_execute: false,
       };
     }
