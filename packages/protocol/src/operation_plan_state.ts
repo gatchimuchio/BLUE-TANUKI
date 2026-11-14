@@ -48,9 +48,11 @@ const OperationPlanPlanComputeSourceObservationReferenceSchema = z.object({
   selected_message_identity_digest: Digest.optional(),
   /** Owner explicitly selects one digest-bound Gmail attachment identity for a content-bound write candidate. */
   selected_attachment_identity_digest: Digest.optional(),
+  /** Owner explicitly selects the bounded, untrusted MCP result excerpt for this C computation. */
+  selected_mcp_result: z.literal(true).optional(),
 }).strict().superRefine((reference, context) => {
   const selections = [reference.owner_selected_observation, reference.selected_message_identity_digest,
-    reference.selected_attachment_identity_digest].filter(Boolean).length;
+    reference.selected_attachment_identity_digest, reference.selected_mcp_result].filter(Boolean).length;
   if (selections > 1) {
     context.addIssue({ code: "custom", message: "conflicting_plan_source_selection" });
   }
@@ -148,6 +150,24 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     source_truncated: z.boolean(),
     expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     page_content_is_untrusted: z.literal(true),
+  }).strict(),
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
+    source: z.literal("owner_selected_mcp_call_result"), operation: z.literal("mcp.call"),
+    source_result_digest: Digest,
+    delivery_digest: Digest,
+    connection_digest: Digest,
+    catalog_digest: Digest,
+    tool_name_digest: Digest,
+    input_schema_sha256: Digest,
+    arguments_sha256: Digest,
+    tool_result_digest: Digest,
+    tool_result_excerpt: z.string().max(4_000).optional(),
+    tool_result_excerpt_chars: z.number().int().nonnegative().max(4_000),
+    tool_result_excerpt_sha256: Digest,
+    source_truncated: z.boolean(),
+    expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    owner_selection_digest: Digest,
+    tool_result_is_untrusted: z.literal(true),
   }).strict(),
   z.object({
     schema_version: z.literal("operation-plan-compute-source-observation.v1"),
@@ -296,6 +316,8 @@ export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_V
   "blue-tanuki.plan-compute-source-observations-memory-citation.v2";
 export const OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-mcp-tool-catalog.v1";
+export const OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION =
+  "blue-tanuki.plan-compute-owner-selected-mcp-result.v1";
 /** Parent identity for an explicit result-backed continuation; it grants no authority. */
 export const OperationPlanComputeParentSchema = z.object({
   plan_id_digest: Digest,
@@ -352,6 +374,11 @@ export const OperationPlanComputeInputSchema = z.object({
     context.addIssue({ code: "custom", message: "plan_compute_context_binding_required" });
   }
   const references = input.source_observation_refs ?? [];
+  const selectedMcpResultCount = references.filter((reference) =>
+    "selected_mcp_result" in reference && reference.selected_mcp_result === true).length;
+  if (selectedMcpResultCount > 0 && (selectedMcpResultCount !== 1 || references.length !== 1)) {
+    context.addIssue({ code: "custom", message: "selected_mcp_result_must_be_the_only_source_observation" });
+  }
   if (references.length > 0 && !input.goal_purpose_binding) {
     context.addIssue({ code: "custom", message: "plan_compute_source_observation_requires_purpose_binding" });
   }

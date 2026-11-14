@@ -1077,6 +1077,31 @@ function isFileSearchResultRecord(value: unknown): value is Record<string, unkno
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function selectedMcpResultExcerpt(result: OperationJsonValue): {
+  readonly excerpt: string;
+  readonly excerpt_chars: number;
+  readonly excerpt_sha256: string;
+  readonly truncated: boolean;
+} {
+  const serialized = JSON.stringify(result);
+  const codepoints = Array.from(serialized);
+  const excerpt = codepoints.slice(0, 4_000).join("");
+  return {
+    excerpt,
+    excerpt_chars: Array.from(excerpt).length,
+    excerpt_sha256: createHash("sha256").update(excerpt, "utf8").digest("hex"),
+    truncated: codepoints.length > 4_000,
+  };
+}
+
+function durableComputeSourceObservation(
+  observation: OperationPlanComputeSourceObservation,
+): OperationPlanComputeSourceObservation {
+  if (observation.source !== "owner_selected_mcp_call_result") return observation;
+  const { tool_result_excerpt: _excerpt, ...durable } = observation;
+  return durable;
+}
+
 function isFileSearchRelativeResultPath(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 512 ||
       value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
@@ -4071,7 +4096,9 @@ export class OperationPlanLedger {
             ...(observation.source === "owner_selected_gmail_message_identity"
               ? { selected_message_identity_digest: observation.message_identity_digest } : {}),
             ...(observation.source === "owner_selected_gmail_attachment_identity"
-              ? { selected_attachment_identity_digest: observation.attachment_identity_digest } : {}) });
+              ? { selected_attachment_identity_digest: observation.attachment_identity_digest } : {}),
+            ...(observation.source === "owner_selected_mcp_call_result"
+              ? { selected_mcp_result: true as const } : {}) });
       const current = this.inspectComputeSourceObservations(references, origin);
       if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
         throw new Error("plan_compute_source_observation_stale");
@@ -4212,7 +4239,8 @@ export class OperationPlanLedger {
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalCompletionPolicy ? { goal_completion_policy: goalCompletionPolicy } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
-      ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations } : {}),
+      ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations
+        .map(durableComputeSourceObservation) } : {}),
       ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
@@ -6568,6 +6596,103 @@ export class OperationPlanLedger {
         }));
         continue;
       }
+      if (reference.selected_mcp_result) {
+        if (!isGatewayInternalInboundRequest(caller) || caller.channel !== "webchat" ||
+            caller.metadata?.["blue_tanuki.actor_kind"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+            caller.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+          throw new Error("plan_compute_mcp_result_owner_required");
+        }
+        if (operation !== "mcp.call" || binding.operation !== "mcp.call" || binding.status !== "verified" ||
+            binding.revision_digest !== revision.digest || binding.step_digest !== stepDigest(step) ||
+            !binding.execution_admission || !binding.delivery_digest || !binding.result_digest ||
+            !binding.operation_plan_binding_digest || !binding.memory_commit || !binding.memory_receipt ||
+            !resultMemoryEligible(binding) || !verifyResultMemoryCommit(plan, binding) ||
+            !receiptForResultCommit(binding.memory_receipt, binding.memory_commit) ||
+            !this.resultMemoryReceiptConfirmed(binding.command_id) ||
+            !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ||
+            !this.computeSourceObservationsAreCurrent(plan, inspectedAtMs)) {
+          throw new Error("plan_compute_mcp_result_source_not_verified");
+        }
+        const results = plan.results.filter((candidate) => candidate.plan_id === revision.plan.plan_id &&
+          candidate.request_id === revision.plan.request_id && candidate.step_id === step.step_id &&
+          candidate.operation === "mcp.call" && candidate.status === "succeeded");
+        if (results.length !== 1) throw new Error("plan_compute_mcp_result_unavailable");
+        const result = results[0]!;
+        if (result.observed_at_ms > inspectedAtMs || inspectedAtMs >= result.expires_at_ms ||
+            result.expires_at_ms !== result.observed_at_ms + 600_000 ||
+            result.observed_at_ms !== binding.result_observed_at_ms) {
+          throw new Error("plan_compute_mcp_result_expired");
+        }
+        const validations = step.preparation?.validation ?? [];
+        const output = result.output;
+        const parsedOutput = OperationJsonValueSchema.safeParse(output);
+        const outputRecord = isFileSearchResultRecord(output) ? output : undefined;
+        const toolResult = outputRecord?.result;
+        if (validations.length !== 1 || !operationPlanResultValidationMatches(
+            validations[0]!, step, output, binding) || !parsedOutput.success || !outputRecord ||
+            !isFileSearchResultRecord(toolResult) || typeof outputRecord.result_digest !== "string" ||
+            typeof outputRecord.connection_digest !== "string" || typeof outputRecord.catalog_digest !== "string" ||
+            typeof outputRecord.tool_name !== "string" || typeof outputRecord.input_schema_sha256 !== "string" ||
+            typeof outputRecord.arguments_sha256 !== "string" ||
+            !/^[a-f0-9]{64}$/.test(outputRecord.result_digest) ||
+            operationPlanDigest(toolResult) !== outputRecord.result_digest) {
+          throw new Error("plan_compute_mcp_result_invalid");
+        }
+        const reconciled = this.resultMemory!.reconcile(binding.memory_commit.update_id);
+        const identity = resultMemoryIdentity(binding);
+        const stored = this.resultMemory!.readMemoryRecord(identity.record_id);
+        const committed = binding.memory_commit.changes[0];
+        const expected = committed?.operation === "upsert" ? committed.value : undefined;
+        if (!reconciled.ok || reconciled.status !== "ready" ||
+            !receiptForResultCommit(reconciled.receipt, binding.memory_commit) ||
+            operationPlanDigest(reconciled.receipt) !== operationPlanDigest(binding.memory_receipt) ||
+            !stored?.exists || expected === undefined || operationPlanDigest(stored.value) !== operationPlanDigest(expected)) {
+          throw new Error("plan_compute_mcp_result_receipt_unavailable");
+        }
+        const excerpt = selectedMcpResultExcerpt(toolResult as OperationJsonValue);
+        const ownerSelectionDigest = operationPlanDigest({ schema_version: "owner-selected-mcp-call-result.v1",
+          owner_digest: operationPlanDigest(caller.user), channel_digest: operationPlanDigest(caller.channel),
+          plan_id_digest: reference.plan_id_digest, revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest, source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest, tool_result_digest: outputRecord.result_digest });
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          schema_version: "operation-plan-compute-source-observation.v1",
+          source: "owner_selected_mcp_call_result",
+          operation: "mcp.call",
+          plan_id_digest: reference.plan_id_digest,
+          task_identity_digest: operationPlanTaskIdentityDigest(plan),
+          revision_digest: revision.digest,
+          step_id_digest: reference.step_id_digest,
+          plan_binding_status: "verified",
+          plan_validation_status: "matched",
+          effect_observation: "reported_success",
+          record_digest: operationPlanDigest(stored.value),
+          memory_revision: binding.memory_receipt.revision,
+          memory_receipt_digest: binding.memory_receipt.receipt_digest,
+          observed_at_ms: result.observed_at_ms,
+          source_result_digest: binding.result_digest,
+          delivery_digest: binding.delivery_digest,
+          connection_digest: outputRecord.connection_digest,
+          catalog_digest: outputRecord.catalog_digest,
+          tool_name_digest: operationPlanDigest(outputRecord.tool_name),
+          input_schema_sha256: outputRecord.input_schema_sha256,
+          arguments_sha256: outputRecord.arguments_sha256,
+          tool_result_digest: outputRecord.result_digest,
+          tool_result_excerpt: excerpt.excerpt,
+          tool_result_excerpt_chars: excerpt.excerpt_chars,
+          tool_result_excerpt_sha256: excerpt.excerpt_sha256,
+          source_truncated: excerpt.truncated,
+          expires_at_ms: result.expires_at_ms,
+          owner_selection_digest: ownerSelectionDigest,
+          tool_result_is_untrusted: true,
+          adoption_status: "observation_only",
+          used_as_world_truth: false,
+          used_for_authority: false,
+          may_execute: false,
+        }));
+        continue;
+      }
       if (reference.owner_selected_observation === "local_file_state") {
         if (operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "outcome_unknown" ||
             !binding.execution_admission || binding.step_digest !== stepDigest(step) ||
@@ -7452,6 +7577,9 @@ export class OperationPlanLedger {
           observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms &&
           observation.page_text_excerpt_sha256 === createHash("sha256").update(observation.page_text_excerpt, "utf8").digest("hex");
       }
+      if (observation.source === "owner_selected_mcp_call_result") {
+        return this.ownerSelectedMcpCallResultIsCurrent(p, observation, nowMs, seen);
+      }
       if (observation.source === "owner_selected_local_file_state") {
         return this.ownerSelectedLocalFileStateIsCurrent(p, observation, nowMs, seen);
       }
@@ -7586,6 +7714,76 @@ export class OperationPlanLedger {
       delivery_digest: source.delivery_digest, message_identity_digest: source.message_identity_digest });
     return source.owner_selection_digest === expectedSelectionDigest &&
       this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
+  }
+
+  private ownerSelectedMcpCallResultIsCurrent(
+    candidate: PlanState,
+    source: Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_mcp_call_result" }>,
+    nowMs: number,
+    seen: Set<string>,
+  ): boolean {
+    const matches = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === source.plan_id_digest);
+    if (matches.length !== 1) return false;
+    const plan = matches[0]!;
+    if (plan.owner !== candidate.owner || plan.channel !== candidate.channel ||
+        operationPlanTaskIdentityDigest(plan) !== source.task_identity_digest || this.recoveryHolds.has(source.plan_id_digest) ||
+        !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return false;
+    const revision = plan.revisions.at(-1);
+    if (!revision || revision.digest !== source.revision_digest) return false;
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === source.step_id_digest);
+    if (steps.length !== 1 || steps[0]!.operation !== "mcp.call") return false;
+    const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+      binding.step_id === steps[0]!.step_id);
+    if (bindings.length !== 1) return false;
+    const binding = bindings[0]!;
+    if (binding.status !== "verified" || binding.operation !== "mcp.call" || !binding.execution_admission ||
+        binding.result_digest !== source.source_result_digest || binding.delivery_digest !== source.delivery_digest ||
+        binding.step_digest !== stepDigest(steps[0]!) || !binding.memory_commit || !binding.memory_receipt ||
+        !resultMemoryEligible(binding) || !verifyResultMemoryCommit(plan, binding) ||
+        !receiptForResultCommit(binding.memory_receipt, binding.memory_commit) ||
+        !this.resultMemoryReceiptConfirmed(binding.command_id)) return false;
+    const reconciled = this.resultMemory?.reconcile(binding.memory_commit.update_id);
+    const memoryIdentity = resultMemoryIdentity(binding);
+    const stored = this.resultMemory?.readMemoryRecord(memoryIdentity.record_id);
+    const committed = binding.memory_commit.changes[0];
+    const expectedRecord = committed?.operation === "upsert" ? committed.value : undefined;
+    if (!reconciled?.ok || reconciled.status !== "ready" || !expectedRecord || !stored?.exists ||
+        operationPlanDigest(reconciled.receipt) !== operationPlanDigest(binding.memory_receipt) ||
+        reconciled.receipt.revision !== source.memory_revision ||
+        reconciled.receipt.receipt_digest !== source.memory_receipt_digest ||
+        operationPlanDigest(stored.value) !== operationPlanDigest(expectedRecord) ||
+        operationPlanDigest(stored.value) !== source.record_digest) return false;
+    const results = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
+      result.request_id === revision.plan.request_id && result.step_id === steps[0]!.step_id &&
+      result.operation === "mcp.call" && result.status === "succeeded");
+    if (results.length !== 1) return false;
+    const result = results[0]!;
+    if (result.observed_at_ms !== source.observed_at_ms || result.expires_at_ms !== source.expires_at_ms ||
+        result.expires_at_ms !== result.observed_at_ms + 600_000 || result.observed_at_ms > nowMs || nowMs >= result.expires_at_ms ||
+        !binding.operation_plan_binding_digest || !binding.executor_command_digest) return false;
+    const validations = steps[0]!.preparation?.validation ?? [];
+    const output = result.output;
+    const outputRecord = isFileSearchResultRecord(output) ? output : undefined;
+    const toolResult = outputRecord?.result;
+    if (validations.length !== 1 || !operationPlanResultValidationMatches(validations[0]!, steps[0]!, output, binding) ||
+        !outputRecord || !isFileSearchResultRecord(toolResult) ||
+        outputRecord.result_digest !== source.tool_result_digest || outputRecord.connection_digest !== source.connection_digest ||
+        outputRecord.catalog_digest !== source.catalog_digest || outputRecord.input_schema_sha256 !== source.input_schema_sha256 ||
+        outputRecord.arguments_sha256 !== source.arguments_sha256 ||
+        operationPlanDigest(outputRecord.tool_name) !== source.tool_name_digest ||
+        operationPlanDigest(toolResult) !== source.tool_result_digest) return false;
+    const excerpt = selectedMcpResultExcerpt(toolResult as OperationJsonValue);
+    if (excerpt.excerpt_chars !== source.tool_result_excerpt_chars ||
+        excerpt.excerpt_sha256 !== source.tool_result_excerpt_sha256 || excerpt.truncated !== source.source_truncated ||
+        (source.tool_result_excerpt !== undefined && source.tool_result_excerpt !== excerpt.excerpt)) return false;
+    const expectedSelectionDigest = operationPlanDigest({ schema_version: "owner-selected-mcp-call-result.v1",
+      owner_digest: operationPlanDigest(candidate.owner), channel_digest: operationPlanDigest(candidate.channel),
+      plan_id_digest: source.plan_id_digest, revision_digest: source.revision_digest,
+      step_id_digest: source.step_id_digest, source_result_digest: source.source_result_digest,
+      delivery_digest: source.delivery_digest, tool_result_digest: source.tool_result_digest });
+    if (source.owner_selection_digest !== expectedSelectionDigest || source.tool_result_is_untrusted !== true) return false;
+    return this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
   }
 
   private ownerSelectedGmailAttachmentIdentityIsCurrent(

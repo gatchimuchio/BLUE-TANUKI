@@ -38,8 +38,10 @@ export function metadataKeys(meta: Record<string, unknown> | undefined): string[
 const WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST = operationPlanDigest("webchat-owner-token-holder");
 const WEBCHAT_CHANNEL_IDENTITY_DIGEST = operationPlanDigest("webchat");
 type OperationPlanComputeSourceObservationProjection =
-  | Exclude<OperationPlanComputeSourceObservation, { source: "verified_browser_read_result" }>
-  | Omit<Extract<OperationPlanComputeSourceObservation, { source: "verified_browser_read_result" }>, "page_text_excerpt">;
+  | Exclude<OperationPlanComputeSourceObservation,
+      { source: "verified_browser_read_result" | "owner_selected_mcp_call_result" }>
+  | Omit<Extract<OperationPlanComputeSourceObservation, { source: "verified_browser_read_result" }>, "page_text_excerpt">
+  | Omit<Extract<OperationPlanComputeSourceObservation, { source: "owner_selected_mcp_call_result" }>, "tool_result_excerpt">;
 
 export function hdsDecisionHistoryPayload(
   log: DecisionLog,
@@ -514,9 +516,11 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       for (const observation of rawComputeSourceObservations) {
         const parsed = OperationPlanComputeSourceObservationSchema.safeParse(observation);
         if (!parsed.success) return invalidOperationPlanStatusProjection();
-        if (parsed.data.source === "verified_browser_read_result") {
+        if (parsed.data.source === "verified_browser_read_result" ||
+            parsed.data.source === "owner_selected_mcp_call_result") {
+          const omittedKey = parsed.data.source === "verified_browser_read_result" ? "page_text_excerpt" : "tool_result_excerpt";
           const summary = Object.fromEntries(Object.entries(parsed.data)
-            .filter(([key]) => key !== "page_text_excerpt")) as OperationPlanComputeSourceObservationProjection;
+            .filter(([key]) => key !== omittedKey)) as OperationPlanComputeSourceObservationProjection;
           computeSourceObservations.push(summary);
         } else {
           computeSourceObservations.push(parsed.data);
