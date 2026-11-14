@@ -28,6 +28,7 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
         payload_digest: sha256("content-free payload digest"),
         scope_digest: scopeDigest,
         request_id: requestId,
+        dispatch_available: true,
       })).toEqual({ status: "accepted", request_id: requestId });
       expect(store.getD4RuntimeIntentStatus({ submission_id: submissionId, scope_digest: otherScopeDigest }))
         .toBeNull();
@@ -44,12 +45,14 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
         payload_digest: sha256("content-free payload digest"),
         scope_digest: scopeDigest,
         request_id: "3d98331e-a630-4fda-a47d-8a8d845e29e0",
+        dispatch_available: true,
       })).toEqual({ status: "duplicate", request_id: requestId, state: "outcome_unknown" });
       expect(store.claimD4RuntimeIntent({
         submission_id: submissionId,
         payload_digest: sha256("different payload"),
         scope_digest: scopeDigest,
         request_id: "9479cb4c-a286-421b-b9aa-81c324001ada",
+        dispatch_available: true,
       })).toEqual({ status: "identity_conflict", request_id: requestId });
       expect(store.getD4RuntimeIntentStatus({ submission_id: submissionId, scope_digest: scopeDigest }))
         .toEqual({ request_id: requestId, state: "outcome_unknown" });

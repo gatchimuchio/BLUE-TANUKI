@@ -97,7 +97,7 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     readonly payload_digest: string;
     readonly scope_digest: string;
     readonly request_id: string;
-    readonly dispatch_available?: boolean;
+    readonly dispatch_available: boolean;
   }): WebChatD4RuntimeIntentClaim {
     this.assertOpen();
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
@@ -106,7 +106,7 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
     return this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id,
-      input.dispatch_available !== false);
+      input.dispatch_available);
   }
 
   getD4RuntimeIntentStatus(input: {
