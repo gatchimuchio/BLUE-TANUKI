@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。2026-11-14に削除した旧第四施工指示書への記述は当時の文書変更履歴であり、復活や参照を要求しない。技術原典・QE三点の旧非公開制約も失効済みである。
 
+## 2026-11-14 — rev5.3 QE_BUILD / 通常CLI plan:computeのJ/M状態永続化
+
+**対象・目的:** Gateway CLIの明示的`plan:compute`要求が完了規則なしでもOperationPlanの現在版と結果帰還を後続CLI呼出しへ保持できるようにする。通常質問に毎回計画DBを作らず、完了規則・状態照会・保留結果の既存経路は維持する。
+
+`cliRequestNeedsOperationPlanState`を追加し、通常CLI入力の意味を既存の`--organize`、`--goal-completion-rules-stdin`、`--goal-completion-status`処理と照合した。明示的な`plan:compute`だけを通常taskとして認識し、文書整理source内の同じ文字列や単なる文章中の言及では永続storeを開かない。`runCli`は該当要求で既存のprivate OperationPlan state／J/M result-memoryを構築する。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| CLI state selection focused test | PASS 7/7。明示計算、通常質問、状態照会、stdin規則、整理sourceを確認。 |
+| Gateway typecheck／build | PASS。 |
+| CLI process、restart readback、実C/J/M receipt、real provider／credential、外部作用、全workspace suite、5OS、QC／QA | NOT_RUN。 |
+
+**状態・限界:** `WIRED`（Gateway CLI producerから既存永続store初期化までのsource path）。実CLI起動後のrestart復帰とM receipt readbackは未確認で、C08.04全体を成立扱いしない。外部作用、実provider、D4 Pocket／MINIDORAの変更なし。protected attachmentsとLinux isolation `target/`を保持する。作業開始main=`d7f8bc5042021d2d1fe375f9901613bd069e435b`。実装／復旧refの終端readbackはcloseoutで記録する。
+
 ## 2026-11-14 — rev5.0 P2 QE_BUILD / macOS native app copied-launch consumer
 
 Hosted macOS x64／arm64のBUILD runnerで、native app DMGをread-onlyで検証し、内包するBlueTanuki.appをrunner専用の一時Applications領域へcopyした。DMGをnormal detachしてからcopy版をAppKitのopenで起動し、終了と起動前後の製品状態不変を確認する経路にした。以前のrun #19〜#22ではarm64の対象smokeは成功した一方、x64はアプリ停止後のDMG detachがResource busyで失敗した。強制detachは使わず、利用者向けREADMEのcopy後起動手順に沿ってconsumerを組み直した。

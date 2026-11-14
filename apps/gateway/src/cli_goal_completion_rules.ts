@@ -92,6 +92,24 @@ export function cliGoalCompletionRulesRequested(args: readonly string[]): boolea
   return count === 1;
 }
 
+/** Open durable J/M plan state for CLI requests that create or inspect a plan. */
+export function cliRequestNeedsOperationPlanState(args: readonly string[]): boolean {
+  if (cliGoalCompletionRulesRequested(args) || parseCliGoalCompletionStatusArguments(args)) return true;
+  if (args.includes("--organize")) return false;
+
+  const request = args.filter((arg) => ![
+    "--goal-completion-rules-stdin",
+    "--serve",
+    "--setup",
+    "--doctor",
+    "--audit-dump",
+    "--audit-verify",
+    "--json",
+    "--organize",
+  ].includes(arg)).join(" ").trim();
+  return request === "plan:compute" || request.startsWith("plan:compute ");
+}
+
 export function parseCliGoalCompletionRulesInput(input: Uint8Array): GoalCompletionRules {
   if (input.byteLength === 0) throw new Error("cli_goal_completion_rules_input_empty");
   if (input.byteLength > CLI_GOAL_COMPLETION_RULES_MAX_BYTES) {

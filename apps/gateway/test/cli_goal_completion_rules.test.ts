@@ -5,6 +5,7 @@ import {
   createCliGoalCompletionStatusRequest,
   createCliInboundRequest,
   cliGoalCompletionRulesRequested,
+  cliRequestNeedsOperationPlanState,
   parseCliGoalCompletionStatusArguments,
   parseCliGoalCompletionRulesInput,
   readCliGoalCompletionRulesInput,
@@ -28,6 +29,19 @@ describe("CLI goal completion rules input", () => {
       "--goal-completion-rules-stdin",
       "--goal-completion-rules-stdin",
     ])).toThrow("cli_goal_completion_rules_flag_repeated");
+  });
+
+  it("opens durable plan state for explicit CLI plan computation and readback", () => {
+    expect(cliRequestNeedsOperationPlanState(["ordinary question"])).toBe(false);
+    expect(cliRequestNeedsOperationPlanState(["plan:compute", "read the selected local source"])).toBe(true);
+    expect(cliRequestNeedsOperationPlanState(["plan:compute read the selected local source"])).toBe(true);
+    expect(cliRequestNeedsOperationPlanState(["--goal-completion-rules-stdin", "read the selected local source"]))
+      .toBe(true);
+    expect(cliRequestNeedsOperationPlanState(["--goal-completion-status", "a".repeat(64)])).toBe(true);
+    expect(cliRequestNeedsOperationPlanState(["--organize", "plan:compute is only document source text"]))
+      .toBe(false);
+    expect(cliRequestNeedsOperationPlanState(["question mentions plan:compute as data"]))
+      .toBe(false);
   });
 
   it("accepts one digest-only readback selector and creates an owner-bound CLI status request", () => {

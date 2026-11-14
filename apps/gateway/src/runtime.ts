@@ -26,6 +26,7 @@ import {
   createCliInboundRequest,
   createCliGoalCompletionStatusRequest,
   cliGoalCompletionRulesRequested,
+  cliRequestNeedsOperationPlanState,
   CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
   parseCliGoalCompletionStatusArguments,
   readCliGoalCompletionRulesInput,
@@ -129,7 +130,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     }
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
-    if (completionRulesRequested || goalCompletionStatus || executionStore.pendingResults(1).length > 0) {
+    if (cliRequestNeedsOperationPlanState(cleanArgs) || executionStore.pendingResults(1).length > 0) {
       operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
     }
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
