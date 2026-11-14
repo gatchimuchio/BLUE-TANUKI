@@ -534,6 +534,82 @@ function readSmokeRegistryState(runName: string, label: string): { uninstallPres
   return { uninstallPresent: uninstall === "true", autostartPresent: autostart === "true" };
 }
 
+function readEdgeProcessIds(): Set<number> {
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "$ErrorActionPreference = 'Stop'; Get-CimInstance Win32_Process -Filter \"Name = 'msedge.exe'\" | ForEach-Object { [string]$_.ProcessId }",
+  ], {
+    cwd: process.cwd(),
+    env: smokeChildEnvironment(),
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 60_000,
+    windowsHide: true,
+  });
+  if (result.error) throw new Error(`Edge process inventory failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`Edge process inventory failed with exit ${result.status} signal=${result.signal ?? "none"}`);
+  }
+  return new Set((result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0));
+}
+
+function stopNewEdgeProcesses(preexistingPids: Set<number>, endpointMarker: string): void {
+  // Setup opens the Control Center in the default browser. Close only a newly
+  // spawned Edge process carrying this smoke's loopback URL; preserve every
+  // pre-existing browser process and any unrelated browser launched in parallel.
+  const newPids = [...readEdgeProcessIds()].filter((pid) => !preexistingPids.has(pid));
+  if (newPids.length === 0) {
+    console.log("isolated_control_center_browser_cleanup=not_needed");
+    return;
+  }
+
+  const baseline = [...preexistingPids].join(",");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$baseline = @(${baseline})`,
+    `$endpoint = ${powershellLiteral(endpointMarker)}`,
+    "$matched = $false",
+    "$deadline = [DateTime]::UtcNow.AddSeconds(10)",
+    "do {",
+    "  $targets = @(Get-CimInstance Win32_Process -Filter \"Name = 'msedge.exe'\" | Where-Object { $baseline -notcontains [int]$_.ProcessId -and $_.CommandLine -and $_.CommandLine.IndexOf($endpoint, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { [int]$_.ProcessId })",
+    "  if ($targets.Count -gt 0) { $matched = $true }",
+    "  foreach ($target in $targets) { & (Join-Path $env:SystemRoot 'System32\\taskkill.exe') /PID $target /T /F *> $null }",
+    "  $remaining = @(Get-CimInstance Win32_Process -Filter \"Name = 'msedge.exe'\" | Where-Object { $baseline -notcontains [int]$_.ProcessId -and $_.CommandLine -and $_.CommandLine.IndexOf($endpoint, [StringComparison]::OrdinalIgnoreCase) -ge 0 })",
+    "  if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }",
+    "} while ($remaining.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline)",
+    "if ($remaining.Count -gt 0) { throw 'isolated Control Center Edge process remains after cleanup' }",
+    "if ($matched) { Write-Output 'isolated_control_center_browser_cleanup=pass' } else { Write-Output 'isolated_control_center_browser_cleanup=not_needed' }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ], {
+    cwd: process.cwd(),
+    env: smokeChildEnvironment(),
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 60_000,
+    windowsHide: true,
+  });
+  if (result.error) throw new Error(`isolated Edge cleanup failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    const detail = [result.stdout ?? "", result.stderr ?? ""].join(" ").trim();
+    throw new Error(`isolated Edge cleanup failed with exit ${result.status} signal=${result.signal ?? "none"}${detail ? `: ${detail}` : ""}`);
+  }
+  const summary = (result.stdout ?? "").trim();
+  if (!/^isolated_control_center_browser_cleanup=(?:pass|not_needed)$/m.test(summary)) {
+    throw new Error("isolated Edge cleanup did not report a verified result");
+  }
+  console.log(summary);
+}
+
 function assertSmokeRegistryAbsent(runName: string, label: string): void {
   const state = readSmokeRegistryState(runName, label);
   if (state.uninstallPresent || state.autostartPresent) {
@@ -1020,6 +1096,7 @@ async function main(): Promise<void> {
   let smokeFailure: unknown;
   let cleanupFailure: Error | undefined;
   let startupOnlySmokePassed = false;
+  let edgePidsBeforeIExpress: Set<number> | undefined;
   smoke: try {
     assertNoActiveGatewayProcesses("installed smoke active Gateway preflight");
     logStep("installed smoke active Gateway preflight passed");
@@ -1192,6 +1269,7 @@ async function main(): Promise<void> {
     setupAttempted = true;
     if (directIExpressLaunch) {
       if (!iexpressExe) throw new Error("--launch-iexpress requires a verified IExpress executable");
+      edgePidsBeforeIExpress = readEdgeProcessIds();
       run(iexpressExe, [], work, "IExpress direct user entrypoint", 600_000, isolatedProductEnv);
       console.log("iexpress_direct_user_launch_result=pass");
     } else {
@@ -1860,6 +1938,15 @@ async function main(): Promise<void> {
       }
     } else {
       allowWorkCleanup = true;
+    }
+    if (directIExpressLaunch && edgePidsBeforeIExpress) {
+      try {
+        stopNewEdgeProcesses(edgePidsBeforeIExpress, `${isolatedChildEnv.WEBCHAT_HOST}:${isolatedChildEnv.WEBCHAT_PORT}`);
+      } catch (error) {
+        console.error(`[windows-smoke] isolated Control Center browser cleanup failed: ${errorMessage(error)}`);
+        cleanupFailure ??= error instanceof Error ? error : new Error(String(error));
+        allowWorkCleanup = false;
+      }
     }
     if (allowWorkCleanup) {
       logStep("cleanup temporary install tree after product-state verification");

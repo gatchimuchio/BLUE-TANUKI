@@ -811,6 +811,9 @@ describe("Windows product installer package", () => {
     expect(smoke).toContain('const isolatedProductEnv = {');
     expect(smoke).toContain('const smokePort = directIExpressLaunch ? 8787 : await findAvailableLoopbackPort();');
     expect(smoke).toContain('default direct IExpress smoke endpoint is already occupied');
+    expect(smoke).toContain('function stopNewEdgeProcesses(preexistingPids: Set<number>, endpointMarker: string)');
+    expect(smoke).toContain('CommandLine.IndexOf($endpoint, [StringComparison]::OrdinalIgnoreCase)');
+    expect(smoke).toContain('isolated_control_center_browser_cleanup=pass');
     expect(smoke).toContain('path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0")');
     expect(smoke).toContain('"installer setup", 600_000, isolatedProductEnv');
     expect(smoke).toContain("Get-CimInstance Win32_Process");
