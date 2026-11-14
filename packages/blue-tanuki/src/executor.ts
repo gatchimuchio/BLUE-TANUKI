@@ -75,7 +75,7 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
+import type { BrokerTargetVersionObservation, GmailDraftContentReview, Tool, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubIssueCloseTargetVersion,
   assertGitHubIssueReopenTargetVersion,
@@ -900,7 +900,27 @@ export class Executor {
   /** Read-only preflight for exact registered built-in target resolvers. */
   async inspectCommandTargetVersion(command: ExecuteCommand,
     env?: Readonly<Record<string, string | undefined>>,
-    operationPlanBindingDigest?: string): Promise<BrokerTargetVersionObservation | undefined> {
+    operationPlanBindingDigest?: string,
+    signal?: AbortSignal): Promise<BrokerTargetVersionObservation | undefined> {
+    const inspectTargetVersion = async (
+      tool: Tool,
+      args: Record<string, unknown>,
+      options: {
+        env?: Readonly<Record<string, string | undefined>>;
+        operation_plan_binding_digest?: string;
+        command_digest?: string;
+      } = {},
+    ): Promise<BrokerTargetVersionObservation> => {
+      if (!tool.inspect_target_version) throw new Error(`${tool.name} target version resolver is not connected`);
+      if (signal?.aborted) throw new Error("broker_target_version_inspection_cancelled");
+      const observation = await tool.inspect_target_version(args, {
+        ...options,
+        ...(signal ? { signal } : {}),
+      });
+      if (signal?.aborted) throw new Error("broker_target_version_inspection_cancelled");
+      return observation;
+    };
+    if (signal?.aborted) throw new Error("broker_target_version_inspection_cancelled");
     if (command.type !== "tool_call") return undefined;
     if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
       throw new Error("Broker target version resolver received an invalid operation plan binding");
@@ -909,7 +929,7 @@ export class Executor {
       if (!operationPlanBindingDigest) throw new Error("mcp.call requires a selected Operation Plan binding");
       const tool = this.deps.tools.get("mcp.call");
       if (!tool?.inspect_target_version) throw new Error("mcp.call target version resolver is not connected");
-      const observation = McpCallTargetVersionObservationSchema.parse(await tool.inspect_target_version(
+      const observation = McpCallTargetVersionObservationSchema.parse(await inspectTargetVersion(tool,
         command.payload.arguments,
         { operation_plan_binding_digest: operationPlanBindingDigest, command_digest: operationPlanDigest(command) },
       ));
@@ -935,7 +955,7 @@ export class Executor {
       if (tool !== githubWriteTool || !tool.inspect_target_version) {
         throw new Error("github.write target version resolver requires the registered built-in adapter");
       }
-      const observation = await tool.inspect_target_version(command.payload.arguments, {
+      const observation = await inspectTargetVersion(tool, command.payload.arguments, {
         ...(env ? { env } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
@@ -978,7 +998,7 @@ export class Executor {
         throw new Error("memory.personalization.stop target version resolver requires the registered built-in adapter");
       }
       const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
         }),
@@ -1001,7 +1021,7 @@ export class Executor {
         throw new Error("gmail.write target version resolver requires the registered built-in adapter");
       }
       const observation = GmailWriteTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
           command_digest: operationPlanDigest(command),
@@ -1031,7 +1051,7 @@ export class Executor {
         throw new Error("google.calendar.write target version resolver requires the registered built-in adapter");
       }
       const observation = GoogleCalendarWriteTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
           command_digest: operationPlanDigest(command),
@@ -1048,7 +1068,7 @@ export class Executor {
       if (tool !== googleDriveWriteTool || !tool.inspect_target_version) {
         throw new Error("google.drive.write target version resolver requires the registered built-in adapter");
       }
-      const rawObservation = await tool.inspect_target_version(command.payload.arguments, {
+      const rawObservation = await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
@@ -1071,7 +1091,7 @@ export class Executor {
         throw new Error("file.write target version resolver requires the registered built-in adapter");
       }
       const observation = FileWriteTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
@@ -1094,7 +1114,7 @@ export class Executor {
         throw new Error("file.delete target version resolver requires the registered built-in adapter");
       }
       const observation = FileDeleteTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
@@ -1116,7 +1136,7 @@ export class Executor {
         throw new Error("file.edit target version resolver requires the registered built-in adapter");
       }
       const observation = FileEditTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           operation_plan_binding_digest: operationPlanBindingDigest,
           command_digest: operationPlanDigest(command),
@@ -1141,7 +1161,7 @@ export class Executor {
         throw new Error("shell.exec target version resolver requires the registered built-in adapter");
       }
       const observation = ShellExecTargetVersionObservationSchema.parse(
-        await tool.inspect_target_version(command.payload.arguments, {
+        await inspectTargetVersion(tool, command.payload.arguments, {
           ...(env ? { env } : {}),
           ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
           command_digest: operationPlanDigest(command),
@@ -1159,7 +1179,7 @@ export class Executor {
       throw new Error("file.search target version resolver requires the registered built-in adapter");
     }
     const observation = FileSearchTargetVersionObservationSchema.parse(
-      await tool.inspect_target_version(command.payload.arguments, {
+      await inspectTargetVersion(tool, command.payload.arguments, {
         ...(env ? { env } : {}),
         ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
       }),

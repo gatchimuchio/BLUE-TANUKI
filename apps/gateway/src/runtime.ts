@@ -628,7 +628,8 @@ async function runCliWithExecutionStore(
     let targetVersionAvailable = true;
     try {
       const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
-      targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
+      targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined,
+        operationPlanBindingDigest, commandAbortController.signal);
     } catch {
       targetVersionAvailable = false;
     }

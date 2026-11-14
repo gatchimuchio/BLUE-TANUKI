@@ -6151,6 +6151,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6158,6 +6159,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "code.push") {
       return await inspectGitHubCodePushTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6165,6 +6167,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "pr.create") {
       return await inspectGitHubPullRequestCreateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6172,6 +6175,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.update") {
       return await inspectGitHubIssueUpdateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6179,6 +6183,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.close") {
       return await inspectGitHubIssueCloseTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6186,6 +6191,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.reopen") {
       return await inspectGitHubIssueReopenTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6193,6 +6199,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "issue.comment.create") {
       return await inspectGitHubIssueCommentCreateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6200,6 +6207,7 @@ export const githubWriteTool: Tool = {
     if (githubOperation(args) === "pr.comment.create") {
       return await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
@@ -6209,6 +6217,7 @@ export const githubWriteTool: Tool = {
     }
     return await inspectGitHubIssueCreateTargetVersion(args, {
       ...(options.env ? { env: options.env } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.command_digest ? { command_digest: options.command_digest } : {}),
       ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
     });

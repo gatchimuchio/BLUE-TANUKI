@@ -1952,7 +1952,8 @@ export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): s
 
 async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
   env?: Readonly<Record<string, string | undefined>>;
-  request?: (target: GoogleWriteTarget) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+  request?: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
   operation_plan_binding_digest?: string;
   command_digest?: string;
 }): Promise<GmailWriteTargetVersionObservation> {
@@ -1973,6 +1974,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   if (operation === "draft.send") {
     const snapshot = await readGmailDraftSnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.request ? { request: options.request } : {}),
     });
     observation.request_payload_digest = snapshot.request_payload_digest;
@@ -1982,6 +1984,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   } else if (operation === "message.trash") {
     const snapshot = await readGmailMessageMetadataSnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.request ? { request: options.request } : {}),
     });
     if (snapshot.label_ids.includes("TRASH")) {
@@ -1992,6 +1995,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   } else if (operation === "message.modify") {
     const snapshot = await readGmailMessageModifySnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.request ? { request: options.request } : {}),
     });
     const currentLabelIds = new Set(snapshot.label_ids);
@@ -2005,6 +2009,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   } else if (operation === "message.send") {
     const account = await readGmailAccountIdentity({
       ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.request ? { request: options.request } : {}),
     });
     observation.request_payload_digest = gmailWriteRequestPayloadDigest(args);
@@ -2012,6 +2017,7 @@ async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, opt
   } else if (operation === "draft.create" && args.reply_to_message_id !== undefined) {
     const snapshot = await readGmailMessageMetadataSnapshot(args, {
       ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.request ? { request: options.request } : {}),
     });
     const replySource = gmailReplySource(snapshot);
@@ -4964,9 +4970,10 @@ export const gmailWriteTool: Tool = createGmailWriteTool();
 export function createGoogleCalendarWriteTool(
   options: Omit<GoogleWriteOptions, "signal" | "idempotency_key" | "command_digest"> = {},
 ): Tool {
-  const resolverOptions = (env?: Readonly<Record<string, string | undefined>>): GoogleWriteOptions => ({
+  const resolverOptions = (env?: Readonly<Record<string, string | undefined>>, signal?: AbortSignal): GoogleWriteOptions => ({
     ...options,
     ...(env ? { env: { ...env } } : {}),
+    ...(signal ? { signal } : {}),
   });
   return {
     name: "google.calendar.write",
@@ -4980,7 +4987,7 @@ export function createGoogleCalendarWriteTool(
       if (args.operation === "event.update" || args.operation === "event.delete" || args.operation === "event.invite") {
         const plan = args.operation === "event.update" ? calendarEventUpdatePlan(args)
           : args.operation === "event.delete" ? calendarEventDeletePlan(args) : calendarEventInvitePlan(args);
-        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env));
+        const current = await recheckCalendarEventTarget(plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
         return GoogleCalendarWriteTargetVersionObservationSchema.parse({
           schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
           operation: plan.operation,
@@ -4999,7 +5006,7 @@ export function createGoogleCalendarWriteTool(
         });
       }
       const plan = calendarEventCreatePlan(args);
-      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env));
+      const current = await recheckCalendarAvailability(args, plan, resolverOptions(inspectOptions.env, inspectOptions.signal));
       return GoogleCalendarWriteTargetVersionObservationSchema.parse({
         schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
         operation: "event.create",
@@ -5106,6 +5113,7 @@ export const googleDriveWriteTool: Tool = {
       GoogleDriveTrashTargetVersionObservation> {
     return await inspectGoogleDriveWriteTargetVersion(args, {
       ...(resolverOptions.env ? { env: { ...resolverOptions.env } } : {}),
+      ...(resolverOptions.signal ? { signal: resolverOptions.signal } : {}),
       ...(resolverOptions.operation_plan_binding_digest
         ? { operation_plan_binding_digest: resolverOptions.operation_plan_binding_digest } : {}),
       ...(resolverOptions.command_digest ? { command_digest: resolverOptions.command_digest } : {}),

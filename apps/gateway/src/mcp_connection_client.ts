@@ -379,7 +379,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       let client: Client | undefined;
       let catalogObserved = false;
       try {
-        client = await connect();
+        client = await connect(inspectOptions.signal);
         const catalog = await projectMcpCatalog(client, getEndpoint());
         runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
@@ -398,7 +398,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           may_execute: false,
         } satisfies McpCallTargetVersionObservation);
       } catch (error) {
-        if (!catalogObserved && endpoint) runtimeObservations.recordPreflightFailed(endpoint);
+        if (!catalogObserved && endpoint && !inspectOptions.signal?.aborted) {
+          runtimeObservations.recordPreflightFailed(endpoint);
+        }
+        if (inspectOptions.signal?.aborted) throw new Error("mcp_target_version_inspection_cancelled");
         throw safeMcpFailure(error, "mcp_target_version_unavailable");
       } finally {
         await client?.close().catch(() => undefined);

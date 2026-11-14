@@ -788,6 +788,7 @@ export interface Tool {
   /** Read-only target resolver; Executor only trusts registered built-in adapters. */
   inspect_target_version?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
+    signal?: AbortSignal;
     operation_plan_binding_digest?: string;
     command_digest?: string;
   }): Promise<BrokerTargetVersionObservation>;

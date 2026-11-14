@@ -1872,12 +1872,18 @@ async function serveWithOwnerLease(
   ): Promise<{ status: string }> {
     const isBrokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
+    const executionController = new AbortController();
+    let taskExecutionRegistered = false;
     let resolveFinalization!: () => void;
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
     if (!isBrokerRestore) activeCommandFinalizations.add(finalization);
     try {
-      return await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext);
+      return await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext, executionController,
+        () => { taskExecutionRegistered = true; });
     } finally {
+      if (taskExecutionRegistered) {
+        recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
+      }
       if (!isBrokerRestore) activeCommandFinalizations.delete(finalization);
       resolveFinalization();
     }
@@ -1889,6 +1895,8 @@ async function serveWithOwnerLease(
     origin: InboundRequest,
     opts: ExecuteAndEchoOptions = {},
     ephemeralContext?: InboundEphemeralContext,
+    executionController: AbortController = new AbortController(),
+    onTaskExecutionRegistered: () => void = () => undefined,
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     let failureMemoryGateChangedBeforeExecution = false;
@@ -2303,10 +2311,26 @@ async function serveWithOwnerLease(
       return { status: "canonical_state_restore_in_progress" };
     }
     let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
+    activeTaskExecutions.register(cmd.id, executionController);
+    onTaskExecutionRegistered();
+    const cancelledBeforeExecutor = (reason: string): { status: string } => {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+      recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+        cancellation_requested: true,
+        executor_started: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      return { status: reason };
+    };
     try {
       const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
-      targetVersionObservation = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
+      targetVersionObservation = await executor.inspectCommandTargetVersion(cmd, undefined,
+        operationPlanBindingDigest, executionController.signal);
     } catch {
+      if (executionController.signal.aborted) {
+        return cancelledBeforeExecutor("task_cancelled_during_target_version_preflight");
+      }
       const reason = cmd.type === "tool_call" && cmd.payload.tool_name === "google.calendar.write"
         ? "google_calendar_write_target_version_unavailable"
         : cmd.type === "tool_call" && cmd.payload.tool_name === "github.write"
@@ -2336,6 +2360,9 @@ async function serveWithOwnerLease(
         { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
       );
       return { status: reason };
+    }
+    if (executionController.signal.aborted) {
+      return cancelledBeforeExecutor("task_cancelled_during_target_version_preflight");
     }
     const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
       "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
@@ -2451,6 +2478,7 @@ async function serveWithOwnerLease(
         return { status: reason };
       }
     }
+    if (executionController.signal.aborted) return cancelledBeforeExecutor("task_cancelled_before_executor");
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersionObservation);
     const approvedCommand = executorApproval.approve(cmd, {
       source: opts.skip_approval ? "human_final_review" : "approval_gate",
@@ -2466,6 +2494,7 @@ async function serveWithOwnerLease(
     const planBound = hds.isOperationPlanCommand(cmd.id);
     const admission = planBound ? executionAdmissionForCommand(cmd, executorApproval.receipt(approvedCommand)) : undefined;
     let planAttemptRejection: string | undefined;
+    if (executionController.signal.aborted) return cancelledBeforeExecutor("task_cancelled_before_executor");
     if (!hds.beginOperationPlanAttempt(cmd, admission, (reason) => { planAttemptRejection = reason; })) {
       gatewayLog.warn("operation-plan attempt was not admitted", {
         command_id_digest: digestString(cmd.id),
@@ -2584,9 +2613,7 @@ async function serveWithOwnerLease(
       brokerRestoreQuiesced = true;
     }
     let fb: ExecuteFeedback;
-    const executionController = new AbortController();
     if (emergencyStop.active) executionController.abort();
-    activeTaskExecutions.register(cmd.id, executionController);
     let executionTask: Promise<ExecuteFeedback> | undefined;
     let executionAdmissionLease: { release(): void } | undefined;
     const recheckFailureMemoryApproval = (): void => {
