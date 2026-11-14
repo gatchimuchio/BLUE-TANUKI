@@ -95,6 +95,7 @@ import {
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION,
+  OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   type OperationPlanControl,
   type OperationPlanGoalPurposeBinding,
@@ -5372,7 +5373,7 @@ ${planControl.question}`,
           computeContextMessages,
         ),
         local_p_version: planCompute?.mcp_catalog_context
-          ? "blue-tanuki.plan-compute-mcp-tool-catalog.v1"
+          ? OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION
           : planCompute?.source_observations?.length && planCompute.memory_interpretation_dependencies?.length
           ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION
           : planCompute?.source_observations?.length

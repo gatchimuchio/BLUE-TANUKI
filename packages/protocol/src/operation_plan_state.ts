@@ -294,6 +294,8 @@ export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v2";
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-source-observations-memory-citation.v2";
+export const OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION =
+  "blue-tanuki.plan-compute-mcp-tool-catalog.v1";
 /** Parent identity for an explicit result-backed continuation; it grants no authority. */
 export const OperationPlanComputeParentSchema = z.object({
   plan_id_digest: Digest,

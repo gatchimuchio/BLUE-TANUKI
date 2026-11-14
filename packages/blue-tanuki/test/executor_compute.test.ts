@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
 import {
+  OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
   type ComputeResourceUse,
@@ -413,6 +414,7 @@ describe("Executor compute boundary", () => {
 
   it.each([
     "blue-tanuki.plan-compute-agent-delegation.v1",
+    OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
     OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
     OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
   ])("runs fixed C child roles inside the parent budget and returns them only as candidates for %s", async (localPVersion) => {

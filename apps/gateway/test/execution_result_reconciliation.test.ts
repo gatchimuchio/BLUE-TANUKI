@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
+import { DEFAULT_COMPUTE_BUDGET_POLICY, Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
   githubWriteTool, gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest, gmailWriteTool,
   createGmailWriteTool, LLMComputeAdapter, LLMRegistry, type ComputeBudgetPort, type ExecutorApprovalClock,
   type GoogleWriteResponse, type GoogleWriteTarget, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
@@ -2964,6 +2964,193 @@ describe("Gateway process MCP OwnerのL3確認→no-store再確認→合成call"
       seedState?.close();
     }
   }, 60_000);
+
+  it("Ownerの明示catalog選択を合成C child/parentからJの未選択候補へ接続する", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "blue-mcp-owner-compute-served-"));
+    servedGatewayTempRoots.push(tempRoot);
+    const workspace = join(tempRoot, "workspace");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    const outputRoot = join(tempRoot, "mcp-output");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(privateState, { recursive: true });
+    mkdirSync(outputRoot, { recursive: true });
+    const goalRef = "goal_0000000000000001";
+    const initialPurpose = "Initial purpose for the isolated MCP owner-task planning fixture.";
+    const purposeText = "Propose exactly one owner-selected synthetic MCP note call as an unexecuted candidate.";
+    const initialPurposeDigest = createHash("sha256").update(initialPurpose, "utf8").digest("hex");
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0000000000000001",
+        initial_purpose_digest: initialPurposeDigest, initial_interpretation_digest: "a".repeat(64),
+        adopted_at: Date.now() - 10_000 }],
+      authorizations: [], events: [],
+    }), "utf8");
+
+    let mcp: ServedMcpFixtureProcess | undefined;
+    let gateway: ServedGatewayProcess | undefined;
+    let socket: WebSocket | undefined;
+    let provider: ReturnType<typeof createServer> | undefined;
+    const providerRequests: Array<{ role: "worker" | "parent"; text: string }> = [];
+    const frames: ServedGatewayFrame[] = [];
+    const note = "owner-selected-catalog-note";
+    const task = `Use the MCP tool write_synthetic_note with the exact note value ${note}. Propose it only; do not invoke it.`;
+
+    try {
+      mcp = await startServedMcpFixture(outputRoot);
+      const endpoint = mcp.endpoint;
+      const catalog = await inspectMcpCatalog({ endpoint, fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
+      const providerName = "mcp-owner-local-fixture";
+      provider = createServer((request, response) => {
+        void (async () => {
+          const chunks: Buffer[] = [];
+          for await (const chunk of request) chunks.push(Buffer.from(chunk));
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            messages?: Array<{ content?: unknown }>;
+          };
+          const text = (body.messages ?? [])
+            .map((message) => typeof message.content === "string" ? message.content : "").join("\n");
+          const role = /C child role=([a-z_]+)/u.exec(text)?.[1];
+          providerRequests.push({ role: role ? "worker" : "parent", text });
+          let content: string;
+          if (role) {
+            content = JSON.stringify({ candidate: `synthetic ${role} observation` });
+          } else {
+            if (!text.includes(catalog.catalog_digest) || text.includes(endpoint) ||
+                !text.includes(task) || !text.includes("write_synthetic_note")) {
+              throw new Error("synthetic C request omitted selected catalog/task or disclosed its endpoint");
+            }
+            const requestId = /固定request_id=([^\s。]+)/u.exec(text)?.[1];
+            if (!requestId) throw new Error("synthetic C request did not bind its request identity");
+            const proposal = createMcpToolCallProposal({
+              plan_id: `mcp-owner-task-${requestId}`,
+              request_id: requestId,
+              step_id: "owner-selected-synthetic-note",
+              catalog,
+              tool_name: "write_synthetic_note",
+              arguments: { note },
+              profile: "native-live",
+            });
+            content = JSON.stringify({ plan: proposal.plan,
+              goal_purpose_relation: { outcome: "unknown", evidence: [] } });
+          }
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "mcp-owner-local-completion", object: "chat.completion", created: 1,
+            model: providerName, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        })().catch((error: unknown) => {
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : "synthetic C fixture failed" }));
+        });
+      });
+      provider.listen(0, "127.0.0.1");
+      await once(provider, "listening");
+      const providerAddress = provider.address();
+      if (!providerAddress || typeof providerAddress === "string") throw new Error("synthetic provider port unavailable");
+
+      const gatewayPort = await reserveServedGatewayPort();
+      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, {
+        mcpEndpoint: endpoint,
+        llmEndpoint: `http://127.0.0.1:${providerAddress.port}/v1`,
+      });
+      await waitForServedGatewayHealth(gatewayPort, gateway);
+      const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+      const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
+        const response = await fetch(`${baseUrl}/approval`, {
+          headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
+        });
+        if (!response.ok) throw new Error(`MCP owner-task approval queue unavailable: ${response.status}`);
+        return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+      };
+
+      const purposeProposalResponse = await fetch(`${baseUrl}/owner/goal-purpose-change`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-owner-token", "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: purposeText }),
+      });
+      expect(purposeProposalResponse.status).toBe(202);
+      const purposeProposal = await purposeProposalResponse.json() as { command_id?: string };
+      const purposePending = (await loadQueue()).pending_approvals
+        .find((item) => item.command_id === purposeProposal.command_id);
+      expect(purposePending).toMatchObject({ approval_level: "L3_final_review", content_review_required: true });
+      const purposeReviewResponse = await fetch(
+        `${baseUrl}/approval/${encodeURIComponent(String(purposeProposal.command_id))}/content`,
+        { method: "POST", headers: { authorization: "Bearer f05.02-synthetic-resume-token" } },
+      );
+      expect(purposeReviewResponse.status).toBe(200);
+      expect(purposeReviewResponse.headers.get("cache-control")).toBe("no-store");
+      const purposeReview = await purposeReviewResponse.json() as Record<string, unknown>;
+      const purposeApprovalResponse = await fetch(
+        `${baseUrl}/approval/${encodeURIComponent(String(purposeProposal.command_id))}`,
+        { method: "POST", headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+          body: JSON.stringify({ verdict: "approve", approval_token: purposePending?.approval_token,
+            content_review_digest: purposeReview.command_digest }) },
+      );
+      expect(purposeApprovalResponse.status).toBe(200);
+      expect(await purposeApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
+      } });
+
+      socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
+      const ownerReply = waitForServedGatewayFrame(frames, gateway,
+        (frame) => frame.kind === "channel_send" && typeof frame.content === "string");
+      const taskSubmission = await fetch(`${baseUrl}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-owner-token", "content-type": "application/json" },
+        body: JSON.stringify({ user: "fixture-owner", task, goal_ref: goalRef, purpose_version: 2,
+          submission_id: randomUUID(), include_mcp_catalog: true }),
+      });
+      expect(taskSubmission.status).toBe(202);
+      expect(await taskSubmission.json()).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect((await ownerReply).content).toEqual(expect.any(String));
+
+      let retained: Record<string, unknown> | undefined;
+      const planDeadline = Date.now() + 20_000;
+      while (Date.now() < planDeadline && !retained) {
+        const snapshotResponse = await fetch(`${baseUrl}/runtime/snapshot`, {
+          headers: { authorization: "Bearer f05.02-synthetic-webchat-token" },
+        });
+        if (snapshotResponse.ok) {
+          const snapshot = await snapshotResponse.json() as {
+            operation_plan_status?: { plans?: Array<Record<string, unknown>> };
+          };
+          retained = snapshot.operation_plan_status?.plans?.find((plan) => Array.isArray(plan.steps) &&
+            (plan.steps as Array<Record<string, unknown>>).some((step) => step.operation === "mcp.call"));
+        }
+        if (!retained) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      }
+      expect(retained, `MCP Owner task did not reach J; provider_requests=${providerRequests.length}; ` +
+        `gateway=${gateway.stderr.join("")}`).toBeDefined();
+      expect(retained).toMatchObject({ owner_authentication_required: true, goal_purpose_binding_status: "current",
+        goal_purpose_binding: { goal_ref: goalRef, purpose_version: 2 },
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" } });
+      const steps = retained!.steps as Array<Record<string, unknown>>;
+      expect(steps).toHaveLength(1);
+      expect(steps[0]).toMatchObject({ operation: "mcp.call", status: "not_selected" });
+      expect(JSON.stringify(retained)).not.toContain(endpoint);
+      expect(JSON.stringify(retained)).not.toContain(note);
+      const parentRequest = providerRequests.find((item) => item.role === "parent");
+      expect(parentRequest?.text).toContain(task);
+      expect(parentRequest?.text).toContain(catalog.catalog_digest);
+      expect(parentRequest?.text).toContain("未信頼");
+      expect(parentRequest?.text).not.toContain(endpoint);
+      expect(providerRequests.every((item) => !item.text.includes(endpoint))).toBe(true);
+      expect(providerRequests.some((item) => item.role === "worker")).toBe(true);
+      expect((await loadQueue()).pending_approvals.some((item) =>
+        String(item.operation ?? item.target).includes("mcp.call"))).toBe(false);
+      expect(existsSync(join(outputRoot, "mcp-call-count.txt"))).toBe(false);
+      expect(existsSync(join(outputRoot, "mcp-note.txt"))).toBe(false);
+      expect(gateway.child.exitCode).toBeNull();
+    } finally {
+      if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) socket.terminate();
+      if (gateway) await stopServedGateway(gateway);
+      if (mcp) await stopServedMcpFixture(mcp.child);
+      if (provider?.listening) {
+        await new Promise<void>((resolveClose, reject) => provider!.close((error) => error ? reject(error) : resolveClose()));
+        provider.closeAllConnections();
+      }
+    }
+  }, 90_000);
 });
 
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
@@ -3502,7 +3689,7 @@ async function stopServedMcpFixture(child: ChildProcessWithoutNullStreams): Prom
 }
 
 function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string,
-  options: { githubMockPort?: number; networkGuardPath?: string; mcpEndpoint?: string } = {}): ServedGatewayProcess {
+  options: { githubMockPort?: number; networkGuardPath?: string; mcpEndpoint?: string; llmEndpoint?: string } = {}): ServedGatewayProcess {
   const repositoryRoot = findWorkspaceRoot();
   const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
   if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
@@ -3537,6 +3724,22 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
     });
   }
   if (options.mcpEndpoint !== undefined) env.BLUE_TANUKI_MCP_ENDPOINT = options.mcpEndpoint;
+  if (options.llmEndpoint !== undefined) {
+    const providerName = "mcp-owner-local-fixture";
+    Object.assign(env, {
+      LLM_BACKEND: providerName,
+      BLUE_TANUKI_LLM_BACKEND_HINT: providerName,
+      LLM_PROVIDERS_JSON: JSON.stringify([{
+        name: providerName, type: "openai-compatible", endpoint: options.llmEndpoint,
+        model: providerName, aliases: [], headers: {},
+      }]),
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+        [providerName]: { capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0, currency: "USD" } },
+      }),
+      BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+    });
+  }
   // No host GITHUB_TOKEN or provider credential is inherited; the configured mock gets only a synthetic token.
   const args = options.networkGuardPath ? ["--require", options.networkGuardPath, entrypoint, "--serve"] : [entrypoint, "--serve"];
   const child = spawn(process.execPath, args, {
