@@ -1,5 +1,6 @@
-import type { WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
+import type { WebChatD4RuntimeCancellationStatus, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import type { TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 
 const TASK_OUTCOME_REASON_CODES = new Set([
   "recovery_hold_active",
@@ -45,6 +46,12 @@ const WEBCHAT_CHANNEL_DIGEST = operationPlanDigest("webchat");
 export type D4RuntimeActiveCommandProjection =
   | { readonly status: "matched"; readonly command_id: string }
   | { readonly status: "not_active" | "ambiguous" | "invalid" };
+
+export type D4RuntimeRequestCommandIdsProjection =
+  | { readonly status: "matched"; readonly command_ids: readonly string[] }
+  | { readonly status: "not_found" }
+  | { readonly status: "ambiguous" }
+  | { readonly status: "invalid" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -137,32 +144,118 @@ export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: 
   return projectTaskOutcome(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
 }
 
+export function projectD4RuntimeRequestCommandIds(operationPlans: unknown, requestId: string): D4RuntimeRequestCommandIdsProjection {
+  if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
+    return { status: "invalid" };
+  }
+  const plans = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
+    plan.owner_identity_digest === D4_RUNTIME_OWNER_DIGEST && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+  if (plans.length === 0) return { status: "not_found" };
+  if (plans.length !== 1 || !isRecord(plans[0])) return { status: "ambiguous" };
+  const bindings = plans[0].bindings;
+  if (!Array.isArray(bindings)) return { status: "invalid" };
+
+  const commandIds = new Set<string>();
+  for (const binding of bindings) {
+    if (!isRecord(binding) || typeof binding.request_id !== "string" || typeof binding.command_id !== "string" ||
+        !/^[^\u0000-\u001f\u007f]{1,256}$/u.test(binding.command_id)) {
+      return { status: "invalid" };
+    }
+    if (binding.request_id === requestId) commandIds.add(binding.command_id);
+  }
+  return { status: "matched", command_ids: [...commandIds] };
+}
+
+function unknownCancellationStatus(
+  reason_code: Extract<WebChatD4RuntimeCancellationStatus, { status: "unknown" }>["reason_code"],
+): WebChatD4RuntimeCancellationStatus {
+  return { status: "unknown", reason_code, used_for_authority: false, may_execute: false };
+}
+
+/** Projects only durable, request-bound cancellation metadata; it never claims external processing stopped. */
+export function projectD4RuntimeCancellationStatus(
+  operationPlans: unknown,
+  requestId: string,
+  observations: readonly TaskExecutionCancellationEvidence[],
+): WebChatD4RuntimeCancellationStatus {
+  const binding = projectD4RuntimeRequestCommandIds(operationPlans, requestId);
+  if (binding.status === "not_found") return unknownCancellationStatus("projection_unavailable");
+  if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
+  if (binding.status === "invalid") return unknownCancellationStatus("projection_invalid");
+  const commandIds = new Set(binding.command_ids);
+  const matching = observations.filter((event) => commandIds.has(event.command_id) && event.token_kind === "d4_runtime");
+  if (matching.length === 0) return unknownCancellationStatus("no_recorded_evidence");
+
+  const byCommand = new Map<string, TaskExecutionCancellationEvidence[]>();
+  for (const event of matching) {
+    if (event.used_for_authority !== false || event.may_execute !== false || event.external_processing_stop !== "unknown" ||
+        event.cancel_request_accepted !== true || !isRecord(event) || !Number.isSafeInteger(event.observed_at_ms) ||
+        !Number.isSafeInteger(event.cancel_requested_at_ms)) return unknownCancellationStatus("projection_invalid");
+    const entries = byCommand.get(event.command_id) ?? [];
+    entries.push(event);
+    byCommand.set(event.command_id, entries);
+  }
+
+  const latestByCommand: TaskExecutionCancellationEvidence[] = [];
+  for (const events of byCommand.values()) {
+    const requested = events.filter((event) => event.event === "execution_cancel_requested");
+    const observed = events.filter((event) => event.event === "execution_cancel_observed");
+    if (requested.length > 1 || observed.length > 1) return unknownCancellationStatus("projection_ambiguous");
+    const requestEvent = requested[0];
+    const observedEvent = observed[0];
+    if (requestEvent && (requestEvent.executor_settled !== false || requestEvent.executor_status !== "unknown" ||
+        requestEvent.local_worker_stop !== "not_observed")) return unknownCancellationStatus("projection_invalid");
+    if (observedEvent && requestEvent && observedEvent.cancel_requested_at_ms !== requestEvent.cancel_requested_at_ms) {
+      return unknownCancellationStatus("projection_invalid");
+    }
+    if (observedEvent && requestEvent && observedEvent.observed_at_ms < requestEvent.observed_at_ms) {
+      return unknownCancellationStatus("projection_invalid");
+    }
+    latestByCommand.push(observedEvent ?? requestEvent ?? events[0]!);
+  }
+  const newestRequestAt = Math.max(...latestByCommand.map((event) => event.cancel_requested_at_ms));
+  const newest = latestByCommand.filter((event) => event.cancel_requested_at_ms === newestRequestAt);
+  if (newest.length !== 1) return unknownCancellationStatus("projection_ambiguous");
+  const event = newest[0]!;
+  if (event.event === "execution_cancel_requested") {
+    return {
+      status: "request_recorded",
+      cancel_request_accepted: true,
+      executor_settled: false,
+      executor_status: "unknown",
+      local_worker_stop: "not_observed",
+      external_processing_stop: "unknown",
+      cancel_requested_at_ms: event.cancel_requested_at_ms,
+      used_for_authority: false,
+      may_execute: false,
+    };
+  }
+  return {
+    status: "execution_observed",
+    cancel_request_accepted: true,
+    executor_settled: event.executor_settled,
+    executor_status: event.executor_status,
+    local_worker_stop: event.local_worker_stop,
+    external_processing_stop: "unknown",
+    cancel_requested_at_ms: event.cancel_requested_at_ms,
+    observed_at_ms: event.observed_at_ms,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 /** Resolves only one currently active command bound to this D4 Runtime-owned WebChat request. */
 export function projectD4RuntimeActiveCommand(
   operationPlans: unknown,
   requestId: string,
   activeCommandIds: ReadonlySet<string>,
 ): D4RuntimeActiveCommandProjection {
-  if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
-    return { status: "invalid" };
-  }
-  const plans = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
-    plan.owner_identity_digest === D4_RUNTIME_OWNER_DIGEST && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
-  if (plans.length === 0) return { status: "not_active" };
-  if (plans.length !== 1 || !isRecord(plans[0])) return { status: "ambiguous" };
-  const bindings = plans[0].bindings;
-  if (!Array.isArray(bindings)) return { status: "invalid" };
-
-  const requestBindings = new Set<string>();
-  for (const binding of bindings) {
-    if (!isRecord(binding) || typeof binding.request_id !== "string" || typeof binding.command_id !== "string" ||
-        !/^[^\u0000-\u001f\u007f]{1,256}$/u.test(binding.command_id)) {
-      return { status: "invalid" };
-    }
-    if (binding.request_id === requestId) requestBindings.add(binding.command_id);
-  }
-  if (requestBindings.size === 0) return { status: "not_active" };
-  const activeBindings = [...requestBindings].filter((commandId) => activeCommandIds.has(commandId));
+  const binding = projectD4RuntimeRequestCommandIds(operationPlans, requestId);
+  if (binding.status === "not_found") return { status: "not_active" };
+  if (binding.status === "ambiguous") return { status: "ambiguous" };
+  if (binding.status === "invalid") return { status: "invalid" };
+  if (binding.command_ids.length === 0) return { status: "not_active" };
+  const activeBindings = binding.command_ids.filter((commandId) => activeCommandIds.has(commandId));
   if (activeBindings.length === 0) return { status: "not_active" };
   if (activeBindings.length !== 1) return { status: "ambiguous" };
   return { status: "matched", command_id: activeBindings[0]! };

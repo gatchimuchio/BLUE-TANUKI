@@ -53,6 +53,37 @@ export interface WebChatTaskOutcome {
 /** Backwards-compatible name for the D4 Runtime status projection. */
 export type WebChatD4RuntimeTaskOutcome = WebChatTaskOutcome;
 
+export type WebChatD4RuntimeCancellationStatus =
+  | {
+      readonly status: "request_recorded";
+      readonly cancel_request_accepted: true;
+      readonly executor_settled: false;
+      readonly executor_status: "unknown";
+      readonly local_worker_stop: "not_observed";
+      readonly external_processing_stop: "unknown";
+      readonly cancel_requested_at_ms: number;
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "execution_observed";
+      readonly cancel_request_accepted: true;
+      readonly executor_settled: boolean;
+      readonly executor_status: "success" | "failed" | "suspended" | "unknown";
+      readonly local_worker_stop: "not_observed" | "worker_exit_observed" | "process_tree_empty_confirmed" | "provider_state_unknown";
+      readonly external_processing_stop: "unknown";
+      readonly cancel_requested_at_ms: number;
+      readonly observed_at_ms: number;
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "unknown";
+      readonly reason_code: "projection_unavailable" | "projection_ambiguous" | "projection_invalid" | "no_recorded_evidence";
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    };
+
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
   remember?: boolean;
@@ -1567,6 +1598,8 @@ export interface WebChatOptions {
   d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+  /** Read-only, content-free cancellation evidence for the exact authenticated D4 Runtime request. */
+  onD4RuntimeIntentCancellationStatus?: (input: { request_id: string }) => Promise<WebChatD4RuntimeCancellationStatus>;
   /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */
   onD4RuntimeIntentCancellation?: (
     input: { request_id: string },

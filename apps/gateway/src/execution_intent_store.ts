@@ -281,6 +281,27 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     });
     return pending;
   }
+  /** Read bounded, content-free D4 Runtime cancellation observations for known command bindings. */
+  taskExecutionCancellationEvidenceForCommands(command_ids: readonly string[], limit = MAX_PENDING_TASK_CANCELLATION_EVENTS):
+    TaskExecutionCancellationEvidence[] {
+    if (!Array.isArray(command_ids) || command_ids.length > 256 ||
+        command_ids.some((id) => typeof id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(id)) ||
+        new Set(command_ids).size !== command_ids.length || !Number.isSafeInteger(limit) || limit < 1 ||
+        limit > MAX_PENDING_TASK_CANCELLATION_EVENTS) {
+      throw new Error("execution_task_cancellation_query_invalid");
+    }
+    let observations: TaskExecutionCancellationEvidence[] = [];
+    this.transaction(() => {
+      const wanted = new Set(command_ids);
+      const state = collectTaskExecutionCancellationEvidence(this.db);
+      const matching = [...state.events.values()]
+        .map((record) => record.event)
+        .filter((event) => event.token_kind === "d4_runtime" && wanted.has(event.command_id));
+      if (matching.length > limit) throw new Error("execution_task_cancellation_query_limit_exceeded");
+      observations = matching.map((event) => ({ ...event }));
+    });
+    return observations;
+  }
   taskExecutionCancellationEvidenceIds(): ReadonlySet<string> {
     let ids: ReadonlySet<string> = new Set();
     this.transaction(() => { ids = new Set(collectTaskExecutionCancellationEvidence(this.db).events.keys()); });

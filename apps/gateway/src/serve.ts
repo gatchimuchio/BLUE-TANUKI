@@ -141,6 +141,7 @@ import type {
   WebChatMemoryPersonalizationStopContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
+  WebChatD4RuntimeCancellationStatus,
   WebChatD4RuntimeIntentCancellation,
   WebChatD4RuntimeTaskOutcome,
   WebChatAuthorityTraceItem,
@@ -149,7 +150,8 @@ import type {
   WebChatHistorySnapshot,
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
-import { projectD4RuntimeActiveCommand, projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
+import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
+  projectD4RuntimeTaskOutcome, projectOwnerTaskOutcome } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -4140,6 +4142,21 @@ async function serveWithOwnerLease(
                 return projectD4RuntimeTaskOutcome(hds.getRuntimeSnapshot().operation_plans, request_id);
               } catch {
                 return projectD4RuntimeTaskOutcome(undefined, request_id);
+              }
+            },
+            onD4RuntimeIntentCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeCancellationStatus> => {
+              let operationPlans: unknown;
+              try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
+              catch {
+                return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
+              }
+              const binding = projectD4RuntimeRequestCommandIds(operationPlans, request_id);
+              if (binding.status !== "matched") return projectD4RuntimeCancellationStatus(operationPlans, request_id, []);
+              try {
+                const observations = executionStore.taskExecutionCancellationEvidenceForCommands(binding.command_ids);
+                return projectD4RuntimeCancellationStatus(operationPlans, request_id, observations);
+              } catch {
+                return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
               }
             },
             onD4RuntimeIntentCancellation: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeIntentCancellation | null> => {
