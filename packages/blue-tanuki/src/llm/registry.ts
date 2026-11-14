@@ -30,7 +30,7 @@ export interface LLMRegistryOptions {
   defaultName?: string;
   fallbackName?: string;
   retry?: Partial<LLMRetryPolicy>;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
 }
 
@@ -82,8 +82,23 @@ function normalizeRetryPolicy(policy: Partial<LLMRetryPolicy> | undefined): LLMR
   };
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("llm_retry_delay_aborted"));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (error !== undefined) reject(error);
+      else resolve();
+    };
+    const onAbort = () => finish(signal?.reason ?? new Error("llm_retry_delay_aborted"));
+    const timer = setTimeout(() => finish(), ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 /**
@@ -101,7 +116,7 @@ export class LLMRegistry implements LLMBackend {
   private readonly fallbackProfiles = new Map<string, LLMFallbackProfile>();
   private readonly health = new Map<string, LLMBackendHealth>();
   private readonly retryPolicy: LLMRetryPolicy;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private defaultName: string | undefined;
   private fallbackName: string | undefined;
@@ -440,7 +455,13 @@ export class LLMRegistry implements LLMBackend {
         if (signal?.aborted) throw error;
         const mayRetry = classification.retryable && attempt < this.retryPolicy.max_attempts;
         if (!mayRetry) break;
-        await this.sleep(this.retryDelayMs(attempt, classification.retry_after_ms));
+        try {
+          await this.sleep(this.retryDelayMs(attempt, classification.retry_after_ms), signal);
+        } catch (sleepError) {
+          if (signal?.aborted) throw createLLMAbortError(name, signal);
+          throw sleepError;
+        }
+        if (signal?.aborted) throw createLLMAbortError(name, signal);
       }
     }
     throw lastError;
