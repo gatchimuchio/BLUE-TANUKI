@@ -943,8 +943,15 @@ async function receiveFirstMessage(
 async function main(): Promise<void> {
   const artifact = path.resolve(argValue("--artifact") ?? defaultArtifact());
   const iexpressExeArg = argValue("--iexpress-exe");
+  const directIExpressLaunch = process.argv.includes("--launch-iexpress");
   if (process.argv.includes("--iexpress-exe") && !iexpressExeArg) {
     throw new Error("--iexpress-exe requires a Windows IExpress installer path");
+  }
+  if (directIExpressLaunch && !iexpressExeArg) {
+    throw new Error("--launch-iexpress requires --iexpress-exe");
+  }
+  if (directIExpressLaunch && !process.argv.includes("--startup-only")) {
+    throw new Error("--launch-iexpress is limited to --startup-only");
   }
   if (iexpressExeArg && process.platform !== "win32") {
     throw new Error("--iexpress-exe installed smoke must run on Windows");
@@ -963,12 +970,17 @@ async function main(): Promise<void> {
   mkdirSync(smokeTempBase, { recursive: true });
   const work = mkdtempSync(path.join(smokeTempBase, "w-"));
   const packageDir = path.join(work, "package");
-  const installRoot = path.join(work, "i");
-  const dataRoot = path.join(work, "d");
   const autostartRunName = `BLUE-TANUKI-SMOKE-${randomUUID()}`;
   const isolatedProfile = path.join(work, "profile");
   const isolatedAppData = path.join(isolatedProfile, "AppData", "Roaming");
   const isolatedLocalAppData = path.join(isolatedProfile, "AppData", "Local");
+  const installRoot = directIExpressLaunch
+    ? path.join(isolatedLocalAppData, "Programs", "BlueTanuki")
+    : path.join(work, "i");
+  const dataRoot = directIExpressLaunch
+    ? path.join(isolatedAppData, "BlueTanuki")
+    : path.join(work, "d");
+  const startMenuRoot = path.join(isolatedAppData, "Microsoft", "Windows", "Start Menu", "Programs", "BLUE-TANUKI");
   const isolatedTemp = path.join(work, "Temp");
   const retentionUninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-retain-${randomUUID()}.status`);
   const uninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`);
@@ -1172,36 +1184,55 @@ async function main(): Promise<void> {
 
     launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
     setupAttempted = true;
-    run("cmd.exe", [
-      "/d",
-      "/s",
-      "/c",
-      setupCommand,
-      "-InstallRoot",
-      installRoot,
-      "-DataRoot",
-      dataRoot,
-      "-NoLaunch",
-    ], packageDir, iexpressExe ? "IExpress embedded Setup" : "installer setup", 600_000, isolatedProductEnv);
-    console.log(iexpressExe ? "iexpress_embedded_setup_result=pass" : "installer_zip_setup_result=pass");
+    if (directIExpressLaunch) {
+      if (!iexpressExe) throw new Error("--launch-iexpress requires a verified IExpress executable");
+      run(iexpressExe, [], work, "IExpress direct user entrypoint", 600_000, isolatedProductEnv);
+      console.log("iexpress_direct_user_launch_result=pass");
+    } else {
+      run("cmd.exe", [
+        "/d",
+        "/s",
+        "/c",
+        setupCommand,
+        "-InstallRoot",
+        installRoot,
+        "-DataRoot",
+        dataRoot,
+        "-NoLaunch",
+      ], packageDir, iexpressExe ? "IExpress embedded Setup" : "installer setup", 600_000, isolatedProductEnv);
+      console.log(iexpressExe ? "iexpress_embedded_setup_result=pass" : "installer_zip_setup_result=pass");
+    }
 
     const envFile = path.join(dataRoot, "blue-tanuki.env");
     if (process.argv.includes("--startup-only")) {
-      setEnvFileValue(envFile, "WEBCHAT_HOST", isolatedChildEnv.WEBCHAT_HOST!);
-      setEnvFileValue(envFile, "WEBCHAT_PORT", isolatedChildEnv.WEBCHAT_PORT!);
+      if (!directIExpressLaunch) {
+        setEnvFileValue(envFile, "WEBCHAT_HOST", isolatedChildEnv.WEBCHAT_HOST!);
+        setEnvFileValue(envFile, "WEBCHAT_PORT", isolatedChildEnv.WEBCHAT_PORT!);
+      }
       const env = parseEnvFile(envFile);
       const port = env.WEBCHAT_PORT ?? "8787";
       const portNumber = Number.parseInt(port, 10);
       if (!Number.isInteger(portNumber) || portNumber <= 0) {
         throw new Error(`WEBCHAT_PORT is invalid in installed smoke env file: ${port}`);
       }
-      run("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-File",
-        launcher,
-        "start",
-      ], installRoot, "startup-only launcher start", 120_000, isolatedProductEnv);
+      if (directIExpressLaunch) {
+        if (env.WEBCHAT_HOST !== isolatedChildEnv.WEBCHAT_HOST ||
+            env.WEBCHAT_PORT !== isolatedChildEnv.WEBCHAT_PORT) {
+          throw new Error("direct IExpress first-run config did not retain the isolated WebChat endpoint");
+        }
+        if (!existsSync(path.join(startMenuRoot, "BLUE-TANUKI.lnk"))) {
+          throw new Error("direct IExpress Setup did not create the isolated Start Menu product entry");
+        }
+        console.log("iexpress_start_menu_entry_result=pass");
+      } else {
+        run("powershell.exe", [
+          "-NoProfile",
+          "-NonInteractive",
+          "-File",
+          launcher,
+          "start",
+        ], installRoot, "startup-only launcher start", 120_000, isolatedProductEnv);
+      }
       stopped = false;
       const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
       if (!healthReady) {
@@ -1792,11 +1823,13 @@ async function main(): Promise<void> {
           const installAbsent = await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS);
           const dataAbsent = await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS);
           const registryState = readSmokeRegistryState(autostartRunName, "cleanup registry verification");
+          const startMenuAbsent = !existsSync(startMenuRoot);
           const stagePrefix = `.${path.basename(installRoot)}.blue-tanuki-stage-`;
           const preservedStages = readdirSync(work).filter((entry) => entry.startsWith(stagePrefix));
-          if (!installAbsent || (installWasPresent && !dataAbsent) || preservedStages.length > 0 || registryState.uninstallPresent || registryState.autostartPresent) {
-            throw new Error(`cleanup left product state installAbsent=${installAbsent} dataAbsent=${dataAbsent} installWasPresent=${installWasPresent} preservedStages=${preservedStages.join(",")} uninstallKey=${registryState.uninstallPresent} autostart=${registryState.autostartPresent}`);
+          if (!installAbsent || (installWasPresent && !dataAbsent) || !startMenuAbsent || preservedStages.length > 0 || registryState.uninstallPresent || registryState.autostartPresent) {
+            throw new Error(`cleanup left product state installAbsent=${installAbsent} dataAbsent=${dataAbsent} startMenuAbsent=${startMenuAbsent} installWasPresent=${installWasPresent} preservedStages=${preservedStages.join(",")} uninstallKey=${registryState.uninstallPresent} autostart=${registryState.autostartPresent}`);
           }
+          assertNoActiveGatewayProcesses("post-uninstall installed smoke process check");
           // work is created uniquely for this run; when Setup never committed an
           // install, any DataRoot contents beneath it are test-generated only.
           allowWorkCleanup = true;

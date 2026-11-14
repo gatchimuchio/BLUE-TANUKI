@@ -23,14 +23,18 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Require the selected ref to be main
+      - name: Require the selected ref to be main or the isolated IExpress verification branch
         shell: pwsh
         env:
           BLUE_TANUKI_ACTION_REF: ${{ github.ref }}
           BLUE_TANUKI_ACTION_SHA: ${{ github.sha }}
         run: |
-          if ($env:BLUE_TANUKI_ACTION_REF -ne "refs/heads/main") {
-            throw "This BUILD smoke accepts refs/heads/main only."
+          $allowedRefs = @(
+            "refs/heads/main",
+            "refs/heads/codex/windows-iexpress-direct-smoke-20261114"
+          )
+          if ($allowedRefs -notcontains $env:BLUE_TANUKI_ACTION_REF) {
+            throw "This BUILD smoke accepts main or the bounded IExpress verification branch only."
           }
           $actualSha = (git rev-parse HEAD).Trim()
           if ($actualSha -ne $env:BLUE_TANUKI_ACTION_SHA) {
@@ -72,4 +76,4 @@ jobs:
           }
           $installer = Join-Path $PWD "release/windows/BlueTanukiSetup-$version-windows-x64.exe"
           $payload = Join-Path $PWD "release/windows/blue-tanuki-$version-windows-x64-installer.zip"
-          pnpm exec tsx scripts/smoke_windows_installed.ts --iexpress-exe $installer --artifact $payload --startup-only
+          pnpm exec tsx scripts/smoke_windows_installed.ts --iexpress-exe $installer --artifact $payload --startup-only --launch-iexpress
