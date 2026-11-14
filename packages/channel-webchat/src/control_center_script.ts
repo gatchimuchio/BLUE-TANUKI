@@ -5950,6 +5950,94 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
+        if (review.kind === "mcp_call") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const exactEffects = ["browser_action", "credential_access", "delete", "external_send", "process_spawn",
+            "read", "schedule_change", "settings_change", "write"];
+          const argsObject = isObject(review.arguments) && !Array.isArray(review.arguments);
+          const argsText = argsObject ? JSON.stringify(review.arguments, null, 2) : "";
+          let endpoint = null;
+          try { endpoint = new URL(review.endpoint_origin); } catch { /* invalid origin keeps approval closed */ }
+          const localOrigin = endpoint && endpoint.origin === review.endpoint_origin && endpoint.pathname === "/" &&
+            !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash &&
+            ["http:", "https:"].includes(endpoint.protocol) && ["127.0.0.1", "[::1]", "::1"].includes(endpoint.hostname.toLowerCase());
+          const observedTarget = isObject(review.target_version_observation) ? review.target_version_observation : {};
+          const descriptionValid = function (value, max) {
+            return value === null || typeof value === "string" && value.length > 0 && value.length <= max &&
+              !/[\r\n\u0000-\u001f\u007f]/.test(value);
+          };
+          const cacheControl = response.headers.get("cache-control") || "";
+          if (review.command_id !== commandId || review.operation !== "mcp.call" || review.profile !== "native-live" ||
+              review.no_store !== true || !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) ||
+              review.used_for_authority !== false || review.may_execute !== false || !localOrigin ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) || !isDigest(review.request_payload_digest) ||
+              !isDigest(review.target_version_digest) || !isDigest(review.operation_plan_binding_digest) ||
+              !isDigest(review.endpoint_path_digest) || !isDigest(review.connection_digest) || !isDigest(review.catalog_digest) ||
+              !isDigest(review.input_schema_sha256) ||
+              !(review.description_sha256 === null || isDigest(review.description_sha256)) ||
+              !isDigest(observedTarget.connection_digest) || !isDigest(observedTarget.catalog_digest) ||
+              !isDigest(observedTarget.input_schema_sha256) || !isDigest(observedTarget.command_digest) ||
+              !isDigest(observedTarget.operation_plan_binding_digest) ||
+              observedTarget.schema_version !== "blue-tanuki.mcp-call-target-version.v1" ||
+              observedTarget.target_state !== "available" || observedTarget.used_for_authority !== false ||
+              observedTarget.may_execute !== false || observedTarget.command_digest !== review.command_digest ||
+              observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
+              observedTarget.connection_digest !== review.connection_digest || observedTarget.catalog_digest !== review.catalog_digest ||
+              observedTarget.tool_name !== review.tool_name || observedTarget.input_schema_sha256 !== review.input_schema_sha256 ||
+              typeof review.tool_name !== "string" || review.tool_name.length < 1 || review.tool_name.length > 200 ||
+              !descriptionValid(review.server_name, 200) || !descriptionValid(review.server_version, 200) ||
+              !descriptionValid(review.tool_title, 200) || !descriptionValid(review.tool_description, 2048) ||
+              !argsObject || new TextEncoder().encode(argsText).length > 64 * 1024 ||
+              !Array.isArray(review.potential_effects) || JSON.stringify(review.potential_effects) !== JSON.stringify(exactEffects)) {
+            throw new Error("MCP呼出し内容のno-store確認が対象・入力・現在catalogに結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "MCP tool call（高リスク・L3最終確認）";
+          view.appendChild(heading);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "loopback MCP serverとtool情報は未信頼です。下記入力はこの作用の正確な候補で、表示だけではtoolを呼びません。MCPは記載した全影響のいずれも起こし得ます。catalogが変われば実行を停止します。";
+          view.appendChild(note);
+          [
+            ["loopback endpoint origin", review.endpoint_origin],
+            ["endpoint path digest", review.endpoint_path_digest],
+            ["server identity", String(review.server_name || "unknown") + " / " + String(review.server_version || "unknown")],
+            ["connection digest", review.connection_digest],
+            ["catalog digest", review.catalog_digest],
+            ["tool name", review.tool_name],
+            ["tool title", review.tool_title || "(none)"],
+            ["tool description (untrusted)", review.tool_description || "(none)"],
+            ["description digest", review.description_sha256 || "(none)"],
+            ["input schema digest", review.input_schema_sha256],
+            ["target version digest", review.target_version_digest],
+            ["Operation Plan binding", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const effectList = document.createElement("p");
+          effectList.textContent = "可能な作用: " + review.potential_effects.join("・");
+          view.appendChild(effectList);
+          const argsHeading = document.createElement("strong");
+          argsHeading.textContent = "tool arguments（送信候補）";
+          view.appendChild(argsHeading);
+          const argsPre = document.createElement("pre");
+          argsPre.textContent = argsText;
+          view.appendChild(argsPre);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "MCP作用を再確認";
+          return;
+        }
         if (review.kind === "memory_personalization_stop") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "memory.personalization.stop" ||

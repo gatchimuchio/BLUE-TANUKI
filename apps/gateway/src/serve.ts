@@ -311,6 +311,7 @@ interface PendingApproval {
   content_review_file_edit_target_version_digest?: string;
   content_review_file_delete_target_version_digest?: string;
   content_review_memory_personalization_target_version_digest?: string;
+  content_review_mcp_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
@@ -1878,6 +1879,7 @@ async function serveWithOwnerLease(
     expected_file_delete_target_version_digest?: string;
     expected_google_drive_target_version_digest?: string;
     expected_github_write_target_version_digest?: string;
+    expected_mcp_call_target_version_digest?: string;
     browser_form_input_review_digest?: string;
     browser_form_input_operation_plan_binding_digest?: string;
     browser_form_submit_receipt_pending?: PendingApproval;
@@ -2501,6 +2503,19 @@ async function serveWithOwnerLease(
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedGitHubTargetVersionDigest !== opts.expected_github_write_target_version_digest) {
         const reason = "github_write_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_mcp_call_target_version_digest) {
+      const observedMcpTargetVersionDigest = cmd.type === "tool_call" && cmd.payload.tool_name === "mcp.call" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.mcp-call-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation) : undefined;
+      if (observedMcpTargetVersionDigest !== opts.expected_mcp_call_target_version_digest) {
+        const reason = "mcp_call_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -3416,7 +3431,7 @@ async function serveWithOwnerLease(
   function pendingApprovalNeedsContentReview(command: ExecuteCommand): boolean {
     const requiresToolContentReview = command.type === "tool_call" && (
       command.payload.tool_name === "file.edit" || command.payload.tool_name === "file.delete" ||
-      command.payload.tool_name === "memory.personalization.stop" ||
+      command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "mcp.call" ||
       (command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) ||
       (command.payload.tool_name === "google.drive.write" &&
@@ -4028,6 +4043,8 @@ async function serveWithOwnerLease(
           ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
         ...(pending.content_review_github_target_version_digest
           ? { expected_github_write_target_version_digest: pending.content_review_github_target_version_digest } : {}),
+        ...(pending.content_review_mcp_target_version_digest
+          ? { expected_mcp_call_target_version_digest: pending.content_review_mcp_target_version_digest } : {}),
       });
       if (r.status === "failure_memory_gate_changed") {
         completeApprovalResolution(command_id);
@@ -5418,6 +5435,23 @@ async function serveWithOwnerLease(
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "mcp.call" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "mcp_call" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review = { ...snapshot, command_id };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_mcp_target_version_digest: review.target_version_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -5741,6 +5775,26 @@ async function serveWithOwnerLease(
     if (pending.memory_judgment_reassessment_proposal) {
       return validateMemoryJudgmentReassessmentContentReview(pending, content_review_digest);
     }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "mcp.call") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest || !pending.content_review_mcp_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
+        return current && "kind" in current && current.kind === "mcp_call" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_mcp_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return signal?.aborted ? "cancelled" : "unavailable";
+      }
+    }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop") {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -6009,7 +6063,7 @@ async function serveWithOwnerLease(
         isGmailMessageTrashReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
-            p.command.payload.tool_name === "memory.personalization.stop" ||
+            p.command.payload.tool_name === "memory.personalization.stop" || p.command.payload.tool_name === "mcp.call" ||
             (p.command.payload.tool_name === "github.write" &&
               ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&

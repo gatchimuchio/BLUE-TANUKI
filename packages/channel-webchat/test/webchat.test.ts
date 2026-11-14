@@ -5961,6 +5961,85 @@ describe("WebChatChannel — approval API", () => {
     }
   });
 
+  it("reveals one exact MCP L3 request through no-store review and keeps it out of the approval queue", async () => {
+    const argument = "synthetic mcp request payload";
+    const digest = "a".repeat(64);
+    const targetVersion = {
+      schema_version: "blue-tanuki.mcp-call-target-version.v1" as const,
+      connection_digest: "b".repeat(64),
+      catalog_digest: "c".repeat(64),
+      tool_name: "write_note",
+      input_schema_sha256: "d".repeat(64),
+      command_digest: digest,
+      operation_plan_binding_digest: "e".repeat(64),
+      target_state: "available" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    const mcpReview = {
+      kind: "mcp_call",
+      command_id: "cmd-mcp-review",
+      command_digest: digest,
+      review_digest: "f".repeat(64),
+      request_payload_digest: "1".repeat(64),
+      target_version_digest: "2".repeat(64),
+      target_version_observation: targetVersion,
+      operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+      operation: "mcp.call",
+      profile: "native-live",
+      endpoint_origin: "http://127.0.0.1:43123",
+      endpoint_path_digest: "3".repeat(64),
+      connection_digest: targetVersion.connection_digest,
+      catalog_digest: targetVersion.catalog_digest,
+      server_name: "local fixture",
+      server_version: "1.0.0",
+      tool_name: targetVersion.tool_name,
+      tool_title: null,
+      tool_description: "Untrusted fixture description",
+      description_sha256: "4".repeat(64),
+      input_schema_sha256: targetVersion.input_schema_sha256,
+      arguments: { note: argument },
+      potential_effects: ["browser_action", "credential_access", "delete", "external_send", "process_spawn",
+        "read", "schedule_change", "settings_change", "write"],
+      no_store: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    let reviewCalls = 0;
+    const ctx = await setup({
+      approval: {
+        list: async () => [{ command_id: "cmd-mcp-review", request_id: "req-mcp-review", operation: "mcp.call",
+          risk: "high", approval_level: "L3_final_review", final_review_required: true, reason: "final_review_required",
+          content_review_required: true }],
+        reviewContent: async (command_id) => {
+          reviewCalls += 1;
+          return command_id === "cmd-mcp-review" ? mcpReview : null;
+        },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const queue = await getRaw(ctx.port, "/approval", { authorization: `Bearer ${RESUME_TOKEN}` });
+      expect(queue.text).not.toContain(argument);
+      const response = await fetch(`http://127.0.0.1:${ctx.port}/approval/cmd-mcp-review/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await response.json()).toMatchObject({
+        kind: "mcp_call", command_id: "cmd-mcp-review", tool_name: "write_note",
+        arguments: { note: argument }, no_store: true, used_for_authority: false, may_execute: false,
+      });
+      expect(CONTROL_CENTER_SCRIPT).toContain('if (review.kind === "mcp_call")');
+      expect(CONTROL_CENTER_SCRIPT).toContain("argsPre.textContent = argsText");
+      expect(reviewCalls).toBe(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("reveals exact draft.create content only through the explicit review route", async () => {
     const draftBody = "synthetic draft body";
     const digest = "d".repeat(64);

@@ -626,6 +626,35 @@ export interface MemoryPersonalizationStopContentReview {
   may_execute: false;
 }
 
+/** No-store owner review of one exact native-live MCP request and its freshly observed target. */
+export interface McpCallContentReview {
+  kind: "mcp_call";
+  operation: "mcp.call";
+  profile: "native-live";
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  target_version_observation: McpCallTargetVersionObservation;
+  operation_plan_binding_digest: string;
+  endpoint_origin: string;
+  endpoint_path_digest: string;
+  connection_digest: string;
+  catalog_digest: string;
+  server_name: string | null;
+  server_version: string | null;
+  tool_name: string;
+  tool_title: string | null;
+  tool_description: string | null;
+  description_sha256: string | null;
+  input_schema_sha256: string;
+  arguments: Record<string, unknown>;
+  potential_effects: readonly string[];
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** No-store view of retained attendees, new invitees, and all guests receiving Calendar update notices. */
 export interface GoogleCalendarEventInviteContentReview {
   kind: "google_calendar_event_invite";
@@ -829,7 +858,7 @@ export interface GoogleDriveFileTrashContentReview {
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | GmailMessageTrashContentReview |
   GmailMessageModifyContentReview |
   FileEditDiffContentReview | FileDeleteTargetContentReview |
-  MemoryPersonalizationStopContentReview |
+  MemoryPersonalizationStopContentReview | McpCallContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
   GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview |

@@ -1279,11 +1279,51 @@ export interface WebChatGitHubReleaseDraftCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatMcpCallContentReview {
+  kind: "mcp_call";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  target_version_observation: {
+    schema_version: "blue-tanuki.mcp-call-target-version.v1";
+    connection_digest: string;
+    catalog_digest: string;
+    tool_name: string;
+    input_schema_sha256: string;
+    command_digest: string;
+    operation_plan_binding_digest: string;
+    target_state: "available";
+    used_for_authority: false;
+    may_execute: false;
+  };
+  operation_plan_binding_digest: string;
+  operation: "mcp.call";
+  profile: "native-live";
+  endpoint_origin: string;
+  endpoint_path_digest: string;
+  connection_digest: string;
+  catalog_digest: string;
+  server_name: string | null;
+  server_version: string | null;
+  tool_name: string;
+  tool_title: string | null;
+  tool_description: string | null;
+  description_sha256: string | null;
+  input_schema_sha256: string;
+  arguments: Record<string, unknown>;
+  potential_effects: readonly string[];
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
-  WebChatMemoryPersonalizationStopContentReview |
+  WebChatMemoryPersonalizationStopContentReview | WebChatMcpCallContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
   WebChatBrowserFormInputContentReview |
   WebChatBrowserLinkNavigationContentReview |

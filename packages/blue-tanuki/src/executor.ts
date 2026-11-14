@@ -25,6 +25,7 @@ import {
   MemoryPersonalizationTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
+  MCP_CALL_POTENTIAL_EFFECTS,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
   canonicalExecutorCommandSnapshot,
@@ -1287,6 +1288,80 @@ export class Executor {
     };
     assertNotCancelled();
     if (command.type !== "tool_call") return undefined;
+    if (command.payload.tool_name === "mcp.call") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("mcp.call content review requires a selected Operation Plan binding");
+      }
+      const args = command.payload.arguments;
+      const tool = this.deps.tools.get("mcp.call");
+      if (!tool || tool.name !== "mcp.call" || !tool.inspect_content_review) {
+        throw new Error("mcp.call content review requires the registered MCP adapter");
+      }
+      const review = await tool.inspect_content_review(args, {
+        ...(signal ? { signal } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      assertNotCancelled();
+      const expectedKeys = ["arguments", "catalog_digest", "command_digest", "connection_digest", "description_sha256",
+        "endpoint_origin", "endpoint_path_digest", "input_schema_sha256", "kind", "may_execute", "no_store", "operation",
+        "operation_plan_binding_digest", "potential_effects", "profile", "request_payload_digest", "review_digest",
+        "server_name", "server_version", "target_version_digest", "target_version_observation", "tool_description",
+        "tool_name", "tool_title", "used_for_authority"];
+      const observation = "kind" in review && review.kind === "mcp_call"
+        ? McpCallTargetVersionObservationSchema.safeParse(review.target_version_observation) : null;
+      const requestPayloadDigest = args.profile === "native-live" && typeof args.connection_digest === "string" &&
+        typeof args.catalog_digest === "string" && typeof args.tool_name === "string" &&
+        typeof args.input_schema_sha256 === "string"
+        ? operationPlanDigest({ schema_version: "blue-tanuki.mcp-call-request.v1", profile: args.profile,
+          connection_digest: args.connection_digest, catalog_digest: args.catalog_digest, tool_name: args.tool_name,
+          input_schema_sha256: args.input_schema_sha256, arguments: args.arguments })
+        : "invalid";
+      let endpointOriginValid = false;
+      if ("kind" in review && review.kind === "mcp_call" && typeof review.endpoint_origin === "string") {
+        try {
+          const endpointOrigin = new URL(review.endpoint_origin);
+          endpointOriginValid = endpointOrigin.origin === review.endpoint_origin && endpointOrigin.pathname === "/" &&
+            !endpointOrigin.username && !endpointOrigin.password && !endpointOrigin.search && !endpointOrigin.hash &&
+            ["http:", "https:"].includes(endpointOrigin.protocol) &&
+            ["127.0.0.1", "[::1]", "::1"].includes(endpointOrigin.hostname.toLowerCase());
+        } catch { /* invalid MCP endpoint origin remains non-reviewable */ }
+      }
+      const isDigest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+      const hasOptionalText = (value: unknown, max: number): boolean => value === null ||
+        typeof value === "string" && value.length > 0 && value.length <= max && !/[\r\n\u0000-\u001f\u007f]/.test(value);
+      const reviewMatches = "kind" in review && review.kind === "mcp_call" &&
+        Object.keys(review).sort().join(",") === [...expectedKeys].sort().join(",") &&
+        args.profile === "native-live" && isDigest(args.connection_digest) && isDigest(args.catalog_digest) &&
+        typeof args.tool_name === "string" && typeof args.input_schema_sha256 === "string" &&
+        isDigest(args.input_schema_sha256) && typeof args.arguments === "object" && args.arguments !== null && !Array.isArray(args.arguments) &&
+        review.operation === "mcp.call" && review.profile === "native-live" && review.command_digest === operationPlanDigest(command) &&
+        review.operation_plan_binding_digest === operationPlanBindingDigest && isDigest(review.review_digest) &&
+        isDigest(review.request_payload_digest) && review.request_payload_digest === requestPayloadDigest &&
+        isDigest(review.target_version_digest) && endpointOriginValid && isDigest(review.endpoint_path_digest) &&
+        review.connection_digest === args.connection_digest && review.catalog_digest === args.catalog_digest &&
+        review.tool_name === args.tool_name && isDigest(review.input_schema_sha256) &&
+        review.input_schema_sha256 === args.input_schema_sha256 &&
+        (review.description_sha256 === null || isDigest(review.description_sha256));
+      const baseMatches = "kind" in review && review.kind === "mcp_call" && !!observation?.success &&
+        review.target_version_observation.schema_version === "blue-tanuki.mcp-call-target-version.v1" &&
+        review.target_version_digest === operationPlanDigest(observation.data) &&
+        observation.data.command_digest === operationPlanDigest(command) &&
+        observation.data.operation_plan_binding_digest === operationPlanBindingDigest &&
+        observation.data.connection_digest === args.connection_digest && observation.data.catalog_digest === args.catalog_digest &&
+        observation.data.tool_name === args.tool_name && observation.data.input_schema_sha256 === args.input_schema_sha256 &&
+        operationPlanDigest(review.arguments) === operationPlanDigest(args.arguments) &&
+        Array.isArray(review.potential_effects) &&
+        JSON.stringify(review.potential_effects) === JSON.stringify(MCP_CALL_POTENTIAL_EFFECTS) &&
+        hasOptionalText(review.server_name, 200) && hasOptionalText(review.server_version, 200) &&
+        hasOptionalText(review.tool_title, 200) && hasOptionalText(review.tool_description, 2_048) &&
+        review.no_store === true && review.used_for_authority === false && review.may_execute === false;
+      const { review_digest, ...reviewBase } = review as Extract<ToolContentReview, { kind: "mcp_call" }>;
+      if (!reviewMatches || !baseMatches || !isDigest(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("mcp.call content review returned evidence for another command, catalog, or plan source");
+      }
+      return review;
+    }
     if (command.payload.tool_name === "memory.personalization.stop") {
       if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
         throw new Error("memory.personalization.stop content review requires a selected Operation Plan binding");

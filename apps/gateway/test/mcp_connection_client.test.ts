@@ -410,6 +410,30 @@ describe("MCP catalog adapter", () => {
         expect(approval.context.risk).toBe("high");
         const planBinding = hds.getExecutionOperationPlanBindingDigest(command);
         if (!planBinding) throw new Error("HDS did not provide the selected Operation Plan binding");
+        const callsBeforeReview = await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8").catch(() => "0");
+        const contentReview = await executor.inspectCommandContentReview(command, undefined, planBinding);
+        if (!contentReview || !("kind" in contentReview) || contentReview.kind !== "mcp_call") {
+          throw new Error("Executor did not provide the plan-bound MCP L3 content review");
+        }
+        expect(contentReview).toMatchObject({
+          operation: "mcp.call",
+          profile: "native-live",
+          server_name: "BLUE-TANUKI local fixture",
+          server_version: "1.0.0",
+          tool_name: "write_synthetic_note",
+          tool_description: "Write one synthetic test note under the test-owned temporary root.",
+          arguments: { note },
+          endpoint_origin: new URL(endpoint).origin,
+          potential_effects: ["browser_action", "credential_access", "delete", "external_send", "process_spawn",
+            "read", "schedule_change", "settings_change", "write"],
+          no_store: true,
+          used_for_authority: false,
+          may_execute: false,
+        });
+        const { review_digest, ...reviewBase } = contentReview;
+        expect(review_digest).toBe(operationPlanDigest(reviewBase));
+        expect(contentReview.target_version_digest).toBe(operationPlanDigest(contentReview.target_version_observation));
+        expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8").catch(() => "0")).toBe(callsBeforeReview);
         const targetVersion = await executor.inspectCommandTargetVersion(command, undefined, planBinding);
         if (!targetVersion) throw new Error("Executor did not observe the configured MCP target");
         const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);

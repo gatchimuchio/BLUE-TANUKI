@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { Tool, ToolRegistry } from "@blue-tanuki/core";
+import type { McpCallContentReview, Tool, ToolRegistry } from "@blue-tanuki/core";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSchema,
   McpCallTargetVersionObservationSchema, OperationPlanMcpCatalogContextSchema,
@@ -25,6 +25,7 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_TOOL_RESULT_BYTES = 256 * 1024;
 
 type McpFetch = NonNullable<NonNullable<ConstructorParameters<typeof StreamableHTTPClientTransport>[1]>["fetch"]>;
+type McpTargetInspectionOptions = NonNullable<Parameters<NonNullable<Tool["inspect_target_version"]>>[1]>;
 
 export interface McpCatalogEntry {
   readonly name: string;
@@ -505,44 +506,104 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
   const connect = (signal?: AbortSignal): Promise<Client> =>
     connectMcpClient(getEndpoint(), fetcher, signal);
 
-  return {
+  const inspectCandidate = async (args: Record<string, unknown>, inspectOptions: McpTargetInspectionOptions) => {
+    if (!inspectOptions.command_digest || !inspectOptions.operation_plan_binding_digest) {
+      throw new Error("mcp_operation_plan_binding_required");
+    }
+    let client: Client | undefined;
+    let catalogObserved = false;
+    try {
+      client = await connect(inspectOptions.signal);
+      const snapshot = await readMcpCatalogSnapshot(client);
+      const catalog = projectMcpCatalog(snapshot, getEndpoint());
+      runtimeObservations.recordCatalogReachable(getEndpoint());
+      catalogObserved = true;
+      const candidate = parseMcpCallArguments(args);
+      assertCandidateMatchesCatalog(candidate, catalog);
+      const observation = McpCallTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.mcp-call-target-version.v1",
+        connection_digest: catalog.connection_digest,
+        catalog_digest: catalog.catalog_digest,
+        tool_name: candidate.tool_name,
+        input_schema_sha256: candidate.input_schema_sha256,
+        command_digest: inspectOptions.command_digest,
+        operation_plan_binding_digest: inspectOptions.operation_plan_binding_digest,
+        target_state: "available",
+        used_for_authority: false,
+        may_execute: false,
+      } satisfies McpCallTargetVersionObservation);
+      return { candidate, catalog, snapshot, observation };
+    } catch (error) {
+      const currentEndpoint = endpoint;
+      if (!catalogObserved && currentEndpoint && !inspectOptions.signal?.aborted) {
+        runtimeObservations.recordPreflightFailed(currentEndpoint);
+      }
+      if (inspectOptions.signal?.aborted) throw new Error("mcp_target_version_inspection_cancelled");
+      throw safeMcpFailure(error, "mcp_target_version_unavailable");
+    } finally {
+      await client?.close().catch(() => undefined);
+    }
+  };
+
+  const tool: Tool = {
     name: "mcp.call",
     description: "Calls one catalog-bound MCP tool through HDS-J selection, fresh target observation and L3 final review.",
     required_capabilities: requireToolOperationDescriptor("mcp.call").required_capabilities,
     async inspect_target_version(args, inspectOptions) {
-      if (!inspectOptions?.command_digest || !inspectOptions.operation_plan_binding_digest) {
+      if (!inspectOptions) throw new Error("mcp_operation_plan_binding_required");
+      return (await inspectCandidate(args, inspectOptions)).observation;
+    },
+    async inspect_content_review(args, reviewOptions) {
+      if (!reviewOptions?.command_digest || !reviewOptions.operation_plan_binding_digest) {
         throw new Error("mcp_operation_plan_binding_required");
       }
-      let client: Client | undefined;
-      let catalogObserved = false;
-      try {
-        client = await connect(inspectOptions.signal);
-        const catalog = projectMcpCatalog(await readMcpCatalogSnapshot(client), getEndpoint());
-        runtimeObservations.recordCatalogReachable(getEndpoint());
-        catalogObserved = true;
-        const candidate = parseMcpCallArguments(args);
-        assertCandidateMatchesCatalog(candidate, catalog);
-        return McpCallTargetVersionObservationSchema.parse({
-          schema_version: "blue-tanuki.mcp-call-target-version.v1",
-          connection_digest: catalog.connection_digest,
-          catalog_digest: catalog.catalog_digest,
-          tool_name: candidate.tool_name,
-          input_schema_sha256: candidate.input_schema_sha256,
-          command_digest: inspectOptions.command_digest,
-          operation_plan_binding_digest: inspectOptions.operation_plan_binding_digest,
-          target_state: "available",
-          used_for_authority: false,
-          may_execute: false,
-        } satisfies McpCallTargetVersionObservation);
-      } catch (error) {
-        if (!catalogObserved && endpoint && !inspectOptions.signal?.aborted) {
-          runtimeObservations.recordPreflightFailed(endpoint);
-        }
-        if (inspectOptions.signal?.aborted) throw new Error("mcp_target_version_inspection_cancelled");
-        throw safeMcpFailure(error, "mcp_target_version_unavailable");
-      } finally {
-        await client?.close().catch(() => undefined);
+      const inspection = await inspectCandidate(args, reviewOptions);
+      const { candidate, catalog, snapshot, observation } = inspection;
+      const matchedTools = snapshot.tools.filter((entry) => entry.name === candidate.tool_name);
+      if (matchedTools.length !== 1 || !endpoint) throw new Error("mcp_tool_review_unavailable");
+      const rawTool = matchedTools[0]!;
+      const projectedTool = catalog.tools.find((entry) => entry.name === candidate.tool_name);
+      if (!projectedTool || projectedTool.input_schema_sha256 !== candidate.input_schema_sha256) {
+        throw new Error("mcp_tool_review_stale");
       }
+      const toolTitle = optionalMcpPlanningText(rawTool.title, 200);
+      const toolDescription = optionalMcpPlanningText(rawTool.description, 2_048);
+      const requestPayloadDigest = operationPlanDigest({
+        schema_version: "blue-tanuki.mcp-call-request.v1",
+        profile: "native-live",
+        connection_digest: candidate.connection_digest,
+        catalog_digest: candidate.catalog_digest,
+        tool_name: candidate.tool_name,
+        input_schema_sha256: candidate.input_schema_sha256,
+        arguments: candidate.arguments,
+      });
+      const reviewBase: Omit<McpCallContentReview, "review_digest"> = {
+        kind: "mcp_call",
+        operation: "mcp.call",
+        profile: "native-live",
+        command_digest: reviewOptions.command_digest,
+        request_payload_digest: requestPayloadDigest,
+        target_version_digest: operationPlanDigest(observation),
+        target_version_observation: observation,
+        operation_plan_binding_digest: reviewOptions.operation_plan_binding_digest,
+        endpoint_origin: endpoint.origin,
+        endpoint_path_digest: operationPlanDigest(endpoint.pathname),
+        connection_digest: catalog.connection_digest,
+        catalog_digest: catalog.catalog_digest,
+        server_name: catalog.server_info?.name ?? null,
+        server_version: catalog.server_info?.version ?? null,
+        tool_name: candidate.tool_name,
+        tool_title: toolTitle,
+        tool_description: toolDescription,
+        description_sha256: projectedTool.description_sha256,
+        input_schema_sha256: candidate.input_schema_sha256,
+        arguments: candidate.arguments,
+        potential_effects: [...MCP_CALL_POTENTIAL_EFFECTS],
+        no_store: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+      return Object.freeze({ ...reviewBase, review_digest: operationPlanDigest(reviewBase) });
     },
     async invoke(args, ctx) {
       const candidate = parseMcpCallArguments(args);
@@ -606,6 +667,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       }
     },
   };
+  return tool;
 }
 
 /** Always reserve the core tool name; an absent or invalid endpoint stays disabled. */

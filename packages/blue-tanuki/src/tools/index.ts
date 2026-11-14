@@ -6,6 +6,7 @@ export {
   type ToolContext,
   type ToolExecutionLifecycleObservation,
   type FileEditDiffContentReview,
+  type McpCallContentReview,
   type ToolContentReview,
 } from "./registry.js";
 export { createMemoryPersonalizationStopTool, isMemoryPersonalizationStopTool } from "./memory_personalization.js";
