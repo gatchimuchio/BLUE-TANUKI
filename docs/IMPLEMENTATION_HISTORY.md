@@ -2,6 +2,22 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。2026-11-14に削除した旧第四施工指示書への記述は当時の文書変更履歴であり、復活や参照を要求しない。技術原典・QE三点の旧非公開制約も失効済みである。
 
+## 2026-11-14 — rev5.3 QE_BUILD / 明示許可modelの音声要求をCへ渡す
+
+**対象・目的:** BLUE-TANUKIのGateway受信音声を、音声文字起こし専用の既存契約を維持しながら、ownerが別途明示許可したOpenAI-compatible provider/modelだけ通常のCタスク入力として扱えるようにする。音声由来内容を本人確認・承認・権限へ昇格させず、音声と画像の同時要求も明示能力がある場合のみ同じC計算へ渡す。
+
+`LLM_AUDIO_TASK_CAPABILITY`を追加し、`BLUE_TANUKI_LLM_AUDIO_TASK_CAPABLE_MODELS_JSON`をprovider／exact model別の既定OFF設定にした。task許可modelは文字起こし許可modelにも登録し、同じmodelが文字起こしendpointとtext completion双方に対応する責任を運用者へ明記した。`Executor`はtask能力のある場合にのみC計算フラグを付ける。OpenAI-compatible backendはraw音声を文字起こしAPIへ一回送り、原文を含まない未信頼ラベル付きtranscriptだけを揮発C入力に加えてcompletionを行う。transcriptが空の場合はCの後段呼出しを省く。audio taskの最大2回分とretry／fallbackを費用・provider attempt予約へ算入し、fallback時もHDSの`user_audio`／`llm.audio.transcription`認可とfallbackのtask model許可を要求する。画像併用時は同modelのimage許可も検査する。
+
+audio呼出しではsession historyをproviderへ送らず、元の要求文とC応答もsession historyへ追加しない。通常のHDS feedback／Output Auditは維持する。C由来tool candidateを実行権限へ変換しない。`docs/runbook.md`に既定OFFのmodel設定、費用境界、保存・承認境界を記録し、変更後hashを既存の日本語基底移行台帳へ反映した。移行負債74件は解消していない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| workspace `corepack pnpm exec tsc -b --pretty false` | PASS。 |
+| `docs:check`／`git diff --check` | PASS。日本語基底移行負債74件は継続。 |
+| unit／integration test、実provider／credential／Telegram API、served Gateway、全OS、全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+**状態・限界:** 当該設定下のソース経路を`CODE_PRESENT`とする。endpoint／modelの実対応、実provider呼出し、Gateway実起動、音声＋画像のconsumer動作は未確認で、F16や製品全体の成立を示さない。実provider・秘密情報・外部作用、D4-Pocket／MINIDORAは変更なし。編集前main=`5e62c99cf90408c7388d2cebdce738a99ce347b4`。implementation commit=`2f9e5f85cb888a41b651f6c8cdcdd7dbb5f8f6c3`をGitHub `main`へpush/readback済み。push後の復旧2世代はimplementation checkpoint current=`2f9e5f85cb888a41b651f6c8cdcdd7dbb5f8f6c3`、previous=`5e62c99cf90408c7388d2cebdce738a99ce347b4`でlocal branch/tag・remote tag一致。closeout記録を続ける。protected attachmentsとLinux isolation `target/`を保持。commit時stale Windows worktree metadata削除拒否はACL／metadataを変更せず保留した。
+
 ## 2026-11-14 — rev5.3 QE_BUILD / 通常CLI plan:computeのJ/M状態永続化
 
 **対象・目的:** Gateway CLIの明示的`plan:compute`要求が完了規則なしでもOperationPlanの現在版と結果帰還を後続CLI呼出しへ保持できるようにする。通常質問に毎回計画DBを作らず、完了規則・状態照会・保留結果の既存経路は維持する。
