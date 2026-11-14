@@ -25,6 +25,8 @@ this workspace does not have owner-provided live credentials and live smoke
 targets. This is a deliberate support-boundary decision, not a missing local
 test.
 
+保留中の4チャネル実装と実行時依存関係は、利用者が設定したインストール済み環境から通常のプラグイン審査経路で読み込めるよう、デスクトップ製品の配置物とソース構築用一式へ含める。同梱によって提供水準を昇格させず、未設定チャネルを起動せず、認証情報も含めない。提供水準の昇格には、以下の証拠を引き続き要求する。
+
 WhatsApp remains `reserved-third-party` and cannot be promoted by this gate.
 
 ## Machine Gate

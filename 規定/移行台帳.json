@@ -16,7 +16,7 @@
     { "path": "docs/ADAPTER_CONTRACT.md", "sha256": "593489f2c1555d86efb5ca617cccdd54844e661b41d86cd7bf4bd4bc978efcfa" },
     { "path": "docs/BLUE_TANUKI_AUTHORITY_MODEL.md", "sha256": "f4f66c41a2ba0df24f879729318fb1ee6f81b43d46d16ce50027f621d9c08e21" },
     { "path": "docs/CAPABILITY_ENVELOPE.md", "sha256": "38fd5137502e8d6d3ae0711bc291842c953052f5bc4ae4e621a04655120773fb" },
-    { "path": "docs/CHANNEL_PROMOTION_GATE.md", "sha256": "f5dd4f71710553a88109c5bfaeb4ce79139e59ed60f6d5528f4e6680e46ba78c" },
+    { "path": "docs/CHANNEL_PROMOTION_GATE.md", "sha256": "9f8a3422eb02d2923f48ab5441e003ea518e4e38bf6acaff58ef114fcefb0cac" },
     { "path": "docs/CHANNEL_READINESS_MATRIX.md", "sha256": "cbd6c598a6f4df9731bba91e01e0b5476d81623135a83496465a4e71449ea787" },
     { "path": "docs/COMPOSIO_CONNECTOR.md", "sha256": "16c0af99475eff4f42491a3f14ae660d4a2f05989d2b670f9ce9072dfaeff6c4" },
     { "path": "docs/CONFORMANCE_TARGETS.md", "sha256": "a61ae0feec14a5cb85168f37bf66d4c8be6b7b721e29320c85d323bbdedd9f7a" },

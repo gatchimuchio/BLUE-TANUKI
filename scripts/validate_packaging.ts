@@ -314,6 +314,14 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-APACHE-2.0");
   requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-CC-BY-4.0");
   requireIncludes("scripts/package_windows.ts", packageWindows, "NOTICE");
+  for (const previewChannel of ["slack", "discord", "teams", "line"]) {
+    requireIncludes("scripts/package_windows.ts", packageWindows, `packages/channel-${previewChannel}`);
+  }
+  requireIncludes("scripts/package_windows.ts", packageWindows, "copyPreviewRuntimeDependencies");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "copyRuntimeDependencyClosure");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "resolveInstalledPackageDir");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "resolvePackagedDependencyDir");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS");
 
   const windowsOneclickAudit = read("tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes(
@@ -643,7 +651,7 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "規定/移行台帳.json");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/japanese_base_gate.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/licensing_gate.ts");
-  requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".sha256");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".manifest.json");
@@ -682,6 +690,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-arm64.command");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "core_release_paths");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "preview_runtime_paths");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "pnpm\", \"run\", \"doctor");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:repo-health");
@@ -729,7 +738,7 @@ function main(): void {
     requireIncludes("scripts/create_release_bundle.ts", releaseBundle, migrationDebtPath);
     requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, migrationDebtPath);
   }
-  requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "isForbiddenFileName");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "blue-tanuki.env.");

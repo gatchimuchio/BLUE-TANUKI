@@ -13,11 +13,18 @@ export const PRODUCT_SCOPE_CORE_RELEASE_PATHS = [
   "apps/gateway",
 ] as const;
 
-export const PRODUCT_SCOPE_PREVIEW_PATHS = [
+// Preview adapters ship in product builds so an owner-configured installation
+// can load them through the normal plugin review path. Their presence does not
+// promote them to first-party support or change the release claims.
+export const PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS = [
   "packages/channel-slack",
   "packages/channel-discord",
   "packages/channel-teams",
   "packages/channel-line",
+] as const;
+
+export const PRODUCT_SCOPE_PREVIEW_PATHS = [
+  ...PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
   "install/installer",
   "install/windows/install.ps1",
   "install/windows/uninstall.ps1",

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as https from "node:https";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import {
   type InstalledHeadlessShell,
 } from "./playwright_browser_runtime.ts";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
+import { PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS } from "../packages/protocol/src/product_scope_contract.js";
 
 interface PackageJson {
   version: string;
@@ -80,6 +81,10 @@ const RUNTIME_PACKAGES = [
   { rel: "packages/channel-base", module: "@blue-tanuki/channel-base" },
   { rel: "packages/channel-webchat", module: "@blue-tanuki/channel-webchat" },
   { rel: "packages/channel-telegram", module: "@blue-tanuki/channel-telegram" },
+  { rel: "packages/channel-slack", module: "@blue-tanuki/channel-slack" },
+  { rel: "packages/channel-discord", module: "@blue-tanuki/channel-discord" },
+  { rel: "packages/channel-teams", module: "@blue-tanuki/channel-teams" },
+  { rel: "packages/channel-line", module: "@blue-tanuki/channel-line" },
   { rel: "packages/operator-writing", module: "@blue-tanuki/operator-writing" },
   { rel: "packages/operator-daily", module: "@blue-tanuki/operator-daily" },
   { rel: "packages/operator-developer", module: "@blue-tanuki/operator-developer" },
@@ -137,6 +142,10 @@ const REQUIRED_COMMON_BUILT_FILES = [
   "packages/channel-base/dist/index.js",
   "packages/channel-webchat/dist/index.js",
   "packages/channel-telegram/dist/index.js",
+  "packages/channel-slack/dist/index.js",
+  "packages/channel-discord/dist/index.js",
+  "packages/channel-teams/dist/index.js",
+  "packages/channel-line/dist/index.js",
   "packages/operator-writing/dist/index.js",
   "packages/operator-daily/dist/index.js",
   "packages/operator-developer/dist/index.js",
@@ -177,17 +186,25 @@ export async function copyDir(src: string, dest: string): Promise<void> {
   if (!existsSync(src)) {
     throw new Error(`missing directory: ${src}`);
   }
-  await cp(src, dest, {
-    recursive: true,
-    force: true,
-    dereference: true,
-    filter: (source) => {
-      const base = path.basename(source);
-      if (base === "node_modules" || base === ".git" || base === ".blue-tanuki") return false;
-      if (base === ".codex-tmp" || base === "release" || base === "dist-windows") return false;
-      return !isSecretLike(path.basename(source));
-    },
-  });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await cp(src, dest, {
+        recursive: true,
+        force: true,
+        dereference: true,
+        filter: (source) => {
+          const base = path.basename(source);
+          if (base === "node_modules" || base === ".git" || base === ".blue-tanuki") return false;
+          if (base === ".codex-tmp" || base === "release" || base === "dist-windows") return false;
+          return !isSecretLike(path.basename(source));
+        },
+      });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EBUSY" || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
 }
 
 function isSecretLike(name: string): boolean {
@@ -247,6 +264,179 @@ async function copyExternalModule(
   const real = await import("node:fs/promises").then((fs) => fs.realpath(source!));
   const dest = path.join(appRoot, "node_modules", ...destinationName.split("/"));
   await copyDir(real, dest);
+}
+
+interface RuntimeDependencyPackageJson {
+  name?: string;
+  version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  os?: string[];
+  cpu?: string[];
+}
+
+function packageAllowsTarget(values: readonly string[] | undefined, target: string): boolean {
+  if (!values || values.length === 0) return true;
+  const allowed = values.filter((value) => !value.startsWith("!"));
+  const denied = values.filter((value) => value.startsWith("!")).map((value) => value.slice(1));
+  return !denied.includes(target) && (allowed.length === 0 || allowed.includes(target));
+}
+
+function resolveInstalledPackageDir(fromDir: string, packageName: string): string | null {
+  let current = path.resolve(fromDir);
+  const segments = packageName.split("/");
+  for (;;) {
+    const candidate = path.join(current, "node_modules", ...segments);
+    if (existsSync(candidate)) {
+      const resolved = realpathSync(candidate);
+      const relative = path.relative(root, resolved);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error(`runtime dependency ${packageName} resolves outside the workspace`);
+      }
+      const packageJsonPath = path.join(resolved, "package.json");
+      if (!existsSync(packageJsonPath)) {
+        throw new Error(`runtime dependency ${packageName} has no package.json at ${resolved}`);
+      }
+      const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8")) as RuntimeDependencyPackageJson;
+      if (manifest.name !== packageName || typeof manifest.version !== "string") {
+        throw new Error(`runtime dependency identity mismatch for ${packageName} at ${resolved}`);
+      }
+      return resolved;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolvePackagedDependencyDir(
+  fromDir: string,
+  packageName: string,
+  appRoot: string,
+): string | null {
+  let current = path.resolve(fromDir);
+  const packageSegments = packageName.split("/");
+  const resolvedRoot = path.resolve(appRoot);
+  for (;;) {
+    const candidate = path.join(current, "node_modules", ...packageSegments);
+    if (existsSync(candidate)) return realpathSync(candidate);
+    if (current === resolvedRoot) return null;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    const relative = path.relative(resolvedRoot, parent);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+    current = parent;
+  }
+}
+
+function isWorkspaceRuntimePackage(packageDir: string): boolean {
+  const rel = path.relative(root, packageDir);
+  return ["packages", "apps", "install"].some((segment) =>
+    rel === segment || rel.startsWith(`${segment}${path.sep}`));
+}
+
+async function copyRuntimeDependencyClosure(
+  sourcePackageDir: string,
+  destinationPackageDir: string,
+  appRoot: string,
+  target: NativeAppTarget,
+  expanded: Set<string>,
+  ancestors: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  const sourcePackageJson = JSON.parse(
+    readFileSync(path.join(sourcePackageDir, "package.json"), "utf8"),
+  ) as RuntimeDependencyPackageJson;
+  const dependencyNames = new Set([
+    ...Object.keys(sourcePackageJson.dependencies ?? {}),
+    ...Object.keys(sourcePackageJson.optionalDependencies ?? {}),
+    ...Object.keys(sourcePackageJson.peerDependencies ?? {}),
+  ]);
+  for (const packageName of [...dependencyNames].sort()) {
+    const required = Object.prototype.hasOwnProperty.call(sourcePackageJson.dependencies ?? {}, packageName) ||
+      (Object.prototype.hasOwnProperty.call(sourcePackageJson.peerDependencies ?? {}, packageName) &&
+        sourcePackageJson.peerDependenciesMeta?.[packageName]?.optional !== true);
+    const dependencyDir = resolveInstalledPackageDir(sourcePackageDir, packageName);
+    if (!dependencyDir) {
+      if (!required) continue;
+      throw new Error(`missing installed runtime dependency ${packageName} required by ${sourcePackageJson.name ?? sourcePackageDir}`);
+    }
+    const dependencyPackageJson = JSON.parse(
+      readFileSync(path.join(dependencyDir, "package.json"), "utf8"),
+    ) as RuntimeDependencyPackageJson;
+    const compatible = packageAllowsTarget(dependencyPackageJson.os, target.platform) &&
+      packageAllowsTarget(dependencyPackageJson.cpu, target.arch);
+    if (!compatible) {
+      if (!required) continue;
+      throw new Error(`runtime dependency ${packageName}@${dependencyPackageJson.version ?? "unknown"} does not support ${target.platform}-${target.arch}`);
+    }
+    if (isWorkspaceRuntimePackage(dependencyDir)) continue;
+    if (typeof dependencyPackageJson.version !== "string") {
+      throw new Error(`runtime dependency ${packageName} has no version`);
+    }
+    const identity = `${packageName}@${dependencyPackageJson.version}`;
+    const existingDir = resolvePackagedDependencyDir(destinationPackageDir, packageName, appRoot);
+    let destination = existingDir;
+    if (existingDir) {
+      const existingPackageJson = JSON.parse(
+        readFileSync(path.join(existingDir, "package.json"), "utf8"),
+      ) as RuntimeDependencyPackageJson;
+      if (existingPackageJson.name !== packageName || typeof existingPackageJson.version !== "string") {
+        throw new Error(`packaged dependency identity mismatch for ${packageName} at ${existingDir}`);
+      }
+      if (existingPackageJson.version !== dependencyPackageJson.version) {
+        destination = path.join(destinationPackageDir, "node_modules", ...packageName.split("/"));
+      }
+    } else {
+      destination = path.join(appRoot, "node_modules", ...packageName.split("/"));
+    }
+
+    const destinationExists = existsSync(destination);
+    if (destinationExists) {
+      const copiedPackageJson = JSON.parse(
+        readFileSync(path.join(destination, "package.json"), "utf8"),
+      ) as RuntimeDependencyPackageJson;
+      if (copiedPackageJson.name !== packageName || copiedPackageJson.version !== dependencyPackageJson.version) {
+        throw new Error(`packaged dependency version conflict for ${identity} at ${destination}`);
+      }
+    } else {
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyDir(dependencyDir, destination);
+    }
+
+    if (ancestors.has(identity)) {
+      const visibleDir = resolvePackagedDependencyDir(destinationPackageDir, packageName, appRoot);
+      if (!visibleDir || path.resolve(visibleDir) !== path.resolve(destination)) {
+        throw new Error(`recursive runtime dependency ${identity} is not resolvable from ${destinationPackageDir}`);
+      }
+      continue;
+    }
+    const expansionKey = `${path.resolve(dependencyDir)}\0${path.resolve(destination)}`;
+    if (expanded.has(expansionKey)) continue;
+    expanded.add(expansionKey);
+    await copyRuntimeDependencyClosure(
+      dependencyDir,
+      destination,
+      appRoot,
+      target,
+      expanded,
+      new Set([...ancestors, identity]),
+    );
+  }
+}
+
+async function copyPreviewRuntimeDependencies(appRoot: string, target: NativeAppTarget): Promise<void> {
+  const expanded = new Set<string>();
+  for (const rel of PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS) {
+    await copyRuntimeDependencyClosure(
+      path.join(root, rel),
+      path.join(appRoot, rel),
+      appRoot,
+      target,
+      expanded,
+    );
+  }
 }
 
 async function copyGateway(appRoot: string): Promise<void> {
@@ -405,6 +595,7 @@ export async function copyAppLayout(
   for (const nativePackage of keyringNativePackages(target)) {
     await copyLockedNapiPackage(nativePackage, keyringVersion, appRoot, stagingRoot);
   }
+  await copyPreviewRuntimeDependencies(appRoot, target);
 }
 
 async function installWindowsBrowserRuntime(appRoot: string): Promise<InstalledHeadlessShell> {

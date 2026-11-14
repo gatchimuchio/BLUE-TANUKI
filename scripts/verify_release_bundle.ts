@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+  PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
 } from "../packages/protocol/src/product_scope_contract.js";
 
 interface PackageJson {
@@ -22,6 +23,7 @@ interface ReleaseManifest {
   };
   sha256_file?: string;
   core_release_paths?: string[];
+  preview_runtime_paths?: string[];
   required_paths?: string[];
   installer_paths?: string[];
   windows_installer_artifacts?: string[];
@@ -106,6 +108,18 @@ const REQUIRED_ARCHIVE_PATHS = [
   "apps/gateway/dist/main.js",
   "packages/channel-webchat/dist/webchat.js",
   "packages/channel-telegram/dist/telegram.js",
+  "packages/channel-slack/package.json",
+  "packages/channel-slack/blue-tanuki.plugin.json",
+  "packages/channel-slack/dist/index.js",
+  "packages/channel-discord/package.json",
+  "packages/channel-discord/blue-tanuki.plugin.json",
+  "packages/channel-discord/dist/index.js",
+  "packages/channel-teams/package.json",
+  "packages/channel-teams/blue-tanuki.plugin.json",
+  "packages/channel-teams/dist/index.js",
+  "packages/channel-line/package.json",
+  "packages/channel-line/blue-tanuki.plugin.json",
+  "packages/channel-line/dist/index.js",
   "packages/operator-writing/dist/index.js",
   "packages/operator-daily/dist/index.js",
   "packages/operator-developer/dist/index.js",
@@ -282,6 +296,11 @@ function assertManifest(
   for (const required of PRODUCT_SCOPE_CORE_RELEASE_PATHS) {
     if (!manifest.core_release_paths?.includes(required)) {
       throw new Error(`manifest core_release_paths missing ${required}`);
+    }
+  }
+  for (const previewPath of PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS) {
+    if (!manifest.preview_runtime_paths?.includes(previewPath)) {
+      throw new Error(`manifest preview_runtime_paths missing ${previewPath}`);
     }
   }
   for (const artifact of windowsInstallerArtifactPaths(manifest.version ?? readPackage().version)) {

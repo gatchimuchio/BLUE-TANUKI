@@ -5,6 +5,7 @@ import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import {
   PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+  PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
   PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS,
 } from "../packages/protocol/src/product_scope_contract.js";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
@@ -61,6 +62,7 @@ const INCLUDED_PATHS = [
   "tooling",
   "tsconfig.base.json",
   ...CORE_RELEASE_PATHS,
+  ...PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
 ] as const;
 
 const REQUIRED_PATHS = [
@@ -106,6 +108,18 @@ const REQUIRED_PATHS = [
   "assets/aotanu/spritesheets/aotanu_error_2x2.png",
   "packages/channel-webchat/dist/webchat.js",
   "packages/channel-telegram/dist/telegram.js",
+  "packages/channel-slack/package.json",
+  "packages/channel-slack/blue-tanuki.plugin.json",
+  "packages/channel-slack/dist/index.js",
+  "packages/channel-discord/package.json",
+  "packages/channel-discord/blue-tanuki.plugin.json",
+  "packages/channel-discord/dist/index.js",
+  "packages/channel-teams/package.json",
+  "packages/channel-teams/blue-tanuki.plugin.json",
+  "packages/channel-teams/dist/index.js",
+  "packages/channel-line/package.json",
+  "packages/channel-line/blue-tanuki.plugin.json",
+  "packages/channel-line/dist/index.js",
   "packages/operator-writing/dist/index.js",
   "packages/operator-daily/dist/index.js",
   "packages/operator-developer/dist/index.js",
@@ -220,6 +234,7 @@ interface ReleaseManifest {
   sha256_file: string;
   included_paths: readonly string[];
   core_release_paths: readonly string[];
+  preview_runtime_paths: readonly string[];
   required_paths: readonly string[];
   installer_paths: readonly string[];
   windows_installer_artifacts: readonly string[];
@@ -616,6 +631,7 @@ async function writeIntegrityFiles(
     sha256_file: shaFileName,
     included_paths: INCLUDED_PATHS,
     core_release_paths: CORE_RELEASE_PATHS,
+    preview_runtime_paths: PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
     required_paths: REQUIRED_PATHS,
     installer_paths: INSTALLER_PATHS,
     windows_installer_artifacts: windowsInstallerArtifactPaths(version),
