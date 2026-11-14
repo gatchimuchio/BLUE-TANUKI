@@ -111,6 +111,7 @@ const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
 const MAX_OWNER_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
 const MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4 + 256 * 1024;
 const CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS = 30_000;
+const WEBSOCKET_SEND_CALLBACK_TIMEOUT_MS = 5_000;
 const CONTROL_CENTER_LAUNCH_HANDOFF_CAP = 32;
 
 interface ControlCenterLaunchHandoff {
@@ -875,16 +876,45 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       ...(meta.request_id ? { request_id: meta.request_id } : {}),
       content: payload.content,
     });
-    let any = false;
-    for (const ws of set) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(frame);
-        any = true;
-      }
+    const openSockets = [...set].filter((ws) => ws.readyState === WebSocket.OPEN);
+    if (openSockets.length === 0) {
+      return { delivered: false, delivery_status: "not_delivered", error: "no_open_socket",
+        error_kind: "recoverable", error_code: "no_open_socket",
+        next_action: "WebChatを再接続してから、この依頼の状態を確認してください。" };
     }
-    return any
-      ? { delivered: true, external_id: `webchat-${meta.command_id}` }
-      : { delivered: false, error: "no_open_socket" };
+
+    const outcomes = await Promise.all(openSockets.map((ws) => new Promise<"delivered" | "unknown" | "not_sent">((resolve) => {
+      let settled = false;
+      const finish = (outcome: "delivered" | "unknown" | "not_sent"): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        context?.signal?.removeEventListener("abort", onAbort);
+        resolve(outcome);
+      };
+      const onAbort = (): void => finish("unknown");
+      const timer = setTimeout(() => finish("unknown"), WEBSOCKET_SEND_CALLBACK_TIMEOUT_MS);
+      context?.signal?.addEventListener("abort", onAbort, { once: true });
+      if (context?.signal?.aborted) {
+        finish("not_sent");
+        return;
+      }
+      try {
+        ws.send(frame, (error?: Error) => finish(error ? "unknown" : "delivered"));
+      } catch {
+        finish("unknown");
+      }
+    })));
+    if (outcomes.includes("delivered")) {
+      return { delivered: true, delivery_status: "delivered", external_id: `webchat-${meta.command_id}` };
+    }
+    if (outcomes.includes("unknown")) {
+      return { delivered: false, delivery_status: "unknown", error: "webchat_delivery_outcome_unknown",
+        error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+        next_action: "WebChatの表示と依頼状態を確認し、結果が不明な間は再送しないでください。" };
+    }
+    return { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+      error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
   }
 
   private notifyOwnerTaskProcessingFailure(target: string, requestId: string): void {
