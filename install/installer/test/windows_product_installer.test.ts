@@ -809,11 +809,14 @@ describe("Windows product installer package", () => {
     expect(smoke).toContain("installed smoke active Gateway preflight");
     expect(smoke).toContain("active Gateway process prevents isolated Setup/Launcher/Uninstall smoke");
     expect(smoke).toContain('const isolatedProductEnv = {');
+    expect(smoke).toContain('const smokePort = directIExpressLaunch ? 8787 : await findAvailableLoopbackPort();');
+    expect(smoke).toContain('default direct IExpress smoke endpoint is already occupied');
     expect(smoke).toContain('path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0")');
     expect(smoke).toContain('"installer setup", 600_000, isolatedProductEnv');
     expect(smoke).toContain("Get-CimInstance Win32_Process");
     expect(smoke).toContain("blue-tanuki-stage-");
-    expect(smoke).toContain('const installRoot = path.join(work, "i");');
+    expect(smoke).toContain('const installRoot = directIExpressLaunch');
+    expect(smoke).toContain(': path.join(work, "i");');
     expect(smoke).toContain("preserving temporary install tree because product cleanup is unconfirmed");
     expect(smoke).toContain('run("powershell.exe"');
     expect(smoke).toContain("Expand-Archive -LiteralPath");

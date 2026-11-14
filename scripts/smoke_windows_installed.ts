@@ -985,7 +985,10 @@ async function main(): Promise<void> {
   const retentionUninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-retain-${randomUUID()}.status`);
   const uninstallStatusFile = path.join(isolatedTemp, `BlueTanukiUninstall-${randomUUID()}.status`);
   const windowsRoot = process.env.SystemRoot ?? "C:\\Windows";
-  const smokePort = await findAvailableLoopbackPort();
+  // The no-argument IExpress entrypoint runs Setup's normal --yes defaults,
+  // which intentionally use 127.0.0.1:8787. Other smoke modes can set a free
+  // ephemeral endpoint in their generated env file.
+  const smokePort = directIExpressLaunch ? 8787 : await findAvailableLoopbackPort();
   mkdirSync(isolatedAppData, { recursive: true });
   mkdirSync(isolatedLocalAppData, { recursive: true });
   mkdirSync(isolatedTemp, { recursive: true });
@@ -1020,6 +1023,9 @@ async function main(): Promise<void> {
   smoke: try {
     assertNoActiveGatewayProcesses("installed smoke active Gateway preflight");
     logStep("installed smoke active Gateway preflight passed");
+    if (directIExpressLaunch && await probeLoopbackTcp(smokePort)) {
+      throw new Error(`default direct IExpress smoke endpoint is already occupied: 127.0.0.1:${smokePort}`);
+    }
     assertSmokeRegistryAbsent(autostartRunName, "installed smoke registry preflight");
     logStep("installed smoke registry preflight passed");
 
