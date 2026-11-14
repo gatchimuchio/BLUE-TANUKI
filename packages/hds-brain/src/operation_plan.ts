@@ -6842,6 +6842,50 @@ export class OperationPlanLedger {
         });
         continue;
       }
+      if (b.operation === "mcp.call") {
+        if (b.status !== "verified" || step.operation !== "mcp.call" || !b.memory_commit || !b.memory_receipt ||
+            !resultMemoryEligible(b) || !verifyResultMemoryCommit(p, b) ||
+            !receiptForResultCommit(b.memory_receipt, b.memory_commit) ||
+            !this.resultMemoryReceiptConfirmed(b.command_id)) {
+          throw new Error("plan_reflection_observation_not_current");
+        }
+        const identity = resultMemoryIdentity(b);
+        const change = b.memory_commit.changes[0];
+        const record = this.resultMemory.readMemoryRecord(identity.record_id);
+        if (!change || change.operation !== "upsert" || !record?.exists ||
+            operationPlanDigest(record.value) !== operationPlanDigest(change.value)) {
+          throw new Error("plan_reflection_record_mismatch");
+        }
+        const results = p.results.filter((result) => result.plan_id === current.plan.plan_id &&
+          result.request_id === current.plan.request_id && result.step_id === step.step_id &&
+          result.operation === "mcp.call" && result.status === "succeeded");
+        const result = results[0];
+        const observation = record.value as unknown as Record<string, unknown>;
+        if (results.length !== 1 || !result || result.observed_at_ms !== b.result_observed_at_ms ||
+            observation.schema_version !== "mcp-call-outcome-observation.v1" ||
+            observation.record_type !== "mcp_call_outcome_observation" ||
+            observation.plan_revision_digest !== current.digest || observation.step_digest !== b.step_digest ||
+            observation.result_digest !== b.result_digest || observation.delivery_digest !== b.delivery_digest ||
+            observation.effect_observation !== "reported_success" || observation.source_is_untrusted !== true ||
+            observation.adoption_status !== "observation_only" || observation.used_as_world_truth !== false ||
+            observation.used_for_authority !== false || observation.may_execute !== false ||
+            !["connection_digest", "catalog_digest", "tool_name_digest", "input_schema_sha256", "arguments_sha256",
+              "tool_result_digest"].every((key) => typeof observation[key] === "string" &&
+                /^[a-f0-9]{64}$/.test(observation[key] as string))) {
+          throw new Error("plan_reflection_summary_not_available");
+        }
+        citations.push({ evidence_type: "mcp_call", record_id: identity.record_id,
+          record_digest: operationPlanDigest(record.value), memory_revision: b.memory_receipt.revision,
+          receipt_digest: b.memory_receipt.receipt_digest, source_revision_digest: b.revision_digest,
+          step_digest: b.step_digest, observed_at_ms: result.observed_at_ms, operation: "mcp.call",
+          observation: { effect_observation: "reported_success", connection_digest: observation.connection_digest as string,
+            catalog_digest: observation.catalog_digest as string, tool_name_digest: observation.tool_name_digest as string,
+            input_schema_sha256: observation.input_schema_sha256 as string,
+            arguments_sha256: observation.arguments_sha256 as string, tool_result_digest: observation.tool_result_digest as string,
+            source_is_untrusted: true }, adoption_status: "observation_only", counterevidence_status: "not_assessed",
+          used_as_world_truth: false, used_for_authority: false, may_execute: false });
+        continue;
+      }
       if (b.operation !== "file.search") throw new Error("plan_reflection_operation_not_supported");
       if (b.status !== "verified" || !b.memory_commit || !b.memory_receipt || !verifyResultMemoryCommit(p, b) ||
           !receiptForResultCommit(b.memory_receipt, b.memory_commit)) throw new Error("plan_reflection_observation_not_current");

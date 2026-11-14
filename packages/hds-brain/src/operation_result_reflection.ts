@@ -19,6 +19,10 @@ export type ResultObservationCitation = ResultObservationCitationBase & (
       observation: { source: "local_file_state"; inspection_status: "matched" | "not_found" | "mismatch";
         match_count: number; target_identity_digest: string; observed_payload_digest?: string;
         file_state_digest?: string; action_outcome: "outcome_unknown" } }
+  | { evidence_type: "mcp_call"; operation: "mcp.call";
+      observation: { effect_observation: "reported_success"; connection_digest: string; catalog_digest: string;
+        tool_name_digest: string; input_schema_sha256: string; arguments_sha256: string; tool_result_digest: string;
+        source_is_untrusted: true } }
 );
 export interface ResultObservationProjection {
   schema_version: "operation-result-current-projection.v2";
