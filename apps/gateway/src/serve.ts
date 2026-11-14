@@ -4148,7 +4148,7 @@ async function serveWithOwnerLease(
         if (binding.status !== "matched") return projectOwnerTaskCancellationStatus(operationPlans, request_id, []);
         try {
           const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
-            binding.command_ids, undefined, "owner_task",
+            binding.command_ids, undefined, ["owner_task", "resume"],
           );
           return projectOwnerTaskCancellationStatus(operationPlans, request_id, observations);
         } catch {

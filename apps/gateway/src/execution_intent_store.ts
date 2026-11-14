@@ -285,23 +285,25 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   taskExecutionCancellationEvidenceForCommands(
     command_ids: readonly string[],
     limit = MAX_PENDING_TASK_CANCELLATION_EVENTS,
-    token_kind: "d4_runtime" | "owner_task" = "d4_runtime",
+    token_kinds: readonly TaskExecutionCancellationEvidence["token_kind"][] = ["d4_runtime"],
   ):
     TaskExecutionCancellationEvidence[] {
     if (!Array.isArray(command_ids) || command_ids.length > 256 ||
         command_ids.some((id) => typeof id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(id)) ||
         new Set(command_ids).size !== command_ids.length || !Number.isSafeInteger(limit) || limit < 1 ||
-        limit > MAX_PENDING_TASK_CANCELLATION_EVENTS ||
-        (token_kind !== "d4_runtime" && token_kind !== "owner_task")) {
+        limit > MAX_PENDING_TASK_CANCELLATION_EVENTS || !Array.isArray(token_kinds) || token_kinds.length < 1 ||
+        token_kinds.length > 3 || new Set(token_kinds).size !== token_kinds.length ||
+        token_kinds.some((kind) => kind !== "resume" && kind !== "d4_runtime" && kind !== "owner_task")) {
       throw new Error("execution_task_cancellation_query_invalid");
     }
     let observations: TaskExecutionCancellationEvidence[] = [];
     this.transaction(() => {
       const wanted = new Set(command_ids);
+      const wantedTokenKinds = new Set(token_kinds);
       const state = collectTaskExecutionCancellationEvidence(this.db);
       const matching = [...state.events.values()]
         .map((record) => record.event)
-        .filter((event) => event.token_kind === token_kind && wanted.has(event.command_id));
+        .filter((event) => wantedTokenKinds.has(event.token_kind) && wanted.has(event.command_id));
       if (matching.length > limit) throw new Error("execution_task_cancellation_query_limit_exceeded");
       observations = matching.map((event) => ({ ...event }));
     });

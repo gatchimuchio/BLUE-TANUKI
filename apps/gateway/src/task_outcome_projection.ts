@@ -191,7 +191,7 @@ export function projectD4RuntimeCancellationStatus(
   observations: readonly TaskExecutionCancellationEvidence[],
 ): WebChatD4RuntimeCancellationStatus {
   return projectTaskCancellationStatus(
-    operationPlans, requestId, observations, D4_RUNTIME_OWNER_DIGEST, "d4_runtime",
+    operationPlans, requestId, observations, D4_RUNTIME_OWNER_DIGEST, ["d4_runtime"],
   );
 }
 
@@ -201,7 +201,7 @@ export function projectOwnerTaskCancellationStatus(
   observations: readonly TaskExecutionCancellationEvidence[],
 ): WebChatD4RuntimeCancellationStatus {
   return projectTaskCancellationStatus(
-    operationPlans, requestId, observations, WEBCHAT_OWNER_TASK_DIGEST, "owner_task",
+    operationPlans, requestId, observations, WEBCHAT_OWNER_TASK_DIGEST, ["owner_task", "resume"],
   );
 }
 
@@ -210,14 +210,14 @@ function projectTaskCancellationStatus(
   requestId: string,
   observations: readonly TaskExecutionCancellationEvidence[],
   ownerIdentityDigest: string,
-  tokenKind: TaskExecutionCancellationEvidence["token_kind"],
+  tokenKinds: readonly TaskExecutionCancellationEvidence["token_kind"][],
 ): WebChatD4RuntimeCancellationStatus {
   const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
   if (binding.status === "not_found") return unknownCancellationStatus("projection_unavailable");
   if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
   if (binding.status === "invalid") return unknownCancellationStatus("projection_invalid");
   const commandIds = new Set(binding.command_ids);
-  const matching = observations.filter((event) => commandIds.has(event.command_id) && event.token_kind === tokenKind);
+  const matching = observations.filter((event) => commandIds.has(event.command_id) && tokenKinds.includes(event.token_kind));
   if (matching.length === 0) return unknownCancellationStatus("no_recorded_evidence");
 
   const byCommand = new Map<string, TaskExecutionCancellationEvidence[]>();
