@@ -3398,7 +3398,7 @@ async function serveWithOwnerLease(
       (command.payload.tool_name === "google.drive.write" &&
         ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(command.payload.arguments.operation))) ||
       (command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "code.push", "release.draft.create"].includes(String(command.payload.arguments.operation)))
+        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(command.payload.arguments.operation)))
     );
     return isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
       isBrowserLinkNavigationReviewCommand(command) || isGmailWriteContentReviewCommand(command) ||
@@ -5491,7 +5491,7 @@ async function serveWithOwnerLease(
       }
     }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)) &&
+        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation)) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       try {
@@ -5504,7 +5504,8 @@ async function serveWithOwnerLease(
             ? "github_issue_comment_create" : pending.command.payload.arguments.operation === "pr.comment.create"
               ? "github_pull_request_comment_create" : pending.command.payload.arguments.operation === "pr.create"
               ? "github_pull_request_create" : pending.command.payload.arguments.operation === "pr.merge"
-                ? "github_pull_request_merge" : pending.command.payload.arguments.operation === "code.push"
+                ? "github_pull_request_merge" : pending.command.payload.arguments.operation === "pr.review.submit"
+                  ? "github_pull_request_review_submit" : pending.command.payload.arguments.operation === "code.push"
                 ? "github_code_push" : pending.command.payload.arguments.operation === "release.draft.create"
                   ? "github_release_draft_create" : "github_issue_create";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== expectedKind ||
@@ -5770,7 +5771,7 @@ async function serveWithOwnerLease(
       }
     }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "github.write" &&
-        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation))) {
+        ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(pending.command.payload.arguments.operation))) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
       if (!content_review_digest || !pending.content_review_digest ||
@@ -5787,7 +5788,8 @@ async function serveWithOwnerLease(
             ? "github_issue_comment_create" : pending.command.payload.arguments.operation === "pr.comment.create"
               ? "github_pull_request_comment_create" : pending.command.payload.arguments.operation === "pr.create"
               ? "github_pull_request_create" : pending.command.payload.arguments.operation === "pr.merge"
-                ? "github_pull_request_merge" : pending.command.payload.arguments.operation === "code.push"
+                ? "github_pull_request_merge" : pending.command.payload.arguments.operation === "pr.review.submit"
+                  ? "github_pull_request_review_submit" : pending.command.payload.arguments.operation === "code.push"
                   ? "github_code_push" : pending.command.payload.arguments.operation === "release.draft.create"
                     ? "github_release_draft_create" : "github_issue_create";
         return current && "kind" in current && current.kind === expectedKind &&
@@ -5982,7 +5984,7 @@ async function serveWithOwnerLease(
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
             p.command.payload.tool_name === "memory.personalization.stop" ||
             (p.command.payload.tool_name === "github.write" &&
-              ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "code.push", "release.draft.create"].includes(String(p.command.payload.arguments.operation))) ||
+              ["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&
               ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.drive.write" &&

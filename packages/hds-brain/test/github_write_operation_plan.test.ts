@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { githubCodePushRequestPayloadDigest, githubReleaseDraftCreateRequestPayloadDigest, type OperationStep } from "@blue-tanuki/protocol";
+import { githubCodePushRequestPayloadDigest, githubPullRequestReviewSubmitRequestPayloadDigest,
+  githubReleaseDraftCreateRequestPayloadDigest, type OperationStep } from "@blue-tanuki/protocol";
 import { operationPlanResultValidationMatches } from "../src/operation_plan.js";
 
 describe("github.write code.push Operation Plan result contract", () => {
@@ -114,6 +115,63 @@ describe("github.write release.draft.create Operation Plan result contract", () 
     expect(matches({ ...result, result: { ...result.result, tag_name: "v2.0" } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, target_commit_sha: "f".repeat(40) } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, draft: false } })).toBe(false);
+  });
+});
+
+describe("github.write pr.review.submit Operation Plan result contract", () => {
+  it("accepts only the verified review event for the exact approved PR head and body", () => {
+    const parameters = {
+      operation: "pr.review.submit",
+      owner: "gatchimuchio",
+      repo: "blue-tanuki",
+      number: 7,
+      expected_head_sha: "a".repeat(40),
+      event: "REQUEST_CHANGES",
+      body: "Please address the exact requested changes.",
+    };
+    const target = { kind: "external_service" as const, id: "github" };
+    const step = { operation: "github.write", adapter: "external_api", target, parameters } as OperationStep;
+    const validation = { method: "github_write_result_matches", target,
+      expected: { schema_version: "blue-tanuki.github-write-result-validation.v1", operation: "pr.review.submit" } };
+    const binding = { command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+      executor_command_digest: "e".repeat(64) };
+    const bodyDigest = createHashHex(parameters.body);
+    const requestPayloadDigest = githubPullRequestReviewSubmitRequestPayloadDigest({ owner: parameters.owner,
+      repo: parameters.repo, pull_request_number: parameters.number, expected_head_sha: parameters.expected_head_sha,
+      event: parameters.event, body: parameters.body });
+    const result = {
+      schema_version: "blue-tanuki.github-write-result.v1",
+      operation: "pr.review.submit",
+      api_host: "api.github.com",
+      repo: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      target_identity_digest: "1".repeat(64),
+      request_payload_digest: requestPayloadDigest,
+      command_digest: binding.command_digest,
+      operation_plan_binding_digest: binding.operation_plan_binding_digest,
+      method: "POST",
+      path: "/repos/gatchimuchio/blue-tanuki/pulls/7/reviews",
+      status: 200,
+      mutation_status: "provider_accepted",
+      content_type: "application/json",
+      truncated: false,
+      rate_limit_remaining: "59",
+      github_request_id: "PR-REVIEW-REQ",
+      result_digest: "3".repeat(64),
+      result: { id: 792, number: 7, commit_id: parameters.expected_head_sha,
+        state: "CHANGES_REQUESTED", submitted_at: "2026-11-14T12:00:00Z", body_digest: bodyDigest },
+      provider_data_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const matches = (output: unknown) => operationPlanResultValidationMatches(
+      validation as Parameters<typeof operationPlanResultValidationMatches>[0], step, output,
+      binding as Parameters<typeof operationPlanResultValidationMatches>[3]);
+
+    expect(matches(result)).toBe(true);
+    expect(matches({ ...result, result: { ...result.result, commit_id: "f".repeat(40) } })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, state: "APPROVED" } })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, body_digest: "4".repeat(64) } })).toBe(false);
   });
 });
 

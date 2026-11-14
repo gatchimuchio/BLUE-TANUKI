@@ -126,6 +126,22 @@ export const GitHubPullRequestMergeTargetVersionObservationSchema = GitHubWriteT
   merge_method: z.enum(["merge", "squash", "rebase"]),
 }).strict();
 
+/** Plan-bound evidence for submitting one review to an exact pull request head. */
+export const GitHubPullRequestReviewSubmitTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("pr.review.submit"),
+  pull_request_id: z.number().int().positive().safe(),
+  pull_request_number: z.number().int().positive().max(1_000_000),
+  pull_request_state: z.literal("open"),
+  pull_request_locked: z.literal(false),
+  pull_request_draft: z.literal(false),
+  pull_request_updated_at: z.string().datetime({ offset: true }),
+  pull_request_title: z.string().min(1).max(65_536),
+  pull_request_head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  pull_request_base_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  review_event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
+  review_body_digest: DigestSchema.optional(),
+}).strict();
+
 /** One reviewed, create-only file commit to an existing non-default branch. */
 export const GitHubCodePushTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("code.push"),
@@ -154,6 +170,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
   GitHubPullRequestMergeTargetVersionObservationSchema,
+  GitHubPullRequestReviewSubmitTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
   GitHubReleaseDraftCreateTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
@@ -202,6 +219,12 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
     }
     return;
   }
+  if (value.operation === "pr.review.submit") {
+    if (value.review_event !== "APPROVE" && !value.review_body_digest) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "request-changes and comment reviews require a body digest" });
+    }
+    return;
+  }
   if (value.operation !== "pr.comment.create") return;
   const inlineFields = [value.path, value.start_line, value.start_side, value.line, value.side, value.pull_request_head_sha,
     value.pull_request_base_sha, value.pull_request_diff_digest];
@@ -229,6 +252,7 @@ export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof Gi
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestMergeTargetVersionObservation = z.infer<typeof GitHubPullRequestMergeTargetVersionObservationSchema>;
+export type GitHubPullRequestReviewSubmitTargetVersionObservation = z.infer<typeof GitHubPullRequestReviewSubmitTargetVersionObservationSchema>;
 export type GitHubCodePushTargetVersionObservation = z.infer<typeof GitHubCodePushTargetVersionObservationSchema>;
 export type GitHubReleaseDraftCreateTargetVersionObservation = z.infer<typeof GitHubReleaseDraftCreateTargetVersionObservationSchema>;
 
@@ -573,6 +597,45 @@ export function githubPullRequestMergeRequestPayloadDigest(input: {
     input.pull_request_number,
     input.expected_head_sha,
     input.merge_method,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestReviewSubmitTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  pull_request_id: number;
+  pull_request_number: number;
+  head_sha: string;
+  base_sha: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-review-submit-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.pull_request_id,
+    input.pull_request_number,
+    input.head_sha,
+    input.base_sha,
+  ]), "utf8").digest("hex");
+}
+
+export function githubPullRequestReviewSubmitRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  pull_request_number: number;
+  expected_head_sha: string;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body?: string;
+}): string {
+  const bodyDigest = input.body === undefined ? null : createHash("sha256").update(input.body, "utf8").digest("hex");
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-pull-request-review-submit-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.pull_request_number,
+    input.expected_head_sha,
+    input.event,
+    bodyDigest,
   ]), "utf8").digest("hex");
 }
 

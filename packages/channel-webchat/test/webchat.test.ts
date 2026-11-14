@@ -525,6 +525,9 @@ describe("WebChatChannel — Control Center shell", () => {
       .filter((code) => code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d || code === 0x7f);
     expect(rawControlCharacters).toEqual([]);
     expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.kind === "github_pull_request_review_submit"');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.expected_head_sha !== review.pull_request_head_sha');
+    expect(CONTROL_CENTER_SCRIPT).toContain('heading.textContent = "GitHub pull request reviewの投稿（公開・通知作用）"');
     expect(CONTROL_CENTER_SCRIPT).toContain('review.kind === "browser_form_get"');
     expect(CONTROL_CENTER_SCRIPT).toContain('review.action === "download_text_attachment"');
     expect(CONTROL_CENTER_SCRIPT).toContain('review.download_mode.saved_locally === false');

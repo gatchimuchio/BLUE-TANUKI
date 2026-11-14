@@ -71,6 +71,8 @@ import {
   githubPullRequestCreateRequestPayloadDigest,
   githubPullRequestMergeRequestPayloadDigest,
   githubPullRequestMergeTargetIdentityDigest,
+  githubPullRequestReviewSubmitRequestPayloadDigest,
+  githubPullRequestReviewSubmitTargetIdentityDigest,
   githubCodePushTargetIdentityDigest,
   githubCodePushRequestPayloadDigest,
   githubReleaseDraftCreateTargetIdentityDigest,
@@ -3958,7 +3960,7 @@ ${planControl.question}`,
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
           (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.comment.create" &&
-            operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.comment.create" && operation !== "code.push" &&
+            operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" && operation !== "pr.comment.create" && operation !== "code.push" &&
             operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
       }
@@ -4159,6 +4161,30 @@ ${planControl.question}`,
           head_repository_id: observation.head_repository_id, head_canonical_full_name: observation.head_canonical_full_name,
           pull_request_number: observation.pull_request_number, head_ref: observation.head_ref,
           head_sha: observation.head_sha, base_ref: observation.base_ref, base_sha: observation.base_sha });
+      } else if (operation === "pr.review.submit") {
+        const pullRequestNumber = positiveNumber("number");
+        const expectedHeadSha = optionalText("expected_head_sha");
+        const event = optionalText("event");
+        const body = optionalText("body");
+        if (!expectedHeadSha || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+            (event !== "APPROVE" && event !== "REQUEST_CHANGES" && event !== "COMMENT") ||
+            (event !== "APPROVE" && !body) || (body !== undefined && (body.length > 65_536 ||
+              Buffer.byteLength(body, "utf8") > 65_536 || Buffer.from(body, "utf8").toString("utf8") !== body ||
+              body.includes("\u0000"))) ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "number", "expected_head_sha", "event", "body", "max_bytes"].includes(key)) ||
+            observation.operation !== "pr.review.submit" || observation.pull_request_number !== pullRequestNumber ||
+            observation.pull_request_state !== "open" || observation.pull_request_locked || observation.pull_request_draft ||
+            observation.pull_request_head_sha !== expectedHeadSha || observation.review_event !== event ||
+            observation.review_body_digest !== (body === undefined ? undefined : createHash("sha256").update(body, "utf8").digest("hex"))) {
+          throw new Error("HDS github.write pr.review.submit parameters or observed pull request are invalid");
+        }
+        requestPayloadDigest = githubPullRequestReviewSubmitRequestPayloadDigest({ owner, repo,
+          pull_request_number: pullRequestNumber, expected_head_sha: expectedHeadSha,
+          event, ...(body === undefined ? {} : { body }) });
+        targetIdentityDigest = githubPullRequestReviewSubmitTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, pull_request_id: observation.pull_request_id,
+          pull_request_number: observation.pull_request_number, head_sha: observation.pull_request_head_sha,
+          base_sha: observation.pull_request_base_sha });
       } else {
         const title = optionalText("title");
         const body = optionalText("body");

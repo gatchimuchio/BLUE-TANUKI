@@ -31,6 +31,8 @@ import {
   inspectGitHubPullRequestCommentCreateContentReview,
   inspectGitHubPullRequestCreateTargetVersion,
   inspectGitHubPullRequestCreateContentReview,
+  inspectGitHubPullRequestReviewSubmitTargetVersion,
+  inspectGitHubPullRequestReviewSubmitContentReview,
   inspectGitHubCodePushTargetVersion,
   inspectGitHubCodePushContentReview,
   inspectGitHubReleaseDraftCreateTargetVersion,
@@ -2060,6 +2062,100 @@ describe("built-in tools", () => {
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
   });
 
+  it("github.write pr.review.submit binds the reviewed head, event, and body and verifies the returned review", async () => {
+    const args = { operation: "pr.review.submit", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, expected_head_sha: GITHUB_PR_HEAD_SHA, event: "COMMENT", body: "Reviewed exact head" };
+    const seen: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    let reads = 0;
+    const options = await reviewedGitHubPullRequestReviewSubmit(args,
+      fakeGitHubPullRequestReviewSubmit(args, async (target) => {
+        seen.push({ method: target.method, path: target.path, body: target.body });
+        return githubWriteJson({ id: 792, state: "COMMENTED", commit_id: GITHUB_PR_HEAD_SHA,
+          submitted_at: "2026-11-14T12:00:00Z", body: args.body,
+          pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }, 200);
+      }, async (target) => {
+        reads += 1;
+        if (target.path.endsWith("/pulls/7/reviews/792")) {
+          return githubReadJson({ id: 792, state: "COMMENTED", commit_id: GITHUB_PR_HEAD_SHA,
+            submitted_at: "2026-11-14T12:00:00Z", body: args.body,
+            pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" });
+        }
+        return githubPullRequestReviewSubmitRead(target.path);
+      }));
+    const review = await inspectGitHubPullRequestReviewSubmitContentReview(args, options);
+    expect(review).toMatchObject({ kind: "github_pull_request_review_submit",
+      operation: "github.write.pr.review.submit", expected_head_sha: GITHUB_PR_HEAD_SHA,
+      review_event: "COMMENT", body: args.body, notification_effect: "github_api_may_trigger_notifications",
+      publication_effect: "visible_to_repository_audience", used_for_authority: false, may_execute: false });
+
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(seen).toEqual([{ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls/7/reviews",
+      body: { commit_id: GITHUB_PR_HEAD_SHA, event: "COMMENT", body: args.body } }]);
+    expect(reads).toBeGreaterThanOrEqual(5);
+    expect(result).toMatchObject({ operation: "pr.review.submit", method: "POST", status: 200,
+      mutation_status: "provider_accepted", result: { id: 792, number: 7, commit_id: GITHUB_PR_HEAD_SHA,
+        state: "COMMENTED", submitted_at: "2026-11-14T12:00:00Z" },
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(result)).not.toContain(args.body);
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write pr.review.submit submits a bodyless approval only to the explicit head", async () => {
+    const args = { operation: "pr.review.submit", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, expected_head_sha: GITHUB_PR_HEAD_SHA, event: "APPROVE" };
+    let sent: { method: string; path: string; body: Record<string, unknown> } | undefined;
+    const options = await reviewedGitHubPullRequestReviewSubmit(args, fakeGitHubPullRequestReviewSubmit(args,
+      async (target) => {
+        sent = { method: target.method, path: target.path, body: target.body };
+        return githubWriteJson({ id: 792, state: "APPROVED", commit_id: GITHUB_PR_HEAD_SHA,
+          submitted_at: "2026-11-14T12:00:00Z", body: "",
+          pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" });
+      }));
+    const result = await invokeGitHubWrite(args, options) as Record<string, unknown>;
+    expect(sent).toEqual({ method: "POST", path: "/repos/gatchimuchio/blue-tanuki/pulls/7/reviews",
+      body: { commit_id: GITHUB_PR_HEAD_SHA, event: "APPROVE" } });
+    expect(result).toMatchObject({ mutation_status: "provider_accepted",
+      result: { id: 792, commit_id: GITHUB_PR_HEAD_SHA, state: "APPROVED" } });
+    expect((result.result as Record<string, unknown>).body_digest).toBeUndefined();
+  });
+
+  it("github.write pr.review.submit refuses a changed reviewed head before POST", async () => {
+    const args = { operation: "pr.review.submit", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, expected_head_sha: GITHUB_PR_HEAD_SHA, event: "APPROVE" };
+    let pullReads = 0;
+    let writes = 0;
+    const options = await reviewedGitHubPullRequestReviewSubmit(args, fakeGitHubPullRequestReviewSubmit(args,
+      async () => {
+        writes += 1;
+        throw new Error("stale head must not receive a review");
+      }, async (target) => {
+        if (target.path.endsWith("/pulls/7")) {
+          pullReads += 1;
+          return githubReadJson(githubPullRequestReviewSubmitPull(pullReads > 1 ? "f".repeat(40) : GITHUB_PR_HEAD_SHA));
+        }
+        return githubPullRequestReviewSubmitRead(target.path);
+      }));
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/head SHA changed.*outcome=stale/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write pr.review.submit never retries when exact review readback is unavailable", async () => {
+    const args = { operation: "pr.review.submit", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, expected_head_sha: GITHUB_PR_HEAD_SHA, event: "APPROVE" };
+    let writes = 0;
+    const options = await reviewedGitHubPullRequestReviewSubmit(args, fakeGitHubPullRequestReviewSubmit(args,
+      async () => {
+        writes += 1;
+        return githubWriteJson({ id: 793, state: "APPROVED", commit_id: GITHUB_PR_HEAD_SHA,
+          submitted_at: "2026-11-14T12:00:00Z", body: "",
+          pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" }, 200);
+      }, async (target) => target.path.endsWith("/reviews/793")
+        ? { status: 503, ok: false, content_type: "application/json", body: "{}", truncated: false }
+        : githubPullRequestReviewSubmitRead(target.path)));
+    await expect(invokeGitHubWrite(args, options)).rejects.toThrow(/readback could not confirm.*do not retry automatically/);
+    expect(writes).toBe(1);
+  });
+
   it("github.write pr.comment.create rejects an issue or locked PR before POST", async () => {
     let writes = 0;
     const args = { operation: "pr.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "comment" };
@@ -4022,6 +4118,52 @@ function fakeGitHubPullRequestCommentCreate(
   return fakeGitHubWrite(request, undefined, read_request);
 }
 
+function githubWriteJson(body: unknown, status = 200) {
+  return { status, ok: status >= 200 && status < 300, content_type: "application/json",
+    body: JSON.stringify(body), truncated: false, rate_limit_remaining: "60", request_id: "PR-REVIEW-REQ" };
+}
+
+function githubPullRequestReviewSubmitPull(headSha = GITHUB_PR_HEAD_SHA) {
+  return {
+    id: 456,
+    number: 7,
+    state: "open",
+    locked: false,
+    merged: false,
+    draft: false,
+    updated_at: "2026-11-14T12:00:00Z",
+    title: "Review target PR",
+    head: { sha: headSha },
+    base: { sha: GITHUB_PR_BASE_SHA, repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } },
+  };
+}
+
+function githubPullRequestReviewSubmitRead(targetPath: string) {
+  if (targetPath.endsWith("/pulls/7")) return githubReadJson(githubPullRequestReviewSubmitPull());
+  return githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+    owner: { login: "gatchimuchio" }, private: false });
+}
+
+function fakeGitHubPullRequestReviewSubmit(
+  args: Record<string, unknown>,
+  request: NonNullable<GitHubWriteOptions["request"]> = async (target) => {
+    const event = target.body.event;
+    const state = event === "APPROVE" ? "APPROVED" : event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED";
+    return githubWriteJson({ id: 792, state, commit_id: target.body.commit_id,
+      submitted_at: "2026-11-14T12:00:00Z", body: target.body.body ?? "",
+      pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" });
+  },
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.includes("/reviews/")
+    ? githubReadJson({ id: 792, state: args.event === "APPROVE" ? "APPROVED"
+      : args.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED",
+      commit_id: args.expected_head_sha, submitted_at: "2026-11-14T12:00:00Z",
+      body: typeof args.body === "string" ? args.body : "",
+      pull_request_url: "https://api.github.com/repos/gatchimuchio/blue-tanuki/pulls/7" })
+    : githubPullRequestReviewSubmitRead(target.path),
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
 const GITHUB_PR_HEAD_SHA = "a".repeat(40);
 const GITHUB_PR_BASE_SHA = "b".repeat(40);
 
@@ -4091,6 +4233,17 @@ async function reviewedGitHubPullRequestCommentCreate(args: Record<string, unkno
   const command_digest = "c".repeat(64);
   const operation_plan_binding_digest = "d".repeat(64);
   const target = await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
+}
+
+async function reviewedGitHubPullRequestReviewSubmit(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubPullRequestReviewSubmit(args)): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubPullRequestReviewSubmitTargetVersion(args, {
     ...options, command_digest, operation_plan_binding_digest,
   });
   return { ...options, command_digest, operation_plan_binding_digest,

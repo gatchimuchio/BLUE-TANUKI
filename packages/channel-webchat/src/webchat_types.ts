@@ -1155,6 +1155,39 @@ export interface WebChatGitHubPullRequestMergeContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubPullRequestReviewSubmitContentReview {
+  kind: "github_pull_request_review_submit";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.pr.review.submit";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  pull_request_id: number;
+  pull_request_number: number;
+  pull_request_state: "open";
+  pull_request_locked: false;
+  pull_request_draft: false;
+  pull_request_updated_at: string;
+  pull_request_title: string;
+  pull_request_head_sha: string;
+  pull_request_base_sha: string;
+  expected_head_sha: string;
+  review_event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body?: string;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "visible_to_repository_audience";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubCodePushContentReview {
   kind: "github_code_push";
   command_id: string;
@@ -1232,6 +1265,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGitHubPullRequestCommentCreateContentReview |
   WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
   WebChatGitHubPullRequestMergeContentReview |
+  WebChatGitHubPullRequestReviewSubmitContentReview |
   WebChatGitHubReleaseDraftCreateContentReview;
 
 export type WebChatApprovalContentReviewValidation =

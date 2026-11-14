@@ -10,6 +10,7 @@ import { ToolRegistry } from "../src/tools/registry.js";
 import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectGitHubIssueCommentCreateTargetVersion,
   inspectGitHubPullRequestCommentCreateContentReview, inspectGitHubPullRequestCommentCreateTargetVersion,
   inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion,
+  inspectGitHubPullRequestReviewSubmitContentReview, inspectGitHubPullRequestReviewSubmitTargetVersion,
   inspectGitHubCodePushContentReview, inspectGitHubCodePushTargetVersion } from "../src/tools/builtin.js";
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
@@ -74,6 +75,66 @@ describe("承認内容からExecutorへの固定", () => {
         issue_number: 7,
         issue_title: "対象Issue",
         body: "合成コメント",
+        used_for_authority: false,
+        may_execute: false,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("GitHub pr.review.submitのevent・body・head evidenceをExecutorで同じPlanへ結ぶ", async () => {
+    const headSha = "a".repeat(40);
+    const baseSha = "b".repeat(40);
+    const args = { operation: "pr.review.submit", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, expected_head_sha: headSha, event: "REQUEST_CHANGES", body: "合成レビュー本文" };
+    const source: ExecuteCommand = {
+      id: "synthetic-github-pr-review-submit",
+      type: "tool_call",
+      payload: { tool_name: "github.write", arguments: args },
+      constraints: { allowed_tools: ["github.write"], allowed_capabilities: ["github:pr.write", "github:code.write",
+        "network:github.com", "secrets:GITHUB_TOKEN"] },
+      upstream_decision: { frame_goal: "選択PRへ合成reviewを投稿する", model_abstraction: "fixture",
+        commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" },
+    };
+    const env = { GITHUB_TOKEN: "synthetic-token", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" };
+    const operationPlanBindingDigest = "f".repeat(64);
+    const commandDigest = operationPlanDigest(source);
+    const read_request = async (target: { path: string }) => {
+      const body = target.path.endsWith("/pulls/7")
+        ? { id: 456, number: 7, state: "open", locked: false, merged: false, draft: false,
+          updated_at: "2026-11-14T12:00:00Z", title: "対象PR", head: { sha: headSha },
+          base: { sha: baseSha, repo: { id: 123, full_name: "gatchimuchio/blue-tanuki" } } }
+        : { id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+          owner: { login: "gatchimuchio" }, private: false };
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify(body),
+        truncated: false, rate_limit_remaining: "60" };
+    };
+    const options = { env, command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request };
+    const target = await inspectGitHubPullRequestReviewSubmitTargetVersion(args, options);
+    const expectedReview = await inspectGitHubPullRequestReviewSubmitContentReview(args, options);
+    const targetSpy = vi.spyOn(githubWriteTool, "inspect_target_version").mockResolvedValue(target);
+    vi.spyOn(githubWriteTool, "inspect_content_review").mockResolvedValue(expectedReview);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const approval = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: approval, tools, llm: new StubBackend() });
+
+    try {
+      const review = await executor.inspectCommandContentReview(source, env, operationPlanBindingDigest);
+      expect(targetSpy).toHaveBeenCalledOnce();
+      expect(review).toMatchObject({
+        kind: "github_pull_request_review_submit",
+        operation: "github.write.pr.review.submit",
+        command_digest: commandDigest,
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        pull_request_number: 7,
+        pull_request_title: "対象PR",
+        expected_head_sha: headSha,
+        review_event: "REQUEST_CHANGES",
+        body: "合成レビュー本文",
+        notification_effect: "github_api_may_trigger_notifications",
+        publication_effect: "visible_to_repository_audience",
         used_for_authority: false,
         may_execute: false,
       });

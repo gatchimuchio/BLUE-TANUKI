@@ -38,6 +38,7 @@ import {
   githubPullRequestCommentCreateRequestPayloadDigest,
   githubPullRequestCreateRequestPayloadDigest,
   githubPullRequestMergeRequestPayloadDigest,
+  githubPullRequestReviewSubmitRequestPayloadDigest,
   githubCodePushRequestPayloadDigest,
   githubReleaseDraftCreateRequestPayloadDigest,
   normalizeGmailAddressList,
@@ -246,7 +247,7 @@ export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v6";
     readonly operation: "github.write";
-    readonly operation_name: "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.comment.create" | "code.push" | "release.draft.create";
+    readonly operation_name: "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create";
     readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
     readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
     readonly http_status: number | null;
@@ -1213,6 +1214,20 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     return githubPullRequestMergeRequestPayloadDigest({ owner, repo, pull_request_number: number,
       expected_head_sha: expectedHeadSha, merge_method: mergeMethod });
   }
+  if (operation === "pr.review.submit") {
+    const number = parameters.number;
+    const expectedHeadSha = parameters.expected_head_sha;
+    const event = parameters.event;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1 || number > 1_000_000 ||
+        typeof expectedHeadSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+        (event !== "APPROVE" && event !== "REQUEST_CHANGES" && event !== "COMMENT") ||
+        (body !== undefined && (body.length > 65_536 || Buffer.byteLength(body, "utf8") > 65_536 ||
+          Buffer.from(body, "utf8").toString("utf8") !== body || body.includes("\u0000"))) ||
+        ((event === "REQUEST_CHANGES" || event === "COMMENT") && !body) ||
+        !allowedKeys(["operation", "owner", "repo", "number", "expected_head_sha", "event", "body"])) return undefined;
+    return githubPullRequestReviewSubmitRequestPayloadDigest({ owner, repo, pull_request_number: number,
+      expected_head_sha: expectedHeadSha, event, ...(body === undefined ? {} : { body }) });
+  }
   if (operation === "code.push") {
     const branch = parameters.branch;
     const expectedHeadSha = parameters.expected_head_sha;
@@ -1289,6 +1304,8 @@ function githubWriteResultMatches(
           ? { method: "POST", path: `/repos/${owner}/${repo}/pulls`, status: 201 }
           : parameters.operation === "pr.merge" && typeof number === "number"
             ? { method: "PUT", path: `/repos/${owner}/${repo}/pulls/${number}/merge`, status: 200 }
+          : parameters.operation === "pr.review.submit" && typeof number === "number"
+            ? { method: "POST", path: `/repos/${owner}/${repo}/pulls/${number}/reviews`, status: 200 }
           : parameters.operation === "code.push"
             ? { method: "POST", path: "/graphql", status: 200 }
             : parameters.operation === "release.draft.create"
@@ -1365,6 +1382,21 @@ function githubWriteResultMatches(
       typeof result.base_ref === "string" && result.base_ref.length > 0 &&
       typeof result.merge_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.merge_commit_sha) &&
       result.merge_method === parameters.merge_method;
+  }
+  if (parameters.operation === "pr.review.submit") {
+    const event = parameters.event;
+    const expectedState = event === "APPROVE" ? "APPROVED"
+      : event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED";
+    const body = typeof parameters.body === "string" ? parameters.body : undefined;
+    const expectedBodyDigest = body === undefined ? undefined : createHash("sha256").update(body, "utf8").digest("hex");
+    const resultKeys = expectedBodyDigest
+      ? "body_digest,commit_id,id,number,state,submitted_at" : "commit_id,id,number,state,submitted_at";
+    return (event === "APPROVE" || event === "REQUEST_CHANGES" || event === "COMMENT") &&
+      Object.keys(result).sort().join(",") === resultKeys && Number.isSafeInteger(result.id) &&
+      (result.id as number) > 0 && result.number === parameters.number &&
+      result.commit_id === parameters.expected_head_sha && result.state === expectedState &&
+      typeof result.submitted_at === "string" && Number.isFinite(Date.parse(result.submitted_at)) &&
+      result.body_digest === expectedBodyDigest;
   }
   const expectedDraft = parameters.draft ?? false;
   const expectedHeadRepository = typeof parameters.head_repository === "string"
@@ -5416,7 +5448,7 @@ export class OperationPlanLedger {
         : binding.status === "provider_rejected" ? "provider_rejected" : null;
       if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
           !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
-          !["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.create", "pr.merge", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
+        !["issue.create", "issue.update", "issue.close", "issue.reopen", "issue.comment.create", "pr.create", "pr.merge", "pr.review.submit", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
           committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
           committedObservation.record_type !== "github_write_outcome_observation" ||
           committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
@@ -5460,7 +5492,7 @@ export class OperationPlanLedger {
         memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
         observed_at_ms: binding.result_observed_at_ms,
         operation: "github.write",
-        operation_name: operationName as "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.comment.create" | "code.push" | "release.draft.create",
+        operation_name: operationName as "issue.create" | "issue.update" | "issue.close" | "issue.reopen" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create",
         status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
         mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
         provider_result_digest: summary?.provider_result_digest ?? null,

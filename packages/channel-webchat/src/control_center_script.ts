@@ -7496,6 +7496,80 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub pull requestの対象・head/base SHA・merge方式を再確認";
           return;
         }
+        if (review.kind === "github_pull_request_review_submit") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "github.write.pr.review.submit" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              review.publication_effect !== "visible_to_repository_audience" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.pull_request_id) || review.pull_request_id <= 0 ||
+              !Number.isSafeInteger(review.pull_request_number) || review.pull_request_number <= 0 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              review.pull_request_state !== "open" || review.pull_request_locked !== false || review.pull_request_draft !== false ||
+              typeof review.pull_request_updated_at !== "string" || !Number.isFinite(Date.parse(review.pull_request_updated_at)) ||
+              typeof review.pull_request_title !== "string" || review.pull_request_title.length === 0 || review.pull_request_title.length > 65536 ||
+              !isCommitSha(review.pull_request_head_sha) || !isCommitSha(review.pull_request_base_sha) ||
+              review.expected_head_sha !== review.pull_request_head_sha ||
+              (review.review_event !== "APPROVE" && review.review_event !== "REQUEST_CHANGES" && review.review_event !== "COMMENT") ||
+              (review.review_event !== "APPROVE" && (typeof review.body !== "string" || review.body.trim().length === 0)) ||
+              (review.body !== undefined && (typeof review.body !== "string" || new TextEncoder().encode(review.body).byteLength > 65536))) {
+            throw new Error("GitHub pull request reviewの対象・head SHA・イベント・本文がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GitHub pull request reviewの投稿（公開・通知作用）";
+          view.appendChild(heading);
+          [
+            ["操作", review.operation],
+            ["Repository", review.canonical_full_name + " (ID " + review.repository_id + ")"],
+            ["可視性", review.repository_visibility === "public" ? "Public（内容は公開）" : "Private（アクセス権を持つ利用者が閲覧可能）"],
+            ["Pull request", "#" + review.pull_request_number + " (ID " + review.pull_request_id + ") — " + review.pull_request_title],
+            ["状態", "open / unlocked / non-draft"],
+            ["最終更新", review.pull_request_updated_at],
+            ["対象head", review.expected_head_sha],
+            ["対象base SHA", review.pull_request_base_sha],
+            ["レビューイベント", review.review_event],
+            ["GitHub通知", "APIが通知を発生させる場合があります。"],
+            ["公開作用", "レビューはrepository audienceから閲覧可能になります。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          if (review.body !== undefined) {
+            const bodyHeading = document.createElement("strong");
+            bodyHeading.textContent = "レビュー本文";
+            const body = document.createElement("pre");
+            body.textContent = review.body;
+            view.append(bodyHeading, body);
+          } else {
+            const noBody = document.createElement("p");
+            noBody.textContent = "承認イベントのみ。レビュー本文はありません。";
+            view.appendChild(noBody);
+          }
+          const digests = document.createElement("p");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHub pull request reviewの公開内容・対象を再確認";
+          return;
+        }
         if (review.kind === "github_code_push") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const isCommitSha = function (value) { return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); };
