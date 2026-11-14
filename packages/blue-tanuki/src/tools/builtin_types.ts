@@ -67,12 +67,12 @@ export interface GitHubReadOptions {
   request?: (target: GitHubReadTarget, signal?: AbortSignal) => Promise<GitHubReadResponse>;
 }
 
-export type GitHubWriteMethod = "POST" | "PATCH" | "PUT";
+export type GitHubWriteMethod = "POST" | "PATCH" | "PUT" | "DELETE";
 
 export interface GitHubWriteTarget {
   method: GitHubWriteMethod;
   path: string;
-  body: Record<string, unknown>;
+  body?: Record<string, unknown>;
   maxBytes: number;
   token: string;
 }

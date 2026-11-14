@@ -7062,6 +7062,93 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "GitHub issueの変更前後と影響を再確認";
           return;
         }
+        if (review.kind === "github_issue_label") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const validLabels = function (value) {
+            return Array.isArray(value) && value.length <= 100 && value.every(function (label, index) {
+              return typeof label === "string" && label.length > 0 && label.length <= 100 &&
+                label.trim() === label && !/[\\u0000-\\u001f\\u007f]/.test(label) &&
+                (index === 0 || value[index - 1] < label);
+            });
+          };
+          if (review.command_id !== commandId || review.operation !== "github.write.issue.label" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.provider_observation_is_atomic !== false ||
+              review.notification_effect !== "github_api_may_trigger_notifications" ||
+              review.publication_effect !== "visible_to_repository_audience" ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              typeof review.repository_id !== "number" || !Number.isSafeInteger(review.repository_id) || review.repository_id <= 0 ||
+              !Number.isSafeInteger(review.issue_id) || review.issue_id <= 0 ||
+              !Number.isSafeInteger(review.issue_number) || review.issue_number <= 0 || review.issue_number > 1000000 ||
+              typeof review.requested_owner !== "string" || review.requested_owner.length < 1 || review.requested_owner.length > 100 ||
+              typeof review.requested_repo !== "string" || review.requested_repo.length < 1 || review.requested_repo.length > 100 ||
+              typeof review.canonical_full_name !== "string" ||
+              review.canonical_full_name.toLowerCase() !== (review.requested_owner + "/" + review.requested_repo).toLowerCase() ||
+              (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
+              (review.issue_kind !== "issue" && review.issue_kind !== "pull_request") ||
+              (review.issue_state !== "open" && review.issue_state !== "closed") || review.issue_locked !== false ||
+              typeof review.issue_updated_at !== "string" || !Number.isFinite(Date.parse(review.issue_updated_at)) ||
+              typeof review.issue_title !== "string" || review.issue_title.length === 0 || review.issue_title.length > 65536 ||
+              (review.action !== "add" && review.action !== "remove") ||
+              typeof review.label !== "string" || review.label.length === 0 || review.label.length > 100 ||
+              review.label.trim() !== review.label || /[\\u0000-\\u001f\\u007f]/.test(review.label) ||
+              !validLabels(review.current_labels) || !validLabels(review.resulting_labels) ||
+              (review.action === "add" && (review.current_labels.includes(review.label) ||
+                JSON.stringify(review.resulting_labels) !== JSON.stringify(review.current_labels.concat([review.label]).sort())) ) ||
+              (review.action === "remove" && (!review.current_labels.includes(review.label) ||
+                JSON.stringify(review.resulting_labels) !== JSON.stringify(review.current_labels.filter(function (label) { return label !== review.label; }))) )) {
+            throw new Error("GitHub issue／PRラベルの対象と変更後の一覧がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = review.action === "add" ? "GitHub issue／PRラベル追加（外部作用）" : "GitHub issue／PRラベル解除（外部作用）";
+          view.appendChild(heading);
+          [
+            ["Repository", review.canonical_full_name],
+            ["Repository ID", String(review.repository_id)],
+            ["可視性", review.repository_visibility === "public" ? "Public" : "Private"],
+            [review.issue_kind === "pull_request" ? "Pull request" : "Issue", "#" + String(review.issue_number) + "（ID " + String(review.issue_id) + "）"],
+            ["現在の状態", review.issue_state + "・ロックなし"],
+            ["観測時刻", review.issue_updated_at],
+            ["ラベル操作", review.action === "add" ? "追加" : "解除"],
+            ["対象ラベル", review.label],
+            ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const title = document.createElement("p");
+          title.textContent = "対象: " + review.issue_title;
+          view.appendChild(title);
+          const currentHeading = document.createElement("strong");
+          currentHeading.textContent = "現在のラベル";
+          const current = document.createElement("pre");
+          current.textContent = review.current_labels.length === 0 ? "（なし）" : review.current_labels.join("\\n");
+          const resultingHeading = document.createElement("strong");
+          resultingHeading.textContent = "変更後のラベル";
+          const resulting = document.createElement("pre");
+          resulting.textContent = review.resulting_labels.length === 0 ? "（なし）" : review.resulting_labels.join("\\n");
+          view.append(currentHeading, current, resultingHeading, resulting);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "表示したラベル一覧だけを追加または解除します。承認後にIssue／PRとラベルを再読取し、状態や一覧が変わっていれば送信を止めます。POST／DELETEと読戻しは非原子的です。結果不明時は自動再送しません。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +
+            review.target_version_digest + " | Operation Plan binding: " + review.operation_plan_binding_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "GitHubラベルの変更と対象を再確認";
+          return;
+        }
         if (review.kind === "github_issue_close" || review.kind === "github_issue_reopen") {
           const isReopen = review.kind === "github_issue_reopen";
           const expectedOperation = isReopen ? "github.write.issue.reopen" : "github.write.issue.close";

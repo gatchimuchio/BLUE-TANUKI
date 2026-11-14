@@ -25,6 +25,8 @@ import {
   inspectGitHubIssueCreateContentReview,
   inspectGitHubIssueUpdateTargetVersion,
   inspectGitHubIssueUpdateContentReview,
+  inspectGitHubIssueLabelTargetVersion,
+  inspectGitHubIssueLabelContentReview,
   inspectGitHubIssueCommentCreateTargetVersion,
   inspectGitHubIssueCommentCreateContentReview,
   inspectGitHubPullRequestCommentCreateTargetVersion,
@@ -1652,6 +1654,92 @@ describe("built-in tools", () => {
       ...options, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
     })).rejects.toThrow(/target is a pull request.*BUILD_GAP/);
     expect(writes).toBe(0);
+  });
+
+  it("github.write issue.label content review binds one exact label change without authority", async () => {
+    const args = { operation: "issue.label", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, action: "add", label: "qe-ready" };
+    const options = fakeGitHubIssueLabel();
+    const target = await inspectGitHubIssueLabelTargetVersion(args, {
+      ...options, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    });
+    const review = await inspectGitHubIssueLabelContentReview(args, {
+      ...options, command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+    });
+    expect(target).toMatchObject({ operation: "issue.label", action: "add", issue_kind: "issue",
+      issue_number: 7, issue_locked: false, issue_label_count: 1, target_label_present: false,
+      mutation_sent: false, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(target)).not.toContain("qe-ready");
+    expect(review).toMatchObject({ kind: "github_issue_label", operation: "github.write.issue.label",
+      issue_id: 456, issue_number: 7, issue_kind: "issue", issue_state: "open", issue_locked: false,
+      issue_title: "Original title", action: "add", label: "qe-ready", current_labels: ["bug"],
+      resulting_labels: ["bug", "qe-ready"], notification_effect: "github_api_may_trigger_notifications",
+      publication_effect: "visible_to_repository_audience", provider_observation_is_atomic: false,
+      used_for_authority: false, may_execute: false });
+    expect(review.request_payload_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([
+    ["add", "qe-ready", ["bug"], ["bug", "qe-ready"], "POST", "/repos/gatchimuchio/blue-tanuki/issues/7/labels"],
+    ["remove", "needs review", ["bug", "needs review"], ["bug"], "DELETE", "/repos/gatchimuchio/blue-tanuki/issues/7/labels/needs%20review"],
+  ] as const)("github.write issue.label %s rechecks, sends one request, and verifies exact readback", async (
+    action, label, initialLabels, finalLabels, expectedMethod, expectedPath,
+  ) => {
+    const args = { operation: "issue.label", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, action, label };
+    let labels = [...initialLabels];
+    let updatedAt = "2026-11-07T12:00:00Z";
+    const seen: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    const options = fakeGitHubIssueLabel(async (target) => {
+      seen.push({ method: target.method, path: target.path, ...(target.body ? { body: target.body } : {}) });
+      labels = [...finalLabels];
+      updatedAt = "2026-11-08T01:00:00Z";
+      return { status: 200, ok: true, content_type: "application/json",
+        body: JSON.stringify(labels.map((name) => ({ name }))), truncated: false,
+        rate_limit_remaining: "58", request_id: "LABEL123" };
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: updatedAt,
+        title: "Original title", labels: labels.map((name) => ({ name })) })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    const reviewed = await reviewedGitHubIssueLabel(args, options);
+    const result = await invokeGitHubWrite(args, reviewed) as Record<string, unknown>;
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: expectedMethod, path: expectedPath });
+    expect(seen[0]?.body).toEqual(action === "add" ? { labels: [label] } : undefined);
+    expect(result).toMatchObject({ operation: "issue.label", method: expectedMethod, path: expectedPath,
+      status: 200, mutation_status: "provider_accepted", result: { issue_id: 456, issue_number: 7,
+        issue_kind: "issue", label_count: finalLabels.length, updated_at: "2026-11-08T01:00:00Z" },
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false });
+    expect(result.github_request_id).toBe("LABEL123");
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write issue.label sends no request for a stale label set and never retries a mismatched response", async () => {
+    const args = { operation: "issue.label", owner: "gatchimuchio", repo: "blue-tanuki",
+      number: 7, action: "add", label: "qe-ready" };
+    let labels = ["bug"];
+    let writes = 0;
+    const options = fakeGitHubIssueLabel(async () => {
+      writes += 1;
+      return { status: 200, ok: true, content_type: "application/json", body: JSON.stringify([{ name: "bug" }]),
+        truncated: false, rate_limit_remaining: "58", request_id: "LABEL-MISMATCH" };
+    }, async (target) => target.path.endsWith("/issues/7")
+      ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+        title: "Original title", labels: labels.map((name) => ({ name })) })
+      : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+        owner: { login: "gatchimuchio" }, private: false }));
+    const reviewed = await reviewedGitHubIssueLabel(args, options);
+    labels = ["bug", "new-state"];
+    await expect(invokeGitHubWrite(args, reviewed)).rejects.toThrow(/target changed after review.*outcome=stale/);
+    expect(writes).toBe(0);
+
+    labels = ["bug"];
+    const currentReview = await reviewedGitHubIssueLabel(args, options);
+    await expect(invokeGitHubWrite(args, currentReview)).rejects.toThrow(/outcome_unknown; do not retry automatically/);
+    expect(writes).toBe(1);
   });
 
   it("github.write issue.comment.create review binds the exact issue and comment without authority", async () => {
@@ -4035,6 +4123,20 @@ function fakeGitHubIssueUpdate(
   return fakeGitHubWrite(request, undefined, read_request);
 }
 
+function fakeGitHubIssueLabel(
+  request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
+    status: 200, ok: true, content_type: "application/json", body: JSON.stringify([{ name: "bug" }, { name: "qe-ready" }]),
+    truncated: false, rate_limit_remaining: "60", request_id: "LABEL-REQ",
+  }),
+  read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => target.path.endsWith("/issues/7")
+    ? githubReadJson({ id: 456, number: 7, state: "open", locked: false, updated_at: "2026-11-07T12:00:00Z",
+      title: "Original title", labels: [{ name: "bug" }] })
+    : githubReadJson({ id: 123, name: "blue-tanuki", full_name: "gatchimuchio/blue-tanuki",
+      owner: { login: "gatchimuchio" }, private: false }),
+): GitHubWriteOptions {
+  return fakeGitHubWrite(request, undefined, read_request);
+}
+
 function fakeGitHubIssueCommentCreate(
   request: NonNullable<GitHubWriteOptions["request"]> = async () => ({
     status: 201,
@@ -4255,6 +4357,17 @@ async function reviewedGitHubIssueUpdate(args: Record<string, unknown>,
   const command_digest = "c".repeat(64);
   const operation_plan_binding_digest = "d".repeat(64);
   const target = await inspectGitHubIssueUpdateTargetVersion(args, {
+    ...options, command_digest, operation_plan_binding_digest,
+  });
+  return { ...options, command_digest, operation_plan_binding_digest,
+    expected_target_version_observation: target };
+}
+
+async function reviewedGitHubIssueLabel(args: Record<string, unknown>,
+  options: GitHubWriteOptions = fakeGitHubIssueLabel()): Promise<GitHubWriteOptions> {
+  const command_digest = "c".repeat(64);
+  const operation_plan_binding_digest = "d".repeat(64);
+  const target = await inspectGitHubIssueLabelTargetVersion(args, {
     ...options, command_digest, operation_plan_binding_digest,
   });
   return { ...options, command_digest, operation_plan_binding_digest,

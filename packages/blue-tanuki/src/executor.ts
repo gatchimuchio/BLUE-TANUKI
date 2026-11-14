@@ -79,6 +79,7 @@ import type { BrokerTargetVersionObservation, GmailDraftContentReview, Tool, Too
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubIssueCloseTargetVersion,
   assertGitHubIssueReopenTargetVersion,
+  assertGitHubIssueLabelTargetVersion,
   assertGitHubIssueCommentCreateTargetVersion,
   assertGitHubPullRequestCommentCreateTargetVersion, assertGitHubPullRequestCreateTargetVersion,
   assertGitHubPullRequestMergeTargetVersion, assertGitHubCodePushTargetVersion,
@@ -319,10 +320,17 @@ function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown)
     args.comment_kind === "pull_request_review_inline" && target.comment_kind === "pull_request_review_inline";
   const timelinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
     (args.comment_kind === undefined || args.comment_kind === "pull_request_timeline") && target.comment_kind === undefined;
+  const issueLabelAction = operation === "issue.label" && target.operation === "issue.label" &&
+    (args.action === "add" || args.action === "remove") && typeof args.label === "string" &&
+    args.label.length > 0 && args.label.length <= 100 && args.label === args.label.trim() &&
+    !/[\u0000-\u001f\u007f]/.test(args.label);
   const route = operation === "issue.create"
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues` }
       : (operation === "issue.update" || operation === "issue.close" || operation === "issue.reopen") && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}` }
+      : issueLabelAction && validCommentNumber
+        ? { method: args.action === "add" ? "POST" : "DELETE",
+          path: `/repos/${owner}/${repo}/issues/${number}/labels${args.action === "remove" ? `/${encodeURIComponent(args.label as string)}` : ""}` }
       : (issueComment || timelinePullRequestComment) && validCommentNumber
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments` }
         : inlinePullRequestComment && validCommentNumber
@@ -376,10 +384,17 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
     args.comment_kind === "pull_request_review_inline" && target.comment_kind === "pull_request_review_inline";
   const timelinePullRequestComment = operation === "pr.comment.create" && target.operation === "pr.comment.create" &&
     (args.comment_kind === undefined || args.comment_kind === "pull_request_timeline") && target.comment_kind === undefined;
+  const issueLabelAction = operation === "issue.label" && target.operation === "issue.label" &&
+    (args.action === "add" || args.action === "remove") && typeof args.label === "string" &&
+    args.label.length > 0 && args.label.length <= 100 && args.label === args.label.trim() &&
+    !/[\u0000-\u001f\u007f]/.test(args.label);
   const route = operation === "issue.create"
     ? { method: "POST", path: `/repos/${owner}/${repo}/issues`, status: 201 }
     : (operation === "issue.update" || operation === "issue.close" || operation === "issue.reopen") && Number.isSafeInteger(number) && (number as number) > 0 && (number as number) <= 1_000_000
       ? { method: "PATCH", path: `/repos/${owner}/${repo}/issues/${number}`, status: 200 }
+      : issueLabelAction && validCommentNumber
+        ? { method: args.action === "add" ? "POST" : "DELETE",
+          path: `/repos/${owner}/${repo}/issues/${number}/labels${args.action === "remove" ? `/${encodeURIComponent(args.label as string)}` : ""}`, status: 200 }
       : (issueComment || timelinePullRequestComment) && validCommentNumber
         ? { method: "POST", path: `/repos/${owner}/${repo}/issues/${number}/comments`, status: 201 }
         : inlinePullRequestComment && validCommentNumber
@@ -412,6 +427,16 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
       typeof result.result !== "object" || result.result === null || Array.isArray(result.result) ||
       result.provider_data_is_untrusted !== true || result.used_for_authority !== false || result.may_execute !== false) return false;
   const summary = result.result as Record<string, unknown>;
+  if (operation === "issue.label" && target.operation === "issue.label") {
+    const expectedCount = target.issue_label_count + (target.action === "add" ? 1 : -1);
+    return Object.keys(summary).sort().join(",") === "issue_id,issue_kind,issue_number,label_count,label_set_digest,updated_at" &&
+      summary.issue_id === target.issue_id && summary.issue_number === target.issue_number &&
+      summary.issue_number === args.number && summary.issue_kind === target.issue_kind &&
+      summary.label_count === expectedCount && typeof summary.label_set_digest === "string" &&
+      /^[a-f0-9]{64}$/.test(summary.label_set_digest) && summary.label_set_digest !== target.issue_label_set_digest &&
+      typeof summary.updated_at === "string" && Number.isFinite(Date.parse(summary.updated_at)) &&
+      result.result_digest === operationPlanDigest(summary);
+  }
   if (operation === "issue.create") {
     return Object.keys(summary).sort().join(",") === "id,number,title" &&
       Number.isSafeInteger(summary.id) && (summary.id as number) > 0 &&
@@ -676,7 +701,7 @@ function approveCommandForExecution(
       const args = snapshot.payload.arguments;
       if (!hds_binding?.operation_plan_binding_digest || observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
-          (args.operation !== "issue.create" && args.operation !== "issue.update" && args.operation !== "issue.close" && args.operation !== "issue.reopen" &&
+          (args.operation !== "issue.create" && args.operation !== "issue.update" && args.operation !== "issue.close" && args.operation !== "issue.reopen" && args.operation !== "issue.label" &&
             args.operation !== "issue.comment.create" && args.operation !== "pr.comment.create" && args.operation !== "pr.create" && args.operation !== "pr.merge" && args.operation !== "pr.review.submit" &&
             args.operation !== "code.push" && args.operation !== "release.draft.create")) {
         throw new Error("Executor approval rejected: github.write target version does not match command or Operation Plan");
@@ -692,6 +717,9 @@ function approveCommandForExecution(
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "issue.reopen") {
         assertGitHubIssueReopenTargetVersion(args, observation, operationPlanDigest(snapshot),
+          hds_binding.operation_plan_binding_digest);
+      } else if (args.operation === "issue.label") {
+        assertGitHubIssueLabelTargetVersion(args, observation, operationPlanDigest(snapshot),
           hds_binding.operation_plan_binding_digest);
       } else if (args.operation === "pr.create") {
         assertGitHubPullRequestCreateTargetVersion(args, observation, operationPlanDigest(snapshot),
@@ -759,6 +787,7 @@ function approveCommandForExecution(
       ((snapshot.payload.arguments.operation !== "issue.create" && snapshot.payload.arguments.operation !== "issue.update" &&
         snapshot.payload.arguments.operation !== "issue.close" &&
         snapshot.payload.arguments.operation !== "issue.reopen" &&
+        snapshot.payload.arguments.operation !== "issue.label" &&
         snapshot.payload.arguments.operation !== "issue.comment.create" &&
         snapshot.payload.arguments.operation !== "pr.comment.create" &&
         snapshot.payload.arguments.operation !== "pr.create" &&
@@ -989,7 +1018,7 @@ export class Executor {
     if (command.payload.tool_name === "github.write") {
       const operation = command.payload.arguments.operation;
       if (!operationPlanBindingDigest || (operation !== "issue.create" && operation !== "issue.update" &&
-          operation !== "issue.close" && operation !== "issue.reopen" &&
+          operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" &&
           operation !== "issue.comment.create" && operation !== "pr.comment.create" && operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" &&
           operation !== "code.push" && operation !== "release.draft.create")) {
         throw new Error("github.write target version resolver requires a supported selected Operation Plan binding");
@@ -1012,6 +1041,9 @@ export class Executor {
       }
       if (operation === "issue.reopen") {
         return Object.freeze(assertGitHubIssueReopenTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
+      }
+      if (operation === "issue.label") {
+        return Object.freeze(assertGitHubIssueLabelTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
       }
       if (operation === "issue.comment.create") {
         return Object.freeze(assertGitHubIssueCommentCreateTargetVersion(args, observation, operationPlanDigest(command), operationPlanBindingDigest));
@@ -1322,6 +1354,7 @@ export class Executor {
           (command.payload.arguments.operation !== "issue.create" && command.payload.arguments.operation !== "issue.update" &&
             command.payload.arguments.operation !== "issue.close" &&
             command.payload.arguments.operation !== "issue.reopen" &&
+            command.payload.arguments.operation !== "issue.label" &&
             command.payload.arguments.operation !== "issue.comment.create" &&
             command.payload.arguments.operation !== "pr.comment.create" &&
             command.payload.arguments.operation !== "pr.create" &&
@@ -1348,7 +1381,7 @@ export class Executor {
       });
       assertNotCancelled();
       const githubReview = review as Extract<ToolContentReview, {
-        kind: "github_issue_create" | "github_issue_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_comment_create" |
+        kind: "github_issue_create" | "github_issue_update" | "github_issue_close" | "github_issue_reopen" | "github_issue_label" | "github_issue_comment_create" |
           "github_pull_request_comment_create" | "github_pull_request_create" | "github_pull_request_merge" | "github_pull_request_review_submit" | "github_code_push" |
           "github_release_draft_create"
       }>;
@@ -1402,6 +1435,41 @@ export class Executor {
             githubReview.issue_updated_at !== reopenObservation.issue_updated_at ||
             githubReview.issue_title !== reopenObservation.issue_title || githubReview.requested_state !== "open") {
           throw new Error("github.write issue.reopen content review returned evidence for another command, target, or plan source");
+        }
+        return githubReview;
+      }
+      if (githubReview.kind === "github_issue_label") {
+        const labelObservation = observation.operation === "issue.label" ? observation : undefined;
+        const action = args.action;
+        const label = args.label;
+        const labelsValid = (values: unknown): values is string[] => Array.isArray(values) && values.length <= 100 &&
+          values.every((item) => typeof item === "string" && item.length > 0 && item.length <= 100 &&
+            item === item.trim() && !/[\u0000-\u001f\u007f]/.test(item)) &&
+          values.every((item, index) => index === 0 || values[index - 1]! < item);
+        const expectedResultLabels = labelsValid(githubReview.current_labels) && typeof label === "string"
+          ? (action === "add" ? [...githubReview.current_labels, label] : githubReview.current_labels.filter((item) => item !== label)).sort()
+          : [];
+        const observedLabelSetDigest = labelsValid(githubReview.current_labels)
+          ? createHash("sha256").update(JSON.stringify(githubReview.current_labels), "utf8").digest("hex") : "";
+        if (!labelObservation || command.payload.arguments.operation !== "issue.label" ||
+            githubReview.operation !== "github.write.issue.label" || commonMismatch ||
+            (action !== "add" && action !== "remove") || typeof label !== "string" || githubReview.action !== action ||
+            githubReview.label !== label || githubReview.issue_id !== labelObservation.issue_id ||
+            githubReview.issue_number !== labelObservation.issue_number || githubReview.issue_number !== args.number ||
+            githubReview.issue_kind !== labelObservation.issue_kind || githubReview.issue_state !== labelObservation.issue_state ||
+            githubReview.issue_locked !== false || labelObservation.issue_locked ||
+            githubReview.issue_updated_at !== labelObservation.issue_updated_at ||
+            typeof githubReview.issue_title !== "string" || githubReview.issue_title.length === 0 ||
+            operationPlanDigest(githubReview.issue_title) !== labelObservation.issue_title_digest ||
+            !labelsValid(githubReview.current_labels) || !labelsValid(githubReview.resulting_labels) ||
+            observedLabelSetDigest !== labelObservation.issue_label_set_digest ||
+            githubReview.current_labels.length !== labelObservation.issue_label_count ||
+            operationPlanDigest(label) !== labelObservation.target_label_digest ||
+            labelObservation.target_label_present !== (action === "remove") ||
+            JSON.stringify(githubReview.resulting_labels) !== JSON.stringify(expectedResultLabels) ||
+            githubReview.notification_effect !== "github_api_may_trigger_notifications" ||
+            githubReview.publication_effect !== "visible_to_repository_audience") {
+          throw new Error("github.write issue.label content review returned evidence for another command, target, or plan source");
         }
         return githubReview;
       }

@@ -59,6 +59,23 @@ export const GitHubIssueReopenTargetVersionObservationSchema = GitHubWriteTarget
   issue_title: z.string().min(1).max(65_536),
 }).strict();
 
+/** Plan-bound evidence for changing one label on one exact GitHub issue or pull request. */
+export const GitHubIssueLabelTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("issue.label"),
+  action: z.enum(["add", "remove"]),
+  issue_id: z.number().int().positive().safe(),
+  issue_number: z.number().int().positive().max(1_000_000),
+  issue_kind: z.enum(["issue", "pull_request"]),
+  issue_state: z.enum(["open", "closed"]),
+  issue_locked: z.literal(false),
+  issue_updated_at: z.string().datetime({ offset: true }),
+  issue_title_digest: DigestSchema,
+  issue_label_set_digest: DigestSchema,
+  issue_label_count: z.number().int().nonnegative().max(100),
+  target_label_digest: DigestSchema,
+  target_label_present: z.boolean(),
+}).strict();
+
 export const GitHubIssueCommentCreateTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("issue.comment.create"),
   issue_id: z.number().int().positive().safe(),
@@ -166,6 +183,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCloseTargetVersionObservationSchema,
   GitHubIssueReopenTargetVersionObservationSchema,
+  GitHubIssueLabelTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
@@ -183,6 +201,13 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
         (!sameRepository && !value.head_repository_is_fork)) {
       context.addIssue({ code: z.ZodIssueCode.custom,
         message: "pull request head repository must be the base repository or a fork in the same GitHub network" });
+    }
+    return;
+  }
+  if (value.operation === "issue.label") {
+    if ((value.action === "add" && value.target_label_present) ||
+        (value.action === "remove" && !value.target_label_present)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "label action must change the observed label set" });
     }
     return;
   }
@@ -248,6 +273,7 @@ export type GitHubIssueCreateTargetVersionObservation = z.infer<typeof GitHubIss
 export type GitHubIssueUpdateTargetVersionObservation = z.infer<typeof GitHubIssueUpdateTargetVersionObservationSchema>;
 export type GitHubIssueCloseTargetVersionObservation = z.infer<typeof GitHubIssueCloseTargetVersionObservationSchema>;
 export type GitHubIssueReopenTargetVersionObservation = z.infer<typeof GitHubIssueReopenTargetVersionObservationSchema>;
+export type GitHubIssueLabelTargetVersionObservation = z.infer<typeof GitHubIssueLabelTargetVersionObservationSchema>;
 export type GitHubIssueCommentCreateTargetVersionObservation = z.infer<typeof GitHubIssueCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCommentCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCommentCreateTargetVersionObservationSchema>;
 export type GitHubPullRequestCreateTargetVersionObservation = z.infer<typeof GitHubPullRequestCreateTargetVersionObservationSchema>;
@@ -369,6 +395,55 @@ export function githubIssueReopenRequestPayloadDigest(input: {
     input.repo,
     input.issue_number,
     "open",
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueLabelTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  issue_id: number;
+  issue_number: number;
+  issue_kind: "issue" | "pull_request";
+  issue_updated_at: string;
+  issue_label_set_digest: string;
+}): string {
+  if (!Number.isSafeInteger(input.repository_id) || input.repository_id <= 0 ||
+      !Number.isSafeInteger(input.issue_id) || input.issue_id <= 0 ||
+      !Number.isSafeInteger(input.issue_number) || input.issue_number <= 0 || input.issue_number > 1_000_000 ||
+      !/^[a-f0-9]{64}$/.test(input.issue_label_set_digest) || !Number.isFinite(Date.parse(input.issue_updated_at))) {
+    throw new Error("invalid GitHub issue label target identity");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-label-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.issue_id,
+    input.issue_number,
+    input.issue_kind,
+    input.issue_updated_at,
+    input.issue_label_set_digest,
+  ]), "utf8").digest("hex");
+}
+
+export function githubIssueLabelRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  issue_number: number;
+  action: "add" | "remove";
+  label: string;
+}): string {
+  if (!Number.isSafeInteger(input.issue_number) || input.issue_number <= 0 || input.issue_number > 1_000_000 ||
+      !input.label || input.label.length > 100 || input.label !== input.label.trim() ||
+      /[\u0000-\u001f\u007f]/.test(input.label)) {
+    throw new Error("invalid GitHub issue label request");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-issue-label-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.issue_number,
+    input.action,
+    input.label,
   ]), "utf8").digest("hex");
 }
 

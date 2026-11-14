@@ -18,6 +18,7 @@ import {
   GitHubIssueUpdateTargetVersionObservationSchema,
   GitHubIssueCloseTargetVersionObservationSchema,
   GitHubIssueReopenTargetVersionObservationSchema,
+  GitHubIssueLabelTargetVersionObservationSchema,
   GitHubIssueCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCommentCreateTargetVersionObservationSchema,
   GitHubPullRequestCreateTargetVersionObservationSchema,
@@ -39,6 +40,8 @@ import {
   githubIssueCloseTargetIdentityDigest,
   githubIssueReopenRequestPayloadDigest,
   githubIssueReopenTargetIdentityDigest,
+  githubIssueLabelRequestPayloadDigest,
+  githubIssueLabelTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubIssueCommentCreateTargetIdentityDigest,
   githubPullRequestCommentCreateRequestPayloadDigest,
@@ -63,6 +66,7 @@ import {
   type GitHubIssueUpdateTargetVersionObservation,
   type GitHubIssueCloseTargetVersionObservation,
   type GitHubIssueReopenTargetVersionObservation,
+  type GitHubIssueLabelTargetVersionObservation,
   type GitHubIssueCommentCreateTargetVersionObservation,
   type GitHubPullRequestCommentCreateTargetVersionObservation,
   type GitHubPullRequestCreateTargetVersionObservation,
@@ -76,6 +80,7 @@ import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContent
   type FileEditDiffContentReview, type GitHubIssueCreateContentReview, type GitHubIssueUpdateContentReview,
   type GitHubIssueCloseContentReview,
   type GitHubIssueReopenContentReview,
+  type GitHubIssueLabelContentReview,
   type GitHubIssueCommentCreateContentReview, type GitHubPullRequestCommentCreateContentReview,
   type GitHubPullRequestCreateContentReview, type GitHubCodePushContentReview,
   type GitHubPullRequestMergeContentReview,
@@ -1045,6 +1050,25 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
     };
   }
 
+  if (operation === "issue.label") {
+    const number = requiredPositiveIntArg(args, "number", 1_000_000);
+    const action = stringArg(args, "action")!;
+    const label = stringArg(args, "label")!;
+    if ((action !== "add" && action !== "remove") || label.length > 100 || label !== label.trim() ||
+        /[\u0000-\u001f\u007f]/.test(label) ||
+        Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "action", "label", "max_bytes"].includes(key))) {
+      throw new Error("github.write issue.label requires one bounded label and explicit add/remove action; mutation_sent=false");
+    }
+    const labelPath = `/repos/${ownerPath}/${repoPath}/issues/${number}/labels`;
+    return {
+      operation,
+      method: action === "add" ? "POST" : "DELETE",
+      path: action === "add" ? labelPath : `${labelPath}/${encodeURIComponent(label)}`,
+      body: action === "add" ? { labels: [label] } : {},
+      repo,
+    };
+  }
+
   if (operation === "issue.update") {
     const number = requiredPositiveIntArg(args, "number", 1_000_000);
     const body: Record<string, unknown> = {};
@@ -1199,7 +1223,7 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
   }
 
   throw new Error(
-    "operation must be issue.create, issue.update, issue.close, issue.reopen, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, or release.draft.create",
+    "operation must be issue.create, issue.update, issue.close, issue.reopen, issue.label, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, or release.draft.create",
   );
 }
 
@@ -1546,7 +1570,7 @@ async function defaultGitHubWriteRequest(
   signal?: AbortSignal,
 ): Promise<GitHubWriteResponse> {
   return await new Promise((resolve, reject) => {
-    const requestBody = Buffer.from(JSON.stringify(target.body), "utf8");
+    const requestBody = target.body === undefined ? undefined : Buffer.from(JSON.stringify(target.body), "utf8");
     let finished = false;
     const finish = (result: GitHubWriteResponse): void => {
       if (finished) return;
@@ -1567,8 +1591,7 @@ async function defaultGitHubWriteRequest(
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${target.token}`,
-          "Content-Type": "application/json",
-          "Content-Length": String(requestBody.length),
+          ...(requestBody ? { "Content-Type": "application/json", "Content-Length": String(requestBody.length) } : {}),
           "User-Agent": "BLUE-TANUKI/0.1 github.write",
           "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -1629,7 +1652,7 @@ async function defaultGitHubWriteRequest(
     req.on("error", (error) => {
       if (!finished) fail(error);
     });
-    req.write(requestBody);
+    if (requestBody) req.write(requestBody);
     req.end();
   });
 }
@@ -1780,6 +1803,7 @@ export async function invokeGitHubWrite(
   if (route.operation === "issue.close") return await invokeGitHubIssueClose(args, opts);
   if (route.operation === "issue.reopen") return await invokeGitHubIssueReopen(args, opts);
   if (route.operation === "issue.update") return await invokeGitHubIssueUpdate(args, opts);
+  if (route.operation === "issue.label") return await invokeGitHubIssueLabel(args, opts);
   if (route.operation === "issue.comment.create") return await invokeGitHubIssueCommentCreate(args, opts);
   if (route.operation === "pr.comment.create") return await invokeGitHubPullRequestCommentCreate(args, opts);
   if (route.operation === "pr.create") return await invokeGitHubPullRequestCreate(args, opts);
@@ -3987,6 +4011,203 @@ export async function inspectGitHubIssueReopenContentReview(args: Record<string,
   return { ...base, review_digest: sha256Hex(base) };
 }
 
+interface GitHubIssueLabelInspection {
+  readonly observation: GitHubIssueLabelTargetVersionObservation;
+  readonly issue_title: string;
+  readonly labels: readonly string[];
+}
+
+async function inspectGitHubIssueLabel(args: Record<string, unknown>, opts: GitHubWriteOptions = {}): Promise<GitHubIssueLabelInspection> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "issue.label") throw new Error("github.write issue.label target observation has another operation");
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "action", "label", "max_bytes"].includes(key))) {
+    throw new Error("github.write issue.label contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write issue.label target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const issueNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const action = stringArg(args, "action")!;
+  const label = stringArg(args, "label")!;
+  if (action !== "add" && action !== "remove") {
+    throw new Error("github.write issue.label requires an explicit add/remove action; mutation_sent=false");
+  }
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.label target inspection");
+  const repositoryResponse = await readRequest({
+    path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    maxBytes,
+    token,
+  }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "issue.label target repository");
+  const repositoryId = repository.id;
+  const fullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerLogin = isRecord(repository.owner) && typeof repository.owner.login === "string" ? repository.owner.login : "";
+  const isPrivate = repository.private;
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      fullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase() || repositoryName.toLowerCase() !== repo.toLowerCase() ||
+      ownerLogin.toLowerCase() !== owner.toLowerCase() || typeof isPrivate !== "boolean") {
+    throw new Error("github.write issue.label repository identity or visibility is incomplete or mismatched");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.label target inspection");
+  const issueResponse = await readRequest({
+    path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
+    maxBytes,
+    token,
+  }, opts.signal);
+  const issue = requireGitHubJsonRecord(issueResponse, "issue.label target issue");
+  const issueId = issue.id;
+  const observedNumber = issue.number;
+  const state = issue.state;
+  const locked = issue.locked;
+  const updatedAt = issue.updated_at;
+  const title = issue.title;
+  const isPullRequest = Object.prototype.hasOwnProperty.call(issue, "pull_request");
+  if (typeof issueId !== "number" || !Number.isSafeInteger(issueId) || issueId <= 0 || observedNumber !== issueNumber ||
+      (state !== "open" && state !== "closed") || locked !== false || typeof updatedAt !== "string" ||
+      !Number.isFinite(Date.parse(updatedAt)) || typeof title !== "string" || title.length === 0 || title.length > 65_536 ||
+      !Array.isArray(issue.labels) || issue.labels.length > 100) {
+    throw new Error("github.write issue.label target is incomplete, locked, or outside the bounded label contract; mutation_sent=false");
+  }
+  const labels: string[] = [];
+  for (const item of issue.labels) {
+    if (!isRecord(item) || typeof item.name !== "string" || item.name.length === 0 || item.name.length > 100 ||
+        item.name !== item.name.trim() || /[\u0000-\u001f\u007f]/.test(item.name)) {
+      throw new Error("github.write issue.label target contains an invalid label; mutation_sent=false");
+    }
+    labels.push(item.name);
+  }
+  const sortedLabels = [...labels].sort(compareGitHubLabelNames);
+  if (new Set(sortedLabels).size !== sortedLabels.length) {
+    throw new Error("github.write issue.label target has ambiguous duplicate labels; mutation_sent=false");
+  }
+  const targetLabelPresent = sortedLabels.includes(label);
+  if ((action === "add" && targetLabelPresent) || (action === "remove" && !targetLabelPresent)) {
+    throw new Error("github.write issue.label action is already satisfied or stale; mutation_sent=false; outcome=stale");
+  }
+  const labelSetDigest = sha256Hex(sortedLabels);
+  const observation = GitHubIssueLabelTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "issue.label",
+    action,
+    repository_id: repositoryId,
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: fullName,
+    repository_visibility: isPrivate ? "private" : "public",
+    issue_id: issueId,
+    issue_number: observedNumber,
+    issue_kind: isPullRequest ? "pull_request" : "issue",
+    issue_state: state,
+    issue_locked: false,
+    issue_updated_at: updatedAt,
+    issue_title_digest: sha256Hex(title),
+    issue_label_set_digest: labelSetDigest,
+    issue_label_count: sortedLabels.length,
+    target_label_digest: sha256Hex(label),
+    target_label_present: targetLabelPresent,
+    target_identity_digest: githubIssueLabelTargetIdentityDigest({ repository_id: repositoryId, canonical_full_name: fullName,
+      issue_id: issueId, issue_number: observedNumber, issue_kind: isPullRequest ? "pull_request" : "issue",
+      issue_updated_at: updatedAt, issue_label_set_digest: labelSetDigest }),
+    request_payload_digest: githubIssueLabelRequestPayloadDigest({ owner, repo, issue_number: issueNumber, action, label }),
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    provider_observation_is_atomic: false,
+    provider_data_is_untrusted: true,
+    mutation_sent: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { observation, issue_title: title, labels: sortedLabels };
+}
+
+function compareGitHubLabelNames(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+export async function inspectGitHubIssueLabelTargetVersion(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubIssueLabelTargetVersionObservation> {
+  return (await inspectGitHubIssueLabel(args, opts)).observation;
+}
+
+export function assertGitHubIssueLabelTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubIssueLabelTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "issue.label") throw new Error("github.write issue.label target observation has another operation");
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const issueNumber = requiredPositiveIntArg(args, "number", 1_000_000);
+  const action = stringArg(args, "action");
+  const label = stringArg(args, "label");
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "number", "action", "label", "max_bytes"].includes(key)) ||
+      githubWriteRoute(args).operation !== "issue.label" || (action !== "add" && action !== "remove") || !label ||
+      label.length > 100 || label !== label.trim() || /[\u0000-\u001f\u007f]/.test(label) ||
+      observation.requested_owner.toLowerCase() !== owner.toLowerCase() || observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() || observation.issue_number !== issueNumber ||
+      observation.action !== action || observation.target_label_digest !== sha256Hex(label) || observation.issue_locked ||
+      observation.target_label_present !== (action === "remove") || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== githubIssueLabelRequestPayloadDigest({ owner, repo, issue_number: issueNumber, action, label }) ||
+      observation.target_identity_digest !== githubIssueLabelTargetIdentityDigest({ repository_id: observation.repository_id,
+        canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
+        issue_number: observation.issue_number, issue_kind: observation.issue_kind, issue_updated_at: observation.issue_updated_at,
+        issue_label_set_digest: observation.issue_label_set_digest }) || observation.mutation_sent || observation.used_for_authority ||
+      observation.may_execute || observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write issue.label target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubIssueLabelContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubIssueLabelContentReview> {
+  const inspected = await inspectGitHubIssueLabel(args, opts);
+  const observation = inspected.observation;
+  const action = stringArg(args, "action") as "add" | "remove";
+  const label = stringArg(args, "label")!;
+  const resultingLabels = (action === "add" ? [...inspected.labels, label] : inspected.labels.filter((item) => item !== label))
+    .sort(compareGitHubLabelNames);
+  const base = {
+    kind: "github_issue_label" as const,
+    operation: "github.write.issue.label" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    issue_id: observation.issue_id,
+    issue_number: observation.issue_number,
+    issue_kind: observation.issue_kind,
+    issue_state: observation.issue_state,
+    issue_locked: observation.issue_locked,
+    issue_updated_at: observation.issue_updated_at,
+    issue_title: inspected.issue_title,
+    action,
+    label,
+    current_labels: [...inspected.labels],
+    resulting_labels: resultingLabels,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    publication_effect: "visible_to_repository_audience" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
 type GitHubCommentCreateOperation = "issue.comment.create" | "pr.comment.create";
 type GitHubCommentCreateTargetObservation = GitHubIssueCommentCreateTargetVersionObservation |
   GitHubPullRequestCommentCreateTargetVersionObservation;
@@ -4714,6 +4935,147 @@ async function invokeGitHubCommentCreate(
     github_request_id: response.request_id,
     result_digest: sha256Hex(data),
     result: { id: comment.id },
+    provider_data_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+async function invokeGitHubIssueLabel(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
+  const env = opts.env ?? process.env;
+  const route = githubWriteRoute(args);
+  if (route.operation !== "issue.label") throw new Error("github.write issue.label route mismatch; mutation_sent=false");
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write issue.label requires a command, Operation Plan binding, and approved target observation; mutation_sent=false");
+  }
+  const expected = assertGitHubIssueLabelTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const current = await inspectGitHubIssueLabel(args, {
+    env,
+    signal: opts.signal,
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    ...(opts.read_request ? { read_request: opts.read_request } : {}),
+  });
+  if (canonicalGitHubWriteTargetVersionObservation(current.observation) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write issue.label target changed after review; mutation_sent=false; outcome=stale");
+  }
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write issue.label");
+  let response: GitHubWriteResponse;
+  try {
+    response = await request({ method: route.method, path: route.path,
+      ...(expected.action === "add" ? { body: { labels: [stringArg(args, "label")!] } } : {}), maxBytes, token }, opts.signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "provider_request_failed";
+    throw new Error("github.write issue.label outcome_unknown; do not retry automatically; check GitHub before a new Owner decision; " + message);
+  }
+  const data = parseJsonOrText(response.body);
+  if (!response.ok || response.status !== 200 || response.truncated || !response.content_type?.toLowerCase().includes("json")) {
+    const explicitRejection = !response.ok && !response.truncated &&
+      [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+    if (explicitRejection) {
+      return {
+        schema_version: "blue-tanuki.github-write-result.v1",
+        operation: "issue.label",
+        api_host: "api.github.com",
+        repo: route.repo,
+        repository_id: expected.repository_id,
+        target_identity_digest: expected.target_identity_digest,
+        request_payload_digest: expected.request_payload_digest,
+        command_digest: expected.command_digest,
+        operation_plan_binding_digest: expected.operation_plan_binding_digest,
+        method: route.method,
+        path: route.path,
+        status: response.status,
+        mutation_status: "provider_rejected",
+        result_digest: sha256Hex(data),
+        retry_permitted: false,
+        next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+        provider_data_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    }
+    throw new Error(`github.write issue.label outcome_unknown; HTTP ${response.status}; do not retry automatically; check GitHub before a new Owner decision`);
+  }
+  const readLabelNames = (value: unknown): string[] | null => {
+    if (!Array.isArray(value) || value.length > 100) return null;
+    const names: string[] = [];
+    for (const item of value) {
+      if (!isRecord(item) || typeof item.name !== "string" || item.name.length === 0 || item.name.length > 100 ||
+          item.name !== item.name.trim() || /[\u0000-\u001f\u007f]/.test(item.name)) return null;
+      names.push(item.name);
+    }
+    const sorted = names.sort(compareGitHubLabelNames);
+    return new Set(sorted).size === sorted.length ? sorted : null;
+  };
+  const requestedLabels = readLabelNames(data);
+  const label = stringArg(args, "label")!;
+  const expectedLabels = (expected.action === "add"
+    ? [...current.labels, label]
+    : current.labels.filter((item) => item !== label)).sort(compareGitHubLabelNames);
+  if (!requestedLabels || JSON.stringify(requestedLabels) !== JSON.stringify(expectedLabels)) {
+    throw new Error("github.write issue.label response did not confirm the exact returned label set; outcome_unknown; do not retry automatically");
+  }
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const issueNumber = expected.issue_number;
+  let readback: GitHubReadResponse;
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write issue.label readback");
+    readback = await (opts.read_request ?? defaultGitHubReadRequest)({
+      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
+      maxBytes,
+      token,
+    }, opts.signal);
+  } catch {
+    throw new Error("github.write issue.label readback is unknown; do not retry automatically; check GitHub before a new Owner decision");
+  }
+  let issue: Record<string, unknown>;
+  let readbackLabels: string[] | null;
+  try {
+    issue = requireGitHubJsonRecord(readback, "issue.label result readback");
+    readbackLabels = readLabelNames(issue.labels);
+  } catch {
+    throw new Error("github.write issue.label readback is invalid; outcome_unknown; do not retry automatically; check GitHub before a new Owner decision");
+  }
+  const expectedResultLabels = expectedLabels;
+  if (issue.id !== expected.issue_id || issue.number !== expected.issue_number || issue.locked !== false ||
+      (Object.prototype.hasOwnProperty.call(issue, "pull_request") ? "pull_request" : "issue") !== expected.issue_kind ||
+      typeof issue.updated_at !== "string" || !Number.isFinite(Date.parse(issue.updated_at)) ||
+      !readbackLabels || !expectedResultLabels || JSON.stringify(readbackLabels) !== JSON.stringify(expectedResultLabels)) {
+    throw new Error("github.write issue.label readback did not confirm the reviewed target and exact label set; outcome_unknown; do not retry automatically");
+  }
+  const resultObservation = { issue_id: issue.id, issue_number: issue.number, issue_kind: expected.issue_kind,
+    label_count: readbackLabels.length, label_set_digest: sha256Hex(readbackLabels), updated_at: issue.updated_at };
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1",
+    operation: "issue.label",
+    api_host: "api.github.com",
+    repo: route.repo,
+    repository_id: expected.repository_id,
+    target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest,
+    command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest,
+    method: route.method,
+    path: route.path,
+    status: response.status,
+    mutation_status: "provider_accepted",
+    content_type: response.content_type,
+    truncated: response.truncated,
+    rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id,
+    result_digest: sha256Hex(resultObservation),
+    result: resultObservation,
     provider_data_is_untrusted: true,
     used_for_authority: false,
     may_execute: false,
@@ -6933,6 +7295,14 @@ export const githubWriteTool: Tool = {
         ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
       });
     }
+    if (githubOperation(args) === "issue.label") {
+      return await inspectGitHubIssueLabelTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
     if (githubOperation(args) === "issue.comment.create") {
       return await inspectGitHubIssueCommentCreateTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
@@ -6960,7 +7330,7 @@ export const githubWriteTool: Tool = {
     });
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview |
-    GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
+    GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
     GitHubPullRequestMergeContentReview | GitHubPullRequestReviewSubmitContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateContentReview(args, {
@@ -7020,6 +7390,14 @@ export const githubWriteTool: Tool = {
     }
     if (githubOperation(args) === "issue.reopen") {
       return await inspectGitHubIssueReopenContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "issue.label") {
+      return await inspectGitHubIssueLabelContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),

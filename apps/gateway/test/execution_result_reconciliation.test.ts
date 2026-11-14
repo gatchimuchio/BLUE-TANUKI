@@ -16,6 +16,7 @@ import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool
   type GoogleWriteResponse, type GoogleWriteTarget, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDigest, githubIssueCreateTargetIdentityDigest,
   githubIssueUpdateRequestPayloadDigest, githubIssueUpdateTargetIdentityDigest,
+  githubIssueLabelRequestPayloadDigest, githubIssueLabelTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest, githubIssueCommentCreateTargetIdentityDigest,
   githubPullRequestCommentCreateRequestPayloadDigest, githubPullRequestCommentCreateTargetIdentityDigest,
   githubPullRequestCreateRequestPayloadDigest, githubPullRequestCreateTargetIdentityDigest,
@@ -240,13 +241,15 @@ function gmailDraftSendCandidate(id: string): OperationPlan {
       command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
-type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.comment.create" | "pr.create" | "pr.comment.create" |
+type GitHubWriteOperation = "issue.create" | "issue.update" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.comment.create" |
   "code.push" | "release.draft.create";
-type GitHubWriteCase = { operation: GitHubWriteOperation; comment_kind?: "pull_request_review_inline"; inline_range?: boolean };
+type GitHubWriteCase = { operation: GitHubWriteOperation; action?: "add" | "remove"; comment_kind?: "pull_request_review_inline"; inline_range?: boolean };
 const GITHUB_PR_HEAD_REPOSITORY = "fixture-contributor/synthetic-repo";
 const githubWriteCases: readonly GitHubWriteCase[] = [
   { operation: "issue.create" },
   { operation: "issue.update" },
+  { operation: "issue.label", action: "add" },
+  { operation: "issue.label", action: "remove" },
   { operation: "issue.comment.create" },
   { operation: "pr.create" },
   { operation: "code.push" },
@@ -262,15 +265,16 @@ type GitHubWriteScenario = {
   target_identity_digest: string;
   request_payload_digest: string;
   target_fields: Record<string, unknown>;
-  method: "POST" | "PATCH";
+  method: "POST" | "PATCH" | "DELETE";
   path: string;
   accepted_status: 200 | 201;
-  accepted_provider_response: Record<string, unknown>;
+  accepted_provider_response: unknown;
   accepted_result: Record<string, unknown>;
   private_values: string[];
 };
 
-function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pull_request_review_inline", range = false): GitHubWriteScenario {
+function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pull_request_review_inline", range = false,
+  labelAction: "add" | "remove" = "add"): GitHubWriteScenario {
   const owner = "fixture-owner";
   const repo = "synthetic-repo";
   const canonicalFullName = `${owner}/${repo}`;
@@ -304,6 +308,35 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
         title: updatedTitle, body: updatedBody },
       accepted_result: { id: 424243, number, state: "open", locked: false, title: updatedTitle },
       private_values: [updatedTitle, updatedBody, "prior synthetic issue title", "prior synthetic issue body"] };
+  }
+  if (operation === "issue.label") {
+    const label = "qe-ready";
+    const currentLabels = labelAction === "add" ? ["bug"] : ["bug", label];
+    const resultingLabels = labelAction === "add" ? ["bug", label] : ["bug"];
+    const labelSetDigest = hash(currentLabels);
+    const updatedAt = "2026-11-08T01:02:05.000Z";
+    const targetIdentityDigest = githubIssueLabelTargetIdentityDigest({ repository_id: repositoryId,
+      canonical_full_name: canonicalFullName, issue_id: 424_250, issue_number: number, issue_kind: "issue",
+      issue_updated_at: issueUpdatedAt, issue_label_set_digest: labelSetDigest });
+    const acceptedResult = { issue_id: 424_250, issue_number: number, issue_kind: "issue",
+      label_count: resultingLabels.length, label_set_digest: hash(resultingLabels), updated_at: updatedAt };
+    return { operation, step_id: `write-issue-label-${labelAction}`,
+      parameters: { operation, owner, repo, number, action: labelAction, label },
+      target_identity_digest: targetIdentityDigest,
+      request_payload_digest: githubIssueLabelRequestPayloadDigest({ owner, repo, issue_number: number,
+        action: labelAction, label }),
+      target_fields: { action: labelAction, issue_id: 424_250, issue_number: number, issue_kind: "issue", issue_state: "open",
+        issue_locked: false, issue_updated_at: issueUpdatedAt,
+        issue_title_digest: hash("synthetic issue target title"),
+        issue_label_set_digest: labelSetDigest, issue_label_count: currentLabels.length,
+        target_label_digest: hash(label),
+        target_label_present: labelAction === "remove" },
+      method: labelAction === "add" ? "POST" : "DELETE",
+      path: `/repos/${owner}/${repo}/issues/${number}/labels${labelAction === "remove" ? `/${encodeURIComponent(label)}` : ""}`,
+      accepted_status: 200,
+      accepted_provider_response: resultingLabels.map((name) => ({ name })),
+      accepted_result: acceptedResult,
+      private_values: ["synthetic issue target title", label] };
   }
   if (operation === "issue.comment.create") {
     const comment = "synthetic issue comment body never retained in M";
@@ -581,7 +614,8 @@ function mockSyntheticGitHubWrite(mode: "accepted" | "rejected" | "unknown", sce
       target_identity_digest: target.target_identity_digest, request_payload_digest: target.request_payload_digest,
       command_digest: target.command_digest, operation_plan_binding_digest: target.operation_plan_binding_digest,
       method: scenario.method, path: scenario.path,
-      result_digest: mode === "accepted" ? hash(scenario.accepted_provider_response) : "c".repeat(64),
+      result_digest: mode === "accepted" ? (scenario.operation === "issue.label"
+        ? operationPlanDigest(scenario.accepted_result) : hash(scenario.accepted_provider_response)) : "c".repeat(64),
       provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
     };
     if (mode === "rejected") return { ...common, status: 403, mutation_status: "provider_rejected",
@@ -779,10 +813,10 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
   for (const writeCase of githubWriteCases) {
     const { operation } = writeCase;
-    const operationLabel = `${operation}${writeCase.comment_kind === "pull_request_review_inline" ? " inline diff" : ""}` +
+    const operationLabel = `${operation}${writeCase.action ? ` ${writeCase.action}` : ""}${writeCase.comment_kind === "pull_request_review_inline" ? " inline diff" : ""}` +
       `${writeCase.inline_range ? " range" : ""}`;
     it(`github.write ${operationLabel}受理をJの束縛・digest-only M・Owner照会まで運ぶ`, async () => {
-      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range);
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range, writeCase.action);
       await fixture(async (c) => {
         expect(c.cmd.payload.tool_name).toBe("github.write");
         expect(c.cmd.payload.arguments.operation).toBe(operation);
@@ -814,7 +848,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     });
 
     it(`github.write ${operationLabel}明示拒否をMへ記録し、Ownerへ再送せず返す`, async () => {
-      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range);
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range, writeCase.action);
       await fixture(async (c) => {
         expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
         const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -840,7 +874,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     });
 
     it(`github.write ${operationLabel}結果不明をtask-bound M receiptとOwner照会へ運び、自動再送しない`, async () => {
-      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range);
+      const scenario = githubWriteScenario(operation, writeCase.comment_kind, writeCase.inline_range, writeCase.action);
       await fixture(async (c) => {
         expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
         const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -2752,10 +2786,10 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
   it.each(githubWriteCases)(
     "実Gateway processは$operation/$comment_kindを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
-    async ({ operation, comment_kind, inline_range }) => {
+    async ({ operation, comment_kind, inline_range, action }) => {
     const inlineReview = comment_kind === "pull_request_review_inline";
     const inlineRange = inlineReview && inline_range === true;
-    const scenario = githubWriteScenario(operation, comment_kind, inline_range);
+    const scenario = githubWriteScenario(operation, comment_kind, inline_range, action);
     const title = String(scenario.parameters.title ?? "");
     const body = String(scenario.parameters.body);
     const repositoryPath = "/repos/fixture-owner/synthetic-repo";
@@ -2779,6 +2813,8 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const mockResponses: Array<{ method: string; path: string; status: number; finished: boolean; closed: boolean }> = [];
     const unexpectedMockRequests: Array<{ method: string; path: string }> = [];
     let createdRelease: Record<string, unknown> | undefined;
+    let issueLabels = operation === "issue.label" && action === "remove" ? ["bug", "qe-ready"] : ["bug"];
+    let currentIssueUpdatedAt = String(scenario.target_fields.issue_updated_at ?? "2026-11-08T01:02:03.000Z");
     const mutationRequests = () => mockRequests.filter((item) => item.method === scenario.method && item.path === scenario.path);
     const mockServer = createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -2861,7 +2897,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
             patch: inlineRange ? githubInlineRangePatch : githubInlinePatch }]));
           return;
         }
-        if ((operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") &&
+        if ((operation === "issue.update" || operation === "issue.label" || operation === "issue.comment.create" || operation === "pr.comment.create") &&
           method === "GET" && path === issueTargetPath) {
           const isPullRequest = operation === "pr.comment.create";
           response.statusCode = 200;
@@ -2871,9 +2907,10 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
             number: isPullRequest ? scenario.target_fields.pull_request_number : scenario.target_fields.issue_number,
             state: isPullRequest ? scenario.target_fields.pull_request_state : scenario.target_fields.issue_state,
             locked: isPullRequest ? scenario.target_fields.pull_request_locked : scenario.target_fields.issue_locked,
-            updated_at: isPullRequest ? scenario.target_fields.pull_request_updated_at : scenario.target_fields.issue_updated_at,
+            updated_at: isPullRequest ? scenario.target_fields.pull_request_updated_at : currentIssueUpdatedAt,
             title: scenario.target_fields.issue_title ?? (isPullRequest ? "synthetic pull request target title" : "synthetic issue target title"),
             body: scenario.target_fields.issue_body ?? null,
+            ...(operation === "issue.label" ? { labels: issueLabels.map((name) => ({ name })) } : {}),
             ...(isPullRequest ? { pull_request: { url: `https://api.github.com/repos/fixture-owner/synthetic-repo/pulls/${String(scenario.parameters.number)}` } } : {}) }));
           return;
         }
@@ -2881,6 +2918,10 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
           response.statusCode = scenario.accepted_status;
           responseRecord.status = response.statusCode;
           if (operation === "release.draft.create") createdRelease = scenario.accepted_provider_response;
+          if (operation === "issue.label") {
+            issueLabels = action === "add" ? ["bug", "qe-ready"] : ["bug"];
+            currentIssueUpdatedAt = String(scenario.accepted_result.updated_at);
+          }
           response.end(JSON.stringify(scenario.accepted_provider_response));
           return;
         }
@@ -2999,6 +3040,13 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
           ? { kind: "github_issue_update", operation: "github.write.issue.update", issue_number: 7,
             current_title: "prior synthetic issue title", current_body: "prior synthetic issue body",
             requested_title: title, requested_body: body }
+          : operation === "issue.label"
+            ? { kind: "github_issue_label", operation: "github.write.issue.label", issue_id: 424_250,
+              issue_number: 7, issue_kind: "issue", issue_state: "open", issue_locked: false,
+              issue_updated_at: "2026-11-08T01:02:03.000Z", issue_title: "synthetic issue target title",
+              action, label: "qe-ready", current_labels: action === "add" ? ["bug"] : ["bug", "qe-ready"],
+              resulting_labels: action === "add" ? ["bug", "qe-ready"] : ["bug"],
+              publication_effect: "visible_to_repository_audience" }
           : operation === "issue.comment.create"
             ? { kind: "github_issue_comment_create", operation: "github.write.issue.comment.create",
               issue_id: 424244, issue_number: 7, issue_state: "open", issue_locked: false,
@@ -3075,7 +3123,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         path, authorization_present: !!authorization, body_bytes: Buffer.byteLength(body) })), unexpectedMockRequests,
         mock_responses: mockResponses, finalApprovalBody, gateway_stderr: gateway.stderr.join("") })).toHaveLength(1);
       expect(writes[0]?.authorization).toBe(`Bearer ${fakeGitHubToken}`);
-      const expectedMutationBody = operation === "pr.comment.create" && inlineReview
+      const expectedMutationBody = operation === "issue.label"
+        ? action === "add" ? { labels: ["qe-ready"] } : undefined
+        : operation === "pr.comment.create" && inlineReview
         ? { body, path: scenario.parameters.path,
           ...(inlineRange ? { start_line: scenario.parameters.start_line, start_side: scenario.parameters.start_side } : {}),
           line: scenario.parameters.line, side: scenario.parameters.side,
@@ -3090,7 +3140,8 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
             ? { tag_name: releaseTagName, target_commitish: scenario.target_fields.target_commit_sha,
               name: scenario.parameters.name, body, draft: true, prerelease: false, generate_release_notes: false }
           : { title, body };
-      expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);
+      if (expectedMutationBody === undefined) expect(writes[0]!.body).toBe("");
+      else expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);
       if (operation === "release.draft.create") {
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         for (const readPath of [repositoryPath, releaseTagRefPath, releaseAnnotatedTagPath, releaseByTagPath]) {
@@ -3100,13 +3151,18 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         expect(createdRelease).toMatchObject({ id: 42_449, tag_name: releaseTagName,
           target_commitish: scenario.target_fields.target_commit_sha, draft: true, prerelease: false, assets: [] });
       }
-      if (operation === "issue.update" || operation === "issue.comment.create" || operation === "pr.comment.create") {
+      if (operation === "issue.update" || operation === "issue.label" || operation === "issue.comment.create" || operation === "pr.comment.create") {
         const writeIndex = mockRequests.findIndex((item) => item.method === scenario.method && item.path === scenario.path);
         const postApprovalIssueReadIndexes = mockRequests.map((item, index) => ({ item, index }))
           .filter(({ item, index }) => index >= githubRequestCountBeforeApproval && item.method === "GET" && item.path === issueTargetPath)
           .map(({ index }) => index);
         expect(postApprovalIssueReadIndexes.length).toBeGreaterThan(0);
-        expect(postApprovalIssueReadIndexes.at(-1)!).toBeLessThan(writeIndex);
+        if (operation === "issue.label") {
+          expect(postApprovalIssueReadIndexes.some((index) => index < writeIndex)).toBe(true);
+          expect(postApprovalIssueReadIndexes.some((index) => index > writeIndex)).toBe(true);
+        } else {
+          expect(postApprovalIssueReadIndexes.at(-1)!).toBeLessThan(writeIndex);
+        }
       }
       if (operation === "pr.create") {
         const prBranchRefs = [String(scenario.parameters.head), String(scenario.parameters.base)];

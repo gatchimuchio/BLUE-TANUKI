@@ -63,6 +63,8 @@ import {
   githubIssueCloseRequestPayloadDigest,
   githubIssueReopenTargetIdentityDigest,
   githubIssueReopenRequestPayloadDigest,
+  githubIssueLabelTargetIdentityDigest,
+  githubIssueLabelRequestPayloadDigest,
   githubIssueCommentCreateTargetIdentityDigest,
   githubIssueCommentCreateRequestPayloadDigest,
   githubPullRequestCommentCreateTargetIdentityDigest,
@@ -3959,7 +3961,7 @@ ${planControl.question}`,
       const planBindingDigest = operation_plan_binding_digest;
       if (brokerTargetVersionObservation === undefined || planBindingDigest === undefined ||
           typeof owner !== "string" || typeof repo !== "string" ||
-          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.comment.create" &&
+          (operation !== "issue.create" && operation !== "issue.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" && operation !== "issue.comment.create" &&
             operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" && operation !== "pr.comment.create" && operation !== "code.push" &&
             operation !== "release.draft.create")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
@@ -4035,6 +4037,26 @@ ${planControl.question}`,
         targetIdentityDigest = githubIssueReopenTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
           issue_number: observation.issue_number });
+      } else if (operation === "issue.label") {
+        const issueNumber = positiveNumber("number");
+        const action = args.action;
+        const label = optionalText("label");
+        if ((action !== "add" && action !== "remove") || !label || label.length > 100 || label !== label.trim() ||
+            /[\u0000-\u001f\u007f]/.test(label) ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "number", "action", "label", "max_bytes"].includes(key)) ||
+            observation.operation !== "issue.label" || observation.issue_number !== issueNumber ||
+            observation.issue_locked !== false || observation.action !== action ||
+            observation.target_label_digest !== operationPlanDigest(label) ||
+            observation.target_label_present !== (action === "remove") ||
+            (action === "add" ? observation.issue_label_count >= 100 : observation.issue_label_count < 1)) {
+          throw new Error("HDS github.write issue.label parameters or observed target are invalid");
+        }
+        requestPayloadDigest = githubIssueLabelRequestPayloadDigest({ owner, repo, issue_number: issueNumber,
+          action, label });
+        targetIdentityDigest = githubIssueLabelTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name, issue_id: observation.issue_id,
+          issue_number: observation.issue_number, issue_kind: observation.issue_kind,
+          issue_updated_at: observation.issue_updated_at, issue_label_set_digest: observation.issue_label_set_digest });
       } else if (operation === "issue.comment.create" || operation === "pr.comment.create") {
         const issueNumber = positiveNumber("number");
         const body = optionalText("body");

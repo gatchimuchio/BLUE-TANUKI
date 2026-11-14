@@ -2049,6 +2049,67 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(approve.disabled).toBe(false);
   });
 
+  it("renders GitHub issue and PR label changes as exact untrusted text", async () => {
+    const commandId = "github-label-command";
+    const injectedLabel = '<img src=x onerror="alert(1)">';
+    const review = {
+      kind: "github_issue_label", command_id: commandId, command_digest: "a".repeat(64),
+      operation: "github.write.issue.label", requested_owner: "gatchimuchio", requested_repo: "blue-tanuki",
+      canonical_full_name: "gatchimuchio/blue-tanuki", repository_id: 123, repository_visibility: "public",
+      issue_id: 456, issue_number: 7, issue_kind: "pull_request", issue_state: "open", issue_locked: false,
+      issue_updated_at: "2026-11-07T12:00:00Z", issue_title: "Reviewed PR title", action: "add", label: injectedLabel,
+      current_labels: ["bug"], resulting_labels: [injectedLabel, "bug"], request_payload_digest: "b".repeat(64),
+      target_version_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64), review_digest: "e".repeat(64),
+      notification_effect: "github_api_may_trigger_notifications",
+      publication_effect: "visible_to_repository_audience", provider_observation_is_atomic: false,
+      used_for_authority: false, may_execute: false,
+    };
+    const makeNode = (tagName: string) => ({ tagName, textContent: "", className: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view :
+        selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const run = new Script(`
+      async function runReview() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+        const document = { querySelectorAll() { return [reviewCard]; }, createElement(tagName) { return makeNode(tagName); } };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await reviewApprovalContent("${commandId}", reviewButton);
+      }
+      runReview();
+    `);
+    const button = { textContent: "Review exact change" };
+    await run.runInNewContext({ reviewState: state, reviewCard: card, reviewData: review, makeNode, reviewButton: button });
+    const collectText = (node: { textContent?: string; children?: Array<Record<string, unknown>> }): string =>
+      [String(node.textContent ?? ""), ...(node.children ?? []).map((child) =>
+        collectText(child as { textContent?: string; children?: Array<Record<string, unknown>> }))].join(" ");
+    const renderedText = collectText(view);
+    expect(renderedText).toContain("GitHub issue／PRラベル追加（外部作用）");
+    expect(renderedText).toContain("Pull request");
+    expect(renderedText).toContain(injectedLabel);
+    expect(renderedText).toContain("POST／DELETEと読戻しは非原子的です");
+    expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
+    expect(approve.disabled).toBe(false);
+    expect(button.textContent).toBe("GitHubラベルの変更と対象を再確認");
+  });
+
   it("renders GitHub code push target and file content as exact untrusted text", async () => {
     const commandId = "github-code-push-command";
     const contentText = '<img src=x onerror="alert(1)"> synthetic file';
