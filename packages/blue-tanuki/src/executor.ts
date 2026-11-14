@@ -1946,7 +1946,10 @@ export class Executor {
     const ephemeralCanvasArtifact = transientCanvasArtifact
       ? validateTransientCanvasArtifactInput(transientCanvasArtifact)
       : undefined;
-    if (ephemeralCanvasArtifact && (ephemeralImages.length > 0 || ephemeralAudio.length > 0)) {
+    // Canvas content is added as bounded text, so it can share one provider
+    // request with a validated image. Keep audio+Canvas blocked until their
+    // combined provenance and audio-task contract are explicitly bound.
+    if (ephemeralCanvasArtifact && ephemeralAudio.length > 0) {
       throw new Error("llm_mixed_media_input_unsupported");
     }
     if ((ephemeralImages.length > 0 || ephemeralAudio.length > 0) && payload.agent_delegation) {
