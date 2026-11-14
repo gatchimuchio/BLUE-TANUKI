@@ -365,13 +365,16 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         } : {}),
       },
     };
+    const ephemeralImages = imageAttachment?.status === "read" ? [imageAttachment.image] : [];
+    const ephemeralAudio = audioAttachment?.status === "read" ? [audioAttachment.audio] : [];
     return {
       request,
-      ...(imageAttachment?.status === "read" ? {
-        context: { request_id: id, ephemeral_images: [imageAttachment.image] },
-      } : {}),
-      ...(audioAttachment?.status === "read" ? {
-        context: { request_id: id, ephemeral_images: [], ephemeral_audio: [audioAttachment.audio] },
+      ...(ephemeralImages.length > 0 || ephemeralAudio.length > 0 ? {
+        context: {
+          request_id: id,
+          ephemeral_images: ephemeralImages,
+          ...(ephemeralAudio.length > 0 ? { ephemeral_audio: ephemeralAudio } : {}),
+        },
       } : {}),
     };
   }
