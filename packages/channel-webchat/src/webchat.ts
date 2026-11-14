@@ -1777,19 +1777,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
       const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
       const sessionScope = `d4-runtime:${sessionIdDigest}`;
-      if (this.connectionCount(sessionScope) === 0) {
-        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({
-          accepted: false,
-          status: "not_dispatched",
-          error: "runtime_response_channel_not_connected",
-        }));
-        return;
-      }
       const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
       const payloadDigest = d4RuntimeIntentPayloadDigest(
         config.token, parsed.data.runtime_id, parsed.data.session_id, parsed.data.intent,
       );
+      const responseChannelConnected = this.connectionCount(sessionScope) > 0;
       let claim;
       try {
         claim = submissionStore.claimD4RuntimeIntent({
@@ -1797,10 +1789,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           payload_digest: payloadDigest,
           scope_digest: scopeDigest,
           request_id: randomUUID(),
+          dispatch_available: responseChannelConnected,
         });
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
+        return;
+      }
+      if (claim.status === "not_dispatched") {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({
+          accepted: false,
+          status: "not_dispatched",
+          error: "runtime_response_channel_not_connected",
+        }));
         return;
       }
       if (claim.status === "identity_conflict") {

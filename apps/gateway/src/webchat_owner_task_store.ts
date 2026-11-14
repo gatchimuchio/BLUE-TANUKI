@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type {
+  WebChatD4RuntimeIntentClaim,
   WebChatOwnerTaskSubmissionClaim,
   WebChatOwnerTaskSubmissionState,
   WebChatOwnerTaskSubmissionStatus,
@@ -86,7 +87,9 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
         !REQUEST_ID.test(input.request_id)) throw new Error("webchat_owner_task_claim_invalid");
     const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
-    return this.claimInScope(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id);
+    const result = this.claimInScope(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id, true);
+    if (result.status === "not_dispatched") throw new Error("webchat_owner_task_unreachable_dispatch_state");
+    return result;
   }
 
   claimD4RuntimeIntent(input: {
@@ -94,14 +97,16 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     readonly payload_digest: string;
     readonly scope_digest: string;
     readonly request_id: string;
-  }): WebChatOwnerTaskSubmissionClaim {
+    readonly dispatch_available?: boolean;
+  }): WebChatD4RuntimeIntentClaim {
     this.assertOpen();
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
         !DIGEST.test(input.scope_digest) || !REQUEST_ID.test(input.request_id)) {
       throw new Error("webchat_d4_runtime_intent_claim_invalid");
     }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
-    return this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id);
+    return this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id,
+      input.dispatch_available !== false);
   }
 
   getD4RuntimeIntentStatus(input: {
@@ -129,7 +134,8 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     eventDigest: string,
     payloadDigest: string,
     requestId: string,
-  ): WebChatOwnerTaskSubmissionClaim {
+    dispatchAvailable = true,
+  ): WebChatD4RuntimeIntentClaim {
     return this.transaction(() => {
       const current = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
         FROM webchat_owner_task_inbox WHERE scope_digest=? AND event_digest=?`)
@@ -140,6 +146,7 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
           ? { status: "duplicate", request_id: current.request_id, state: current.delivery_state } as const
           : { status: "identity_conflict", request_id: current.request_id } as const;
       }
+      if (!dispatchAvailable) return { status: "not_dispatched" } as const;
       const now = Date.now();
       this.db.prepare(`INSERT INTO webchat_owner_task_inbox
         (scope_digest,event_digest,payload_digest,request_id,delivery_state,created_at_ms,updated_at_ms)

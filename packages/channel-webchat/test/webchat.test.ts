@@ -107,6 +107,7 @@ function createTestOwnerTaskSubmissionStore(): WebChatOwnerTaskSubmissionStore {
           ? { status: "duplicate", request_id: current.request_id, state: current.state }
           : { status: "identity_conflict", request_id: current.request_id };
       }
+      if (!input.dispatch_available) return { status: "not_dispatched" };
       submissions.set(key, {
         payload_digest: input.payload_digest,
         request_id: input.request_id,

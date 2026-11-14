@@ -1936,6 +1936,9 @@ export type WebChatOwnerTaskSubmissionClaim =
   | { readonly status: "duplicate"; readonly request_id: string; readonly state: WebChatOwnerTaskSubmissionState }
   | { readonly status: "identity_conflict"; readonly request_id: string };
 
+export type WebChatD4RuntimeIntentClaim = WebChatOwnerTaskSubmissionClaim |
+  { readonly status: "not_dispatched" };
+
 export interface WebChatOwnerTaskSubmissionStatus {
   readonly request_id: string;
   readonly state: WebChatOwnerTaskSubmissionState;
@@ -1949,13 +1952,15 @@ export interface WebChatOwnerTaskSubmissionStore {
   markHandlerReturned(request_id: string): void;
   markOutcomeUnknown(request_id: string): void;
   markRejected(request_id: string): void;
-  /** Claim a D4 Runtime intent in a stable runtime/session scope before dispatch. */
+  /** Resolve duplicate/conflicting D4 ids before applying the response-channel gate. */
   claimD4RuntimeIntent(input: {
     readonly submission_id: string;
     readonly payload_digest: string;
     readonly scope_digest: string;
     readonly request_id: string;
-  }): WebChatOwnerTaskSubmissionClaim;
+    /** When false, return existing claims but do not create a new claim. */
+    readonly dispatch_available: boolean;
+  }): WebChatD4RuntimeIntentClaim;
   /** Read only the content-free dispatch state for a D4 Runtime intent. */
   getD4RuntimeIntentStatus(input: {
     readonly submission_id: string;
