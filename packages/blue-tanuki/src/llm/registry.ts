@@ -4,6 +4,7 @@ import {
   createLLMAbortError,
   LLM_IMAGE_INPUT_CAPABILITY,
   LLM_AUDIO_TRANSCRIPTION_CAPABILITY,
+  LLM_AUDIO_TASK_CAPABILITY,
   LLMProviderError,
   LLM_ROUTING_TRACE,
   type LLMBackend,
@@ -250,6 +251,11 @@ export class LLMRegistry implements LLMBackend {
     return this.callWithFallbackAuthorization(req, signal);
   }
 
+  supportsCapability(capability: string, model?: string, backendHint?: string): boolean {
+    const selected = this.resolveWithName(backendHint);
+    return backendSupportsCapability(selected.backend, capability, model);
+  }
+
   /** Upper cost bound for every provider attempt that this routed call may make. */
   maximumCostForCall(
     req: LLMRequest,
@@ -265,7 +271,8 @@ export class LLMRegistry implements LLMBackend {
       fallbackAuthorization,
     );
     if (fallbackBound) return fallbackBound;
-    const amount = primaryProfile.max_cost_per_attempt.amount * this.retryPolicy.max_attempts;
+    const requestFactor = req.audio_transcript_for_compute === true && req.ephemeral_audio?.length ? 2 : 1;
+    const amount = primaryProfile.max_cost_per_attempt.amount * this.retryPolicy.max_attempts * requestFactor;
     if (!Number.isFinite(amount) || amount < 0) return undefined;
     return { amount, currency: primaryProfile.max_cost_per_attempt.currency, source: "CONFIG" };
   }
@@ -282,7 +289,10 @@ export class LLMRegistry implements LLMBackend {
       req,
       fallbackAuthorization,
     ));
-    return this.retryPolicy.max_attempts * (canFallback ? 2 : 1);
+    const selectedCalls = req.audio_transcript_for_compute === true && req.ephemeral_audio?.length ? 2 : 1;
+    const fallback = canFallback ? this.resolveWithName(this.fallbackName) : undefined;
+    const fallbackCalls = fallback && req.audio_transcript_for_compute === true && req.ephemeral_audio?.length ? 2 : 1;
+    return this.retryPolicy.max_attempts * (selectedCalls + (canFallback ? fallbackCalls : 0));
   }
 
   /** @internal HDS fallback authorization is consumed here and never forwarded to a provider. */
@@ -304,6 +314,14 @@ export class LLMRegistry implements LLMBackend {
     if (req.ephemeral_audio?.length &&
         !backendSupportsCapability(selected.backend, LLM_AUDIO_TRANSCRIPTION_CAPABILITY, req.model)) {
       throw new LLMProviderError("Audio transcription is not configured for the selected provider and model.", {
+        provider: selected.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
+    if (req.audio_transcript_for_compute === true &&
+        !backendSupportsCapability(selected.backend, LLM_AUDIO_TASK_CAPABILITY, req.model)) {
+      throw new LLMProviderError("Audio task input is not configured for the selected provider and model.", {
         provider: selected.name,
         kind: "bad_request",
         retryable: false,
@@ -373,7 +391,9 @@ export class LLMRegistry implements LLMBackend {
       if (!authorization.required_capabilities.includes(LLM_AUDIO_TRANSCRIPTION_CAPABILITY) ||
           !fallbackProfile.capabilities.includes(LLM_AUDIO_TRANSCRIPTION_CAPABILITY) ||
           !fallbackBackend ||
-          !backendSupportsCapability(fallbackBackend, LLM_AUDIO_TRANSCRIPTION_CAPABILITY, request.model)) {
+          !backendSupportsCapability(fallbackBackend, LLM_AUDIO_TRANSCRIPTION_CAPABILITY, request.model) ||
+          (request.audio_transcript_for_compute === true &&
+            !backendSupportsCapability(fallbackBackend, LLM_AUDIO_TASK_CAPABILITY, request.model))) {
         return undefined;
       }
     }
@@ -388,8 +408,8 @@ export class LLMRegistry implements LLMBackend {
       return undefined;
     }
     const total = boundedCostSum(
-      primaryCost.amount,
-      fallbackCost.amount,
+      primaryCost.amount * (request.audio_transcript_for_compute === true && request.ephemeral_audio?.length ? 2 : 1),
+      fallbackCost.amount * (request.audio_transcript_for_compute === true && request.ephemeral_audio?.length ? 2 : 1),
       this.retryPolicy.max_attempts,
       authorization.max_total_cost.amount,
     );

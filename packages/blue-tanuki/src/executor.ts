@@ -54,8 +54,10 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   classifyLLMError,
+  backendSupportsCapability,
   createLLMAbortError,
   LLMProviderError,
+  LLM_AUDIO_TASK_CAPABILITY,
   LLM_EXECUTION_CANCELLED_REASON,
   LLM_EXECUTION_TIMEOUT_REASON,
   validateLLMImageInputs,
@@ -1944,21 +1946,23 @@ export class Executor {
     const ephemeralCanvasArtifact = transientCanvasArtifact
       ? validateTransientCanvasArtifactInput(transientCanvasArtifact)
       : undefined;
-    if ((ephemeralImages.length > 0 && ephemeralAudio.length > 0) ||
-        (ephemeralCanvasArtifact && (ephemeralImages.length > 0 || ephemeralAudio.length > 0))) {
+    if (ephemeralCanvasArtifact && (ephemeralImages.length > 0 || ephemeralAudio.length > 0)) {
       throw new Error("llm_mixed_media_input_unsupported");
     }
     if ((ephemeralImages.length > 0 || ephemeralAudio.length > 0) && payload.agent_delegation) {
       throw new Error("llm_media_agent_delegation_unsupported");
     }
-    // History merge: when a session_store is configured AND the payload
-    // declares a session_id, prepend retained history before invoking
-    // the LLM. The current user message (typically payload.messages[-1])
-    // is NOT pre-appended here — it is appended only on success below,
-    // together with the assistant reply, so that failed calls don't
-    // pollute the history.
+    // Normal text/image calls may merge retained history and append the
+    // current user/assistant messages after success. Audio calls remain
+    // per-call so a transcript cannot persist through a stored reply.
     const session_store = this.deps.session_store;
     const session_id = payload.session_id;
+    const audioTaskEnabled = ephemeralAudio.length > 0 && backendSupportsCapability(
+      this.deps.llm,
+      LLM_AUDIO_TASK_CAPABILITY,
+      payload.model,
+      payload.backend_hint,
+    );
 
     let effectiveMessages = ephemeralCanvasArtifact
       ? withTransientCanvasArtifactMessages(payload.messages, ephemeralCanvasArtifact)
@@ -1981,6 +1985,8 @@ export class Executor {
       messages: effectiveMessages,
       ...(ephemeralImages.length > 0 ? { ephemeral_images: ephemeralImages } : {}),
       ...(ephemeralAudio.length > 0 ? { ephemeral_audio: ephemeralAudio } : {}),
+      ...(audioTaskEnabled
+        ? { audio_transcript_for_compute: true as const } : {}),
       ...(payload.backend_hint !== undefined ? { backend_hint: payload.backend_hint } : {}),
       ...(payload.model !== undefined ? { model: payload.model } : {}),
       ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
@@ -2113,7 +2119,7 @@ export class Executor {
     // Append on success. We persist the messages that the *current call*
     // contributed (i.e. payload.messages, not the prepended history,
     // which is already on disk) plus the assistant reply.
-    if (session_store && session_id && !ephemeralCanvasArtifact) {
+    if (session_store && session_id && ephemeralAudio.length === 0 && !ephemeralCanvasArtifact) {
       const now = Date.now();
       for (const m of payload.messages) {
         await session_store.append(session_id, {

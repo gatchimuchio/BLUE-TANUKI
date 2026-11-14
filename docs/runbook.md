@@ -99,6 +99,7 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `LLM_PROVIDERS_JSON`        | optional     | Additional named provider catalog                     | none               |
 | `BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON` | optional | Exact provider model IDs explicitly enabled for image input | none (image input disabled) |
 | `BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON` | optional | 音声文字起こし用APIを使うproviderごとの許可model ID map | none (音声文字起こし無効) |
+| `BLUE_TANUKI_LLM_AUDIO_TASK_CAPABLE_MODELS_JSON` | optional | 文字起こし結果を揮発入力として通常のCタスクへ渡すprovider/model map | none (文字起こしのみ) |
 | `ANTHROPIC_API_KEY`         | `anthropic`  | API key when `LLM_BACKEND=anthropic`                  | none               |
 | `ANTHROPIC_MODEL`           | optional     | Override default Anthropic model name                 | `claude-opus-4-7`  |
 | `ANTHROPIC_ENDPOINT`        | optional     | Override Anthropic messages endpoint                  | Anthropic API      |
@@ -159,7 +160,11 @@ provider profileはcanonical provider名をkeyとし、valueを`{ "capabilities"
 
 画像入力を許可するmodelは、providerのcanonical nameからmodel IDの配列へのJSON mapで明示する。例：`{"openai-compatible":["vision-model-v1"],"anthropic":["claude-vision-model"],"openrouter":["provider/vision-model"]}`。未記載のmodelは画像入力を拒否する。providerやmodelの対応状況はこの設定だけでは検証されず、実provider呼出しを行った証拠にもならない。画像を使うfallbackはfallback profileに`llm.image.input`を含め、fallback authorizationで同能力と`user_image`入力源を明示している場合に限る。Telegram画像のraw bytesは一回の計算に限る揮発入力であり、session履歴・監査本文・通常metadataへ保存しない。
 
-Telegram音声文字起こしは、providerのcanonical nameから正確なmodel ID配列への`BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON`で個別に許可する。設定例：`{"openai-compatible":["gpt-4o-mini-transcribe"]}`。未記載modelは音声を受け付けない。設定してもendpoint/modelの実対応や実provider動作を証明しない。対応endpointには音声文字起こしAPIが必要で、入力はsignature検査済みのFLAC／MP3／MP4／M4A／OGG／WAV／WebM、最大20 MiB。fallbackを使う場合はfallback profileに`llm.audio.transcription`を含め、HDS-issued fallback authorizationで同能力と`user_audio`入力源を許可する。raw bytesは一回の計算に限る揮発入力とし、添付識別子・ファイル名は通常metadataへ保存しない。文字起こしは確度情報をproviderが返さない候補として表示し、J／HDSへ承認入力として戻さない。音声だけでは本人確認、L3 final review、承認にならない。
+Telegram音声文字起こしは、providerのcanonical nameから正確なmodel ID配列への`BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON`で個別に許可する。設定例：`{"openai-compatible":["gpt-4o-mini-transcribe"]}`。未記載modelは音声を受け付けない。設定してもendpoint/modelの実対応や実provider動作を証明しない。対応endpointには音声文字起こしAPIが必要で、入力はsignature検査済みのFLAC／MP3／MP4／M4A／OGG／WAV／WebM、最大20 MiB。raw bytesは一回の計算に限る揮発入力とし、添付識別子・ファイル名は通常metadataへ保存しない。
+
+文字起こし後に通常のC計算へ続ける動作は、別の明示設定`BLUE_TANUKI_LLM_AUDIO_TASK_CAPABLE_MODELS_JSON`でprovider／model単位に許可する。値の形式は`{"openai-compatible":["<transcription-and-chat-capable-model-id>"]}`で、実際のmodel IDへ置き換える。ここに設定するmodelは文字起こし許可一覧にも含め、同じmodelが文字起こしendpointとtext completion双方に対応する必要がある。未設定なら従来どおり文字起こしのみを返す。taskモードは文字起こしと通常C呼出しの最大2回分を予約し、transcription／text双方のprovider設定と有限費用上限を満たさない呼出しを開始しない。fallbackは`llm.audio.transcription`と`user_audio`を許可するHDS-issued authorization、fallback profileの同能力・費用上限に加え、同modelのtask許可を満たす場合だけ使う。
+
+taskモードの文字起こしは、確度情報のない未信頼なC入力として同一の揮発計算内でのみ使う。音声呼出しでは既存session historyをproviderへ送らず、元の要求文・C応答もsession historyへ追加しないため、raw audioとtranscript本文が履歴経由で残らない。Cの返答・候補は通常のHDS／Output Audit経路へ戻るが、文字起こしはHDSへの本人認証・承認・権限入力ではなく、providerのtool候補も実行許可にならない。音声だけでは本人確認、L3 final review、送信・変更の承認は成立しない。文字起こしまたはtask許可設定も、モデル／endpointの実対応や実provider動作を証明しない。
 
 ---
 

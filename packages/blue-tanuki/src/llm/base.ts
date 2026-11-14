@@ -8,6 +8,8 @@ import {
 
 export const LLM_IMAGE_INPUT_CAPABILITY = "llm.image.input";
 export const LLM_AUDIO_TRANSCRIPTION_CAPABILITY = "llm.audio.transcription";
+/** Audio transcription followed by normal C reasoning in the same bounded task. */
+export const LLM_AUDIO_TASK_CAPABILITY = "llm.audio.task";
 export const MAX_LLM_IMAGE_INPUTS = 4;
 export const MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_LLM_AUDIO_INPUTS = 1;
@@ -37,8 +39,10 @@ export interface LLMRequest {
    * into session messages, audit payloads, or ordinary request metadata.
    */
   ephemeral_images?: readonly TransientImageInput[];
-  /** Volatile inbound audio, consumed only by an explicitly configured transcription model. */
+  /** Volatile inbound audio, consumed only by an explicitly configured audio-capable model. */
   ephemeral_audio?: readonly TransientAudioInput[];
+  /** Route a configured transcription model's untrusted transcript into normal C reasoning. */
+  audio_transcript_for_compute?: true;
   backend_hint?: string;
   max_tokens?: number;
   temperature?: number;
@@ -93,7 +97,7 @@ export interface LLMBackend {
   readonly name: string;
   /** Static capabilities for custom backends. Provider adapters may make this model-specific below. */
   readonly capabilities?: readonly string[];
-  supportsCapability?(capability: string, model?: string): boolean;
+  supportsCapability?(capability: string, model?: string, backendHint?: string): boolean;
   /** Set only by a local registry that stamps its selected canonical backend on responses. */
   readonly canonical_provider_identity?: true;
   call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
@@ -103,9 +107,10 @@ export function backendSupportsCapability(
   backend: LLMBackend,
   capability: string,
   model?: string,
+  backendHint?: string,
 ): boolean {
   return backend.supportsCapability
-    ? backend.supportsCapability(capability, model)
+    ? backend.supportsCapability(capability, model, backendHint)
     : backend.capabilities?.includes(capability) ?? false;
 }
 
