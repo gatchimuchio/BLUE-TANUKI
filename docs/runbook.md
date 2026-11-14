@@ -166,6 +166,8 @@ Telegram音声文字起こしは、providerのcanonical nameから正確なmodel
 
 taskモードの文字起こしは、確度情報のない未信頼なC入力として同一の揮発計算内でのみ使う。音声呼出しでは既存session historyをproviderへ送らず、元の要求文・C応答もsession historyへ追加しないため、raw audioとtranscript本文が履歴経由で残らない。Cの返答・候補は通常のHDS／Output Audit経路へ戻るが、文字起こしはHDSへの本人認証・承認・権限入力ではなく、providerのtool候補も実行許可にならない。音声だけでは本人確認、L3 final review、送信・変更の承認は成立しない。文字起こしまたはtask許可設定も、モデル／endpointの実対応や実provider動作を証明しない。
 
+WebChatのowner taskは、ownerが仕事文面と委任目的を指定して明示送信した場合に限り、音声1件を同じC計算の入力として添付できる。この経路は`BLUE_TANUKI_LLM_AUDIO_TASK_CAPABLE_MODELS_JSON`で許可されたtask対応modelを必須とし、未対応時は文字起こしだけの応答へ格下げせずC計算を失敗させる。画像1枚との併用は可能で、その場合は同一modelの画像入力許可も必要。Canvas成果物とは併用しない。raw audioは一回の依頼にだけ渡し、依頼digestには形式・長さ・hashだけを含め、受信後はbufferを消去する。文字起こし専用経路は引き続きownerが候補を確認してから計画欄へ明示入力する方式であり、直接task添付とは別である。音声内容は未信頼で、owner task選択も本人確認・承認・実行権限を作らない。
+
 ---
 
 ## 2.1 Plugin Loader And Permissions

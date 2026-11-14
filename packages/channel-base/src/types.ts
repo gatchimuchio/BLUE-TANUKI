@@ -17,6 +17,8 @@ export interface InboundEphemeralContext {
   readonly request_id: string;
   readonly ephemeral_images: readonly TransientImageInput[];
   readonly ephemeral_audio?: readonly TransientAudioInput[];
+  /** Require an audio-task-capable C model; do not degrade an owner task to transcription-only. */
+  readonly require_audio_task_compute?: boolean;
   readonly ephemeral_canvas_artifact?: TransientCanvasArtifactInput;
 }
 

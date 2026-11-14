@@ -149,7 +149,7 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 - Blue側の一回claim・session-scoped状態照会・戻りtransportは接続されたが、D4アプリ側producer・受信loopとの結合、workspace登録、再接続・切断後の処理結果回復は未確認。D03.01全体は未成立で、D4 Pocket repoは変更していない
 - WSは長期Bearerでなくsingle-use ticketで認証する。ticket消費後は再利用できない。接続はin-memoryで、Gateway再起動後の継続・結果再取得を保証しない
 - セッションは in-memory (`Map<user, Set<WebSocket>>`)。プロセス再起動で切断
-- HTTP body の hard cap 1MB
+- 通常HTTP bodyのhard capは1 MiB。`/owner/audio-transcribe`と`/owner/task-compute`は個別の媒体上限に対応したbody capを使う。owner taskは画像1枚（最大5 MiB）と音声1件（最大20 MiB）を併用できるが、Canvas成果物と音声は併用できない。
 
 #### Slack / Discord (`channel-slack`, `channel-discord`) — release-polished preview
 

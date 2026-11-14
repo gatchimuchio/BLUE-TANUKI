@@ -1072,6 +1072,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         rememberOwnerTaskStatusSubmissionId(body && body.submission_id);
         const imageInput = body && body.image_input && typeof body.image_input === "object"
           ? body.image_input : null;
+        const audioInput = body && body.audio_input && typeof body.audio_input === "object"
+          ? body.audio_input : null;
         const canvasArtifactInput = body && body.canvas_artifact_input && typeof body.canvas_artifact_input === "object"
           ? body.canvas_artifact_input : null;
         let serializedBody = JSON.stringify(body);
@@ -1085,9 +1087,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           serializedBody = "";
           if (imageInput && typeof imageInput.data_base64 === "string") imageInput.data_base64 = "";
+          if (audioInput && typeof audioInput.data_base64 === "string") audioInput.data_base64 = "";
           if (canvasArtifactInput && typeof canvasArtifactInput.content === "string") canvasArtifactInput.content = "";
           if (body && typeof body === "object") {
             delete body.image_input;
+            delete body.audio_input;
             delete body.canvas_artifact_input;
           }
           if (state.canvasArtifactInput === canvasArtifactInput) {
@@ -1632,6 +1636,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (isCanvasTask && !canvasArtifactInput) {
           throw new Error("Canvas成果物の参照と本文が一致しません。表示物から操作意図を再準備してください");
         }
+        const audioInput = byId("owner-task-audio");
+        const audioFile = audioInput.files && audioInput.files.length === 1 ? audioInput.files[0] : null;
+        if (audioInput.files && audioInput.files.length > 1) throw new Error("音声ファイルは1件だけ選択してください");
+        if (audioFile && canvasArtifactInput) throw new Error("音声とCanvas成果物は同じowner taskへ添付できません");
         const imageInput = byId("owner-task-image");
         const imageFile = imageInput.files && imageInput.files.length === 1 ? imageInput.files[0] : null;
         let imagePayload;
@@ -1652,6 +1660,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             imagePayload = { media_type: imageFile.type, data_base64: btoa(binary) };
           } finally {
             imageBytes.fill(0);
+          }
+        }
+        let audioPayload;
+        if (audioFile) {
+          if (!Number.isSafeInteger(audioFile.size) || audioFile.size < 1 || audioFile.size > 20 * 1024 * 1024) {
+            throw new Error("音声は1 byte以上、20 MiB以下にしてください");
+          }
+          const audioBytes = new Uint8Array(await audioFile.arrayBuffer());
+          try {
+            let dataBase64 = "";
+            for (let offset = 0; offset < audioBytes.length; offset += 0x6000) {
+              const binaryChunk = String.fromCharCode.apply(null, Array.from(audioBytes.subarray(offset, offset + 0x6000)));
+              dataBase64 += btoa(binaryChunk);
+            }
+            audioPayload = { data_base64: dataBase64 };
+          } finally {
+            audioBytes.fill(0);
           }
         }
         const completionRulesText = byId("owner-task-completion-rules").value.trim();
@@ -1679,12 +1704,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           submission_id: submissionId,
           ...(completionRules !== undefined ? { goal_completion_rules: completionRules } : {}),
           ...(imagePayload ? { image_input: imagePayload } : {}),
+          ...(audioPayload ? { audio_input: audioPayload } : {}),
           ...(canvasArtifactInput ? { canvas_artifact_input: canvasArtifactInput } : {})
         });
         renderOwnerTaskStatusSubmissionIds(submissionId);
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
         imageInput.value = "";
+        audioInput.value = "";
         byId("owner-task-completion-rules").value = "";
         appendChat("owner", task);
         appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました", result.request_id);

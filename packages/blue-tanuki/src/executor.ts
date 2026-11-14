@@ -201,6 +201,7 @@ export interface ExecutorExecutionContext {
   /** One-call image bytes; kept outside command payloads and session history. */
   ephemeral_images?: readonly TransientImageInput[];
   ephemeral_audio?: readonly TransientAudioInput[];
+  require_audio_task_compute?: boolean;
   /** One-call Canvas data; transformed to an untrusted C input message and omitted from session history. */
   ephemeral_canvas_artifact?: TransientCanvasArtifactInput;
   /** Synchronous resource admission after ticket validation but before any command work. */
@@ -1859,7 +1860,8 @@ export class Executor {
       switch (cmd.type) {
         case "llm_call":
           feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal,
-            context.ephemeral_images, context.ephemeral_audio, context.ephemeral_canvas_artifact, markInvoked);
+            context.ephemeral_images, context.ephemeral_audio, context.ephemeral_canvas_artifact,
+            context.require_audio_task_compute, markInvoked);
           break;
         case "tool_call":
           feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal,
@@ -1939,10 +1941,14 @@ export class Executor {
     transientImages?: readonly TransientImageInput[],
     transientAudio?: readonly TransientAudioInput[],
     transientCanvasArtifact?: TransientCanvasArtifactInput,
+    requireAudioTaskCompute = false,
     markInvoked?: (boundary: ExecutionInvocationBoundary) => void,
   ): Promise<ExecuteFeedback> {
     const ephemeralImages = validateLLMImageInputs(transientImages);
     const ephemeralAudio = validateLLMAudioInputs(transientAudio);
+    if (requireAudioTaskCompute && ephemeralAudio.length === 0) {
+      throw new Error("llm_audio_task_input_missing");
+    }
     const ephemeralCanvasArtifact = transientCanvasArtifact
       ? validateTransientCanvasArtifactInput(transientCanvasArtifact)
       : undefined;
@@ -1966,6 +1972,9 @@ export class Executor {
       payload.model,
       payload.backend_hint,
     );
+    if (requireAudioTaskCompute && !audioTaskEnabled) {
+      throw new Error("llm_audio_task_capability_required");
+    }
 
     let effectiveMessages = ephemeralCanvasArtifact
       ? withTransientCanvasArtifactMessages(payload.messages, ephemeralCanvasArtifact)

@@ -105,7 +105,7 @@ const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
-const MAX_OWNER_TASK_JSON_BYTES = Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4 + 256 * 1024;
+const MAX_OWNER_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
 const MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4 + 256 * 1024;
 const CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS = 30_000;
 const CONTROL_CENTER_LAUNCH_HANDOFF_CAP = 32;
@@ -1318,9 +1318,18 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const ownerTaskImage = imageRead.image;
+      const audioRead = readOwnerAudio(body?.audio_input);
+      if (!audioRead.ok) {
+        ownerTaskImage?.data.fill(0);
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_audio" }));
+        return;
+      }
+      const ownerTaskAudio = audioRead.audio;
       const canvasArtifactRead = readOwnerTaskCanvasArtifact(body?.canvas_artifact_input);
       if (!canvasArtifactRead.ok) {
         ownerTaskImage?.data.fill(0);
+        ownerTaskAudio?.data.fill(0);
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_canvas_artifact" }));
         return;
@@ -1335,8 +1344,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           (canvasTaskReference.kind === "valid" && (!ownerTaskCanvasArtifact ||
             !submittedCanvasArtifactReference ||
             !sameCanvasArtifactReference(canvasTaskReference.reference, submittedCanvasArtifactReference))) ||
-          (canvasTaskReference.kind !== "valid" && ownerTaskCanvasArtifact !== undefined)) {
+          (canvasTaskReference.kind !== "valid" && ownerTaskCanvasArtifact !== undefined) ||
+          (ownerTaskAudio !== undefined && ownerTaskCanvasArtifact !== undefined)) {
         ownerTaskImage?.data.fill(0);
+        ownerTaskAudio?.data.fill(0);
         ownerTaskCanvasArtifact?.data.fill(0);
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "canvas_artifact_input_task_mismatch" }));
@@ -1344,6 +1355,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (body) {
         delete body.image_input;
+        delete body.audio_input;
         delete body.canvas_artifact_input;
       }
       const requestId = randomUUID();
@@ -1360,6 +1372,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           byte_length: ownerTaskImage.data.byteLength,
           digest: createHash("sha256").update(ownerTaskImage.data).digest("hex"),
         } : null,
+        ownerTaskAudio ? {
+          format: ownerTaskAudio.format,
+          byte_length: ownerTaskAudio.data.byteLength,
+          digest: createHash("sha256").update(ownerTaskAudio.data).digest("hex"),
+        } : null,
         ownerTaskCanvasArtifact ? {
           media_type: ownerTaskCanvasArtifact.media_type,
           byte_length: ownerTaskCanvasArtifact.data.byteLength,
@@ -1371,6 +1388,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       let claimedRequestId: string | undefined;
       let handlerStarted = false;
       let imageTransferred = false;
+      let audioTransferred = false;
       let canvasArtifactTransferred = false;
       try {
         const claim = submissionStore.claim({
@@ -1454,14 +1472,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           },
         });
         handlerStarted = true;
-        const ephemeralContext: InboundEphemeralContext | undefined = ownerTaskImage || ownerTaskCanvasArtifact
+        const ephemeralContext: InboundEphemeralContext | undefined = ownerTaskImage || ownerTaskAudio || ownerTaskCanvasArtifact
           ? {
             request_id: requestId,
             ephemeral_images: ownerTaskImage ? [ownerTaskImage] : [],
+            ...(ownerTaskAudio ? { ephemeral_audio: [ownerTaskAudio] } : {}),
+            ...(ownerTaskAudio ? { require_audio_task_compute: true } : {}),
             ...(ownerTaskCanvasArtifact ? { ephemeral_canvas_artifact: ownerTaskCanvasArtifact } : {}),
           }
           : undefined;
         imageTransferred = ownerTaskImage !== undefined;
+        audioTransferred = ownerTaskAudio !== undefined;
         canvasArtifactTransferred = ownerTaskCanvasArtifact !== undefined;
         void Promise.resolve().then(() => handler(inboundReq, ephemeralContext)).then(() => {
           submissionStore.markHandlerReturned(requestId);
@@ -1473,6 +1494,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           this.notifyOwnerTaskProcessingFailure(replyTo, requestId);
         }).finally(() => {
           ownerTaskImage?.data.fill(0);
+          ownerTaskAudio?.data.fill(0);
           ownerTaskCanvasArtifact?.data.fill(0);
         });
         res.writeHead(202, {
@@ -1494,6 +1516,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         error: "owner_task_compute_unavailable" }));
       } finally {
         if (!imageTransferred) ownerTaskImage?.data.fill(0);
+        if (!audioTransferred) ownerTaskAudio?.data.fill(0);
         if (!canvasArtifactTransferred) ownerTaskCanvasArtifact?.data.fill(0);
       }
       return;
