@@ -7,6 +7,7 @@ import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
@@ -34,6 +35,9 @@ import { projectOperationPlanStatus } from "../src/serve_projection.js";
 import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
+import { createMcpToolCallProposal, inspectMcpCatalog } from "../src/mcp_connection_client.js";
+
+const MCP_SERVE_FIXTURE_PATH = fileURLToPath(new URL("./fixtures/mcp_live_process_server.mjs", import.meta.url));
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function stableHash(value: unknown): string {
@@ -2783,6 +2787,185 @@ describe("保存済みGitHub結果→Gateway process→WebChat Owner表示", () 
   }
 });
 
+describe("Gateway process MCP OwnerのL3確認→no-store再確認→合成call", () => {
+  it("古い確認digestを拒否し、fresh no-store review後の一回だけを実行する", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "blue-mcp-owner-review-served-"));
+    servedGatewayTempRoots.push(tempRoot);
+    const workspace = join(tempRoot, "workspace");
+    const stateRoot = join(tempRoot, "state");
+    const outputRoot = join(tempRoot, "mcp-output");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(outputRoot, { recursive: true });
+    const callCountPath = join(outputRoot, "mcp-call-count.txt");
+    const readCallCount = () => existsSync(callCountPath) ? readFileSync(callCountPath, "utf8") : "0";
+    const note = "gateway-review-synthetic";
+    const requestId = randomUUID();
+    let mcp: ServedMcpFixtureProcess | undefined;
+    let gateway: ServedGatewayProcess | undefined;
+    let socket: WebSocket | undefined;
+    let seedState: OperationPlanStateStore | undefined;
+    let seedHds: HDSUpperController | undefined;
+    const frames: ServedGatewayFrame[] = [];
+
+    try {
+      mcp = await startServedMcpFixture(outputRoot);
+      const endpoint = mcp.endpoint;
+      const catalog = await inspectMcpCatalog({ endpoint, fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
+      const proposal = createMcpToolCallProposal({
+        plan_id: `mcp-served-${requestId}`,
+        request_id: requestId,
+        step_id: "mcp-served-action",
+        catalog,
+        tool_name: "write_synthetic_note",
+        arguments: { note },
+        profile: "native-live",
+      });
+
+      const seedPath = join(tempRoot, "seed-j.sqlite");
+      seedState = new OperationPlanStateStore(seedPath);
+      seedHds = new HDSUpperController({ operation_plan_state: seedState });
+      const computeRequest = createGatewayInternalInboundRequest({
+        id: requestId,
+        channel: "webchat",
+        user: "webchat-owner-token-holder",
+        content: `Write one synthetic MCP note: ${note}`,
+        timestamp: Date.now(),
+        goal_criteria: {
+          schema_version: "blue-tanuki.goal-criteria.v1",
+          criteria: [{ criterion_ref: `mcp-served-${requestId}`, criterion_kind: "objective",
+            tool_relations: [{ tool_name: "mcp.call", relation: "supports" }] }],
+        },
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": requestId,
+        },
+      });
+      const compute = seedHds.decide(computeRequest);
+      if (compute.command?.type !== "llm_call") throw new Error("MCP process fixture did not create the C plan request");
+      seedHds.onFeedback({ command_id: compute.command.id, status: "success",
+        result: { content: "Synthetic local MCP candidate.", operation_core: { status: "valid_plan", plan: proposal.plan } },
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+      const stored = seedHds.getRuntimeSnapshot().operation_plans.plans[0];
+      if (!stored) throw new Error("MCP process fixture plan was not retained by HDS");
+      expect(stored.steps).toMatchObject([{ operation: "mcp.call", status: "not_selected" }]);
+      seedHds.closeOperationPlanMemory();
+      seedHds.close();
+      seedHds = undefined;
+      seedState.close();
+      seedState = undefined;
+
+      const runtimePlanState = join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      mkdirSync(dirname(runtimePlanState), { recursive: true });
+      copyFileSync(seedPath, runtimePlanState);
+      const completeHistory = new CompleteHistoryStore({ filepath: join(tempRoot, "complete-history.jsonl") });
+      completeHistory.append({ kind: "audit_history", actor: "synthetic-fixture", source: "mcp-owner-review-seed",
+        timestamp: Date.now(), payload: { synthetic: true, used_for_authority: false } });
+      expect(completeHistory.verify()).toBe(true);
+
+      const gatewayPort = await reserveServedGatewayPort();
+      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { mcpEndpoint: endpoint });
+      await waitForServedGatewayHealth(gatewayPort, gateway);
+      socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
+      const reviewRequest = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-owner-token", "content-type": "application/json" },
+        body: JSON.stringify({ user: "fixture-owner", content: `plan:review ${JSON.stringify({
+          plan_id: stored.plan_id, revision_digest: stored.revision_digest, step_id: operationPlanDigest("mcp-served-action"),
+        })}` }),
+      });
+      const reviewRequestBody = await reviewRequest.text();
+      expect(reviewRequest.status).toBe(202);
+
+      const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+          headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
+        });
+        if (response.status !== 200) throw new Error(`MCP process approval queue unavailable: ${response.status}`);
+        return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+      };
+      let pending: Record<string, unknown> | undefined;
+      let lastQueue: { pending_approvals: Array<Record<string, unknown>> } | undefined;
+      const approvalDeadline = Date.now() + 10_000;
+      while (Date.now() < approvalDeadline && !pending) {
+        lastQueue = await loadQueue();
+        pending = lastQueue.pending_approvals.find((item) => item.final_review_required === true &&
+          item.content_review_required === true && JSON.stringify(item).includes("mcp.call"));
+        if (!pending) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      }
+      if (!pending) throw new Error(`MCP action did not reach the L3 content-review queue: invoke=${reviewRequestBody}; ` +
+        `queue=${JSON.stringify(lastQueue)}; frames=${JSON.stringify(frames)}; stderr=${gateway.stderr.join("")}`);
+      expect(typeof pending.command_id).toBe("string");
+      expect(typeof pending.approval_token).toBe("string");
+      const approvalUrl = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pending.command_id))}`;
+      expect(JSON.stringify(pending)).not.toContain(note);
+      expect(readCallCount()).toBe("0");
+
+      const premature = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token }),
+      });
+      expect(premature.status).toBe(409);
+      expect(await premature.json()).toMatchObject({ error: "approval_content_review_required" });
+
+      const getContentReview = async () => {
+        const response = await fetch(`${approvalUrl}/content`, {
+          method: "POST", headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
+        });
+        const body = await response.text();
+        expect(response.status, `${body}; gateway=${gateway?.stderr.join("")}`).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        return JSON.parse(body) as Record<string, unknown>;
+      };
+      const firstReview = await getContentReview();
+      expect(firstReview).toMatchObject({ kind: "mcp_call", command_id: pending.command_id,
+        arguments: { note }, no_store: true, used_for_authority: false, may_execute: false,
+        tool_description: "Write one synthetic test note under the test-owned temporary root." });
+      expect(readCallCount()).toBe("0");
+
+      const staleApproval = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
+          content_review_digest: "f".repeat(64) }),
+      });
+      expect(staleApproval.status).toBe(409);
+      expect(await staleApproval.json()).toMatchObject({ error: "approval_content_review_stale" });
+      expect(readCallCount()).toBe("0");
+
+      const freshReview = await getContentReview();
+      expect(freshReview.tool_description).toBe("Write one synthetic test note under the test-owned temporary root.");
+      expect(freshReview.review_digest).toBe(firstReview.review_digest);
+      const approval = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer f05.02-synthetic-resume-token", "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token,
+          content_review_digest: freshReview.review_digest }),
+      });
+      const approvalText = await approval.text();
+      expect(approval.status, `${approvalText}; gateway=${gateway.stderr.join("")}`).toBe(200);
+      expect(JSON.parse(approvalText)).toMatchObject({ ok: true, result: { approval: "approve", executed: true } });
+      expect(readCallCount()).toBe("1");
+      expect(await readFileSync(join(outputRoot, "mcp-note.txt"), "utf8")).toBe(note);
+      expect(gateway.child.exitCode).toBeNull();
+    } finally {
+      if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) socket.terminate();
+      if (gateway) await stopServedGateway(gateway);
+      if (mcp) await stopServedMcpFixture(mcp.child);
+      if (seedHds) {
+        seedHds.closeOperationPlanMemory();
+        seedHds.close();
+      }
+      seedState?.close();
+    }
+  }, 60_000);
+});
+
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
   it.each(githubWriteCases)(
     "実Gateway processは$operation/$comment_kindを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
@@ -3265,8 +3448,61 @@ interface ServedGatewayProcess {
   readonly stderr: string[];
 }
 
+interface ServedMcpFixtureProcess {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly endpoint: string;
+}
+
+async function startServedMcpFixture(root: string, port = 0):
+  Promise<ServedMcpFixtureProcess> {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"]) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  const child = spawn(process.execPath, [MCP_SERVE_FIXTURE_PATH, root, String(port)], {
+    stdio: "pipe", env, windowsHide: true,
+  });
+  return await new Promise((resolveReady, rejectReady) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      rejectReady(new Error("served_mcp_fixture_start_timeout"));
+    }, 10_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      const match = /(?:^|\r?\n)READY (http:\/\/127\.0\.0\.1:\d+\/mcp)(?:\r?\n|$)/u.exec(stdout);
+      if (!match) return;
+      clearTimeout(timeout);
+      resolveReady({ child, endpoint: match[1]! });
+    });
+    child.once("error", (error) => { clearTimeout(timeout); rejectReady(error); });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      rejectReady(new Error(`served_mcp_fixture_exit_before_ready:${code ?? signal ?? "unknown"}:${stderr.slice(-200)}`));
+    });
+  });
+}
+
+async function stopServedMcpFixture(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.stdin.end("STOP\n");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([exited, new Promise<void>((resolveWait) => { timeout = setTimeout(resolveWait, 2_000); })]);
+  if (timeout) clearTimeout(timeout);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill();
+    await exited;
+  }
+}
+
 function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string,
-  options: { githubMockPort?: number; networkGuardPath?: string } = {}): ServedGatewayProcess {
+  options: { githubMockPort?: number; networkGuardPath?: string; mcpEndpoint?: string } = {}): ServedGatewayProcess {
   const repositoryRoot = findWorkspaceRoot();
   const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
   if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
@@ -3300,6 +3536,7 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
       BT_F05_02_GITHUB_MOCK_PORT: String(options.githubMockPort),
     });
   }
+  if (options.mcpEndpoint !== undefined) env.BLUE_TANUKI_MCP_ENDPOINT = options.mcpEndpoint;
   // No host GITHUB_TOKEN or provider credential is inherited; the configured mock gets only a synthetic token.
   const args = options.networkGuardPath ? ["--require", options.networkGuardPath, entrypoint, "--serve"] : [entrypoint, "--serve"];
   const child = spawn(process.execPath, args, {
