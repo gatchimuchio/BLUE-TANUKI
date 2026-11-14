@@ -489,10 +489,57 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return String(kind || "System");
       }
 
+      function renderOperationResultReflection(text) {
+        if (typeof text !== "string" || text.length > 64000) return text;
+        let review;
+        try { review = JSON.parse(text); } catch (_) { return text; }
+        const isDigestValue = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+        if (!isObject(review) || review.schema_version !== "operation-result-reflection-review.v1" ||
+            review.status !== "references_verified_interpretation_unverified" ||
+            !isDigestValue(review.projection_digest) || review.interpretation_status !== "candidate_only" ||
+            review.memory_adoption !== false || review.used_as_world_truth !== false ||
+            review.used_for_authority !== false || review.may_execute !== false ||
+            !Array.isArray(review.citations) || review.citations.length < 1 || review.citations.length > 8) return text;
+
+        const evidenceLabels = {
+          file_search: "file.searchの観測",
+          external_receipt: "外部作用receiptの照合観測",
+          file_state: "file.writeの状態観測",
+          mcp_call: "MCP tool応答の観測（外部由来・非信頼）",
+        };
+        const entries = [];
+        for (let index = 0; index < review.citations.length; index += 1) {
+          const citation = review.citations[index];
+          if (!isObject(citation) || typeof citation.record_id !== "string" || citation.record_id.length < 1 ||
+              citation.record_id.length > 200 || !isDigestValue(citation.record_digest) ||
+              typeof citation.interpretation !== "string" || citation.interpretation.length < 1 ||
+              citation.interpretation.length > 800 || typeof citation.uncertainty !== "string" ||
+              citation.uncertainty.length < 1 || citation.uncertainty.length > 800 || !isObject(citation.source) ||
+              citation.source.record_id !== citation.record_id || citation.source.record_digest !== citation.record_digest ||
+              citation.source.adoption_status !== "observation_only" || citation.source.counterevidence_status !== "not_assessed" ||
+              citation.source.used_as_world_truth !== false || citation.source.used_for_authority !== false ||
+              citation.source.may_execute !== false || typeof citation.source.evidence_type !== "string" ||
+              !Object.prototype.hasOwnProperty.call(evidenceLabels, citation.source.evidence_type)) return text;
+          entries.push([
+            (index + 1) + ". " + evidenceLabels[citation.source.evidence_type],
+            "引用ID: " + citation.record_id,
+            "記録digest: " + citation.record_digest,
+            "解釈候補（未検証）: " + citation.interpretation,
+            "不確実性: " + citation.uncertainty,
+          ].join("\n"));
+        }
+        return [
+          "観測の解釈候補（未検証）",
+          "Jは引用元IDとdigestの一致だけを確認しています。解釈の事実適合・世界の真実・承認・実行権限は確認していません。記憶も更新していません。",
+          ...entries,
+        ].join("\n\n");
+      }
+
       function appendChat(kind, text, requestId) {
         const log = byId("chat-log");
         const item = document.createElement("article");
         const role = chatRoleForKind(kind);
+        const displayText = role === "assistant" ? renderOperationResultReflection(text) : text;
         const requestRef = typeof requestId === "string" && requestId.length > 0 && requestId.length <= 200
           ? requestId : "";
         if (requestRef) item.dataset.requestId = requestRef;
@@ -500,7 +547,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ? '<small class="chat-request-ref">依頼ID末尾: ' + escapeHtml(requestRef.slice(-12)) + '</small>'
           : "";
         item.className = "chat-item " + role;
-        item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(text) + '</p>' + correlation + '</div>';
+        item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(displayText) + '</p>' + correlation + '</div>';
         if (log.querySelector(".chat-item.system .chat-bubble p")?.textContent === "Ready.") log.innerHTML = "";
         const bubble = item.querySelector(".chat-bubble");
         if (role === "assistant" && bubble && isCanvasPreviewContent(text)) {
