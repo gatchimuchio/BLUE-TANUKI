@@ -1342,13 +1342,6 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "canvas_artifact_input_task_mismatch" }));
         return;
       }
-      if (ownerTaskImage && ownerTaskCanvasArtifact) {
-        ownerTaskImage.data.fill(0);
-        ownerTaskCanvasArtifact.data.fill(0);
-        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, error: "owner_task_media_combination_unsupported" }));
-        return;
-      }
       if (body) {
         delete body.image_input;
         delete body.canvas_artifact_input;

@@ -1637,7 +1637,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         let imagePayload;
         if (imageInput.files && imageInput.files.length > 1) throw new Error("画像は1枚だけ選択してください");
         if (imageFile) {
-          if (canvasArtifactInput) throw new Error("Canvas本文と画像は同じtaskへ同時に添付できません");
           if (imageFile.type !== "image/jpeg" && imageFile.type !== "image/png") {
             throw new Error("JPEGまたはPNG画像を選択してください");
           }

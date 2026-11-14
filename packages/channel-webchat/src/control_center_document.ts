@@ -171,7 +171,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
             <label for="owner-task-image">画像を添付（JPEG/PNG、1枚、最大5 MiB、一時入力）</label>
             <input id="owner-task-image" type="file" accept="image/jpeg,image/png" />
-            <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。</p>
+            <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。Canvas成果物本文と画像は同じ仕事へ併せて渡せます。どちらも計算入力に限り、権限・承認根拠にはなりません。</p>
             <label for="owner-audio-transcription-file">音声を文字起こし（対応音声、1件、最大20 MiB、一時入力）</label>
             <input id="owner-audio-transcription-file" type="file" accept="audio/flac,audio/x-flac,audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,video/mp4,audio/ogg,application/ogg,audio/opus,audio/wav,audio/x-wav,audio/wave,audio/webm,video/webm,.flac,.mp3,.mpeg,.mpga,.mp4,.m4a,.ogg,.oga,.wav,.webm" />
             <p class="muted">音声は一回のC文字起こし候補にだけ使います。話者の本人確認・承認には使いません。候補と確度の有無を確認し、計画に使う場合はownerが内容を明示して計画欄へ入力してください。</p>
