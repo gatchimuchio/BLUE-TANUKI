@@ -117,7 +117,7 @@ POSIX shellでは `pnpm gateway -- --task-stdin < task.txt`。これにより本
 
 資料整理の入力本文は、shell履歴やprocess argumentへ内容を置かない `--organize-stdin` でも渡せる。UTF-8を厳密に検査し、空入力・12,000 UTF-16コード単位超・48,000 byte超・追加のinline引数を拒否する。例: `Get-Content -Raw .\source.txt | pnpm gateway -- --organize-stdin`（PowerShell）、`pnpm gateway -- --organize-stdin < source.txt`（POSIX shell）。既存の `--organize <本文>` は互換用に残るため、秘密や個人情報を含む本文には使わない。
 
-CLIの一回実行中にCtrl+C（SIGINT）またはSIGTERMを受けると、Broker対象確認へ同じAbortSignalを渡し、停止が確認された場合はExecutorを開始せずHDS取消記録を残す。WebChatのOwner Taskも対象確認の開始前にactive execution registryへ登録し、同じ中止要求をBroker確認・Executorへ渡す。対応adapterの読取要求はsignalにより中断を試みるが、通信相手側の処理停止を保証しない。中止を確認できない読取は戻り後にExecutorを開始せず、結果不明を残す。Executor実行中の中止要求は結果・結果不明の帰還を維持する。いずれもworker停止や外部作用の取消完了を意味しない。同じ仕事を再送する前に状態を確認する。終了コードはSIGINTで130、SIGTERMで143。
+CLIの一回実行中にCtrl+C（SIGINT）またはSIGTERMを受けると、Broker対象確認へ同じAbortSignalを渡し、停止が確認された場合はExecutorを開始せずHDS取消記録を残す。WebChatのOwner Taskも実行評価後のBroker対象確認開始前にactive execution registryへ登録し、同じ中止要求を確認処理・Executorへ渡す。対応adapterの読取要求はsignalにより中断を試みるが、通信相手側の処理停止を保証しない。中止を確認できない読取は戻り後にExecutorを開始せず、結果不明を残す。Executor実行中の中止要求は結果・結果不明の帰還を維持する。いずれもworker停止や外部作用の取消完了を意味しない。承認時に先行するno-store content-review再検証は別経路で、この中止経路への接続を確認中。同じ仕事を再送する前に状態を確認する。終了コードはSIGINTで130、SIGTERMで143。
 
 規則付きCLI要求は、Gatewayと共有する `BLUE_TANUKI_STATE_ROOT` のprivate J/M状態へ保存される。初回projectionに表示される `計画照会ID digest` を使い、`--goal-completion-status <digest>` で後から同じ状態を読める。このstatus照会は新しいtaskや計算を作らず、LLM／Executorも外部作用も呼ばない。検証済みM receiptの再照合と監査記録は行う。Control CenterでCLI由来の計画をレビューする際は、既存のowner再認証と元owner・channel束縛を使う。照会IDはdigestのみで、計画本文・規則本文は表示しない。
 
