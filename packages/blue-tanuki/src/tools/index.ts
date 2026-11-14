@@ -135,11 +135,13 @@ export {
   buildBrowserSearchFormGetUrl,
   parseBrowserFormGetArguments,
   parseBrowserLinkNavigationArguments,
+  parseBrowserDownloadArguments,
   type BrowserFormGetArguments,
   type BrowserFormInputArguments,
   type BrowserFormInputStageReceipt,
   type BrowserFormGetField,
   type BrowserLinkNavigationArguments,
+  type BrowserDownloadArguments,
   type BrowserSearchFormControlSnapshot,
   type BrowserSearchFormSnapshot,
 } from "./browser_form_submission.js";

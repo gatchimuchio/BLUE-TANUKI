@@ -6013,14 +6013,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "browser_link_navigation") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isDownload = review.action === "download_text_attachment";
+          const expectedOperation = isDownload ? "browser.automation.download" : "browser.automation.click";
+          const expectedEffect = isDownload ? "download_read_unclassified" : "navigation_unclassified";
+          const downloadModeValid = !isDownload || (review.download_mode &&
+            review.download_mode.content_types === "text/plain, text/csv, JSON, XML" &&
+            Number.isSafeInteger(review.download_mode.max_bytes) && review.download_mode.max_bytes >= 1 &&
+            review.download_mode.max_bytes <= 512000 && Number.isSafeInteger(review.download_mode.max_chars) &&
+            review.download_mode.max_chars >= 1 && review.download_mode.max_chars <= 20000 &&
+            review.download_mode.same_origin_only === true && review.download_mode.redirects_allowed === false &&
+            review.download_mode.content_returned_to_agent === true && review.download_mode.saved_locally === false &&
+            review.download_mode.used_for_authority === false && review.download_mode.may_execute === false);
           let parsedPageUrl = null;
           let parsedTargetUrl = null;
           try { parsedPageUrl = new URL(review.page_url); parsedTargetUrl = new URL(review.target_url); }
           catch { /* validation below keeps approval closed */ }
-          if (review.command_id !== commandId || review.operation !== "browser.automation.click" ||
-              review.method !== "GET" || review.external_effect_class !== "navigation_unclassified" ||
+          if (review.command_id !== commandId || (review.action !== "navigate" && !isDownload) ||
+              review.operation !== expectedOperation || review.method !== "GET" || review.external_effect_class !== expectedEffect ||
               review.same_origin_only !== true || review.javascript_enabled !== false ||
               review.credentials_reused !== false || review.downloads_enabled !== false || review.no_store !== true ||
+              !downloadModeValid || (!isDownload && review.download_mode !== undefined) ||
               review.used_for_authority !== false || review.may_execute !== false ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.operation_plan_binding_digest) ||
@@ -6032,9 +6044,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "同一originのリンク遷移";
+          heading.textContent = isDownload ? "同一originリンクのテキスト添付取得" : "同一originのリンク遷移";
           view.appendChild(heading);
-          [
+          const fields = [
             ["現在のページ", review.page_url],
             ["リンク名", review.link_name],
             ["固定された遷移先", review.target_url],
@@ -6042,9 +6054,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["method", "GET。外部効果は未分類"],
             ["ページJavaScript", "無効"],
             ["資格情報・Cookie", "再利用なし"],
-            ["download", "無効"],
+            ["ブラウザーの自動保存", "無効"],
             ["作用直前の再確認", "現在のページ上の同名リンクが同じ完全URLを指す場合だけ進む"],
-          ].forEach(function (field) {
+          ];
+          if (isDownload) {
+            fields.push(["許可する形式", review.download_mode.content_types]);
+            fields.push(["取得上限", review.download_mode.max_bytes + " bytes / " + review.download_mode.max_chars + "文字"]);
+            fields.push(["取得結果", "非信頼テキストとしてCへ返す。ローカル保存・実行はしない"]);
+            fields.push(["HTTPリダイレクト", "拒否"]);
+            fields.push(["保存する場合", "別のfile.write提案とL3確認が必要"]);
+          }
+          fields.forEach(function (field) {
             const row = document.createElement("p");
             const label = document.createElement("strong");
             label.textContent = field[0] + ": ";
@@ -6055,14 +6075,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "ページが変わり同名リンクの遷移先が変化した場合は実行を停止します。GETでも外部状態が変わる可能性があるため、送信先の効果を自動判定しません。";
+          note.textContent = isDownload
+            ? "ページが変わり同名リンクの遷移先が変わった場合、または添付がテキスト形式・上限を満たさない場合は内容を返しません。GETの外部効果は未分類です。"
+            : "ページが変わり同名リンクの遷移先が変化した場合は実行を停止します。GETでも外部状態が変わる可能性があるため、送信先の効果を自動判定しません。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
           view.appendChild(digests);
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
-          button.textContent = "遷移先を再確認";
+          button.textContent = isDownload ? "添付取得条件を再確認" : "遷移先を再確認";
           return;
         }
         if (review.kind === "file_delete_target") {

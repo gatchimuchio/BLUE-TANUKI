@@ -102,9 +102,11 @@ import {
   parseBrowserFormInputArguments,
   parseBrowserFormGetArguments,
   parseBrowserLinkNavigationArguments,
+  parseBrowserDownloadArguments,
   type BrowserFormGetArguments,
   type BrowserFormInputArguments,
   type BrowserLinkNavigationArguments,
+  type BrowserDownloadArguments,
   type BrowserSearchFormSnapshot,
 } from "./browser_form_submission.js";
 import type {
@@ -218,6 +220,7 @@ const BROWSER_AUTOMATION_ENABLE_ENV = "BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW";
 const BROWSER_AUTOMATION_TIMEOUT_MS = 15_000;
 const BROWSER_AUTOMATION_MAX_CHARS = 20_000;
 const BROWSER_FORM_RESPONSE_MAX_BYTES = 512_000;
+const BROWSER_DOWNLOAD_DEFAULT_MAX_BYTES = 64_000;
 const BROWSER_AUTOMATION_VIEWPORT = { width: 1280, height: 720 } as const;
 const FILE_SEARCH_EXACT_TARGET_MAX_BYTES = 1_000_000;
 const BLOCKED_IPS = new BlockList();
@@ -409,6 +412,11 @@ function headerString(value: string | string[] | number | undefined): string | n
   if (Array.isArray(value)) return value[0] ?? null;
   if (typeof value === "number") return String(value);
   return value ?? null;
+}
+
+function unambiguousHeaderString(value: string | string[] | number | undefined): string | null {
+  if (Array.isArray(value)) return value.length === 1 ? value[0] ?? null : null;
+  return headerString(value);
 }
 
 function truncateText(value: string, max: number): string {
@@ -1318,8 +1326,11 @@ async function defaultHttpRequest(
       },
       (res) => {
         const status = res.statusCode ?? 0;
-        const contentType = headerString(res.headers["content-type"]);
-        const contentDisposition = headerString(res.headers["content-disposition"]);
+        const contentType = unambiguousHeaderString(res.headers["content-type"]);
+        const contentDisposition = unambiguousHeaderString(res.headers["content-disposition"]);
+        const rawContentEncoding = res.headers["content-encoding"];
+        const contentEncoding = Array.isArray(rawContentEncoding) && rawContentEncoding.length > 1
+          ? "multiple-values" : unambiguousHeaderString(rawContentEncoding);
         const location = headerString(res.headers.location);
         if (method === "HEAD") {
           res.resume();
@@ -1328,6 +1339,7 @@ async function defaultHttpRequest(
             ok: status >= 200 && status < 300,
             content_type: contentType,
             content_disposition: contentDisposition,
+            content_encoding: contentEncoding,
             location,
             body: "",
             truncated: false,
@@ -1356,6 +1368,7 @@ async function defaultHttpRequest(
               ok: status >= 200 && status < 300,
               content_type: contentType,
               content_disposition: contentDisposition,
+              content_encoding: contentEncoding,
               location,
               body: Buffer.concat(chunks).toString("utf8"),
               truncated,
@@ -1368,6 +1381,7 @@ async function defaultHttpRequest(
             ok: status >= 200 && status < 300,
             content_type: contentType,
             content_disposition: contentDisposition,
+            content_encoding: contentEncoding,
             location,
             body: Buffer.concat(chunks).toString("utf8"),
             truncated,
@@ -1579,6 +1593,7 @@ interface HttpFetchResult extends Omit<HttpFetchResponse, "location"> {
 async function fetchHttpResponse(
   args: Record<string, unknown>,
   opts: HttpFetchOptions = {},
+  allowRedirect?: (from: URL, to: URL) => boolean,
 ): Promise<HttpFetchResult> {
   const rawUrl = stringArg(args, "url")!;
   const method = (stringArg(args, "method", false) ?? "GET").toUpperCase();
@@ -1600,7 +1615,11 @@ async function fetchHttpResponse(
       if (redirects >= HTTP_REDIRECT_LIMIT) {
         throw new Error(`http.fetch redirect limit exceeded (${HTTP_REDIRECT_LIMIT})`);
       }
-      url = parseHttpUrl(new URL(res.location, url).href);
+      const nextUrl = parseHttpUrl(new URL(res.location, url).href);
+      if (allowRedirect && !allowRedirect(url, nextUrl)) {
+        throw new Error("http.fetch redirect target rejected by request policy");
+      }
+      url = nextUrl;
       continue;
     }
     return {
@@ -1609,6 +1628,7 @@ async function fetchHttpResponse(
       ok: res.ok,
       content_type: res.content_type,
       content_disposition: res.content_disposition,
+      content_encoding: res.content_encoding,
       body: res.body,
       truncated: res.truncated,
     };
@@ -4331,7 +4351,7 @@ export async function invokeBrowserRead(
   };
 }
 
-type BrowserObservationNavigation = "http_get" | "browser_snapshot";
+type BrowserObservationNavigation = "http_get" | "browser_snapshot" | "browser_download";
 type BrowserObservationEvidenceSource = "EXTERNAL_EVIDENCE" | "FIXTURE";
 
 function createBrowserObservation(input: {
@@ -4422,6 +4442,13 @@ function isBrowserTextResultContentType(contentType: string | null): boolean {
   );
 }
 
+function isBrowserDownloadContentType(contentType: string | null): boolean {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "text/plain" || mediaType === "text/csv" || mediaType === "text/xml" ||
+    mediaType === "application/json" || mediaType === "application/xml" ||
+    Boolean(mediaType?.endsWith("+json") || mediaType?.endsWith("+xml"));
+}
+
 export function assertBrowserFormResponseIsReadableText(response: Pick<
   HttpFetchResponse,
   "status" | "content_type" | "content_disposition" | "body"
@@ -4430,6 +4457,43 @@ export function assertBrowserFormResponseIsReadableText(response: Pick<
     attachment: "browser_form_get_download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting",
     nonText: "browser_form_get_non_text_result_rejected; download_not_saved; outcome_unknown; automatic_retry=false; next_action=inspect_without_resubmitting",
   });
+}
+
+export function assertBrowserDownloadResponseIsBoundedTextAttachment(
+  response: Pick<HttpFetchResponse, "status" | "ok" | "content_type" | "content_disposition" | "content_encoding" | "body" | "truncated">,
+  limits: { max_bytes: number; max_chars: number },
+): NonNullable<BrowserAutomationRunResult["download"]> {
+  const disposition = response.content_disposition?.trim().toLowerCase() ?? "";
+  if (!response.ok || response.status !== 200) {
+    throw new Error("browser_download_http_response_rejected; content_not_exposed; saved_locally=false; automatic_retry=false");
+  }
+  if (disposition.includes(",") || !/^attachment(?:\s*;|$)/.test(disposition)) {
+    throw new Error("browser_download_response_is_not_an_attachment; content_not_exposed; saved_locally=false");
+  }
+  const contentEncoding = response.content_encoding?.trim().toLowerCase();
+  if (contentEncoding && contentEncoding !== "identity") {
+    throw new Error("browser_download_encoded_content_not_supported; content_not_exposed; saved_locally=false");
+  }
+  if (!isBrowserDownloadContentType(response.content_type)) {
+    throw new Error("browser_download_content_type_not_supported; only_plain_text_csv_json_or_xml; content_not_exposed; saved_locally=false");
+  }
+  if (response.truncated || response.body.includes("\uFFFD")) {
+    throw new Error("browser_download_content_incomplete_or_invalid_utf8; content_not_exposed; saved_locally=false; automatic_retry=false");
+  }
+  const sizeBytes = Buffer.byteLength(response.body, "utf8");
+  if (sizeBytes > limits.max_bytes || response.body.length > limits.max_chars) {
+    throw new Error("browser_download_size_limit_exceeded; partial_content_not_exposed; saved_locally=false; automatic_retry=false");
+  }
+  return {
+    content_type: response.content_type!.split(";", 1)[0]!.trim().toLowerCase(),
+    content: response.body,
+    content_sha256: createHash("sha256").update(response.body, "utf8").digest("hex"),
+    size_bytes: sizeBytes,
+    saved_locally: false,
+    content_is_untrusted: true,
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 function assertBrowserReadableResponseIsText(response: Pick<
@@ -4525,7 +4589,7 @@ async function defaultBrowserAutomationRunner(
           return;
         }
         const parsedRequestUrl = parseHttpUrl(requestUrl);
-        if (request.action === "click" && browserRequest.isNavigationRequest() &&
+        if ((request.action === "click" || request.action === "download") && browserRequest.isNavigationRequest() &&
             parsedRequestUrl.origin !== new URL(request.url).origin) {
           await route.abort();
           return;
@@ -4542,6 +4606,8 @@ async function defaultBrowserAutomationRunner(
     let formResponseTruncated = false;
     let formRequestDispatched = false;
     let formStateDigest: string | undefined;
+    let downloadResult: BrowserAutomationRunResult["download"];
+    let finalUrlOverride: URL | null = null;
     if (request.action === "form_submit" || request.action === "form_fill") {
       if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
         throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
@@ -4568,39 +4634,79 @@ async function defaultBrowserAutomationRunner(
         timeout: request.timeout_ms,
       });
     }
-    if (request.action === "click") {
+    if (request.action === "click" || request.action === "download") {
       if (!request.link_name || !request.target_url || !page.getByRole) {
-        throw new Error("browser_link_navigation_unavailable; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_link_unavailable; saved_locally=false"
+          : "browser_link_navigation_unavailable; mutation_sent=false");
       }
       const link = page.getByRole("link", { name: request.link_name, exact: true });
       if (await link.count() !== 1) {
-        throw new Error("browser_link_navigation_not_unique; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_link_not_unique; saved_locally=false"
+          : "browser_link_navigation_not_unique; mutation_sent=false");
       }
       const href = await link.getAttribute("href");
-      if (!href) throw new Error("browser_link_navigation_target_missing; mutation_sent=false");
+      if (!href) throw new Error(request.action === "download"
+        ? "browser_download_link_target_missing; saved_locally=false"
+        : "browser_link_navigation_target_missing; mutation_sent=false");
       let linkUrl: URL;
       try {
         linkUrl = parseHttpUrl(new URL(href, page.url()).href);
       } catch {
-        throw new Error("browser_link_navigation_target_invalid; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_link_target_invalid; saved_locally=false"
+          : "browser_link_navigation_target_invalid; mutation_sent=false");
       }
       if (linkUrl.origin !== new URL(request.url).origin) {
-        throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_cross_origin_denied; saved_locally=false"
+          : "browser_link_navigation_cross_origin_denied; mutation_sent=false");
       }
       let expectedLinkUrl: URL;
       try {
         expectedLinkUrl = parseHttpUrl(request.target_url);
       } catch {
-        throw new Error("browser_link_navigation_expected_target_invalid; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_reviewed_target_invalid; saved_locally=false"
+          : "browser_link_navigation_expected_target_invalid; mutation_sent=false");
       }
       if (linkUrl.href !== expectedLinkUrl.href) {
-        throw new Error("browser_link_navigation_target_changed_after_review; mutation_sent=false");
+        throw new Error(request.action === "download"
+          ? "browser_download_link_target_changed_after_review; saved_locally=false"
+          : "browser_link_navigation_target_changed_after_review; mutation_sent=false");
       }
-      await resolvePublicTarget(linkUrl, request.env, request.resolveHost);
-      await page.goto(linkUrl.href, {
-        waitUntil: "domcontentloaded",
-        timeout: request.timeout_ms,
-      });
+      if (request.action === "download") {
+        const maxBytes = request.download_max_bytes ?? BROWSER_DOWNLOAD_DEFAULT_MAX_BYTES;
+        let fetched: HttpFetchResult;
+        try {
+          fetched = await fetchHttpResponse({ url: linkUrl.href, method: "GET", max_bytes: maxBytes }, {
+            env: request.env,
+            resolveHost: request.resolveHost,
+            request: request.http_request,
+            signal: request.signal,
+          }, () => false);
+        } catch {
+          if (request.signal?.aborted) {
+            throw new Error("browser_download_cancelled; content_not_exposed; saved_locally=false; automatic_retry=false");
+          }
+          throw new Error("browser_download_request_unavailable; content_not_exposed; saved_locally=false; automatic_retry=false");
+        }
+        if (request.signal?.aborted) {
+          throw new Error("browser_download_cancelled; content_not_exposed; saved_locally=false; automatic_retry=false");
+        }
+        downloadResult = assertBrowserDownloadResponseIsBoundedTextAttachment(fetched, {
+          max_bytes: maxBytes,
+          max_chars: request.max_chars,
+        });
+        finalUrlOverride = parseHttpUrl(fetched.url);
+      } else {
+        await resolvePublicTarget(linkUrl, request.env, request.resolveHost);
+        await page.goto(linkUrl.href, {
+          waitUntil: "domcontentloaded",
+          timeout: request.timeout_ms,
+        });
+      }
     } else if (request.action === "form_submit" || request.action === "form_fill") {
       if (!request.action_url || !request.form_name || !request.fields || !page.getByRole) {
         throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
@@ -4733,19 +4839,20 @@ async function defaultBrowserAutomationRunner(
         }
       }
     }
-    const finalUrl = formFinalUrl?.href ?? page.url();
+    const finalUrl = formFinalUrl?.href ?? finalUrlOverride?.href ?? page.url();
     const parsedFinalUrl = parseHttpUrl(finalUrl);
-    if (request.action === "click" && parsedFinalUrl.origin !== new URL(request.url).origin) {
+    if ((request.action === "click" || request.action === "download") &&
+        parsedFinalUrl.origin !== new URL(request.url).origin) {
       throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
     }
-    if (request.action !== "form_submit") {
+    if (request.action !== "form_submit" && request.action !== "download") {
       await resolvePublicTarget(parsedFinalUrl, request.env, request.resolveHost);
     }
     let title: string;
     let bodyText: unknown;
     try {
-      title = formText === null ? await page.title() : "";
-      bodyText = formText ?? await page.evaluate("document.body ? document.body.innerText : ''");
+      title = downloadResult || formText !== null ? "" : await page.title();
+      bodyText = downloadResult ? "" : formText ?? await page.evaluate("document.body ? document.body.innerText : ''");
     } catch (error) {
       if (request.action === "form_submit" && formRequestDispatched) {
         throw new Error("browser_form_get_result_parse_failed; outcome_unknown; automatic_retry=false");
@@ -4761,6 +4868,7 @@ async function defaultBrowserAutomationRunner(
       truncated: formResponseTruncated || text.length > request.max_chars,
       ...(formHttpStatus === undefined ? {} : { http_status: formHttpStatus }),
       ...(formStateDigest ? { form_state_digest: formStateDigest } : {}),
+      ...(downloadResult ? { download: downloadResult } : {}),
     };
   } finally {
     await context?.close().catch(() => undefined);
@@ -4781,7 +4889,7 @@ async function invokeBrowserPreview(
   action: BrowserAutomationRunRequest["action"],
   linkName?: string,
   formSubmission?: BrowserFormGetArguments | BrowserFormInputArguments,
-  linkNavigation?: BrowserLinkNavigationArguments,
+  linkNavigation?: BrowserLinkNavigationArguments | BrowserDownloadArguments,
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   if (!browserAutomationEnabled(env)) {
@@ -4808,8 +4916,11 @@ async function invokeBrowserPreview(
   const snapshot = await runner({
     action,
     url: url.href,
-    ...(linkName ? { link_name: linkName } : {}),
+    ...(linkName || linkNavigation ? { link_name: linkName ?? linkNavigation?.link_name } : {}),
     ...(linkNavigation ? { target_url: linkNavigation.target_url } : {}),
+    ...(linkNavigation?.action === "download" ? {
+      download_max_bytes: linkNavigation.max_bytes ?? BROWSER_DOWNLOAD_DEFAULT_MAX_BYTES,
+    } : {}),
     ...(formSubmission ? { action_url: formSubmission.action_url } : {}),
     ...(formSubmission ? { form_name: formSubmission.form_name, fields: formSubmission.fields } : {}),
     ...(formSubmission?.action === "form_submit" ? {
@@ -4843,15 +4954,17 @@ async function invokeBrowserPreview(
       !snapshot.form_state_digest || !/^[a-f0-9]{64}$/.test(snapshot.form_state_digest))) {
     throw new Error("browser_form_input_result_unavailable; final_submit_sent=false");
   }
-  if (action === "click" && finalUrl.origin !== url.origin) {
-    throw new Error("browser_link_navigation_cross_origin_denied; mutation_sent=false");
+  if ((action === "click" || action === "download") && finalUrl.origin !== url.origin) {
+    throw new Error(action === "download"
+      ? "browser_download_cross_origin_denied; saved_locally=false"
+      : "browser_link_navigation_cross_origin_denied; mutation_sent=false");
   }
   if (action !== "form_submit") {
     await resolvePublicTarget(finalUrl, env, resolveHost);
   }
   const displayedUrl = new URL(url.href);
   const displayedFinalUrl = new URL(finalUrl.href);
-  if (action === "form_submit" || action === "form_fill") {
+  if (action === "form_submit" || action === "form_fill" || action === "download") {
     displayedUrl.search = "";
     displayedUrl.hash = "";
     displayedFinalUrl.search = "";
@@ -4868,11 +4981,12 @@ async function invokeBrowserPreview(
     title: snapshot.title,
     text: truncateText(snapshot.text, maxChars),
     truncated: snapshot.truncated || snapshot.text.length > maxChars,
+    ...(snapshot.download ? { download: snapshot.download } : {}),
     observation: createBrowserObservation({
       requestedUrl: url,
       finalUrl,
       observedAt: new Date(),
-      navigation: "browser_snapshot",
+      navigation: action === "download" ? "browser_download" : "browser_snapshot",
       tabScope: "single_ephemeral_tab",
       frameScope: "main_frame",
       credentialContext: "ephemeral_no_persistent_profile",
@@ -4913,6 +5027,9 @@ async function invokeBrowserPreview(
     resource_limits: {
       timeout_ms: timeoutMs,
       max_chars: maxChars,
+      ...(linkNavigation?.action === "download" ? {
+        download_max_bytes: linkNavigation.max_bytes ?? BROWSER_DOWNLOAD_DEFAULT_MAX_BYTES,
+      } : {}),
       viewport: BROWSER_AUTOMATION_VIEWPORT,
     },
   };
@@ -4937,12 +5054,15 @@ export async function invokeBrowserAutomation(
       ? new Set(["action", "url", "action_url", "form_name", "fields", "max_chars", "timeout_ms"])
     : action === "click"
       ? new Set(["action", "url", "max_chars", "timeout_ms", "link_name", "target_url"])
+      : action === "download"
+        ? new Set(["action", "url", "max_chars", "max_bytes", "timeout_ms", "link_name", "target_url"])
       : new Set(["action", "url", "max_chars", "timeout_ms"]);
   if (Object.keys(args).some((key) => !acceptedKeys.has(key))) {
     throw new Error("browser.automation received an unsupported argument; mutation_sent=false");
   }
 
-  if (action !== "navigate" && action !== "click" && action !== "form_fill" && action !== "form_submit") {
+  if (action !== "navigate" && action !== "click" && action !== "download" &&
+      action !== "form_fill" && action !== "form_submit") {
     throw new Error(
       `browser.automation action ${action} is preview-quarantined and not implemented; ` +
         "approval_level=L3_final_review; mutation_sent=false",
@@ -4960,12 +5080,13 @@ export async function invokeBrowserAutomation(
   }
   const linkNavigation = action === "click"
     ? parseBrowserLinkNavigationArguments(args)
+    : action === "download" ? parseBrowserDownloadArguments(args)
     : undefined;
   const linkName = linkNavigation?.link_name;
   if (action === "click" && (!linkName || !isWellFormedBrowserLinkName(linkName))) {
     throw new Error("browser.automation click requires an exact link_name and target_url; mutation_sent=false");
   }
-  if (action !== "click" && action !== "form_submit" && action !== "form_fill" &&
+  if (action !== "click" && action !== "download" && action !== "form_submit" && action !== "form_fill" &&
       (args.link_name !== undefined || args.target_url !== undefined)) {
     throw new Error("browser.automation navigation does not accept link_name; mutation_sent=false");
   }
@@ -6191,7 +6312,7 @@ export const browserSnapshotTool: Tool = {
 
 export const browserAutomationTool: Tool = {
   name: "browser.automation",
-  description: "既定で無効なpreview用headless browser操作。リンク移動はL3確認済みの完全URLへ固定する。form_fillはL3確認後に一時DOMへ値を入れるだけで送信しない。入力はtext/search/email/url/tel/number/date/time/month/week/datetime-localとtextareaに限定し、他のcontrolは拒否する。form_submitは短期receipt・別L3・実行直前のform-state再照合後に同一originへGETを一回だけ送る。GETの外部効果は未分類とし、結果不明時に自動再送しない。",
+  description: "既定で無効なpreview用headless browser操作。リンク移動とテキスト添付取得はL3確認済みの同一origin完全URLへ固定する。downloadはtext/plain・text/csv・JSON・XMLだけを上限付きで非信頼入力としてCへ返し、ローカル保存はしない。保存する場合は別のfile.write提案とL3確認を使う。form_fillはL3確認後に一時DOMへ値を入れるだけで送信しない。入力はtext/search/email/url/tel/number/date/time/month/week/datetime-localとtextareaに限定し、他のcontrolは拒否する。form_submitは短期receipt・別L3・実行直前のform-state再照合後に同一originへGETを一回だけ送る。GETの外部効果は未分類とし、結果不明時に自動再送しない。",
   required_capabilities: requireToolOperationDescriptor("browser.automation").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeBrowserAutomation(args, {

@@ -30,6 +30,16 @@ export interface BrowserLinkNavigationArguments {
   timeout_ms?: number;
 }
 
+export interface BrowserDownloadArguments {
+  action: "download";
+  url: string;
+  link_name: string;
+  target_url: string;
+  max_bytes?: number;
+  max_chars?: number;
+  timeout_ms?: number;
+}
+
 export interface BrowserSearchFormControlSnapshot {
   tag: string;
   type: string;
@@ -266,7 +276,7 @@ export function parseBrowserFormGetArguments(value: unknown): BrowserFormGetArgu
     const name = rawField.name.trim();
     const fieldValue = rawField.value;
     if (!validFieldName(name) || names.has(name) || fieldValue.length === 0 || fieldValue.length > 1_024 ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(fieldValue) || hasUnpairedSurrogate(fieldValue)) {
+        /[\u0000-\u001f\u007f]/.test(fieldValue) || hasUnpairedSurrogate(fieldValue)) {
       throw new Error("browser_form_get_invalid_arguments");
     }
     names.add(name);
@@ -333,6 +343,33 @@ export function parseBrowserLinkNavigationArguments(value: unknown): BrowserLink
     target_url: targetUrl.href,
     ...(value.max_chars === undefined ? {} : { max_chars: value.max_chars as number }),
     ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms as number }),
+  };
+}
+
+/** Bind a bounded in-memory text attachment read to the exact same-origin link shown for L3 review. */
+export function parseBrowserDownloadArguments(value: unknown): BrowserDownloadArguments {
+  if (!isRecord(value) || value.action !== "download" ||
+      Object.keys(value).some((key) => !["action", "url", "link_name", "target_url", "max_bytes", "max_chars", "timeout_ms"].includes(key)) ||
+      typeof value.max_bytes !== "undefined" && (typeof value.max_bytes !== "number" ||
+        !Number.isSafeInteger(value.max_bytes) || value.max_bytes < 1 || value.max_bytes > 512_000)) {
+    throw new Error("browser_download_invalid_arguments");
+  }
+  const parsed = parseBrowserLinkNavigationArguments({
+    action: "click",
+    url: value.url,
+    link_name: value.link_name,
+    target_url: value.target_url,
+    ...(value.max_chars === undefined ? {} : { max_chars: value.max_chars }),
+    ...(value.timeout_ms === undefined ? {} : { timeout_ms: value.timeout_ms }),
+  });
+  return {
+    action: "download",
+    url: parsed.url,
+    link_name: parsed.link_name,
+    target_url: parsed.target_url,
+    ...(value.max_bytes === undefined ? {} : { max_bytes: value.max_bytes as number }),
+    ...(parsed.max_chars === undefined ? {} : { max_chars: parsed.max_chars }),
+    ...(parsed.timeout_ms === undefined ? {} : { timeout_ms: parsed.timeout_ms }),
   };
 }
 

@@ -526,6 +526,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rawControlCharacters).toEqual([]);
     expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
     expect(CONTROL_CENTER_SCRIPT).toContain('review.kind === "browser_form_get"');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.action === "download_text_attachment"');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.download_mode.saved_locally === false');
+    expect(CONTROL_CENTER_SCRIPT).toContain('review.download_mode.redirects_allowed === false');
+    expect(CONTROL_CENTER_SCRIPT).toContain('fields.push(["HTTPリダイレクト", "拒否"]);');
     expect(CONTROL_CENTER_SCRIPT).toContain('parsedActionUrl.origin !== review.origin');
     expect(CONTROL_CENTER_SCRIPT).toContain('review.external_effect_class !== "form_submission_unclassified"');
     expect(CONTROL_CENTER_SCRIPT).toContain("購入・確定等の作用を除外できません");

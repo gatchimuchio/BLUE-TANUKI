@@ -46,6 +46,7 @@ import {
   invokeBrowserSnapshot,
   invokeBrowserAutomation,
   assertBrowserFormResponseIsReadableText,
+  assertBrowserDownloadResponseIsBoundedTextAttachment,
   invokeShellExec,
   registerBuiltinTools,
   type BrowserAutomationOptions,
@@ -2735,7 +2736,7 @@ describe("built-in tools", () => {
     expect(called).toBe(false);
   });
 
-  it("browser.automation denies credential use and quarantines side-effect actions", async () => {
+  it("browser.automation denies credential use and quarantines unsupported side-effect actions", async () => {
     await expect(
       invokeBrowserAutomation(
         { action: "navigate", url: "https://example.test/", use_credentials: true },
@@ -2745,10 +2746,112 @@ describe("built-in tools", () => {
 
     await expect(
       invokeBrowserAutomation(
-        { action: "download", url: "https://example.test/" },
+        { action: "upload", url: "https://example.test/" },
         fakeBrowserAutomation({ env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" } }),
       ),
     ).rejects.toThrow(/preview-quarantined.*mutation_sent=false/);
+  });
+
+  it("browser.automation returns only a reviewed bounded same-origin text attachment to C", async () => {
+    const seen: string[] = [];
+    const content = "decision: blue";
+    const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
+    const result = await invokeBrowserAutomation({
+      action: "download",
+      url: "https://example.test/page",
+      link_name: "Download report",
+      target_url: "https://example.test/report.txt",
+      max_bytes: 128,
+      max_chars: 64,
+    }, fakeBrowserAutomation({
+      env: { BLUE_TANUKI_BROWSER_AUTOMATION_PREVIEW: "1" },
+      async runner(request) {
+        seen.push(`${request.action}:${request.target_url}:${request.download_max_bytes}:${request.max_chars}`);
+        return {
+          engine: "fake-headless",
+          final_url: request.target_url!,
+          title: null,
+          text: "",
+          truncated: false,
+          download: {
+            content_type: "text/plain",
+            content,
+            content_sha256: contentDigest,
+            size_bytes: Buffer.byteLength(content),
+            saved_locally: false,
+            content_is_untrusted: true,
+            used_for_authority: false,
+            may_execute: false,
+          },
+        };
+      },
+    })) as Record<string, any>;
+
+    expect(seen).toEqual(["download:https://example.test/report.txt:128:64"]);
+    expect(result).toMatchObject({
+      action: "download",
+      final_url: "https://example.test/report.txt",
+      download: {
+        content_type: "text/plain",
+        content,
+        content_sha256: contentDigest,
+        size_bytes: Buffer.byteLength(content),
+        saved_locally: false,
+        content_is_untrusted: true,
+        used_for_authority: false,
+        may_execute: false,
+      },
+      approval_level: "L3_final_review",
+      sandbox: { downloads: "disabled", credential_reuse: false },
+      resource_limits: { max_chars: 64, download_max_bytes: 128 },
+    });
+    expect((result as any).observation.navigation).toBe("browser_download");
+  });
+
+  it("browser attachment response validation rejects unreviewable or incomplete bytes", () => {
+    const base = {
+      status: 200,
+      ok: true,
+      content_type: "text/plain; charset=utf-8",
+      content_disposition: "attachment; filename=ignored.txt",
+      body: "safe text",
+      truncated: false,
+    };
+    expect(assertBrowserDownloadResponseIsBoundedTextAttachment(base, { max_bytes: 32, max_chars: 32 })).toMatchObject({
+      content: "safe text",
+      size_bytes: Buffer.byteLength("safe text"),
+      saved_locally: false,
+      content_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, content_type: "text/html" }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/content_type_not_supported/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, content_encoding: "gzip" }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/encoded_content_not_supported/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({
+      ...base, content_encoding: "identity, gzip",
+    }, { max_bytes: 32, max_chars: 32 })).toThrow(/encoded_content_not_supported/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, content_disposition: "inline" }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/not_an_attachment/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({
+      ...base, content_disposition: "inline, attachment; filename=ambiguous.txt",
+    }, { max_bytes: 32, max_chars: 32 })).toThrow(/not_an_attachment/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, truncated: true }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/incomplete_or_invalid_utf8/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, status: 206 }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/http_response_rejected/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, body: "long content" }, {
+      max_bytes: 5, max_chars: 32,
+    })).toThrow(/size_limit_exceeded/);
+    expect(() => assertBrowserDownloadResponseIsBoundedTextAttachment({ ...base, body: "bad\uFFFDtext" }, {
+      max_bytes: 32, max_chars: 32,
+    })).toThrow(/incomplete_or_invalid_utf8/);
   });
 
   it("browser form results reject attachments and non-text downloads without exposing response bytes", () => {

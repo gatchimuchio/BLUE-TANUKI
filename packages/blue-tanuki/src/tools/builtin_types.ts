@@ -20,6 +20,7 @@ export interface HttpFetchResponse {
   ok: boolean;
   content_type: string | null;
   content_disposition?: string | null;
+  content_encoding?: string | null;
   location: string | null;
   body: string;
   truncated: boolean;
@@ -108,10 +109,11 @@ export type BrowserAutomationAction =
   | "upload";
 
 export interface BrowserAutomationRunRequest {
-  action: "snapshot" | "navigate" | "click" | "form_fill" | "form_submit";
+  action: "snapshot" | "navigate" | "click" | "download" | "form_fill" | "form_submit";
   url: string;
   link_name?: string;
   target_url?: string;
+  download_max_bytes?: number;
   action_url?: string;
   form_name?: string;
   fields?: readonly { name: string; value: string }[];
@@ -135,6 +137,16 @@ export interface BrowserAutomationRunResult {
   truncated: boolean;
   http_status?: number;
   form_state_digest?: string;
+  download?: {
+    content_type: string;
+    content: string;
+    content_sha256: string;
+    size_bytes: number;
+    saved_locally: false;
+    content_is_untrusted: true;
+    used_for_authority: false;
+    may_execute: false;
+  };
 }
 
 export type BrowserAutomationRunner = (

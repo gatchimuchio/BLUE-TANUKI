@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBrowserSearchFormGetUrl,
+  parseBrowserDownloadArguments,
   parseBrowserFormGetArguments,
   type BrowserSearchFormSnapshot,
 } from "../src/tools/browser_form_submission.js";
@@ -34,6 +35,38 @@ const searchForm: BrowserSearchFormSnapshot = {
 };
 
 describe("browser form GET contract", () => {
+  it("parses a bounded same-origin text attachment request", () => {
+    expect(parseBrowserDownloadArguments({
+      action: "download",
+      url: "https://example.test/page",
+      link_name: "Download report",
+      target_url: "https://example.test/report.csv",
+      max_bytes: 32_000,
+      max_chars: 8_000,
+    })).toEqual({
+      action: "download",
+      url: "https://example.test/page",
+      link_name: "Download report",
+      target_url: "https://example.test/report.csv",
+      max_bytes: 32_000,
+      max_chars: 8_000,
+    });
+  });
+
+  it.each([
+    ["cross-origin target", { target_url: "https://other.test/report.csv" }],
+    ["oversized byte bound", { max_bytes: 512_001 }],
+    ["extra argument", { credentials: true }],
+  ])("rejects %s for text attachment reads", (_label, override) => {
+    expect(() => parseBrowserDownloadArguments({
+      action: "download",
+      url: "https://example.test/page",
+      link_name: "Download report",
+      target_url: "https://example.test/report.csv",
+      ...override,
+    })).toThrow();
+  });
+
   it("parses a bounded request and binds the same-origin target", () => {
     expect(parseBrowserFormGetArguments(baseArguments)).toMatchObject({
       ...baseArguments,

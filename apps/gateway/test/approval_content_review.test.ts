@@ -6,6 +6,8 @@ import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   isBrowserFormGetReviewCommand,
   projectBrowserFormGetContentReview,
+  isBrowserLinkNavigationReviewCommand,
+  projectBrowserLinkNavigationContentReview,
   isGmailDraftSendReviewCommand,
   isGmailMessageSendReviewCommand,
   isGmailMessageTrashReviewCommand,
@@ -42,6 +44,20 @@ function browserFormCommand(arguments_: Record<string, unknown>): ExecuteCommand
     payload: { tool_name: "browser.automation", arguments: arguments_ },
     upstream_decision: {
       frame_goal: "synthetic browser form review",
+      model_abstraction: "fixture",
+      commit_hash: "a".repeat(64),
+      commit_decision: "ASSERT",
+    },
+  };
+}
+
+function browserLinkCommand(arguments_: Record<string, unknown>): ExecuteCommand {
+  return {
+    id: "cmd-browser-link-review",
+    type: "tool_call",
+    payload: { tool_name: "browser.automation", arguments: arguments_ },
+    upstream_decision: {
+      frame_goal: "synthetic browser link review",
       model_abstraction: "fixture",
       commit_hash: "a".repeat(64),
       commit_decision: "ASSERT",
@@ -400,5 +416,63 @@ describe("browser form GET approval content review projection", () => {
     expect(projectBrowserFormGetContentReview(browserFormCommand({ ...args, extra: true }),
       "a".repeat(64), "b".repeat(64))).toBeNull();
     expect(isBrowserFormGetReviewCommand(browserFormCommand({ ...args, action: "navigate" }))).toBe(false);
+  });
+});
+
+describe("browser text attachment approval content review projection", () => {
+  const args = {
+    action: "download",
+    url: "https://example.test/page",
+    link_name: "Download report",
+    target_url: "https://example.test/report.csv",
+    max_bytes: 32_000,
+    max_chars: 8_000,
+  };
+
+  it("binds the exact same-origin link and bounded in-memory text retrieval", () => {
+    const input = browserLinkCommand(args);
+    const projection = projectBrowserLinkNavigationContentReview(input, "a".repeat(64), "b".repeat(64));
+    expect(isBrowserLinkNavigationReviewCommand(input)).toBe(true);
+    expect(projection).toMatchObject({
+      kind: "browser_link_navigation",
+      operation: "browser.automation.download",
+      action: "download_text_attachment",
+      page_url: args.url,
+      target_url: args.target_url,
+      link_name: args.link_name,
+      method: "GET",
+      external_effect_class: "download_read_unclassified",
+      same_origin_only: true,
+      javascript_enabled: false,
+      credentials_reused: false,
+      downloads_enabled: false,
+      no_store: true,
+      download_mode: {
+        content_types: "text/plain, text/csv, JSON, XML",
+        max_bytes: 32_000,
+        max_chars: 8_000,
+        same_origin_only: true,
+        redirects_allowed: false,
+        content_returned_to_agent: true,
+        saved_locally: false,
+        used_for_authority: false,
+        may_execute: false,
+      },
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projectBrowserLinkNavigationContentReview(browserLinkCommand({ ...args, max_bytes: 31_999 }),
+      "a".repeat(64), "b".repeat(64))?.review_digest).not.toBe(projection?.review_digest);
+    expect(projectBrowserLinkNavigationContentReview(browserLinkCommand({ ...args,
+      target_url: "https://example.test/changed.csv" }), "a".repeat(64), "b".repeat(64))?.review_digest)
+      .not.toBe(projection?.review_digest);
+  });
+
+  it("fails closed for cross-origin or unrecognized download requests", () => {
+    expect(projectBrowserLinkNavigationContentReview(browserLinkCommand({ ...args,
+      target_url: "https://other.test/report.csv" }), "a".repeat(64), "b".repeat(64))).toBeNull();
+    expect(projectBrowserLinkNavigationContentReview(browserLinkCommand({ ...args, extra: true }),
+      "a".repeat(64), "b".repeat(64))).toBeNull();
+    expect(isBrowserLinkNavigationReviewCommand(browserLinkCommand({ ...args, action: "navigate" }))).toBe(false);
   });
 });
