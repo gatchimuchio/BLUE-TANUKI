@@ -286,6 +286,8 @@ export interface RecoveryBackupInspection {
   mode: "read_only";
   status: "verified" | "not_found" | "invalid";
   backup_id_digest: string | null;
+  backup_action: "backup" | "pre_restore" | "pre_factory_reset" | null;
+  backup_created_at: string | null;
   coverage: "complete_for_configured_targets" | "partial" | "none_configured" | "unknown";
   configured_required_item_count: number | null;
   copied_required_item_count: number | null;
@@ -306,6 +308,11 @@ export interface RecoveryBackupInspection {
   operation_plan_archive_dependencies: RecoveryBackupOperationPlanDependencyInventory;
   used_for_authority: false;
   may_execute: false;
+}
+
+export interface PreUpdateRecoveryBackupInspection {
+  readonly inspection: RecoveryBackupInspection;
+  readonly manifest_path_matches: boolean;
 }
 
 export interface RecoveryScopeApplicabilityRequest {
@@ -1061,6 +1068,9 @@ async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Prom
   if (parsed.schema_version !== 1 || parsed.surface !== "recovery" || parsed.backup_id !== backupIdValue) {
     throw new Error("invalid_backup_manifest");
   }
+  if (typeof parsed.created_at !== "string" || !Number.isFinite(Date.parse(parsed.created_at))) {
+    throw new Error("invalid_backup_manifest_created_at");
+  }
   if (trimTrailingSeparators(parsed.recovery_root) !== root) {
     throw new Error("invalid_backup_manifest_recovery_root");
   }
@@ -1384,6 +1394,8 @@ async function inspectRecoveryBackup(
     schema_version: 1 as const,
     surface: "recovery_backup_inspection" as const,
     mode: "read_only" as const,
+    backup_action: null,
+    backup_created_at: null,
     canonical_state_coverage: "not_included" as const,
     canonical_state_expected_store_count: null,
     canonical_state_snapshot_count: null,
@@ -1406,6 +1418,8 @@ async function inspectRecoveryBackup(
         ...base,
         status: "not_found",
         backup_id_digest: null,
+        backup_action: null,
+        backup_created_at: null,
         coverage: "unknown",
         configured_required_item_count: null,
         copied_required_item_count: null,
@@ -1442,6 +1456,8 @@ async function inspectRecoveryBackup(
       ...base,
       status: "verified",
       backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
+      backup_action: manifest.action,
+      backup_created_at: manifest.created_at,
       coverage: configuredRequiredItems.length === 0
         ? "none_configured"
         : missingRequiredItemCount === 0 ? "complete_for_configured_targets" : "partial",
@@ -1465,6 +1481,8 @@ async function inspectRecoveryBackup(
       ...base,
       status: "invalid",
       backup_id_digest: backupId ? createHash("sha256").update(backupId).digest("hex") : null,
+      backup_action: null,
+      backup_created_at: null,
       coverage: "unknown",
       configured_required_item_count: null,
       copied_required_item_count: null,
@@ -1483,6 +1501,29 @@ export async function inspectLatestRecoveryBackup(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RecoveryBackupInspection> {
   return inspectRecoveryBackup(env, () => latestBackupId(env));
+}
+
+/** Verify the exact recovery pack and manifest path recorded by an update rollback plan. */
+export async function inspectPreUpdateRecoveryBackup(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  manifestPath: string,
+): Promise<PreUpdateRecoveryBackupInspection> {
+  let manifestPathMatches = false;
+  try {
+    assertBackupId(backupId);
+    const root = (await runtimeSafeTarget(env, recoveryRoot(env), "recovery_root", {
+      allow_under_recovery_root: true,
+    })).path;
+    const expectedManifestPath = path.join(root, backupId, "manifest.json");
+    manifestPathMatches = path.isAbsolute(manifestPath) && path.resolve(manifestPath) === expectedManifestPath;
+  } catch {
+    manifestPathMatches = false;
+  }
+
+  const requestedDigest = createHash("sha256").update(backupId).digest("hex");
+  const inspection = await inspectRecoveryBackup(env, () => backupIdForDigest(env, requestedDigest));
+  return { inspection, manifest_path_matches: manifestPathMatches };
 }
 
 function emptyRecoveryScopeApplicability(

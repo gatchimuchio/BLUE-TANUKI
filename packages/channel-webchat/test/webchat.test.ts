@@ -3863,7 +3863,8 @@ describe("WebChatChannel — Update surface", () => {
             status: "unknown",
           },
           rollback: {
-            pre_update_backup_available: true,
+            pre_update_backup_available: false,
+            pre_update_backup_status: "missing",
             latest_plan_path: null,
             latest_plan_id: null,
             rollback_requires_manual_app_restore: true,

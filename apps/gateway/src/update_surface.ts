@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { PRODUCT_SCOPE_CORE_RELEASE_PATHS } from "@blue-tanuki/protocol";
-import { createRecoveryBackup } from "./recovery_surface.js";
+import { createRecoveryBackup, inspectPreUpdateRecoveryBackup } from "./recovery_surface.js";
 
 export type UpdateEvidenceSource = readonly ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"];
 
@@ -51,6 +51,7 @@ export interface UpdateSnapshot {
   };
   rollback: {
     pre_update_backup_available: boolean;
+    pre_update_backup_status: "verified" | "partial" | "missing" | "unverified";
     latest_plan_path: string | null;
     latest_plan_id: string | null;
     rollback_requires_manual_app_restore: true;
@@ -134,6 +135,16 @@ interface RollbackPlan {
   used_for_authority: false;
   hds_brain_remains_authority: true;
   evidence_source: UpdateEvidenceSource;
+}
+
+type VerifiableRollbackPlan = Omit<RollbackPlan, "pre_update_backup_manifest_path"> & {
+  pre_update_backup_manifest_path: string;
+};
+
+interface LatestRollbackPlan {
+  id: string | null;
+  path: string | null;
+  preUpdateBackupStatus: UpdateSnapshot["rollback"]["pre_update_backup_status"];
 }
 
 const AUTHORITY_BOUNDARY: UpdateAuthorityBoundary = {
@@ -342,14 +353,100 @@ async function verifyCandidate(
   }
 }
 
-async function latestRollbackPlan(env: NodeJS.ProcessEnv): Promise<{ id: string; path: string } | null> {
+function isRollbackPlanForId(value: unknown, id: string): value is VerifiableRollbackPlan {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const plan = value as Record<string, unknown>;
+  const boundary = plan.authority_boundary;
+  const boundaryRecord = typeof boundary === "object" && boundary !== null && !Array.isArray(boundary)
+    ? boundary as Record<string, unknown>
+    : null;
+  const validBoundary = boundaryRecord !== null &&
+    boundaryRecord.ui_used_for_authority === false &&
+    boundaryRecord.update_metadata_used_for_authority === false &&
+    boundaryRecord.rollback_plan_used_for_authority === false &&
+    boundaryRecord.recovery_backup_used_for_authority === false &&
+    boundaryRecord.used_for_authority === false &&
+    Object.keys(boundaryRecord).length === 5;
+  const evidence = plan.evidence_source;
+  return plan.schema_version === 1 &&
+    plan.surface === "update" &&
+    plan.plan_id === id &&
+    typeof plan.created_at === "string" && Number.isFinite(Date.parse(plan.created_at)) &&
+    typeof plan.pre_update_backup_id === "string" && /^[A-Za-z0-9_.-]+$/u.test(plan.pre_update_backup_id) &&
+    typeof plan.pre_update_backup_manifest_path === "string" &&
+    path.isAbsolute(plan.pre_update_backup_manifest_path) &&
+    plan.rollback_requires_manual_app_restore === true &&
+    validBoundary &&
+    plan.used_for_authority === false &&
+    plan.hds_brain_remains_authority === true &&
+    Array.isArray(evidence) && JSON.stringify(evidence) === JSON.stringify(["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"]);
+}
+
+async function latestRollbackPlan(env: NodeJS.ProcessEnv): Promise<LatestRollbackPlan | null> {
   const root = updateRoot(env);
-  const entries = await fs.readdir(root)
-    .then((items) => items.filter((item) => item.endsWith(".rollback-plan.json")).sort())
-    .catch(() => []);
+  let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    rootStat = await fs.lstat(root);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && String(error.code) === "ENOENT") return null;
+    return { id: null, path: root, preUpdateBackupStatus: "unverified" };
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    return { id: null, path: root, preUpdateBackupStatus: "unverified" };
+  }
+  let entries: string[];
+  try {
+    entries = (await fs.readdir(root)).filter((item) => item.endsWith(".rollback-plan.json")).sort();
+  } catch {
+    return { id: null, path: root, preUpdateBackupStatus: "unverified" };
+  }
   const latest = entries[entries.length - 1];
   if (!latest) return null;
-  return { id: latest.slice(0, -".rollback-plan.json".length), path: path.join(root, latest) };
+  const id = latest.slice(0, -".rollback-plan.json".length);
+  const planPath = path.join(root, latest);
+  try {
+    const stat = await fs.lstat(planPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) {
+      return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+    }
+    const plan: unknown = JSON.parse(await fs.readFile(planPath, "utf8"));
+    if (!isRollbackPlanForId(plan, id)) {
+      return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+    }
+    const backup = await inspectPreUpdateRecoveryBackup(
+      env,
+      plan.pre_update_backup_id,
+      plan.pre_update_backup_manifest_path,
+    );
+    if (!backup.manifest_path_matches) {
+      return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+    }
+    if (backup.inspection.status === "not_found") {
+      return { id, path: planPath, preUpdateBackupStatus: "missing" };
+    }
+    if (backup.inspection.status !== "verified") {
+      return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+    }
+    const backupCreatedAt = Date.parse(backup.inspection.backup_created_at ?? "");
+    if (backup.inspection.backup_action !== "backup" || !Number.isFinite(backupCreatedAt) ||
+        backupCreatedAt > Date.parse(plan.created_at)) {
+      return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+    }
+    const configuredTargetsComplete =
+      backup.inspection.coverage === "complete_for_configured_targets" &&
+      (backup.inspection.configured_required_item_count ?? 0) > 0;
+    const canonicalStateComplete =
+      backup.inspection.coverage === "none_configured" &&
+      backup.inspection.canonical_state_coverage === "complete" &&
+      (backup.inspection.canonical_state_verified_store_count ?? 0) > 0;
+    return {
+      id,
+      path: planPath,
+      preUpdateBackupStatus: configuredTargetsComplete || canonicalStateComplete ? "verified" : "partial",
+    };
+  } catch {
+    return { id, path: planPath, preUpdateBackupStatus: "unverified" };
+  }
 }
 
 function assertConfirmation(actual: string | undefined, expected: string): void {
@@ -471,7 +568,8 @@ export async function buildUpdateSnapshot(
       status: compatibilityStatus,
     },
     rollback: {
-      pre_update_backup_available: true,
+      pre_update_backup_available: latestPlan?.preUpdateBackupStatus === "verified",
+      pre_update_backup_status: latestPlan?.preUpdateBackupStatus ?? "missing",
       latest_plan_path: latestPlan?.path ?? null,
       latest_plan_id: latestPlan?.id ?? null,
       rollback_requires_manual_app_restore: true,
