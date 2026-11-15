@@ -20,6 +20,7 @@ import type {
   CompleteHistoryEntry,
   CompleteHistoryReplayFilter,
   DecisionLog,
+  HDSDecisionOutputAuditLog,
   OutputAuditLog,
   PeriodicVerificationTrigger,
   OperationPlanGoalPurposeRelationReviewContent,
@@ -1890,6 +1891,29 @@ async function serveWithOwnerLease(
     });
     if (command && isRecoveryMutationCommand(command) && !entry) recoveryObservationHistoryIncomplete = true;
     return entry !== null;
+  }
+
+  function recordHDSDecisionOutputHistory(origin: InboundRequest, actor: string, output: HDSDecisionOutputAuditLog): boolean {
+    return recordCompleteHistory({
+      kind: "final_output",
+      request_id: output.request_id,
+      actor,
+      source: "hds_decision_output_audit",
+      timestamp: output.timestamp,
+      payload: {
+        upstream_commit_hash: output.upstream_commit_hash,
+        upstream_decision: output.upstream_decision,
+        origin_channel: origin.channel,
+        target_surface: output.target_surface,
+        rendered_output_digest: output.rendered_output_digest,
+        rendered_output_chars: output.rendered_output_chars,
+        user_visible_output: output.user_visible_output,
+        external_side_effect_result: output.external_side_effect_result,
+        used_for_authority: output.used_for_authority,
+        may_execute: output.may_execute,
+        may_commit_to_memory: output.may_commit_to_memory,
+      },
+    }) !== null;
   }
 
   /**
@@ -6475,6 +6499,29 @@ async function serveWithOwnerLease(
         continue;
       }
 
+      if (log.kind === "hds_decision_output_audit") {
+        const source = requestSources.get(log.request_id);
+        items.push({
+          ...base,
+          kind: "hds_decision_output_audit",
+          event: `decision.output.${log.upstream_decision.toLowerCase()}`,
+          upstream_commit_hash: log.upstream_commit_hash,
+          upstream_decision: log.upstream_decision,
+          target_surface: log.target_surface,
+          rendered_output_digest: log.rendered_output_digest,
+          rendered_output_chars: log.rendered_output_chars,
+          user_visible_output: log.user_visible_output,
+          external_side_effect_result: log.external_side_effect_result,
+          source_process_kind: source?.source_process_kind,
+          source_channel: source?.source_channel,
+          used_for_authority: log.used_for_authority,
+          may_execute: log.may_execute,
+          may_commit_to_memory: log.may_commit_to_memory,
+          reason: log.reason,
+        });
+        continue;
+      }
+
       if (log.kind === "runtime_invariants") {
         items.push({
           ...base,
@@ -7073,6 +7120,14 @@ async function serveWithOwnerLease(
     const content = log.commit.decision === "SUSPEND"
       ? humanizeDecision(log.commit.decision, log.commit.reason, input.authority_request.id, issued?.token)
       : "Drive本文の整理はHDS判断により継続されませんでした。本文は表示・保存していません。";
+    const outputAudit = hds.onHDSDecisionOutputAudit({
+      request_id: input.authority_request.id,
+      upstream_commit_hash: log.commit.hash,
+      upstream_decision: log.commit.decision,
+      rendered_output: content,
+      target_surface: "channel",
+    });
+    recordHDSDecisionOutputHistory(input.original_request, input.original_request.user, outputAudit);
     await dispatcher.dispatch(replyPayload(input.original_request, content), {
       command_id: `notify-${input.authority_request.id}`,
       upstream_commit_hash: log.commit.hash,
@@ -7400,6 +7455,14 @@ async function serveWithOwnerLease(
       authorityReq.id,
       issued?.token,
     );
+    const outputAudit = hds.onHDSDecisionOutputAudit({
+      request_id: authorityReq.id,
+      upstream_commit_hash: log.commit.hash,
+      upstream_decision: log.commit.decision,
+      rendered_output: human,
+      target_surface: "channel",
+    });
+    recordHDSDecisionOutputHistory(authorityReq, authorityReq.user, outputAudit);
     await dispatcher.dispatch(
       replyPayload(authorityReq, human),
       { command_id: `notify-${authorityReq.id}`, upstream_commit_hash: log.commit.hash, request_id: authorityReq.id },

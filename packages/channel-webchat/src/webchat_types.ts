@@ -1541,6 +1541,7 @@ export interface WebChatAuthorityTraceItem {
     | "command_lifecycle"
     | "executor_feedback"
     | "output_audit"
+    | "hds_decision_output_audit"
     | "runtime_invariants"
     | "schedule_lifecycle"
     | "memory_reference"
@@ -1601,6 +1602,15 @@ export interface WebChatAuthorityTraceItem {
   known_command?: boolean;
   report_digest?: string;
   evidence_count?: number;
+  upstream_commit_hash?: string;
+  upstream_decision?: string;
+  target_surface?: string;
+  rendered_output_digest?: string;
+  rendered_output_chars?: number;
+  user_visible_output?: boolean;
+  external_side_effect_result?: false;
+  may_execute?: false;
+  may_commit_to_memory?: false;
   source_process_kind?: string;
   source_channel?: string;
   authority_trace?: unknown;

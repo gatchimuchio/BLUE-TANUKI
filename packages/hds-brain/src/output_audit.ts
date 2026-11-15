@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecuteCommand, ExecuteFeedback } from "@blue-tanuki/protocol";
+import type { Decision, ExecuteCommand, ExecuteFeedback } from "@blue-tanuki/protocol";
 
 export type OutputAuditKind =
   | "llm_raw_output"
@@ -81,6 +81,33 @@ export interface ProjectionOutputAuditInput {
   readonly timestamp?: number;
 }
 
+/** Digest-only audit for an HDS decision notification displayed without a command result. */
+export interface HDSDecisionOutputAuditLog {
+  kind: "hds_decision_output_audit";
+  request_id: string;
+  upstream_commit_hash: string;
+  upstream_decision: Decision;
+  target_surface: OutputTargetSurface;
+  rendered_output_digest: string;
+  rendered_output_chars: number;
+  user_visible_output: boolean;
+  external_side_effect_result: false;
+  used_for_authority: false;
+  may_execute: false;
+  may_commit_to_memory: false;
+  reason: "hds_decision_notification_reviewed_before_display";
+  timestamp: number;
+}
+
+export interface HDSDecisionOutputAuditInput {
+  readonly request_id: string;
+  readonly upstream_commit_hash: string;
+  readonly upstream_decision: Decision;
+  readonly rendered_output: string;
+  readonly target_surface: OutputTargetSurface;
+  readonly timestamp?: number;
+}
+
 export function buildOutputAuditLog(input: OutputAuditInput): OutputAuditLog {
   const output = input.rendered_output ?? null;
   const outputKind = classifyOutputKind(input.command);
@@ -147,6 +174,31 @@ export function buildProjectionOutputAuditLog(input: ProjectionOutputAuditInput)
     may_execute: false,
     may_commit_to_memory: false,
     reason: "terminal_j_projection_reviewed_before_display",
+    timestamp: input.timestamp ?? Date.now(),
+  };
+}
+
+export function buildHDSDecisionOutputAuditLog(input: HDSDecisionOutputAuditInput): HDSDecisionOutputAuditLog {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(input.request_id) ||
+      !/^[a-f0-9]{64}$/u.test(input.upstream_commit_hash) ||
+      !["ASSERT", "SUSPEND", "OUT_OF_SCOPE", "FAIL"].includes(input.upstream_decision) ||
+      typeof input.rendered_output !== "string" || input.rendered_output.length === 0) {
+    throw new Error("invalid_hds_decision_output_audit_input");
+  }
+  return {
+    kind: "hds_decision_output_audit",
+    request_id: input.request_id,
+    upstream_commit_hash: input.upstream_commit_hash,
+    upstream_decision: input.upstream_decision,
+    target_surface: input.target_surface,
+    rendered_output_digest: sha256(input.rendered_output),
+    rendered_output_chars: input.rendered_output.length,
+    user_visible_output: isUserVisibleSurface(input.target_surface),
+    external_side_effect_result: false,
+    used_for_authority: false,
+    may_execute: false,
+    may_commit_to_memory: false,
+    reason: "hds_decision_notification_reviewed_before_display",
     timestamp: input.timestamp ?? Date.now(),
   };
 }

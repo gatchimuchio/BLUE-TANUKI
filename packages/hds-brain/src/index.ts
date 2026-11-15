@@ -87,12 +87,15 @@ export {
   type AuditOptions,
 } from "./audit.js";
 export {
+  buildHDSDecisionOutputAuditLog,
   buildOutputAuditLog,
   buildProjectionOutputAuditLog,
   classifyOutputKind,
   type OutputAuditInput,
   type OutputAuditKind,
   type OutputAuditLog,
+  type HDSDecisionOutputAuditInput,
+  type HDSDecisionOutputAuditLog,
   type ProjectionOutputAuditInput,
   type ProjectionOutputAuditLog,
   type OutputTargetSurface,

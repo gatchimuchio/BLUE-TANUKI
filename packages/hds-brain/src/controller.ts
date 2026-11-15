@@ -210,8 +210,11 @@ import { routeAction } from "./action_router.js";
 import { resolveActor } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
+  buildHDSDecisionOutputAuditLog,
   buildProjectionOutputAuditLog,
   buildOutputAuditLog,
+  type HDSDecisionOutputAuditInput,
+  type HDSDecisionOutputAuditLog,
   type OutputAuditInput,
   type OutputAuditLog,
   type ProjectionOutputAuditLog,
@@ -4673,6 +4676,13 @@ ${planControl.question}`,
       ...input,
       request_id: input.request_id ?? sourceLog?.request_id ?? null,
     });
+    this.audit.append(log);
+    return log;
+  }
+
+  /** HDS decision notification output is digest-only evidence, never authority. */
+  onHDSDecisionOutputAudit(input: HDSDecisionOutputAuditInput): HDSDecisionOutputAuditLog {
+    const log = buildHDSDecisionOutputAuditLog(input);
     this.audit.append(log);
     return log;
   }
