@@ -197,9 +197,12 @@ data purge is requested.
 This is source-level behavior only. Runtime confirmation for installed Windows
 update, interruption recovery, rollback, configuration preservation, and
 uninstall cleanup is `NOT_RUN`; do not treat the path as release-ready. Linux
-and macOS packaged Setup continue to refuse replacement. No source-tree
-replacement, background updater, download, signature, or OS-protection bypass is
-introduced. Release verification still does not prove these installed flows.
+and macOS packaged Setup also contain explicit `--update` and `--rollback`
+source paths with schema, version, candidate-doctor, resident-stop, and retained
+package checks; their installed flows are likewise unverified. No source-tree
+replacement, background updater, network download, signature, or OS-protection
+bypass is introduced. Release verification still does not prove these installed
+flows.
 
 ## 3. Fresh install and retained data
 

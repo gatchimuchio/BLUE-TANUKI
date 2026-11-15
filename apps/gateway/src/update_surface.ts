@@ -250,7 +250,7 @@ function updateNextSafeAction(
     return "Verify the release archive, checksum, and manifest before considering product data compatibility.";
   }
   if (compatibilityStatus === "pass") {
-    return "The installed marker and candidate declare the same product data schema. This does not enable application replacement; keep the current installation until the packaged update and rollback path is implemented.";
+    return "The installed marker and candidate declare the same product data schema. This does not authorize replacement from Control Center. To apply an update, use the explicit packaged Setup for this OS; it independently checks the package version, installed state, configuration, candidate doctor, resident shutdown, and retained rollback package. Installed update and rollback runtime behavior remains unverified.";
   }
   if (compatibilityStatus === "blocked") {
     return "Installed and candidate product data schema versions differ, or candidate verification failed. Do not reuse or replace the installation; preserve the current application and data.";
