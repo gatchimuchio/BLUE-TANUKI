@@ -5300,8 +5300,13 @@ export class OperationPlanLedger {
         return { status: "held", reason_code: "memory_unverified", rules_digest: policy.rules_digest,
           rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
       }
-      const results = plan.results.filter((result) => result.plan_id === revision.plan.plan_id &&
-        result.request_id === revision.plan.request_id && result.step_id === step.step_id &&
+      const sourceRevision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
+      if (!sourceRevision || sourceRevision.plan.plan_id !== revision.plan.plan_id) {
+        return { status: "held", reason_code: "result_unverified", rules_digest: policy.rules_digest,
+          rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
+      }
+      const results = plan.results.filter((result) => result.plan_id === sourceRevision.plan.plan_id &&
+        result.request_id === sourceRevision.plan.request_id && result.step_id === step.step_id &&
         result.operation === step.operation && result.status === "succeeded");
       let output: OperationJsonValue | undefined;
       let resultDigest: string | undefined;
