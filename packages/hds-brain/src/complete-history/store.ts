@@ -57,7 +57,8 @@ export class CompleteHistoryStore {
     this.max_entries = opts.max_entries ?? Number.POSITIVE_INFINITY;
     if (this.filepath) {
       ensureCompleteHistoryDirectory(dirname(this.filepath));
-      if (tryLstat(this.filepath)) this.loadFromFile();
+      const existing = tryLstat(this.filepath);
+      if (existing) this.loadFromFile({ dev: existing.dev, ino: existing.ino });
       else this.fileWasAbsentAtConstruction = true;
     }
   }
@@ -201,9 +202,9 @@ export class CompleteHistoryStore {
     return this.skipped;
   }
 
-  private loadFromFile(): void {
+  private loadFromFile(expectedIdentity: CompleteHistoryFileIdentity): void {
     if (!this.filepath) return;
-    const opened = openCompleteHistoryFile(this.filepath, "read");
+    const opened = openCompleteHistoryFile(this.filepath, "read", expectedIdentity);
     let raw: string;
     try {
       raw = readFileSync(opened.fd, "utf8");
