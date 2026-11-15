@@ -8,14 +8,18 @@ export function renderCurrentCliGoalCompletionProjection(input: {
   request_id: string;
   rules: GoalCompletionRules;
 }): string {
-  if (!input.hds.reconcileOperationPlanMemory()) {
-    return "達成判定: 未確認（M receiptを現在状態へ反映できませんでした）";
+  try {
+    if (!input.hds.reconcileOperationPlanMemory()) {
+      return "達成判定: 未確認（M receiptを現在状態へ反映できませんでした）";
+    }
+    return renderCliGoalCompletionProjection({
+      operation_plans: input.hds.getRuntimeSnapshot().operation_plans,
+      request_id: input.request_id,
+      rules: input.rules,
+    });
+  } catch {
+    return "達成判定: 未確認（現在のJ/M状態を取得できませんでした）";
   }
-  return renderCliGoalCompletionProjection({
-    operation_plans: input.hds.getRuntimeSnapshot().operation_plans,
-    request_id: input.request_id,
-    rules: input.rules,
-  });
 }
 
 export function renderCurrentCliGoalCompletionStatusProjection(input: {
