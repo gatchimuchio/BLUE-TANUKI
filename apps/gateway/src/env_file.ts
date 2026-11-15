@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
@@ -129,19 +130,27 @@ export async function writeEnvFileAtomic(
   const backupPath = options.backup
     ? await backupEnvFileIfExists(resolved, options.backup_label)
     : undefined;
-  const tmpPath = `${resolved}.tmp-${process.pid}-${Date.now()}`;
+  const tmpPath = `${resolved}.tmp-${process.pid}-${randomUUID()}`;
+  let tmpHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let ownsTempFile = false;
+  let renamed = false;
   try {
-    await fs.writeFile(tmpPath, content, {
-      encoding: "utf8",
-      mode: options.mode ?? 0o600,
-    });
+    tmpHandle = await fs.open(tmpPath, "wx", options.mode ?? 0o600);
+    ownsTempFile = true;
+    await tmpHandle.writeFile(content, "utf8");
+    await tmpHandle.chmod(options.mode ?? 0o600).catch(() => undefined);
+    // Flush the complete replacement before making it visible at the target path.
+    await tmpHandle.sync();
+    await tmpHandle.close();
+    tmpHandle = undefined;
     await fs.rename(tmpPath, resolved);
-    await fs.chmod(resolved, options.mode ?? 0o600).catch(() => undefined);
+    renamed = true;
     return backupPath
       ? { path: resolved, backup_path: backupPath }
       : { path: resolved };
   } catch (e) {
-    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    await tmpHandle?.close().catch(() => undefined);
+    if (ownsTempFile && !renamed) await fs.rm(tmpPath, { force: true }).catch(() => undefined);
     throw e;
   }
 }
