@@ -80,6 +80,7 @@ interface PendingRuntimeScheduleOperation {
 
 export interface RuntimeScheduleManagerOptions {
   env?: Env;
+  safe_mode?: boolean;
   now?: () => number;
   onLifecycle?: (
     event:
@@ -100,16 +101,18 @@ export class RuntimeScheduleManager {
   private scheduler: CronSchedulerChannel | null = null;
   private readonly now: () => number;
   private readonly file: string;
+  private readonly safeMode: boolean;
   private readonly approvalTimeoutMs: number;
   private readonly onLifecycle?: RuntimeScheduleManagerOptions["onLifecycle"];
 
   private constructor(
     file: string,
     schedules: readonly RuntimeSchedule[],
-    opts: Required<Pick<RuntimeScheduleManagerOptions, "now">> & Pick<RuntimeScheduleManagerOptions, "onLifecycle"> & { approvalTimeoutMs: number },
+    opts: Required<Pick<RuntimeScheduleManagerOptions, "now" | "safe_mode">> & Pick<RuntimeScheduleManagerOptions, "onLifecycle"> & { approvalTimeoutMs: number },
   ) {
     this.file = file;
     this.now = opts.now;
+    this.safeMode = opts.safe_mode;
     this.onLifecycle = opts.onLifecycle;
     this.approvalTimeoutMs = opts.approvalTimeoutMs;
     for (const schedule of schedules) {
@@ -125,6 +128,7 @@ export class RuntimeScheduleManager {
     const schedules = await readSchedulesFile(file);
     return new RuntimeScheduleManager(file, schedules, {
       now: opts.now ?? (() => Date.now()),
+      safe_mode: opts.safe_mode ?? env.BLUE_TANUKI_SAFE_MODE === "1",
       onLifecycle: opts.onLifecycle,
       approvalTimeoutMs,
     });
@@ -135,6 +139,7 @@ export class RuntimeScheduleManager {
   }
 
   activeCronTasks(): CronTaskOptions[] {
+    if (this.safeMode) return [];
     return Array.from(this.schedules.values())
       .filter((schedule) => schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined)
       .map((schedule) => this.toCronTask(schedule));
@@ -206,6 +211,9 @@ export class RuntimeScheduleManager {
     opts: { request_id?: string | null; actor?: string },
   ): { ok: true; pending: PendingRuntimeScheduleOperation } | { ok: false; message: string } {
     this.pruneExpiredPending(opts.actor ?? evaluation.context.actor);
+    if (this.safeMode) {
+      return { ok: false, message: "schedule operation rejected: Safe Mode pauses runtime schedules; nothing was changed; restart normally to resume saved schedules" };
+    }
     if (command.type !== "tool_call") {
       return { ok: false, message: "schedule operation rejected: command is not a tool_call; nothing was activated; retry with tool:schedule.*" };
     }
@@ -279,6 +287,9 @@ export class RuntimeScheduleManager {
   }
 
   private async approvePending(command_id: string): Promise<unknown> {
+    if (this.safeMode) {
+      throw new Error("schedule approval unavailable in Safe Mode; nothing was changed; restart normally to resume saved schedules");
+    }
     this.pruneExpiredPending("system");
     const pending = this.pending.get(command_id);
     if (!pending) {

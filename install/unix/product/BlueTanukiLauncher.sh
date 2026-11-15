@@ -823,6 +823,7 @@ case "$COMMAND" in
   safe-mode)
     BLUE_TANUKI_SAFE_MODE=1
     export BLUE_TANUKI_SAFE_MODE
+    resident_stop
     resident_start "$@"
     ;;
   doctor)

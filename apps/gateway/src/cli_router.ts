@@ -1,5 +1,6 @@
 import { createLogger } from "@blue-tanuki/core";
 import { loadEnvFileFromArgv } from "./env_file.js";
+import { applyGatewaySafeMode } from "./safe_mode.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 
@@ -192,6 +193,13 @@ export async function runGatewayCliRouter(): Promise<void> {
   const serveMode =
     process.argv.includes("--serve") || process.env.BLUE_TANUKI_SERVE === "1";
   if (serveMode) {
+    if (applyGatewaySafeMode(process.env)) {
+      gatewayLog.warn("safe mode active", {
+        llm_provider: "stub",
+        external_connectors: "disabled",
+        runtime_schedules: "paused",
+      });
+    }
     await runServeCliMode();
     return;
   }
