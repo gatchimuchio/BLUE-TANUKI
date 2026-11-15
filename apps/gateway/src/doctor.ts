@@ -7,7 +7,10 @@ import {
   manifestPathFor,
   readManifest,
 } from "@blue-tanuki/protocol";
-import { shellExecIsolationProviderAvailable } from "@blue-tanuki/core";
+import {
+  shellExecIsolationProviderAvailable,
+  shellExecIsolationUnavailableReason,
+} from "@blue-tanuki/core";
 import {
   buildLLMCommandRouteFromEnv,
   listConfiguredLLMProviders,
@@ -1034,11 +1037,7 @@ async function checkShellRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
   const shellRootConfigured = typeof env.BLUE_TANUKI_SHELL_ROOT === "string" &&
     env.BLUE_TANUKI_SHELL_ROOT.trim().length > 0;
   if (!(await shellExecIsolationProviderAvailable())) {
-    const reason = process.platform === "win32"
-      ? "Windows AppContainer provider is not installed"
-      : process.platform === "linux"
-        ? "Linux provider, bubblewrap, systemd user manager, or cgroup limits are unavailable"
-        : "this OS does not have a verified shell isolation provider";
+    const reason = shellExecIsolationUnavailableReason();
     return {
       id: "shell_root",
       level: "warn",

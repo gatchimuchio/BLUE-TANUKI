@@ -181,12 +181,17 @@ export function remediationFor(check: CheckDraft): Remediation {
   if (check.id === "shell_root") {
     const providerInstalled = check.detail.includes("provider is installed");
     const rootConfigured = check.detail.includes("BLUE_TANUKI_SHELL_ROOT is configured but not inspected");
+    const macOSIsolationUnavailable = check.detail.includes("macOS has no verified native process isolation provider");
     return {
       cause: check.detail,
-      impact: providerInstalled && rootConfigured
+      impact: macOSIsolationUnavailable
+        ? "shell.exec is unsupported on macOS in this build and remains disabled."
+        : providerInstalled && rootConfigured
         ? "Doctor has not launched a command or inspected the configured root; each shell.exec invocation still validates the root and OS controls and may fail closed."
         : "shell.exec is unavailable and every invocation fails closed before process creation.",
-      next_action: providerInstalled
+      next_action: macOSIsolationUnavailable
+        ? "Keep shell.exec disabled on macOS. No command was started; use other built-in operations, and do not substitute host execution or a deprecated sandbox mechanism."
+        : providerInstalled
         ? rootConfigured
           ? "No setup change is indicated. Doctor does not inspect the configured directory or launch a command; if invocation fails, review its fail-closed diagnostic and rerun pnpm run doctor."
           : "Set BLUE_TANUKI_SHELL_ROOT to a dedicated non-secret directory in Control Center Settings to enable the workspace boundary. Leave it unset to keep shell.exec disabled; there is no host-execution fallback."

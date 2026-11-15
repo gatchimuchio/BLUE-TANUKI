@@ -50,8 +50,17 @@ const LINUX_ISOLATOR_FILENAME = "blue-tanuki-linux-isolation";
 const MAX_NATIVE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_NATIVE_ERROR_BYTES = 16 * 1024;
 const PROCESS_TREE_SHUTDOWN_GRACE_MS = 5_000;
-const SHELL_EXEC_DISABLED_REASON =
-  "shell.exec is disabled because no verified OS-level process isolation provider is connected; no process was started";
+
+export function shellExecIsolationUnavailableReason(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") {
+    return "macOS has no verified native process isolation provider in this build";
+  }
+  if (platform === "win32") return "Windows AppContainer isolation provider is not installed";
+  if (platform === "linux") {
+    return "Linux provider, bubblewrap, systemd user manager, or cgroup limits are unavailable";
+  }
+  return `${platform} does not have a verified OS-level process isolation provider`;
+}
 
 export async function invokeShellExec(
   args: Record<string, unknown>,
@@ -72,7 +81,7 @@ export async function invokeShellExec(
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
 
   if (process.platform !== "win32" && process.platform !== "linux") {
-    throw new Error(SHELL_EXEC_DISABLED_REASON);
+    throw new Error(`shell.exec is disabled because ${shellExecIsolationUnavailableReason()}; no process was started`);
   }
   if (opts.signal?.aborted) {
     throw new Error("shell.exec aborted before isolated process creation");
@@ -167,7 +176,7 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
 export const shellExecTool: Tool = {
   name: "shell.exec",
   description:
-    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built. For an explicitly requested test after an owner-reviewed file.edit, set same_workspace_as_file_root=true and summary_only=true; this returns exit status, text byte counts and digests without captured output. Then reread the same relative file with file.search. Nonzero exit or timeout is a failed test; never restore automatically. If recovery is requested, inspect current state and propose a fresh owner-reviewed inverse file.edit.",
+    "Run a bounded command only inside a verified Windows or Linux isolation provider; macOS and other unsupported operating systems fail closed before process creation. Native isolation must be installed. For an explicitly requested test after an owner-reviewed file.edit, set same_workspace_as_file_root=true and summary_only=true; this returns exit status, text byte counts and digests without captured output. Then reread the same relative file with file.search. Nonzero exit or timeout is a failed test; never restore automatically. If recovery is requested, inspect current state and propose a fresh owner-reviewed inverse file.edit.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async inspect_target_version(args, options = {}) {
     return await inspectShellExecTargetVersion(args, options);

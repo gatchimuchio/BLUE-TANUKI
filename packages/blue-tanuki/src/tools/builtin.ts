@@ -185,6 +185,7 @@ export type {
 } from "./builtin_types.js";
 export {
   invokeShellExec,
+  shellExecIsolationUnavailableReason,
   shellExecIsolationProviderAvailable,
   shellExecTool,
   type ShellExecOptions,
