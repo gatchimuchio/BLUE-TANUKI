@@ -1985,6 +1985,7 @@ async function serveWithOwnerLease(
     expected_gmail_message_modify_provider_state_digest?: string;
     expected_file_edit_target_version_digest?: string;
     expected_file_delete_target_version_digest?: string;
+    expected_settings_write_target_version_digest?: string;
     expected_google_drive_target_version_digest?: string;
     expected_github_write_target_version_digest?: string;
     expected_mcp_call_target_version_digest?: string;
@@ -2578,6 +2579,21 @@ async function serveWithOwnerLease(
         : undefined;
       if (observedFileDeleteTargetVersionDigest !== opts.expected_file_delete_target_version_digest) {
         const reason = "file_delete_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_settings_write_target_version_digest) {
+      const observedSettingsWriteTargetVersionDigest = cmd.type === "tool_call" &&
+        cmd.payload.tool_name === "settings.write" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.settings-write-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation)
+        : undefined;
+      if (observedSettingsWriteTargetVersionDigest !== opts.expected_settings_write_target_version_digest) {
+        const reason = "settings_write_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -3544,7 +3560,8 @@ async function serveWithOwnerLease(
   function pendingApprovalNeedsContentReview(command: ExecuteCommand): boolean {
     const requiresToolContentReview = command.type === "tool_call" && (
       command.payload.tool_name === "file.edit" || command.payload.tool_name === "file.delete" ||
-      command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "mcp.call" ||
+      command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "settings.write" ||
+      command.payload.tool_name === "mcp.call" ||
       (command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) ||
       (command.payload.tool_name === "google.drive.write" &&
@@ -4156,6 +4173,8 @@ async function serveWithOwnerLease(
           ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
         ...(pending.content_review_file_delete_target_version_digest
           ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
+        ...(pending.content_review_settings_write_target_version_digest
+          ? { expected_settings_write_target_version_digest: pending.content_review_settings_write_target_version_digest } : {}),
         ...(pending.content_review_drive_target_version_digest
           ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
         ...(pending.content_review_github_target_version_digest
