@@ -62,7 +62,9 @@ $watchdogLog = Join-Path $logDir "blue-tanuki-watchdog.out.log"
 $watchdogErrLog = Join-Path $logDir "blue-tanuki-watchdog.err.log"
 $doctorLog = Join-Path $logDir "doctor.json"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$runName = if ($env:BLUE_TANUKI_AUTOSTART_RUN_NAME) { $env:BLUE_TANUKI_AUTOSTART_RUN_NAME } else { "BLUE-TANUKI" }
+$runName = if ([string]::IsNullOrWhiteSpace($env:BLUE_TANUKI_AUTOSTART_RUN_NAME)) { "BLUE-TANUKI" } else { ([string]$env:BLUE_TANUKI_AUTOSTART_RUN_NAME).Trim() }
+$script:autostartRunNameValid = $runName -match '^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$'
+$script:autostartCommand = "powershell.exe -NoProfile -File `"$PSCommandPath`" resident-start"
 
 function Normalize-ProcessImagePath($Path) {
   return [System.IO.Path]::GetFullPath([string]$Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
@@ -871,23 +873,85 @@ function Open-Logs {
   Start-Process $logDir
 }
 
+function Read-AutostartEntry {
+  if (-not $script:autostartRunNameValid) {
+    Fail "BLUE_TANUKI_AUTOSTART_RUN_NAME must be 1-64 safe registry-name characters; no autostart action was performed."
+  }
+  if (-not (Test-Path -LiteralPath $runKey)) {
+    return [pscustomobject]@{ exists = $false; value = $null; kind = $null }
+  }
+  try {
+    $key = Get-Item -LiteralPath $runKey -ErrorAction Stop
+    if ($key.GetValueNames() -notcontains $runName) {
+      return [pscustomobject]@{ exists = $false; value = $null; kind = $null }
+    }
+    return [pscustomobject]@{
+      exists = $true
+      value = $key.GetValue($runName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      kind = $key.GetValueKind($runName)
+    }
+  } catch {
+    Fail "Could not inspect the per-user autostart entry. No registry value was changed. $($_.Exception.Message)"
+  }
+}
+
+function Test-ManagedAutostartEntry($Entry) {
+  return $Entry.exists -and $Entry.kind -eq [Microsoft.Win32.RegistryValueKind]::String -and
+    $Entry.value -is [string] -and
+    [string]::Equals([string]$Entry.value, [string]$script:autostartCommand, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Enable-Autostart {
+  $current = Read-AutostartEntry
+  if ($current.exists) {
+    if (Test-ManagedAutostartEntry $current) {
+      Write-Host "autostart_status=enabled"
+      Write-Host "autostart_entry=HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"
+      return
+    }
+    Fail "Refusing to replace an existing per-user autostart value not owned by this BLUE-TANUKI install. Preserved: HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"
+  }
   New-Item -Path $runKey -Force | Out-Null
-  $value = "powershell.exe -NoProfile -File `"$PSCommandPath`" resident-start"
-  New-ItemProperty -Path $runKey -Name $runName -Value $value -PropertyType String -Force | Out-Null
+  try {
+    New-ItemProperty -Path $runKey -Name $runName -Value $script:autostartCommand -PropertyType String -ErrorAction Stop | Out-Null
+  } catch {
+    Fail "Could not create the per-user autostart entry without replacing an existing value. No existing entry was overwritten. $($_.Exception.Message)"
+  }
+  $created = Read-AutostartEntry
+  if (-not (Test-ManagedAutostartEntry $created)) {
+    Fail "The per-user autostart entry did not read back as the exact managed command. No existing value was overwritten."
+  }
   Write-Host "autostart_status=enabled"
   Write-Host "autostart_entry=HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"
 }
 
 function Disable-Autostart {
-  Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+  $current = Read-AutostartEntry
+  if (-not $current.exists) {
+    Write-Host "autostart_status=disabled"
+    return
+  }
+  if (-not (Test-ManagedAutostartEntry $current)) {
+    Fail "Refusing to remove a per-user autostart value not owned by this BLUE-TANUKI install. Preserved: HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"
+  }
+  try {
+    Remove-ItemProperty -LiteralPath $runKey -Name $runName -ErrorAction Stop
+  } catch {
+    Fail "Could not remove the managed per-user autostart entry. $($_.Exception.Message)"
+  }
+  if ((Read-AutostartEntry).exists) {
+    Fail "The managed per-user autostart entry remains after removal."
+  }
   Write-Host "autostart_status=disabled"
 }
 
 function Show-AutostartStatus {
-  $entry = Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
-  if ($entry) {
+  $entry = Read-AutostartEntry
+  if (Test-ManagedAutostartEntry $entry) {
     Write-Host "autostart_status=enabled"
+  } elseif ($entry.exists) {
+    Write-Host "autostart_status=conflict"
+    Write-Host "autostart_next_action=Preserve and inspect the existing per-user Run value before changing it."
   } else {
     Write-Host "autostart_status=disabled"
   }

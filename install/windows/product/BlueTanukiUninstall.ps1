@@ -154,6 +154,7 @@ function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
   if ($DryRun) {
     Write-Host "Would remove installed application files under: $ResolvedInstallRoot"
     Write-Host 'Would remove only shortcuts and uninstall registration verified as owned by this install.'
+    Write-Host 'Would remove only per-user autostart entries whose command exactly identifies this install.'
     if ($PurgeData) {
       Write-Host "Would permanently remove the full product data root and every file under it: $ResolvedDataRoot"
       Write-Host 'This includes DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
@@ -167,6 +168,7 @@ function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
 
   Write-Host "Will remove installed application files under: $ResolvedInstallRoot"
   Write-Host 'Will remove only shortcuts and uninstall registration verified as owned by this install.'
+  Write-Host 'Will remove only per-user autostart entries whose command exactly identifies this install.'
   if ($PurgeData) {
     Write-Host "Will permanently remove the full product data root and every file under it: $ResolvedDataRoot"
     Write-Host 'This includes DPAPI-protected provider credentials, saved content and history, sessions, logs, audit records, environment settings, and files added under that root.'
@@ -273,6 +275,57 @@ function Remove-ManagedUninstallRegistration($InstallRootResolved) {
   Remove-Item -LiteralPath $key -Recurse -Force
 }
 
+function Remove-ManagedAutostart($InstallRootResolved) {
+  $registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  if (-not (Test-Path -LiteralPath $registryPath)) { return }
+  try { $runKey = Get-Item -LiteralPath $registryPath -ErrorAction Stop } catch {
+    Fail "Refusing to uninstall because the per-user autostart registry could not be inspected. No product files were removed. $($_.Exception.Message)"
+  }
+
+  $launcherPath = Normalize-Path (Join-Path $InstallRootResolved 'BlueTanukiLauncher.ps1')
+  $expectedCommand = 'powershell.exe -NoProfile -File "' + $launcherPath + '" resident-start'
+  $ownedNames = @()
+  foreach ($name in $runKey.GetValueNames()) {
+    $value = $null
+    try {
+      $value = $runKey.GetValue([string]$name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } catch {
+      Fail "Refusing to uninstall because an autostart entry could not be inspected. No product files were removed. name=$name reason=$($_.Exception.Message)"
+    }
+    if (-not ($value -is [string])) { continue }
+    $value = [string]$value
+    $referencesLauncher = $value.IndexOf($launcherPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    if (-not $referencesLauncher) { continue }
+
+    $valueKind = $null
+    try { $valueKind = $runKey.GetValueKind([string]$name) } catch {
+      Fail "Refusing to uninstall because a launcher-related autostart entry could not be classified. No product files were removed. name=$name reason=$($_.Exception.Message)"
+    }
+    if ($valueKind -ne [Microsoft.Win32.RegistryValueKind]::String -or
+        -not [string]::Equals($value, $expectedCommand, [System.StringComparison]::OrdinalIgnoreCase)) {
+      Fail "Refusing to remove the installation because an autostart entry references its launcher but differs from the managed command. No product files or registry entries were removed. name=$name"
+    }
+    $ownedNames += [string]$name
+  }
+
+  foreach ($name in $ownedNames) {
+    if ($DryRun) {
+      Write-Host "Would remove managed per-user autostart entry: $name"
+      continue
+    }
+    try {
+      Remove-ItemProperty -LiteralPath $registryPath -Name $name -ErrorAction Stop
+      $verificationKey = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+      if ($verificationKey.GetValueNames() -contains $name) {
+        Fail "The managed per-user autostart entry remains after removal. Product files were preserved. name=$name"
+      }
+    } catch {
+      Fail "Could not remove the managed per-user autostart entry. Product files were preserved. name=$name reason=$($_.Exception.Message)"
+    }
+    if (-not $Quiet) { Write-Host "Removed managed per-user autostart entry: $name" }
+  }
+}
+
 $installRootInput = if ($InstallRoot) {
   $InstallRoot
 } elseif ($env:BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT) {
@@ -332,6 +385,7 @@ if ($PurgeData) {
     Fail "Refusing to remove product files because the requested user-data purge target changed. No files were removed. $($_.Exception.Message)"
   }
 }
+Remove-ManagedAutostart $installRootResolved
 Remove-Target $installRootResolved 'installed app'
 Remove-ManagedShortcuts $installRootResolved
 Remove-ManagedUninstallRegistration $installRootResolved
