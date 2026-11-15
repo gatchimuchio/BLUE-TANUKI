@@ -556,7 +556,7 @@ function validateNativeResult(value: unknown): NativeShellResult {
     typeof result.descendants_terminated !== "boolean" ||
     (result.signal === null && result.exit_code === null) ||
     (result.signal !== null && result.exit_code !== null) ||
-    result.timed_out !== (result.signal !== null)
+    result.timed_out !== (result.signal === "timeout")
   ) {
     throw new Error("shell.exec Windows isolation returned an invalid or unconfirmed result");
   }

@@ -819,7 +819,7 @@ mod windows_provider {
         let (signal, timed_out) = if wait == WAIT_OBJECT_0 {
             (None, false)
         } else if wait == WAIT_OBJECT_0 + 1 {
-            (Some("aborted"), true)
+            (Some("aborted"), false)
         } else if wait == WAIT_TIMEOUT {
             (Some("timeout"), true)
         } else {

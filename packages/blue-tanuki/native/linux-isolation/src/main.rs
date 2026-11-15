@@ -409,7 +409,7 @@ fn run_outer(request: Request) -> Result<String, String> {
     let _ = systemctl_user(&runtime_dir, &["reset-failed".into(), unit.clone()]);
 
     let response = if cancelled.load(Ordering::SeqCst) {
-        result_json(None, Some("aborted"), true, "", "", false, true, false)
+        result_json(None, Some("aborted"), false, "", "", false, true, false)
     } else if unit_state.result == "timeout" {
         result_json(None, Some("timeout"), true, "", "", false, true, false)
     } else if unit_state.result != "success"
