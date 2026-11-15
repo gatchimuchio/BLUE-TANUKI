@@ -94,7 +94,7 @@ function Test-ManagedWindowsProductLauncherShortcut {
 
     $expectedLauncher = Get-InstallPathIdentity (Join-Path $InstallRoot 'BlueTanukiLauncher.ps1')
     $launcherArgument = [regex]::Escape($expectedLauncher)
-    $pattern = '^(?:-NoProfile\s+-WindowStyle\s+Hidden\s+-File\s+"' + $launcherArgument + '"\s+open|-NoProfile\s+-File\s+"' + $launcherArgument + '"\s+(?:doctor-open|logs|safe-mode|restart|stop))\s*$'
+    $pattern = '^(?:-NoProfile\s+-WindowStyle\s+Hidden\s+-File\s+"' + $launcherArgument + '"\s+open|-NoProfile\s+-File\s+"' + $launcherArgument + '"\s+(?:resident-status|doctor-open|logs|safe-mode|restart|stop))\s*$'
     return [regex]::IsMatch($Arguments, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
   } catch {
     return $false

@@ -251,6 +251,7 @@ function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
   $uninstaller = Join-Path $InstallRootResolved "UninstallBlueTanuki.cmd"
   $icon = "$(Find-NodeExe $InstallRootResolved),0"
   New-Shortcut (Join-Path $programs "BLUE-TANUKI.lnk") $ps "-NoProfile -WindowStyle Hidden -File `"$launcher`" open" $InstallRootResolved "Open BLUE-TANUKI Control Center" $icon
+  New-Shortcut (Join-Path $programs "BLUE-TANUKI Status.lnk") $ps "-NoProfile -File `"$launcher`" resident-status" $InstallRootResolved "Show BLUE-TANUKI runtime status without changing it" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Doctor.lnk") $ps "-NoProfile -File `"$launcher`" doctor-open" $InstallRootResolved "Run BLUE-TANUKI Doctor" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Logs.lnk") $ps "-NoProfile -File `"$launcher`" logs" $InstallRootResolved "Open BLUE-TANUKI logs" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Safe Mode.lnk") $ps "-NoProfile -File `"$launcher`" safe-mode" $InstallRootResolved "Start BLUE-TANUKI with external providers and connectors disabled" $icon
@@ -289,7 +290,7 @@ function Assert-ShortcutTargetsCompatible($InstallRootResolved, $DesktopShortcut
     if (-not $folder.PSIsContainer -or ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       Fail "Start Menu target is not a regular directory: $programs"
     }
-    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Restart.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
+    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Status.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Restart.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
       $path = Join-Path $programs $name
       if ((Test-Path -LiteralPath $path) -and -not (Test-ShortcutTargetBelongsToInstall $path $InstallRootResolved)) {
         Fail "Refusing to replace an unrelated Start Menu item: $path"
