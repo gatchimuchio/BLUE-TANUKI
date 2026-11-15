@@ -111,8 +111,6 @@ export interface WebChatSettingsSurface {
   html: string | (() => string);
   /** Return a redacted current-settings snapshot. */
   getSnapshot: () => Promise<unknown>;
-  /** Persist a settings update. When omitted, POST is rejected. */
-  update?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Verify a candidate LLM configuration without persisting it. */
   verifyLlm?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Inspect one owner-supplied, credentialless loopback MCP endpoint without calling a tool. */

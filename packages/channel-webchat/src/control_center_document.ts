@@ -306,8 +306,9 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div class="action-row">
             <button id="load-connectors" class="primary" type="button">Load Connectors</button>
-            <button id="save-connectors" class="primary" type="button">Save Composio</button>
+            <button id="save-connectors" class="primary" type="button" disabled>Save Composio</button>
           </div>
+          <p class="muted">Connector settings are read-only here until the HDS Operation Plan and no-store L3 final-review path is connected. No connector changes are saved from this page.</p>
           <div class="status-grid">
             <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
@@ -390,8 +391,9 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="action-row">
             <button id="load-settings" class="primary" type="button">Load Settings</button>
             <button id="verify-llm-settings" type="button">Verify LLM</button>
-            <button id="save-settings" class="primary" type="button">Save Settings</button>
+            <button id="save-settings" class="primary" type="button" disabled>Save Settings</button>
           </div>
+          <p class="muted">Settings are read-only here until the HDS Operation Plan and no-store L3 final-review path is connected. No settings changes are saved from this page.</p>
           <div class="status-grid">
             <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>
             <div class="metric"><span>Model</span><span id="settings-model-status">not loaded</span></div>

@@ -3554,23 +3554,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     if (req.method === "POST") {
-      if (!this.opts.settings.update) {
-        res.writeHead(501, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "settings_update_not_configured" }));
-        return;
-      }
-      const body = await readJson(req);
-      if (!body) {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "json_body_required" }));
-        return;
-      }
-      const result = await this.opts.settings.update(body);
-      res.writeHead(200, {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-      });
-      res.end(JSON.stringify({ ok: true, result }));
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "settings_write_requires_hds_l3_final_review" }));
       return;
     }
     res.writeHead(405, { "content-type": "application/json" });

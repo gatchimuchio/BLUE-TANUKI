@@ -2,11 +2,9 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { composioStatus } from "@blue-tanuki/core";
 import type { WebChatSettingsSurface } from "@blue-tanuki/channel-webchat";
-import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
+import { parseEnvFile } from "./env_file.js";
 import {
-  renderSetupEnvFile,
   setupConfigFromEnv,
-  setupConfigToEnv,
   type SetupProviderKind,
 } from "./setup_config.js";
 import {
@@ -15,14 +13,8 @@ import {
 } from "./llm_config.js";
 import type { PluginRuntime } from "./plugin_loader.js";
 import {
-  applySettingsPatch,
   assessLlmComputeReadiness,
-  protectComposioApiKeyForEnvFile,
-  protectD4RuntimeTokenForEnvFile,
-  protectLlmApiKeyForEnvFile,
   type LlmComputeReadiness,
-  type SettingsSecretStorageOptions,
-  type SettingsSecretStorageResult,
   verifyLlmProvisioning,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
@@ -40,8 +32,6 @@ export interface SettingsSurfaceOptions {
   plugins: PluginRuntime;
   mcpRuntimeObservations?: McpRuntimeObservationStore;
 }
-
-export interface SettingsEnvFileUpdateOptions extends SettingsSecretStorageOptions {}
 
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
   switch (observation.last_call.state) {
@@ -69,7 +59,8 @@ function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapsho
 export interface SettingsSnapshot {
   schema_version: 1;
   env_file: string | null;
-  writable: boolean;
+  writable: false;
+  write_block_reason: "settings_write_requires_hds_l3_final_review";
   approval: {
     mode: ReturnType<typeof setupConfigFromEnv>["approval"]["mode"];
     final_review_remains_required: true;
@@ -317,7 +308,8 @@ export function buildSettingsSnapshot(
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
-    writable: Boolean(envFilePath(env)),
+    writable: false,
+    write_block_reason: "settings_write_requires_hds_l3_final_review",
     approval: {
       mode: config.approval.mode,
       final_review_remains_required: true,
@@ -410,49 +402,6 @@ export function buildSettingsSnapshot(
   };
 }
 
-export async function updateSettingsEnvFile(
-  body: Record<string, unknown>,
-  env: Env,
-  opts: SettingsEnvFileUpdateOptions = {},
-): Promise<{
-  output_path: string;
-  backup_path?: string;
-  restart_required: true;
-  env_keys: string[];
-  secret_storage: {
-    llm_api_key: SettingsSecretStorageResult;
-    composio_api_key: SettingsSecretStorageResult;
-    d4_runtime_token: SettingsSecretStorageResult;
-  };
-}> {
-  const target = envFilePath(env);
-  if (!target) {
-    throw new Error("BLUE_TANUKI_ENV_FILE is required to save settings");
-  }
-  const fileEnv = await readEnvFileEnv(target);
-  const baseEnv = { ...env, ...fileEnv };
-  const nextConfig = applySettingsPatch(setupConfigFromEnv(baseEnv), body);
-  const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
-  const composioSecretStorage = protectComposioApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
-  const d4RuntimeSecretStorage = protectD4RuntimeTokenForEnvFile(nextConfig, target, baseEnv, opts);
-  const writeResult = await writeEnvFileAtomic(target, renderSetupEnvFile(nextConfig), {
-    mode: 0o600,
-    backup: true,
-    backup_label: "settings",
-  });
-  return {
-    output_path: target,
-    backup_path: writeResult.backup_path,
-    restart_required: true,
-    env_keys: Object.keys(setupConfigToEnv(nextConfig)).sort(),
-    secret_storage: {
-      llm_api_key: secretStorage,
-      composio_api_key: composioSecretStorage,
-      d4_runtime_token: d4RuntimeSecretStorage,
-    },
-  };
-}
-
 export function createWebChatSettingsSurface(
   opts: SettingsSurfaceOptions,
 ): WebChatSettingsSurface | undefined {
@@ -467,7 +416,6 @@ export function createWebChatSettingsSurface(
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
       return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
     },
-    update: async (body) => updateSettingsEnvFile(body, env),
     verifyLlm: async (body) => verifyLlmProvisioning(body, env, opts.plugins),
     inspectMcpEndpoint: async (endpointInput) => {
       const endpoint = parseLoopbackMcpEndpoint(endpointInput);
@@ -941,8 +889,9 @@ export function renderSettingsHtml(): string {
         <div class="actions">
           <button class="secondary" id="load-btn" type="button">Load</button>
           <button class="secondary" id="verify-llm-btn" type="button">Verify LLM</button>
-          <button class="primary" id="save-btn" type="button">Save</button>
+          <button class="primary" id="save-btn" type="button" disabled>Save</button>
         </div>
+        <div class="notice warn" id="settings-write-status">Settings are read-only because HDS L3 final review is not connected to this surface. No settings changes are saved here.</div>
         <div class="notice" id="notice"></div>
       </div>
     </div>
