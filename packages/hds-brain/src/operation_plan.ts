@@ -5238,6 +5238,35 @@ export class OperationPlanLedger {
       return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
     } catch { return false; }
   }
+  /** Resolve completion evidence for a current step without reusing execution authority. */
+  private bindingForRevisionStep(
+    plan: PlanState,
+    revision: PlanState["revisions"][number],
+    step: PlanState["revisions"][number]["plan"]["steps"][number],
+  ): {
+    readonly binding?: Binding;
+    readonly ambiguous: boolean;
+  } {
+    const current = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
+      binding.step_id === step.step_id);
+    if (current.length > 0) return { ...(current.length === 1 ? { binding: current[0]! } : {}), ambiguous: current.length !== 1 };
+
+    const currentRevisionIndex = plan.revisions.findIndex((candidate) => candidate.digest === revision.digest);
+    if (currentRevisionIndex < 0) return { ambiguous: true };
+    const expectedStepDigest = stepDigest(step);
+    const inherited = plan.bindings.filter((binding) => {
+      if (binding.step_id !== step.step_id || binding.operation !== step.operation || binding.status !== "verified" ||
+          binding.step_digest !== expectedStepDigest) return false;
+      const sourceRevisionIndex = plan.revisions.findIndex((candidate) => candidate.digest === binding.revision_digest);
+      if (sourceRevisionIndex < 0 || sourceRevisionIndex >= currentRevisionIndex) return false;
+      for (let index = sourceRevisionIndex; index <= currentRevisionIndex; index += 1) {
+        const revisionStep = plan.revisions[index]!.plan.steps.find((candidate) => candidate.step_id === step.step_id);
+        if (!revisionStep || stepDigest(revisionStep) !== expectedStepDigest) return false;
+      }
+      return true;
+    });
+    return { ...(inherited.length === 1 ? { binding: inherited[0]! } : {}), ambiguous: inherited.length > 1 };
+  }
   private goalCompletionRulesAssessment(plan: PlanState, revision: PlanState["revisions"][number]): GoalCompletionAssessment {
     const policy = plan.goal_completion_policy;
     if (!policy) return { status: "not_configured", reason_code: "rules_missing", rule_count: 0, satisfied_rule_count: 0 };
@@ -5257,10 +5286,9 @@ export class OperationPlanLedger {
       if (candidates.length !== 1) return { status: "held", reason_code: "rule_target_ambiguous",
         rules_digest: policy.rules_digest, rule_count: policy.rules.rules.length, satisfied_rule_count: evidence.length };
       const step = candidates[0]!;
-      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
-        binding.step_id === step.step_id);
-      const binding = bindings[0];
-      if (bindings.length !== 1 || !binding || binding.operation !== step.operation ||
+      const bindingResolution = this.bindingForRevisionStep(plan, revision, step);
+      const binding = bindingResolution.binding;
+      if (bindingResolution.ambiguous || !binding || binding.operation !== step.operation ||
           binding.step_digest !== stepDigest(step) || binding.status !== "verified" ||
           !binding.result_digest || binding.result_observed_at_ms === undefined) {
         return { status: "held", reason_code: "result_unverified", rules_digest: policy.rules_digest,
@@ -5311,10 +5339,9 @@ export class OperationPlanLedger {
   private currentRevisionBindingsVerified(plan: PlanState): boolean {
     const revision = plan.revisions.at(-1)!;
     return revision.plan.steps.length > 0 && revision.plan.steps.every((step) => {
-      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
-        binding.step_id === step.step_id);
-      const binding = bindings[0];
-      return bindings.length === 1 && !!binding && binding.status === "verified" &&
+      const resolution = this.bindingForRevisionStep(plan, revision, step);
+      const binding = resolution.binding;
+      return !resolution.ambiguous && !!binding && binding.status === "verified" &&
         binding.operation === step.operation && binding.step_digest === stepDigest(step) &&
         this.resultMemoryReceiptIsVerified(plan, binding);
     });
@@ -5394,17 +5421,20 @@ export class OperationPlanLedger {
     const revision = plan.revisions.at(-1)!;
     const taskIdentity = operationPlanTaskIdentityDigest(plan);
     const recoveryHold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
-    const currentBindings = revision.plan.steps.map((step) => plan.bindings.filter((binding) =>
-      binding.revision_digest === revision.digest && binding.step_id === step.step_id).at(-1));
-    const allResultsVerified = currentBindings.length > 0 && currentBindings.every((binding) => binding?.status === "verified");
-    const hasUnverifiedResult = currentBindings.some((binding) => binding &&
-      ["outcome_unknown", "verification_failed", "provider_rejected", "invalidated"].includes(binding.status));
+    const currentBindings = revision.plan.steps.map((step) => this.bindingForRevisionStep(plan, revision, step));
+    const allResultsVerified = currentBindings.length > 0 && currentBindings.every(({ binding }, index) =>
+      binding?.status === "verified" && binding.operation === revision.plan.steps[index]!.operation &&
+      binding.step_digest === stepDigest(revision.plan.steps[index]!));
+    const hasUnverifiedResult = currentBindings.some(({ binding, ambiguous }, index) => ambiguous ||
+      binding && (binding.operation !== revision.plan.steps[index]!.operation ||
+        binding.step_digest !== stepDigest(revision.plan.steps[index]!) ||
+        ["outcome_unknown", "verification_failed", "provider_rejected", "invalidated"].includes(binding.status)));
     const goalPurposeBindingStatus = plan.goal_purpose_binding
       ? this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding) ? "current" as const : "stale" as const
       : this.goalGovernanceReader?.()?.used_for_authority === false ? "required" as const : "not_configured" as const;
     const goalPurposeRelation = this.goalPurposeRelationProjection(plan);
     const assessment = this.goalCompletionRulesAssessment(plan, revision);
-    const missingReceipt = currentBindings.some((binding) => binding?.status === "verified" && !binding.memory_receipt);
+    const missingReceipt = currentBindings.some(({ binding }) => binding?.status === "verified" && !binding.memory_receipt);
     const unverifiedMemory = allResultsVerified && !missingReceipt && !this.currentRevisionBindingsVerified(plan);
     const savedAssessment = plan.goal_completion_assessment;
     const sealStale = !!savedAssessment && !this.completionAssessmentIsCurrent(plan, assessment);
@@ -7341,12 +7371,15 @@ export class OperationPlanLedger {
           ? { compute_source_observations: structuredClone(p.compute_source_observations) } : {}),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
           recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
-        status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.revision_digest === currentRevision.digest &&
-          b.step_id === s.step_id && b.status === "verified"))
+        status: currentRevision.plan.steps.every((step) => {
+          const resolution = this.bindingForRevisionStep(p, currentRevision, step);
+          return !resolution.ambiguous && resolution.binding?.status === "verified" &&
+            resolution.binding.operation === step.operation && resolution.binding.step_digest === stepDigest(step);
+        })
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
-          const binding = p.bindings.filter((entry) => entry.revision_digest === currentRevision.digest &&
-            entry.step_id === step.step_id).at(-1);
+          const bindingResolution = this.bindingForRevisionStep(p, currentRevision, step);
+          const binding = bindingResolution.binding;
           const stepResults = p.results.filter((entry) => entry.step_id === step.step_id && entry.operation === step.operation);
           const shellExecSummary = stepResults.length === 1
             ? summaryOnlyShellExecResult(step, stepResults[0]!.output) : undefined;

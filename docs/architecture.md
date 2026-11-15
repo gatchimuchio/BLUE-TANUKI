@@ -100,6 +100,10 @@ DecisionLog (audit chain に追記)
 
 **RESUME は人間のみ**。Executor からの feedback で SUSPEND を覆す経路は設計上存在しない。これにより「下流が暴走しても上流の判断を上書きできない」という containment property が保たれる。
 
+#### 現行Operation Planのrevision継続
+
+Owner Taskの複数stepを改訂するとき、既に検証済みのstepは変更できず、未実行部分だけを改訂できる。現在のrevisionに同じstepのbindingがない場合、完了判定は全revisionで定義digestが変化していないstepに限り、過去revisionの一意な検証済みbinding・結果・M receiptを再照合して利用できる。これは完了証拠の継承だけであり、executor command、承認、実行権限は再利用しない。定義変更・曖昧な候補・未解決作用・不確認M receiptは引き続き保留する。
+
 ### 下流: BLUE-TANUKI core (`packages/blue-tanuki`)
 
 実行機。**LLM 呼び出しはここに集約**。役割:
