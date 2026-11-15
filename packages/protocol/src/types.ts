@@ -810,6 +810,8 @@ export const RuntimeIntentInputSchema = z.object({
   session_id: RegisteredRuntimeReferenceSchema,
   submission_id: RuntimeSubmissionIdSchema,
   intent: z.string().min(1).max(4_096),
+  /** Optional explicit completion criteria; they never grant execution authority. */
+  goal_completion_rules: GoalCompletionRulesSchema.optional(),
   /** Optional one-request image bytes; decoded only into Gateway ephemeral context. */
   image_input: RuntimeIntentImageInputSchema.optional(),
   /** Optional one-request audio bytes; decoded only into Gateway ephemeral context. */
