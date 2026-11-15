@@ -305,40 +305,17 @@ function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
   Assert-ShortcutTargetsCompatible $InstallRootResolved $DesktopShortcutEnabled
   $programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\BLUE-TANUKI"
   New-Item -ItemType Directory -Force -Path $programs | Out-Null
-  $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-  $launcher = Join-Path $InstallRootResolved "BlueTanukiLauncher.ps1"
-  $uninstaller = Join-Path $InstallRootResolved "UninstallBlueTanuki.cmd"
   $icon = "$(Find-NodeExe $InstallRootResolved),0"
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI.lnk") $ps "-NoProfile -WindowStyle Hidden -File `"$launcher`" open" $InstallRootResolved "Open BLUE-TANUKI Control Center" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Status.lnk") $ps "-NoProfile -File `"$launcher`" resident-status" $InstallRootResolved "Show BLUE-TANUKI runtime status without changing it" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Doctor.lnk") $ps "-NoProfile -File `"$launcher`" doctor-open" $InstallRootResolved "Run BLUE-TANUKI Doctor" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Logs.lnk") $ps "-NoProfile -File `"$launcher`" logs" $InstallRootResolved "Open BLUE-TANUKI logs" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Safe Mode.lnk") $ps "-NoProfile -File `"$launcher`" safe-mode" $InstallRootResolved "Start BLUE-TANUKI with external providers and connectors disabled" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Restart.lnk") $ps "-NoProfile -File `"$launcher`" restart" $InstallRootResolved "Restart BLUE-TANUKI in normal mode using saved settings" $icon
-  New-Shortcut (Join-Path $programs "BLUE-TANUKI Stop.lnk") $ps "-NoProfile -File `"$launcher`" stop" $InstallRootResolved "Stop BLUE-TANUKI resident runtime" $icon
-  New-Shortcut (Join-Path $programs "Uninstall BLUE-TANUKI.lnk") $uninstaller "" $InstallRootResolved "Uninstall BLUE-TANUKI" $icon
+  $definitions = Get-ManagedWindowsProductShortcutDefinitions -InstallRoot $InstallRootResolved
+  foreach ($definition in @($definitions | Where-Object { $_.location -eq 'start-menu' })) {
+    New-Shortcut (Join-Path $programs $definition.name) $definition.target $definition.arguments `
+      $InstallRootResolved $definition.description $icon
+  }
   if ($DesktopShortcutEnabled) {
     $desktop = [Environment]::GetFolderPath("Desktop")
-    New-Shortcut (Join-Path $desktop "BLUE-TANUKI.lnk") $ps "-NoProfile -WindowStyle Hidden -File `"$launcher`" open" $InstallRootResolved "Open BLUE-TANUKI Control Center" $icon
-  }
-}
-
-function Test-ShortcutTargetBelongsToInstall($Path, $InstallRootResolved) {
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-  $item = Get-Item -Force -LiteralPath $Path
-  if ($item.Extension -ne '.lnk' -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
-  try {
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($Path)
-    $launcher = Get-InstallPathIdentity (Join-Path $InstallRootResolved 'BlueTanukiLauncher.ps1')
-    $uninstaller = Get-InstallPathIdentity (Join-Path $InstallRootResolved 'UninstallBlueTanuki.cmd')
-    $target = if ($shortcut.TargetPath) { Get-InstallPathIdentity $shortcut.TargetPath } else { '' }
-    if ([string]::Equals($target, $launcher, [System.StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($target, $uninstaller, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
-    return Test-ManagedWindowsProductLauncherShortcut -TargetPath ([string]$shortcut.TargetPath) `
-      -Arguments ([string]$shortcut.Arguments) -InstallRoot $InstallRootResolved
-  } catch {
-    return $false
+    $definition = @($definitions | Where-Object { $_.location -eq 'desktop' })[0]
+    New-Shortcut (Join-Path $desktop $definition.name) $definition.target $definition.arguments `
+      $InstallRootResolved $definition.description $icon
   }
 }
 
@@ -349,16 +326,19 @@ function Assert-ShortcutTargetsCompatible($InstallRootResolved, $DesktopShortcut
     if (-not $folder.PSIsContainer -or ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       Fail "Start Menu target is not a regular directory: $programs"
     }
-    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Status.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Restart.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
-      $path = Join-Path $programs $name
-      if ((Test-Path -LiteralPath $path) -and -not (Test-ShortcutTargetBelongsToInstall $path $InstallRootResolved)) {
+    foreach ($definition in @(Get-ManagedWindowsProductShortcutDefinitions -InstallRoot $InstallRootResolved |
+        Where-Object { $_.location -eq 'start-menu' })) {
+      $path = Join-Path $programs $definition.name
+      if ((Test-Path -LiteralPath $path) -and -not (Test-ManagedWindowsProductShortcut -Path $path -InstallRoot $InstallRootResolved -Location 'start-menu')) {
         Fail "Refusing to replace an unrelated Start Menu item: $path"
       }
     }
   }
   if ($DesktopShortcutEnabled) {
-    $desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BLUE-TANUKI.lnk'
-    if ((Test-Path -LiteralPath $desktopShortcut) -and -not (Test-ShortcutTargetBelongsToInstall $desktopShortcut $InstallRootResolved)) {
+    $desktopDefinition = @(Get-ManagedWindowsProductShortcutDefinitions -InstallRoot $InstallRootResolved |
+      Where-Object { $_.location -eq 'desktop' })[0]
+    $desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) $desktopDefinition.name
+    if ((Test-Path -LiteralPath $desktopShortcut) -and -not (Test-ManagedWindowsProductShortcut -Path $desktopShortcut -InstallRoot $InstallRootResolved -Location 'desktop')) {
       Fail "Refusing to replace an unrelated desktop item: $desktopShortcut"
     }
   }

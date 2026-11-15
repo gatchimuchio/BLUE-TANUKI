@@ -330,7 +330,7 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("User data retained");
     expect(uninstall).toContain("Assert-ManagedWindowsProductInstall");
     expect(uninstall).toContain("Assert-ManagedWindowsProductData");
-    expect(uninstall).toContain("Test-ShortcutOwnedByInstall");
+    expect(uninstall).toContain("Test-ManagedWindowsProductShortcut");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
     expect(uninstall).toContain("GetFullPath($PSCommandPath)");
     expect(uninstall).toContain("^BlueTanukiUninstall-[A-Za-z0-9-]+\\.ps1$");

@@ -197,25 +197,6 @@ function Remove-RegularFile($Path, $Label) {
   Remove-Item -LiteralPath $Path -Force
 }
 
-function Test-ShortcutOwnedByInstall($Path, $InstallRootResolved) {
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-  $item = Get-Item -Force -LiteralPath $Path
-  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.Extension -ne '.lnk') { return $false }
-  try {
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($Path)
-    $launcher = Normalize-Path (Join-Path $InstallRootResolved 'BlueTanukiLauncher.ps1')
-    $uninstaller = Normalize-Path (Join-Path $InstallRootResolved 'UninstallBlueTanuki.cmd')
-    $target = if ($shortcut.TargetPath) { Normalize-Path $shortcut.TargetPath } else { '' }
-    if ([string]::Equals($target, $uninstaller, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
-    if ([string]::Equals($target, $launcher, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
-    return Test-ManagedWindowsProductLauncherShortcut -TargetPath ([string]$shortcut.TargetPath) `
-      -Arguments ([string]$shortcut.Arguments) -InstallRoot $InstallRootResolved
-  } catch {
-    return $false
-  }
-}
-
 function Remove-ManagedShortcuts($InstallRootResolved) {
   if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
     Write-Warning 'Preserved BLUE-TANUKI Start Menu shortcuts because the current Roaming AppData path is unavailable.'
@@ -224,9 +205,13 @@ function Remove-ManagedShortcuts($InstallRootResolved) {
     if (Test-Path -LiteralPath $programs) {
       $folder = Get-Item -Force -LiteralPath $programs
       if ($folder.PSIsContainer -and ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
-        foreach ($entry in @(Get-ChildItem -Force -LiteralPath $programs -ErrorAction Stop)) {
-          if (Test-ShortcutOwnedByInstall $entry.FullName $InstallRootResolved) {
-            Remove-RegularFile $entry.FullName 'managed Start Menu shortcut'
+        foreach ($definition in @(Get-ManagedWindowsProductShortcutDefinitions -InstallRoot $InstallRootResolved |
+            Where-Object { $_.location -eq 'start-menu' })) {
+          $shortcutPath = Join-Path $programs $definition.name
+          if (Test-ManagedWindowsProductShortcut -Path $shortcutPath -InstallRoot $InstallRootResolved -Location 'start-menu') {
+            Remove-RegularFile $shortcutPath 'managed Start Menu shortcut'
+          } elseif ((Test-Path -LiteralPath $shortcutPath) -and -not $Quiet) {
+            Write-Warning "Preserved a Start Menu item that is not an unchanged BLUE-TANUKI shortcut: $shortcutPath"
           }
         }
         if (-not $DryRun -and @(Get-ChildItem -Force -LiteralPath $programs -ErrorAction Stop).Count -eq 0) {
@@ -243,7 +228,7 @@ function Remove-ManagedShortcuts($InstallRootResolved) {
     Write-Warning 'Preserved the BLUE-TANUKI desktop shortcut because Windows did not resolve the Desktop folder.'
   } else {
     $desktopShortcut = Join-Path $desktopRoot 'BLUE-TANUKI.lnk'
-    if (Test-ShortcutOwnedByInstall $desktopShortcut $InstallRootResolved) {
+    if (Test-ManagedWindowsProductShortcut -Path $desktopShortcut -InstallRoot $InstallRootResolved -Location 'desktop') {
       Remove-RegularFile $desktopShortcut 'managed desktop shortcut'
     } elseif ((Test-Path -LiteralPath $desktopShortcut) -and -not $Quiet) {
       Write-Warning "Preserved an unrelated desktop item: $desktopShortcut"

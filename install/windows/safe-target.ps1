@@ -101,6 +101,53 @@ function Test-ManagedWindowsProductLauncherShortcut {
   }
 }
 
+function Get-ManagedWindowsProductShortcutDefinitions {
+  param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+  $powerShell = Get-InstallPathIdentity (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+  $launcher = Get-InstallPathIdentity (Join-Path $InstallRoot 'BlueTanukiLauncher.ps1')
+  $uninstaller = Get-InstallPathIdentity (Join-Path $InstallRoot 'UninstallBlueTanuki.cmd')
+  return @(
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI.lnk'; target = $powerShell; arguments = "-NoProfile -WindowStyle Hidden -File `"$launcher`" open"; description = 'Open BLUE-TANUKI Control Center' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Status.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" resident-status"; description = 'Show BLUE-TANUKI runtime status without changing it' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Doctor.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" doctor-open"; description = 'Run BLUE-TANUKI Doctor' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Logs.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" logs"; description = 'Open BLUE-TANUKI logs' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Safe Mode.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" safe-mode"; description = 'Start BLUE-TANUKI with external providers and connectors disabled' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Restart.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" restart"; description = 'Restart BLUE-TANUKI in normal mode using saved settings' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'BLUE-TANUKI Stop.lnk'; target = $powerShell; arguments = "-NoProfile -File `"$launcher`" stop"; description = 'Stop BLUE-TANUKI resident runtime' },
+    [pscustomobject]@{ location = 'start-menu'; name = 'Uninstall BLUE-TANUKI.lnk'; target = $uninstaller; arguments = ''; description = 'Uninstall BLUE-TANUKI' },
+    [pscustomobject]@{ location = 'desktop'; name = 'BLUE-TANUKI.lnk'; target = $powerShell; arguments = "-NoProfile -WindowStyle Hidden -File `"$launcher`" open"; description = 'Open BLUE-TANUKI Control Center' }
+  )
+}
+
+function Test-ManagedWindowsProductShortcut {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$InstallRoot,
+    [Parameter(Mandatory = $true)][ValidateSet('start-menu', 'desktop')][string]$Location
+  )
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+  try {
+    $item = Get-Item -Force -LiteralPath $Path
+    if ($item.PSIsContainer -or $item.Extension -ne '.lnk' -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+    $name = [System.IO.Path]::GetFileName($Path)
+    $definitions = @(Get-ManagedWindowsProductShortcutDefinitions -InstallRoot $InstallRoot |
+      Where-Object { $_.location -eq $Location -and $_.name -ceq $name })
+    if ($definitions.Count -ne 1) { return $false }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($Path)
+    $definition = $definitions[0]
+    $actualTarget = Get-InstallPathIdentity ([string]$shortcut.TargetPath)
+    return [string]::Equals($actualTarget, [string]$definition.target, [System.StringComparison]::OrdinalIgnoreCase) -and
+      [string]::Equals([string]$shortcut.Arguments, [string]$definition.arguments, [System.StringComparison]::OrdinalIgnoreCase)
+  } catch {
+    return $false
+  }
+}
+
 function Get-Sha256HexFromFile {
   param([Parameter(Mandatory = $true)][string]$Path)
   $stream = [System.IO.File]::OpenRead($Path)
