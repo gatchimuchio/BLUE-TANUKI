@@ -404,15 +404,8 @@ function d4RuntimeIntentPayloadDigest(
   sessionId: string,
   intent: string,
   attachments: { readonly image?: TransientImageInput; readonly audio?: TransientAudioInput } = {},
-  goalCompletionRules?: GoalCompletionRules,
 ): string {
   const payload: unknown[] = [runtimeId, sessionId, intent];
-  if (goalCompletionRules) {
-    const rulesDigest = createHash("sha256")
-      .update(stableJson(goalCompletionRules), "utf8")
-      .digest("hex");
-    payload.push({ goal_completion_rules_digest: rulesDigest });
-  }
   if (attachments.image || attachments.audio) {
     payload.push({
       image: attachments.image ? {
@@ -431,15 +424,6 @@ function d4RuntimeIntentPayloadDigest(
     .update("blue-tanuki.d4-runtime.intent-submission-payload.v1\0", "utf8")
     .update(JSON.stringify(payload), "utf8")
     .digest("hex");
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }
 
 function normalizeTaskOutcome(value: unknown): WebChatTaskOutcome {
@@ -591,7 +575,7 @@ function findAotanuAssetRoot(): string {
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
  *   POST /runtime/ws-ticket body:{runtime_id, session_id} auth:dedicated D4 Runtime bearer
- *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent, goal_completion_rules?} auth:dedicated D4 Runtime bearer
+ *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
@@ -1830,6 +1814,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         delete body.image_input;
         delete body.audio_input;
       }
+      if (body !== null && Object.prototype.hasOwnProperty.call(body, "goal_completion_rules")) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({
+          accepted: false,
+          error: "runtime_intent_completion_rules_owner_required",
+        }));
+        return;
+      }
       const parsed = RuntimeIntentInputSchema.safeParse(body);
       if (!parsed.success || !parsed.data.intent.trim() || !isWellFormedUnicode(parsed.data.intent)) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1889,7 +1881,6 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             ...(runtimeImage ? { image: runtimeImage } : {}),
             ...(runtimeAudio ? { audio: runtimeAudio } : {}),
           },
-          parsed.data.goal_completion_rules,
         );
         const responseChannelConnected = this.connectionCount(sessionScope) > 0;
         let claim;
@@ -1948,8 +1939,6 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           content: parsed.data.intent,
           timestamp: Date.now(),
           session_id: sessionScope,
-          ...(parsed.data.goal_completion_rules
-            ? { goal_completion_rules: parsed.data.goal_completion_rules } : {}),
           metadata: {
             reply_to: sessionScope,
             "blue_tanuki.authority_context": "gateway_internal_v1",
