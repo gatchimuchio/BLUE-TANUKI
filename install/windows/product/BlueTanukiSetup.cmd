@@ -1,6 +1,6 @@
 @echo off
 setlocal
-powershell.exe -NoProfile -File "%~dp0BlueTanukiSetup.ps1" %*
+powershell.exe -NoProfile -STA -File "%~dp0BlueTanukiSetup.ps1" %*
 if errorlevel 1 (
   echo.
   echo BLUE-TANUKI setup failed. Review the output above.

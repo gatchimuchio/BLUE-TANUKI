@@ -399,15 +399,17 @@ or live LLM credentials can remain unset during local setup.
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
 source installers documented above. Normal packaged product Setup blocks
 replacement unless the operator explicitly supplies an update or rollback
-option. Windows uses `-Update` and `-Rollback`; Linux/macOS uses `--update` and
+option. The Windows self-extracting installer presents an explicit update,
+rollback, or cancel choice for a verified existing install; the packaged ZIP
+command also accepts `-Update` and `-Rollback`. Linux/macOS uses `--update` and
 `--rollback`. Update requires a newer semantic version, an exact product
 data-schema match, a verified installed tree, a retained regular configuration,
 the packaged doctor, and confirmed resident shutdown. It keeps one verified
 previous app/runtime pair. Rollback restores that pair and retains the
 previously active pair after verification. Config reset, doctor skip, and
 `-force` / `--force` cannot authorize replacement, and no data migration is
-implemented. The macOS product app offers explicit confirmation for update and
-rollback. These source paths have not been exercised as installed
+implemented. The macOS product app also offers explicit confirmation for update
+and rollback. These source paths have not been exercised as installed
 update/rollback and are not release-verified. Setup may first recover a
 previously interrupted, verified transaction.
 

@@ -137,7 +137,7 @@ function buildSed(targetExeShortPath: string, stageDirShortPath: string): string
     "[Strings]",
     `TargetName=${targetExeShortPath}`,
     "FriendlyName=BLUE-TANUKI Setup",
-    "AppLaunched=cmd.exe /D /C BlueTanukiSetup.cmd",
+    "AppLaunched=cmd.exe /D /C BlueTanukiSetup.cmd -Interactive",
     'FILE0="BlueTanukiSetup.cmd"',
     "[SourceFiles]",
     `SourceFiles0=${stageDir}`,

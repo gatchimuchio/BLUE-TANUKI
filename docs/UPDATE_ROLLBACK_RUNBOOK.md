@@ -117,8 +117,12 @@ migration or claim complete product-data backup coverage.
 Linux users run the verified .run installer with --update or --rollback.
 macOS command-installer users use --update or --rollback; the bundled macOS
 product app offers explicit confirmation buttons for update and rollback.
-Windows users use -Update or -Rollback in packaged Setup. In-place replacement
-without the explicit option remains blocked, and -Force does not authorize it.
+The Windows self-extracting installer presents an explicit update, rollback,
+or cancel choice when it finds a verified existing installation. Setup
+revalidates the selected operation before any replacement. Users running the
+packaged ZIP command directly can still choose `-Update` or `-Rollback`.
+In-place replacement without an explicit action remains blocked, and `-Force`
+does not authorize it.
 
 The installer keeps the current settings and product data in place. It requires
 matching product data-schema declarations and one verified previous app/runtime

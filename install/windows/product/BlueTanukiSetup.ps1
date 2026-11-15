@@ -4,6 +4,7 @@ param(
   [string]$DataRoot = "$env:APPDATA\BlueTanuki",
   [switch]$DesktopShortcut,
   [switch]$NoLaunch,
+  [switch]$Interactive,
   [switch]$Update,
   [switch]$Rollback,
   [switch]$ResetConfig,
@@ -21,8 +22,76 @@ function Fail($Message) {
 }
 
 if ($Update -and $Rollback) { Fail 'Use only one of -Update or -Rollback.' }
+if ($Interactive -and ($Update -or $Rollback)) { Fail 'Interactive mode selects the update or rollback operation; do not combine it with -Update or -Rollback.' }
 if ($Rollback -and ($ResetConfig -or $SkipDoctor -or $DesktopShortcut)) {
   Fail 'Rollback does not accept config-reset, doctor-skip, or shortcut-change options.'
+}
+
+function Select-ExistingProductAction($InstalledVersion, $CandidateVersion, $CanUpdate, $RollbackVersion, $CanRollback) {
+  try {
+    if (-not ('System.Windows.Forms.Form' -as [type])) { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop }
+    if (-not ('System.Drawing.Point' -as [type])) { Add-Type -AssemblyName System.Drawing -ErrorAction Stop }
+  } catch {
+    Fail 'The interactive Windows setup dialog is unavailable. No product files were changed. Run BlueTanukiSetup.cmd -Update or -Rollback from the verified installer ZIP.'
+  }
+
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = 'BLUE-TANUKI セットアップ'
+  $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+  $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+  $form.MaximizeBox = $false
+  $form.MinimizeBox = $false
+  $form.ShowInTaskbar = $true
+  $form.TopMost = $true
+  $form.ClientSize = New-Object System.Drawing.Size(540, 228)
+
+  $details = New-Object System.Windows.Forms.Label
+  $details.Location = New-Object System.Drawing.Point(18, 16)
+  $details.Size = New-Object System.Drawing.Size(504, 132)
+  $details.Text = @"
+現在の版: $InstalledVersion
+候補の版: $CandidateVersion
+保持中の前版: $(if ($RollbackVersion) { $RollbackVersion } else { 'なし' })
+
+更新は同じ製品データschemaの新しい版だけに適用されます。選択後もSetupが条件を再検証します。
+"@
+  $form.Controls.Add($details)
+
+  $updateButton = New-Object System.Windows.Forms.Button
+  $updateButton.Location = New-Object System.Drawing.Point(18, 176)
+  $updateButton.Size = New-Object System.Drawing.Size(150, 34)
+  $updateButton.Text = '更新'
+  $updateButton.Enabled = [bool]$CanUpdate
+  $updateButton.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+  $form.Controls.Add($updateButton)
+
+  $rollbackButton = New-Object System.Windows.Forms.Button
+  $rollbackButton.Location = New-Object System.Drawing.Point(184, 176)
+  $rollbackButton.Size = New-Object System.Drawing.Size(188, 34)
+  $rollbackButton.Text = if ($CanRollback) { '前の版に戻す' } else { '前の版に戻す (利用不可)' }
+  $rollbackButton.Enabled = [bool]$CanRollback
+  $rollbackButton.DialogResult = [System.Windows.Forms.DialogResult]::No
+  $form.Controls.Add($rollbackButton)
+
+  $cancelButton = New-Object System.Windows.Forms.Button
+  $cancelButton.Location = New-Object System.Drawing.Point(388, 176)
+  $cancelButton.Size = New-Object System.Drawing.Size(134, 34)
+  $cancelButton.Text = 'キャンセル'
+  $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+  $form.Controls.Add($cancelButton)
+
+  if ($CanUpdate) { $form.AcceptButton = $updateButton }
+  elseif ($CanRollback) { $form.AcceptButton = $rollbackButton }
+  $form.CancelButton = $cancelButton
+  try {
+    switch ($form.ShowDialog()) {
+      ([System.Windows.Forms.DialogResult]::Yes) { return 'update' }
+      ([System.Windows.Forms.DialogResult]::No) { return 'rollback' }
+      default { return 'cancel' }
+    }
+  } finally {
+    $form.Dispose()
+  }
 }
 
 function Fail-SourceTreeSetup($MissingEntries) {
@@ -653,6 +722,57 @@ try {
       Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
     }
     Assert-RegistryTargetCompatible $installRootResolved
+    if ($Interactive -and -not $Update -and -not $Rollback) {
+      $currentMetadataForChoice = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+      $currentSchemaForChoice = 0L
+      $canUpdate = $false
+      $canRollback = $false
+      $rollbackVersion = $null
+      try {
+        if ([long]::TryParse([string]$currentMetadataForChoice.data_schema_version, [ref]$currentSchemaForChoice) -and
+            $currentSchemaForChoice -eq $packageDataSchemaVersion -and
+            (Compare-ProductSemVer ([string]$version) ([string]$currentMetadataForChoice.version)) -gt 0 -and
+            (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+          $envItemForChoice = Get-Item -Force -LiteralPath $envFile -ErrorAction Stop
+          if (($envItemForChoice.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+            Assert-DataPackageCompatibility $dataRootResolved $installRootResolved
+            $previousRootForChoice = Get-PreviousProductInstallPath $installRootResolved
+            $previousMetadataForChoice = Assert-ManagedPreviousProductInstall $previousRootForChoice $installRootResolved $dataRootResolved
+            if (-not $previousMetadataForChoice -or
+                [long]$previousMetadataForChoice.data_schema_version -eq $packageDataSchemaVersion) {
+              $canUpdate = $true
+            }
+          }
+        }
+      } catch { $canUpdate = $false }
+      try {
+        $currentSchemaForRollback = 0L
+        if ([long]::TryParse([string]$currentMetadataForChoice.data_schema_version, [ref]$currentSchemaForRollback) -and
+            $currentSchemaForRollback -eq $packageDataSchemaVersion) {
+          $previousRootForRollbackChoice = Get-PreviousProductInstallPath $installRootResolved
+          $previousMetadataForRollbackChoice = Assert-ManagedPreviousProductInstall $previousRootForRollbackChoice $installRootResolved $dataRootResolved
+          if ($previousMetadataForRollbackChoice -and
+              [long]$previousMetadataForRollbackChoice.data_schema_version -eq $packageDataSchemaVersion) {
+            $dataMarkerForRollbackChoice = Assert-ManagedWindowsProductDataMarker -DataRoot $dataRootResolved `
+              -InstallRoot $installRootResolved -IncludeMarker
+            if ($dataMarkerForRollbackChoice.marker.schema_version -eq 3 -and
+                [long]$dataMarkerForRollbackChoice.marker.data_schema_version -eq $packageDataSchemaVersion) {
+              $canRollback = $true
+              $rollbackVersion = [string]$previousMetadataForRollbackChoice.version
+            }
+          }
+        }
+      } catch { $canRollback = $false; $rollbackVersion = $null }
+      $selectedAction = Select-ExistingProductAction ([string]$currentMetadataForChoice.version) `
+        ([string]$version) $canUpdate $rollbackVersion $canRollback
+      if ($selectedAction -eq 'cancel') {
+        Write-Host 'Setup cancelled. The selected update or rollback was not applied.'
+        exit 0
+      }
+      if ($selectedAction -eq 'update') { $Update = $true; $updateMode = $true }
+      elseif ($selectedAction -eq 'rollback') { $Rollback = $true }
+      else { Fail 'The interactive setup did not return a supported action. No product files were changed.' }
+    }
     if ($Rollback) {
       Assert-ShortcutTargetsCompatible $installRootResolved $false
       Invoke-ProductRollback $installRootResolved $dataRootResolved $packageDataSchemaVersion $NoLaunch

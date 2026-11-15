@@ -348,6 +348,7 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "Normal Windows users should not run source builds",
     `BlueTanukiSetup-${manifest.version}-windows-x64.exe`,
     "Double-click",
+    "offers Update, Rollback to the retained previous app, or Cancel",
     "payload/recovery archive",
     "not approved for public distribution",
     "Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree",

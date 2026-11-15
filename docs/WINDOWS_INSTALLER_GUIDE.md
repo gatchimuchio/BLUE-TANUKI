@@ -122,7 +122,7 @@ hash mismatch.
 1. Obtain `BlueTanukiSetup-<version>-windows-x64.exe` and verify its SHA-256 sidecar.
 2. Double-click the `.exe`.
 3. IExpress extracts the setup command; it verifies and internally extracts the payload/recovery zip.
-4. The packaged setup installs the app and starts the resident gateway with the bundled Node runtime.
+4. On a fresh install, the packaged setup installs the app and starts the resident gateway with the bundled Node runtime. If a verified install already exists, Setup asks whether to update, restore the retained previous app, or cancel. It validates the selected operation again before applying it.
 5. The Control Center opens at `http://127.0.0.1:8787/app`.
 6. Use stub mode for first conversation without external API credentials.
 
