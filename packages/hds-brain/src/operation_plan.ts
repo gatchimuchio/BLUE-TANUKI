@@ -7392,7 +7392,21 @@ export class OperationPlanLedger {
         steps: currentRevision.plan.steps.map((step) => {
           const bindingResolution = this.bindingForRevisionStep(p, currentRevision, step);
           const binding = bindingResolution.binding;
-          const stepResults = p.results.filter((entry) => entry.step_id === step.step_id && entry.operation === step.operation);
+          const sourceBinding = !bindingResolution.ambiguous && binding?.status === "verified" &&
+              binding.operation === step.operation && binding.step_digest === stepDigest(step)
+            ? binding
+            : undefined;
+          const sourceRevision = sourceBinding
+            ? p.revisions.find((entry) => entry.digest === sourceBinding.revision_digest)
+            : undefined;
+          const resultObservedAtMs = sourceBinding?.result_observed_at_ms;
+          const stepResults = sourceRevision && resultObservedAtMs !== undefined
+            ? p.results.filter((entry) => entry.plan_id === sourceRevision.plan.plan_id &&
+                entry.request_id === sourceRevision.plan.request_id && entry.step_id === step.step_id &&
+                entry.operation === step.operation && entry.status === "succeeded" &&
+                entry.observed_at_ms === resultObservedAtMs &&
+                operationPlanDigest(entry.target) === operationPlanDigest(step.target))
+            : [];
           const shellExecSummary = stepResults.length === 1
             ? summaryOnlyShellExecResult(step, stepResults[0]!.output) : undefined;
           const observation = binding?.status === "outcome_unknown"
