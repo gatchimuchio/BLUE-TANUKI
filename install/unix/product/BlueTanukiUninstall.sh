@@ -152,6 +152,7 @@ if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
     if ! sh "$LAUNCHER" resident-stop >/dev/null 2>&1; then
       fail "resident shutdown was not confirmed; install, runtime, and user data were retained"
     fi
+    assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
   fi
 fi
 
@@ -179,6 +180,9 @@ remove_target "$INSTALL_ROOT" app
 remove_target "$RUNTIME_ROOT" runtime
 
 if [ "$PURGE" = "1" ]; then
+  if [ "$DRY_RUN" != "1" ]; then
+    assert_product_data_root_markers "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  fi
   remove_target "$DATA_ROOT" data_root
   if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then remove_target "$CONFIG_ROOT" config_root; fi
   say "BLUE-TANUKI uninstalled with data purge."
