@@ -517,11 +517,23 @@ render_managed_linux_autostart_entry() {
     /*) ;;
     *) safe_target_fail "Linux autostart install root must be absolute" ;;
   esac
-  bt_autostart_cr=$(printf '\r')
-  case "$bt_autostart_install_root" in
-    *'
-'*|*"$bt_autostart_cr"*) safe_target_fail "Linux autostart install root contains a line break" ;;
-  esac
+  assert_absolute_single_line_path "Linux autostart install root" "$bt_autostart_install_root"
+  bt_autostart_exec=$(desktop_exec_path "$bt_autostart_install_root/BlueTanukiLauncher.sh") ||
+    safe_target_fail "Linux autostart launcher path could not be encoded"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Start BLUE-TANUKI resident gateway
+Exec=$bt_autostart_exec resident-start
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+}
+
+render_legacy_managed_linux_autostart_entry() {
+  bt_autostart_install_root=$1
+  assert_absolute_single_line_path "Linux autostart install root" "$bt_autostart_install_root"
   cat <<EOF
 [Desktop Entry]
 Type=Application
@@ -537,7 +549,50 @@ is_managed_linux_autostart_entry() {
   bt_autostart_file=$1
   bt_autostart_install_root=$2
   [ -f "$bt_autostart_file" ] && [ ! -L "$bt_autostart_file" ] || return 1
-  render_managed_linux_autostart_entry "$bt_autostart_install_root" | cmp -s "$bt_autostart_file" -
+  if render_managed_linux_autostart_entry "$bt_autostart_install_root" | cmp -s "$bt_autostart_file" -; then
+    return 0
+  fi
+  render_legacy_managed_linux_autostart_entry "$bt_autostart_install_root" |
+    cmp -s "$bt_autostart_file" -
+}
+
+linux_autostart_entry_references_install() {
+  bt_autostart_file=$1
+  bt_autostart_install_root=$2
+  [ -f "$bt_autostart_file" ] && [ ! -L "$bt_autostart_file" ] && [ -r "$bt_autostart_file" ] || return 2
+  bt_autostart_quoted_root=$(desktop_exec_quote "$bt_autostart_install_root/") || return 2
+  bt_autostart_launcher="$bt_autostart_install_root/BlueTanukiLauncher.sh"
+  bt_autostart_quoted_launcher=$(desktop_exec_quote "$bt_autostart_launcher") || return 2
+  while IFS= read -r bt_autostart_line || [ -n "$bt_autostart_line" ]; do
+    case "$bt_autostart_line" in
+      Exec=*)
+        bt_autostart_exec=${bt_autostart_line#Exec=}
+        case "$bt_autostart_exec" in
+          *BlueTanukiLauncher.sh*|*"$bt_autostart_install_root"*|*"$bt_autostart_quoted_root"*|*"$bt_autostart_launcher"*|*"$bt_autostart_quoted_launcher"*)
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  done < "$bt_autostart_file"
+  return 1
+}
+
+macos_autostart_entry_references_install() {
+  bt_autostart_file=$1
+  bt_autostart_install_root=$2
+  [ -f "$bt_autostart_file" ] && [ ! -L "$bt_autostart_file" ] && [ -r "$bt_autostart_file" ] || return 2
+  bt_autostart_install_xml=$(xml_escape_text "$bt_autostart_install_root") || return 2
+  bt_autostart_launcher="$bt_autostart_install_root/BlueTanukiLauncher.sh"
+  bt_autostart_launcher_xml=$(xml_escape_text "$bt_autostart_launcher") || return 2
+  while IFS= read -r bt_autostart_line || [ -n "$bt_autostart_line" ]; do
+    case "$bt_autostart_line" in
+      *BlueTanukiLauncher.sh*|*"$bt_autostart_install_root"*|*"$bt_autostart_install_xml"*|*"$bt_autostart_launcher"*|*"$bt_autostart_launcher_xml"*)
+        return 0
+        ;;
+    esac
+  done < "$bt_autostart_file"
+  return 1
 }
 
 trim_trailing_slashes() {

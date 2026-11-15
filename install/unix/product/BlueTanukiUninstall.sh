@@ -128,23 +128,118 @@ remove_exact_managed_file() {
   say "Removed managed $owned_label: $owned_file"
 }
 
-remove_linux_autostart_if_owned() {
-  owned_file=$1
-  if [ ! -e "$owned_file" ] && [ ! -L "$owned_file" ]; then return; fi
-  if ! is_managed_linux_autostart_entry "$owned_file" "$INSTALL_ROOT"; then
-    say "Preserved unrelated autostart_entry: $owned_file"
+assert_regular_autostart_parent_chain() {
+  bt_autostart_parent=$1
+  while [ "$bt_autostart_parent" != "/" ]; do
+    [ ! -L "$bt_autostart_parent" ] || fail "autostart parent path contains a symlink; no product files were removed: $bt_autostart_parent"
+    if [ -e "$bt_autostart_parent" ] && [ ! -d "$bt_autostart_parent" ]; then
+      fail "autostart parent path is not a directory; no product files were removed: $bt_autostart_parent"
+    fi
+    bt_autostart_parent=${bt_autostart_parent%/*}
+    [ -n "$bt_autostart_parent" ] || bt_autostart_parent=/
+  done
+}
+
+configure_product_autostart_target() {
+  case "$PLATFORM" in
+    macos)
+      [ -n "${HOME:-}" ] || fail "HOME is unavailable; cannot inspect macOS autostart safely"
+      AUTOSTART_FILE="$HOME/Library/LaunchAgents/com.blue-tanuki.gateway.plist"
+      ;;
+    linux)
+      [ -n "${HOME:-}" ] || fail "HOME is unavailable; cannot inspect Linux autostart safely"
+      bt_autostart_config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+      assert_absolute_single_line_path "Linux XDG config home" "$bt_autostart_config_home"
+      AUTOSTART_FILE="$bt_autostart_config_home/autostart/blue-tanuki.desktop"
+      ;;
+    *)
+      fail "unsupported platform for autostart inspection: $PLATFORM"
+      ;;
+  esac
+  AUTOSTART_FILE=$(safe_file_target "$AUTOSTART_FILE" AUTOSTART_FILE)
+  AUTOSTART_PARENT=${AUTOSTART_FILE%/*}
+  assert_regular_autostart_parent_chain "$AUTOSTART_PARENT"
+}
+
+product_autostart_is_managed() {
+  case "$PLATFORM" in
+    linux) is_managed_linux_autostart_entry "$AUTOSTART_FILE" "$INSTALL_ROOT" ;;
+    macos)
+      is_managed_macos_autostart_entry "$AUTOSTART_FILE" "$INSTALL_ROOT" \
+        "$DATA_ROOT/logs/blue-tanuki.out.log" "$DATA_ROOT/logs/blue-tanuki.err.log"
+      ;;
+  esac
+}
+
+product_autostart_references_install() {
+  case "$PLATFORM" in
+    linux) linux_autostart_entry_references_install "$AUTOSTART_FILE" "$INSTALL_ROOT" ;;
+    macos) macos_autostart_entry_references_install "$AUTOSTART_FILE" "$INSTALL_ROOT" ;;
+  esac
+}
+
+preflight_product_autostart() {
+  if [ ! -e "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ]; then return; fi
+  assert_regular_autostart_parent_chain "$AUTOSTART_PARENT"
+  [ -f "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ] && [ -r "$AUTOSTART_FILE" ] ||
+    fail "autostart entry cannot be safely classified; no product files were removed: $AUTOSTART_FILE"
+  if product_autostart_is_managed; then return; fi
+  if product_autostart_references_install; then
+    fail "modified autostart entry references this installation; no product files were removed: $AUTOSTART_FILE"
+  else
+    bt_autostart_status=$?
+  fi
+  case "$bt_autostart_status" in
+    1) return ;;
+    *) fail "autostart entry could not be inspected safely; no product files were removed: $AUTOSTART_FILE" ;;
+  esac
+}
+
+remove_product_autostart() {
+  if [ ! -e "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ]; then return; fi
+  assert_regular_autostart_parent_chain "$AUTOSTART_PARENT"
+  [ -f "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ] && [ -r "$AUTOSTART_FILE" ] ||
+    fail "autostart entry changed to an unsafe object; product files were preserved: $AUTOSTART_FILE"
+  if product_autostart_is_managed; then
+    if [ "$DRY_RUN" = "1" ]; then
+      say "Would remove managed autostart_entry: $AUTOSTART_FILE"
+      return
+    fi
+    rm -f -- "$AUTOSTART_FILE"
+    say "Removed managed autostart_entry: $AUTOSTART_FILE"
     return
   fi
-  if [ "$DRY_RUN" = "1" ]; then
-    say "Would remove managed autostart_entry: $owned_file"
-    return
+  if product_autostart_references_install; then
+    fail "autostart entry now references this installation; product files were preserved: $AUTOSTART_FILE"
+  else
+    bt_autostart_status=$?
   fi
-  rm -f -- "$owned_file"
-  say "Removed managed autostart_entry: $owned_file"
+  case "$bt_autostart_status" in
+    1) say "Preserved unrelated autostart_entry: $AUTOSTART_FILE" ;;
+    *) fail "autostart entry could not be inspected safely; product files were preserved: $AUTOSTART_FILE" ;;
+  esac
+}
+
+assert_product_autostart_clear() {
+  if [ ! -e "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ]; then return; fi
+  assert_regular_autostart_parent_chain "$AUTOSTART_PARENT"
+  [ -f "$AUTOSTART_FILE" ] && [ ! -L "$AUTOSTART_FILE" ] && [ -r "$AUTOSTART_FILE" ] ||
+    fail "autostart entry appeared in an unsafe form; product files were preserved: $AUTOSTART_FILE"
+  if product_autostart_references_install; then
+    fail "autostart entry still references this installation; product files were preserved: $AUTOSTART_FILE"
+  else
+    bt_autostart_status=$?
+  fi
+  case "$bt_autostart_status" in
+    1) return ;;
+    *) fail "autostart entry could not be inspected safely; product files were preserved: $AUTOSTART_FILE" ;;
+  esac
 }
 
 LAUNCHER="$INSTALL_ROOT/BlueTanukiLauncher.sh"
 BIN_LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" BIN_LAUNCHER)
+configure_product_autostart_target
+preflight_product_autostart
 if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     say "Would stop resident gateway and remove only an owned autostart entry."
@@ -156,25 +251,15 @@ if [ -f "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
   fi
 fi
 
+remove_product_autostart
 remove_exact_managed_file "$BIN_LAUNCHER" launcher is_managed_unix_launcher_wrapper "$LAUNCHER"
 if [ "$PLATFORM" = macos ]; then
   remove_exact_managed_file "$SURFACE_FILE" application_command is_managed_macos_application_command "$BIN_LAUNCHER"
-  macos_autostart="$HOME/Library/LaunchAgents/com.blue-tanuki.gateway.plist"
-  macos_launch_agents="$HOME/Library/LaunchAgents"
-  if [ -L "$HOME" ] || [ -L "$HOME/Library" ] || [ -L "$macos_launch_agents" ] ||
-    { [ -e "$HOME/Library" ] && [ ! -d "$HOME/Library" ]; } ||
-    { [ -e "$macos_launch_agents" ] && [ ! -d "$macos_launch_agents" ]; }; then
-    say "Preserved autostart_entry because its parent path is not a regular directory: $macos_autostart"
-  else
-    remove_exact_managed_file "$macos_autostart" autostart_entry is_managed_macos_autostart_entry \
-      "$INSTALL_ROOT" "$DATA_ROOT/logs/blue-tanuki.out.log" "$DATA_ROOT/logs/blue-tanuki.err.log"
-  fi
 else
   remove_exact_managed_file "$SURFACE_FILE" desktop_launcher is_managed_linux_desktop_entry "$BIN_LAUNCHER"
-  linux_autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/blue-tanuki.desktop"
-  remove_linux_autostart_if_owned "$linux_autostart"
 fi
 
+if [ "$DRY_RUN" != "1" ]; then assert_product_autostart_clear; fi
 cd /
 remove_target "$INSTALL_ROOT" app
 remove_target "$RUNTIME_ROOT" runtime
