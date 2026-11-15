@@ -18,6 +18,7 @@ export {
   type WebChatOwnerTaskSubmissionClaim,
   type WebChatD4RuntimeIntentClaim,
   type WebChatOwnerTaskSubmissionStatus,
+  type WebChatOwnerTaskSubmissionResult,
   type WebChatD4RuntimeIntentResult,
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,

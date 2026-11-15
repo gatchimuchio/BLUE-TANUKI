@@ -1337,6 +1337,34 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           evidence.evidence_digest.slice(0, 12) + "）。これは実行権限や公開／出荷判断を作りません。", achieved: true };
       }
 
+      function ownerTaskSubmissionResultSummary(value) {
+        const flags = value && value.used_for_authority === false && value.may_execute === false;
+        if (!isObject(value) || !flags) return { text: "回答本文projectionが不正なため表示しません。", content: null };
+        if (value.status === "not_ready" && Object.keys(value).length === 3 &&
+            Object.keys(value).every(function (key) { return ["status", "used_for_authority", "may_execute"].indexOf(key) >= 0; })) {
+          return { text: "Gatewayで回答をまだ観測していません。後で再照会してください。", content: null };
+        }
+        if (value.status === "unavailable" && Object.keys(value).length === 4 &&
+            Object.keys(value).every(function (key) { return ["status", "reason_code", "used_for_authority", "may_execute"].indexOf(key) >= 0; }) &&
+            ["not_retained", "content_too_large", "capacity_reached", "result_store_unavailable"].indexOf(value.reason_code) >= 0) {
+          const reasons = {
+            not_retained: "短期cacheに回答がありません。Gateway再起動または保持期限切れの可能性があります。",
+            content_too_large: "回答が短期再取得上限を超えました。",
+            capacity_reached: "短期再取得cacheの容量上限に達しました。",
+            result_store_unavailable: "短期再取得機能を利用できません。",
+          };
+          return { text: reasons[value.reason_code], content: null };
+        }
+        const allowed = ["status", "content", "content_sha256", "captured_at_ms", "used_for_authority", "may_execute"];
+        if (value.status !== "available" || Object.keys(value).length !== allowed.length ||
+            Object.keys(value).some(function (key) { return allowed.indexOf(key) < 0; }) ||
+            typeof value.content !== "string" || value.content.length > 65536 ||
+            !/^[a-f0-9]{64}$/i.test(value.content_sha256 || "") || !Number.isSafeInteger(value.captured_at_ms) ||
+            value.captured_at_ms < 1) return { text: "回答本文projectionが不正なため表示しません。", content: null };
+        return { text: "Gatewayの揮発cacheから回答本文を再取得しました。実行権限・目標達成・停止完了の証拠ではありません。",
+          content: value.content };
+      }
+
       function ownerTaskCancellationSummary(value) {
         if (value === undefined) return null;
         if (!isObject(value) || value.used_for_authority !== false || value.may_execute !== false) {
@@ -1387,6 +1415,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerToken = ownerTokenInput.value.trim();
         const submissionId = ownerTaskStatusSubmissionId();
         const isCurrentSubmission = submissionId !== null && submissionId === ownerTaskSubmissionIdMemory;
+        const resultPane = byId("owner-task-result");
+        const resultStatus = byId("owner-task-result-status");
+        resultPane.textContent = "";
+        resultPane.hidden = true;
+        resultStatus.textContent = "";
+        resultStatus.hidden = true;
         if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
         if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
         const wasSubmissionSelectDisabled = submissionSelect.disabled;
@@ -1426,6 +1460,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
           const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
           const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
+          const resultSummary = ownerTaskSubmissionResultSummary(result.result);
+          resultStatus.textContent = resultSummary.text;
+          resultStatus.hidden = false;
+          if (resultSummary.content !== null) {
+            resultPane.textContent = resultSummary.content;
+            resultPane.hidden = false;
+          }
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
             status.textContent = stateSummary + (taskOutcomeSummary
@@ -1832,6 +1873,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       async function submitOwnerTask() {
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
+        byId("owner-task-result").textContent = "";
+        byId("owner-task-result").hidden = true;
+        byId("owner-task-result-status").textContent = "";
+        byId("owner-task-result-status").hidden = true;
         const task = byId("owner-task-intent").value.trim();
         const isCanvasTask = task.startsWith(CANVAS_OPERATION_TASK_PREFIX);
         if (state.canvasArtifactInput && state.canvasArtifactPreparedTask !== task) {
@@ -9422,6 +9467,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           "Tasks／Runtimeで先行依頼の状態を確認し、同じ仕事の重複実行にならないと判断した場合だけ、新しい依頼IDへ切り替えてください。続行しますか？");
         if (!confirmed) return;
         clearOwnerTaskSubmissionId();
+        byId("owner-task-result").textContent = "";
+        byId("owner-task-result").hidden = true;
+        byId("owner-task-result-status").textContent = "";
+        byId("owner-task-result-status").hidden = true;
         const status = byId("owner-task-status");
         status.textContent = "新しい依頼IDを用意しました。先行依頼との重複がないことを確認した場合だけ再送してください。";
         status.className = "badge warn";
@@ -9432,6 +9481,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.textContent = error.message || "依頼状態を確認できませんでした";
           status.className = "badge bad";
         });
+      });
+      byId("owner-task-status-submission-id").addEventListener("change", function () {
+        byId("owner-task-result").textContent = "";
+        byId("owner-task-result").hidden = true;
+        byId("owner-task-result-status").textContent = "";
+        byId("owner-task-result-status").hidden = true;
       });
       byId("cancel-owner-task-submission").addEventListener("click", function () {
         cancelOwnerTaskSubmission().catch(function (error) {

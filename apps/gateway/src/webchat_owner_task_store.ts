@@ -7,6 +7,7 @@ import type {
   WebChatD4RuntimeIntentClaim,
   WebChatD4RuntimeIntentResult,
   WebChatOwnerTaskSubmissionClaim,
+  WebChatOwnerTaskSubmissionResult,
   WebChatOwnerTaskSubmissionState,
   WebChatOwnerTaskSubmissionStatus,
   WebChatOwnerTaskSubmissionStore,
@@ -18,6 +19,11 @@ const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const OWNER_TASK_SCOPE = sha256("webchat-owner-task-scope.v1");
 const D4_RUNTIME_TARGET = /^d4-runtime:[a-f0-9]{64}$/u;
+const OWNER_TASK_RESULT_TTL_MS = 15 * 60 * 1000;
+const OWNER_TASK_RESULT_MAX_ENTRIES = 512;
+const OWNER_TASK_RESULT_MAX_BYTES = 64 * 1024;
+const OWNER_TASK_RESULT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const RESULT_CACHE_CLEANUP_INTERVAL_MS = 10_000;
 const D4_RUNTIME_RESULT_TTL_MS = 15 * 60 * 1000;
 const D4_RUNTIME_RESULT_MAX_ENTRIES = 512;
 const D4_RUNTIME_RESULT_MAX_BYTES = 64 * 1024;
@@ -39,6 +45,15 @@ interface D4RuntimeResultEntry {
   unavailable_reason?: "content_too_large" | "capacity_reached";
 }
 
+interface OwnerTaskResultEntry {
+  readonly scope_digest: string;
+  expires_at_ms: number;
+  content?: string;
+  content_sha256?: string;
+  captured_at_ms?: number;
+  unavailable_reason?: "content_too_large" | "capacity_reached";
+}
+
 interface RuntimeSubmissionRow {
   readonly scope_digest: string;
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
@@ -47,8 +62,11 @@ interface RuntimeSubmissionRow {
 /** Durable, content-free inbox for deduplicating authenticated WebChat submissions. */
 export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore {
   private readonly db: DatabaseType;
+  private readonly ownerTaskResults = new Map<string, OwnerTaskResultEntry>();
+  private ownerTaskResultBytes = 0;
   private readonly d4RuntimeResults = new Map<string, D4RuntimeResultEntry>();
   private d4RuntimeResultBytes = 0;
+  private readonly resultCacheCleanupTimer: NodeJS.Timeout;
   private closed = false;
 
   constructor(filepath: string) {
@@ -88,6 +106,13 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       this.closed = true;
       throw error;
     }
+    this.resultCacheCleanupTimer = setInterval(() => {
+      if (this.closed) return;
+      const now = Date.now();
+      this.pruneOwnerTaskResults(now);
+      this.pruneD4RuntimeResults(now);
+    }, RESULT_CACHE_CLEANUP_INTERVAL_MS);
+    this.resultCacheCleanupTimer.unref();
   }
 
   static fromEnvironment(env: NodeJS.ProcessEnv = process.env): GatewayWebChatOwnerTaskStore {
@@ -112,6 +137,7 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
     const result = this.claimInScope(OWNER_TASK_SCOPE, eventDigest, input.payload_digest, input.request_id, true);
     if (result.status === "not_dispatched") throw new Error("webchat_owner_task_unreachable_dispatch_state");
+    if (result.status === "accepted") this.registerOwnerTaskResultTarget(result.request_id);
     return result;
   }
 
@@ -275,6 +301,65 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     return this.getStatusInScope(OWNER_TASK_SCOPE, eventDigest);
   }
 
+  getOwnerTaskSubmissionResult(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionResult {
+    this.assertOpen();
+    if (!REQUEST_ID.test(input.request_id)) {
+      return { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+    }
+    const row = this.db.prepare(`SELECT scope_digest,delivery_state FROM webchat_owner_task_inbox WHERE request_id=?`)
+      .get(input.request_id) as RuntimeSubmissionRow | undefined;
+    if (!row || row.scope_digest !== OWNER_TASK_SCOPE || row.delivery_state === "rejected") {
+      return { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+    }
+    const now = Date.now();
+    this.pruneOwnerTaskResults(now);
+    const entry = this.ownerTaskResults.get(input.request_id);
+    if (entry && entry.scope_digest === OWNER_TASK_SCOPE && entry.expires_at_ms > now) {
+      if (entry.content !== undefined && entry.content_sha256 && entry.captured_at_ms !== undefined) {
+        return { status: "available", content: entry.content, content_sha256: entry.content_sha256,
+          captured_at_ms: entry.captured_at_ms, used_for_authority: false, may_execute: false };
+      }
+      if (entry.unavailable_reason) {
+        return { status: "unavailable", reason_code: entry.unavailable_reason,
+          used_for_authority: false, may_execute: false };
+      }
+    }
+    return row.delivery_state === "dispatching"
+      ? { status: "not_ready", used_for_authority: false, may_execute: false }
+      : { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+  }
+
+  recordOwnerTaskSubmissionResult(input: { readonly request_id: string; readonly content: string }): void {
+    this.assertOpen();
+    if (!REQUEST_ID.test(input.request_id)) return;
+    const now = Date.now();
+    this.pruneOwnerTaskResults(now);
+    const entry = this.ownerTaskResults.get(input.request_id);
+    if (!entry || entry.scope_digest !== OWNER_TASK_SCOPE || entry.expires_at_ms <= now) return;
+    const row = this.db.prepare(`SELECT scope_digest,delivery_state FROM webchat_owner_task_inbox WHERE request_id=?`)
+      .get(input.request_id) as { readonly scope_digest: string; readonly delivery_state: WebChatOwnerTaskSubmissionState } | undefined;
+    if (!row || row.scope_digest !== OWNER_TASK_SCOPE || row.delivery_state === "rejected") return;
+    if (entry.content !== undefined) this.ownerTaskResultBytes -= Buffer.byteLength(entry.content, "utf8");
+    delete entry.content;
+    delete entry.content_sha256;
+    delete entry.captured_at_ms;
+    delete entry.unavailable_reason;
+    const byteLength = Buffer.byteLength(input.content, "utf8");
+    entry.captured_at_ms = now;
+    entry.expires_at_ms = now + OWNER_TASK_RESULT_TTL_MS;
+    if (byteLength > OWNER_TASK_RESULT_MAX_BYTES) {
+      entry.unavailable_reason = "content_too_large";
+      return;
+    }
+    if (this.ownerTaskResultBytes + byteLength > OWNER_TASK_RESULT_CACHE_MAX_BYTES) {
+      entry.unavailable_reason = "capacity_reached";
+      return;
+    }
+    entry.content = input.content;
+    entry.content_sha256 = sha256(input.content);
+    this.ownerTaskResultBytes += byteLength;
+  }
+
   markHandlerReturned(request_id: string): void {
     this.updateDispatchState(request_id, "handler_returned");
   }
@@ -289,6 +374,9 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
 
   close(): void {
     if (this.closed) return;
+    clearInterval(this.resultCacheCleanupTimer);
+    this.ownerTaskResults.clear();
+    this.ownerTaskResultBytes = 0;
     this.d4RuntimeResults.clear();
     this.d4RuntimeResultBytes = 0;
     this.db.close();
@@ -319,6 +407,26 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       // running; the 15-minute result-retention window begins when output arrives.
       expires_at_ms: now + 24 * 60 * 60 * 1000,
     });
+  }
+
+  private registerOwnerTaskResultTarget(requestId: string): void {
+    const now = Date.now();
+    this.pruneOwnerTaskResults(now);
+    if (this.ownerTaskResults.size >= OWNER_TASK_RESULT_MAX_ENTRIES) return;
+    this.ownerTaskResults.set(requestId, {
+      scope_digest: OWNER_TASK_SCOPE,
+      // Keep only an in-memory request binding while work runs; the output retention window
+      // begins only after a matching reply is captured.
+      expires_at_ms: now + 24 * 60 * 60 * 1000,
+    });
+  }
+
+  private pruneOwnerTaskResults(now: number): void {
+    for (const [requestId, entry] of this.ownerTaskResults) {
+      if (entry.expires_at_ms > now) continue;
+      if (entry.content !== undefined) this.ownerTaskResultBytes -= Buffer.byteLength(entry.content, "utf8");
+      this.ownerTaskResults.delete(requestId);
+    }
   }
 
   private pruneD4RuntimeResults(now: number): void {

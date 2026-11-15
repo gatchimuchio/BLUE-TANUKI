@@ -1961,6 +1961,27 @@ export interface WebChatOwnerTaskSubmissionStatus {
   readonly state: WebChatOwnerTaskSubmissionState;
 }
 
+export type WebChatOwnerTaskSubmissionResult =
+  | {
+      readonly status: "available";
+      readonly content: string;
+      readonly content_sha256: string;
+      readonly captured_at_ms: number;
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "not_ready";
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason_code: "not_retained" | "content_too_large" | "capacity_reached" | "result_store_unavailable";
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    };
+
 export type WebChatD4RuntimeIntentResult =
   | {
       readonly status: "available";
@@ -1987,6 +2008,10 @@ export interface WebChatOwnerTaskSubmissionStore {
     WebChatOwnerTaskSubmissionClaim;
   /** Read only the content-free delivery state for an owner-provided submission id. */
   getStatus?(input: { readonly submission_id: string }): WebChatOwnerTaskSubmissionStatus | null;
+  /** Reacquire only a bounded, process-memory reply for this already-bound owner submission. */
+  getOwnerTaskSubmissionResult?(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionResult;
+  /** Capture a reply only when request_id belongs to the authenticated owner submission scope. */
+  recordOwnerTaskSubmissionResult?(input: { readonly request_id: string; readonly content: string }): void;
   markHandlerReturned(request_id: string): void;
   markOutcomeUnknown(request_id: string): void;
   markRejected(request_id: string): void;
