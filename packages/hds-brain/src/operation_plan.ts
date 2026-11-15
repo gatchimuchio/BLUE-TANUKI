@@ -5353,7 +5353,7 @@ export class OperationPlanLedger {
   }
   private taskHasUnresolvedAttempt(taskIdentityDigest: string): boolean {
     return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&
-      plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown"].includes(binding.status)));
+      plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status)));
   }
   private taskHasCompletionSeal(taskIdentityDigest: string): boolean {
     return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&

@@ -102,7 +102,7 @@ DecisionLog (audit chain に追記)
 
 #### 現行Operation Planのrevision継続
 
-Owner Taskの複数stepを改訂するとき、既に検証済みのstepは変更できず、未実行部分だけを改訂できる。現在のrevisionに同じstepのbindingがない場合、完了判定は全revisionで定義digestが変化していないstepに限り、過去revisionの一意な検証済みbinding・結果・M receiptを再照合して利用できる。これは完了証拠の継承だけであり、executor command、承認、実行権限は再利用しない。定義変更・曖昧な候補・未解決作用・不確認M receiptは引き続き保留する。
+Owner Taskの複数stepを改訂するとき、既に検証済みのstepは変更できず、未実行部分だけを改訂できる。現在のrevisionに同じstepのbindingがない場合、完了判定は全revisionで定義digestが変化していないstepに限り、過去revisionの一意な検証済みbinding・結果・M receiptを再照合して利用できる。これは完了証拠の継承だけであり、executor command、承認、実行権限は再利用しない。定義変更・曖昧な候補・未解決作用・不確認M receiptは引き続き保留する。同一task identityを共有するplanの `verification_failed` bindingも、報告成功の結果を検証できておらず作用状態が未確定なため、タスク完了を保留する。結果の確定・照合が済むまでpeer/child planの達成でこの未解決状態を覆さない。
 
 ### 下流: BLUE-TANUKI core (`packages/blue-tanuki`)
 
