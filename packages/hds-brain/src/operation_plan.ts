@@ -5493,18 +5493,19 @@ export class OperationPlanLedger {
     const actions: { step_digest: string; source_digest: string; delivery_digest: string;
       result_digest: string; memory_receipt_digest: string }[] = [];
     for (const step of revision.plan.steps) {
-      const bindings = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
-        binding.step_id === step.step_id);
-      const binding = bindings.at(-1);
-      if (bindings.length !== 1 || !binding || binding.status !== "verified" ||
+      const bindingResolution = this.bindingForRevisionStep(plan, revision, step);
+      const binding = bindingResolution.binding;
+      if (bindingResolution.ambiguous || !binding || binding.status !== "verified" ||
           binding.operation !== step.operation || binding.step_digest !== stepDigest(step) ||
           !binding.execution_admission || !binding.operation_plan_binding_digest ||
           !binding.delivery_digest || !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
           !resultMemoryEligible(binding)) continue;
       try {
+        const sourceRevision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
+        if (!sourceRevision || sourceRevision.plan.plan_id !== planId) continue;
         const sourceDigest = operationPlanExecutionSourceDigest(plan, binding, step);
         const results = plan.results.filter((result) => result.plan_id === planId &&
-          result.request_id === revision.plan.request_id && result.step_id === step.step_id &&
+          result.request_id === sourceRevision.plan.request_id && result.step_id === step.step_id &&
           result.operation === step.operation && result.status === "succeeded");
         const resultVerified = step.operation === "github.write"
           ? results.length === 0 && binding.github_write_result?.mutation_status === "provider_accepted"
