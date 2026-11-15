@@ -466,6 +466,51 @@ write_managed_external_file() {
   fi
 }
 
+write_managed_linux_desktop_entry() {
+  bt_linux_desktop_target=$1
+  bt_linux_desktop_mode=$2
+  bt_linux_desktop_launcher=$3
+  bt_linux_desktop_parent=$(dirname -- "$bt_linux_desktop_target")
+  [ -d "$bt_linux_desktop_parent" ] && [ ! -L "$bt_linux_desktop_parent" ] ||
+    safe_target_fail "Linux_desktop_entry parent is missing or not a regular directory: $bt_linux_desktop_parent"
+  if [ -e "$bt_linux_desktop_target" ] || [ -L "$bt_linux_desktop_target" ]; then
+    [ -f "$bt_linux_desktop_target" ] && [ ! -L "$bt_linux_desktop_target" ] ||
+      safe_target_fail "Linux_desktop_entry exists and is not a regular file; it was preserved: $bt_linux_desktop_target"
+    if render_managed_linux_desktop_entry "$bt_linux_desktop_launcher" |
+        cmp -s "$bt_linux_desktop_target" -; then
+      return 0
+    fi
+    if ! render_legacy_managed_linux_desktop_entry "$bt_linux_desktop_launcher" |
+        cmp -s "$bt_linux_desktop_target" -; then
+      safe_target_fail "Linux_desktop_entry is not an exact current or legacy managed file; it was preserved: $bt_linux_desktop_target"
+    fi
+    bt_linux_desktop_temp=$(mktemp "$bt_linux_desktop_parent/.blue-tanuki-managed.XXXXXX") ||
+      safe_target_fail "Linux_desktop_entry could not create a same-directory migration file"
+    if ! render_managed_linux_desktop_entry "$bt_linux_desktop_launcher" > "$bt_linux_desktop_temp" ||
+        ! chmod "$bt_linux_desktop_mode" "$bt_linux_desktop_temp" ||
+        ! render_managed_linux_desktop_entry "$bt_linux_desktop_launcher" |
+          cmp -s "$bt_linux_desktop_temp" -; then
+      rm -f -- "$bt_linux_desktop_temp"
+      safe_target_fail "Linux_desktop_entry migration could not be prepared; the existing file was preserved"
+    fi
+    if ! render_legacy_managed_linux_desktop_entry "$bt_linux_desktop_launcher" |
+        cmp -s "$bt_linux_desktop_target" -; then
+      rm -f -- "$bt_linux_desktop_temp"
+      safe_target_fail "Linux_desktop_entry changed during migration; existing data was preserved: $bt_linux_desktop_target"
+    fi
+    if ! mv -f -- "$bt_linux_desktop_temp" "$bt_linux_desktop_target"; then
+      rm -f -- "$bt_linux_desktop_temp"
+      safe_target_fail "Linux_desktop_entry migration failed; existing data was preserved: $bt_linux_desktop_target"
+    fi
+    render_managed_linux_desktop_entry "$bt_linux_desktop_launcher" |
+      cmp -s "$bt_linux_desktop_target" - ||
+      safe_target_fail "Linux_desktop_entry changed after migration: $bt_linux_desktop_target"
+    return 0
+  fi
+  write_managed_external_file "$bt_linux_desktop_target" Linux_desktop_entry "$bt_linux_desktop_mode" \
+    render_managed_linux_desktop_entry "$bt_linux_desktop_launcher"
+}
+
 render_managed_linux_autostart_entry() {
   bt_autostart_install_root=$1
   case "$bt_autostart_install_root" in

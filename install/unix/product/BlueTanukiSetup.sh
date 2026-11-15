@@ -331,7 +331,10 @@ assert_managed_external_file() {
   if [ -e "$managed_file" ] || [ -L "$managed_file" ]; then
     [ -f "$managed_file" ] && [ ! -L "$managed_file" ] || fail "$managed_label is not a regular file: $managed_file"
     if ! "$managed_renderer" "$@" | cmp -s "$managed_file" -; then
-      fail "$managed_label is not an exact managed file; existing data was preserved: $managed_file"
+      if [ "$managed_label" != Linux_desktop_entry ] ||
+          ! render_legacy_managed_linux_desktop_entry "$@" | cmp -s "$managed_file" -; then
+        fail "$managed_label is not an exact managed file; existing data was preserved: $managed_file"
+      fi
     fi
   fi
 }
@@ -508,6 +511,7 @@ if [ "$PLATFORM" = "macos" ]; then
   assert_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER render_managed_unix_launcher_wrapper "$LAUNCHER"
   assert_managed_external_file "$SURFACE_FILE" macOS_application_command render_managed_macos_application_command "$BIN_LAUNCHER"
 else
+  render_managed_linux_desktop_entry "$BIN_LAUNCHER" >/dev/null
   assert_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER render_managed_unix_launcher_wrapper "$LAUNCHER"
   assert_managed_external_file "$SURFACE_FILE" Linux_desktop_entry render_managed_linux_desktop_entry "$BIN_LAUNCHER"
 fi
@@ -803,7 +807,7 @@ write_managed_external_file "$BIN_LAUNCHER" BIN_LAUNCHER 700 render_managed_unix
 if [ "$PLATFORM" = "macos" ]; then
   write_managed_external_file "$SURFACE_FILE" macOS_application_command 700 render_managed_macos_application_command "$BIN_LAUNCHER"
 else
-  write_managed_external_file "$SURFACE_FILE" Linux_desktop_entry 644 render_managed_linux_desktop_entry "$BIN_LAUNCHER"
+  write_managed_linux_desktop_entry "$SURFACE_FILE" 644 "$BIN_LAUNCHER"
 fi
 
 if [ "$CONFIG_ROOT" = "$DATA_ROOT" ]; then
