@@ -60,20 +60,32 @@ describe("downloadable product installer packages", () => {
     }
   });
 
-  it("requires same-install process shutdown before Unix update or uninstall removes files", () => {
+  it("blocks Unix packaged updates before app mutation and stops only for uninstall", () => {
     const setup = read("install/unix/product/BlueTanukiSetup.sh");
     const uninstall = read("install/unix/product/BlueTanukiUninstall.sh");
     const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
+    const updateGate = setup.indexOf("in-place product replacement is blocked");
+    const stageCreation = setup.indexOf('mkdir "$INSTALL_STAGE"');
 
     expect(launcher).toContain("process_identity_state");
     expect(launcher).toContain("list_owned_process_pids");
     expect(launcher).toContain("resident-watchdog");
     expect(launcher).toContain("did not stop within 10 seconds");
-    expect(setup).toContain("existing resident process could not be safely stopped");
+    expect(updateGate).toBeGreaterThanOrEqual(0);
+    expect(stageCreation).toBeGreaterThan(updateGate);
+    expect(setup.slice(updateGate)).not.toContain("resident-stop");
+    expect(setup).toContain("assert_product_data_compatibility");
+    expect(setup).toContain("write_product_data_compatibility_marker");
     expect(uninstall).toContain("resident shutdown was not confirmed");
     expect(setup).not.toMatch(/resident-stop[^\n]*\|\|\s*true/);
     expect(uninstall).not.toMatch(/resident-stop[^\n]*\|\|\s*true/);
     expect(uninstall).not.toContain("resident-autostart-disable");
+
+    for (const rel of ["install/linux/install.sh", "install/macos/install.sh"]) {
+      const sourceSetup = read(rel);
+      expect(sourceSetup).toContain("blue-tanuki-product-data.json");
+      expect(sourceSetup.indexOf("blue-tanuki-product-data.json")).toBeLessThan(sourceSetup.indexOf('rm -rf "$INSTALL_ROOT"'));
+    }
   });
 
   it("keeps Unix runtime state under the retained data root", () => {

@@ -1,6 +1,6 @@
 # BLUE-TANUKI Update / Rollback / Recovery Runbook
 
-BLUE-TANUKI does not currently implement an automatic updater. Updates are operator-run source or release-bundle replacements, followed by validation. **Manual application is currently blocked because product-wide persisted-data schema compatibility and migration support are unknown.** A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not establish data compatibility or authorize replacing the running application.
+BLUE-TANUKI does not currently implement an automatic updater or a supported application replacement procedure. **Manual application is blocked because product-wide persisted-data schema compatibility and migration support are unknown.** After any required recovery of a previously interrupted transaction, packaged product Setup refuses an in-place replacement before stopping the resident or staging its candidate; `--force` does not authorize an update. A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not establish data compatibility or authorize replacing the running application.
 
 ## Distribution readiness gate
 
@@ -122,11 +122,16 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
    `unknown`: stop here, keep the existing application running, and do not
    replace source or app files.** The release-manifest schema version is not a
    product data-schema version.
-7. For a future candidate only after product-wide compatibility and every
-   required migration are explicitly supported and verified, confirm that the
-   pre-update backup covers every data store the update may change. Then stop
-   BLUE-TANUKI and apply the source or release-bundle update manually.
-8. Restart and run doctor, audit verification, and release verification.
+7. Stop here. A future compatible candidate still needs an implemented update
+   path that enforces the migration contract and verified backup scope. Do not
+   use `--force`, replace source/app files, or run product Setup over an
+   existing installation.
+8. Restart and run doctor/audit checks only when no replacement was attempted.
+
+After uninstall with data retained, product Setup permits reattachment only
+when the staged app and runtime inventories exactly match the inventory
+recorded with that data root. A missing or different inventory is treated as
+unknown compatibility and blocks setup; the retained data is not changed.
 
 If post-update validation fails, restore the previous app directory or source
 commit and restore only data covered by a verified recovery backup. If any data
@@ -135,48 +140,22 @@ the current files and recovery evidence; do not claim that rollback is safe or
 complete. The rollback plan is evidence only and has `used_for_authority=false`;
 it cannot approve commands or bypass HDS-BRAIN.
 
-## 2. Source Install Update
+## 2. Source and release replacement
 
-```bash
-git status --short
-git pull
-pnpm install
-pnpm typecheck
-pnpm build
-pnpm test
-pnpm run doctor
-```
+Source-tree and release-bundle replacement are also blocked while compatibility
+is unknown. Do not `git pull`, copy a new app tree over an installed product,
+or treat successful typecheck/build/doctor as permission to reuse existing
+product data. Release verification proves bundle integrity only. A future
+procedure must document the data migration contract, affected stores, recovery
+coverage, and the product path that enforces them before replacement is
+enabled.
 
-Then start with the same env file as before:
+## 3. Fresh install and retained data
 
-```bash
-pnpm gateway:serve -- --env-file .blue-tanuki/blue-tanuki.env
-```
-
-If using the portable resident launcher, restart with:
-
-```bash
-blue-tanuki resident-start
-blue-tanuki resident-status
-```
-
-## 3. Release Bundle Update
-
-1. Verify the downloaded archive and sidecars.
-2. Extract to a new app directory when possible.
-3. Preserve the existing env file and local data directories.
-4. Run install/setup only if the bundle path requires it.
-5. Run `doctor` before start.
-
-```bash
-pnpm release:verify -- --file <bundle>
-pnpm run doctor
-```
-
-Portable installers preserve env/config by default during force reinstall. Use reset options only for intentional config regeneration:
-
-- Windows: `-ResetConfig`
-- macOS/Linux: `RESET_CONFIG=1`
+A fresh install into empty product roots remains available. After uninstall,
+retained product data may be reattached only to an app/runtime inventory that
+matches its recorded compatibility marker. Missing legacy markers and changed
+inventories remain blocked until a verified migration path exists.
 
 ## 4. Config Preservation
 

@@ -780,189 +780,111 @@ async function main(): Promise<void> {
       throw new Error(`installed runtime state leaked into the managed install root: ${leakedEntries.join(",")}`);
     }
 
-    const residentPidFile = path.join(dataRoot, "blue-tanuki.pid");
-    const pidBeforeUpdate = readPidFile(residentPidFile);
-    if (!pidBeforeUpdate) throw new Error("resident PID was unavailable before installed update lifecycle checks");
-    run("sh", [launcher, "stop"], installRoot, "launcher stop before update lifecycle checks", 60_000, env);
-    stopped = true;
-    if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-      throw new Error("installed gateway healthz stayed reachable before update lifecycle checks");
-    }
+const residentPidFile = path.join(dataRoot, "blue-tanuki.pid");
+const pidBeforeUpdate = readPidFile(residentPidFile);
+if (!pidBeforeUpdate) throw new Error("resident PID was unavailable before installed update lifecycle checks");
+const updateRetentionFile = path.join(dataRoot, "data", "g04-03-update-retention-sentinel.txt");
+const updateRetentionValue = "G04.03 isolated state survives a blocked package update\n";
+writeFileSync(updateRetentionFile, updateRetentionValue, "utf8");
+const ownerStateBeforeUpdate = Buffer.from(readFileSync(runtimeOwnerState));
+const envBeforeUpdate = Buffer.from(readFileSync(envFile));
+const installInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
+const runtimeInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
 
-    const updateRetentionFile = path.join(dataRoot, "data", "g04-03-update-retention-sentinel.txt");
-    const updateRetentionValue = "G04.03 isolated state survives update failure and recovery\n";
-    writeFileSync(updateRetentionFile, updateRetentionValue, "utf8");
-    const ownerStateBeforeUpdate = Buffer.from(readFileSync(runtimeOwnerState));
-    const envBeforeUpdate = Buffer.from(readFileSync(envFile));
-    const installInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
-    const runtimeInventoryBeforeUpdate = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
+const updatePackageParent = path.join(work, "update-package");
+const updatePackageDir = path.join(updatePackageParent, path.basename(packageDir));
+run("mkdir", ["-p", updatePackageParent], work, "create isolated update package parent", 10_000, env);
+run("cp", ["-R", packageDir, updatePackageParent], work, "copy isolated update package", 60_000, env);
+if (!existsSync(path.join(updatePackageDir, "app")) || !existsSync(path.join(updatePackageDir, "BlueTanukiSetup.sh"))) {
+  throw new Error("isolated update package copy is missing the app or setup entrypoint");
+}
+writeFileSync(path.join(updatePackageDir, "app", "g04-03-update-marker.txt"), "G04.03 isolated package update marker\n", "utf8");
+const updateSetup = path.join(updatePackageDir, "BlueTanukiSetup.sh");
+const updateSetupArgs = [
+  updateSetup,
+  "--install-root", installRoot,
+  "--data-root", dataRoot,
+  "--config-root", configRoot,
+  "--runtime-root", runtimeRoot,
+  "--bin-root", binRoot,
+  "--force",
+  "--no-launch",
+  "--skip-doctor",
+];
 
-    {
-      const updatePackageParent = path.join(work, "update-package");
-      const updatePackageDir = path.join(updatePackageParent, path.basename(packageDir));
-      const updateToolDir = path.join(work, "update-test-tools");
-      run("mkdir", ["-p", updatePackageParent, updateToolDir], work, "create isolated update test package", 10_000, env);
-      run("cp", ["-R", packageDir, updatePackageParent], work, "copy isolated update test package", 60_000, env);
-      if (!existsSync(path.join(updatePackageDir, "app")) || !existsSync(path.join(updatePackageDir, "BlueTanukiSetup.sh"))) {
-        throw new Error("isolated update package copy is missing the app or setup entrypoint");
-      }
-      const updateMarkerInPackage = path.join(updatePackageDir, "app", "g04-03-update-marker.txt");
-      writeFileSync(updateMarkerInPackage, "G04.03 isolated package update marker\n", "utf8");
-      const updateSetup = path.join(updatePackageDir, "BlueTanukiSetup.sh");
-      const updateSetupArgs = [
-        updateSetup,
-        "--install-root", installRoot,
-        "--data-root", dataRoot,
-        "--config-root", configRoot,
-        "--runtime-root", runtimeRoot,
-        "--bin-root", binRoot,
-        "--force",
-        "--no-launch",
-        "--skip-doctor",
-      ];
-      const testPath = `${updateToolDir}:${process.env.PATH ?? "/usr/bin:/bin"}`;
-      const moveFailureMarker = path.join(work, "update-runtime-move-failure-triggered");
-      const moveFailureShim = [
-        "#!/bin/sh",
-        'if [ "$#" -eq 3 ] && [ "$1" = "--" ] && [ "$2" = "$BT_TEST_RUNTIME_ROOT" ] && [ ! -e "$BT_TEST_FAILURE_MARKER" ]; then',
-        '  case "$3" in "$BT_TEST_RUNTIME_ROLLBACK_PREFIX"*)',
-        '    : > "$BT_TEST_FAILURE_MARKER"',
-        '    echo "blue-tanuki injected runtime move failure" >&2',
-        "    exit 73",
-        "    ;;",
-        "  esac",
-        "fi",
-        `exec ${systemMoveCommand} \"$@\"`,
-        "",
-      ].join("\n");
-      writeFileSync(path.join(updateToolDir, "mv"), moveFailureShim, "utf8");
-      run("chmod", ["+x", path.join(updateToolDir, "mv")], work, "enable isolated update failure shim", 10_000, env);
-      const failedUpdateOutput = runExpectingFailure("sh", updateSetupArgs, updatePackageDir, "installed update transaction failure rollback", installerTransactionTimeoutMs, {
-        ...env,
-        PATH: testPath,
-        BT_TEST_RUNTIME_ROOT: runtimeRoot,
-        BT_TEST_RUNTIME_ROLLBACK_PREFIX: path.join(work, ".RuntimeRoot.blue-tanuki-rollback-"),
-        BT_TEST_FAILURE_MARKER: moveFailureMarker,
-      });
-      if (!existsSync(moveFailureMarker) || !failedUpdateOutput.includes("blue-tanuki injected runtime move failure")) {
-        throw new Error("installed update did not hit the isolated runtime-move failure point");
-      }
-      if (!existsSync(installRoot) || !existsSync(runtimeRoot) || existsSync(path.join(installRoot, "g04-03-update-marker.txt"))) {
-        throw new Error("failed update did not restore the previous app and runtime pair");
-      }
-      if (!readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryBeforeUpdate) ||
-          !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryBeforeUpdate)) {
-        throw new Error("failed update changed the previous managed app or runtime inventory");
-      }
-      if (!existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
-          !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
-        throw new Error("failed update changed retained owner state, config, or user data");
-      }
-      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-        throw new Error("resident process remained after failed update rollback");
-      }
-      console.log("update_failure_rollback_result=pass");
+const blockedUpdateOutput = runExpectingFailure("sh", updateSetupArgs, updatePackageDir, "installed package update compatibility gate", installerTransactionTimeoutMs, env);
+if (!blockedUpdateOutput.includes("in-place product replacement is blocked")) {
+  throw new Error(`packaged setup did not report the in-place compatibility gate: ${blockedUpdateOutput}`);
+}
+if (!existsSync(installRoot) || !existsSync(runtimeRoot) ||
+    existsSync(path.join(installRoot, "g04-03-update-marker.txt")) ||
+    !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryBeforeUpdate) ||
+    !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryBeforeUpdate) ||
+    !existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
+    !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue ||
+    !(await waitFor(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+  throw new Error("blocked package update changed the installed app/runtime or retained state, or stopped the resident");
+}
+console.log("product_update_blocked_result=pass");
+run("sh", [launcher, "stop"], installRoot, "launcher stop after blocked update check", 60_000, env);
+stopped = true;
+if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+  throw new Error("installed gateway healthz stayed reachable after stopping following the update check");
+}
+const installInventoryAfterRecovery = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
+const runtimeInventoryAfterRecovery = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
 
-      const interruptedMoveMarker = path.join(work, "interrupted-update-app-move.pid");
-      const interruptedMoveShim = [
-        "#!/bin/sh",
-        'if [ "$#" -eq 3 ] && [ "$1" = "--" ] && [ "$2" = "$BT_TEST_INSTALL_ROOT" ]; then',
-        '  case "$3" in "$BT_TEST_INSTALL_ROLLBACK_PREFIX"*)',
-        `    ${systemMoveCommand} "$@" || exit $?`,
-        '    printf "%s\\n" "$$" > "$BT_TEST_HOLD_PID_FILE"',
-        "    while :; do :; done",
-        "    ;;",
-        "  esac",
-        "fi",
-        `exec ${systemMoveCommand} \"$@\"`,
-        "",
-      ].join("\n");
-      writeFileSync(path.join(updateToolDir, "mv"), interruptedMoveShim, "utf8");
-      run("chmod", ["+x", path.join(updateToolDir, "mv")], work, "enable isolated interrupted-update shim", 10_000, env);
-      await interruptInstallerAfterAppMove(updateSetupArgs, updatePackageDir, {
-        ...env,
-        PATH: testPath,
-        BT_TEST_INSTALL_ROOT: installRoot,
-        BT_TEST_INSTALL_ROLLBACK_PREFIX: path.join(work, ".InstallRoot.blue-tanuki-rollback-"),
-        BT_TEST_HOLD_PID_FILE: interruptedMoveMarker,
-      }, interruptedMoveMarker, installerTransactionTimeoutMs);
-
-      const rollbackPrefix = `.${path.basename(installRoot)}.blue-tanuki-rollback-`;
-      const rollbackCandidates = readdirSync(path.dirname(installRoot)).filter((name) => name.startsWith(rollbackPrefix));
-      if (rollbackCandidates.length !== 1 || existsSync(installRoot) || !existsSync(runtimeRoot)) {
-        throw new Error("interrupted update did not leave the exact expected old-app rollback and active-runtime state");
-      }
-      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-        throw new Error("resident process remained after interrupted update terminated");
-      }
-      const recoveryOutput = runExpectingStatus("sh", updateSetupArgs, updatePackageDir, 0, "installed interrupted-update recovery and resumed update", installerTransactionTimeoutMs, env);
-      if (!recoveryOutput.includes("restored the verified previous product after an interrupted update") ||
-          !existsSync(path.join(installRoot, "g04-03-update-marker.txt"))) {
-        throw new Error("installer did not restore the prior app and then complete the isolated update");
-      }
-      if (!existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
-          !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
-        throw new Error("interrupted-update recovery changed retained owner state, config, or user data");
-      }
-      if (!(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-        throw new Error("resident process remained after interrupted-update recovery");
-      }
-      console.log("interrupted_update_recovery_result=pass");
-      const installInventoryAfterRecovery = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")));
-      const runtimeInventoryAfterRecovery = Buffer.from(readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")));
-
-      if (platform === "macos") {
-        if (typeof process.getuid !== "function" || process.getuid() === 0) {
-          throw new Error("macOS permission-denial smoke requires a non-root runner account");
-        }
-        const permissionCaseRoot = path.join(work, "permission-denial");
-        const permissionInstallParent = path.join(permissionCaseRoot, "readonly-install-parent");
-        const permissionHome = path.join(permissionCaseRoot, "home");
-        const permissionHomeApplications = path.join(permissionHome, "Applications");
-        const permissionEnv = {
-          ...env,
-          HOME: permissionHome,
-          XDG_CONFIG_HOME: path.join(permissionHome, ".config"),
-          XDG_DATA_HOME: path.join(permissionHome, ".local", "share"),
-        };
-        run("mkdir", ["-p", permissionInstallParent, permissionHomeApplications], work, "create isolated permission-denial parent", 10_000, env);
-        const permissionInstallRoot = path.join(permissionInstallParent, "InstallRoot");
-        const permissionMode = statSync(permissionInstallParent).mode & 0o777;
-        if ((permissionMode & 0o200) === 0) {
-          throw new Error("isolated permission-denial parent was not writable before the test");
-        }
-        let permissionDeniedOutput = "";
-        chmodSync(permissionInstallParent, permissionMode & ~0o222);
-        try {
-          permissionDeniedOutput = runExpectingFailure("sh", [
-            updateSetup,
-            "--install-root", permissionInstallRoot,
-            "--data-root", path.join(permissionCaseRoot, "DataRoot"),
-            "--config-root", path.join(permissionCaseRoot, "ConfigRoot"),
-            "--runtime-root", path.join(permissionCaseRoot, "RuntimeRoot"),
-            "--bin-root", path.join(permissionCaseRoot, "BinRoot"),
-            "--no-launch",
-            "--skip-doctor",
-          ], updatePackageDir, "macOS packaged setup permission denial", installerTransactionTimeoutMs, permissionEnv);
-        } finally {
-          chmodSync(permissionInstallParent, permissionMode);
-        }
-        if (!/permission denied|operation not permitted/i.test(permissionDeniedOutput)) {
-          throw new Error("macOS packaged setup did not report the expected permission denial");
-        }
-        if (existsSync(permissionInstallRoot) || readdirSync(permissionInstallParent).length !== 0) {
-          throw new Error("permission-denied setup created an install or staging path");
-        }
-        if (!existsSync(installRoot) || !existsSync(runtimeRoot) ||
-            !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryAfterRecovery) ||
-            !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryAfterRecovery) ||
-            !existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
-            !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
-          throw new Error("permission-denied setup changed the existing isolated installation or retained state");
-        }
-        console.log("permission_denied_update_result=pass");
-      }
-    }
+if (platform === "macos") {
+  if (typeof process.getuid !== "function" || process.getuid() === 0) {
+    throw new Error("macOS permission-denial smoke requires a non-root runner account");
+  }
+  const permissionCaseRoot = path.join(work, "permission-denial");
+  const permissionInstallParent = path.join(permissionCaseRoot, "readonly-install-parent");
+  const permissionHome = path.join(permissionCaseRoot, "home");
+  const permissionHomeApplications = path.join(permissionHome, "Applications");
+  const permissionEnv = {
+    ...env,
+    HOME: permissionHome,
+    XDG_CONFIG_HOME: path.join(permissionHome, ".config"),
+    XDG_DATA_HOME: path.join(permissionHome, ".local", "share"),
+  };
+  run("mkdir", ["-p", permissionInstallParent, permissionHomeApplications], work, "create isolated permission-denial parent", 10_000, env);
+  const permissionInstallRoot = path.join(permissionInstallParent, "InstallRoot");
+  const permissionMode = statSync(permissionInstallParent).mode & 0o777;
+  if ((permissionMode & 0o200) === 0) {
+    throw new Error("isolated permission-denial parent was not writable before the test");
+  }
+  let permissionDeniedOutput = "";
+  chmodSync(permissionInstallParent, permissionMode & ~0o222);
+  try {
+    permissionDeniedOutput = runExpectingFailure("sh", [
+      updateSetup,
+      "--install-root", permissionInstallRoot,
+      "--data-root", path.join(permissionCaseRoot, "DataRoot"),
+      "--config-root", path.join(permissionCaseRoot, "ConfigRoot"),
+      "--runtime-root", path.join(permissionCaseRoot, "RuntimeRoot"),
+      "--bin-root", path.join(permissionCaseRoot, "BinRoot"),
+      "--no-launch",
+      "--skip-doctor",
+    ], updatePackageDir, "macOS packaged setup permission denial", installerTransactionTimeoutMs, permissionEnv);
+  } finally {
+    chmodSync(permissionInstallParent, permissionMode);
+  }
+  if (!/permission denied|operation not permitted/i.test(permissionDeniedOutput)) {
+    throw new Error("macOS packaged setup did not report the expected permission denial");
+  }
+  if (existsSync(permissionInstallRoot) || readdirSync(permissionInstallParent).length !== 0) {
+    throw new Error("permission-denied setup created an install or staging path");
+  }
+  if (!existsSync(installRoot) || !existsSync(runtimeRoot) ||
+      !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.txt")).equals(installInventoryAfterRecovery) ||
+      !readFileSync(path.join(runtimeRoot, "blue-tanuki-runtime-files.txt")).equals(runtimeInventoryAfterRecovery) ||
+      !existsSync(runtimeOwnerState) || !readFileSync(runtimeOwnerState).equals(ownerStateBeforeUpdate) ||
+      !readFileSync(envFile).equals(envBeforeUpdate) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue) {
+    throw new Error("permission-denied setup changed the existing isolated installation or retained state");
+  }
+  console.log("permission_denied_update_result=pass");
+}
 
     const autostartEntry = platform === "linux"
       ? path.join(env.XDG_CONFIG_HOME!, "autostart", "blue-tanuki.desktop")

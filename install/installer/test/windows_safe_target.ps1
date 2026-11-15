@@ -96,10 +96,11 @@ try {
   }
   $metadata | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $productInstall "blue-tanuki-install.json") -Encoding UTF8
   $dataMarker = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     product_id = "blue-tanuki-product-data"
     install_root = $productInstall
     data_root = $productData
+    managed_files_sha256 = $managedFilesHash
   }
   New-Item -ItemType Directory -Path $productData | Out-Null
   $dataMarker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $productData "blue-tanuki-product-data.json") -Encoding UTF8
@@ -146,7 +147,7 @@ try {
   $managed = Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData
   if ($managed -ne "managed-v3") { throw "managed Windows product install classification was unexpected: $managed" }
   $managedData = Assert-ManagedWindowsProductData -DataRoot $productData -InstallRoot $productInstall
-  if ($managedData -ne "managed-v1") { throw "managed Windows product data classification was unexpected: $managedData" }
+  if ($managedData -ne "managed-v2") { throw "managed Windows product data classification was unexpected: $managedData" }
   Set-Content -LiteralPath (Join-Path $productInstall "unrelated-user-file.txt") -Value "preserve" -Encoding UTF8
   $rejected = $false
   try { Assert-ManagedWindowsProductInstall -InstallRoot $productInstall -DataRoot $productData | Out-Null } catch { $rejected = $true }

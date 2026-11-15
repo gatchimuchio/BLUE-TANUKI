@@ -40,8 +40,11 @@ support and release-claim boundary, not a defect waiver and not authority:
   complete shared persisted-data schema and migration contract. Compatibility
   is `unknown`; manual application must stop until that contract and the
   affected-store backup scope are supported and verified.
-- Actual manual replacement after a compatible candidate is established remains
-  operator-run and has not been executed by the runtime.
+- Packaged Windows/Linux/macOS Setup refuses in-place replacement while
+  compatibility is unknown. After uninstall, retained data is reusable only
+  when the staged app/runtime inventory matches its recorded compatibility
+  marker; legacy or changed inventories are blocked.
+- No source or release-bundle replacement procedure is currently supported.
 - Automatic updater is not shipped.
 - Runtime app-file replacement / runtime auto-apply update is not shipped.
 - A release-manifest format version is not a product-data schema version.

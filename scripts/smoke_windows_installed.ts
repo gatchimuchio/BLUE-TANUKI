@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -342,100 +342,6 @@ async function fetchWithTimeout(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function windowsSetupMoveHookScript(): string {
-  return String.raw`
-$ErrorActionPreference = 'Stop'
-function Move-Item {
-  [CmdletBinding()]
-  param([string]$LiteralPath, [string]$Destination, [switch]$Force)
-  $target = [System.IO.Path]::GetFullPath($env:BT_TEST_INSTALL_ROOT)
-  $source = [System.IO.Path]::GetFullPath($LiteralPath)
-  $destination = [System.IO.Path]::GetFullPath($Destination)
-  $parent = [System.IO.Path]::GetDirectoryName($target)
-  $installName = [System.IO.Path]::GetFileName($target)
-  $rollbackPattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-rollback-(?:[0-9a-f]{16}|[0-9a-f]{32})$'
-  $stagePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) + '\.blue-tanuki-stage-(?:[0-9a-f]{16}|[0-9a-f]{32})$'
-
-  if ($destination -ieq $target -and $env:BT_TEST_MOVE_MODE -eq 'fail-stage' -and
-      [System.Text.RegularExpressions.Regex]::IsMatch([System.IO.Path]::GetFileName($source), $stagePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-    $rollbackCandidates = @(Get-ChildItem -Force -LiteralPath $parent | Where-Object {
-      [System.Text.RegularExpressions.Regex]::IsMatch([string]$_.Name, $rollbackPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    })
-    if ((Test-Path -LiteralPath $target) -or $rollbackCandidates.Count -ne 1) {
-      throw 'Controlled update failure hook did not observe the expected post-backup swap state.'
-    }
-    [System.IO.File]::WriteAllText($env:BT_TEST_MOVE_MARKER, [string]$PID, [System.Text.Encoding]::ASCII)
-    throw 'blue-tanuki injected installed update failure after verified backup move'
-  }
-
-  if ($source -ieq $target -and $env:BT_TEST_MOVE_MODE -eq 'interrupt-rollback' -and
-      [System.Text.RegularExpressions.Regex]::IsMatch([System.IO.Path]::GetFileName($destination), $rollbackPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-    if (Test-Path -LiteralPath $destination) {
-      throw 'Controlled interruption hook found an unexpected rollback destination.'
-    }
-    Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force | Out-Null
-    [System.IO.File]::WriteAllText($env:BT_TEST_MOVE_MARKER, [string]$PID, [System.Text.Encoding]::ASCII)
-    while ($true) { Start-Sleep -Milliseconds 250 }
-  }
-
-  Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force | Out-Null
-}
-
-& $env:BT_TEST_SETUP_SCRIPT -InstallRoot $env:BT_TEST_INSTALL_ROOT -DataRoot $env:BT_TEST_DATA_ROOT -NoLaunch
-`;
-}
-
-async function interruptWindowsInstallerAfterRollbackMove(
-  setupHook: string,
-  cwd: string,
-  markerFile: string,
-  timeoutMs: number,
-  extraEnv: Record<string, string>,
-): Promise<void> {
-  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", setupHook], {
-    cwd,
-    env: smokeChildEnvironment(extraEnv),
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  let spawnError: Error | undefined;
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-  let resolveExit: (result: { code: number | null; signal: NodeJS.Signals | null }) => void = () => undefined;
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    resolveExit = resolve;
-  });
-  child.once("exit", (code, signal) => resolveExit({ code, signal }));
-
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(markerFile) && Date.now() < deadline) {
-    if (spawnError) throw new Error(`interrupted Windows update process could not start: ${spawnError.message}`);
-    if (child.exitCode !== null || child.signalCode !== null) {
-      const result = await exited;
-      throw new Error(`interrupted Windows update exited before the backup move: code=${result.code} signal=${result.signal}`);
-    }
-    await sleep(50);
-  }
-  if (!existsSync(markerFile)) {
-    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await exited;
-    throw new Error("interrupted Windows update did not reach the controlled backup-move point");
-  }
-
-  const markerPid = Number(readFileSync(markerFile, "utf8").trim());
-  if (!Number.isInteger(markerPid) || markerPid <= 0 || child.pid === undefined || markerPid !== child.pid) {
-    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await exited;
-    throw new Error("interrupted Windows update process identity could not be verified");
-  }
-  child.kill("SIGKILL");
-  const result = await exited;
-  if (result.code === 0) {
-    throw new Error("interrupted Windows update unexpectedly exited successfully before termination");
-  }
 }
 
 async function waitFor(url: string, timeoutMs: number): Promise<boolean> {
@@ -1611,7 +1517,7 @@ async function main(): Promise<void> {
 
     logStep("prepare an isolated Windows update package and retention evidence");
     const updateRetentionFile = path.join(dataRoot, "windows-update-retention-sentinel.txt");
-    const updateRetentionValue = "G02.03 isolated state survives update failure and recovery\n";
+    const updateRetentionValue = "G02.03 isolated state survives a blocked package update\n";
     writeFileSync(updateRetentionFile, updateRetentionValue, { encoding: "utf8", flag: "wx" });
     const updateEnvBefore = Buffer.from(readFileSync(envFile));
     const updateInventoryBefore = Buffer.from(readFileSync(path.join(installRoot, "blue-tanuki-managed-files.json")));
@@ -1626,66 +1532,22 @@ async function main(): Promise<void> {
     const updateMarkerValue = "G02.03 verified Windows package update marker\n";
     const updateMarkerInPackage = path.join(updatePackageDir, "app", "g02-update-marker.txt");
     writeFileSync(updateMarkerInPackage, updateMarkerValue, { encoding: "utf8", flag: "wx" });
-    const setupHook = windowsSetupMoveHookScript();
-    const updateSetupEnv = {
-      ...isolatedProductEnv,
-      BT_TEST_SETUP_SCRIPT: path.join(updatePackageDir, "BlueTanukiSetup.ps1"),
-      BT_TEST_INSTALL_ROOT: installRoot,
-      BT_TEST_DATA_ROOT: dataRoot,
-    };
 
-    logStep("inject a Windows update failure after the verified backup move");
-    const failedUpdateMarker = path.join(isolatedTemp, `BlueTanukiUpdateFailure-${randomUUID()}.marker`);
-    const failedUpdateOutput = runExpectingStatus("powershell.exe", [
+    logStep("start the resident before checking the product update gate");
+    run("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
-      "-Command",
-      setupHook,
-    ], updatePackageDir, 1, "installed Windows update failure rollback", INSTALLER_TRANSACTION_TIMEOUT_MS, {
-      ...updateSetupEnv,
-      BT_TEST_MOVE_MODE: "fail-stage",
-      BT_TEST_MOVE_MARKER: failedUpdateMarker,
-    });
-    if (!existsSync(failedUpdateMarker) || !/^\d+$/.test(readFileSync(failedUpdateMarker, "utf8").trim()) ||
-        !failedUpdateOutput.includes("blue-tanuki injected installed update failure after verified backup move")) {
-      throw new Error("Windows update failure did not reach the controlled post-backup transaction point");
+      "-File",
+      launcher,
+      "start",
+    ], installRoot, "launcher start before blocked product update", 120_000, isolatedProductEnv);
+    stopped = false;
+    if (!(await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS))) {
+      throw new Error("installed gateway was not healthy before the blocked package update check");
     }
-    const transactionPrefix = `.${path.basename(installRoot)}.blue-tanuki-`;
-    const transactionSiblingsAfterFailure = readdirSync(work).filter((entry) =>
-      entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry));
-    const failedUpdateRegistry = readSmokeRegistryState(autostartRunName, "post update-failure registry check");
-    if (!existsSync(installRoot) || existsSync(path.join(installRoot, "g02-update-marker.txt")) ||
-        !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.json")).equals(updateInventoryBefore) ||
-        !existsSync(path.join(installRoot, installedNodeRelative)) ||
-        !readFileSync(envFile).equals(updateEnvBefore) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue ||
-        transactionSiblingsAfterFailure.length !== 0 || !failedUpdateRegistry.uninstallPresent || failedUpdateRegistry.autostartPresent ||
-        !(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-      throw new Error("failed Windows update did not restore the previous app/runtime while retaining settings/data and stopping the resident");
-    }
-    console.log("update_failure_rollback_result=pass");
 
-    logStep("interrupt an isolated Windows update after moving the old install to rollback");
-    const interruptedUpdateMarker = path.join(isolatedTemp, `BlueTanukiUpdateInterrupted-${randomUUID()}.marker`);
-    await interruptWindowsInstallerAfterRollbackMove(setupHook, updatePackageDir, interruptedUpdateMarker, INSTALLER_TRANSACTION_TIMEOUT_MS, {
-      ...updateSetupEnv,
-      BT_TEST_MOVE_MODE: "interrupt-rollback",
-      BT_TEST_MOVE_MARKER: interruptedUpdateMarker,
-    });
-    const rollbackPrefix = `${transactionPrefix}rollback-`;
-    const stagePrefix = `${transactionPrefix}stage-`;
-    const rollbackSiblings = readdirSync(work).filter((entry) => entry.startsWith(rollbackPrefix) && /^(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry.slice(rollbackPrefix.length)));
-    const stageSiblings = readdirSync(work).filter((entry) => entry.startsWith(stagePrefix) && /^(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry.slice(stagePrefix.length)));
-    if (existsSync(installRoot) || rollbackSiblings.length !== 1 || stageSiblings.length !== 1) {
-      throw new Error("interrupted Windows update did not leave one exact old-install rollback and its paired staging directory");
-    }
-    const interruptedRollbackRoot = path.join(work, rollbackSiblings[0]!);
-    if (!readFileSync(path.join(interruptedRollbackRoot, "blue-tanuki-managed-files.json")).equals(updateInventoryBefore) ||
-        !existsSync(path.join(interruptedRollbackRoot, installedNodeRelative)) ||
-        !readFileSync(envFile).equals(updateEnvBefore) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue ||
-        !(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-      throw new Error("interrupted Windows update changed the verified old app/runtime, retained settings/data, or left a resident process");
-    }
-    const recoveryOutput = runExpectingStatus("cmd.exe", [
+    logStep("verify packaged in-place update is blocked before stopping or staging");
+    const updateBlockedOutput = runExpectingStatus("cmd.exe", [
       "/d",
       "/s",
       "/c",
@@ -1695,21 +1557,22 @@ async function main(): Promise<void> {
       "-DataRoot",
       dataRoot,
       "-NoLaunch",
-    ], updatePackageDir, 0, "installed Windows interrupted-update recovery and resumed update", INSTALLER_TRANSACTION_TIMEOUT_MS, isolatedProductEnv);
-    const transactionSiblingsAfterRecovery = readdirSync(work).filter((entry) =>
+    ], updatePackageDir, 1, "installed product update compatibility gate", INSTALLER_TRANSACTION_TIMEOUT_MS, isolatedProductEnv);
+    const transactionPrefix = `.${path.basename(installRoot)}.blue-tanuki-`;
+    const transactionSiblingsAfterBlock = readdirSync(work).filter((entry) =>
       entry.startsWith(transactionPrefix) && /\.(?:stage|rollback)-(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(entry));
-    const recoveredUpdateRegistry = readSmokeRegistryState(autostartRunName, "post interrupted-update recovery registry check");
-    if (!recoveryOutput.includes("Restored one verified previous BLUE-TANUKI install after an interrupted update") ||
-        readFileSync(path.join(installRoot, "g02-update-marker.txt"), "utf8") !== updateMarkerValue ||
-        readFileSync(path.join(installRoot, "blue-tanuki-managed-files.json")).equals(updateInventoryBefore) ||
+    const blockedUpdateRegistry = readSmokeRegistryState(autostartRunName, "post blocked update registry check");
+    if (!updateBlockedOutput.includes("In-place product replacement is blocked") ||
+        existsSync(path.join(installRoot, "g02-update-marker.txt")) ||
+        !readFileSync(path.join(installRoot, "blue-tanuki-managed-files.json")).equals(updateInventoryBefore) ||
         !existsSync(path.join(installRoot, installedNodeRelative)) ||
         !readFileSync(envFile).equals(updateEnvBefore) || readFileSync(updateRetentionFile, "utf8") !== updateRetentionValue ||
-        transactionSiblingsAfterRecovery.length !== 0 || !recoveredUpdateRegistry.uninstallPresent || recoveredUpdateRegistry.autostartPresent ||
-        !(await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000))) {
-      throw new Error("Windows interrupted-update recovery did not resume the new package while retaining settings/data and stopping the resident");
+        transactionSiblingsAfterBlock.length !== 0 || !blockedUpdateRegistry.uninstallPresent || blockedUpdateRegistry.autostartPresent ||
+        !(await waitFor(`http://127.0.0.1:${port}/healthz`, 10_000))) {
+      throw new Error("blocked product update changed the installed app/runtime, retained data, registration, or resident state");
     }
-    console.log("interrupted_update_recovery_result=pass");
-    console.log("interrupted_update_staging_cleanup_result=pass");
+    console.log("product_update_blocked_result=pass");
+
 
     const retainedEnvFile = path.join(dataRoot, "blue-tanuki.env");
     const syntheticSecret = `synthetic-uninstall-secret-${randomUUID()}`;

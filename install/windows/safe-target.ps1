@@ -443,7 +443,8 @@ function Assert-ManagedWindowsProductDataMarker {
   param(
     [Parameter(Mandatory = $true)][string]$DataRoot,
     [Parameter(Mandatory = $true)][string]$InstallRoot,
-    [switch]$VerifyTree
+    [switch]$VerifyTree,
+    [switch]$IncludeMarker
   )
   $data = Resolve-SafeDirectoryTarget -Path $DataRoot -Label 'ProductDataRoot'
   $install = Resolve-SafeDirectoryTarget -Path $InstallRoot -Label 'ProductInstallRoot'
@@ -462,11 +463,15 @@ function Assert-ManagedWindowsProductDataMarker {
   try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch {
     throw "Product data ownership marker is invalid: $markerPath"
   }
-  if ($null -eq $marker -or $marker.schema_version -ne 1 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+  if ($null -eq $marker -or $marker.schema_version -notin @(1, 2) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
       -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $data), [System.StringComparison]::OrdinalIgnoreCase) -or
       -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $install), [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Product data ownership marker does not match the requested install and data roots.'
   }
+  if ($marker.schema_version -eq 2 -and [string]$marker.managed_files_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    throw 'Product data compatibility marker does not contain a valid managed product-file inventory digest.'
+  }
+  if ($IncludeMarker) { return [pscustomobject]@{ data_root = $data; marker = $marker } }
   return $data
 }
 
@@ -475,7 +480,8 @@ function Assert-ManagedWindowsProductData {
     [Parameter(Mandatory = $true)][string]$DataRoot,
     [Parameter(Mandatory = $true)][string]$InstallRoot
   )
-  [void](Assert-ManagedWindowsProductDataMarker -DataRoot $DataRoot -InstallRoot $InstallRoot -VerifyTree)
+  $validated = Assert-ManagedWindowsProductDataMarker -DataRoot $DataRoot -InstallRoot $InstallRoot -VerifyTree -IncludeMarker
+  if ($validated.marker.schema_version -eq 2) { return 'managed-v2' }
   return 'managed-v1'
 }
 
@@ -490,6 +496,19 @@ function Assert-ManagedWindowsDevelopmentData {
   $launcher = Join-Path $data 'bin\blue-tanuki.ps1'
   $cmdLauncher = Join-Path $data 'bin\blue-tanuki.cmd'
   $markerPath = Join-Path $data 'blue-tanuki-development-data.json'
+  $productMarkerPath = Join-Path $data 'blue-tanuki-product-data.json'
+  $productMarkerPresent = $false
+  try {
+    [void][System.IO.File]::GetAttributes($productMarkerPath)
+    $productMarkerPresent = $true
+  } catch [System.IO.FileNotFoundException] {
+  } catch [System.IO.DirectoryNotFoundException] {
+  } catch {
+    throw "Could not safely inspect packaged product data marker: $productMarkerPath. $($_.Exception.Message)"
+  }
+  if ($productMarkerPresent) {
+    throw 'The requested development data root belongs to a packaged BLUE-TANUKI product install; product and source-development data cannot share this root.'
+  }
   $hasLauncher = (Test-Path -LiteralPath $launcher) -or (Test-Path -LiteralPath $cmdLauncher)
   if (-not (Test-Path -LiteralPath $markerPath)) {
     if (-not $hasLauncher -and $AllowEmpty) { return 'unmanaged-empty' }

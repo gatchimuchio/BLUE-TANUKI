@@ -466,9 +466,7 @@ function main(): void {
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "crash_recovery_result=pass");
-  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "update_failure_rollback_result=pass");
-  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "interrupted_update_recovery_result=pass");
-  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "interrupted_update_staging_cleanup_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "product_update_blocked_result=pass");
 
   const smokeUnixInstalled = read("scripts/smoke_unix_installed.ts");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "linux_installed_smoke=pass");
@@ -477,8 +475,7 @@ function main(): void {
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "repair_install_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "autostart_exec_restart_result=pass");
-  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "update_failure_rollback_result=pass");
-  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "interrupted_update_recovery_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "product_update_blocked_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "port_conflict_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "approval_flow_result=pass");
   requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "crash_recovery_result=pass");

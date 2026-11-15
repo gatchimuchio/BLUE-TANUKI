@@ -476,34 +476,29 @@ recover_interrupted_product_update() {
   fi
 }
 
-INSTALL_EXISTS=0
 recover_interrupted_product_update
 if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
   [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] || fail "Install target exists but is not a regular directory: $INSTALL_ROOT"
-  INSTALL_EXISTS=1
-  [ "$FORCE" = "1" ] || fail "$INSTALL_ROOT already exists. Re-run with --force to replace a verified BLUE-TANUKI install."
   if [ -e "$INSTALL_ROOT/.blue-tanuki-owner" ] || [ -L "$INSTALL_ROOT/.blue-tanuki-owner" ]; then
     assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
   else
     assert_legacy_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM"
   fi
+  fail "in-place product replacement is blocked while product-wide persisted-data compatibility and migration are unknown; existing data was preserved"
 else
   if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
     fail "Runtime target exists without a verified product install and will not be replaced: $RUNTIME_ROOT"
   fi
   if [ -e "$DATA_ROOT/.blue-tanuki-owner" ] || [ -L "$DATA_ROOT/.blue-tanuki-owner" ] || [ -e "$CONFIG_ROOT/.blue-tanuki-owner" ] || [ -L "$CONFIG_ROOT/.blue-tanuki-owner" ]; then
     assert_product_data_root_markers "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+  elif [ -e "$DATA_ROOT/blue-tanuki-product-data.json" ] || [ -L "$DATA_ROOT/blue-tanuki-product-data.json" ]; then
+    [ -f "$DATA_ROOT/blue-tanuki-product-data.json" ] && [ ! -L "$DATA_ROOT/blue-tanuki-product-data.json" ] || fail "product data compatibility marker is not a regular file"
   else
     assert_fresh_directory "$DATA_ROOT" DATA_ROOT
     if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then
       assert_fresh_directory "$CONFIG_ROOT" CONFIG_ROOT
     fi
   fi
-fi
-
-if [ "$INSTALL_EXISTS" = "1" ]; then
-  assert_no_symlinks_in_tree "$INSTALL_ROOT" INSTALL_ROOT
-  assert_no_symlinks_in_tree "$RUNTIME_ROOT" RUNTIME_ROOT
 fi
 
 desktop_dir=$(dirname -- "$SURFACE_FILE")
@@ -519,8 +514,6 @@ fi
 STAGE_SUFFIX="$(date +%s).$$"
 INSTALL_STAGE="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-stage-$STAGE_SUFFIX"
 RUNTIME_STAGE="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-stage-$STAGE_SUFFIX"
-ROLLBACK_INSTALL="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-rollback-$STAGE_SUFFIX"
-ROLLBACK_RUNTIME="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-rollback-$STAGE_SUFFIX"
 ENV_FILE_STAGE="$CONFIG_ROOT/.blue-tanuki.env-stage-$STAGE_SUFFIX"
 ENV_FILE_BACKUP="$CONFIG_ROOT/.blue-tanuki.env-rollback-$STAGE_SUFFIX"
 INSTALL_ENV_STAGE="$INSTALL_STAGE/blue-tanuki-install.env"
@@ -528,8 +521,6 @@ INSTALL_JSON_STAGE="$INSTALL_STAGE/blue-tanuki-install.json"
 STAGE_LAUNCHER="$INSTALL_STAGE/BlueTanukiLauncher.sh"
 STAGE_UNINSTALLER="$INSTALL_STAGE/BlueTanukiUninstall.sh"
 STAGE_BIN_WRAPPER="$INSTALL_STAGE/BlueTanuki.sh"
-PREVIOUS_APP_MOVED=0
-PREVIOUS_RUNTIME_MOVED=0
 NEW_APP_MOVED=0
 NEW_RUNTIME_MOVED=0
 INSTALL_STAGE_CREATED=0
@@ -550,23 +541,6 @@ cleanup_setup() {
       fi
     elif [ "$NEW_APP_MOVED" = "1" ] && [ -d "$INSTALL_ROOT" ]; then
       if (assert_managed_product_app_inventory "$INSTALL_ROOT"); then rm -rf -- "$INSTALL_ROOT"; fi
-    fi
-    if [ "$PREVIOUS_APP_MOVED" = "1" ] && [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] &&
-        [ -d "$ROLLBACK_INSTALL" ] && [ -d "$ROLLBACK_RUNTIME" ] && [ ! -e "$INSTALL_ROOT" ] && [ ! -e "$RUNTIME_ROOT" ]; then
-      if (assert_managed_product_install_inventories "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME"); then
-        mv -- "$ROLLBACK_INSTALL" "$INSTALL_ROOT" && PREVIOUS_APP_MOVED=0
-        mv -- "$ROLLBACK_RUNTIME" "$RUNTIME_ROOT" && PREVIOUS_RUNTIME_MOVED=0
-      fi
-    elif [ "$PREVIOUS_APP_MOVED" = "1" ] && [ -d "$ROLLBACK_INSTALL" ] && [ ! -e "$INSTALL_ROOT" ]; then
-      if (assert_managed_product_app_inventory "$ROLLBACK_INSTALL"); then
-        mv -- "$ROLLBACK_INSTALL" "$INSTALL_ROOT" && PREVIOUS_APP_MOVED=0
-      fi
-    elif [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] && [ -d "$ROLLBACK_RUNTIME" ] && [ ! -e "$RUNTIME_ROOT" ]; then
-      runtime_metadata_root=$INSTALL_ROOT
-      [ -d "$ROLLBACK_INSTALL" ] && runtime_metadata_root=$ROLLBACK_INSTALL
-      if (assert_managed_product_runtime_inventory "$runtime_metadata_root" "$ROLLBACK_RUNTIME"); then
-        mv -- "$ROLLBACK_RUNTIME" "$RUNTIME_ROOT" && PREVIOUS_RUNTIME_MOVED=0
-      fi
     fi
     if [ "$ENV_FILE_BACKED_UP" = "1" ]; then
       if [ "$ENV_FILE_INSTALLED" = "1" ] && [ -f "$ENV_FILE" ]; then rm -f -- "$ENV_FILE"; fi
@@ -593,21 +567,7 @@ cleanup_setup() {
       fi
     fi
     [ ! -f "$ENV_FILE_STAGE" ] || rm -f -- "$ENV_FILE_STAGE"
-    if [ "$PREVIOUS_APP_MOVED" = "1" ] || [ "$PREVIOUS_RUNTIME_MOVED" = "1" ]; then
-      echo "error: rollback could not restore every previous install path; recovery paths were preserved: $ROLLBACK_INSTALL ; $ROLLBACK_RUNTIME" >&2
-    fi
   else
-    if [ "$PREVIOUS_APP_MOVED" = "1" ] && [ "$PREVIOUS_RUNTIME_MOVED" = "1" ] &&
-        [ -d "$ROLLBACK_INSTALL" ] && [ -d "$ROLLBACK_RUNTIME" ]; then
-      if (assert_managed_product_install_inventories "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME"); then
-        rm -rf -- "$ROLLBACK_RUNTIME"
-        rm -rf -- "$ROLLBACK_INSTALL"
-        PREVIOUS_RUNTIME_MOVED=0
-        PREVIOUS_APP_MOVED=0
-      else
-        echo "warning: previous app and runtime retained for recovery: $ROLLBACK_INSTALL ; $ROLLBACK_RUNTIME" >&2
-      fi
-    fi
     [ ! -f "$ENV_FILE_BACKUP" ] || rm -f -- "$ENV_FILE_BACKUP"
   fi
   exit "$setup_status"
@@ -616,7 +576,7 @@ trap 'cleanup_setup $?' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for candidate in "$INSTALL_STAGE" "$RUNTIME_STAGE" "$ROLLBACK_INSTALL" "$ROLLBACK_RUNTIME" "$ENV_FILE_STAGE" "$ENV_FILE_BACKUP"; do
+for candidate in "$INSTALL_STAGE" "$RUNTIME_STAGE" "$ENV_FILE_STAGE" "$ENV_FILE_BACKUP"; do
   [ ! -e "$candidate" ] && [ ! -L "$candidate" ] || fail "installer staging path already exists: $candidate"
 done
 mkdir -p "$INSTALL_PARENT" "$RUNTIME_PARENT" "$DATA_ROOT" "$CONFIG_ROOT" "$BIN_ROOT" "$desktop_dir"
@@ -714,6 +674,38 @@ for (const key of keys) if (!process.env[key]) throw new Error(`${key} missing`)
 fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
 ' "$INSTALL_JSON_STAGE"
 
+cat > "$STAGE_BIN_WRAPPER" <<EOF
+#!/usr/bin/env sh
+exec "$(printf '%s' "$LAUNCHER")" "\$@"
+EOF
+chmod +x "$STAGE_BIN_WRAPPER"
+write_product_owner_marker "$INSTALL_STAGE/.blue-tanuki-owner" install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+INSTALL_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$INSTALL_STAGE" blue-tanuki-install.json \
+  blue-tanuki-managed-files.txt blue-tanuki-product-install)
+RUNTIME_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$RUNTIME_STAGE" __no_metadata__ \
+  blue-tanuki-runtime-files.txt blue-tanuki-product-runtime)
+INSTALL_MANAGED_FILES_SHA256_VALUE="$INSTALL_MANAGED_FILES_SHA256" \
+RUNTIME_MANAGED_FILES_SHA256_VALUE="$RUNTIME_MANAGED_FILES_SHA256" \
+"$NODE_EXE" -e '
+const fs = require("fs");
+const out = process.argv[1];
+const data = JSON.parse(fs.readFileSync(out, "utf8"));
+const installInventory = process.env.INSTALL_MANAGED_FILES_SHA256_VALUE;
+const runtimeInventory = process.env.RUNTIME_MANAGED_FILES_SHA256_VALUE;
+if (!/^[a-f0-9]{64}$/i.test(installInventory || "") || !/^[a-f0-9]{64}$/i.test(runtimeInventory || "")) {
+  throw new Error("managed file inventory digest missing");
+}
+data.schema_version = 3;
+data.managed_install_files_sha256 = installInventory;
+data.managed_runtime_files_sha256 = runtimeInventory;
+fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
+' "$INSTALL_JSON_STAGE"
+
+assert_product_data_compatibility "$NODE_EXE" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" \
+  "$INSTALL_MANAGED_FILES_SHA256" "$RUNTIME_MANAGED_FILES_SHA256"
+write_product_data_compatibility_marker "$NODE_EXE" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" \
+  "$INSTALL_MANAGED_FILES_SHA256" "$RUNTIME_MANAGED_FILES_SHA256"
+
 if { [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; } && { [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; }; then
   fail "Existing config path is not a regular file: $ENV_FILE"
 fi
@@ -744,46 +736,7 @@ if [ "$RUN_DOCTOR" != "0" ]; then
   fi
 fi
 
-cat > "$STAGE_BIN_WRAPPER" <<EOF
-#!/usr/bin/env sh
-exec "$(printf '%s' "$LAUNCHER")" "\$@"
-EOF
-chmod +x "$STAGE_BIN_WRAPPER"
-
 if [ -f "$ENV_FILE_STAGE" ]; then chmod 600 "$ENV_FILE_STAGE"; fi
-write_product_owner_marker "$INSTALL_STAGE/.blue-tanuki-owner" install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
-INSTALL_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$INSTALL_STAGE" blue-tanuki-install.json \
-  blue-tanuki-managed-files.txt blue-tanuki-product-install)
-RUNTIME_MANAGED_FILES_SHA256=$(write_managed_tree_inventory "$RUNTIME_STAGE" __no_metadata__ \
-  blue-tanuki-runtime-files.txt blue-tanuki-product-runtime)
-INSTALL_MANAGED_FILES_SHA256_VALUE="$INSTALL_MANAGED_FILES_SHA256" \
-RUNTIME_MANAGED_FILES_SHA256_VALUE="$RUNTIME_MANAGED_FILES_SHA256" \
-"$NODE_EXE" -e '
-const fs = require("fs");
-const out = process.argv[1];
-const data = JSON.parse(fs.readFileSync(out, "utf8"));
-const installInventory = process.env.INSTALL_MANAGED_FILES_SHA256_VALUE;
-const runtimeInventory = process.env.RUNTIME_MANAGED_FILES_SHA256_VALUE;
-if (!/^[a-f0-9]{64}$/i.test(installInventory || "") || !/^[a-f0-9]{64}$/i.test(runtimeInventory || "")) {
-  throw new Error("managed file inventory digest missing");
-}
-data.schema_version = 3;
-data.managed_install_files_sha256 = installInventory;
-data.managed_runtime_files_sha256 = runtimeInventory;
-fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
-' "$INSTALL_JSON_STAGE"
-
-if [ "$INSTALL_EXISTS" = "1" ]; then
-  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
-  if ! sh "$LAUNCHER" resident-stop >/dev/null 2>&1; then
-    fail "the existing resident process could not be safely stopped; the current install and runtime were retained"
-  fi
-  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
-  mv -- "$INSTALL_ROOT" "$ROLLBACK_INSTALL"
-  PREVIOUS_APP_MOVED=1
-  mv -- "$RUNTIME_ROOT" "$ROLLBACK_RUNTIME"
-  PREVIOUS_RUNTIME_MOVED=1
-fi
 mv -- "$INSTALL_STAGE" "$INSTALL_ROOT"
 NEW_APP_MOVED=1
 INSTALL_STAGE_CREATED=0

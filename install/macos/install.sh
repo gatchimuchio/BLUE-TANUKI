@@ -58,6 +58,13 @@ SOURCE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$DATA_ROOT/blue-tanuki.env"
 CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
 
+if [ -e "$DATA_ROOT/blue-tanuki-product-data.json" ] || [ -L "$DATA_ROOT/blue-tanuki-product-data.json" ] ||
+   [ -e "$DATA_ROOT/.blue-tanuki-owner" ] || [ -L "$DATA_ROOT/.blue-tanuki-owner" ] ||
+   [ -e "$CONFIG_ROOT/.blue-tanuki-owner" ] || [ -L "$CONFIG_ROOT/.blue-tanuki-owner" ] ||
+   [ -e "$INSTALL_ROOT/.blue-tanuki-owner" ] || [ -L "$INSTALL_ROOT/.blue-tanuki-owner" ]; then
+  fail "this data or app root belongs to a packaged BLUE-TANUKI product install; the source-development installer cannot reuse or replace product state"
+fi
+
 if [ -d "$INSTALL_ROOT" ] && [ "$FORCE" != "1" ]; then
   fail "$INSTALL_ROOT already exists. Re-run with FORCE=1 to replace the app. Add RESET_CONFIG=1 only if you also want to regenerate the env file."
 fi

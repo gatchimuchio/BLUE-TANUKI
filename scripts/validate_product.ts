@@ -1060,14 +1060,12 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     log.includes("crash_recovery_result=pass") &&
     log.includes("safe_mode_result=pass") &&
     log.includes("defender_smartscreen_guidance_result=pass") &&
-    log.includes("update_failure_rollback_result=pass") &&
-    log.includes("interrupted_update_recovery_result=pass") &&
-    log.includes("interrupted_update_staging_cleanup_result=pass") &&
+    log.includes("product_update_blocked_result=pass") &&
     log.includes("uninstall_result=pass");
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? "Windows installed-app smoke passed source-tree guidance/root entrypoint/installer setup/install/repair/reboot-persistence/update-failure-rollback/interrupted-update-recovery/staging-cleanup/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
+      ? "Windows installed-app smoke passed source-tree guidance/root entrypoint/installer setup/install/repair/reboot-persistence/product-update-compatibility-block/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
       : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1092,9 +1090,7 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
       crash_recovery_result: log.includes("crash_recovery_result=pass"),
       safe_mode_result: log.includes("safe_mode_result=pass"),
       defender_smartscreen_guidance_result: log.includes("defender_smartscreen_guidance_result=pass"),
-      update_failure_rollback_result: log.includes("update_failure_rollback_result=pass"),
-      interrupted_update_recovery_result: log.includes("interrupted_update_recovery_result=pass"),
-      interrupted_update_staging_cleanup_result: log.includes("interrupted_update_staging_cleanup_result=pass"),
+      product_update_blocked_result: log.includes("product_update_blocked_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };
@@ -1181,8 +1177,7 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
   }
   const run = await runNodeScript(ctx, "scripts/smoke_unix_installed.ts", args);
   const log = commandLog(run);
-  const updateLifecyclePass = platform !== "linux" ||
-    (log.includes("update_failure_rollback_result=pass") && log.includes("interrupted_update_recovery_result=pass"));
+  const updateLifecyclePass = log.includes("product_update_blocked_result=pass");
   const pass =
     run.exit_code === 0 &&
     log.includes(`${platform}_installed_smoke=pass`) &&
@@ -1208,7 +1203,7 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart-exec-restart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/runtime-state-root/normal-uninstall-retention/reinstall/purge${platform === "linux" ? "/update-failure-rollback/interrupted-update-recovery" : ""}`
+      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart-exec-restart/product-update-compatibility-block/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/runtime-state-root/normal-uninstall-retention/reinstall/purge`
       : `${platform} installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1223,8 +1218,7 @@ async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "mac
       first_message_result: log.includes("first_message_result=pass"),
       repair_install_result: log.includes("repair_install_result=pass"),
       autostart_exec_restart_result: log.includes("autostart_exec_restart_result=pass"),
-      update_failure_rollback_result: log.includes("update_failure_rollback_result=pass"),
-      interrupted_update_recovery_result: log.includes("interrupted_update_recovery_result=pass"),
+      product_update_blocked_result: log.includes("product_update_blocked_result=pass"),
       port_conflict_result: log.includes("port_conflict_result=pass"),
       approval_flow_result: log.includes("approval_flow_result=pass"),
       audit_tamper_result: log.includes("audit_tamper_result=pass"),

@@ -65,10 +65,12 @@ the app and launcher while preserving env/audit/session data. Use Windows
 `-Purge` or macOS/Linux `PURGE=1` only when retained local data should also be
 removed.
 
-Portable upgrades should use Windows `-Force` or macOS/Linux `FORCE=1`. These
-replace the app directory while preserving the existing env file. Use Windows
-`-ResetConfig` or macOS/Linux `RESET_CONFIG=1` only for intentional token,
-provider, and path regeneration.
+Windows `-Force` and macOS/Linux `FORCE=1` apply only to the source-development
+installers. Packaged product Setup blocks in-place replacement while product
+data compatibility and migration are unknown. `-Force` does not bypass this
+gate. After uninstall, retained data can be reattached only to a staged
+app/runtime inventory matching its recorded compatibility marker. Reset flags
+for developer installs do not authorize product-data migration.
 
 When setup or the settings window overwrites an env file, the gateway writes a
 timestamped `.bak` file next to it first and then atomically replaces the env

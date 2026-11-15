@@ -396,14 +396,22 @@ or live LLM credentials can remain unset during local setup.
 
 ## Reinstall and upgrade
 
-`-Force` on Windows and `FORCE=1` on macOS/Linux replace the app directory but
-leave an existing env file intact. The installer preserves WebChat tokens,
-resume tokens,
-settings tokens, LLM provider settings, audit paths, and session paths stable
-across reinstall or portable upgrade.
+`-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
+source installers documented above. Packaged product Setup blocks every
+in-place app replacement while product-wide data compatibility and migration
+are unknown, even when `--force` or `-Force` is supplied. For a normal setup
+attempt, the resident is not stopped and the candidate is not staged. Setup
+may first restore a previously interrupted, verified transaction.
 
-Use `-ResetConfig` on Windows or `RESET_CONFIG=1` on macOS/Linux only when the
-env file should be regenerated intentionally.
+After uninstall with data retained, packaged Setup accepts only a staged
+app/runtime inventory that matches the compatibility marker recorded with that
+data root. A missing marker or different inventory is blocked. This preserves
+same-build reinstall while preventing a different package from reusing
+unverified product data. Source-development installers reject packaged product
+data roots so the two install modes cannot overwrite or mix that state.
+
+`-ResetConfig` or `RESET_CONFIG=1` applies only to the developer source
+installers. It does not authorize a packaged product update or migration.
 
 When setup or settings overwrites an env file, the previous file is kept as a
 timestamped `.bak` file next to the env file.

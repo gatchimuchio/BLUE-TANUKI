@@ -86,24 +86,6 @@ function Find-NodeExe($Root) {
   return $node.FullName
 }
 
-function Stop-ExistingResident($Root) {
-  $launcher = Join-Path $Root "BlueTanukiLauncher.ps1"
-  if (Test-Path -LiteralPath $launcher) {
-    $stopExitCode = $null
-    $stopFailure = $null
-    try {
-      & powershell.exe -NoProfile -File $launcher stop | Out-Null
-      $stopExitCode = $LASTEXITCODE
-    } catch {
-      $stopFailure = $_.Exception.Message
-    }
-    if ($stopFailure -or $stopExitCode -ne 0) {
-      $reason = if ($stopFailure) { $stopFailure } else { "launcher stop returned exit code $stopExitCode" }
-      Fail "Refusing to continue setup because resident shutdown was not confirmed. No update swap or configuration reset was started. $reason"
-    }
-  }
-}
-
 function Copy-DirectoryContents($Source, $Destination) {
   if (-not (Test-Path -LiteralPath $Source)) {
     Fail "Packaged installer content is incomplete. Missing directory: $Source"
@@ -338,13 +320,17 @@ function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootRe
   $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 }
 
-function Write-DataInstallMetadata($DataRootResolved, $InstallRootResolved, $Version) {
+function Write-DataInstallMetadata($DataRootResolved, $InstallRootResolved, $Version, $ManagedFilesSha256) {
+  if ($ManagedFilesSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    Fail 'The staged product file inventory could not be bound to retained user data.'
+  }
   $metadata = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     product_id = "blue-tanuki-product-data"
     install_root = $InstallRootResolved
     data_root = $DataRootResolved
     version = $Version
+    managed_files_sha256 = $ManagedFilesSha256.ToLowerInvariant()
   }
   $metadataPath = Join-Path $DataRootResolved "blue-tanuki-product-data.json"
   $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
@@ -384,7 +370,7 @@ function Assert-DataRootAdoptable($DataRootResolved, $InstallRootResolved, $Exis
     try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch {
       Fail "Product data ownership marker is invalid: $markerPath"
     }
-    if ($marker.schema_version -ne 1 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+    if ($marker.schema_version -notin @(1, 2) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
         -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $DataRootResolved), [System.StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $InstallRootResolved), [System.StringComparison]::OrdinalIgnoreCase)) {
       Fail "Product data ownership marker points to a different install or data root. No data was changed."
@@ -397,10 +383,26 @@ function Assert-DataRootAdoptable($DataRootResolved, $InstallRootResolved, $Exis
   }
 }
 
+function Assert-DataPackageCompatibility($DataRootResolved, $StagedInstallRoot) {
+  $markerPath = Join-Path $DataRootResolved 'blue-tanuki-product-data.json'
+  if (-not (Test-Path -LiteralPath $markerPath)) { return }
+  try {
+    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    $stagedMetadata = Get-Content -LiteralPath (Join-Path $StagedInstallRoot 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+  } catch {
+    Fail "Retained product data compatibility could not be verified. No product files or user data were changed: $($_.Exception.Message)"
+  }
+  if ($marker.schema_version -ne 2 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+      [string]$marker.managed_files_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    Fail 'Retained product data compatibility is unknown. The installed package did not record a compatible product-file inventory, so setup is blocked.'
+  }
+  if (-not [string]::Equals([string]$marker.managed_files_sha256, [string]$stagedMetadata.managed_files_sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail 'The package differs from the product build associated with retained data. Data compatibility and migration are unknown, so setup is blocked.'
+  }
+}
+
 $stageRoot = $null
-$rollbackRoot = $null
 $envBackup = $null
-$oldMoved = $false
 $newMoved = $false
 $existingProductInstall = $false
 $installRootResolved = $null
@@ -439,6 +441,7 @@ try {
     try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
     }
+    Fail 'In-place product replacement is blocked while product-wide persisted-data compatibility and migration are unknown; existing data was preserved.'
   }
   Assert-DataRootAdoptable $dataRootResolved $installRootResolved $existingProductInstall
   Assert-RegistryTargetCompatible $installRootResolved
@@ -458,8 +461,7 @@ try {
   $suffix = [Guid]::NewGuid().ToString('N')
   $transactionSuffix = $suffix.Substring(0,16)
   $stageRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-stage-" + $transactionSuffix)
-  $rollbackRoot = Join-Path $installParent ("." + $installName + ".blue-tanuki-rollback-" + $transactionSuffix)
-  if ((Test-Path -LiteralPath $stageRoot) -or (Test-Path -LiteralPath $rollbackRoot)) { Fail "Could not allocate unique installer staging paths." }
+  if (Test-Path -LiteralPath $stageRoot) { Fail "Could not allocate unique installer staging path." }
   New-Item -ItemType Directory -Path $stageRoot | Out-Null
 
   Copy-DirectoryContents $sourceApp $stageRoot
@@ -469,12 +471,7 @@ try {
   Write-InstallMetadata $stageRoot $installRootResolved $dataRootResolved $version $manifestSha256
   [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved -MetadataInstallRoot $installRootResolved)
   Assert-NoReparsePointsInTree -Path $stageRoot -Label 'StagedProductInstall'
-
-  if ($existingProductInstall) {
-    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
-    Stop-ExistingResident $installRootResolved
-    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
-  }
+  Assert-DataPackageCompatibility $dataRootResolved $stageRoot
 
   New-Item -ItemType Directory -Force -Path $dataRootResolved, $dataDir, $logDir | Out-Null
   if ($ResetConfig -and (Test-Path -LiteralPath $envFile -PathType Leaf)) {
@@ -485,17 +482,12 @@ try {
   Invoke-BundledSetup $nodeExe $stageRoot $envFile $dataDir
   if (-not $SkipDoctor) { Invoke-PostInstallDoctor $nodeExe $stageRoot $envFile $logDir }
 
-  if ($existingProductInstall) {
-    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
-    Assert-NoReparsePointsInTree -Path $installRootResolved -Label 'ExistingProductInstall'
-    Move-Item -LiteralPath $installRootResolved -Destination $rollbackRoot
-    $oldMoved = $true
-  }
   try {
     Move-Item -LiteralPath $stageRoot -Destination $installRootResolved
     $newMoved = $true
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
-    Write-DataInstallMetadata $dataRootResolved $installRootResolved $version
+    $installedMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    Write-DataInstallMetadata $dataRootResolved $installRootResolved $version ([string]$installedMetadata.managed_files_sha256)
     Install-Shortcuts $installRootResolved $DesktopShortcut
     Register-Uninstaller $installRootResolved $dataRootResolved $version
     if (-not $NoLaunch) {
@@ -511,14 +503,8 @@ try {
         Remove-Item -LiteralPath $installRootResolved -Recurse -Force
         $newMoved = $false
       } catch {
-        throw "New install failed and could not be safely removed for rollback. Both paths were preserved where possible. install=$installRootResolved; rollback=$rollbackRoot; reason=$($_.Exception.Message)"
+        throw "New install failed and could not be safely removed. The install path was preserved where possible. install=$installRootResolved; reason=$($_.Exception.Message)"
       }
-    }
-    if ($oldMoved -and (Test-Path -LiteralPath $rollbackRoot -PathType Container) -and -not (Test-Path -LiteralPath $installRootResolved)) {
-      [void](Assert-ManagedWindowsProductInstall -InstallRoot $rollbackRoot -DataRoot $dataRootResolved `
-        -MetadataInstallRoot $installRootResolved)
-      Move-Item -LiteralPath $rollbackRoot -Destination $installRootResolved
-      $oldMoved = $false
     }
     throw
   }
@@ -526,18 +512,6 @@ try {
   if ($envBackup -and (Test-Path -LiteralPath $envBackup -PathType Leaf)) {
     Remove-Item -LiteralPath $envBackup -Force
   }
-  if ($oldMoved -and (Test-Path -LiteralPath $rollbackRoot -PathType Container)) {
-    try {
-      [void](Assert-ManagedWindowsProductInstall -InstallRoot $rollbackRoot -DataRoot $dataRootResolved `
-        -MetadataInstallRoot $installRootResolved)
-      Assert-NoReparsePointsInTree -Path $rollbackRoot -Label 'PreviousProductInstall'
-      Remove-Item -LiteralPath $rollbackRoot -Recurse -Force
-      $oldMoved = $false
-    } catch {
-      Write-Warning "The new install is active; the previous managed app was retained for recovery at $rollbackRoot. $($_.Exception.Message)"
-    }
-  }
-
   Write-Host ""
   Write-Host "BLUE-TANUKI installed."
   Write-Host "Start Menu: BLUE-TANUKI"
