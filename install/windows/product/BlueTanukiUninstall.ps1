@@ -148,11 +148,13 @@ function Remove-Target($Target, $Label, $ProductDataInstallRoot = $null) {
   if (-not $Quiet) { Write-Host "Removed ${Label}: $Target" }
 }
 
-function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
+function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot, $PreviousInstallRoot, $InterruptedInstallRoots) {
   if ($Quiet) { return }
   Write-Host 'Uninstall plan:'
   if ($DryRun) {
     Write-Host "Would remove installed application files under: $ResolvedInstallRoot"
+    if ($PreviousInstallRoot) { Write-Host "Would remove the verified previous application rollback under: $PreviousInstallRoot" }
+    foreach ($interruptedRoot in @($InterruptedInstallRoots)) { Write-Host "Would remove the verified interrupted update candidate under: $interruptedRoot" }
     Write-Host 'Would remove only shortcuts and uninstall registration verified as owned by this install.'
     Write-Host 'Would remove only per-user autostart entries whose command exactly identifies this install.'
     if ($PurgeData) {
@@ -167,6 +169,8 @@ function Write-UninstallPlan($ResolvedInstallRoot, $ResolvedDataRoot) {
   }
 
   Write-Host "Will remove installed application files under: $ResolvedInstallRoot"
+  if ($PreviousInstallRoot) { Write-Host "Will remove the verified previous application rollback under: $PreviousInstallRoot" }
+  foreach ($interruptedRoot in @($InterruptedInstallRoots)) { Write-Host "Will remove the verified interrupted update candidate under: $interruptedRoot" }
   Write-Host 'Will remove only shortcuts and uninstall registration verified as owned by this install.'
   Write-Host 'Will remove only per-user autostart entries whose command exactly identifies this install.'
   if ($PurgeData) {
@@ -346,13 +350,55 @@ try {
   $safeTargets = Assert-SafeInstallTargets -InstallRoot $installRootInput -DataRoot $dataRootInput -SourceRoot $null
   $installRootResolved = $safeTargets.InstallRoot
   $dataRootResolved = $safeTargets.DataRoot
+  if (Restore-InterruptedWindowsProductUpdate -InstallRoot $installRootResolved -DataRoot $dataRootResolved) {
+    $metadata = Read-InstallMetadata $metadataPath
+  }
   [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+  $installParent = Split-Path -Parent $installRootResolved
+  $installName = Split-Path -Leaf $installRootResolved
+  $previousInstallRoot = Join-Path $installParent ('.' + $installName + '.blue-tanuki-previous')
+  $previousMetadata = $null
+  if (Test-Path -LiteralPath $previousInstallRoot) {
+    $previousItem = Get-Item -Force -LiteralPath $previousInstallRoot -ErrorAction Stop
+    if (-not $previousItem.PSIsContainer -or ($previousItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'Previous application rollback path is not a regular directory.'
+    }
+    $previousInstallRoot = Resolve-SafeDirectoryTarget -Path $previousItem.FullName -Label 'PreviousProductRollbackRoot'
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $previousInstallRoot -DataRoot $dataRootResolved `
+      -MetadataInstallRoot $installRootResolved)
+    Assert-NoReparsePointsInTree -Path $previousInstallRoot -Label 'PreviousProductRollbackRoot'
+    $previousMetadata = Get-Content -LiteralPath (Join-Path $previousInstallRoot 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    if ([long]$previousMetadata.data_schema_version -ne [long]$metadata.data_schema_version) {
+      throw 'Previous application rollback uses a different product data schema.'
+    }
+  } else {
+    $previousInstallRoot = $null
+  }
+  $interruptedInstallRoots = @()
+  $interruptedPattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) +
+    '\.blue-tanuki-interrupted-[0-9a-f]{16}$'
+  foreach ($candidate in @(Get-ChildItem -Force -LiteralPath $installParent -ErrorAction Stop)) {
+    if (-not [System.Text.RegularExpressions.Regex]::IsMatch(
+        [string]$candidate.Name, $interruptedPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { continue }
+    if (-not $candidate.PSIsContainer -or ($candidate.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Interrupted update path is not a regular directory: $($candidate.FullName)"
+    }
+    $candidateRoot = Resolve-SafeDirectoryTarget -Path $candidate.FullName -Label 'InterruptedProductUpdateRoot'
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $candidateRoot -DataRoot $dataRootResolved `
+      -MetadataInstallRoot $installRootResolved)
+    Assert-NoReparsePointsInTree -Path $candidateRoot -Label 'InterruptedProductUpdateRoot'
+    $candidateMetadata = Get-Content -LiteralPath (Join-Path $candidateRoot 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    if ([long]$candidateMetadata.data_schema_version -ne [long]$metadata.data_schema_version) {
+      throw "Interrupted update application uses a different product data schema: $candidateRoot"
+    }
+    $interruptedInstallRoots += $candidateRoot
+  }
   if ($PurgeData) { [void](Assert-ManagedWindowsProductData -DataRoot $dataRootResolved -InstallRoot $installRootResolved) }
 } catch {
   Fail "Refusing to uninstall because product ownership and structure could not be verified. No files were changed. $($_.Exception.Message)"
 }
 
-Write-UninstallPlan $installRootResolved $dataRootResolved
+Write-UninstallPlan $installRootResolved $dataRootResolved $previousInstallRoot $interruptedInstallRoots
 
 $launcher = Join-Path $installRootResolved 'BlueTanukiLauncher.ps1'
 if (Test-Path -LiteralPath $launcher -PathType Leaf) {
@@ -387,6 +433,26 @@ if ($PurgeData) {
 }
 Remove-ManagedAutostart $installRootResolved
 Remove-Target $installRootResolved 'installed app'
+if ($previousInstallRoot) {
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $previousInstallRoot -DataRoot $dataRootResolved `
+      -MetadataInstallRoot $installRootResolved)
+    Assert-NoReparsePointsInTree -Path $previousInstallRoot -Label 'PreviousProductRollbackRoot'
+  } catch {
+    Fail "The installed app was removed, but the previous rollback app failed revalidation and was preserved. path=$previousInstallRoot; reason=$($_.Exception.Message)"
+  }
+  Remove-Target $previousInstallRoot 'previous app rollback'
+}
+foreach ($interruptedRoot in @($interruptedInstallRoots)) {
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $interruptedRoot -DataRoot $dataRootResolved `
+      -MetadataInstallRoot $installRootResolved)
+    Assert-NoReparsePointsInTree -Path $interruptedRoot -Label 'InterruptedProductUpdateRoot'
+  } catch {
+    Fail "The installed app was removed, but an interrupted update candidate failed revalidation and was preserved. path=$interruptedRoot; reason=$($_.Exception.Message)"
+  }
+  Remove-Target $interruptedRoot 'interrupted update app'
+}
 Remove-ManagedShortcuts $installRootResolved
 Remove-ManagedUninstallRegistration $installRootResolved
 

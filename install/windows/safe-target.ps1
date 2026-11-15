@@ -330,6 +330,19 @@ function Assert-ManagedWindowsProductInstall {
   if ($manifest.schema_version -ne 1 -or $manifest.name -ne 'blue-tanuki' -or $manifest.package_type -ne 'windows-x64-zip-installer') {
     throw "Product package manifest does not identify a BLUE-TANUKI Windows installer."
   }
+  if ([string]::IsNullOrWhiteSpace([string]$manifest.version) -or
+      -not [string]::Equals([string]$metadata.version, [string]$manifest.version, [System.StringComparison]::Ordinal)) {
+    throw 'Product install ownership metadata version does not match its package manifest.'
+  }
+  $metadataDataSchemaVersion = 0L
+  $manifestDataSchemaVersion = 0L
+  if (-not [long]::TryParse([string]$metadata.data_schema_version, [ref]$metadataDataSchemaVersion) -or
+      -not [long]::TryParse([string]$manifest.data_schema_version, [ref]$manifestDataSchemaVersion) -or
+      $metadataDataSchemaVersion -lt 1 -or $metadataDataSchemaVersion -gt 2147483647 -or
+      $manifestDataSchemaVersion -lt 1 -or $manifestDataSchemaVersion -gt 2147483647 -or
+      $metadataDataSchemaVersion -ne $manifestDataSchemaVersion) {
+    throw 'Product install ownership metadata data-schema version does not match its package manifest.'
+  }
   Assert-ManagedTreeInventory -Root $install -MetadataFileName 'blue-tanuki-install.json' `
     -InventoryFileName 'blue-tanuki-managed-files.json' -ProductId 'blue-tanuki-product-install' `
     -ExpectedSha256 ([string]$metadata.managed_files_sha256)
@@ -355,13 +368,18 @@ function Restore-InterruptedWindowsProductUpdate {
   if ($activeEntries.Count -gt 1) {
     throw 'Multiple filesystem entries match the product install root; no recovery was attempted.'
   }
+  $activePath = $null
   if ($activeEntries.Count -eq 1) {
     $activeEntry = $activeEntries[0]
     if (-not $activeEntry.PSIsContainer -or
         ($activeEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       throw 'Product install root is occupied by a non-regular entry; no recovery was attempted.'
     }
-    return $false
+    $activePath = Resolve-SafeDirectoryTarget -Path $activeEntry.FullName -Label 'InterruptedProductInstallRoot'
+    if (-not [string]::Equals(
+        (Split-Path -Parent $activePath), $parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw 'Product install root is not a direct child of its expected parent; no recovery was attempted.'
+    }
   }
 
   $candidatePattern = '^\.' + [System.Text.RegularExpressions.Regex]::Escape($installName) +
@@ -402,13 +420,53 @@ function Restore-InterruptedWindowsProductUpdate {
     throw "Interrupted product-update rollback candidate is not a verified managed install; it was preserved. $($_.Exception.Message)"
   }
 
-  if (Test-Path -LiteralPath $install) {
+  $interruptedPath = $null
+  if ($activePath) {
+    try {
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $activePath -DataRoot $data -MetadataInstallRoot $install)
+      Assert-NoReparsePointsInTree -Path $activePath -Label 'InterruptedProductActiveInstall'
+      $launcherPath = Join-Path $activePath 'BlueTanukiLauncher.ps1'
+      if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+        throw 'Active interrupted-update installation has no resident launcher.'
+      }
+      $powerShellExe = Join-Path $PSHOME 'powershell.exe'
+      if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+        $powerShellExe = Join-Path $PSHOME 'pwsh.exe'
+      }
+      if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+        throw 'A PowerShell host for the resident-stop command could not be found.'
+      }
+      $stopArgs = @('-NoProfile', '-File', ('"{0}"' -f $launcherPath), 'resident-stop')
+      $stopProcess = Start-Process -FilePath $powerShellExe -ArgumentList $stopArgs -Wait -PassThru -WindowStyle Hidden
+      if ($stopProcess.ExitCode -ne 0) {
+        throw "Resident shutdown was not confirmed (exit code $($stopProcess.ExitCode))."
+      }
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $activePath -DataRoot $data -MetadataInstallRoot $install)
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $candidatePath -DataRoot $data -MetadataInstallRoot $install)
+      $interruptedPath = Join-Path $parent ('.' + $installName + '.blue-tanuki-interrupted-' + $candidateMatch.Groups[1].Value)
+      if (Test-Path -LiteralPath $interruptedPath) {
+        throw 'The interrupted-update inspection path already exists; no install paths were moved.'
+      }
+      [System.IO.Directory]::Move($activePath, $interruptedPath)
+    } catch {
+      throw "The active application could not be safely quarantined for interrupted-update recovery; all paths were preserved. $($_.Exception.Message)"
+    }
+  } elseif (Test-Path -LiteralPath $install) {
     throw 'Product install root appeared during interrupted-update recovery; no candidate was moved.'
   }
-  [System.IO.Directory]::Move($candidatePath, $install)
   try {
+    [System.IO.Directory]::Move($candidatePath, $install)
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $install -DataRoot $data -MetadataInstallRoot $install)
   } catch {
+    if ($interruptedPath -and (Test-Path -LiteralPath $interruptedPath -PathType Container) -and
+        -not (Test-Path -LiteralPath $install)) {
+      try {
+        [System.IO.Directory]::Move($interruptedPath, $install)
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $install -DataRoot $data -MetadataInstallRoot $install)
+      } catch {
+        throw "The previous application could not be restored after interrupted-update recovery failed. All remaining paths were preserved. install=$install; interrupted=$interruptedPath; rollback=$candidatePath; reason=$($_.Exception.Message)"
+      }
+    }
     throw "Restored product install could not be reverified; it remains at the requested install root for inspection. $($_.Exception.Message)"
   }
 

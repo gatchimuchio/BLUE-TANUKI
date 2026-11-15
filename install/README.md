@@ -397,12 +397,17 @@ or live LLM credentials can remain unset during local setup.
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
-source installers documented above. Packaged product Setup blocks every
-in-place app replacement, even when the installed data-schema version matches
-the candidate or `--force` / `-Force` is supplied. The compatibility marker
-enables only post-uninstall data reattachment; it does not enable an app update.
-For a normal setup attempt, the resident is not stopped and the candidate is not
-staged. Setup may first restore a previously interrupted, verified transaction.
+source installers documented above. Normal packaged product Setup still blocks
+in-place replacement; the Windows packaged Setup source has explicit `-Update`
+and `-Rollback` options. `-Update` is manual only, requires a newer semantic
+version and an exact product data-schema match, does not allow config reset or
+doctor skip, and retains one verified previous app tree. `-Rollback` restores
+that tree and retires the replaced app after verification. `-force` / `-Force`
+does not authorize an update, and no data migration is implemented. These
+Windows source paths have not been exercised as installed update/rollback and
+are not release-verified.
+Linux/macOS packaged Setup continues to block in-place replacement. Setup may
+first restore a previously interrupted, verified Windows transaction.
 
 After uninstall with data retained, packaged Setup accepts only a candidate
 whose product data-schema version matches the marker recorded with that data

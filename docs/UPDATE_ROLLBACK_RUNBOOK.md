@@ -1,6 +1,6 @@
 # BLUE-TANUKI Update / Rollback / Recovery Runbook
 
-BLUE-TANUKI does not currently implement an automatic updater or a supported application replacement procedure. Release and packaged-installer manifests now declare the product-wide data-schema version defined in [`PERSISTED_DATA_SCHEMA.md`](PERSISTED_DATA_SCHEMA.md). Matching installed and candidate declarations establish schema-version equality only; they do not enable application replacement. Packaged Setup still refuses in-place replacement before stopping the resident or staging its candidate; `--force` does not authorize an update. A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not authorize replacing the running application.
+BLUE-TANUKI does not implement an automatic updater. Packaged Windows Setup now contains explicit manual `-Update` and `-Rollback` source paths. `-Update` requires a newer semantic version, exact product data-schema agreement, a verified installed tree, a retained regular configuration, a passing candidate doctor, and confirmed resident shutdown; it stages the candidate before replacing app files and keeps one verified previous app. `-Rollback` requires matching schemas and verified active/previous trees, then restores the retained app after stopping the resident. Neither path migrates product data. These source paths have not been exercised as installed update/rollback and are not release evidence. Linux/macOS Setup still blocks in-place replacement. Release and packaged-installer manifests declare the product-wide data-schema version defined in [`PERSISTED_DATA_SCHEMA.md`](PERSISTED_DATA_SCHEMA.md); matching declarations do not enable schema migration. `--force` never authorizes replacement.
 
 ## Distribution readiness gate
 
@@ -121,12 +121,17 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
    not establish complete backup coverage or update readiness.
 6. Read the compatibility result in the Update screen. Legacy installs without
    a product data-schema marker remain `unknown`; a schema-version mismatch is
-   `blocked`. A matching declaration does not enable application replacement.
+   `blocked`. A matching declaration does not by itself enable application
+   replacement.
    The release-manifest format version is not a product data-schema version.
-7. Stop here in all cases. The installed application replacement and rollback
-   path remains unsupported. Do not use `--force`, replace source/app files, or
-   run product Setup over an existing installation.
-8. Restart and run doctor/audit checks only when no replacement was attempted.
+7. The Control Center path remains evidence-only and never replaces application
+   files. Windows source includes a separate manual `BlueTanukiSetup.cmd -Update`
+   path, but installed update/rollback has not been run and remains unverified.
+   Linux/macOS replacement is unsupported. Do not use `--force` or copy source
+   files over an installed product.
+8. After a verified Windows update or rollback, start the product and inspect
+   doctor/audit state. A source parse/build alone does not establish installed
+   update success.
 
 After uninstall with data retained, product Setup permits reattachment only
 when the retained marker has the same product data-schema version as the
@@ -142,15 +147,28 @@ the current files and recovery evidence; do not claim that rollback is safe or
 complete. The rollback plan is evidence only and has `used_for_authority=false`;
 it cannot approve commands or bypass HDS-BRAIN.
 
-## 2. Source and release replacement
+## 2. Manual packaged replacement status
 
-Installed source-tree and release-bundle replacement remain unsupported. Do not
-copy a new app tree over an installed product or treat successful
-typecheck/build/doctor as permission to replace it. Release verification checks
-bundle integrity and the declared product data-schema version; it does not
-inspect every live store or authorize replacement. A future procedure must
-implement the update transaction, affected-store recovery coverage, and rollback
-path before replacement is enabled.
+Windows packaged Setup exposes `-Update` and `-Rollback` in source. `-Update`
+requires a verified existing Windows product, a strictly newer semantic version,
+matching installed/candidate/data-marker product data-schema versions, an
+existing regular env file, and the candidate doctor. It refuses config reset,
+doctor skip, schema migration, downgrade, and force-style replacement. The
+resident is stopped and rechecked before the app directory is swapped. Failed
+or interrupted swaps restore the previous app and preserve the failed candidate
+for inspection; successful swaps retain one prior app version beside the
+install root. `-Rollback` uses a compatible packaged Setup, restores the
+retained app, and retires the replaced app after verification; data roots are
+not migrated or deleted. Windows Uninstall preflights and removes verified
+previous/interrupted app trees while retaining product data unless explicit
+data purge is requested.
+
+This is source-level behavior only. Runtime confirmation for installed Windows
+update, interruption recovery, rollback, configuration preservation, and
+uninstall cleanup is `NOT_RUN`; do not treat the path as release-ready. Linux
+and macOS packaged Setup continue to refuse replacement. No source-tree
+replacement, background updater, download, signature, or OS-protection bypass is
+introduced. Release verification still does not prove these installed flows.
 
 ## 3. Fresh install and retained data
 

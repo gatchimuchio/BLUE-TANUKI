@@ -8,7 +8,7 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-更新経路は手動のみで、自動置換は未実装。release manifest／archiveの検証と製品データ互換性は別条件であり、全永続storeのschema・migration契約と影響storeを覆う復旧証拠が未成立のため、現行candidateの適用判断は`unknown`で停止する。
+自動更新は未実装。Windows packaged Setupのsourceに、同一product data schema・新版・candidate doctor・resident停止を要求する明示`-Update`／`-Rollback` transactionを追加した。失敗・中断時は旧appを戻し、成功時は前版を一世代保持する。更新・rollback・Uninstall実物のruntime確認は`NOT_RUN`で、release-readyではない。Linux/macOSのin-place updateは未実装、Android/iOS製品入口も`BUILD_GAP`。release manifestの一致をinstalled product互換・署名・出荷保証へ拡張しない。
 
 MCPのConnections設定では、ownerが明示したときだけ入力済みcredentialless loopback endpointのbounded catalog metadataを5秒以内で取得できる。認証情報は転送せず、toolは呼ばず、serverを起動・停止しない。記録する到達状態は時点付きの非権威観測であり、live healthや作用結果の保証ではない。
 

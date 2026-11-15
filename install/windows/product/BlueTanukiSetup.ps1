@@ -4,6 +4,8 @@ param(
   [string]$DataRoot = "$env:APPDATA\BlueTanuki",
   [switch]$DesktopShortcut,
   [switch]$NoLaunch,
+  [switch]$Update,
+  [switch]$Rollback,
   [switch]$ResetConfig,
   [switch]$SkipDoctor
 )
@@ -16,6 +18,11 @@ function Fail($Message) {
   Write-Host "BLUE-TANUKI setup failed." -ForegroundColor Red
   Write-Host $Message
   throw [System.InvalidOperationException]::new([string]$Message)
+}
+
+if ($Update -and $Rollback) { Fail 'Use only one of -Update or -Rollback.' }
+if ($Rollback -and ($ResetConfig -or $SkipDoctor -or $DesktopShortcut)) {
+  Fail 'Rollback does not accept config-reset, doctor-skip, or shortcut-change options.'
 }
 
 function Fail-SourceTreeSetup($MissingEntries) {
@@ -32,6 +39,7 @@ function Fail-SourceTreeSetup($MissingEntries) {
   }
   Write-Host "Recommended:"
   Write-Host "  Download blue-tanuki-<version>-windows-x64-installer.zip, extract it, and run BlueTanukiSetup.cmd."
+  Write-Host "  For same-schema manual update use BlueTanukiSetup.cmd -Update; use -Rollback to restore the retained previous app."
   Write-Host ""
   Write-Host "If you are in a source tree/source zip, root INSTALL_WINDOWS.cmd will use a verified packaged installer when available."
   Write-Host "If no packaged installer is available, it fails closed with wrong-asset guidance."
@@ -411,9 +419,195 @@ function Assert-DataPackageCompatibility($DataRootResolved, $StagedInstallRoot) 
   }
 }
 
+function ConvertTo-ProductSemVer($Version) {
+  $match = [System.Text.RegularExpressions.Regex]::Match(
+    [string]$Version,
+    '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+  )
+  if (-not $match.Success) { Fail "Product version is not a supported semantic version: $Version" }
+  $prerelease = @()
+  if ($match.Groups[4].Success) {
+    $prerelease = @($match.Groups[4].Value.Split('.'))
+    foreach ($identifier in $prerelease) {
+      if ([System.Text.RegularExpressions.Regex]::IsMatch($identifier, '^[0-9]+$') -and $identifier.Length -gt 1 -and $identifier.StartsWith('0')) {
+        Fail "Product version contains an invalid zero-padded numeric prerelease identifier: $Version"
+      }
+    }
+  }
+  return [pscustomobject]@{
+    Core = @($match.Groups[1].Value, $match.Groups[2].Value, $match.Groups[3].Value)
+    Prerelease = $prerelease
+  }
+}
+
+function Compare-SemVerIdentifier([string]$Left, [string]$Right) {
+  $leftNumeric = [System.Text.RegularExpressions.Regex]::IsMatch($Left, '^(0|[1-9][0-9]*)$')
+  $rightNumeric = [System.Text.RegularExpressions.Regex]::IsMatch($Right, '^(0|[1-9][0-9]*)$')
+  if ($leftNumeric -and $rightNumeric) {
+    if ($Left.Length -lt $Right.Length) { return -1 }
+    if ($Left.Length -gt $Right.Length) { return 1 }
+    return [string]::CompareOrdinal($Left, $Right)
+  }
+  if ($leftNumeric -and -not $rightNumeric) { return -1 }
+  if (-not $leftNumeric -and $rightNumeric) { return 1 }
+  return [string]::CompareOrdinal($Left, $Right)
+}
+
+function Compare-ProductSemVer([string]$Left, [string]$Right) {
+  $leftVersion = ConvertTo-ProductSemVer $Left
+  $rightVersion = ConvertTo-ProductSemVer $Right
+  for ($index = 0; $index -lt 3; $index++) {
+    $comparison = Compare-SemVerIdentifier $leftVersion.Core[$index] $rightVersion.Core[$index]
+    if ($comparison -ne 0) { return $comparison }
+  }
+  if ($leftVersion.Prerelease.Count -eq 0 -and $rightVersion.Prerelease.Count -gt 0) { return 1 }
+  if ($leftVersion.Prerelease.Count -gt 0 -and $rightVersion.Prerelease.Count -eq 0) { return -1 }
+  $sharedCount = [Math]::Min($leftVersion.Prerelease.Count, $rightVersion.Prerelease.Count)
+  for ($index = 0; $index -lt $sharedCount; $index++) {
+    $comparison = Compare-SemVerIdentifier $leftVersion.Prerelease[$index] $rightVersion.Prerelease[$index]
+    if ($comparison -ne 0) { return $comparison }
+  }
+  if ($leftVersion.Prerelease.Count -lt $rightVersion.Prerelease.Count) { return -1 }
+  if ($leftVersion.Prerelease.Count -gt $rightVersion.Prerelease.Count) { return 1 }
+  return 0
+}
+
+function Get-PreviousProductInstallPath($InstallRootResolved) {
+  $parent = Split-Path -Parent $InstallRootResolved
+  $name = Split-Path -Leaf $InstallRootResolved
+  return Join-Path $parent ('.' + $name + '.blue-tanuki-previous')
+}
+
+function Assert-ManagedPreviousProductInstall($PreviousRoot, $InstallRootResolved, $DataRootResolved) {
+  if (-not (Test-Path -LiteralPath $PreviousRoot)) { return $null }
+  $item = Get-Item -Force -LiteralPath $PreviousRoot -ErrorAction Stop
+  if (-not $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    Fail "Previous product rollback path is not a regular directory and was preserved: $PreviousRoot"
+  }
+  $resolved = Resolve-SafeDirectoryTarget -Path $PreviousRoot -Label 'PreviousProductRollbackRoot'
+  if (-not [string]::Equals(
+      (Split-Path -Parent $resolved), (Split-Path -Parent $InstallRootResolved),
+      [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail "Previous product rollback path is not a sibling of the installed product and was preserved: $PreviousRoot"
+  }
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $resolved -DataRoot $DataRootResolved `
+      -MetadataInstallRoot $InstallRootResolved)
+    Assert-NoReparsePointsInTree -Path $resolved -Label 'PreviousProductRollbackRoot'
+    return (Get-Content -LiteralPath (Join-Path $resolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json)
+  } catch {
+    Fail "Previous product rollback path is not a verified managed install and was preserved: $($_.Exception.Message)"
+  }
+}
+
+function Stop-ManagedProductResident($InstallRootResolved, $DataRootResolved) {
+  [void](Assert-ManagedWindowsProductInstall -InstallRoot $InstallRootResolved -DataRoot $DataRootResolved)
+  $launcher = Join-Path $InstallRootResolved 'BlueTanukiLauncher.ps1'
+  if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+    Fail 'The installed resident launcher is missing; update was stopped without replacing the product.'
+  }
+  $powerShellExe = Join-Path $PSHOME 'powershell.exe'
+  if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+    $powerShellExe = Join-Path $PSHOME 'pwsh.exe'
+  }
+  if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+    Fail 'A PowerShell host for the installed resident-stop command could not be found.'
+  }
+  $arguments = @('-NoProfile', '-File', ('"{0}"' -f $launcher), 'resident-stop')
+  $stopProcess = Start-Process -FilePath $powerShellExe -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+  if ($stopProcess.ExitCode -ne 0) {
+    Fail "The installed resident did not confirm shutdown (exit code $($stopProcess.ExitCode)); update was stopped and installed files were preserved."
+  }
+}
+
+function Invoke-ProductRollback($InstallRootResolved, $DataRootResolved, $PackageDataSchemaVersion, $NoLaunch) {
+  $previousRoot = Get-PreviousProductInstallPath $InstallRootResolved
+  [void](Assert-ManagedWindowsProductInstall -InstallRoot $InstallRootResolved -DataRoot $DataRootResolved)
+  $currentMetadata = Get-Content -LiteralPath (Join-Path $InstallRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+  $previousMetadata = Assert-ManagedPreviousProductInstall $previousRoot $InstallRootResolved $DataRootResolved
+  if (-not $previousMetadata) { Fail "No verified previous BLUE-TANUKI application is available to roll back: $previousRoot" }
+
+  $currentSchema = 0L
+  $previousSchema = 0L
+  if (-not [long]::TryParse([string]$currentMetadata.data_schema_version, [ref]$currentSchema) -or
+      -not [long]::TryParse([string]$previousMetadata.data_schema_version, [ref]$previousSchema) -or
+      $currentSchema -ne $PackageDataSchemaVersion -or $previousSchema -ne $PackageDataSchemaVersion) {
+    Fail 'Rollback requires the installed application, retained previous application, and selected installer to declare the same product data schema. No files were changed.'
+  }
+  $dataMarker = Assert-ManagedWindowsProductDataMarker -DataRoot $DataRootResolved -InstallRoot $InstallRootResolved -IncludeMarker
+  if ($dataMarker.marker.schema_version -ne 3 -or
+      [long]$dataMarker.marker.data_schema_version -ne $PackageDataSchemaVersion) {
+    Fail 'Rollback is blocked because the retained user-data schema cannot be verified against both application versions. No files were changed.'
+  }
+
+  $suffix = [Guid]::NewGuid().ToString('N').Substring(0,16)
+  $parent = Split-Path -Parent $InstallRootResolved
+  $name = Split-Path -Leaf $InstallRootResolved
+  $pendingRoot = Join-Path $parent ('.' + $name + '.blue-tanuki-rollback-' + $suffix)
+  $replacedInstallRoot = Join-Path $parent ('.' + $name + '.blue-tanuki-interrupted-' + $suffix)
+  if (Test-Path -LiteralPath $pendingRoot) { Fail 'Could not allocate a unique rollback transaction path. No files were changed.' }
+  if (Test-Path -LiteralPath $replacedInstallRoot) { Fail 'Could not allocate a unique rollback inspection path. No files were changed.' }
+
+  Stop-ManagedProductResident $InstallRootResolved $DataRootResolved
+  [void](Assert-ManagedWindowsProductInstall -InstallRoot $InstallRootResolved -DataRoot $DataRootResolved)
+  [void](Assert-ManagedPreviousProductInstall $previousRoot $InstallRootResolved $DataRootResolved)
+  [System.IO.Directory]::Move($InstallRootResolved, $pendingRoot)
+  try {
+    [System.IO.Directory]::Move($previousRoot, $InstallRootResolved)
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $InstallRootResolved -DataRoot $DataRootResolved)
+    $restoredMetadata = Get-Content -LiteralPath (Join-Path $InstallRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    Register-Uninstaller $InstallRootResolved $DataRootResolved ([string]$restoredMetadata.version)
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $pendingRoot -DataRoot $DataRootResolved `
+      -MetadataInstallRoot $InstallRootResolved)
+    Assert-NoReparsePointsInTree -Path $pendingRoot -Label 'ReplacedProductInstall'
+    [System.IO.Directory]::Move($pendingRoot, $replacedInstallRoot)
+  } catch {
+    $rollbackFailure = $_.Exception.Message
+    try {
+      if ((Test-Path -LiteralPath $InstallRootResolved -PathType Container) -and
+          -not (Test-Path -LiteralPath $previousRoot)) {
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $InstallRootResolved -DataRoot $DataRootResolved)
+        Assert-NoReparsePointsInTree -Path $InstallRootResolved -Label 'RollbackCandidateInstall'
+        [System.IO.Directory]::Move($InstallRootResolved, $previousRoot)
+      }
+      if ((Test-Path -LiteralPath $pendingRoot -PathType Container) -and
+          -not (Test-Path -LiteralPath $InstallRootResolved)) {
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $pendingRoot -DataRoot $DataRootResolved `
+          -MetadataInstallRoot $InstallRootResolved)
+        [System.IO.Directory]::Move($pendingRoot, $InstallRootResolved)
+        $currentAfterRestore = Get-Content -LiteralPath (Join-Path $InstallRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+        Register-Uninstaller $InstallRootResolved $DataRootResolved ([string]$currentAfterRestore.version)
+      }
+    } catch {
+      Fail "Rollback did not complete and automatic restoration could not be confirmed. All remaining paths were preserved for inspection. install=$InstallRootResolved; previous=$previousRoot; pending=$pendingRoot; reason=$($_.Exception.Message)"
+    }
+    Fail "Rollback did not complete. The previously running application was restored and the retained data was not changed. reason=$rollbackFailure"
+  }
+
+  try {
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $replacedInstallRoot -DataRoot $DataRootResolved `
+      -MetadataInstallRoot $InstallRootResolved)
+    Assert-NoReparsePointsInTree -Path $replacedInstallRoot -Label 'ReplacedProductInstall'
+    Remove-Item -LiteralPath $replacedInstallRoot -Recurse -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $replacedInstallRoot) { throw 'The replaced application remained after rollback cleanup.' }
+  } catch {
+    Write-Warning "Rollback completed, but the replaced application could not be retired and was preserved for inspection: $replacedInstallRoot. $($_.Exception.Message)"
+  }
+
+  Write-Host "Rolled BLUE-TANUKI back to version $($restoredMetadata.version)."
+  Write-Host 'The product data and configuration were retained.'
+  if (-not $NoLaunch) {
+    try { Start-Process -FilePath (Join-Path $InstallRootResolved 'BlueTanuki.cmd') } catch {
+      Write-Warning "Rollback completed, but BLUE-TANUKI did not launch. Start it from the Start Menu or $InstallRootResolved\BlueTanuki.cmd. $($_.Exception.Message)"
+    }
+  }
+}
+
 $stageRoot = $null
 $envBackup = $null
 $newMoved = $false
+$updateRollbackRoot = $null
+$updateMode = [bool]$Update
 $existingProductInstall = $false
 $installRootResolved = $null
 $dataRootResolved = $null
@@ -446,6 +640,8 @@ try {
   try {
     if (Restore-InterruptedWindowsProductUpdate -InstallRoot $installRootResolved -DataRoot $dataRootResolved) {
       Write-Warning "Restored one verified previous BLUE-TANUKI install after an interrupted update. Setup will continue using the packaged version."
+      $restoredMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+      Register-Uninstaller $installRootResolved $dataRootResolved ([string]$restoredMetadata.version)
     }
   } catch {
     Fail "Refusing to continue because interrupted-update recovery was ambiguous or could not be verified. Existing paths were preserved. $($_.Exception.Message)"
@@ -456,7 +652,37 @@ try {
     try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
     }
-    Fail 'In-place product replacement is unsupported. A matching product data-schema declaration does not authorize an application update; the existing application and data were preserved.'
+    Assert-RegistryTargetCompatible $installRootResolved
+    if ($Rollback) {
+      Assert-ShortcutTargetsCompatible $installRootResolved $false
+      Invoke-ProductRollback $installRootResolved $dataRootResolved $packageDataSchemaVersion $NoLaunch
+      exit 0
+    }
+    if (-not $Update) {
+      Fail 'In-place product replacement requires the explicit -Update option. A matching product data-schema declaration alone does not authorize replacement; the existing application and data were preserved.'
+    }
+    if ($ResetConfig -or $SkipDoctor) {
+      Fail 'A product update cannot reset configuration or skip the packaged doctor. No files were changed.'
+    }
+    if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+      Fail 'The installed user configuration is missing. Update is blocked to avoid generating or replacing configuration.'
+    }
+    $envFileItem = Get-Item -Force -LiteralPath $envFile -ErrorAction Stop
+    if (($envFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      Fail 'The installed user configuration is a reparse point. Update is blocked without changing it.'
+    }
+    $currentMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    if ((Compare-ProductSemVer ([string]$packageManifest.version) ([string]$currentMetadata.version)) -le 0) {
+      Fail "Update version must be newer than the installed version. installed=$($currentMetadata.version); candidate=$($packageManifest.version). Use -Rollback for the retained previous version."
+    }
+    Assert-DataPackageCompatibility $dataRootResolved $installRootResolved
+    $previousInstallRoot = Get-PreviousProductInstallPath $installRootResolved
+    $priorRollbackMetadata = Assert-ManagedPreviousProductInstall $previousInstallRoot $installRootResolved $dataRootResolved
+    if ($priorRollbackMetadata -and [long]$priorRollbackMetadata.data_schema_version -ne $packageDataSchemaVersion) {
+      Fail 'The retained rollback application has a different product data schema. No application or user data was changed.'
+    }
+  } elseif ($Update -or $Rollback) {
+    Fail 'The requested update or rollback requires an existing verified BLUE-TANUKI installation. No files were changed.'
   }
   Assert-DataRootAdoptable $dataRootResolved $installRootResolved $existingProductInstall
   Assert-RegistryTargetCompatible $installRootResolved
@@ -495,10 +721,44 @@ try {
   }
   $nodeExe = Find-NodeExe $stageRoot
   Invoke-BundledSetup $nodeExe $stageRoot $envFile $dataDir
-  if (-not $SkipDoctor) { Invoke-PostInstallDoctor $nodeExe $stageRoot $envFile $logDir }
+  $doctorLogDir = $logDir
+  if ($updateMode) {
+    Stop-ManagedProductResident $installRootResolved $dataRootResolved
+    [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+    $activeAfterStop = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+    if (-not [string]::Equals([string]$activeAfterStop.version, [string]$currentMetadata.version, [System.StringComparison]::Ordinal) -or
+        [long]$activeAfterStop.data_schema_version -ne $packageDataSchemaVersion) {
+      Fail 'The installed product changed during update preparation. The candidate was not applied and existing paths were preserved.'
+    }
+    $doctorLogDir = Join-Path $logDir ('update-' + $version + '-' + $transactionSuffix)
+    [void](Resolve-SafeDirectoryTarget -Path $doctorLogDir -Label 'UpdateDoctorLogRoot')
+    if (Test-Path -LiteralPath $doctorLogDir) {
+      Fail 'The update doctor log path already exists. The active installation and user data were preserved.'
+    }
+  }
+  if (-not $SkipDoctor) { Invoke-PostInstallDoctor $nodeExe $stageRoot $envFile $doctorLogDir }
+
+  if ($updateMode -and (Test-Path -LiteralPath $previousInstallRoot)) {
+    $priorRollbackMetadata = Assert-ManagedPreviousProductInstall $previousInstallRoot $installRootResolved $dataRootResolved
+    if ([long]$priorRollbackMetadata.data_schema_version -ne $packageDataSchemaVersion) {
+      Fail 'The retained rollback application changed or has an incompatible product data schema. No files were changed.'
+    }
+    Assert-NoReparsePointsInTree -Path $previousInstallRoot -Label 'PreviousProductRollbackRoot'
+    Remove-Item -LiteralPath $previousInstallRoot -Recurse -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $previousInstallRoot) {
+      Fail 'The prior rollback application could not be retired safely. The active installation and user data were preserved.'
+    }
+  }
 
   try {
-    Move-Item -LiteralPath $stageRoot -Destination $installRootResolved
+    if ($updateMode) {
+      $updateRollbackRoot = Join-Path $installParent ('.' + $installName + '.blue-tanuki-rollback-' + $transactionSuffix)
+      if (Test-Path -LiteralPath $updateRollbackRoot) { Fail 'Could not allocate a unique update rollback path. No files were changed.' }
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+      [System.IO.Directory]::Move($installRootResolved, $updateRollbackRoot)
+    }
+    [System.IO.Directory]::Move($stageRoot, $installRootResolved)
+    $stageRoot = $null
     $newMoved = $true
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
     $installedMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
@@ -507,12 +767,43 @@ try {
     }
     Install-Shortcuts $installRootResolved $DesktopShortcut
     Register-Uninstaller $installRootResolved $dataRootResolved $version
+    if ($updateMode) {
+      [void](Assert-ManagedWindowsProductInstall -InstallRoot $updateRollbackRoot -DataRoot $dataRootResolved `
+        -MetadataInstallRoot $installRootResolved)
+      [System.IO.Directory]::Move($updateRollbackRoot, $previousInstallRoot)
+      $updateRollbackRoot = $previousInstallRoot
+      [void](Assert-ManagedPreviousProductInstall $previousInstallRoot $installRootResolved $dataRootResolved)
+      $updateRollbackRoot = $null
+    }
     if (-not $NoLaunch) {
       try { Start-Process -FilePath (Join-Path $installRootResolved "BlueTanuki.cmd") } catch {
         Write-Warning "BLUE-TANUKI is installed, but the Control Center did not launch. Start it from the Start Menu or $installRootResolved\BlueTanuki.cmd. $($_.Exception.Message)"
       }
     }
   } catch {
+    $installFailure = $_.Exception.Message
+    if ($updateMode -and $updateRollbackRoot -and (Test-Path -LiteralPath $updateRollbackRoot -PathType Container)) {
+      try {
+        if (Test-Path -LiteralPath $installRootResolved) {
+          [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+          Assert-NoReparsePointsInTree -Path $installRootResolved -Label 'FailedUpdatedProductInstall'
+          $failedUpdateRoot = Join-Path $installParent ('.' + $installName + '.blue-tanuki-interrupted-' + $transactionSuffix)
+          if (Test-Path -LiteralPath $failedUpdateRoot) { throw 'The update inspection path already exists.' }
+          [System.IO.Directory]::Move($installRootResolved, $failedUpdateRoot)
+        }
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $updateRollbackRoot -DataRoot $dataRootResolved `
+          -MetadataInstallRoot $installRootResolved)
+        [System.IO.Directory]::Move($updateRollbackRoot, $installRootResolved)
+        [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
+        $restoredMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
+        Register-Uninstaller $installRootResolved $dataRootResolved ([string]$restoredMetadata.version)
+        $newMoved = $false
+        $updateRollbackRoot = $null
+      } catch {
+        throw "Update failed and automatic rollback could not be confirmed. All remaining paths were preserved. install=$installRootResolved; rollback=$updateRollbackRoot; reason=$($_.Exception.Message)"
+      }
+      throw "Update failed. The previous application and existing configuration/state were restored; the update doctor record, if created, remains in $doctorLogDir. reason=$installFailure"
+    }
     if ($newMoved -and (Test-Path -LiteralPath $installRootResolved -PathType Container)) {
       try {
         [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
@@ -530,7 +821,12 @@ try {
     Remove-Item -LiteralPath $envBackup -Force
   }
   Write-Host ""
-  Write-Host "BLUE-TANUKI installed."
+  if ($updateMode) {
+    Write-Host "BLUE-TANUKI updated to $version."
+    Write-Host "Rollback version retained at: $previousInstallRoot"
+  } else {
+    Write-Host "BLUE-TANUKI installed."
+  }
   Write-Host "Start Menu: BLUE-TANUKI"
   Write-Host "Install root: $installRootResolved"
   Write-Host "Env file: $envFile"

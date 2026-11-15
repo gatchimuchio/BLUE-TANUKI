@@ -19,9 +19,10 @@ native credential storeが含まれる。使用者が指定した外部workspace
 - 不一致、旧marker、marker欠落、読取・root同一性の確認失敗は互換性不明として
   fail-closedにする。旧Windows marker schema 1/2、旧Linux/macOS marker schema 1
   には製品データ互換性版がないため、版1として推測しない。
-- 同じ版の宣言はデータ形式の互換性だけを示す。Setupにはin-place application
-  replacementおよびinstalled update/rollbackの実装がないため、更新画面の一致表示
-  は置換許可を意味しない。
+- 同じ版の宣言はデータ形式の互換性だけを示し、migrationや個別storeの意味互換を
+  証明しない。Windows packaged Setupには明示的なmanual `-Update`／`-Rollback`
+  のsource経路があるが、installed runtimeは未検証である。Linux/macOS Setupの
+  in-place replacementは未実装。更新画面の一致表示自体は置換許可を意味しない。
 
 版1はこの契約の初版であり、既存の未記録dataに遡及適用しない。既存storeの
 schema versionやmigrationを一律1へ変更するものではない。
