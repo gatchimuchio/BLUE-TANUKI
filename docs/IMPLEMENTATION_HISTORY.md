@@ -5234,7 +5234,7 @@ task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-at
 
 | QE_BUILD限定確認 | 結果 |
 |---|---|
-| `pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `pnpm --filter @blue-tanuki/core typecheck`／workspace `pnpm exec tsc -b --pretty false` | PASS。 |
 | `git diff --check` | PASS。 |
 | Windows／Linux native provider build、取消・上限超過runtime、全test suite、他OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
 
@@ -5242,4 +5242,4 @@ task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-at
 
 ### 作業資産とGit
 
-変更した`packages/blue-tanuki/src/tools/shell_exec.ts`、`docs/ROADMAP.md`、本履歴をGit管理する。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は保持し、作業生成物は追加していない。作業開始HEADは`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`。commit／push後のmainと復旧refはcloseout時に記録する。
+変更した`packages/blue-tanuki/src/tools/shell_exec.ts`、`docs/ROADMAP.md`、本履歴をGit管理する。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は保持し、workspace buildによるignored `dist/`以外の作業生成物は追加していない。作業開始HEADは`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`。実装commit=`efc5a88`を`main`へfast-forward pushした。local recovery branch／remote backup tag current=`efc5a88`、previous=`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`を更新し、push前に一致を確認した。commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除がPermission deniedになったが、commit／pushは成功し、metadata／ACLの変更や迂回は行っていない。
