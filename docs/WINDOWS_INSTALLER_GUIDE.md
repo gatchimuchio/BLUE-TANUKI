@@ -160,6 +160,8 @@ file. A normal repair install must not rotate `WEBCHAT_TOKEN`,
 - `BLUE-TANUKI Logs` opens the logs folder.
 - `BLUE-TANUKI Safe Mode` starts the Control Center with external LLM
   providers, channel tokens, Composio, and schedules disabled for recovery.
+- `BLUE-TANUKI Restart` stops the current resident process and restarts it in
+  normal mode from saved settings and schedules.
 - `BLUE-TANUKI Stop` stops the resident runtime.
 - `Uninstall BLUE-TANUKI` removes the app while preserving user data by default.
 
@@ -190,8 +192,8 @@ file, then start BLUE-TANUKI again. Use `BLUE-TANUKI Safe Mode` when you need
 the Control Center and Doctor without external providers, connector calls,
 channel connections, or schedules. Safe Mode leaves saved settings and schedules
 unchanged. To resume the normal mode from the saved state, choose `BLUE-TANUKI
-Stop` and then `BLUE-TANUKI`; opening the normal shortcut without stopping the
-Safe Mode process first leaves that existing process in Safe Mode.
+Restart`. Opening the normal shortcut without restarting the Safe Mode process
+first leaves that existing process in Safe Mode.
 
 ## Crash Recovery
 

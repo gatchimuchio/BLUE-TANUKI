@@ -96,6 +96,7 @@ stub-mode first-run.
 Use Start Menu shortcuts:
 
 - `BLUE-TANUKI Stop`
+- `BLUE-TANUKI Restart`
 - `BLUE-TANUKI Safe Mode`
 - `BLUE-TANUKI`
 
@@ -114,6 +115,7 @@ with stub LLM mode and disables external provider keys, connector keys,
 channel tokens, daily brief, and schedules for that launch.
 
 Safe Mode is temporary and does not rewrite the saved settings or schedules.
-To return to normal mode, choose `BLUE-TANUKI Stop`, then start `BLUE-TANUKI`.
-Starting the normal shortcut while the Safe Mode process is still running keeps
-that existing process in Safe Mode.
+To return to normal mode, choose `BLUE-TANUKI Restart`. It stops the current
+resident process and starts it again from the saved settings. Starting the
+normal `BLUE-TANUKI` shortcut while the Safe Mode process is still running
+keeps that existing process in Safe Mode.

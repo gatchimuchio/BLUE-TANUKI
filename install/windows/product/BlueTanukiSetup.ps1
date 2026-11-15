@@ -254,6 +254,7 @@ function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Doctor.lnk") $ps "-NoProfile -File `"$launcher`" doctor-open" $InstallRootResolved "Run BLUE-TANUKI Doctor" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Logs.lnk") $ps "-NoProfile -File `"$launcher`" logs" $InstallRootResolved "Open BLUE-TANUKI logs" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Safe Mode.lnk") $ps "-NoProfile -File `"$launcher`" safe-mode" $InstallRootResolved "Start BLUE-TANUKI with external providers and connectors disabled" $icon
+  New-Shortcut (Join-Path $programs "BLUE-TANUKI Restart.lnk") $ps "-NoProfile -File `"$launcher`" restart" $InstallRootResolved "Restart BLUE-TANUKI in normal mode using saved settings" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Stop.lnk") $ps "-NoProfile -File `"$launcher`" stop" $InstallRootResolved "Stop BLUE-TANUKI resident runtime" $icon
   New-Shortcut (Join-Path $programs "Uninstall BLUE-TANUKI.lnk") $uninstaller "" $InstallRootResolved "Uninstall BLUE-TANUKI" $icon
   if ($DesktopShortcutEnabled) {
@@ -288,7 +289,7 @@ function Assert-ShortcutTargetsCompatible($InstallRootResolved, $DesktopShortcut
     if (-not $folder.PSIsContainer -or ($folder.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       Fail "Start Menu target is not a regular directory: $programs"
     }
-    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
+    foreach ($name in @('BLUE-TANUKI.lnk','BLUE-TANUKI Doctor.lnk','BLUE-TANUKI Logs.lnk','BLUE-TANUKI Safe Mode.lnk','BLUE-TANUKI Restart.lnk','BLUE-TANUKI Stop.lnk','Uninstall BLUE-TANUKI.lnk')) {
       $path = Join-Path $programs $name
       if ((Test-Path -LiteralPath $path) -and -not (Test-ShortcutTargetBelongsToInstall $path $InstallRootResolved)) {
         Fail "Refusing to replace an unrelated Start Menu item: $path"

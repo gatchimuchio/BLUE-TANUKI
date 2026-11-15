@@ -3429,7 +3429,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText(
           "runtime-mode-note",
           safeMode
-            ? "Safe ModeではLLM providerをstubへ固定し、外部connectorとruntime scheduleの実行を停止します。設定・保存済みscheduleは変更しません。通常モードへ戻すには、製品の停止操作の後に通常の起動操作を選んでください。"
+            ? "Safe ModeではLLM providerをstubへ固定し、外部connectorとruntime scheduleの実行を停止します。設定・保存済みscheduleは変更しません。通常モードへ戻すには製品の通常再起動操作を選んでください（Windows:「BLUE-TANUKI Restart」、macOS:「停止」の後に通常起動、Linux: blue-tanuki restart）。"
             : body.safe_mode === false
               ? "現在のGatewayプロセスではSafe Modeは無効です。"
               : "現在の動作モードを確認できません。Gatewayの状態を再取得してください。"
