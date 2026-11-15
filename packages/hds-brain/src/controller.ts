@@ -210,9 +210,12 @@ import { routeAction } from "./action_router.js";
 import { resolveActor } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
+  buildGatewayStatusOutputAuditLog,
   buildHDSDecisionOutputAuditLog,
   buildProjectionOutputAuditLog,
   buildOutputAuditLog,
+  type GatewayStatusOutputAuditInput,
+  type GatewayStatusOutputAuditLog,
   type HDSDecisionOutputAuditInput,
   type HDSDecisionOutputAuditLog,
   type OutputAuditInput,
@@ -4683,6 +4686,13 @@ ${planControl.question}`,
   /** HDS decision notification output is digest-only evidence, never authority. */
   onHDSDecisionOutputAudit(input: HDSDecisionOutputAuditInput): HDSDecisionOutputAuditLog {
     const log = buildHDSDecisionOutputAuditLog(input);
+    this.audit.append(log);
+    return log;
+  }
+
+  /** Gateway control statuses are digest-only evidence and cannot affect authority. */
+  onGatewayStatusOutputAudit(input: GatewayStatusOutputAuditInput): GatewayStatusOutputAuditLog {
+    const log = buildGatewayStatusOutputAuditLog(input);
     this.audit.append(log);
     return log;
   }

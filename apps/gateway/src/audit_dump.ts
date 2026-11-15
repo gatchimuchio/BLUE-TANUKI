@@ -197,6 +197,8 @@ export function formatAuditTextReport(report: AuditDumpReport): string {
       } else if (e.log.kind === "hds_decision_output_audit") {
         const reqId = e.log.request_id;
         lines.push(`  [${String(e.index).padStart(4, "0")}] HDS_DECISION_OUTPUT ${hashShort}… request_id=${reqId} decision=${e.log.upstream_decision} surface=${e.log.target_surface} visible=${e.log.user_visible_output}`);
+      } else if (e.log.kind === "gateway_status_output_audit") {
+        lines.push(`  [${String(e.index).padStart(4, "0")}] GATEWAY_STATUS ${hashShort}… request_id=${e.log.request_id} command_id=${e.log.command_id} source=${e.log.status_source} surface=${e.log.target_surface}`);
       } else if (e.log.kind === "runtime_invariants") {
         const status = e.log.all_ok ? "INVARIANTS:pass" : "INVARIANTS:fail";
         const reqId = e.log.request_id ?? "(none)";

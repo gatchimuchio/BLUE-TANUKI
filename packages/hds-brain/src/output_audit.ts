@@ -108,6 +108,46 @@ export interface HDSDecisionOutputAuditInput {
   readonly timestamp?: number;
 }
 
+export type GatewayStatusOutputSource =
+  | "emergency_stop"
+  | "failure_memory"
+  | "approval_capacity"
+  | "schedule_approval"
+  | "approval_required"
+  | "human_approval"
+  | "schedule_expiry";
+
+/** Digest-only audit for a command-bound control status emitted by the Gateway. */
+export interface GatewayStatusOutputAuditLog {
+  kind: "gateway_status_output_audit";
+  request_id: string;
+  command_id: string;
+  upstream_commit_hash: string;
+  upstream_decision: Decision;
+  status_source: GatewayStatusOutputSource;
+  target_surface: OutputTargetSurface;
+  rendered_output_digest: string;
+  rendered_output_chars: number;
+  user_visible_output: boolean;
+  external_side_effect_result: false;
+  used_for_authority: false;
+  may_execute: false;
+  may_commit_to_memory: false;
+  reason: "gateway_status_notification_reviewed_before_display";
+  timestamp: number;
+}
+
+export interface GatewayStatusOutputAuditInput {
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly upstream_commit_hash: string;
+  readonly upstream_decision: Decision;
+  readonly status_source: GatewayStatusOutputSource;
+  readonly rendered_output: string;
+  readonly target_surface: OutputTargetSurface;
+  readonly timestamp?: number;
+}
+
 export function buildOutputAuditLog(input: OutputAuditInput): OutputAuditLog {
   const output = input.rendered_output ?? null;
   const outputKind = classifyOutputKind(input.command);
@@ -199,6 +239,35 @@ export function buildHDSDecisionOutputAuditLog(input: HDSDecisionOutputAuditInpu
     may_execute: false,
     may_commit_to_memory: false,
     reason: "hds_decision_notification_reviewed_before_display",
+    timestamp: input.timestamp ?? Date.now(),
+  };
+}
+
+export function buildGatewayStatusOutputAuditLog(input: GatewayStatusOutputAuditInput): GatewayStatusOutputAuditLog {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(input.request_id) ||
+      !/^[A-Za-z0-9._:-]{1,128}$/u.test(input.command_id) ||
+      !/^[a-f0-9]{64}$/u.test(input.upstream_commit_hash) ||
+      !["ASSERT", "SUSPEND", "OUT_OF_SCOPE", "FAIL"].includes(input.upstream_decision) ||
+      !["emergency_stop", "failure_memory", "approval_capacity", "schedule_approval", "approval_required", "human_approval", "schedule_expiry"].includes(input.status_source) ||
+      typeof input.rendered_output !== "string" || input.rendered_output.length === 0) {
+    throw new Error("invalid_gateway_status_output_audit_input");
+  }
+  return {
+    kind: "gateway_status_output_audit",
+    request_id: input.request_id,
+    command_id: input.command_id,
+    upstream_commit_hash: input.upstream_commit_hash,
+    upstream_decision: input.upstream_decision,
+    status_source: input.status_source,
+    target_surface: input.target_surface,
+    rendered_output_digest: sha256(input.rendered_output),
+    rendered_output_chars: input.rendered_output.length,
+    user_visible_output: isUserVisibleSurface(input.target_surface),
+    external_side_effect_result: false,
+    used_for_authority: false,
+    may_execute: false,
+    may_commit_to_memory: false,
+    reason: "gateway_status_notification_reviewed_before_display",
     timestamp: input.timestamp ?? Date.now(),
   };
 }

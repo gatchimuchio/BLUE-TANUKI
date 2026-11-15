@@ -20,6 +20,8 @@ import type {
   CompleteHistoryEntry,
   CompleteHistoryReplayFilter,
   DecisionLog,
+  GatewayStatusOutputAuditLog,
+  GatewayStatusOutputSource,
   HDSDecisionOutputAuditLog,
   OutputAuditLog,
   PeriodicVerificationTrigger,
@@ -1916,6 +1918,56 @@ async function serveWithOwnerLease(
     }) !== null;
   }
 
+  function recordGatewayStatusOutputHistory(
+    origin: InboundRequest,
+    actor: string,
+    output: GatewayStatusOutputAuditLog,
+  ): boolean {
+    return recordCompleteHistory({
+      kind: "final_output",
+      request_id: output.request_id,
+      command_id: output.command_id,
+      actor,
+      source: "gateway_status_output_audit",
+      timestamp: output.timestamp,
+      payload: {
+        upstream_commit_hash: output.upstream_commit_hash,
+        upstream_decision: output.upstream_decision,
+        status_source: output.status_source,
+        origin_channel: origin.channel,
+        target_surface: output.target_surface,
+        rendered_output_digest: output.rendered_output_digest,
+        rendered_output_chars: output.rendered_output_chars,
+        user_visible_output: output.user_visible_output,
+        external_side_effect_result: output.external_side_effect_result,
+        used_for_authority: output.used_for_authority,
+        may_execute: output.may_execute,
+        may_commit_to_memory: output.may_commit_to_memory,
+      },
+    }) !== null;
+  }
+
+  function auditGatewayStatusOutput(
+    log: DecisionLog,
+    origin: InboundRequest,
+    actor: string,
+    command_id: string,
+    status_source: GatewayStatusOutputSource,
+    rendered_output: string,
+  ): GatewayStatusOutputAuditLog {
+    const output = hds.onGatewayStatusOutputAudit({
+      request_id: log.request_id,
+      command_id,
+      upstream_commit_hash: log.commit.hash,
+      upstream_decision: log.commit.decision,
+      status_source,
+      rendered_output,
+      target_surface: "channel",
+    });
+    recordGatewayStatusOutputHistory(origin, actor, output);
+    return output;
+  }
+
   /**
    * Run a command through the executor, then mirror user-visible command
    * output back to the originating channel as a channel_send.
@@ -2102,15 +2154,12 @@ async function serveWithOwnerLease(
         emergency_stop_active: true,
         emergency_stop_reason: emergencyStop.reason,
       });
-      await dispatcher.dispatch(
-        {
-          ...replyPayload(origin, `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`),
-        },
-        {
-          command_id: `emergency-stop-blocked-${cmd.id}`,
-          upstream_commit_hash: log.commit.hash,
-        },
-      );
+      const content = `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`;
+      auditGatewayStatusOutput(log, origin, actor, cmd.id, "emergency_stop", content);
+      await dispatcher.dispatch(replyPayload(origin, content), {
+        command_id: `emergency-stop-blocked-${cmd.id}`,
+        upstream_commit_hash: log.commit.hash,
+      });
       return { status: "emergency_stop_blocked" };
     }
     const failureMemoryGateActor = opts.failure_memory_gate_actor ?? actor;
@@ -2147,6 +2196,7 @@ async function serveWithOwnerLease(
         failureGate.decision === "block" || failureGateDigest !== opts.failure_memory_gate_digest)) {
       noteFailureMemoryGateChanged(failureGate, "approval_resume_preflight");
       const content = `[failure-memory-reapproval-required] command_id=${cmd.id} executed=false reason=the current failure-memory gate differs from the approved review; no action was invoked. changed_conditions=${failureMemoryGateChangedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`;
+      auditGatewayStatusOutput(log, origin, actor, cmd.id, "failure_memory", content);
       await dispatcher.dispatch(replyPayload(origin, content), {
         command_id: `failure-memory-reapproval-required-${cmd.id}`,
         upstream_commit_hash: log.commit.hash,
@@ -2168,6 +2218,7 @@ async function serveWithOwnerLease(
         reason: `failure_memory:${failureGate.reason}`,
       });
       const content = `[blocked] Failure memory gate blocked execution. command_id=${cmd.id} reason=${failureGate.reason}`;
+      auditGatewayStatusOutput(log, origin, actor, cmd.id, "failure_memory", content);
       await dispatcher.dispatch(
         replyPayload(origin, content),
         { command_id: `failure-memory-blocked-${cmd.id}`, upstream_commit_hash: log.commit.hash },
@@ -2229,8 +2280,10 @@ async function serveWithOwnerLease(
             resource_backpressure: true,
             reason: approvalAdmission.reason,
           });
+          const content = "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved.";
+          auditGatewayStatusOutput(log, origin, actor, cmd.id, "approval_capacity", content);
           await dispatcher.dispatch(
-            replyPayload(origin, "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved."),
+            replyPayload(origin, content),
             { command_id: `approval-capacity-${cmd.id}`, upstream_commit_hash: log.commit.hash },
           );
           return { status: "approval_queue_backpressure" };
@@ -2251,6 +2304,7 @@ async function serveWithOwnerLease(
               schedule_rejection_reason: prepared.message,
             });
             discardPendingApproval(cmd.id);
+            auditGatewayStatusOutput(log, origin, actor, cmd.id, "schedule_approval", prepared.message);
             await dispatcher.dispatch(
               replyPayload(origin, prepared.message),
               { command_id: `schedule-rejected-${cmd.id}`, upstream_commit_hash: log.commit.hash },
@@ -2335,10 +2389,13 @@ async function serveWithOwnerLease(
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}${changedConditions.length > 0 ? ` failure_memory_changed_conditions=${changedConditions.join(",")}` : ""} approval_is_bound_to_this_command_and_current_gate_only=true`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
-        if (!opts.quiet_approval_notice) await dispatcher.dispatch(
-          replyPayload(origin, approvalContent),
-          { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
-        );
+        if (!opts.quiet_approval_notice) {
+          auditGatewayStatusOutput(log, origin, actor, cmd.id, "approval_required", approvalContent);
+          await dispatcher.dispatch(
+            replyPayload(origin, approvalContent),
+            { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
+          );
+        }
         return { status: "approval_required" };
         } finally {
           approvalAdmission.lease.release();
@@ -3644,8 +3701,9 @@ async function serveWithOwnerLease(
             used_for_authority: false,
             may_execute: false,
           });
-        await dispatcher.dispatch(replyPayload(pending.origin,
-          `[failure-memory-reapproval-required] command_id=${command_id} executed=false reason=the failure-memory gate changed or could not be re-observed; no action was invoked. changed_conditions=${changedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`), {
+        const content = `[failure-memory-reapproval-required] command_id=${command_id} executed=false reason=the failure-memory gate changed or could not be re-observed; no action was invoked. changed_conditions=${changedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`;
+        auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "failure_memory", content);
+        await dispatcher.dispatch(replyPayload(pending.origin, content), {
           command_id: `failure-memory-reapproval-required-${command_id}`,
           upstream_commit_hash: pending.log.commit.hash,
           request_id: pending.log.request_id,
@@ -3754,9 +3812,9 @@ async function serveWithOwnerLease(
           command_present: false,
         });
       }
-      await dispatcher.dispatch({
-        ...replyPayload(pending.origin, `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`),
-      }, {
+      const content = `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`;
+      auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "emergency_stop", content);
+      await dispatcher.dispatch(replyPayload(pending.origin, content), {
         command_id: `emergency-stop-approval-blocked-${command_id}`,
         upstream_commit_hash: pending.log.commit.hash,
       });
@@ -3825,7 +3883,9 @@ async function serveWithOwnerLease(
           verdict,
           token_kind: ctx.token_kind,
         });
-        await dispatcher.dispatch(replyPayload(pending.origin, `[approval-${verdict}] command_id=${command_id}`), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+        const content = `[approval-${verdict}] command_id=${command_id}`;
+        auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "human_approval", content);
+        await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
         completeApprovalResolution(command_id);
         return { approval: verdict, executed: false };
       }
@@ -3837,6 +3897,7 @@ async function serveWithOwnerLease(
           verdict,
           token_kind: ctx.token_kind,
         });
+        auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "schedule_expiry", content);
         await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
         completeApprovalResolution(command_id);
         return { approval: "approve", executed: false, status: "schedule_approval_expired" };
@@ -6507,6 +6568,31 @@ async function serveWithOwnerLease(
           event: `decision.output.${log.upstream_decision.toLowerCase()}`,
           upstream_commit_hash: log.upstream_commit_hash,
           upstream_decision: log.upstream_decision,
+          target_surface: log.target_surface,
+          rendered_output_digest: log.rendered_output_digest,
+          rendered_output_chars: log.rendered_output_chars,
+          user_visible_output: log.user_visible_output,
+          external_side_effect_result: log.external_side_effect_result,
+          source_process_kind: source?.source_process_kind,
+          source_channel: source?.source_channel,
+          used_for_authority: log.used_for_authority,
+          may_execute: log.may_execute,
+          may_commit_to_memory: log.may_commit_to_memory,
+          reason: log.reason,
+        });
+        continue;
+      }
+
+      if (log.kind === "gateway_status_output_audit") {
+        const source = requestSources.get(log.request_id);
+        items.push({
+          ...base,
+          kind: "gateway_status_output_audit",
+          event: `gateway.status.${log.status_source}`,
+          command_id: log.command_id,
+          upstream_commit_hash: log.upstream_commit_hash,
+          upstream_decision: log.upstream_decision,
+          status_source: log.status_source,
           target_surface: log.target_surface,
           rendered_output_digest: log.rendered_output_digest,
           rendered_output_chars: log.rendered_output_chars,

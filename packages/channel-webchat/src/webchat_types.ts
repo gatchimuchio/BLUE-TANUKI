@@ -1542,6 +1542,7 @@ export interface WebChatAuthorityTraceItem {
     | "executor_feedback"
     | "output_audit"
     | "hds_decision_output_audit"
+    | "gateway_status_output_audit"
     | "runtime_invariants"
     | "schedule_lifecycle"
     | "memory_reference"
@@ -1604,6 +1605,7 @@ export interface WebChatAuthorityTraceItem {
   evidence_count?: number;
   upstream_commit_hash?: string;
   upstream_decision?: string;
+  status_source?: string;
   target_surface?: string;
   rendered_output_digest?: string;
   rendered_output_chars?: number;

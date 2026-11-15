@@ -8,7 +8,7 @@ import type {
   GoalCriteriaProjection,
   OperationRequest,
 } from "@blue-tanuki/protocol";
-import type { HDSDecisionOutputAuditLog, OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
+import type { GatewayStatusOutputAuditLog, HDSDecisionOutputAuditLog, OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
 import type { RuntimeInvariantEvidenceReport, RuntimeInvariantValues } from "./runtime_invariants.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import type { DetectorLifecycleTrace } from "./detectors/types.js";
@@ -730,6 +730,7 @@ export type AuditRecord =
   | OutputAuditLog
   | ProjectionOutputAuditLog
   | HDSDecisionOutputAuditLog
+  | GatewayStatusOutputAuditLog
   | ApprovalGateLog
   | AuthorityEventLog
   | MemoryReferenceLog

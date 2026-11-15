@@ -276,6 +276,25 @@ function projectAuditEntry(entry: AuditEntry): Record<string, unknown> {
       may_commit_to_memory: log.may_commit_to_memory,
     };
   }
+  if (log.kind === "gateway_status_output_audit") {
+    return {
+      ...base,
+      kind: log.kind,
+      request_id: log.request_id,
+      command_id: log.command_id,
+      upstream_commit_hash: log.upstream_commit_hash,
+      upstream_decision: log.upstream_decision,
+      status_source: log.status_source,
+      target_surface: log.target_surface,
+      rendered_output_digest: log.rendered_output_digest,
+      rendered_output_chars: log.rendered_output_chars,
+      user_visible_output: log.user_visible_output,
+      external_side_effect_result: log.external_side_effect_result,
+      used_for_authority: log.used_for_authority,
+      may_execute: log.may_execute,
+      may_commit_to_memory: log.may_commit_to_memory,
+    };
+  }
   if (log.kind === "runtime_invariants") {
     return {
       ...base,

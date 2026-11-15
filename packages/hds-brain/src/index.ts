@@ -87,6 +87,7 @@ export {
   type AuditOptions,
 } from "./audit.js";
 export {
+  buildGatewayStatusOutputAuditLog,
   buildHDSDecisionOutputAuditLog,
   buildOutputAuditLog,
   buildProjectionOutputAuditLog,
@@ -94,6 +95,9 @@ export {
   type OutputAuditInput,
   type OutputAuditKind,
   type OutputAuditLog,
+  type GatewayStatusOutputAuditInput,
+  type GatewayStatusOutputAuditLog,
+  type GatewayStatusOutputSource,
   type HDSDecisionOutputAuditInput,
   type HDSDecisionOutputAuditLog,
   type ProjectionOutputAuditInput,
