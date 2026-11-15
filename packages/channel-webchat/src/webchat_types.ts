@@ -1944,6 +1944,27 @@ export interface WebChatOwnerTaskSubmissionStatus {
   readonly state: WebChatOwnerTaskSubmissionState;
 }
 
+export type WebChatD4RuntimeIntentResult =
+  | {
+      readonly status: "available";
+      readonly content: string;
+      readonly content_sha256: string;
+      readonly captured_at_ms: number;
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "not_ready";
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason_code: "not_retained" | "content_too_large" | "capacity_reached" | "result_store_unavailable";
+      readonly used_for_authority: false;
+      readonly may_execute: false;
+    };
+
 export interface WebChatOwnerTaskSubmissionStore {
   claim(input: { readonly submission_id: string; readonly payload_digest: string; readonly request_id: string }):
     WebChatOwnerTaskSubmissionClaim;
@@ -1960,12 +1981,25 @@ export interface WebChatOwnerTaskSubmissionStore {
     readonly request_id: string;
     /** When false, return existing claims but do not create a new claim. */
     readonly dispatch_available: boolean;
+    /** Digest-derived response target; kept in process memory only for result binding. */
+    readonly response_target?: string;
   }): WebChatD4RuntimeIntentClaim;
   /** Read only the content-free dispatch state for a D4 Runtime intent. */
   getD4RuntimeIntentStatus(input: {
     readonly submission_id: string;
     readonly scope_digest: string;
   }): WebChatOwnerTaskSubmissionStatus | null;
+  /** Reacquire a bounded, memory-only reply for this already-bound request. */
+  getD4RuntimeIntentResult?(input: {
+    readonly request_id: string;
+    readonly scope_digest: string;
+  }): WebChatD4RuntimeIntentResult;
+  /** Capture only replies routed back to the digest-derived session target. */
+  recordD4RuntimeIntentResult?(input: {
+    readonly request_id: string;
+    readonly response_target: string;
+    readonly content: string;
+  }): void;
   /** `handler_returned` means the inbound callback returned, not that the user's goal completed. */
   markD4RuntimeIntentHandlerReturned(input: { readonly request_id: string; readonly scope_digest: string }): void;
   markD4RuntimeIntentOutcomeUnknown(input: { readonly request_id: string; readonly scope_digest: string }): void;

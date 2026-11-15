@@ -865,6 +865,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   ): Promise<SendResult> {
     if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
       error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    if (meta.request_id && this.opts.owner_task_submission_store?.recordD4RuntimeIntentResult) {
+      try {
+        this.opts.owner_task_submission_store.recordD4RuntimeIntentResult({
+          request_id: meta.request_id,
+          response_target: payload.target,
+          content: payload.content,
+        });
+      } catch {
+        // The live WebSocket send remains independent; result reacquisition is best-effort.
+      }
+    }
     const set = this.conns.get(payload.target);
     if (!set || set.size === 0) {
       return { delivered: false, error: "no_active_connection" };
@@ -1790,6 +1801,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           scope_digest: scopeDigest,
           request_id: randomUUID(),
           dispatch_available: responseChannelConnected,
+          response_target: sessionScope,
         });
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1931,6 +1943,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
                 used_for_authority: false as const, may_execute: false as const })))
           : undefined;
+        const result = status
+          ? submissionStore.getD4RuntimeIntentResult?.({ request_id: status.request_id, scope_digest: scopeDigest }) ?? {
+              status: "unavailable" as const,
+              reason_code: "result_store_unavailable" as const,
+              used_for_authority: false as const,
+              may_execute: false as const,
+            }
+          : undefined;
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",
@@ -1939,7 +1959,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify(status
           ? { found: true, request_id: status.request_id, state: status.state,
               ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
-              ...(cancellationStatus ? { cancellation: cancellationStatus } : {}) }
+              ...(cancellationStatus ? { cancellation: cancellationStatus } : {}),
+              ...(result ? { result } : {}) }
           : { found: false }));
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });

@@ -94,6 +94,7 @@ import {
   describeLLMConfig,
 } from "./llm_config.js";
 import {
+  correlateOutboundReply,
   InboundRouter,
   OutboundDispatcher,
   type InboundChannel,
@@ -452,7 +453,7 @@ function replyTarget(req: InboundRequest): string {
 export function replyPayload(req: InboundRequest, content: string): ChannelSendPayload {
   const replyThread = req.channel === "slack" ? req.metadata?.["slack_reply_thread_ts"] : undefined;
   const discordReply = req.channel === "discord" ? req.metadata?.["discord_message_id"] : undefined;
-  return {
+  const payload: ChannelSendPayload = {
     channel: req.channel,
     target: replyTarget(req),
     content,
@@ -464,6 +465,10 @@ export function replyPayload(req: InboundRequest, content: string): ChannelSendP
       ? { reply_to_message_id: discordReply }
       : {}),
   };
+  return req.channel === "webchat" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(req.id)
+    ? correlateOutboundReply(payload, req.id)
+    : payload;
 }
 
 function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProjection | undefined): string {

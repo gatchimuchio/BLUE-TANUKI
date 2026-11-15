@@ -1,6 +1,6 @@
 export * from "./types.js";
 export { InboundRouter } from "./router.js";
-export { OutboundDispatcher } from "./dispatcher.js";
+export { correlateOutboundReply, OutboundDispatcher } from "./dispatcher.js";
 export {
   TokenBucket,
   withRetryBackoff,

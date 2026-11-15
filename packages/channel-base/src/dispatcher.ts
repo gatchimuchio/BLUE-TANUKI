@@ -2,6 +2,25 @@ import type { ChannelSendPayload } from "@blue-tanuki/protocol";
 import type { OutboundChannel, SendContext, SendMeta, SendResult } from "./types.js";
 import { classifyChannelDeliveryError } from "./delivery_error.js";
 
+const OUTBOUND_REPLY_REQUEST_ID = Symbol.for("blue-tanuki.outbound-reply-request-id.v1");
+
+/**
+ * Attach a gateway-owned request correlation to a reply without adding it to
+ * the channel payload or its serialized wire form. The dispatcher moves it to
+ * SendMeta and removes the symbol before calling an outbound adapter.
+ */
+export function correlateOutboundReply<T extends ChannelSendPayload>(payload: T, requestId: string): T {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(requestId)) {
+    throw new Error("outbound_reply_request_id_invalid");
+  }
+  Object.defineProperty(payload, OUTBOUND_REPLY_REQUEST_ID, {
+    value: requestId,
+    enumerable: true,
+    configurable: false,
+  });
+  return payload;
+}
+
 /**
  * OutboundDispatcher — routes ChannelSendPayload to the matching OutboundChannel.
  *
@@ -38,8 +57,14 @@ export class OutboundDispatcher {
         next_action: `Register or enable the ${payload.channel} channel before retrying this send.`,
       };
     }
+    const correlatedPayload = payload as ChannelSendPayload & { [OUTBOUND_REPLY_REQUEST_ID]?: unknown };
+    const replyRequestId = correlatedPayload[OUTBOUND_REPLY_REQUEST_ID];
+    const { [OUTBOUND_REPLY_REQUEST_ID]: _replyRequestId, ...channelPayload } = correlatedPayload;
+    const sendMeta = typeof replyRequestId === "string"
+      ? { ...meta, request_id: replyRequestId }
+      : meta;
     try {
-      const result = await ch.send(payload, meta, context);
+      const result = await ch.send(channelPayload, sendMeta, context);
       if (context?.signal?.aborted && !result.delivered && result.delivery_status !== "not_delivered") {
         return { ...result, delivery_status: "unknown", error: "channel_send_cancelled; delivery outcome unknown",
           error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",

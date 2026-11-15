@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type {
   WebChatD4RuntimeIntentClaim,
+  WebChatD4RuntimeIntentResult,
   WebChatOwnerTaskSubmissionClaim,
   WebChatOwnerTaskSubmissionState,
   WebChatOwnerTaskSubmissionStatus,
@@ -16,6 +17,11 @@ const DIGEST = /^[a-f0-9]{64}$/u;
 const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const OWNER_TASK_SCOPE = sha256("webchat-owner-task-scope.v1");
+const D4_RUNTIME_TARGET = /^d4-runtime:[a-f0-9]{64}$/u;
+const D4_RUNTIME_RESULT_TTL_MS = 15 * 60 * 1000;
+const D4_RUNTIME_RESULT_MAX_ENTRIES = 512;
+const D4_RUNTIME_RESULT_MAX_BYTES = 64 * 1024;
+const D4_RUNTIME_RESULT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
 interface SubmissionRow {
   readonly payload_digest: string;
@@ -23,9 +29,26 @@ interface SubmissionRow {
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
 }
 
+interface D4RuntimeResultEntry {
+  readonly scope_digest: string;
+  readonly response_target: string;
+  expires_at_ms: number;
+  content?: string;
+  content_sha256?: string;
+  captured_at_ms?: number;
+  unavailable_reason?: "content_too_large" | "capacity_reached";
+}
+
+interface RuntimeSubmissionRow {
+  readonly scope_digest: string;
+  readonly delivery_state: WebChatOwnerTaskSubmissionState;
+}
+
 /** Durable, content-free inbox for deduplicating authenticated WebChat submissions. */
 export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore {
   private readonly db: DatabaseType;
+  private readonly d4RuntimeResults = new Map<string, D4RuntimeResultEntry>();
+  private d4RuntimeResultBytes = 0;
   private closed = false;
 
   constructor(filepath: string) {
@@ -98,15 +121,23 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     readonly scope_digest: string;
     readonly request_id: string;
     readonly dispatch_available: boolean;
+    readonly response_target?: string;
   }): WebChatD4RuntimeIntentClaim {
     this.assertOpen();
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
         !DIGEST.test(input.scope_digest) || !REQUEST_ID.test(input.request_id)) {
       throw new Error("webchat_d4_runtime_intent_claim_invalid");
     }
+    if (input.response_target !== undefined && !D4_RUNTIME_TARGET.test(input.response_target)) {
+      throw new Error("webchat_d4_runtime_response_target_invalid");
+    }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
-    return this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id,
+    const claim = this.claimInScope(input.scope_digest, eventDigest, input.payload_digest, input.request_id,
       input.dispatch_available);
+    if (claim.status === "accepted" && input.response_target) {
+      this.registerD4RuntimeResultTarget(claim.request_id, input.scope_digest, input.response_target);
+    }
+    return claim;
   }
 
   getD4RuntimeIntentStatus(input: {
@@ -119,6 +150,78 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
     return this.getStatusInScope(input.scope_digest, eventDigest);
+  }
+
+  getD4RuntimeIntentResult(input: {
+    readonly request_id: string;
+    readonly scope_digest: string;
+  }): WebChatD4RuntimeIntentResult {
+    this.assertOpen();
+    if (!REQUEST_ID.test(input.request_id) || !DIGEST.test(input.scope_digest)) {
+      return { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+    }
+    const row = this.db.prepare(`SELECT scope_digest,delivery_state FROM webchat_owner_task_inbox
+      WHERE request_id=?`).get(input.request_id) as RuntimeSubmissionRow | undefined;
+    if (!row || row.scope_digest !== input.scope_digest || row.scope_digest === OWNER_TASK_SCOPE) {
+      return { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+    }
+    const now = Date.now();
+    this.pruneD4RuntimeResults(now);
+    const entry = this.d4RuntimeResults.get(input.request_id);
+    if (entry && entry.scope_digest === input.scope_digest && entry.expires_at_ms > now) {
+      if (entry.content !== undefined && entry.content_sha256 && entry.captured_at_ms !== undefined) {
+        return {
+          status: "available",
+          content: entry.content,
+          content_sha256: entry.content_sha256,
+          captured_at_ms: entry.captured_at_ms,
+          used_for_authority: false,
+          may_execute: false,
+        };
+      }
+      if (entry.unavailable_reason) {
+        return { status: "unavailable", reason_code: entry.unavailable_reason,
+          used_for_authority: false, may_execute: false };
+      }
+    }
+    return row.delivery_state === "dispatching"
+      ? { status: "not_ready", used_for_authority: false, may_execute: false }
+      : { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
+  }
+
+  recordD4RuntimeIntentResult(input: {
+    readonly request_id: string;
+    readonly response_target: string;
+    readonly content: string;
+  }): void {
+    this.assertOpen();
+    if (!REQUEST_ID.test(input.request_id) || !D4_RUNTIME_TARGET.test(input.response_target)) return;
+    const now = Date.now();
+    this.pruneD4RuntimeResults(now);
+    const entry = this.d4RuntimeResults.get(input.request_id);
+    if (!entry || entry.response_target !== input.response_target || entry.expires_at_ms <= now) return;
+    const row = this.db.prepare(`SELECT scope_digest FROM webchat_owner_task_inbox WHERE request_id=?`)
+      .get(input.request_id) as { readonly scope_digest: string } | undefined;
+    if (!row || row.scope_digest !== entry.scope_digest || row.scope_digest === OWNER_TASK_SCOPE) return;
+    if (entry.content !== undefined) this.d4RuntimeResultBytes -= Buffer.byteLength(entry.content, "utf8");
+    delete entry.content;
+    delete entry.content_sha256;
+    delete entry.captured_at_ms;
+    delete entry.unavailable_reason;
+    const byteLength = Buffer.byteLength(input.content, "utf8");
+    entry.captured_at_ms = now;
+    entry.expires_at_ms = now + D4_RUNTIME_RESULT_TTL_MS;
+    if (byteLength > D4_RUNTIME_RESULT_MAX_BYTES) {
+      entry.unavailable_reason = "content_too_large";
+      return;
+    }
+    if (this.d4RuntimeResultBytes + byteLength > D4_RUNTIME_RESULT_CACHE_MAX_BYTES) {
+      entry.unavailable_reason = "capacity_reached";
+      return;
+    }
+    entry.content = input.content;
+    entry.content_sha256 = sha256(input.content);
+    this.d4RuntimeResultBytes += byteLength;
   }
 
   markD4RuntimeIntentHandlerReturned(input: { readonly request_id: string; readonly scope_digest: string }): void {
@@ -186,6 +289,8 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
 
   close(): void {
     if (this.closed) return;
+    this.d4RuntimeResults.clear();
+    this.d4RuntimeResultBytes = 0;
     this.db.close();
     this.closed = true;
   }
@@ -201,6 +306,27 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       WHERE scope_digest=? AND request_id=? AND delivery_state='dispatching'`)
       .run(state, Date.now(), scopeDigest, requestId);
     if (result.changes !== 1) throw new Error("webchat_owner_task_state_transition_rejected");
+  }
+
+  private registerD4RuntimeResultTarget(requestId: string, scopeDigest: string, responseTarget: string): void {
+    const now = Date.now();
+    this.pruneD4RuntimeResults(now);
+    if (this.d4RuntimeResults.size >= D4_RUNTIME_RESULT_MAX_ENTRIES) return;
+    this.d4RuntimeResults.set(requestId, {
+      scope_digest: scopeDigest,
+      response_target: responseTarget,
+      // Keep only the digest-derived route binding while an asynchronous task is
+      // running; the 15-minute result-retention window begins when output arrives.
+      expires_at_ms: now + 24 * 60 * 60 * 1000,
+    });
+  }
+
+  private pruneD4RuntimeResults(now: number): void {
+    for (const [requestId, entry] of this.d4RuntimeResults) {
+      if (entry.expires_at_ms > now) continue;
+      if (entry.content !== undefined) this.d4RuntimeResultBytes -= Buffer.byteLength(entry.content, "utf8");
+      this.d4RuntimeResults.delete(requestId);
+    }
   }
 
   private transaction<T>(fn: () => T): T {
