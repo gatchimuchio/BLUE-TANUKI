@@ -52,6 +52,18 @@ export class LongTermMemoryStore {
     if (!shouldPersist(log)) {
       return null;
     }
+    const priorEntries = this.entries.filter((entry) => entry.request_id === log.request_id);
+    if (priorEntries.length > 0) {
+      if (priorEntries.length !== 1) {
+        this.skipped_captures += 1;
+        return null;
+      }
+      const prior = priorEntries[0]!;
+      const replay = this.createEntry(log, prior.index, prior.prev_hash);
+      if (replay.entry_hash === prior.entry_hash) return prior;
+      this.skipped_captures += 1;
+      return null;
+    }
     if (this.max_entries > 0 && this.entries.length >= this.max_entries) {
       this.skipped_captures += 1;
       return null;
@@ -333,12 +345,11 @@ export class LongTermMemoryStore {
     }
   }
 
-  private createEntry(log: DecisionLog): MemoryEntry {
-    const index = this.entries.length;
-    const prev_hash =
-      this.entries.length === 0
-        ? "GENESIS"
-        : this.entries[this.entries.length - 1]!.entry_hash;
+  private createEntry(
+    log: DecisionLog,
+    index = this.entries.length,
+    prev_hash = this.entries.length === 0 ? "GENESIS" : this.entries[this.entries.length - 1]!.entry_hash,
+  ): MemoryEntry {
     const hashInput: MemoryEntryHashInput = {
       index,
       request_id: log.request_id,

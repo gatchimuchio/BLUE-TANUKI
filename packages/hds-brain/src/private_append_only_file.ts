@@ -4,6 +4,7 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -31,6 +32,7 @@ export class HDSPrivateAppendOnlyFile {
   private readonly directoryIdentity: readonly DirectoryIdentity[];
   private identity?: FileIdentity;
   private absentAtConstruction = false;
+  private appendFailed = false;
 
   constructor(filepath: string) {
     this.filepath = resolve(filepath);
@@ -58,15 +60,33 @@ export class HDSPrivateAppendOnlyFile {
   }
 
   appendUtf8(value: string): void {
+    if (this.appendFailed) throw new Error("hds_private_file_append_disabled_after_failure");
     const opened = this.open("append");
     if (!opened) throw new Error("hds_private_file_unavailable");
+    let failed = false;
+    let failure: unknown;
     try {
       appendFileSync(opened.fd, value, "utf8");
+      fsyncSync(opened.fd);
       this.identity = opened.identity;
       this.absentAtConstruction = false;
-    } finally {
-      closeSync(opened.fd);
+    } catch (error) {
+      // A write/flush can be outcome-ambiguous; never retry through this instance.
+      this.appendFailed = true;
+      failed = true;
+      failure = error;
     }
+    try {
+      closeSync(opened.fd);
+    } catch (error) {
+      // Preserve fail-closed behavior even if the record was already flushed.
+      this.appendFailed = true;
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+    if (failed) throw failure;
   }
 
   private open(mode: "read" | "append"): { fd: number; identity: FileIdentity } | undefined {
