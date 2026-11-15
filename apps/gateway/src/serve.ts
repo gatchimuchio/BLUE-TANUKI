@@ -6246,21 +6246,7 @@ async function serveWithOwnerLease(
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isBrowserFormInputReviewCommand(p.command) || isBrowserFormGetReviewCommand(p.command) ||
-        isBrowserLinkNavigationReviewCommand(p.command) ||
-        isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
-        isGmailMessageTrashReviewCommand(p.command) ||
-        (p.command.type === "tool_call" &&
-          (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
-            p.command.payload.tool_name === "memory.personalization.stop" || p.command.payload.tool_name === "settings.write" ||
-            p.command.payload.tool_name === "mcp.call" ||
-            (p.command.payload.tool_name === "github.write" &&
-              ["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(p.command.payload.arguments.operation))) ||
-            (p.command.payload.tool_name === "google.calendar.write" &&
-              ["event.create", "event.update", "event.delete", "event.invite"].includes(String(p.command.payload.arguments.operation))) ||
-            (p.command.payload.tool_name === "google.drive.write" &&
-              ["file.create", "file.update", "permissions.create", "permissions.create.public_link", "file.trash"]
-                .includes(String(p.command.payload.arguments.operation))))) ||
+      content_review_required: pendingApprovalNeedsContentReview(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),
