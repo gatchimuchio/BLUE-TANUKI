@@ -1012,9 +1012,8 @@ export function renderSettingsHtml(): string {
         <div class="actions">
           <button class="secondary" id="load-btn" type="button">Load</button>
           <button class="secondary" id="verify-llm-btn" type="button">Verify LLM</button>
-          <button class="primary" id="save-btn" type="button" disabled>Save</button>
         </div>
-        <div class="notice warn" id="settings-write-status">This page does not save settings. Supported non-secret LLM values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</div>
+        <div class="notice warn">This page does not save settings. Supported non-secret LLM values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. <a href="/" target="_blank" rel="noopener">Open WebChat to create a Developer task</a>. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</div>
         <div class="notice" id="notice"></div>
       </div>
     </div>
@@ -1185,19 +1184,6 @@ export function renderSettingsHtml(): string {
         setNotice(e.message, "bad");
       }
     }
-    async function save() {
-      const payload = buildPayload();
-      try {
-        await api("/settings/config", {
-          method: "POST",
-          body: JSON.stringify(payload)
-        });
-        setNotice("Saved. Restart required.", "warn");
-        await load();
-      } catch (e) {
-        setNotice(e.message, "bad");
-      }
-    }
     function buildPayload() {
       const llm = {
         provider: fields.provider.value,
@@ -1299,7 +1285,6 @@ export function renderSettingsHtml(): string {
     document.querySelector("#load-btn").addEventListener("click", load);
     document.querySelector("#verify-llm-btn").addEventListener("click", verifyLlm);
     fields.mcpInspectButton.addEventListener("click", inspectMcpEndpoint);
-    document.querySelector("#save-btn").addEventListener("click", save);
     if (tokenInput.value) load();
   </script>
 </body>
