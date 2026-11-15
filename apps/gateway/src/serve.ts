@@ -1985,6 +1985,7 @@ async function serveWithOwnerLease(
     expected_gmail_message_modify_provider_state_digest?: string;
     expected_file_edit_target_version_digest?: string;
     expected_file_delete_target_version_digest?: string;
+    expected_memory_personalization_target_version_digest?: string;
     expected_settings_write_target_version_digest?: string;
     expected_google_drive_target_version_digest?: string;
     expected_github_write_target_version_digest?: string;
@@ -2594,6 +2595,21 @@ async function serveWithOwnerLease(
         : undefined;
       if (observedSettingsWriteTargetVersionDigest !== opts.expected_settings_write_target_version_digest) {
         const reason = "settings_write_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_memory_personalization_target_version_digest) {
+      const observedMemoryPersonalizationTargetVersionDigest = cmd.type === "tool_call" &&
+        cmd.payload.tool_name === "memory.personalization.stop" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.memory-personalization-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation)
+        : undefined;
+      if (observedMemoryPersonalizationTargetVersionDigest !== opts.expected_memory_personalization_target_version_digest) {
+        const reason = "memory_personalization_stop_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -4175,6 +4191,8 @@ async function serveWithOwnerLease(
           ? { expected_file_delete_target_version_digest: pending.content_review_file_delete_target_version_digest } : {}),
         ...(pending.content_review_settings_write_target_version_digest
           ? { expected_settings_write_target_version_digest: pending.content_review_settings_write_target_version_digest } : {}),
+        ...(pending.content_review_memory_personalization_target_version_digest
+          ? { expected_memory_personalization_target_version_digest: pending.content_review_memory_personalization_target_version_digest } : {}),
         ...(pending.content_review_drive_target_version_digest
           ? { expected_google_drive_target_version_digest: pending.content_review_drive_target_version_digest } : {}),
         ...(pending.content_review_github_target_version_digest
