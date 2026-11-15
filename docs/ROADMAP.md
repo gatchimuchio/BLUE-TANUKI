@@ -8,6 +8,8 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
+更新経路は手動のみで、自動置換は未実装。release manifest／archiveの検証と製品データ互換性は別条件であり、全永続storeのschema・migration契約と影響storeを覆う復旧証拠が未成立のため、現行candidateの適用判断は`unknown`で停止する。
+
 MCPのConnections設定では、ownerが明示したときだけ入力済みcredentialless loopback endpointのbounded catalog metadataを5秒以内で取得できる。認証情報は転送せず、toolは呼ばず、serverを起動・停止しない。記録する到達状態は時点付きの非権威観測であり、live healthや作用結果の保証ではない。
 
 WebChat Owner Taskは同じsubmission IDからOwner-token中止要求と取消状態照会へ進むsource経路を持つ。Gatewayはowner actor／WebChat channel／request bindingと一意なactive executionだけをAbortSignal対象にする。local/external停止を主張しない。現時点は`CODE_PRESENT`でありserved/runtime往復、実provider、全体施工の証拠ではない。

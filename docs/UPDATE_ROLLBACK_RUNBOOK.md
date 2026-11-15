@@ -1,6 +1,6 @@
 # BLUE-TANUKI Update / Rollback / Recovery Runbook
 
-BLUE-TANUKI does not currently implement an automatic updater. Updates are operator-run source or release-bundle replacements, followed by validation.
+BLUE-TANUKI does not currently implement an automatic updater. Updates are operator-run source or release-bundle replacements, followed by validation. **Manual application is currently blocked because product-wide persisted-data schema compatibility and migration support are unknown.** A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not establish data compatibility or authorize replacing the running application.
 
 ## Distribution readiness gate
 
@@ -97,8 +97,10 @@ implement automatic update rollback.
 
 P11 keeps update manual-only. The Control Center Update screen verifies a
 configured release bundle sidecar set and records rollback evidence, but it does
-not replace app files, download updates, run a background updater, or provide a
-signed native installer.
+not compare every installed persisted-data store with a candidate schema, apply
+migrations, replace app files, download updates, run a background updater, or
+provide a signed native installer. The current compatibility result is
+`unknown`; no application replacement may proceed on that evidence.
 
 ## Control Center update controls
 
@@ -114,15 +116,24 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
    source bundle boundary, no-secret boundary, and core release paths must match.
 5. Run `Prepare Update`. This requires explicit confirmation, creates a P10
    recovery backup, and writes a rollback plan under `BLUE_TANUKI_UPDATE_DIR` or
-   `BLUE_TANUKI_FILE_ROOT/update`.
-6. Stop BLUE-TANUKI before replacing app files.
-7. Apply the source or release-bundle update manually.
+   `BLUE_TANUKI_FILE_ROOT/update`. This records recovery evidence only; it does
+   not establish complete backup coverage or update readiness.
+6. Read the compatibility result in the Update screen. **The current result is
+   `unknown`: stop here, keep the existing application running, and do not
+   replace source or app files.** The release-manifest schema version is not a
+   product data-schema version.
+7. For a future candidate only after product-wide compatibility and every
+   required migration are explicitly supported and verified, confirm that the
+   pre-update backup covers every data store the update may change. Then stop
+   BLUE-TANUKI and apply the source or release-bundle update manually.
 8. Restart and run doctor, audit verification, and release verification.
 
 If post-update validation fails, restore the previous app directory or source
-commit and restore the recorded recovery backup. The rollback plan is evidence
-only and has `used_for_authority=false`; it cannot approve commands or bypass
-HDS-BRAIN.
+commit and restore only data covered by a verified recovery backup. If any data
+store changed by the update is outside that verified scope, stop and preserve
+the current files and recovery evidence; do not claim that rollback is safe or
+complete. The rollback plan is evidence only and has `used_for_authority=false`;
+it cannot approve commands or bypass HDS-BRAIN.
 
 ## 2. Source Install Update
 

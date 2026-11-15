@@ -33,14 +33,20 @@ support and release-claim boundary, not a defect waiver and not authority:
 
 ## Update / Rollback Limitations
 
-- P11 adds release sidecar verification, pre-update recovery backup, and
-  rollback-plan evidence.
-- Actual manual replacement after prepared update is operator-run and has not
-  been auto-executed by the runtime.
+- P11 verifies release sidecars and records a pre-update recovery backup and
+  rollback plan. These do not establish product-wide data-schema compatibility
+  or complete backup coverage for every persisted store.
+- The current candidate release manifest and installed product do not expose a
+  complete shared persisted-data schema and migration contract. Compatibility
+  is `unknown`; manual application must stop until that contract and the
+  affected-store backup scope are supported and verified.
+- Actual manual replacement after a compatible candidate is established remains
+  operator-run and has not been executed by the runtime.
 - Automatic updater is not shipped.
 - Runtime app-file replacement / runtime auto-apply update is not shipped.
-- Future migration schema support is not implemented beyond the current
-  observed manifest/data schema boundary.
+- A release-manifest format version is not a product-data schema version.
+- Product-wide migration support and installed update/rollback evidence are not
+  established.
 - Signed native installer and signing pipeline are not shipped.
 
 ## Preview / Reserved Limitations
