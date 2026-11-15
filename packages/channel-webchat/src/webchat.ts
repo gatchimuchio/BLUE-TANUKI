@@ -19,6 +19,7 @@ import {
   RuntimeSessionInputSchema,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
+  isCanonicalBase64,
   TRANSIENT_AUDIO_MAX_BYTES,
   TRANSIENT_IMAGE_MAX_BYTES,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
@@ -183,8 +184,7 @@ function readTransientImageInput(value: unknown): TransientImageReadResult {
       typeof record.data_base64 !== "string") return { ok: false };
   const encoded = record.data_base64;
   const maxEncodedBytes = Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4;
-  if (encoded.length === 0 || encoded.length > maxEncodedBytes || encoded.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+  if (encoded.length > maxEncodedBytes || !isCanonicalBase64(encoded)) {
     return { ok: false };
   }
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
@@ -318,8 +318,7 @@ function readTransientAudioInput(value: unknown): TransientAudioReadResult {
   }
   const encoded = record.data_base64;
   const maxEncodedBytes = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4;
-  if (encoded.length === 0 || encoded.length > maxEncodedBytes || encoded.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+  if (encoded.length > maxEncodedBytes || !isCanonicalBase64(encoded)) {
     return { ok: false };
   }
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;

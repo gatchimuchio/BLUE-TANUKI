@@ -702,6 +702,23 @@ export interface TransientImageInput {
 
 export const TRANSIENT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_CANONICAL_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+
+/** RFC 4648の正規Base64表記を、padding bitを含めて検証する。 */
+export function isCanonicalBase64(value: string): boolean {
+  if (value.length === 0 || value.length % 4 !== 0 || !BASE64_CANONICAL_PATTERN.test(value)) return false;
+  if (value.endsWith("==")) {
+    const finalValue = BASE64_ALPHABET.indexOf(value.charAt(value.length - 3));
+    return finalValue >= 0 && (finalValue & 0x0f) === 0;
+  }
+  if (value.endsWith("=")) {
+    const finalValue = BASE64_ALPHABET.indexOf(value.charAt(value.length - 2));
+    return finalValue >= 0 && (finalValue & 0x03) === 0;
+  }
+  return true;
+}
+
 export function detectTransientImageMediaType(bytes: Uint8Array): TransientImageInput["media_type"] | null {
   if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -781,11 +798,11 @@ const RuntimeSubmissionIdSchema = z.string().regex(
 /** Authenticated D4 Runtime dialogue input; submission_id is an idempotency key, never authority. */
 const RuntimeIntentImageInputSchema = z.object({
   media_type: z.enum(["image/jpeg", "image/png"]),
-  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4),
+  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4).refine(isCanonicalBase64),
 }).strict();
 
 const RuntimeIntentAudioInputSchema = z.object({
-  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4),
+  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4).refine(isCanonicalBase64),
 }).strict();
 
 export const RuntimeIntentInputSchema = z.object({
