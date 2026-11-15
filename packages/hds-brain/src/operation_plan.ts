@@ -84,6 +84,10 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+function isUnresolvedOperationAttempt(status: Binding["status"]): boolean {
+  return status === "selected" || status === "intent_committed" || status === "outcome_unknown" ||
+    status === "verification_failed";
+}
 type GoalCompletionReason = "rules_missing" | "rules_invalid" | "rule_target_missing" | "rule_target_ambiguous" |
   "result_unverified" | "result_mismatch" | "memory_unverified" | "rules_satisfied";
 interface GoalCompletionAssessment {
@@ -3073,7 +3077,7 @@ export class OperationPlanLedger {
     if (!Number.isSafeInteger(control.deadline_at_ms) || control.deadline_at_ms <= nowMs) {
       throw new Error("plan_wait_deadline_invalid");
     }
-    if (plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status))) {
+    if (plan.bindings.some((binding) => isUnresolvedOperationAttempt(binding.status))) {
       throw new Error("plan_wait_execution_unresolved");
     }
     const planIdDigest = operationPlanDigest(current.plan.plan_id);
@@ -3831,8 +3835,7 @@ export class OperationPlanLedger {
 
       // A restore can invalidate prior selections, but must never turn an uncertain
       // or still-selected attempt into a fresh attempt. Such plans stay held for explicit recovery.
-      if (plan.bindings.some((binding) => binding.status === "selected" ||
-          binding.status === "intent_committed" || binding.status === "outcome_unknown")) {
+      if (plan.bindings.some((binding) => isUnresolvedOperationAttempt(binding.status))) {
         return false;
       }
       if (taskScopedRestoreHold && plan.bindings.some((binding) =>
@@ -3867,8 +3870,8 @@ export class OperationPlanLedger {
               candidateHold.provenance.restore_task_identity_digest !== taskIdentityDigest ||
               candidateHold.provenance.restore_task_plan_set_digest !== provenance.restore_task_plan_set_digest ||
               candidateHold.provenance.restore_task_dependency_status !== "observed")) return false;
-          if (candidate.bindings.some((binding) => binding.status === "selected" || binding.status === "intent_committed" ||
-              binding.status === "outcome_unknown" || !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) {
+          if (candidate.bindings.some((binding) => isUnresolvedOperationAttempt(binding.status) ||
+              !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) {
             return false;
           }
           this.assertMemoryInterpretationDependenciesCurrent(candidate);
@@ -3891,8 +3894,7 @@ export class OperationPlanLedger {
           if (candidateHold && (candidateHold.provenance.restore_scope_mode !== "task_scoped_merge_v1" ||
               candidateHold.provenance.restore_scope_task_digest !== taskIdentityDigest ||
               candidateHold.reason === "held_residual")) return false;
-          if (candidate.bindings.some((binding) => binding.status === "selected" || binding.status === "intent_committed" ||
-              binding.status === "outcome_unknown")) return false;
+          if (candidate.bindings.some((binding) => isUnresolvedOperationAttempt(binding.status))) return false;
           if (candidate.bindings.some((binding) =>
             !["verified", "provider_rejected", "invalidated", "not_attempted"].includes(binding.status))) return false;
           this.assertMemoryInterpretationDependenciesCurrent(candidate);
@@ -4581,7 +4583,7 @@ export class OperationPlanLedger {
         const priorParameters = binding.prepared_step.parameters ?? {};
         const priorOperation = priorParameters.operation;
         const currentOperation = step.parameters?.operation;
-        const priorUnresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const priorUnresolved = isUnresolvedOperationAttempt(binding.status);
         const priorIsMutation = priorOperation === "event.update" || priorOperation === "event.delete" ||
           priorOperation === "event.invite";
         const currentIsMutation = currentOperation === "event.update" || currentOperation === "event.delete" ||
@@ -4629,7 +4631,7 @@ export class OperationPlanLedger {
           max_bytes: Number(prior.max_bytes ?? 128_000),
           max_content_bytes: Number(prior.max_content_bytes ?? 64_000),
         });
-        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const unresolved = isUnresolvedOperationAttempt(binding.status);
         return priorTargetIdentity === targetIdentity && (unresolved ||
           binding.status === "verified" && priorPayload === requestPayload);
       }));
@@ -4655,7 +4657,7 @@ export class OperationPlanLedger {
           email_address: String(prior.email_address),
           role: prior.role === "writer" ? "writer" : "reader",
         });
-        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const unresolved = isUnresolvedOperationAttempt(binding.status);
         return priorTargetIdentity === targetIdentity && (unresolved ||
           binding.status === "verified" && priorPayload === requestPayload);
       }));
@@ -4668,7 +4670,7 @@ export class OperationPlanLedger {
             ["invalidated", "not_attempted"].includes(binding.status) ||
             binding.prepared_step.parameters?.operation !== "file.trash") return false;
         const prior = binding.prepared_step.parameters ?? {};
-        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const unresolved = isUnresolvedOperationAttempt(binding.status);
         return googleDriveTrashTargetIdentityDigest(String(prior.file_id)) === targetIdentity &&
           unresolved;
       }));
@@ -4698,7 +4700,7 @@ export class OperationPlanLedger {
           max_bytes: Number(prior.max_bytes ?? 128_000),
           max_content_bytes: Number(prior.max_content_bytes ?? 64_000),
         });
-        const unresolved = ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status);
+        const unresolved = isUnresolvedOperationAttempt(binding.status);
         return priorTargetIdentity === targetIdentity && (unresolved ||
           binding.status === "verified" && priorPayload === requestPayload);
       }));
@@ -5353,7 +5355,7 @@ export class OperationPlanLedger {
   }
   private taskHasUnresolvedAttempt(taskIdentityDigest: string): boolean {
     return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&
-      plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status)));
+      plan.bindings.some((binding) => isUnresolvedOperationAttempt(binding.status)));
   }
   private taskHasCompletionSeal(taskIdentityDigest: string): boolean {
     return this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskIdentityDigest &&
