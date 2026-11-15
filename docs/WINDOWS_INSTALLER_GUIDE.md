@@ -188,7 +188,10 @@ file and log locations.
 To recover, stop the process using the port or change `WEBCHAT_PORT` in the env
 file, then start BLUE-TANUKI again. Use `BLUE-TANUKI Safe Mode` when you need
 the Control Center and Doctor without external providers, connector calls,
-channel connections, or schedules.
+channel connections, or schedules. Safe Mode leaves saved settings and schedules
+unchanged. To resume the normal mode from the saved state, choose `BLUE-TANUKI
+Stop` and then `BLUE-TANUKI`; opening the normal shortcut without stopping the
+Safe Mode process first leaves that existing process in Safe Mode.
 
 ## Crash Recovery
 
