@@ -78,9 +78,11 @@ ${CONTROL_CENTER_STYLE}    </style>
         <section class="card">
           <h2>Runtime Snapshot</h2>
           <div class="metric"><span>Gateway</span><span id="gateway-status">not loaded</span></div>
+          <div class="metric"><span>動作モード</span><span id="runtime-mode">未読込</span></div>
           <div class="metric"><span>Snapshot受信時刻</span><span id="runtime-snapshot-observed" class="badge warn" aria-live="polite">not loaded</span></div>
           <div class="metric"><span>HDS Invariants</span><span id="runtime-invariant">not loaded</span></div>
           <div class="metric"><span>Audit Chain</span><span id="runtime-audit">not loaded</span></div>
+          <p id="runtime-mode-note" class="muted" aria-live="polite">Runtime Snapshotから現在の動作モードを読み取ります。</p>
           <p class="muted">WebChatの切断やこの画面を閉じる操作は、チャット接続だけを閉じます。Gatewayサービスの停止を意味しません。Gateway状態は認証済みRuntime Snapshotで別途確認し、再接続時はRuntime tokenがある場合に再取得します。</p>
           <input id="runtime-token" type="password" autocomplete="off" placeholder="webchat token" />
           <button id="load-runtime" class="primary">Load</button>

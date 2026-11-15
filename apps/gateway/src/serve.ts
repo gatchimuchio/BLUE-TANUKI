@@ -4431,6 +4431,7 @@ async function serveWithOwnerLease(
           return {
             ...buildRuntimeStatusSnapshot({
               gateway_status: "running",
+              safe_mode: process.env.BLUE_TANUKI_SAFE_MODE === "1",
               hds: hdsSnapshot,
               webchat_token: process.env.WEBCHAT_TOKEN,
               webchat_resume_token: process.env.WEBCHAT_RESUME_TOKEN,

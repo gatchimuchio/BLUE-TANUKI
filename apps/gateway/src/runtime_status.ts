@@ -8,6 +8,7 @@ export type GatewayStatus = "running" | "starting" | "degraded";
 
 export interface RuntimeStatusInput {
   gateway_status?: GatewayStatus;
+  safe_mode?: boolean;
   hds: HDSRuntimeSnapshot;
   webchat_token?: string;
   webchat_resume_token?: string;
@@ -20,6 +21,7 @@ export interface RuntimeStatusInput {
 
 export interface RuntimeStatusSnapshot {
   gateway_status: GatewayStatus;
+  safe_mode: boolean;
   hds_invariants_ok: boolean;
   webchat_ready: boolean;
   telegram_configured: boolean;
@@ -49,6 +51,7 @@ export function buildRuntimeStatusSnapshot(
 
   return {
     gateway_status,
+    safe_mode: input.safe_mode === true,
     hds_invariants_ok,
     webchat_ready,
     telegram_configured,

@@ -2322,8 +2322,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function updatePermanentUseStatus(body) {
         const pendingApprovals = Number(body.pending_approvals_count ?? 0);
         const pendingSchedules = Number(body.pending_schedule_approvals_count ?? 0);
+        const safeMode = body.safe_mode === true;
+        const modeLabel = typeof body.safe_mode === "boolean" ? (safeMode ? "Safe Mode" : "通常モード") : "未確認";
         const items = [
           ["Gateway", body.gateway_status || "unknown", body.gateway_status === "ready" ? "good" : "warn"],
+          ["動作モード", modeLabel, safeMode ? "review" : body.safe_mode === false ? "good" : "warn"],
           ["HDS", labelForBoolean(body.hds_invariants_ok), toneForBoolean(body.hds_invariants_ok)],
           ["Audit", labelForBoolean(body.audit_chain_valid), toneForBoolean(body.audit_chain_valid)],
           ["WebChat", labelForBoolean(body.webchat_ready), toneForBoolean(body.webchat_ready)],
@@ -3407,6 +3410,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
         const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
         const gatewayStatus = body.gateway_status || "unknown";
+        const safeMode = body.safe_mode === true;
+        const modeLabel = typeof body.safe_mode === "boolean" ? (safeMode ? "Safe Mode" : "通常モード") : "未確認";
         const gatewayTone = gatewayStatus === "degraded" || invariantOk === false || auditOk === false
           ? "bad"
           : gatewayStatus === "running" && invariantOk === true && auditOk === true
@@ -3414,6 +3419,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : "warn";
         setText("gateway-status", gatewayStatus);
         byId("gateway-status").className = "badge " + gatewayTone;
+        setText("runtime-mode", modeLabel);
+        byId("runtime-mode").className = "badge " + (safeMode ? "review" : body.safe_mode === false ? "good" : "warn");
+        setText(
+          "runtime-mode-note",
+          safeMode
+            ? "Safe ModeではLLM providerをstubへ固定し、外部connectorとruntime scheduleの実行を停止します。設定・保存済みscheduleは変更しません。"
+            : body.safe_mode === false
+              ? "現在のGatewayプロセスではSafe Modeは無効です。"
+              : "現在の動作モードを確認できません。Gatewayの状態を再取得してください。"
+        );
         setText("runtime-invariant", labelForBoolean(invariantOk));
         setText("runtime-audit", labelForBoolean(auditOk));
         setText("first-run-next-action", body.next_recommended_action || "none");
