@@ -46,6 +46,8 @@ export interface SetupPathConfig {
   shell_root?: string;
   session_dir: string;
   audit_dir: string;
+  memory_dir: string;
+  memory_file?: string;
   failure_memory_dir: string;
   failure_memory_file?: string;
 }
@@ -215,6 +217,7 @@ export function createDefaultSetupConfig(
       file_root: path.join(base, "files"),
       session_dir: path.join(base, "sessions"),
       audit_dir: path.join(base, "audit"),
+      memory_dir: path.join(base, "private-state", "long-term-memory"),
       failure_memory_dir: path.join(base, "failure-memory"),
     },
     settings: {
@@ -246,6 +249,7 @@ export function validateSetupConfig(
   config.d4_runtime ??= {};
   // Legacy schema-v1 setup files did not persist a dedicated runtime state root.
   config.paths.state_root ??= path.resolve(config.paths.session_dir, "..");
+  config.paths.memory_dir ??= path.join(path.resolve(config.paths.state_root), "private-state", "long-term-memory");
   config.paths.failure_memory_dir ??= path.join(path.resolve(config.paths.session_dir), "failure-memory");
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
@@ -360,6 +364,10 @@ export function validateSetupConfig(
   }
   validatePath(config.paths.session_dir, "paths.session_dir");
   validatePath(config.paths.audit_dir, "paths.audit_dir");
+  validatePath(config.paths.memory_dir, "paths.memory_dir");
+  if (config.paths.memory_file !== undefined) {
+    validatePath(config.paths.memory_file, "paths.memory_file");
+  }
   validatePath(config.paths.failure_memory_dir, "paths.failure_memory_dir");
   if (config.paths.failure_memory_file !== undefined) {
     validatePath(config.paths.failure_memory_file, "paths.failure_memory_file");
@@ -468,6 +476,9 @@ export function setupConfigFromEnv(
   config.paths.state_root = env.BLUE_TANUKI_STATE_ROOT ?? path.resolve(config.paths.session_dir, "..");
   config.paths.audit_dir =
     env.BLUE_TANUKI_AUDIT_DIR ?? config.paths.audit_dir;
+  config.paths.memory_file = env.BLUE_TANUKI_MEMORY_FILE;
+  config.paths.memory_dir = env.BLUE_TANUKI_MEMORY_DIR ??
+    path.join(path.resolve(config.paths.state_root), "private-state", "long-term-memory");
   config.paths.failure_memory_file = env.BLUE_TANUKI_FAILURE_MEMORY_FILE;
   config.paths.failure_memory_dir = env.BLUE_TANUKI_FAILURE_MEMORY_DIR ??
     (config.paths.failure_memory_file
@@ -528,6 +539,12 @@ export function setupConfigToEnv(
     env.BLUE_TANUKI_FAILURE_MEMORY_FILE = path.resolve(config.paths.failure_memory_file);
   } else {
     env.BLUE_TANUKI_FAILURE_MEMORY_DIR = path.resolve(config.paths.failure_memory_dir);
+  }
+
+  if (config.paths.memory_file?.trim()) {
+    env.BLUE_TANUKI_MEMORY_FILE = path.resolve(config.paths.memory_file);
+  } else {
+    env.BLUE_TANUKI_MEMORY_DIR = path.resolve(config.paths.memory_dir);
   }
 
   if (config.llm.provider === "stub") {
@@ -679,6 +696,8 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_SHELL_ROOT",
     "BLUE_TANUKI_SESSION_DIR",
     "BLUE_TANUKI_AUDIT_DIR",
+    "BLUE_TANUKI_MEMORY_FILE",
+    "BLUE_TANUKI_MEMORY_DIR",
     "BLUE_TANUKI_FAILURE_MEMORY_FILE",
     "BLUE_TANUKI_FAILURE_MEMORY_DIR",
     "COMPOSIO_API_KEY",

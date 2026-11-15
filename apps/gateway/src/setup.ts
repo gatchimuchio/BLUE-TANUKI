@@ -291,6 +291,16 @@ function resolveFrom(cwd: string, value: string): string {
   return path.resolve(cwd, value);
 }
 
+function applyMemoryPathsFromEnvironment(
+  config: BlueTanukiSetupConfig,
+  env: Record<string, string | undefined>,
+): void {
+  config.paths.memory_file = env.BLUE_TANUKI_MEMORY_FILE?.trim() || undefined;
+  if (env.BLUE_TANUKI_MEMORY_DIR?.trim()) {
+    config.paths.memory_dir = env.BLUE_TANUKI_MEMORY_DIR;
+  }
+}
+
 export function buildSetupConfigFromOptions(
   opts: SetupCliOptions,
   cwd = process.cwd(),
@@ -298,6 +308,7 @@ export function buildSetupConfigFromOptions(
 ): BlueTanukiSetupConfig {
   const baseDir = resolveFrom(cwd, opts.base_dir ?? ".blue-tanuki");
   const config = createDefaultSetupConfig({ base_dir: baseDir });
+  applyMemoryPathsFromEnvironment(config, env);
   if (opts.provider) config.llm.provider = opts.provider;
   if (opts.model) config.llm.model = opts.model;
   if (opts.endpoint) config.llm.endpoint = opts.endpoint;
@@ -331,6 +342,7 @@ async function promptForConfig(
 ): Promise<BlueTanukiSetupConfig> {
   const baseDir = resolveFrom(io.cwd, opts.base_dir ?? ".blue-tanuki");
   const config = createDefaultSetupConfig({ base_dir: baseDir });
+  applyMemoryPathsFromEnvironment(config, io.env);
   const rl = createInterface({ input: io.stdin, output: io.stdout });
   try {
     const providerAnswer = await ask(
@@ -416,6 +428,38 @@ async function ensureRuntimeDirs(config: BlueTanukiSetupConfig): Promise<void> {
   await fs.mkdir(config.paths.file_root, { recursive: true });
   await fs.mkdir(config.paths.session_dir, { recursive: true });
   await fs.mkdir(config.paths.audit_dir, { recursive: true });
+  const memoryFile = config.paths.memory_file?.trim()
+    ? path.resolve(config.paths.memory_file)
+    : path.join(path.resolve(config.paths.memory_dir), "memory.jsonl");
+  const memoryDir = path.dirname(memoryFile);
+  await fs.mkdir(memoryDir, { recursive: true, mode: 0o700 });
+  const memoryDirInfo = await fs.lstat(memoryDir);
+  if (memoryDirInfo.isSymbolicLink() || !memoryDirInfo.isDirectory()) {
+    throw new Error("setup_hds_memory_directory_must_be_a_real_directory");
+  }
+  const defaultMemoryDir = path.join(
+    path.resolve(config.paths.state_root),
+    "private-state",
+    "long-term-memory",
+  );
+  if (
+    !config.paths.memory_file?.trim() &&
+    path.resolve(memoryDir) === defaultMemoryDir &&
+    process.platform !== "win32"
+  ) {
+    await fs.chmod(memoryDir, 0o700);
+  }
+  try {
+    const handle = await fs.open(memoryFile, "wx", 0o600);
+    await handle.close();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const memoryFileInfo = await fs.lstat(memoryFile);
+  if (memoryFileInfo.isSymbolicLink() || !memoryFileInfo.isFile() || memoryFileInfo.nlink > 1) {
+    throw new Error("setup_hds_memory_file_must_be_a_regular_file");
+  }
+  if (process.platform !== "win32") await fs.chmod(memoryFile, 0o600);
   await fs.mkdir(
     config.paths.failure_memory_file
       ? path.dirname(path.resolve(config.paths.failure_memory_file))

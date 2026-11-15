@@ -77,8 +77,9 @@ const coreLog = createLogger({ scope: "blue-tanuki" });
 const auditLog = createLogger({ scope: "audit" });
 
 /**
- * Build the HDS memory store from explicit env configuration.
- * Memory remains reference/evidence only and is not used for authority.
+ * Build the HDS memory store from Setup-managed or explicit env configuration.
+ * Setup supplies a durable private-state default; an unconfigured development
+ * process remains ephemeral. Memory is reference/evidence only, never authority.
  */
 export function buildHDSMemoryStore(env: NodeJS.ProcessEnv = process.env): LongTermMemoryStore {
   const file = env.BLUE_TANUKI_MEMORY_FILE;
