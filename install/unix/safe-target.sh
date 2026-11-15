@@ -61,6 +61,22 @@ is_managed_macos_application_command() {
 render_managed_linux_desktop_entry() {
   bt_desktop_launcher=$1
   assert_absolute_single_line_path "Linux desktop launcher path" "$bt_desktop_launcher"
+  bt_desktop_exec=$(desktop_exec_path "$bt_desktop_launcher") ||
+    safe_target_fail "Linux desktop launcher path could not be encoded"
+  cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=BLUE-TANUKI
+Comment=Launch BLUE-TANUKI Control Center
+Exec=$bt_desktop_exec launch
+Terminal=false
+Categories=Utility;
+EOF
+}
+
+render_legacy_managed_linux_desktop_entry() {
+  bt_desktop_launcher=$1
+  assert_absolute_single_line_path "Linux desktop launcher path" "$bt_desktop_launcher"
   cat <<EOF
 [Desktop Entry]
 Type=Application
@@ -76,7 +92,10 @@ is_managed_linux_desktop_entry() {
   bt_desktop_file=$1
   bt_desktop_launcher=$2
   [ -f "$bt_desktop_file" ] && [ ! -L "$bt_desktop_file" ] || return 1
-  render_managed_linux_desktop_entry "$bt_desktop_launcher" | cmp -s "$bt_desktop_file" -
+  if render_managed_linux_desktop_entry "$bt_desktop_launcher" | cmp -s "$bt_desktop_file" -; then
+    return 0
+  fi
+  render_legacy_managed_linux_desktop_entry "$bt_desktop_launcher" | cmp -s "$bt_desktop_file" -
 }
 
 render_managed_macos_autostart_entry() {
@@ -342,13 +361,29 @@ is_managed_dev_linux_systemd_user_service() {
 desktop_exec_quote() {
   bt_dev_desktop_value=$1
   assert_absolute_single_line_path "Linux desktop executable argument" "$bt_dev_desktop_value"
+  case "$bt_dev_desktop_value" in
+    *=*|*[[:cntrl:]]*) safe_target_fail "Linux desktop executable path contains a character that Exec cannot represent" ;;
+  esac
   bt_dev_desktop_quoted=$(printf '%s' "$bt_dev_desktop_value" | sed \
-    -e 's/[\\]/\\\\/g' \
+    -e 's/[\\]/\\\\\\\\/g' \
     -e 's/"/\\"/g' \
     -e 's/`/\\`/g' \
     -e 's/\$/\\$/g' \
     -e 's/%/%%/g') || safe_target_fail "Linux desktop executable argument could not be encoded"
   printf '"%s"' "$bt_dev_desktop_quoted"
+}
+
+desktop_exec_path() {
+  bt_desktop_value=$1
+  assert_absolute_single_line_path "Linux desktop executable argument" "$bt_desktop_value"
+  case "$bt_desktop_value" in
+    *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-]*)
+      desktop_exec_quote "$bt_desktop_value"
+      ;;
+    *)
+      printf '%s' "$bt_desktop_value"
+      ;;
+  esac
 }
 
 render_managed_dev_linux_xdg_autostart_entry() {
