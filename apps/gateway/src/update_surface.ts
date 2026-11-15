@@ -432,9 +432,13 @@ async function latestRollbackPlan(env: NodeJS.ProcessEnv): Promise<LatestRollbac
         backupCreatedAt > Date.parse(plan.created_at)) {
       return { id, path: planPath, preUpdateBackupStatus: "unverified" };
     }
+    const canonicalStateCompleteOrEmpty =
+      backup.inspection.canonical_state_coverage === "complete" ||
+      backup.inspection.canonical_state_coverage === "none_present";
     const configuredTargetsComplete =
       backup.inspection.coverage === "complete_for_configured_targets" &&
-      (backup.inspection.configured_required_item_count ?? 0) > 0;
+      (backup.inspection.configured_required_item_count ?? 0) > 0 &&
+      canonicalStateCompleteOrEmpty;
     const canonicalStateComplete =
       backup.inspection.coverage === "none_configured" &&
       backup.inspection.canonical_state_coverage === "complete" &&
