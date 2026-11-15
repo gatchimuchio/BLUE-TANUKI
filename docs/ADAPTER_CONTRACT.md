@@ -70,3 +70,9 @@ Adapter / plugin / skill acceptance is governed by:
 - [Conformance](CONFORMANCE.md)
 
 Adapters remain Layer B unless explicitly promoted through documented review. Layer B cannot modify Layer A authority, Approval Gate, Runtime Invariants, or audit format.
+
+## 9. D4 Runtime state projection
+
+The dedicated D4 Runtime credential may read `GET /runtime/snapshot` for a bounded status projection validated by `D4RuntimeStatusProjectionSchema`. It contains only Gateway/HDS status flags, counts capped at 1,000,000, an observation timestamp, `evidence_source=["INTERNAL_STATE"]`, and the non-authority markers `used_for_authority=false` and `may_execute=false`. It does not expose the Control Center snapshot, approval details, scheduled task details, operator surfaces, execution receipts, or HDS internals. Invalid or incomplete status data fails closed with HTTP 503.
+
+The ordinary WebChat credential retains the existing Control Center snapshot response. A D4 status projection is an `INTERNAL_STATE` observation; it does not prove provider connectivity, external action completion, installed-product health, permission, approval, or release readiness. The D4 application consumer remains a separate integration surface.

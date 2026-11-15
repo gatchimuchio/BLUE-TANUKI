@@ -4571,7 +4571,6 @@ async function serveWithOwnerLease(
           const runtimeScheduleSnapshot = runtimeSchedules.snapshot();
           return {
             ...buildRuntimeStatusSnapshot({
-              gateway_status: "running",
               safe_mode: process.env.BLUE_TANUKI_SAFE_MODE === "1",
               hds: hdsSnapshot,
               webchat_token: process.env.WEBCHAT_TOKEN,

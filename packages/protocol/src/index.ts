@@ -11,6 +11,7 @@ export * from "./product_data_schema.js";
 export * from "./common_record.js";
 export * from "./goal_projection.js";
 export * from "./goal_completion.js";
+export * from "./d4_runtime_status.js";
 export * from "./file_search_target_version.js";
 export * from "./file_write_target_version.js";
 export * from "./file_delete_target_version.js";

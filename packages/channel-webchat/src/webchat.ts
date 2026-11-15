@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
   GoalCompletionRulesSchema,
+  D4RuntimeStatusProjectionSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
@@ -2646,6 +2647,30 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     return this.checkAuth(req, "inbound") || this.checkAuth(req, "d4_runtime");
   }
 
+  /** D4 Runtimeには状態値だけを返し、Control Center向けの詳細snapshotを渡さない。 */
+  private projectD4RuntimeStatusSnapshot(value: unknown): Record<string, unknown> | null {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const snapshot = value as Record<string, unknown>;
+    const parsed = D4RuntimeStatusProjectionSchema.safeParse({
+      schema_version: "blue-tanuki.d4-runtime-status.v1",
+      runtime_id: this.opts.d4_runtime_intent?.runtime_id,
+      gateway_status: snapshot.gateway_status,
+      safe_mode: snapshot.safe_mode,
+      hds_invariants_ok: snapshot.hds_invariants_ok,
+      webchat_ready: snapshot.webchat_ready,
+      telegram_configured: snapshot.telegram_configured,
+      pending_approvals_count: snapshot.pending_approvals_count,
+      runtime_schedules_count: snapshot.runtime_schedules_count,
+      pending_schedule_approvals_count: snapshot.pending_schedule_approvals_count,
+      audit_chain_valid: snapshot.audit_chain_valid,
+      observed_at_ms: Date.now(),
+      evidence_source: ["INTERNAL_STATE"],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    return parsed.success ? parsed.data : null;
+  }
+
   private checkSettingsAuth(req: IncomingMessage): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
@@ -3075,17 +3100,27 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if (!this.checkRuntimeProjectionAuth(req)) {
+    const d4RuntimeProjection = this.checkAuth(req, "d4_runtime");
+    if (!d4RuntimeProjection && !this.checkAuth(req, "inbound")) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
     const snapshot = await this.opts.runtime.getSnapshot();
+    const responseSnapshot = d4RuntimeProjection
+      ? this.projectD4RuntimeStatusSnapshot(snapshot)
+      : snapshot;
+    if (responseSnapshot === null) {
+      res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "runtime_status_projection_unavailable" }));
+      return;
+    }
     res.writeHead(200, {
       "content-type": "application/json",
       "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
     });
-    res.end(JSON.stringify(snapshot));
+    res.end(JSON.stringify(responseSnapshot));
   }
 
   private async handleRuntimeResultReconciliation(
