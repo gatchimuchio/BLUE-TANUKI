@@ -1337,7 +1337,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           evidence.evidence_digest.slice(0, 12) + "）。これは実行権限や公開／出荷判断を作りません。", achieved: true };
       }
 
-      function ownerTaskSubmissionResultSummary(value) {
+      async function ownerTaskSubmissionResultSummary(value) {
         const flags = value && value.used_for_authority === false && value.may_execute === false;
         if (!isObject(value) || !flags) return { text: "回答本文projectionが不正なため表示しません。", content: null };
         if (value.status === "not_ready" && Object.keys(value).length === 3 &&
@@ -1358,10 +1358,29 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const allowed = ["status", "content", "content_sha256", "captured_at_ms", "used_for_authority", "may_execute"];
         if (value.status !== "available" || Object.keys(value).length !== allowed.length ||
             Object.keys(value).some(function (key) { return allowed.indexOf(key) < 0; }) ||
-            typeof value.content !== "string" || value.content.length > 65536 ||
+            typeof value.content !== "string" ||
             !/^[a-f0-9]{64}$/i.test(value.content_sha256 || "") || !Number.isSafeInteger(value.captured_at_ms) ||
             value.captured_at_ms < 1) return { text: "回答本文projectionが不正なため表示しません。", content: null };
-        return { text: "Gatewayの揮発cacheから回答本文を再取得しました。実行権限・目標達成・停止完了の証拠ではありません。",
+        let actualDigest;
+        try {
+          if (typeof crypto === "undefined" || !crypto.subtle || typeof TextEncoder !== "function") {
+            return { text: "回答本文のSHA-256を検証できないため表示しません。", content: null };
+          }
+          const contentBytes = new TextEncoder().encode(value.content);
+          if (contentBytes.byteLength > 64 * 1024) {
+            return { text: "回答本文が短期再取得上限を超えたため表示しません。", content: null };
+          }
+          const digest = await crypto.subtle.digest("SHA-256", contentBytes);
+          actualDigest = Array.from(new Uint8Array(digest), function (byte) {
+            return byte.toString(16).padStart(2, "0");
+          }).join("");
+        } catch {
+          return { text: "回答本文のSHA-256を検証できないため表示しません。", content: null };
+        }
+        if (actualDigest !== value.content_sha256.toLowerCase()) {
+          return { text: "回答本文とGateway記録のSHA-256が一致しないため表示しません。", content: null };
+        }
+        return { text: "Gatewayの揮発cacheから回答本文を再取得し、SHA-256一致を確認しました。実行権限・目標達成・停止完了の証拠ではありません。",
           content: value.content };
       }
 
@@ -1460,7 +1479,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
           const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
           const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
-          const resultSummary = ownerTaskSubmissionResultSummary(result.result);
+          const resultSummary = await ownerTaskSubmissionResultSummary(result.result);
           resultStatus.textContent = resultSummary.text;
           resultStatus.hidden = false;
           if (resultSummary.content !== null) {
