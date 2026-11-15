@@ -121,6 +121,7 @@ import {
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
   detectTransientAudioFormat,
+  isGatewayInternalD4RuntimeIntentRequest,
   isGatewayInternalInboundRequest,
   MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   meaningUpdateProposalAuditProjection,
@@ -939,6 +940,7 @@ export function selectGatewayInboundEphemeralContext(
     request.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
     request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
     request.metadata?.["blue_tanuki.operation_core.used_for_authority"] === false;
+  const d4RuntimeIntentProjection = isGatewayInternalD4RuntimeIntentRequest(request);
   const validOwnerTaskImage = image !== undefined &&
     (image.media_type === "image/jpeg" || image.media_type === "image/png") &&
     image.data instanceof Uint8Array && image.data.byteLength > 0 &&
@@ -966,6 +968,13 @@ export function selectGatewayInboundEphemeralContext(
     ephemeralContext.ephemeral_images.length <= 1 &&
     (ephemeralContext.ephemeral_images.length === 0 || validOwnerTaskImage) &&
     (canvasArtifact === undefined || validOwnerTaskCanvasArtifact);
+  const d4RuntimeIntentImage = d4RuntimeIntentProjection && validOwnerTaskImage &&
+    (ephemeralContext.ephemeral_audio?.length ?? 0) === 0 && canvasArtifact === undefined;
+  const d4RuntimeIntentAudio = d4RuntimeIntentProjection && validOwnerTaskAudio &&
+    ephemeralContext.require_audio_task_compute === true &&
+    ephemeralContext.ephemeral_images.length <= 1 &&
+    (ephemeralContext.ephemeral_images.length === 0 || validOwnerTaskImage) &&
+    canvasArtifact === undefined;
   const ownerAudioTranscription = request.channel === "webchat" && isGatewayInternalInboundRequest(request) &&
     request.user === "webchat-owner-token-holder" &&
     request.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
@@ -981,8 +990,9 @@ export function selectGatewayInboundEphemeralContext(
     ephemeralContext.ephemeral_images.length <= 1 &&
     (ephemeralContext.ephemeral_images.length === 0 || validOwnerTaskImage) &&
     (ephemeralContext.ephemeral_audio?.length ?? 0) === 0;
-  const audioTaskRequirementBound = ephemeralContext.require_audio_task_compute !== true || ownerTaskAudio;
-  return audioTaskRequirementBound && (ownerTaskImage || ownerTaskAudio || ownerAudioTranscription || ownerCanvasArtifact)
+  const audioTaskRequirementBound = ephemeralContext.require_audio_task_compute !== true || ownerTaskAudio || d4RuntimeIntentAudio;
+  return audioTaskRequirementBound && (ownerTaskImage || ownerTaskAudio || d4RuntimeIntentImage ||
+    d4RuntimeIntentAudio || ownerAudioTranscription || ownerCanvasArtifact)
     ? ephemeralContext : undefined;
 }
 
@@ -7131,7 +7141,8 @@ async function serveWithOwnerLease(
         : hdsBoundaryInput;
     const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
     const audioTranscriptionProjection = authorityReq.channel === "telegram" ||
-      authorityReq.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core";
+      authorityReq.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core" ||
+      isGatewayInternalD4RuntimeIntentRequest(authorityReq);
     const hdsDecisionInput = commandEphemeralContext?.ephemeral_audio?.length &&
       commandEphemeralContext.ephemeral_images.length === 0 && audioTranscriptionProjection
       ? createGatewayInternalTransientAudioRequest(authorityReq, commandEphemeralContext)

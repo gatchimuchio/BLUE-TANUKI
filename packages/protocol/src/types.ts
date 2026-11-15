@@ -912,6 +912,22 @@ export function createGatewayInternalInboundRequest(
   });
 }
 
+/** D4 Runtime由来の制限付きGateway要求であることを内部印と受付digestまで照合する。 */
+export function isGatewayInternalD4RuntimeIntentRequest(value: unknown): value is InboundRequest {
+  if (!isGatewayInternalInboundRequest(value)) return false;
+  const request = value as InboundRequest;
+  const runtimeIdDigest = request.metadata?.["blue_tanuki.runtime_ingress.runtime_id_digest"];
+  const sessionIdDigest = request.metadata?.["blue_tanuki.runtime_ingress.session_id_digest"];
+  return request.channel === "webchat" && request.user === "d4-runtime-adapter-token-holder" &&
+    request.metadata?.["blue_tanuki.actor_kind"] === "user" &&
+    request.metadata?.["blue_tanuki.trust_level"] === "limited" &&
+    request.metadata?.["blue_tanuki.process_kind"] === "chat" &&
+    request.metadata?.["blue_tanuki.runtime_ingress.version"] === "d4-runtime-intent.v1" &&
+    typeof runtimeIdDigest === "string" && /^[a-f0-9]{64}$/u.test(runtimeIdDigest) &&
+    typeof sessionIdDigest === "string" && /^[a-f0-9]{64}$/u.test(sessionIdDigest) &&
+    request.metadata?.["blue_tanuki.runtime_ingress.used_for_authority"] === false;
+}
+
 /**
  * Bind a Gateway-validated, one-request audio input to its HDS decision without
  * adding media bytes or a caller-forgeable marker to the persisted request.
@@ -935,11 +951,12 @@ export function createGatewayInternalTransientAudioRequest(
     request.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
     request.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-audio-transcription:operation-core" &&
     request.metadata?.["blue_tanuki.operation_core.used_for_authority"] === false;
-  if ((!telegramInput && !ownerWebChatInput) || context.request_id !== request.id ||
+  const d4RuntimeInput = isGatewayInternalD4RuntimeIntentRequest(request);
+  if ((!telegramInput && !ownerWebChatInput && !d4RuntimeInput) || context.request_id !== request.id ||
       context.ephemeral_images.length !== 0 || !input ||
       !(input.data instanceof Uint8Array) || input.data.byteLength === 0 ||
       input.data.byteLength > TRANSIENT_AUDIO_MAX_BYTES || detectTransientAudioFormat(input.data) !== input.format) {
-    throw new Error("transient audio request is not bound to one validated Telegram or owner WebChat input");
+    throw new Error("transient audio request is not bound to one validated Telegram, owner WebChat, or D4 Runtime input");
   }
   const internal = createGatewayInternalInboundRequest({
     ...request,
