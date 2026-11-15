@@ -463,8 +463,6 @@ if ! (
   HOME="$PRODUCT_HOME" \
   XDG_DATA_HOME="$PRODUCT_HOME/.local/share" \
   XDG_CONFIG_HOME="$PRODUCT_HOME/.config" \
-  DRY_RUN=1 \
-  PURGE=1 \
   sh "$PRODUCT_INSTALL/BlueTanukiUninstall.sh" --dry-run --purge
 ) > "$TMP_ROOT/product-uninstall.out" 2>&1; then
   cat "$TMP_ROOT/product-uninstall.out" >&2

@@ -105,9 +105,9 @@ for rollback_entry in "$RUNTIME_PARENT"/.$RUNTIME_NAME.blue-tanuki-rollback-*; d
   [ "$rollback_entry_suffix" = "$PREVIOUS_SUFFIX" ] || fail "an unfinished or unreferenced runtime update path exists; run the packaged Setup recovery first. No files were removed: $rollback_entry"
 done
 
-PURGE="${PURGE:-0}"
-DRY_RUN="${DRY_RUN:-0}"
-QUIET="${QUIET:-0}"
+PURGE=0
+DRY_RUN=0
+QUIET=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --purge|-PurgeData) PURGE=1 ;;

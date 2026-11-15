@@ -428,10 +428,10 @@ timestamped `.bak` file next to the env file.
 
 ## Uninstall
 
-Uninstallers remove the installed app and launcher by default while preserving
-the env file, audit chain, sessions, and local data. Use `-Purge` on Windows or
-`PURGE=1` on macOS/Linux to remove the retained data as well. Use `-DryRun` or
-`DRY_RUN=1` to preview the removal.
+Source/developer uninstallers remove the installed app and launcher by default
+while preserving the env file, audit chain, sessions, and local data. Their
+`-Purge`/`PURGE=1` and `-DryRun`/`DRY_RUN=1` controls are specific to those
+source-install paths.
 
 The packaged Windows product uninstaller shows the resolved install and data
 roots before stopping the resident runtime or removing anything. Its default
@@ -443,3 +443,8 @@ Recycle Bin. Use
 `UninstallBlueTanuki.cmd -DryRun` to preview the selected scope first. This
 packaged-product option is separate from the source/developer uninstaller's
 `-Purge` option.
+
+The packaged Linux/macOS product uninstaller `BlueTanukiUninstall.sh` also
+preserves data by default. Its `--purge`, `--dry-run`, and `--quiet` options are
+read from command-line arguments only; inherited `PURGE`, `DRY_RUN`, and
+`QUIET` environment variables do not change the selected action.
