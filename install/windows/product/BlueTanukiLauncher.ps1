@@ -411,6 +411,33 @@ function Get-HealthUrl {
   return "http://$(Get-WebHost):$(Get-WebPort)/healthz"
 }
 
+function Get-ControlCenterLoopbackHealthUrl {
+  $loopbackHost = Get-ControlCenterLoopbackHost
+  if (-not $loopbackHost) { return $null }
+  return "http://$(Format-ControlCenterHost $loopbackHost):$(Get-WebPort)/healthz"
+}
+
+function Test-ControlCenterLoopbackHealth($TimeoutMs) {
+  $healthUrl = Get-ControlCenterLoopbackHealthUrl
+  if (-not $healthUrl) { return $false }
+  $request = $null
+  $response = $null
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($healthUrl)
+    $request.Method = "GET"
+    $request.Proxy = $null
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = $TimeoutMs
+    $request.ReadWriteTimeout = $TimeoutMs
+    $response = $request.GetResponse()
+    return [int]$response.StatusCode -eq 200
+  } catch {
+    return $false
+  } finally {
+    if ($response) { $response.Dispose() }
+  }
+}
+
 function Test-ResidentRunning {
   $pidValue = Read-ResidentPid
   if (-not $pidValue) {
@@ -745,8 +772,17 @@ function Stop-Resident {
 function Show-Status {
   if (Test-ResidentRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
+    if (-not (Get-ControlCenterLoopbackHealthUrl)) {
+      Write-Host "resident_health=unobserved_non_loopback_binding"
+    } elseif (Test-ControlCenterLoopbackHealth 1000) {
+      Write-Host "resident_health=ready"
+    } else {
+      Write-Host "resident_health=not_ready"
+      Write-Host "resident_health_next_action=Run BlueTanukiDoctor.cmd and review logs before retrying."
+    }
   } else {
     Write-Host "resident_status=stopped"
+    Write-Host "resident_health=not_running"
   }
   if (Test-WatchdogRunning) {
     Write-Host "watchdog_status=running pid=$(Read-WatchdogPid)"

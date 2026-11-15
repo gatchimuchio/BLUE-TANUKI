@@ -619,6 +619,12 @@ resident_status() {
   watchdog_pid=$(resolve_owned_pid watchdog "$WATCHDOG_PID_FILE") || return 2
   if [ -n "$pid" ]; then
     echo "resident_status=running pid=$pid"
+    if wait_gateway_health 2; then
+      echo "resident_health=ready"
+    else
+      echo "resident_health=not_ready"
+      echo "resident_health_next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh' doctor and review the logs before retrying."
+    fi
   elif [ -n "$watchdog_pid" ]; then
     echo "resident_status=starting watchdog_pid=$watchdog_pid"
   else

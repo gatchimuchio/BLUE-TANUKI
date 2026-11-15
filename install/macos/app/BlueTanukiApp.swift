@@ -100,7 +100,9 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             try self.validateInstalledProduct()
             let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
             let output = try self.runShellCapturingOutput(launcher, arguments: ["resident-status"])
-            let statusLine = output.split(whereSeparator: { $0.isNewline }).first.map(String.init)
+            let lines = output.split(whereSeparator: { $0.isNewline }).map(String.init)
+            let statusLine = lines.first
+            let healthLine = lines.first(where: { $0.hasPrefix("resident_health=") })
             if statusLine == "resident_status=stopped" {
                 return ResidentProductStatus.stopped
             }
@@ -109,7 +111,13 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                let pid = Int(statusLine.dropFirst("resident_status=running pid=".count)),
                pid >= 2,
                pid <= 2_147_483_647 {
-                return ResidentProductStatus.running
+                if healthLine == "resident_health=ready" {
+                    return ResidentProductStatus.running
+                }
+                if healthLine == "resident_health=not_ready" {
+                    return ResidentProductStatus.runningNotReady
+                }
+                throw AppError.invalidResidentStatus
             }
             if let statusLine,
                statusLine.hasPrefix("resident_status=starting watchdog_pid="),
@@ -122,7 +130,9 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         } completion: { result in
             switch result {
             case .success(.running):
-                self.setStatus("Gatewayは稼働中です。", detail: "実際のSafe Mode、接続、schedule状態はコントロールセンターで確認してください。")
+                self.setStatus("Gatewayのヘルス応答を確認しました。", detail: "これはローカルのhealthz応答です。実際のSafe Mode、接続、schedule状態はコントロールセンターで確認してください。")
+            case .success(.runningNotReady):
+                self.setStatus("Gatewayプロセスは稼働中ですが、healthz応答を確認できません。", detail: "プロセスは自動停止・再起動していません。ログとDoctorを確認してから再操作してください。")
             case .success(.starting):
                 self.setStatus("Gatewayを起動中です。", detail: "起動完了後の実際の稼働状態はコントロールセンターで確認してください。")
             case .success(.stopped):
@@ -429,6 +439,7 @@ private enum AppError: Error, CustomStringConvertible {
 
 private enum ResidentProductStatus {
     case running
+    case runningNotReady
     case starting
     case stopped
 }
