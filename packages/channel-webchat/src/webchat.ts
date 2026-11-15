@@ -108,7 +108,7 @@ const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
-const MAX_OWNER_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
+const MAX_MULTIMODAL_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
 const MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4 + 256 * 1024;
 const CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS = 30_000;
 const WEBSOCKET_SEND_CALLBACK_TIMEOUT_MS = 5_000;
@@ -170,11 +170,11 @@ const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
-type OwnerTaskImageReadResult =
+type TransientImageReadResult =
   | { readonly ok: true; readonly image?: TransientImageInput }
   | { readonly ok: false };
 
-function readOwnerTaskImage(value: unknown): OwnerTaskImageReadResult {
+function readTransientImageInput(value: unknown): TransientImageReadResult {
   if (value === undefined) return { ok: true };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false };
   const record = value as Record<string, unknown>;
@@ -305,11 +305,11 @@ function readOwnerTaskCanvasArtifact(value: unknown): OwnerTaskCanvasArtifactRea
   };
 }
 
-type OwnerAudioReadResult =
+type TransientAudioReadResult =
   | { readonly ok: true; readonly audio?: TransientAudioInput }
   | { readonly ok: false };
 
-function readOwnerAudio(value: unknown): OwnerAudioReadResult {
+function readTransientAudioInput(value: unknown): TransientAudioReadResult {
   if (value === undefined) return { ok: true };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false };
   const record = value as Record<string, unknown>;
@@ -380,10 +380,31 @@ function d4RuntimeIntentScopeDigest(runtimeId: string, sessionId: string): strin
     .digest("hex");
 }
 
-function d4RuntimeIntentPayloadDigest(token: string, runtimeId: string, sessionId: string, intent: string): string {
+function d4RuntimeIntentPayloadDigest(
+  token: string,
+  runtimeId: string,
+  sessionId: string,
+  intent: string,
+  attachments: { readonly image?: TransientImageInput; readonly audio?: TransientAudioInput } = {},
+): string {
+  const payload: unknown[] = [runtimeId, sessionId, intent];
+  if (attachments.image || attachments.audio) {
+    payload.push({
+      image: attachments.image ? {
+        media_type: attachments.image.media_type,
+        byte_length: attachments.image.data.byteLength,
+        sha256: createHash("sha256").update(attachments.image.data).digest("hex"),
+      } : null,
+      audio: attachments.audio ? {
+        format: attachments.audio.format,
+        byte_length: attachments.audio.data.byteLength,
+        sha256: createHash("sha256").update(attachments.audio.data).digest("hex"),
+      } : null,
+    });
+  }
   return createHmac("sha256", token)
     .update("blue-tanuki.d4-runtime.intent-submission-payload.v1\0", "utf8")
-    .update(JSON.stringify([runtimeId, sessionId, intent]), "utf8")
+    .update(JSON.stringify(payload), "utf8")
     .digest("hex");
 }
 
@@ -1265,7 +1286,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     let body: Record<string, unknown> | null;
     try {
-      body = await readJson(req, url.pathname === "/owner/task-compute" ? MAX_OWNER_TASK_JSON_BYTES :
+      body = await readJson(req, url.pathname === "/owner/task-compute" || url.pathname === "/runtime/intent"
+        ? MAX_MULTIMODAL_TASK_JSON_BYTES :
         url.pathname === "/owner/audio-transcribe" ? MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES : undefined);
     } catch (error) {
       if (error instanceof Error && error.message === "body_too_large") {
@@ -1400,7 +1422,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "owner_audio_transcription_unavailable" }));
         return;
       }
-      const audioRead = readOwnerAudio(body.audio_input);
+      const audioRead = readTransientAudioInput(body.audio_input);
       if (!audioRead.ok || !audioRead.audio) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_audio_transcription_media" }));
@@ -1505,14 +1527,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
         return;
       }
-      const imageRead = readOwnerTaskImage(body?.image_input);
+      const imageRead = readTransientImageInput(body?.image_input);
       if (!imageRead.ok) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_image" }));
         return;
       }
       const ownerTaskImage = imageRead.image;
-      const audioRead = readOwnerAudio(body?.audio_input);
+      const audioRead = readTransientAudioInput(body?.audio_input);
       if (!audioRead.ok) {
         ownerTaskImage?.data.fill(0);
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1749,6 +1771,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     if (url.pathname === "/runtime/intent") {
+      const imageInput = body?.image_input;
+      const audioInput = body?.audio_input;
+      if (body) {
+        delete body.image_input;
+        delete body.audio_input;
+      }
       const parsed = RuntimeIntentInputSchema.safeParse(body);
       if (!parsed.success || !parsed.data.intent.trim() || !isWellFormedUnicode(parsed.data.intent)) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1785,49 +1813,138 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
         return;
       }
-      const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
-      const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
-      const sessionScope = `d4-runtime:${sessionIdDigest}`;
-      const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
-      const payloadDigest = d4RuntimeIntentPayloadDigest(
-        config.token, parsed.data.runtime_id, parsed.data.session_id, parsed.data.intent,
-      );
-      const responseChannelConnected = this.connectionCount(sessionScope) > 0;
-      let claim;
+      const imageRead = readTransientImageInput(imageInput);
+      const audioRead = readTransientAudioInput(audioInput);
+      if (!imageRead.ok || !audioRead.ok) {
+        if (imageRead.ok) imageRead.image?.data.fill(0);
+        if (audioRead.ok) audioRead.audio?.data.fill(0);
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_runtime_intent_attachment" }));
+        return;
+      }
+      const runtimeImage = imageRead.image;
+      const runtimeAudio = audioRead.audio;
+      let transientTransferred = false;
       try {
-        claim = submissionStore.claimD4RuntimeIntent({
-          submission_id: parsed.data.submission_id,
-          payload_digest: payloadDigest,
-          scope_digest: scopeDigest,
-          request_id: randomUUID(),
-          dispatch_available: responseChannelConnected,
-          response_target: sessionScope,
+        const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
+        const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
+        const sessionScope = `d4-runtime:${sessionIdDigest}`;
+        const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
+        const payloadDigest = d4RuntimeIntentPayloadDigest(
+          config.token, parsed.data.runtime_id, parsed.data.session_id, parsed.data.intent,
+          {
+            ...(runtimeImage ? { image: runtimeImage } : {}),
+            ...(runtimeAudio ? { audio: runtimeAudio } : {}),
+          },
+        );
+        const responseChannelConnected = this.connectionCount(sessionScope) > 0;
+        let claim;
+        try {
+          claim = submissionStore.claimD4RuntimeIntent({
+            submission_id: parsed.data.submission_id,
+            payload_digest: payloadDigest,
+            scope_digest: scopeDigest,
+            request_id: randomUUID(),
+            dispatch_available: responseChannelConnected,
+            response_target: sessionScope,
+          });
+        } catch {
+          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
+          return;
+        }
+        if (claim.status === "not_dispatched") {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({
+            accepted: false,
+            status: "not_dispatched",
+            error: "runtime_response_channel_not_connected",
+          }));
+          return;
+        }
+        if (claim.status === "identity_conflict") {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_id_conflict" }));
+          return;
+        }
+        if (claim.status === "duplicate" && claim.state === "rejected") {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, request_id: claim.request_id, state: claim.state }));
+          return;
+        }
+        if (claim.status === "duplicate") {
+          res.writeHead(202, {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          res.end(JSON.stringify({
+            accepted: true,
+            duplicate: true,
+            request_id: claim.request_id,
+            state: claim.state,
+            session_ref_digest: sessionIdDigest,
+          }));
+          return;
+        }
+        const inboundReq = createGatewayInternalInboundRequest({
+          id: claim.request_id,
+          channel: "webchat",
+          user: D4_RUNTIME_TOKEN_ACTOR,
+          content: parsed.data.intent,
+          timestamp: Date.now(),
+          session_id: sessionScope,
+          metadata: {
+            reply_to: sessionScope,
+            "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.actor_kind": "user",
+            "blue_tanuki.trust_level": "limited",
+            "blue_tanuki.process_kind": "chat",
+            "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+            "blue_tanuki.runtime_ingress.runtime_id_digest": runtimeIdDigest,
+            "blue_tanuki.runtime_ingress.session_id_digest": sessionIdDigest,
+            "blue_tanuki.runtime_ingress.used_for_authority": false,
+          },
         });
-      } catch {
-        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_store_unavailable" }));
-        return;
-      }
-      if (claim.status === "not_dispatched") {
-        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({
-          accepted: false,
-          status: "not_dispatched",
-          error: "runtime_response_channel_not_connected",
-        }));
-        return;
-      }
-      if (claim.status === "identity_conflict") {
-        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, error: "runtime_intent_submission_id_conflict" }));
-        return;
-      }
-      if (claim.status === "duplicate" && claim.state === "rejected") {
-        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ accepted: false, request_id: claim.request_id, state: claim.state }));
-        return;
-      }
-      if (claim.status === "duplicate") {
+        const ephemeralContext: InboundEphemeralContext | undefined = runtimeImage || runtimeAudio
+          ? {
+            request_id: inboundReq.id,
+            ephemeral_images: runtimeImage ? [runtimeImage] : [],
+            ...(runtimeAudio ? { ephemeral_audio: [runtimeAudio], require_audio_task_compute: true } : {}),
+          }
+          : undefined;
+        const markOutcomeUnknown = () => {
+          try {
+            submissionStore.markD4RuntimeIntentOutcomeUnknown({
+              request_id: claim.request_id,
+              scope_digest: scopeDigest,
+            });
+          } catch { /* retain the durable claim even if state recording is unavailable */ }
+        };
+        const reportHandlerFailure = () => {
+          // Keep caller-provided Runtime/Session references and intent out of logs.
+          // eslint-disable-next-line no-console
+          console.error("[webchat] D4 Runtime intent handler error");
+          this.notifyD4RuntimeIntentProcessingFailure(sessionScope, claim.request_id);
+        };
+        transientTransferred = true;
+        void Promise.resolve().then(() => handler(inboundReq, ephemeralContext)).then(() => {
+          try {
+            submissionStore.markD4RuntimeIntentHandlerReturned({
+              request_id: claim.request_id,
+              scope_digest: scopeDigest,
+            });
+          } catch {
+            markOutcomeUnknown();
+            reportHandlerFailure();
+          }
+        }, () => {
+          markOutcomeUnknown();
+          reportHandlerFailure();
+        }).finally(() => {
+          runtimeImage?.data.fill(0);
+          runtimeAudio?.data.fill(0);
+        });
         res.writeHead(202, {
           "content-type": "application/json",
           "cache-control": "no-store",
@@ -1835,73 +1952,18 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         });
         res.end(JSON.stringify({
           accepted: true,
-          duplicate: true,
-          request_id: claim.request_id,
-          state: claim.state,
+          duplicate: false,
+          request_id: inboundReq.id,
+          state: "dispatching",
           session_ref_digest: sessionIdDigest,
         }));
         return;
-      }
-      const inboundReq = createGatewayInternalInboundRequest({
-        id: claim.request_id,
-        channel: "webchat",
-        user: D4_RUNTIME_TOKEN_ACTOR,
-        content: parsed.data.intent,
-        timestamp: Date.now(),
-        session_id: sessionScope,
-        metadata: {
-          reply_to: sessionScope,
-          "blue_tanuki.authority_context": "gateway_internal_v1",
-          "blue_tanuki.actor_kind": "user",
-          "blue_tanuki.trust_level": "limited",
-          "blue_tanuki.process_kind": "chat",
-          "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
-          "blue_tanuki.runtime_ingress.runtime_id_digest": runtimeIdDigest,
-          "blue_tanuki.runtime_ingress.session_id_digest": sessionIdDigest,
-          "blue_tanuki.runtime_ingress.used_for_authority": false,
-        },
-      });
-      const markOutcomeUnknown = () => {
-        try {
-          submissionStore.markD4RuntimeIntentOutcomeUnknown({
-            request_id: claim.request_id,
-            scope_digest: scopeDigest,
-          });
-        } catch { /* retain the durable claim even if state recording is unavailable */ }
-      };
-      const reportHandlerFailure = () => {
-        // Keep caller-provided Runtime/Session references and intent out of logs.
-        // eslint-disable-next-line no-console
-        console.error("[webchat] D4 Runtime intent handler error");
-        this.notifyD4RuntimeIntentProcessingFailure(sessionScope, claim.request_id);
-      };
-      void Promise.resolve().then(() => handler(inboundReq)).then(() => {
-        try {
-          submissionStore.markD4RuntimeIntentHandlerReturned({
-            request_id: claim.request_id,
-            scope_digest: scopeDigest,
-          });
-        } catch {
-          markOutcomeUnknown();
-          reportHandlerFailure();
+      } finally {
+        if (!transientTransferred) {
+          runtimeImage?.data.fill(0);
+          runtimeAudio?.data.fill(0);
         }
-      }, () => {
-        markOutcomeUnknown();
-        reportHandlerFailure();
-      });
-      res.writeHead(202, {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      });
-      res.end(JSON.stringify({
-        accepted: true,
-        duplicate: false,
-        request_id: inboundReq.id,
-        state: "dispatching",
-        session_ref_digest: sessionIdDigest,
-      }));
-      return;
+      }
     }
 
     if (url.pathname === "/runtime/intent/status") {

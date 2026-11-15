@@ -779,11 +779,24 @@ const RuntimeSubmissionIdSchema = z.string().regex(
 );
 
 /** Authenticated D4 Runtime dialogue input; submission_id is an idempotency key, never authority. */
+const RuntimeIntentImageInputSchema = z.object({
+  media_type: z.enum(["image/jpeg", "image/png"]),
+  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_IMAGE_MAX_BYTES / 3) * 4),
+}).strict();
+
+const RuntimeIntentAudioInputSchema = z.object({
+  data_base64: z.string().min(4).max(Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4),
+}).strict();
+
 export const RuntimeIntentInputSchema = z.object({
   runtime_id: RegisteredRuntimeReferenceSchema,
   session_id: RegisteredRuntimeReferenceSchema,
   submission_id: RuntimeSubmissionIdSchema,
   intent: z.string().min(1).max(4_096),
+  /** Optional one-request image bytes; decoded only into Gateway ephemeral context. */
+  image_input: RuntimeIntentImageInputSchema.optional(),
+  /** Optional one-request audio bytes; decoded only into Gateway ephemeral context. */
+  audio_input: RuntimeIntentAudioInputSchema.optional(),
 }).strict();
 export type RuntimeIntentInput = z.infer<typeof RuntimeIntentInputSchema>;
 
