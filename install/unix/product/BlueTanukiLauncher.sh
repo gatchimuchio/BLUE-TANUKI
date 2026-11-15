@@ -615,8 +615,12 @@ resident_stop() {
 }
 
 resident_status() {
-  if is_running; then
-    echo "resident_status=running pid=$(read_pid)"
+  pid=$(resolve_owned_pid resident "$PID_FILE") || return 2
+  watchdog_pid=$(resolve_owned_pid watchdog "$WATCHDOG_PID_FILE") || return 2
+  if [ -n "$pid" ]; then
+    echo "resident_status=running pid=$pid"
+  elif [ -n "$watchdog_pid" ]; then
+    echo "resident_status=starting watchdog_pid=$watchdog_pid"
   else
     echo "resident_status=stopped"
   fi

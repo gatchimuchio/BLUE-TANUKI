@@ -95,6 +95,44 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         }
     }
 
+    @objc private func checkProductStatus() {
+        beginOperation("インストール状態を確認しています。", detail: "管理対象の常駐プロセスだけを読み取り確認します。") {
+            try self.validateInstalledProduct()
+            let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
+            let output = try self.runShellCapturingOutput(launcher, arguments: ["resident-status"])
+            let statusLine = output.split(whereSeparator: { $0.isNewline }).first.map(String.init)
+            if statusLine == "resident_status=stopped" {
+                return ResidentProductStatus.stopped
+            }
+            if let statusLine,
+               statusLine.hasPrefix("resident_status=running pid="),
+               let pid = Int(statusLine.dropFirst("resident_status=running pid=".count)),
+               pid >= 2,
+               pid <= 2_147_483_647 {
+                return ResidentProductStatus.running
+            }
+            if let statusLine,
+               statusLine.hasPrefix("resident_status=starting watchdog_pid="),
+               let pid = Int(statusLine.dropFirst("resident_status=starting watchdog_pid=".count)),
+               pid >= 2,
+               pid <= 2_147_483_647 {
+                return ResidentProductStatus.starting
+            }
+            throw AppError.invalidResidentStatus
+        } completion: { result in
+            switch result {
+            case .success(.running):
+                self.setStatus("Gatewayは稼働中です。", detail: "実際のSafe Mode、接続、schedule状態はコントロールセンターで確認してください。")
+            case .success(.starting):
+                self.setStatus("Gatewayを起動中です。", detail: "起動完了後の実際の稼働状態はコントロールセンターで確認してください。")
+            case .success(.stopped):
+                self.setStatus("Gatewayは停止中です。", detail: "保存済みの設定とscheduleは変更していません。起動するには「コントロールセンターを開く」を選んでください。")
+            case .failure(let error):
+                self.showFailure("稼働状態の確認", error: error)
+            }
+        }
+    }
+
     @objc private func restartNormally() {
         beginOperation("通常モードで再起動しています。", detail: "Safe Modeのプロセスを停止し、保存済みの設定からGatewayを起動します。") {
             try self.validateInstalledProduct()
@@ -180,11 +218,11 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         let title = NSTextField(labelWithString: "BLUE-TANUKI")
         title.font = .systemFont(ofSize: 27, weight: .semibold)
 
-        let subtitle = NSTextField(wrappingLabelWithString: "ローカルで動作する製品アプリです。インストール、起動、停止、アンインストールをここから行えます。")
+        let subtitle = NSTextField(wrappingLabelWithString: "ローカルで動作する製品アプリです。インストール、状態確認、起動、停止、アンインストールをここから行えます。")
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = .secondaryLabelColor
 
-        statusLabel = NSTextField(wrappingLabelWithString: "インストール状態は、起動・停止の操作時に検証します。")
+        statusLabel = NSTextField(wrappingLabelWithString: "「稼働状態を確認」を選ぶと、管理対象Gatewayの状態を表示します。")
         statusLabel.font = .systemFont(ofSize: 14, weight: .medium)
 
         detailLabel = NSTextField(wrappingLabelWithString: "初回は「インストールまたは更新」を選んでください。自動起動やPurgeは行いません。")
@@ -211,6 +249,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         secondRow.spacing = 10
 
         let thirdRow = NSStackView(views: [
+            makeButton("稼働状態を確認", action: #selector(checkProductStatus)),
             makeButton("ログを表示", action: #selector(showLogs)),
             makeButton("アンインストール…", action: #selector(uninstallProduct)),
         ])
@@ -294,6 +333,22 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
     }
 
     private func runShell(_ script: URL, arguments: [String]) throws {
+        try runShell(script, arguments: arguments, standardOutput: FileHandle.nullDevice)
+    }
+
+    private func runShellCapturingOutput(_ script: URL, arguments: [String]) throws -> String {
+        let output = Pipe()
+        try runShell(script, arguments: arguments, standardOutput: output)
+        guard let data = try output.fileHandleForReading.readToEnd() else {
+            throw AppError.invalidResidentStatus
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw AppError.invalidResidentStatus
+        }
+        return text
+    }
+
+    private func runShell(_ script: URL, arguments: [String], standardOutput: Any) throws {
         guard fileManager.fileExists(atPath: script.path) else { throw AppError.missingComponent }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -307,7 +362,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             "LOGNAME": user,
         ]
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = standardOutput
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
@@ -316,11 +371,11 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         }
     }
 
-    private func beginOperation(
+    private func beginOperation<Output>(
         _ status: String,
         detail: String,
-        operation: @escaping () throws -> Void,
-        completion: @escaping (Result<Void, Error>) -> Void
+        operation: @escaping () throws -> Output,
+        completion: @escaping (Result<Output, Error>) -> Void
     ) {
         guard !operationInProgress else { return }
         operationInProgress = true
@@ -356,6 +411,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
 private enum AppError: Error, CustomStringConvertible {
     case invalidInstaller
+    case invalidResidentStatus
     case missingComponent
     case notInstalled
     case commandFailed(Int32)
@@ -363,9 +419,16 @@ private enum AppError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .invalidInstaller: return "同梱インストーラーの完全性を確認できません"
+        case .invalidResidentStatus: return "常駐プロセスの状態応答を確認できません"
         case .missingComponent: return "必要な製品ファイルが見つかりません"
         case .notInstalled: return "製品が未インストールか、管理ファイルがありません"
         case .commandFailed: return "管理処理が正常終了しませんでした"
         }
     }
+}
+
+private enum ResidentProductStatus {
+    case running
+    case starting
+    case stopped
 }
