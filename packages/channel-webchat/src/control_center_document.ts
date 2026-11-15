@@ -467,21 +467,21 @@ ${CONTROL_CENTER_STYLE}    </style>
         <section class="card" data-screen-group="update">
           <div class="row">
             <h2>Update</h2>
-            <span id="update-boundary-status" class="badge warn">not loaded</span>
+            <span id="update-boundary-status" class="badge warn">application status unknown</span>
           </div>
           <div class="status-grid">
             <input id="update-token" type="password" autocomplete="off" placeholder="maintenance token" />
             <button id="load-update" class="primary" type="button">Load Update</button>
             <button id="verify-update" type="button">Verify Bundle</button>
-            <button id="prepare-update" type="button">Prepare Update</button>
+            <button id="prepare-update" type="button">Record Backup / Plan</button>
           </div>
           <div class="status-grid">
             <div class="metric"><span>Current version</span><span id="update-current-version">not loaded</span></div>
-            <div class="metric"><span>Candidate</span><span id="update-candidate-status">not loaded</span></div>
+            <div class="metric"><span>Archive integrity</span><span id="update-candidate-status">not loaded</span></div>
             <div class="metric"><span>Candidate version</span><span id="update-candidate-version">not loaded</span></div>
             <div class="metric"><span>SHA256</span><span id="update-sha-status">not loaded</span></div>
             <div class="metric"><span>Manifest</span><span id="update-manifest-status">not loaded</span></div>
-            <div class="metric"><span>Compatibility</span><span id="update-compatibility-status">not loaded</span></div>
+            <div class="metric"><span>Product data compatibility</span><span id="update-compatibility-status">not loaded</span></div>
             <div class="metric"><span>Rollback plan</span><span id="update-rollback-status">not loaded</span></div>
             <div class="metric"><span>Automatic updater</span><span id="update-auto-status">not shipped</span></div>
             <div class="metric technical-boundary"><span>Boundary</span><span id="update-authority-status">HDS gated</span></div>
@@ -490,10 +490,10 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <pre id="update-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Manual Update</h3><p class="muted">The runtime verifies release sidecars and prepares rollback evidence; it does not replace app files automatically.</p></div>
-            <div class="screen-card"><h3>Pre-update Backup</h3><p class="muted">Prepare Update creates a recovery backup and rollback plan before manual replacement.</p></div>
-            <div class="screen-card"><h3>Compatibility</h3><p class="muted">Manifest schema and release boundaries must match before update is treated as ready.</p></div>
-            <div class="screen-card"><h3>Update Boundary</h3><p class="muted">Update metadata is checked before manual replacement.</p></div>
+            <div class="screen-card"><h3>Manual Update</h3><p class="muted">The runtime verifies release sidecars and records rollback evidence. It does not replace app files automatically. Application remains blocked while product data compatibility is unknown.</p></div>
+            <div class="screen-card"><h3>Pre-update Backup</h3><p class="muted">Record Backup / Plan stores recovery evidence only. It does not prove complete data-store coverage or update readiness.</p></div>
+            <div class="screen-card"><h3>Compatibility</h3><p class="muted">The release-manifest schema is not the product data schema. Application requires supported product-wide compatibility and migration evidence.</p></div>
+            <div class="screen-card"><h3>Update Boundary</h3><p class="muted">Sidecar, plan, and backup evidence are not authority. Unknown data compatibility stops manual application.</p></div>
           </div>
         </section>
 

@@ -562,13 +562,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "記録digest: " + citation.record_digest,
             "解釈候補（未検証）: " + citation.interpretation,
             "不確実性: " + citation.uncertainty,
-          ].join("\n"));
+          ].join("\\n"));
         }
         return [
           "観測の解釈候補（未検証）",
           "Jは引用元IDとdigestの一致だけを確認しています。解釈の事実適合・世界の真実・承認・実行権限は確認していません。記憶も更新していません。",
           ...entries,
-        ].join("\n\n");
+        ].join("\\n\\n");
       }
 
       function appendChat(kind, text, requestId) {
@@ -4025,6 +4025,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("about-json", compactJson(redactRuntimeValue(snapshot)));
       }
 
+      function setUpdateApplicationGate(candidateStatus, compatibilityStatus) {
+        let label = "application blocked · compatibility unknown";
+        let tone = "warn";
+        if (candidateStatus === "fail" || compatibilityStatus === "blocked") {
+          label = "application blocked · verification failed";
+          tone = "bad";
+        } else if (candidateStatus !== "pass") {
+          label = "application blocked · archive not verified";
+        } else if (compatibilityStatus === "pass") {
+          label = "manual-only · compatibility verified";
+        }
+        setText("update-boundary-status", label);
+        byId("update-boundary-status").className = "badge " + tone;
+        return { label: label, tone: tone };
+      }
+
       function renderUpdateSnapshot(snapshot) {
         const candidate = snapshot.candidate || {};
         const compat = snapshot.compatibility || {};
@@ -4042,8 +4058,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("update-auto-status", dist.automatic_updater_shipped ? "shipped" : "not shipped");
         setText("update-authority-status", authority.used_for_authority === true ? "unsafe" : "HDS gated");
         setText("update-next-action-status", snapshot.next_safe_action || "not loaded");
-        setText("update-boundary-status", snapshot.mode || "manual");
-        byId("update-boundary-status").className = "badge " + (candidate.verification_status === "pass" ? "good" : "warn");
+        setUpdateApplicationGate(candidate.verification_status || "unknown", compat.status || "unknown");
         byId("update-candidate-status").className = "badge " + (candidate.verification_status === "pass" ? "good" : candidate.verification_status === "fail" ? "bad" : "warn");
         byId("update-sha-status").className = "badge " + (candidate.sha256_matches ? "good" : "warn");
         byId("update-manifest-status").className = "badge " + (candidate.manifest_matches ? "good" : "warn");
@@ -4055,14 +4070,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function renderUpdateActionResult(body) {
         const result = body.result || body;
-        setText("update-action-status", result.action ? result.action + " completed" : "completed");
-        if (result.compatibility_status) {
-          setText("update-compatibility-status", result.compatibility_status);
-          byId("update-compatibility-status").className = "badge " +
-            (result.compatibility_status === "pass" ? "good" : result.compatibility_status === "blocked" ? "bad" : "warn");
-        }
+        const candidate = result.candidate || {};
+        const compatibilityStatus = result.compatibility_status || "unknown";
+        const gate = setUpdateApplicationGate(candidate.verification_status || "unknown", compatibilityStatus);
+        const actionLabel = result.action === "prepare_update"
+          ? "Backup and rollback plan recorded"
+          : "Archive integrity check completed";
+        setText("update-action-status", actionLabel + "; " + gate.label);
+        setText("update-compatibility-status", compatibilityStatus);
+        byId("update-compatibility-status").className = "badge " +
+          (compatibilityStatus === "pass" ? "good" : compatibilityStatus === "blocked" ? "bad" : "warn");
         setText("update-next-action-status", result.next_safe_action || "not loaded");
-        byId("update-action-status").className = "badge review";
+        byId("update-action-status").className = "badge " + gate.tone;
         setText("update-json", compactJson(redactRuntimeValue(result)));
       }
 
@@ -5623,7 +5642,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function prepareUpdate() {
-        if (!window.confirm("Create a pre-update backup and rollback plan?")) return;
+        if (!window.confirm("Record a pre-update recovery backup and rollback plan? This records evidence only; it does not verify product data compatibility or authorize replacing app files.")) return;
         await runUpdateAction("/update/prepare", { confirm: "PRE_UPDATE_BACKUP" });
       }
 
@@ -6155,11 +6174,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const observedTarget = isObject(review.target_version_observation) ? review.target_version_observation : {};
           const descriptionValid = function (value, max) {
             return value === null || typeof value === "string" && value.length > 0 && value.length <= max &&
-              !/[\r\n\u0000-\u001f\u007f]/.test(value);
+              !/[\\r\\n\\u0000-\\u001f\\u007f]/.test(value);
           };
           const cacheControl = response.headers.get("cache-control") || "";
           if (review.command_id !== commandId || review.operation !== "mcp.call" || review.profile !== "native-live" ||
-              review.no_store !== true || !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) ||
+              review.no_store !== true || !/(?:^|,)\\s*no-store\\s*(?:,|$)/i.test(cacheControl) ||
               review.used_for_authority !== false || review.may_execute !== false || !localOrigin ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) || !isDigest(review.request_payload_digest) ||
               !isDigest(review.target_version_digest) || !isDigest(review.operation_plan_binding_digest) ||
@@ -8744,7 +8763,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !isDigest(review.target_identity_digest) || !isDigest(review.request_payload_digest) ||
               !isDigest(review.provider_state_digest) || !validText(review.account_email, 320) ||
               !/^[A-Za-z0-9_-]{1,512}$/.test(review.message_id || "") ||
-              !validText(review.thread_id, 512) || !/^\d{1,16}$/.test(review.internal_date || "") ||
+              !validText(review.thread_id, 512) || !/^\\d{1,16}$/.test(review.internal_date || "") ||
               !Number.isSafeInteger(review.size_estimate) || review.size_estimate < 0 ||
               !Array.isArray(review.label_ids) || review.label_ids.length > 100 ||
               review.label_ids.some(function (label) { return !validText(label, 256); }) ||
