@@ -106,6 +106,8 @@ Owner Taskの複数stepを改訂するとき、既に検証済みのstepは変�
 
 `memory_interpretation_follow_up`も同じstep継続判定を使う。定義digestが全revisionで変化していない場合だけ、元revisionのrequest/resultと検証済みM receiptを再照合し、表示用の`action_observed`へ反映する。定義変更、曖昧なbinding、結果不一致、未確認receiptは`unconfirmed`のままにする。この投影は学習の妥当性・改善・汎化を判定せず、authorityや実行権限にも使わない。
 
+Ownerの保存結果再表示も同じstep継続判定を使う。定義digestがsource revisionから現行revisionまで不変でbindingが一意な場合だけ、source revisionのrequest IDに紐づく保存結果とM receiptを再照合し、現行revisionに束縛したno-store projectionを返す。定義変更・曖昧なbinding・source revision／結果の欠落・receipt未確認は拒否する。再表示は作用、承認、execution authorityを再利用せず、実行を再送しない。
+
 ### 下流: BLUE-TANUKI core (`packages/blue-tanuki`)
 
 実行機。**LLM 呼び出しはここに集約**。役割:

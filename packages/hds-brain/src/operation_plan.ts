@@ -5545,8 +5545,8 @@ export class OperationPlanLedger {
       operationPlanDigest(step.step_id) === control.step_id);
     if (steps.length !== 1) throw new Error("plan_saved_result_step_identity_mismatch");
     const step = steps[0]!;
-    const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
-    const binding = bindings.at(-1);
+    const bindingResolution = this.bindingForRevisionStep(plan, current, step);
+    const binding = bindingResolution.binding;
     const githubWrite = step.operation === "github.write";
     const mcpCall = step.operation === "mcp.call";
     const gmailMessageSend = step.operation === "gmail.write" && step.parameters?.operation === "message.send";
@@ -5558,13 +5558,17 @@ export class OperationPlanLedger {
     const allowedBindingStatus = githubWrite
       ? ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding?.status ?? "")
       : binding?.status === "verified";
-    if (bindings.length !== 1 || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
+    if (bindingResolution.ambiguous || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
         (!githubWrite && !mcpCall && !gmailMessageSend && !gmailDraftSend && !gmailReplyDraft && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
           step.operation !== "file.write" && step.operation !== "file.delete") ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
-    const results = plan.results.filter((result) => result.plan_id === current.plan.plan_id &&
-      result.request_id === current.plan.request_id && result.step_id === step.step_id &&
+    const sourceRevision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
+    if (!sourceRevision || sourceRevision.plan.plan_id !== current.plan.plan_id) {
+      throw new Error("plan_saved_result_revision_stale");
+    }
+    const results = plan.results.filter((result) => result.plan_id === sourceRevision.plan.plan_id &&
+      result.request_id === sourceRevision.plan.request_id && result.step_id === step.step_id &&
       result.operation === step.operation && result.status === "succeeded");
     if (githubWrite ? results.length !== 0 : results.length !== 1) throw new Error("plan_saved_result_result_unavailable");
     const result = results[0]!;
