@@ -5220,3 +5220,26 @@ task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-at
 資産分類：変更した10 source filesと本記録をGit管理。workspace `dist/`はTypeScript build出力として継続開発用に保持。作業前からある`.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は未変更・未stage。秘密／credentialの使用なし。D4-PocketのCodex作業領域は稼働中と確認し、同repoへ変更なし。
 
 作業開始local／origin／GitHub `main`=`fe110b71d1fce17072f3d3a8d8595c8e8e23836d`。実装commit `c5f1123e96b60ca03fd114490612d3b3a3c13458`を`main`へfast-forward pushし、GitHub `refs/heads/main`とlocal HEADの一致をreadbackした。編集前のlocal recovery branch／remote tag current=`fe110b71d1fce17072f3d3a8d8595c8e8e23836d`、previous=`df12b219aab55cdbc84bd00047b4b2a5175c155b`は二世代を保全しlocal／remote一致を確認。fetchとcommitの後処理で既存stale worktree metadata `.git/worktrees/blue-tanuki-health-2026-11-07-windows`の削除がPermission deniedになったが、Git操作は成功。metadata／ACLを変更・迂回せず保留した。
+## 2026-11-15 — rev5.3 QE_BUILD / native shell provider cleanup ownership
+
+### 対象と目的
+
+対象はWindows／Linuxの`shell.exec` parent-to-native-provider response path。目的はprovider responseが親の4 MiB上限を超えた場合にも、process treeを所有するnative providerがcleanupを終える前に親がproviderをkillしないこと。これはQE_BUILD中に見つけた実行安全欠陥の是正であり、全体QC／QAではない。
+
+### 変更
+
+`invokeNativeProvider`は応答が上限を超えたら蓄積済みstdoutを破棄し、native providerへ通常の`cancel`要求を送る。以前はWindows経路だけ親が`child.kill()`を呼び、Windows providerが所有するJob Object停止、一時root ACLの解除、AppContainer profile cleanupを中断する可能性があった。今回の変更でWindows／Linuxともproviderの終了通知を待ってから応答上限エラーを返す。上限超過応答の内容は解析・利用しない。5秒を過ぎてもprovider終了が観測できない場合は既存規則どおりprovider状態を不明として記録し、親からkillしない。
+
+### 確認と限界
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/core typecheck` | PASS。 |
+| `git diff --check` | PASS。 |
+| Windows／Linux native provider build、取消・上限超過runtime、全test suite、他OS、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA | NOT_RUN／未成立。 |
+
+この変更はsource-levelのcleanup ownership整合だけを確認した。runtime経路とOS installed製品の実証ではない。製品全体はQE_BUILDのまま、`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`。C08.03実provider、OD-03 live外部作用、別repo変更、P13公開／出荷GOは行っていない。
+
+### 作業資産とGit
+
+変更した`packages/blue-tanuki/src/tools/shell_exec.ts`、`docs/ROADMAP.md`、本履歴をGit管理する。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は保持し、作業生成物は追加していない。作業開始HEADは`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`。commit／push後のmainと復旧refはcloseout時に記録する。

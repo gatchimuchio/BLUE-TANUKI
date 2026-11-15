@@ -424,13 +424,11 @@ function invokeNativeProvider(
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       stdoutBytes += buffer.byteLength;
       if (stdoutBytes > MAX_NATIVE_RESPONSE_BYTES) {
-        if (platform === "linux") {
-          stdoutExceededBound = true;
-          stdout.length = 0;
-          return;
-        }
-        fail(new Error("shell.exec native isolation response exceeded its bound"));
-        child.kill();
+        stdoutExceededBound = true;
+        stdout.length = 0;
+        // The native provider owns process-tree termination and OS permission cleanup.
+        // Ask it to cancel and wait for its close instead of killing the cleanup owner.
+        cancel();
         return;
       }
       if (!stdoutExceededBound) stdout.push(buffer);
