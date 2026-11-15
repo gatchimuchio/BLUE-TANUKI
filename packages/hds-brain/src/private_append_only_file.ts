@@ -157,7 +157,8 @@ function ensureDirectoryPath(path: string): void {
 
 /** Persist newly created directory entries on POSIX before reporting append success. */
 function syncDirectoryChain(path: string, expected?: readonly DirectoryIdentity[]): void {
-  // Node's portable Win32 fs API does not expose a directory handle suitable for fsync.
+  // Win32 directory-handle flushing is not used: the documented API contract does not
+  // establish durable directory-entry semantics for FlushFileBuffers on directory handles.
   if (process.platform === "win32") return;
 
   const absolutePath = resolve(path);
