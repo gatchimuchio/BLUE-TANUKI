@@ -183,8 +183,13 @@ if [ "$PURGE" = "1" ]; then
   if [ "$DRY_RUN" != "1" ]; then
     assert_product_data_root_markers "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
   fi
+  if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then
+    remove_target "$CONFIG_ROOT" config_root
+    if [ "$DRY_RUN" != "1" ]; then
+      assert_product_owner_marker "$DATA_ROOT/.blue-tanuki-owner" data "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+    fi
+  fi
   remove_target "$DATA_ROOT" data_root
-  if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then remove_target "$CONFIG_ROOT" config_root; fi
   say "BLUE-TANUKI uninstalled with data purge."
 else
   say "BLUE-TANUKI app removed. Data retained at: $DATA_ROOT"
