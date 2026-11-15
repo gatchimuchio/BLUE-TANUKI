@@ -40,7 +40,19 @@ export function createUnidentifiedGoalProjection(input: {
       immutable: true,
     },
     necessity: { status: "unknown" },
-    target_state: { status: "unknown" },
+    target_state: input.evaluation_rules_reference
+      ? {
+        status: "identified",
+        subject: "ownerが委任した仕事",
+        condition: "参照された全評価規則が検証済み結果で成立している",
+        scope: [
+          `依頼:${input.evaluation_rules_reference.source_ref}`,
+          `規則SHA-256:${input.evaluation_rules_reference.rules_digest}`,
+          `規則数:${input.evaluation_rules_reference.rule_count}`,
+        ].join(";"),
+        source_ref: input.evaluation_rules_reference.source_ref,
+      }
+      : { status: "unknown" },
     evaluation_rules: input.evaluation_rules_reference
       ? { status: "referenced", ...input.evaluation_rules_reference }
       : { status: "unknown" },
