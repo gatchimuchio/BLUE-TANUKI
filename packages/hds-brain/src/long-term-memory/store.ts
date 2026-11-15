@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { resolve } from "node:path";
 import type { DecisionLog } from "../types.js";
+import { HDSPrivateAppendOnlyFile } from "../private_append_only_file.js";
 import {
   canonicalizeMemoryEntry,
   decodeMemoryEntry,
@@ -23,6 +23,8 @@ export interface CurrentMemoryReferenceVersionSnapshot {
 
 export class LongTermMemoryStore {
   private readonly filepath?: string;
+  private readonly storage?: HDSPrivateAppendOnlyFile;
+  private readonly personalizationStorage?: HDSPrivateAppendOnlyFile;
   private readonly max_entries: number;
   private entries: MemoryEntry[] = [];
   private personalizationExclusions: PersonalizationExclusionEvent[] = [];
@@ -31,16 +33,15 @@ export class LongTermMemoryStore {
   private skipped_captures = 0;
 
   constructor(opts: MemoryStoreOptions = {}) {
-    this.filepath = opts.filepath;
+    this.filepath = opts.filepath ? resolve(opts.filepath) : undefined;
+    this.storage = this.filepath ? new HDSPrivateAppendOnlyFile(this.filepath) : undefined;
+    this.personalizationStorage = this.filepath
+      ? new HDSPrivateAppendOnlyFile(`${this.filepath}.personalization.jsonl`)
+      : undefined;
     this.max_entries = opts.max_entries ?? DEFAULT_MAX_ENTRIES;
 
-    if (this.filepath && !existsSync(dirname(this.filepath))) {
-      mkdirSync(dirname(this.filepath), { recursive: true });
-    }
     this.loadPersonalizationExclusions();
-    if (this.filepath && existsSync(this.filepath)) {
-      this.loadFromFile();
-    }
+    this.loadFromFile();
   }
 
   /**
@@ -57,9 +58,9 @@ export class LongTermMemoryStore {
     }
 
     const entry = this.createEntry(log);
-    if (this.filepath) {
+    if (this.storage) {
       try {
-        appendFileSync(this.filepath, encodeMemoryEntry(entry) + "\n");
+        this.storage.appendUtf8(encodeMemoryEntry(entry) + "\n");
       } catch {
         this.skipped_captures += 1;
         return null;
@@ -142,7 +143,7 @@ export class LongTermMemoryStore {
     }
     let currentEntries: readonly MemoryEntry[];
     try {
-      const raw = this.filepath && existsSync(this.filepath) ? readFileSync(this.filepath, "utf8") : undefined;
+      const raw = this.storage?.readUtf8IfPresent();
       currentEntries = raw === undefined ? this.entries : raw.split("\n").filter((line) => line.trim().length > 0).map(decodeMemoryEntry);
     } catch {
       return { status: "unavailable", entry_hash: null, exclusion_revision_digest: state.revision_digest };
@@ -214,12 +215,11 @@ export class LongTermMemoryStore {
       may_execute: false as const,
     };
     const event: PersonalizationExclusionEvent = { ...base, event_hash: hashPersonalizationExclusion(base) };
-    const filepath = this.personalizationFilepath();
-    if (filepath) {
+    if (this.personalizationStorage) {
       try {
         const currentRaw = this.readPersonalizationRaw();
         const separator = currentRaw.length > 0 && !currentRaw.endsWith("\n") ? "\n" : "";
-        appendFileSync(filepath, `${separator}${JSON.stringify(event)}\n`, { encoding: "utf8", flag: "a" });
+        this.personalizationStorage.appendUtf8(`${separator}${JSON.stringify(event)}\n`);
       } catch {
         throw new Error("memory_personalization_persistence_failed");
       }
@@ -255,7 +255,7 @@ export class LongTermMemoryStore {
       if (!this.filepath) {
         currentEntries = this.entries;
       } else {
-        const raw = existsSync(this.filepath) ? readFileSync(this.filepath, "utf8") : "";
+        const raw = this.storage?.readUtf8IfPresent() ?? "";
         currentEntries = raw.split("\n").filter((line) => line.trim().length > 0).map(decodeMemoryEntry);
       }
     } catch {
@@ -307,7 +307,7 @@ export class LongTermMemoryStore {
 
     let raw = "";
     try {
-      raw = existsSync(this.filepath) ? readFileSync(this.filepath, "utf8") : "";
+      raw = this.storage?.readUtf8IfPresent() ?? "";
       const exclusionRaw = this.readPersonalizationRaw();
       const diskEntries = raw.split("\n").filter((line) => line.trim().length > 0).map(decodeMemoryEntry);
       const diskValid = verifyMemoryEntrySequence(diskEntries);
@@ -385,24 +385,19 @@ export class LongTermMemoryStore {
   }
 
   private loadFromFile(): void {
-    if (!this.filepath) return;
-    const raw = readFileSync(this.filepath, "utf8");
+    const raw = this.storage?.readUtf8IfPresent();
+    if (raw === undefined) return;
     const lines = raw.split("\n").filter((line: string) => line.trim().length > 0);
     this.entries = lines.map((line: string) => decodeMemoryEntry(line));
     if (!this.verify()) {
       throw new Error(
-        `LongTermMemoryStore: chain verification failed on load from ${this.filepath}`,
+        "LongTermMemoryStore: chain verification failed on load",
       );
     }
   }
 
-  private personalizationFilepath(): string | undefined {
-    return this.filepath ? `${this.filepath}.personalization.jsonl` : undefined;
-  }
-
   private readPersonalizationRaw(): string {
-    const filepath = this.personalizationFilepath();
-    if (filepath) return existsSync(filepath) ? readFileSync(filepath, "utf8") : "";
+    if (this.personalizationStorage) return this.personalizationStorage.readUtf8IfPresent() ?? "";
     return this.personalizationExclusions.map((event) => JSON.stringify(event)).join("\n") +
       (this.personalizationExclusions.length > 0 ? "\n" : "");
   }

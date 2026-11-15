@@ -1,17 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  appendFileSync,
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
-import { dirname, join, parse, relative, resolve, sep } from "node:path";
-import {
   COMMON_RECORD_SCHEMA_VERSION,
   CommonRecordSchema,
   type CommonRecord,
@@ -31,6 +19,7 @@ import {
   type CompleteHistoryReplayFilter,
   type CompleteHistoryStoreOptions,
 } from "./types.js";
+import { HDSPrivateAppendOnlyFile } from "../private_append_only_file.js";
 
 export interface CompleteHistoryRecordProjection {
   readonly record: CommonRecord;
@@ -39,28 +28,17 @@ export interface CompleteHistoryRecordProjection {
   readonly complete_history_used_for_authority: false;
 }
 
-interface CompleteHistoryFileIdentity {
-  readonly dev: bigint;
-  readonly ino: bigint;
-}
-
 export class CompleteHistoryStore {
   private entries: CompleteHistoryEntry[] = [];
   private skipped = 0;
-  private readonly filepath?: string;
+  private readonly storage?: HDSPrivateAppendOnlyFile;
   private readonly max_entries: number;
-  private fileIdentity?: CompleteHistoryFileIdentity;
-  private fileWasAbsentAtConstruction = false;
 
   constructor(opts: CompleteHistoryStoreOptions = {}) {
-    this.filepath = opts.filepath ? resolve(opts.filepath) : undefined;
+    this.storage = opts.filepath ? new HDSPrivateAppendOnlyFile(opts.filepath) : undefined;
     this.max_entries = opts.max_entries ?? Number.POSITIVE_INFINITY;
-    if (this.filepath) {
-      ensureCompleteHistoryDirectory(dirname(this.filepath));
-      const existing = tryLstat(this.filepath);
-      if (existing) this.loadFromFile({ dev: existing.dev, ino: existing.ino });
-      else this.fileWasAbsentAtConstruction = true;
-    }
+    const existing = this.storage?.readUtf8IfPresent();
+    if (existing !== undefined) this.loadFromRaw(existing);
   }
 
   append(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
@@ -91,21 +69,7 @@ export class CompleteHistoryStore {
       ...withoutHash,
       entry_hash: completeHistoryEntryHash(withoutHash),
     };
-    if (this.filepath) {
-      const opened = openCompleteHistoryFile(
-        this.filepath,
-        "append",
-        this.fileIdentity,
-        this.fileWasAbsentAtConstruction,
-      );
-      try {
-        appendFileSync(opened.fd, encodeCompleteHistoryEntry(entry) + "\n", "utf8");
-        this.fileIdentity = opened.identity;
-        this.fileWasAbsentAtConstruction = false;
-      } finally {
-        closeSync(opened.fd);
-      }
-    }
+    this.storage?.appendUtf8(encodeCompleteHistoryEntry(entry) + "\n");
     this.entries.push(entry);
     return entry;
   }
@@ -202,108 +166,13 @@ export class CompleteHistoryStore {
     return this.skipped;
   }
 
-  private loadFromFile(expectedIdentity: CompleteHistoryFileIdentity): void {
-    if (!this.filepath) return;
-    const opened = openCompleteHistoryFile(this.filepath, "read", expectedIdentity);
-    let raw: string;
-    try {
-      raw = readFileSync(opened.fd, "utf8");
-      this.fileIdentity = opened.identity;
-    } finally {
-      closeSync(opened.fd);
-    }
+  private loadFromRaw(raw: string): void {
     const lines = raw.split("\n").filter((line) => line.trim().length > 0);
     this.entries = lines.map(decodeCompleteHistoryEntry);
     if (!this.verify()) {
-      throw new Error(`CompleteHistoryStore: chain verification failed on load from ${this.filepath}`);
+      throw new Error("CompleteHistoryStore: chain verification failed on load");
     }
   }
-}
-
-function ensureCompleteHistoryDirectory(path: string): void {
-  const absolutePath = resolve(path);
-  const root = parse(absolutePath).root;
-  let current = root;
-  const parts = relative(root, absolutePath).split(sep).filter(Boolean);
-  for (const part of parts) {
-    current = join(current, part);
-    let stat = tryLstat(current);
-    if (!stat) {
-      try {
-        mkdirSync(current, { mode: 0o700 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      stat = tryLstat(current);
-    }
-    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error("CompleteHistoryStore: storage directory must be a real directory");
-    }
-  }
-}
-
-function assertCompleteHistoryDirectory(path: string): void {
-  const absolutePath = resolve(path);
-  const root = parse(absolutePath).root;
-  let current = root;
-  for (const part of relative(root, absolutePath).split(sep).filter(Boolean)) {
-    current = join(current, part);
-    const stat = tryLstat(current);
-    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error("CompleteHistoryStore: storage directory identity changed");
-    }
-  }
-}
-
-function tryLstat(path: string) {
-  try {
-    return lstatSync(path, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-function openCompleteHistoryFile(
-  path: string,
-  mode: "read" | "append",
-  expectedIdentity?: CompleteHistoryFileIdentity,
-  expectAbsent = false,
-): { fd: number; identity: CompleteHistoryFileIdentity } {
-  assertCompleteHistoryDirectory(dirname(path));
-  const before = tryLstat(path);
-  if (before && !isPrivateHistoryFileStat(before)) {
-    throw new Error("CompleteHistoryStore: storage file must be a single-link regular file");
-  }
-  if ((expectedIdentity && !before) || (expectAbsent && before)) {
-    throw new Error("CompleteHistoryStore: storage file identity changed");
-  }
-
-  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
-  const flags = mode === "read"
-    ? constants.O_RDONLY | noFollow
-    : constants.O_WRONLY | constants.O_APPEND | noFollow |
-      (expectAbsent ? constants.O_CREAT | constants.O_EXCL : 0);
-  const fd = openSync(path, flags, 0o600);
-  try {
-    assertCompleteHistoryDirectory(dirname(path));
-    const descriptorStat = fstatSync(fd, { bigint: true });
-    const pathStat = tryLstat(path);
-    if (!pathStat || !isPrivateHistoryFileStat(descriptorStat) || !isPrivateHistoryFileStat(pathStat) ||
-        descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino ||
-        (expectedIdentity && (descriptorStat.dev !== expectedIdentity.dev || descriptorStat.ino !== expectedIdentity.ino))) {
-      throw new Error("CompleteHistoryStore: storage file identity changed");
-    }
-    if (process.platform !== "win32") fchmodSync(fd, 0o600);
-    return { fd, identity: { dev: descriptorStat.dev, ino: descriptorStat.ino } };
-  } catch (error) {
-    closeSync(fd);
-    throw error;
-  }
-}
-
-function isPrivateHistoryFileStat(stat: { isFile(): boolean; nlink: bigint }): boolean {
-  return stat.isFile() && stat.nlink === 1n;
 }
 
 function cloneEntry(entry: CompleteHistoryEntry): CompleteHistoryEntry {
