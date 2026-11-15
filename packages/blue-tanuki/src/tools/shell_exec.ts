@@ -367,6 +367,7 @@ function invokeNativeProvider(
     let closeObserved = false;
     let processTreeConfirmed = false;
     let providerStateUnknownReported = false;
+    let cancellationRequested = false;
     let stdoutExceededBound = false;
     let watchdog: NodeJS.Timeout | undefined;
     let cancelFallback: NodeJS.Timeout | undefined;
@@ -390,18 +391,16 @@ function invokeNativeProvider(
       reject(error);
     };
     const cancel = (): void => {
-      if (settled) return;
+      if (settled || cancellationRequested) return;
+      cancellationRequested = true;
       try {
         child.stdin?.write("cancel\n");
-      } catch {
-        if (platform !== "linux") child.kill();
-      }
+      } catch { /* the native provider still owns bounded process cleanup */ }
       cancelFallback = setTimeout(() => {
         if (!closeObserved) {
-          // Linux commands are owned by a systemd unit that outlives this helper.
-          // Killing only the helper can orphan the command, so wait for its bounded
-          // unit lifetime and report uncertainty while shutdown is still pending.
-          if (platform !== "linux") child.kill();
+          // OS providers own descendant termination and temporary permission cleanup.
+          // Killing a helper here can interrupt that cleanup, so retain it and report
+          // uncertainty while the provider completes its bounded shutdown path.
           reportProviderStateUnknown();
         }
       }, PROCESS_TREE_SHUTDOWN_GRACE_MS);
@@ -414,8 +413,8 @@ function invokeNativeProvider(
 
     child.stdin?.on("error", () => {
       // A closed provider may reject a late cancellation write asynchronously.
-      // On Linux the systemd unit remains the owner until its process tree ends.
-      if (platform !== "linux" && !closeObserved) child.kill();
+      // Keep the OS provider alive so it can finish process-tree and permission cleanup.
+      if (!closeObserved) reportProviderStateUnknown();
     });
 
     child.once("spawn", () => report({ state: "worker_started", observed_at_ms: Date.now(),

@@ -2,6 +2,20 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。2026-11-14に削除した旧第四施工指示書への記述は当時の文書変更履歴であり、復活や参照を要求しない。技術原典・QE三点の旧非公開制約も失効済みである。
 
+## 2026-11-15 — rev5.3 QE_BUILD / native shell取消時のOS cleanup所有
+
+**対象・目的:** `shell.exec`の取消・timeout時にWindows native helperが所有するJob Object停止、一時root ACL復元、AppContainer profile cleanupをJavaScript親から中断しない。
+
+親側の取消fallbackと遅延stdin error handlerがWindows native helperを強制終了し得る境界を修正した。取消要求は一度だけ送信し、5秒後にworkerが閉じていなければ`provider_state_unknown`を報告するが、native helperは強制終了しない。helper自身がJob Object内のprocess tree停止とtemporary permission cleanupを確定して終了する責任を保つ。作用結果不明を成功へ読み替えず、同じ操作の自動再試行は追加しない。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/core typecheck`／`git diff --check` | PASS。 |
+| `pnpm docs:check` | FAIL。Markdown検査PASS後、日本語基底ゲートが今回変更していない登録済み移行負債7文書のhash不整合を報告。license gateは未到達。 |
+| Windows native helper build、cancel／timeout runtime、全workspace suite、全OS、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+**状態・限界:** TypeScript sourceのcleanup所有境界を修正した。Windowsでの実停止、ACL復元、helperのbounded shutdownは未確認であり、Windows shell isolationや製品全体の成立証拠ではない。日本語基底ゲートが指摘した7文書は今回変更対象外の既存不整合であり、その台帳是正は別施工に残す。Linux挙動、C08.03 provider試験、外部作用、別repo、公開／出荷判断は変更していない。実装commitとpush後のrecovery refを下記へ追記する。
+
 ## 2026-11-14 — rev5.3 QE_BUILD / WebChat owner-task audio input
 
 **対象・目的:** WebChat owner taskで、task文面と現行の委任目的に明示的に添付された音声を、許可済みC modelで一回の計算入力として扱えるようにし、文字起こしのみの応答へ誤って降格しない。

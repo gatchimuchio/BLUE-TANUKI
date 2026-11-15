@@ -14,6 +14,8 @@ MCPのConnections設定では、ownerが明示したときだけ入力済みcred
 
 WebChat Owner Taskは同じsubmission IDからOwner-token中止要求と取消状態照会へ進むsource経路を持つ。Gatewayはowner actor／WebChat channel／request bindingと一意なactive executionだけをAbortSignal対象にする。local/external停止を主張しない。現時点は`CODE_PRESENT`でありserved/runtime往復、実provider、全体施工の証拠ではない。
 
+Windows／Linuxの`shell.exec`取消経路は、取消猶予後もJavaScript親がnative providerを強制終了せず、process tree停止と一時権限cleanupをOS providerに委ねる。5秒で停止完了が見えない場合は状態不明を記録し、provider終了を待つ。core typecheck／diff checkはPASS。`docs:check`はMarkdown検査PASS後、日本語基底の既存移行台帳不整合7件でFAIL。Windows native実行・取消runtimeは未確認。
+
 
 ## 旧BUILD_BATCH履歴（当時の証拠。現行施工対象・次の着工順序ではない）
 
