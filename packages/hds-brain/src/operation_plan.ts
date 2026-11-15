@@ -7436,6 +7436,7 @@ export class OperationPlanLedger {
           }] : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
+            ...(binding ? { binding_source_revision_digest: binding.revision_digest } : {}),
             ...(gmailMessageIdentityOptions?.length ? { gmail_message_identity_options: gmailMessageIdentityOptions } : {}),
             ...(gmailAttachmentIdentityOptions?.length ? { gmail_attachment_identity_options: gmailAttachmentIdentityOptions } : {}),
             ...(shellExecSummary ? { shell_exec_summary: shellExecSummary } : {}),

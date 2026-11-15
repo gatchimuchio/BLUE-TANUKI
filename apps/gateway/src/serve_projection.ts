@@ -643,7 +643,10 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     for (const step of (plan.steps as Record<string, unknown>[]).slice(0, 20)) {
       if (!isDigest(step.step_id) || !isDigest(step.definition_digest) || typeof step.operation !== "string" ||
           !/^[a-z][a-z0-9._-]{0,99}$/.test(step.operation) || typeof step.status !== "string" ||
-          !OPERATION_PLAN_STEP_STATUSES.has(step.status)) return invalidOperationPlanStatusProjection();
+          !OPERATION_PLAN_STEP_STATUSES.has(step.status) ||
+          (step.binding_source_revision_digest !== undefined && !isDigest(step.binding_source_revision_digest))) {
+        return invalidOperationPlanStatusProjection();
+      }
       const observationStatus = step.external_receipt_observation;
       const observation = step.external_receipt;
       const fileStateObservation = step.local_file_state_observation;
@@ -712,9 +715,17 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           (fileStateObservation !== undefined && observationStatus !== "not_applicable")) {
         return invalidOperationPlanStatusProjection();
       }
-      const matching = bindings.filter((candidate) => candidate.step_id === step.step_id);
-      const binding = matching.at(-1);
-      if (binding && (binding.status !== step.status || !isDigest(binding.command_digest) ||
+      const matching = step.binding_source_revision_digest === undefined
+        ? []
+        : bindings.filter((candidate) => candidate.step_id === step.step_id &&
+          candidate.revision_digest === step.binding_source_revision_digest);
+      if ((step.binding_source_revision_digest === undefined && step.status !== "not_selected") ||
+          (step.binding_source_revision_digest !== undefined && matching.length !== 1)) {
+        return invalidOperationPlanStatusProjection();
+      }
+      const binding = matching[0];
+      if (binding && (binding.operation !== step.operation || binding.step_digest !== step.definition_digest ||
+          binding.status !== step.status || !isDigest(binding.command_digest) ||
           (binding.execution_ticket_digest !== undefined && !isDigest(binding.execution_ticket_digest)) ||
           (binding.result_digest !== undefined && !isDigest(binding.result_digest)) ||
           (binding.delivery_digest !== undefined && !isDigest(binding.delivery_digest)) ||
