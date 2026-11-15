@@ -78,16 +78,25 @@ const auditLog = createLogger({ scope: "audit" });
 
 /**
  * Build the HDS memory store from Setup-managed or explicit env configuration.
- * Setup supplies a durable private-state default; an unconfigured development
- * process remains ephemeral. Memory is reference/evidence only, never authority.
+ * Current Setup writes a durable memory path. Older installed env files may
+ * predate that key, so the configured state root receives the same private
+ * default; an unconfigured development process remains ephemeral. Memory is
+ * reference/evidence only, never authority.
  */
 export function buildHDSMemoryStore(env: NodeJS.ProcessEnv = process.env): LongTermMemoryStore {
   const file = env.BLUE_TANUKI_MEMORY_FILE;
   const dir = env.BLUE_TANUKI_MEMORY_DIR;
+  const stateRoot = env.BLUE_TANUKI_STATE_ROOT?.trim();
   const max = parseInt(env.BLUE_TANUKI_MEMORY_CAP ?? "10000", 10);
   const max_entries = Number.isFinite(max) && max >= 0 ? max : 10_000;
   if (file) return new LongTermMemoryStore({ filepath: path.resolve(file), max_entries });
   if (dir) return new LongTermMemoryStore({ filepath: path.join(path.resolve(dir), "memory.jsonl"), max_entries });
+  if (stateRoot) {
+    return new LongTermMemoryStore({
+      filepath: path.join(path.resolve(stateRoot), "private-state", "long-term-memory", "memory.jsonl"),
+      max_entries,
+    });
+  }
   return new LongTermMemoryStore({ max_entries });
 }
 
