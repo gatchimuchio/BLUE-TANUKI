@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { OperationPlanReflectionCandidateSchema, type ExecuteCommand, type ExecuteFeedback } from "@blue-tanuki/protocol";
+import { OperationPlanReflectionCandidateSchema, type ExecuteCommand, type ExecuteFeedback,
+  type OperationPlanGoalPurposeBinding } from "@blue-tanuki/protocol";
 
 interface ResultObservationCitationBase {
   record_id: string; record_digest: string; memory_revision: number; receipt_digest: string;
@@ -26,7 +27,8 @@ export type ResultObservationCitation = ResultObservationCitationBase & (
 );
 export interface ResultObservationProjection {
   schema_version: "operation-result-current-projection.v2";
-  scope: { plan_handle: string; task_identity_digest: string; revision_digest: string; owner_digest: string; channel_digest: string };
+  scope: { plan_handle: string; task_identity_digest: string; revision_digest: string; owner_digest: string;
+    channel_digest: string; source_step_id_digests: string[]; goal_purpose_binding?: OperationPlanGoalPurposeBinding };
   citations: ResultObservationCitation[];
   used_for_authority: false; memory_adoption: false; may_execute: false;
 }
@@ -83,6 +85,7 @@ export function reviewResultReflection(command: ExecuteCommand, feedback: Execut
     }
     return { accepted: true, content: JSON.stringify({ schema_version: "operation-result-reflection-review.v1",
       status: "references_verified_interpretation_unverified", projection_digest: projectionDigest,
+      scope: projection.scope, source_step_id_digests: projection.scope.source_step_id_digests,
       citations: candidate.citations.map((citation) => ({ ...citation,
         source: projection.citations.find((source) => source.record_id === citation.record_id)! })),
       interpretation_status: "candidate_only", memory_adoption: false, used_as_world_truth: false,

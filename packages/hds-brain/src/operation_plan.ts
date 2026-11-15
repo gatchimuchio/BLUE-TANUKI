@@ -7059,7 +7059,9 @@ export class OperationPlanLedger {
     }
     return { schema_version: "operation-result-current-projection.v2", scope: { plan_handle: operationPlanDigest(current.plan.plan_id),
       task_identity_digest: operationPlanTaskIdentityDigest(p),
-      revision_digest: current.digest, owner_digest: operationPlanDigest(p.owner), channel_digest: operationPlanDigest(p.channel) },
+      revision_digest: current.digest, owner_digest: operationPlanDigest(p.owner), channel_digest: operationPlanDigest(p.channel),
+      source_step_id_digests: Array.from(ids, (id) => operationPlanDigest(id)),
+      ...(p.goal_purpose_binding ? { goal_purpose_binding: structuredClone(p.goal_purpose_binding) } : {}) },
       citations, used_for_authority: false, memory_adoption: false, may_execute: false };
   }
   bindReflection(control: OperationPlanReflectionControl, caller: InboundRequest, command: ExecuteCommand,

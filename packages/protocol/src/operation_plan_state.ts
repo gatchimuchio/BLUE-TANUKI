@@ -9,6 +9,22 @@ import { ComputeResourceUseSchema } from "./types.js";
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const GoalRef = z.string().regex(/^goal_[a-f0-9]{16,64}$/);
+/** Owner-selected, still-unverified C interpretation carried as data into a same-task candidate computation. */
+export const OperationPlanSelectedResultReflectionSchema = z.object({
+  schema_version: z.literal("operation-result-reflection-selection.v1"),
+  projection_digest: Digest,
+  source_step_id_digests: z.array(Digest).min(1).max(8),
+  citations: z.array(z.object({ record_id: Id, record_digest: Digest,
+    interpretation: z.string().trim().min(1).max(800), uncertainty: z.string().trim().min(1).max(800) }).strict()).min(1).max(8),
+}).strict().superRefine((selection, context) => {
+  if (new Set(selection.source_step_id_digests).size !== selection.source_step_id_digests.length) {
+    context.addIssue({ code: "custom", message: "selected_result_reflection_duplicate_source_step" });
+  }
+  if (new Set(selection.citations.map((citation) => citation.record_id)).size !== selection.citations.length) {
+    context.addIssue({ code: "custom", message: "selected_result_reflection_duplicate_citation" });
+  }
+});
+export type OperationPlanSelectedResultReflection = z.infer<typeof OperationPlanSelectedResultReflectionSchema>;
 export const OperationPlanGoalPurposeBindingSchema = z.object({
   goal_ref: GoalRef,
   purpose_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -368,6 +384,7 @@ export const OperationPlanComputeInputSchema = z.object({
   parent_plan: OperationPlanComputeParentSchema.optional(),
   source_citation_request_id: z.string().trim().min(1).max(128).optional(),
   source_observation_refs: z.array(OperationPlanComputeSourceObservationReferenceSchema).max(8).optional(),
+  selected_result_reflection: OperationPlanSelectedResultReflectionSchema.optional(),
   include_mcp_catalog: z.boolean().optional(),
 }).strict().superRefine((input, context) => {
   if (!input.goal_purpose_binding && !input.source_citation_request_id) {
@@ -381,6 +398,19 @@ export const OperationPlanComputeInputSchema = z.object({
   }
   if (references.length > 0 && !input.goal_purpose_binding) {
     context.addIssue({ code: "custom", message: "plan_compute_source_observation_requires_purpose_binding" });
+  }
+  if (input.selected_result_reflection) {
+    if (!input.parent_plan || !input.goal_purpose_binding) {
+      context.addIssue({ code: "custom", message: "selected_result_reflection_requires_parent_and_purpose" });
+    }
+    const stepIds = input.selected_result_reflection.source_step_id_digests;
+    if (references.length !== stepIds.length || references.some((reference, index) =>
+      !("plan_id_digest" in reference) || reference.plan_id_digest !== input.parent_plan?.plan_id_digest ||
+      reference.revision_digest !== input.parent_plan?.revision_digest || reference.step_id_digest !== stepIds[index] ||
+      "owner_selected_observation" in reference || "selected_message_identity_digest" in reference ||
+      "selected_attachment_identity_digest" in reference || "selected_mcp_result" in reference)) {
+      context.addIssue({ code: "custom", message: "selected_result_reflection_source_refs_mismatch" });
+    }
   }
   if (input.parent_plan) {
     if (!input.goal_purpose_binding) {
