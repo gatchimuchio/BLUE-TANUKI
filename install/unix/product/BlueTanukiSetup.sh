@@ -76,7 +76,10 @@ DATA_ROOT="$DEFAULT_DATA_ROOT"
 CONFIG_ROOT="$DEFAULT_CONFIG_ROOT"
 RUNTIME_ROOT="$DATA_ROOT/runtime"
 BIN_ROOT="$HOME/.local/bin"
-CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
+# Packaged product Control Center is local-only; source installers retain their
+# independent URL override.
+unset BLUE_TANUKI_CONTROL_CENTER_URL
+CONTROL_CENTER_URL="http://127.0.0.1:8787/app"
 # Developer source-installer environment switches must not alter packaged setup.
 # The explicit CLI options below are the only way to change these modes.
 unset FORCE RESET_CONFIG RUN_DOCTOR
