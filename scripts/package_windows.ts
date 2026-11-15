@@ -14,6 +14,7 @@ import {
 } from "./playwright_browser_runtime.ts";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS } from "../packages/protocol/src/product_scope_contract.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 interface PackageJson {
   version: string;
@@ -28,6 +29,7 @@ interface WindowsInstallerManifest {
   schema_version: 1;
   name: "blue-tanuki";
   version: string;
+  data_schema_version: typeof PRODUCT_DATA_SCHEMA_VERSION;
   package_type: "windows-x64-zip-installer";
   created_at: string;
   node_runtime: {
@@ -788,6 +790,7 @@ async function main(): Promise<void> {
       schema_version: 1,
       name: "blue-tanuki",
       version: pkg.version,
+      data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
       package_type: "windows-x64-zip-installer",
       created_at: new Date().toISOString(),
       node_runtime: {

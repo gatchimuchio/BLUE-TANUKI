@@ -1,6 +1,6 @@
 # BLUE-TANUKI Update / Rollback / Recovery Runbook
 
-BLUE-TANUKI does not currently implement an automatic updater or a supported application replacement procedure. **Manual application is blocked because product-wide persisted-data schema compatibility and migration support are unknown.** After any required recovery of a previously interrupted transaction, packaged product Setup refuses an in-place replacement before stopping the resident or staging its candidate; `--force` does not authorize an update. A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not establish data compatibility or authorize replacing the running application.
+BLUE-TANUKI does not currently implement an automatic updater or a supported application replacement procedure. Release and packaged-installer manifests now declare the product-wide data-schema version defined in [`PERSISTED_DATA_SCHEMA.md`](PERSISTED_DATA_SCHEMA.md). Matching installed and candidate declarations establish schema-version equality only; they do not enable application replacement. Packaged Setup still refuses in-place replacement before stopping the resident or staging its candidate; `--force` does not authorize an update. A valid archive, release manifest, sidecar, pre-update backup, or rollback plan does not authorize replacing the running application.
 
 ## Distribution readiness gate
 
@@ -97,10 +97,11 @@ implement automatic update rollback.
 
 P11 keeps update manual-only. The Control Center Update screen verifies a
 configured release bundle sidecar set and records rollback evidence, but it does
-not compare every installed persisted-data store with a candidate schema, apply
-migrations, replace app files, download updates, run a background updater, or
-provide a signed native installer. The current compatibility result is
-`unknown`; no application replacement may proceed on that evidence.
+not inspect every installed persisted-data store, apply migrations, replace app
+files, download updates, run a background updater, or provide a signed native
+installer. It compares the declared product data-schema version from the
+candidate manifest with the installed marker. A match is version-declaration
+evidence only; no application replacement may proceed on that evidence.
 
 ## Control Center update controls
 
@@ -118,20 +119,21 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
    recovery backup, and writes a rollback plan under `BLUE_TANUKI_UPDATE_DIR` or
    `BLUE_TANUKI_FILE_ROOT/update`. This records recovery evidence only; it does
    not establish complete backup coverage or update readiness.
-6. Read the compatibility result in the Update screen. **The current result is
-   `unknown`: stop here, keep the existing application running, and do not
-   replace source or app files.** The release-manifest schema version is not a
-   product data-schema version.
-7. Stop here. A future compatible candidate still needs an implemented update
-   path that enforces the migration contract and verified backup scope. Do not
-   use `--force`, replace source/app files, or run product Setup over an
-   existing installation.
+6. Read the compatibility result in the Update screen. Legacy installs without
+   a product data-schema marker remain `unknown`; a schema-version mismatch is
+   `blocked`. A matching declaration does not enable application replacement.
+   The release-manifest format version is not a product data-schema version.
+7. Stop here in all cases. The installed application replacement and rollback
+   path remains unsupported. Do not use `--force`, replace source/app files, or
+   run product Setup over an existing installation.
 8. Restart and run doctor/audit checks only when no replacement was attempted.
 
 After uninstall with data retained, product Setup permits reattachment only
-when the staged app and runtime inventories exactly match the inventory
-recorded with that data root. A missing or different inventory is treated as
-unknown compatibility and blocks setup; the retained data is not changed.
+when the retained marker has the same product data-schema version as the
+candidate package and all product roots match. Legacy or missing markers and a
+different version are treated as unknown/incompatible; the retained data is not
+changed. A matching schema declaration permits data reuse after uninstall, not
+in-place application replacement.
 
 If post-update validation fails, restore the previous app directory or source
 commit and restore only data covered by a verified recovery backup. If any data
@@ -142,20 +144,20 @@ it cannot approve commands or bypass HDS-BRAIN.
 
 ## 2. Source and release replacement
 
-Source-tree and release-bundle replacement are also blocked while compatibility
-is unknown. Do not `git pull`, copy a new app tree over an installed product,
-or treat successful typecheck/build/doctor as permission to reuse existing
-product data. Release verification proves bundle integrity only. A future
-procedure must document the data migration contract, affected stores, recovery
-coverage, and the product path that enforces them before replacement is
-enabled.
+Installed source-tree and release-bundle replacement remain unsupported. Do not
+copy a new app tree over an installed product or treat successful
+typecheck/build/doctor as permission to replace it. Release verification checks
+bundle integrity and the declared product data-schema version; it does not
+inspect every live store or authorize replacement. A future procedure must
+implement the update transaction, affected-store recovery coverage, and rollback
+path before replacement is enabled.
 
 ## 3. Fresh install and retained data
 
-A fresh install into empty product roots remains available. After uninstall,
-retained product data may be reattached only to an app/runtime inventory that
-matches its recorded compatibility marker. Missing legacy markers and changed
-inventories remain blocked until a verified migration path exists.
+A fresh install into empty product roots remains available and records the
+current product data-schema version. After uninstall, retained product data may
+be reattached only to a package that declares the same version. Missing legacy
+markers and changed versions remain blocked; no migration is performed.
 
 ## 4. Config Preservation
 

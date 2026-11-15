@@ -36,14 +36,14 @@ support and release-claim boundary, not a defect waiver and not authority:
 - P11 verifies release sidecars and records a pre-update recovery backup and
   rollback plan. These do not establish product-wide data-schema compatibility
   or complete backup coverage for every persisted store.
-- The current candidate release manifest and installed product do not expose a
-  complete shared persisted-data schema and migration contract. Compatibility
-  is `unknown`; manual application must stop until that contract and the
-  affected-store backup scope are supported and verified.
-- Packaged Windows/Linux/macOS Setup refuses in-place replacement while
-  compatibility is unknown. After uninstall, retained data is reusable only
-  when the staged app/runtime inventory matches its recorded compatibility
-  marker; legacy or changed inventories are blocked.
+- Release bundles, packaged installers, and newly created product-data markers
+  now carry the shared `PRODUCT_DATA_SCHEMA_VERSION`. Legacy markers remain
+  `unknown`; a version mismatch is blocked because automatic migration is not
+  supported. The version declaration is not live inspection of each store.
+- Packaged Windows/Linux/macOS Setup still refuses in-place replacement.
+  Matching data-schema declarations permit only post-uninstall data
+  reattachment; they do not establish the app replacement, full backup coverage,
+  installed update, or rollback path.
 - No source or release-bundle replacement procedure is currently supported.
 - Automatic updater is not shipped.
 - Runtime app-file replacement / runtime auto-apply update is not shipped.

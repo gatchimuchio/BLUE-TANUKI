@@ -294,6 +294,11 @@ else
   grep -Fqx '  "schema_version": 1,' "$PACKAGE_MANIFEST" || fail "macOS installer manifest schema is not recognized"
   grep -Eq "^  \\\"package_type\\\": \\\"macos-(x64|arm64)-tar-installer\\\",?$" "$PACKAGE_MANIFEST" || fail "installer manifest platform does not match $PLATFORM"
 fi
+PACKAGE_DATA_SCHEMA_VERSION=$(sed -n 's/^  "data_schema_version": \([1-9][0-9]*\),$/\1/p' "$PACKAGE_MANIFEST")
+case "$PACKAGE_DATA_SCHEMA_VERSION" in
+  ''|*[!0-9]*) fail "installer manifest has no supported product data-schema version" ;;
+esac
+[ "${#PACKAGE_DATA_SCHEMA_VERSION}" -le 10 ] || fail "installer manifest product data-schema version is outside the supported range"
 PACKAGE_MANIFEST_SHA256=$(sha256_file "$PACKAGE_MANIFEST")
 case "$PACKAGE_MANIFEST_SHA256" in
   *[!0-9a-fA-F]*|'') fail "installer manifest SHA-256 could not be verified" ;;
@@ -484,7 +489,7 @@ if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
   else
     assert_legacy_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM"
   fi
-  fail "in-place product replacement is blocked while product-wide persisted-data compatibility and migration are unknown; existing data was preserved"
+  fail "in-place product replacement is unsupported; a matching product data-schema declaration does not authorize an application update. The existing application and data were preserved"
 else
   if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
     fail "Runtime target exists without a verified product install and will not be replaced: $RUNTIME_ROOT"
@@ -636,6 +641,7 @@ RUNTIME_ROOT_VALUE="$RUNTIME_ROOT" \
 BIN_ROOT_VALUE="$BIN_ROOT" \
 ENV_FILE_VALUE="$ENV_FILE" \
 NODE_EXE_VALUE="$NODE_EXE_FINAL" \
+DATA_SCHEMA_VERSION_VALUE="$PACKAGE_DATA_SCHEMA_VERSION" \
 PACKAGE_MANIFEST_SHA256_VALUE="$PACKAGE_MANIFEST_SHA256" \
 CONTROL_CENTER_URL_VALUE="$CONTROL_CENTER_URL" \
 PLATFORM_VALUE="$PLATFORM" \
@@ -650,6 +656,7 @@ const keys = [
   "BIN_ROOT_VALUE",
   "ENV_FILE_VALUE",
   "NODE_EXE_VALUE",
+  "DATA_SCHEMA_VERSION_VALUE",
   "PACKAGE_MANIFEST_SHA256_VALUE",
   "CONTROL_CENTER_URL_VALUE",
   "PLATFORM_VALUE",
@@ -665,12 +672,16 @@ const data = {
   bin_root: process.env.BIN_ROOT_VALUE,
   env_file: process.env.ENV_FILE_VALUE,
   node_exe: process.env.NODE_EXE_VALUE,
+  data_schema_version: Number(process.env.DATA_SCHEMA_VERSION_VALUE),
   control_center_url: process.env.CONTROL_CENTER_URL_VALUE,
   platform: process.env.PLATFORM_VALUE,
   user_requires_node_pnpm_git: false,
   autostart_enabled_by_default: false,
 };
 for (const key of keys) if (!process.env[key]) throw new Error(`${key} missing`);
+if (!Number.isSafeInteger(data.data_schema_version) || data.data_schema_version < 1 || data.data_schema_version > 2147483647) {
+  throw new Error("product data-schema version is invalid");
+}
 fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
 ' "$INSTALL_JSON_STAGE"
 
@@ -702,9 +713,9 @@ fs.writeFileSync(out, `${JSON.stringify(data, null, 2)}\n`);
 ' "$INSTALL_JSON_STAGE"
 
 assert_product_data_compatibility "$NODE_EXE" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" \
-  "$INSTALL_MANAGED_FILES_SHA256" "$RUNTIME_MANAGED_FILES_SHA256"
+  "$PACKAGE_DATA_SCHEMA_VERSION"
 write_product_data_compatibility_marker "$NODE_EXE" "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" \
-  "$INSTALL_MANAGED_FILES_SHA256" "$RUNTIME_MANAGED_FILES_SHA256"
+  "$PACKAGE_DATA_SCHEMA_VERSION" "$INSTALL_MANAGED_FILES_SHA256" "$RUNTIME_MANAGED_FILES_SHA256"
 
 if { [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; } && { [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; }; then
   fail "Existing config path is not a regular file: $ENV_FILE"

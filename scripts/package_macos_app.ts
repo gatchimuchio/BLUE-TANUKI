@@ -4,11 +4,13 @@ import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
 import { readPackage, root, sha256File } from "./package_windows.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type MacArch = "x64" | "arm64";
 
 interface ProductInstallerManifest {
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   installer?: { file?: string; size_bytes?: number; sha256?: string };
   macos_distribution?: {
@@ -69,7 +71,8 @@ function readVerifiedInstaller(version: string, arch: MacArch): { file: string; 
   const actual = sha256File(file);
   if (actual !== expected.toLowerCase()) throw new Error(`macOS installer checksum mismatch: ${file}`);
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as ProductInstallerManifest;
-  if (manifest.version !== version || manifest.package_type !== `macos-${arch}-self-extracting-command-installer`) {
+  if (manifest.version !== version || manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION ||
+      manifest.package_type !== `macos-${arch}-self-extracting-command-installer`) {
     throw new Error(`macOS installer manifest does not match version/architecture: ${manifestFile}`);
   }
   if (manifest.installer?.file !== path.basename(file) ||
@@ -198,6 +201,7 @@ async function packageTarget(version: string, arch: MacArch): Promise<void> {
       schema_version: 1,
       name: "blue-tanuki",
       version,
+      data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
       package_type: `macos-${arch}-native-app-dmg`,
       created_at: new Date().toISOString(),
       source_commit: sourceCommit.stdout.trim(),

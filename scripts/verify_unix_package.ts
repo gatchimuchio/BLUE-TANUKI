@@ -9,6 +9,7 @@ import {
   parseHeadlessShellRevision,
   PLAYWRIGHT_CORE_VERSION,
 } from "./playwright_browser_runtime.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type UnixPlatform = "linux" | "macos";
 type UnixArch = "x64" | "arm64";
@@ -17,6 +18,7 @@ interface ExternalManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   archive?: {
     file?: string;
@@ -291,6 +293,7 @@ function assertManifest(
     throw new Error(`manifest schema_version must be ${expectedSchemaVersion}`);
   }
   if (manifest.name !== "blue-tanuki") throw new Error("manifest name must be blue-tanuki");
+  if (manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) throw new Error("manifest data_schema_version mismatch");
   if (manifest.package_type !== `${platform}-${arch}-tar-installer`) throw new Error("manifest package_type mismatch");
   if (manifest.archive?.file !== path.basename(archive)) throw new Error("manifest archive file mismatch");
   if (manifest.archive?.sha256 !== actualSha) throw new Error("manifest archive sha256 mismatch");

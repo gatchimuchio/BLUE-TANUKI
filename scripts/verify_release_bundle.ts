@@ -7,6 +7,7 @@ import {
   PRODUCT_SCOPE_CORE_RELEASE_PATHS,
   PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
 } from "../packages/protocol/src/product_scope_contract.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 interface PackageJson {
   version: string;
@@ -16,6 +17,7 @@ interface ReleaseManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   archive?: {
     file?: string;
     size_bytes?: number;
@@ -271,6 +273,9 @@ function assertManifest(
   }
   if (manifest.name !== "blue-tanuki") {
     throw new Error("manifest name must be blue-tanuki");
+  }
+  if (manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) {
+    throw new Error("manifest data_schema_version does not match the product data compatibility contract");
   }
   if (manifest.archive?.file !== archiveName) {
     throw new Error("manifest archive file does not match release file");

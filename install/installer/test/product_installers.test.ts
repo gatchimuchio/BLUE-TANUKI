@@ -64,7 +64,7 @@ describe("downloadable product installer packages", () => {
     const setup = read("install/unix/product/BlueTanukiSetup.sh");
     const uninstall = read("install/unix/product/BlueTanukiUninstall.sh");
     const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
-    const updateGate = setup.indexOf("in-place product replacement is blocked");
+    const updateGate = setup.indexOf("in-place product replacement is unsupported");
     const stageCreation = setup.indexOf('mkdir "$INSTALL_STAGE"');
 
     expect(launcher).toContain("process_identity_state");

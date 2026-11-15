@@ -611,6 +611,8 @@ function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
   New-Item -ItemType Directory -Force -Path $dataRoot, $dataDir, $logDir | Out-Null
   $nodeExe = Find-NodeExe
   $env:BLUE_TANUKI_ENV_FILE = $envFile
+  $env:BLUE_TANUKI_INSTALL_ROOT = $installRoot
+  $env:BLUE_TANUKI_DATA_ROOT = $dataRoot
   $rawArgs = @("apps/gateway/dist/main.js", "--serve", "--env-file", $envFile)
   if ($RemainingArgs) {
     $rawArgs += $RemainingArgs

@@ -4034,7 +4034,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } else if (candidateStatus !== "pass") {
           label = "application blocked · archive not verified";
         } else if (compatibilityStatus === "pass") {
-          label = "manual-only · compatibility verified";
+          label = "application blocked · data compatible; replacement unsupported";
+          tone = "warn";
         }
         setText("update-boundary-status", label);
         byId("update-boundary-status").className = "badge " + tone;

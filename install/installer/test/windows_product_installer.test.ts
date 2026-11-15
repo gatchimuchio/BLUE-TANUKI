@@ -411,7 +411,7 @@ describe("Windows product installer package", () => {
     const setup = read("install/windows/product/BlueTanukiSetup.ps1");
     const recoveryCall = setup.indexOf("Restore-InterruptedWindowsProductUpdate -InstallRoot");
     const installPresenceCheck = setup.indexOf("$existingProductInstall = Test-Path -LiteralPath $installRootResolved");
-    const replacementBlock = setup.indexOf("In-place product replacement is blocked while product-wide persisted-data compatibility and migration are unknown");
+    const replacementBlock = setup.indexOf("In-place product replacement is unsupported. A matching product data-schema declaration does not authorize an application update");
     const stageCreation = setup.indexOf("$stageRoot = Join-Path $installParent");
     const compatibilityCheck = setup.indexOf("Assert-DataPackageCompatibility $dataRootResolved $stageRoot");
     const residentStop = setup.indexOf("Stop-ExistingResident");

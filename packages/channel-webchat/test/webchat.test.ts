@@ -3859,7 +3859,7 @@ describe("WebChatChannel — Update surface", () => {
             candidate_manifest_schema_version: 1,
             candidate_data_schema_version: null,
             migration_required: null,
-            migration_supported: null,
+            migration_supported: false,
             status: "unknown",
           },
           rollback: {
@@ -3882,7 +3882,7 @@ describe("WebChatChannel — Update surface", () => {
             recovery_backup_used_for_authority: false,
             used_for_authority: false,
           },
-          next_safe_action: "Create a pre-update backup.",
+          next_safe_action: "Product data-schema compatibility and migration support are unknown. Do not apply this candidate until both are supported and verified.",
           evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
         }),
         verifyCandidate: async () => {

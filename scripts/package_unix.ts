@@ -15,6 +15,7 @@ import {
   type NativeAppTarget,
 } from "./package_windows.ts";
 import { installHeadlessShell, PLAYWRIGHT_CORE_VERSION } from "./playwright_browser_runtime.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type UnixPlatform = "linux" | "macos";
 type UnixArch = "x64" | "arm64";
@@ -34,6 +35,7 @@ interface UnixInstallerManifest {
   schema_version: 1 | 2;
   name: "blue-tanuki";
   version: string;
+  data_schema_version: typeof PRODUCT_DATA_SCHEMA_VERSION;
   package_type: `${UnixPlatform}-${UnixArch}-tar-installer`;
   created_at: string;
   node_runtime: {
@@ -315,6 +317,7 @@ async function packageTarget(target: UnixTarget): Promise<void> {
     schema_version: target.platform === "linux" ? 2 : 1,
     name: "blue-tanuki",
     version: pkg.version,
+    data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
     package_type: packageType,
     created_at: new Date().toISOString(),
     node_runtime: {

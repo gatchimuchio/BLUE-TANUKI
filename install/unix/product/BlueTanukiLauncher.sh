@@ -33,7 +33,11 @@ STATE_ROOT="${STATE_ROOT:-$DATA_ROOT/data}"
 [ "$STATE_ROOT" = "$DATA_ROOT/data" ] ||
   fail "installed runtime state root does not match its retained data root"
 BLUE_TANUKI_STATE_ROOT="$STATE_ROOT"
+BLUE_TANUKI_INSTALL_ROOT="$INSTALL_ROOT"
+BLUE_TANUKI_DATA_ROOT="$DATA_ROOT"
 export BLUE_TANUKI_STATE_ROOT
+export BLUE_TANUKI_INSTALL_ROOT
+export BLUE_TANUKI_DATA_ROOT
 
 load_autostart_guard() {
   SAFE_TARGET_LIB="$SCRIPT_DIR/install/unix/safe-target.sh"

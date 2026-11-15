@@ -690,9 +690,9 @@ if [ "${1:-}" = "-e" ]; then
   javascript=$1
   shift
   if [ -n "${PACKAGE_MANIFEST_SHA256_VALUE:-}" ]; then
-    printf '{\n  "schema_version": 2,\n  "product_id": "blue-tanuki-product-install",\n  "package_manifest_sha256": "%s",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "env_file": "%s",\n  "node_exe": "%s",\n  "control_center_url": "%s",\n  "platform": "%s",\n  "autostart_enabled_by_default": false\n}\n' \
+    printf '{\n  "schema_version": 2,\n  "product_id": "blue-tanuki-product-install",\n  "package_manifest_sha256": "%s",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "env_file": "%s",\n  "node_exe": "%s",\n  "data_schema_version": %s,\n  "control_center_url": "%s",\n  "platform": "%s",\n  "autostart_enabled_by_default": false\n}\n' \
       "$PACKAGE_MANIFEST_SHA256_VALUE" "$INSTALL_ROOT_VALUE" "$DATA_ROOT_VALUE" "$CONFIG_ROOT_VALUE" \
-      "$RUNTIME_ROOT_VALUE" "$BIN_ROOT_VALUE" "$ENV_FILE_VALUE" "$NODE_EXE_VALUE" \
+      "$RUNTIME_ROOT_VALUE" "$BIN_ROOT_VALUE" "$ENV_FILE_VALUE" "$NODE_EXE_VALUE" "$DATA_SCHEMA_VERSION_VALUE" \
       "$CONTROL_CENTER_URL_VALUE" "$PLATFORM_VALUE" > "$1"
   elif [ -n "${INSTALL_MANAGED_FILES_SHA256_VALUE:-}" ] && [ -n "${RUNTIME_MANAGED_FILES_SHA256_VALUE:-}" ]; then
     metadata_file=$1
@@ -704,7 +704,7 @@ if [ "${1:-}" = "-e" ]; then
   elif printf '%s' "$javascript" | grep -Fq 'const expected = {'; then
     marker="$BT_PRODUCT_DATA_MARKER"
     [ -f "$marker" ] && [ ! -L "$marker" ] || exit 44
-    grep -Fqx '  "schema_version": 1,' "$marker" || exit 45
+    grep -Fqx '  "schema_version": 2,' "$marker" || exit 45
     grep -Fqx '  "product_id": "blue-tanuki-product-data",' "$marker" || exit 46
     grep -Fqx "  \"install_root\": \"$BT_PRODUCT_INSTALL_ROOT\"," "$marker" || exit 47
     grep -Fqx "  \"data_root\": \"$BT_PRODUCT_DATA_ROOT\"," "$marker" || exit 48
@@ -712,14 +712,16 @@ if [ "${1:-}" = "-e" ]; then
     grep -Fqx "  \"runtime_root\": \"$BT_PRODUCT_RUNTIME_ROOT\"," "$marker" || exit 50
     grep -Fqx "  \"bin_root\": \"$BT_PRODUCT_BIN_ROOT\"," "$marker" || exit 51
     grep -Fqx "  \"platform\": \"$BT_PRODUCT_PLATFORM\"," "$marker" || exit 52
-    grep -Fqx "  \"managed_install_files_sha256\": \"$BT_PRODUCT_INSTALL_INVENTORY\"," "$marker" || exit 53
-    grep -Fqx "  \"managed_runtime_files_sha256\": \"$BT_PRODUCT_RUNTIME_INVENTORY\"" "$marker" || exit 54
+    grep -Fqx "  \"data_schema_version\": $BT_PRODUCT_DATA_SCHEMA_VERSION," "$marker" || exit 53
+    grep -Fqx "  \"managed_install_files_sha256\": \"$BT_PRODUCT_INSTALL_INVENTORY\"," "$marker" || exit 54
+    grep -Fqx "  \"managed_runtime_files_sha256\": \"$BT_PRODUCT_RUNTIME_INVENTORY\"" "$marker" || exit 55
   elif printf '%s' "$javascript" | grep -Fq 'const data = {'; then
     marker="$BT_PRODUCT_DATA_MARKER"
     marker_tmp="$marker.test-tmp.$$"
-    printf '{\n  "schema_version": 1,\n  "product_id": "blue-tanuki-product-data",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "platform": "%s",\n  "managed_install_files_sha256": "%s",\n  "managed_runtime_files_sha256": "%s"\n}\n' \
+    printf '{\n  "schema_version": 2,\n  "product_id": "blue-tanuki-product-data",\n  "install_root": "%s",\n  "data_root": "%s",\n  "config_root": "%s",\n  "runtime_root": "%s",\n  "bin_root": "%s",\n  "platform": "%s",\n  "data_schema_version": %s,\n  "managed_install_files_sha256": "%s",\n  "managed_runtime_files_sha256": "%s"\n}\n' \
       "$BT_PRODUCT_INSTALL_ROOT" "$BT_PRODUCT_DATA_ROOT" "$BT_PRODUCT_CONFIG_ROOT" "$BT_PRODUCT_RUNTIME_ROOT" \
-      "$BT_PRODUCT_BIN_ROOT" "$BT_PRODUCT_PLATFORM" "$BT_PRODUCT_INSTALL_INVENTORY" "$BT_PRODUCT_RUNTIME_INVENTORY" > "$marker_tmp"
+      "$BT_PRODUCT_BIN_ROOT" "$BT_PRODUCT_PLATFORM" "$BT_PRODUCT_DATA_SCHEMA_VERSION" \
+      "$BT_PRODUCT_INSTALL_INVENTORY" "$BT_PRODUCT_RUNTIME_INVENTORY" > "$marker_tmp"
     ln "$marker_tmp" "$marker"
     rm -f -- "$marker_tmp"
   else
@@ -761,6 +763,7 @@ cat > "$SETUP_PACKAGE/unix-installer-manifest.json" <<MANIFEST
   "schema_version": 2,
   "name": "blue-tanuki",
   "version": "1.0.0-rc.1",
+  "data_schema_version": 1,
   "package_type": "linux-x64-tar-installer",
   "linux_runtime": {
     "distribution": "vendor-supported GNU/Linux releases using glibc",
@@ -949,10 +952,10 @@ STOP_FAILURE_FILE="$TMP_ROOT/stop-process-failure"
 export STOP_FAILURE_FILE
 : > "$STOP_FAILURE_FILE"
 if run_fixture_setup --force --no-launch --skip-doctor > "$TMP_ROOT/setup-update-blocked.out" 2>&1; then
-  echo "product setup replaced an installed package while data compatibility was unknown" >&2
+  echo "product setup replaced an installed package despite the unsupported replacement policy" >&2
   exit 69
 fi
-grep -Fq "in-place product replacement is blocked" "$TMP_ROOT/setup-update-blocked.out" || {
+grep -Fq "in-place product replacement is unsupported" "$TMP_ROOT/setup-update-blocked.out" || {
   cat "$TMP_ROOT/setup-update-blocked.out" >&2
   echo "product setup did not report the compatibility gate" >&2
   exit 70

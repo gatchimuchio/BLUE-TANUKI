@@ -1134,13 +1134,12 @@ assert_product_data_compatibility() {
   bt_runtime_root=$5
   bt_bin_root=$6
   bt_platform=$7
-  bt_install_inventory=$8
-  bt_runtime_inventory=$9
+  bt_data_schema_version=$8
   bt_marker="$bt_data_root/blue-tanuki-product-data.json"
   if [ ! -e "$bt_marker" ] && [ ! -L "$bt_marker" ]; then
     if [ -e "$bt_data_root/.blue-tanuki-owner" ] || [ -L "$bt_data_root/.blue-tanuki-owner" ] ||
        [ -e "$bt_config_root/.blue-tanuki-owner" ] || [ -L "$bt_config_root/.blue-tanuki-owner" ]; then
-      safe_target_fail "retained product data compatibility is unknown; no compatible product-file inventory was recorded"
+      safe_target_fail "retained product data compatibility is unknown; no compatible product data-schema marker was recorded"
     fi
     return 0
   fi
@@ -1151,8 +1150,7 @@ assert_product_data_compatibility() {
   BT_PRODUCT_RUNTIME_ROOT="$bt_runtime_root" \
   BT_PRODUCT_BIN_ROOT="$bt_bin_root" \
   BT_PRODUCT_PLATFORM="$bt_platform" \
-  BT_PRODUCT_INSTALL_INVENTORY="$bt_install_inventory" \
-  BT_PRODUCT_RUNTIME_INVENTORY="$bt_runtime_inventory" \
+  BT_PRODUCT_DATA_SCHEMA_VERSION="$bt_data_schema_version" \
   "$bt_node_exe" -e '
 const fs = require("fs");
 const markerPath = process.env.BT_PRODUCT_DATA_MARKER;
@@ -1160,7 +1158,7 @@ const stat = fs.lstatSync(markerPath);
 if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error("product data compatibility marker is not a bounded regular file");
 const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
 const expected = {
-  schema_version: 1,
+  schema_version: 2,
   product_id: "blue-tanuki-product-data",
   install_root: process.env.BT_PRODUCT_INSTALL_ROOT,
   data_root: process.env.BT_PRODUCT_DATA_ROOT,
@@ -1172,13 +1170,14 @@ const expected = {
 for (const [key, value] of Object.entries(expected)) {
   if (marker[key] !== value) throw new Error(`product data compatibility marker mismatch: ${key}`);
 }
-if (!/^[a-f0-9]{64}$/i.test(marker.managed_install_files_sha256 || "") ||
-    !/^[a-f0-9]{64}$/i.test(marker.managed_runtime_files_sha256 || "")) {
-  throw new Error("product data compatibility marker has invalid file inventory digests");
+if (!Number.isSafeInteger(marker.data_schema_version) || marker.data_schema_version < 1 ||
+    !Number.isSafeInteger(Number(process.env.BT_PRODUCT_DATA_SCHEMA_VERSION)) ||
+    Number(process.env.BT_PRODUCT_DATA_SCHEMA_VERSION) < 1 ||
+    marker.data_schema_version > 2147483647 || Number(process.env.BT_PRODUCT_DATA_SCHEMA_VERSION) > 2147483647) {
+  throw new Error("product data-schema version is missing or invalid");
 }
-if (marker.managed_install_files_sha256.toLowerCase() !== process.env.BT_PRODUCT_INSTALL_INVENTORY.toLowerCase() ||
-    marker.managed_runtime_files_sha256.toLowerCase() !== process.env.BT_PRODUCT_RUNTIME_INVENTORY.toLowerCase()) {
-  throw new Error("package differs from the product build associated with retained data; compatibility and migration are unknown");
+if (marker.data_schema_version !== Number(process.env.BT_PRODUCT_DATA_SCHEMA_VERSION)) {
+  throw new Error("package product data-schema version differs from retained data; migration is unsupported");
 }
 ' || safe_target_fail "retained product data compatibility could not be verified; setup is blocked"
 }
@@ -1191,12 +1190,13 @@ write_product_data_compatibility_marker() {
   bt_runtime_root=$5
   bt_bin_root=$6
   bt_platform=$7
-  bt_install_inventory=$8
-  bt_runtime_inventory=$9
+  bt_data_schema_version=$8
+  bt_install_inventory=$9
+  bt_runtime_inventory=${10}
   bt_marker="$bt_data_root/blue-tanuki-product-data.json"
   if [ -e "$bt_marker" ] || [ -L "$bt_marker" ]; then
     assert_product_data_compatibility "$bt_node_exe" "$bt_install_root" "$bt_data_root" "$bt_config_root" "$bt_runtime_root" "$bt_bin_root" "$bt_platform" \
-      "$bt_install_inventory" "$bt_runtime_inventory"
+      "$bt_data_schema_version"
     return 0
   fi
   BT_PRODUCT_DATA_MARKER="$bt_marker" \
@@ -1206,6 +1206,7 @@ write_product_data_compatibility_marker() {
   BT_PRODUCT_RUNTIME_ROOT="$bt_runtime_root" \
   BT_PRODUCT_BIN_ROOT="$bt_bin_root" \
   BT_PRODUCT_PLATFORM="$bt_platform" \
+  BT_PRODUCT_DATA_SCHEMA_VERSION="$bt_data_schema_version" \
   BT_PRODUCT_INSTALL_INVENTORY="$bt_install_inventory" \
   BT_PRODUCT_RUNTIME_INVENTORY="$bt_runtime_inventory" \
   "$bt_node_exe" -e '
@@ -1213,7 +1214,7 @@ const fs = require("fs");
 const path = process.env.BT_PRODUCT_DATA_MARKER;
 const temporary = `${path}.tmp-${process.pid}`;
 const data = {
-  schema_version: 1,
+  schema_version: 2,
   product_id: "blue-tanuki-product-data",
   install_root: process.env.BT_PRODUCT_INSTALL_ROOT,
   data_root: process.env.BT_PRODUCT_DATA_ROOT,
@@ -1221,10 +1222,12 @@ const data = {
   runtime_root: process.env.BT_PRODUCT_RUNTIME_ROOT,
   bin_root: process.env.BT_PRODUCT_BIN_ROOT,
   platform: process.env.BT_PRODUCT_PLATFORM,
+  data_schema_version: Number(process.env.BT_PRODUCT_DATA_SCHEMA_VERSION),
   managed_install_files_sha256: process.env.BT_PRODUCT_INSTALL_INVENTORY,
   managed_runtime_files_sha256: process.env.BT_PRODUCT_RUNTIME_INVENTORY,
 };
-if (!/^[a-f0-9]{64}$/i.test(data.managed_install_files_sha256 || "") ||
+if (!Number.isSafeInteger(data.data_schema_version) || data.data_schema_version < 1 || data.data_schema_version > 2147483647 ||
+    !/^[a-f0-9]{64}$/i.test(data.managed_install_files_sha256 || "") ||
     !/^[a-f0-9]{64}$/i.test(data.managed_runtime_files_sha256 || "")) throw new Error("managed inventory digest missing");
 const fd = fs.openSync(temporary, "wx", 0o600);
 try {

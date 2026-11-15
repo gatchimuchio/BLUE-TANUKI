@@ -190,6 +190,74 @@ async function readGitHead(root: string): Promise<string | null> {
   return /^[a-f0-9]{40}$/i.test(commit) ? commit : null;
 }
 
+function safeDataSchemaVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function sameAbsolutePath(left: unknown, right: string): boolean {
+  if (typeof left !== "string" || left.length === 0) return false;
+  const normalizedLeft = path.normalize(path.resolve(left));
+  const normalizedRight = path.normalize(path.resolve(right));
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+async function readInstalledDataSchemaVersion(env: NodeJS.ProcessEnv): Promise<number | null> {
+  const dataRootValue = env.BLUE_TANUKI_DATA_ROOT?.trim();
+  const installRootValue = env.BLUE_TANUKI_INSTALL_ROOT?.trim();
+  if (!dataRootValue || !installRootValue) return null;
+  const dataRoot = path.resolve(dataRootValue);
+  const markerPath = path.join(dataRoot, "blue-tanuki-product-data.json");
+  try {
+    const rootStat = await fs.lstat(dataRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
+    const markerStat = await fs.lstat(markerPath);
+    if (!markerStat.isFile() || markerStat.isSymbolicLink() || markerStat.size > 65536) return null;
+    const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+    const expectedMarkerSchema = process.platform === "win32" ? 3 : 2;
+    if (marker.schema_version !== expectedMarkerSchema ||
+        marker.product_id !== "blue-tanuki-product-data" ||
+        !sameAbsolutePath(marker.data_root, dataRoot) ||
+        !sameAbsolutePath(marker.install_root, installRootValue) ||
+        !safeDataSchemaVersion(marker.data_schema_version)) return null;
+    if (process.platform !== "win32") {
+      const expectedPlatform = process.platform === "darwin" ? "macos" : "linux";
+      if (marker.platform !== expectedPlatform) return null;
+    }
+    return marker.data_schema_version;
+  } catch {
+    return null;
+  }
+}
+
+function dataCompatibilityStatus(
+  candidate: UpdateCandidateStatus,
+  currentDataSchemaVersion: number | null,
+  candidateDataSchemaVersion: number | null,
+): UpdateSnapshot["compatibility"]["status"] {
+  if (candidate.verification_status === "fail") return "blocked";
+  if (candidate.verification_status !== "pass" ||
+      currentDataSchemaVersion === null || candidateDataSchemaVersion === null) return "unknown";
+  return currentDataSchemaVersion === candidateDataSchemaVersion ? "pass" : "blocked";
+}
+
+function updateNextSafeAction(
+  candidate: UpdateCandidateStatus,
+  compatibilityStatus: UpdateSnapshot["compatibility"]["status"],
+): string {
+  if (candidate.verification_status !== "pass") {
+    return "Verify the release archive, checksum, and manifest before considering product data compatibility.";
+  }
+  if (compatibilityStatus === "pass") {
+    return "The installed marker and candidate declare the same product data schema. This does not enable application replacement; keep the current installation until the packaged update and rollback path is implemented.";
+  }
+  if (compatibilityStatus === "blocked") {
+    return "Installed and candidate product data schema versions differ, or candidate verification failed. Do not reuse or replace the installation; preserve the current application and data.";
+  }
+  return DATA_COMPATIBILITY_NOT_ESTABLISHED;
+}
+
 function defaultArchivePath(root: string, version: string): string {
   const ext = process.platform === "win32" ? "zip" : "tar.gz";
   return path.join(root, "release", `blue-tanuki-${version}-source-bundle.${ext}`);
@@ -258,6 +326,7 @@ function manifestFailure(
 ): string | null {
   if (manifest.schema_version !== 1) return "manifest schema_version must be 1";
   if (manifest.name !== "blue-tanuki") return "manifest name must be blue-tanuki";
+  if (!safeDataSchemaVersion(manifest.data_schema_version)) return "manifest data_schema_version is missing or invalid";
   if (manifest.archive?.file !== path.basename(archivePath)) return "manifest archive file mismatch";
   if (manifest.archive?.size_bytes !== archiveSize) return "manifest archive size mismatch";
   if (typeof manifest.archive?.sha256 !== "string" || manifest.archive.sha256.toLowerCase() !== actualSha) {
@@ -515,6 +584,7 @@ async function writeRollbackPlan(
 function actionResult(
   action: UpdateActionResult["action"],
   candidate: UpdateCandidateStatus,
+  compatibilityStatus: UpdateSnapshot["compatibility"]["status"],
   values: Omit<
     UpdateActionResult,
     "schema_version" | "surface" | "action" | "status" | "candidate" | "compatibility_status" | "authority_boundary" | "used_for_authority" | "hds_brain_remains_authority" | "evidence_source"
@@ -526,7 +596,7 @@ function actionResult(
     action,
     status: "completed",
     candidate,
-    compatibility_status: candidate.verification_status === "fail" ? "blocked" : "unknown",
+    compatibility_status: compatibilityStatus,
     ...values,
     authority_boundary: AUTHORITY_BOUNDARY,
     used_for_authority: false,
@@ -539,24 +609,26 @@ export async function buildUpdateSnapshot(
   root = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateSnapshot> {
-  const [currentVersion, currentGitHead, candidate, latestPlan] = await Promise.all([
+  const [currentVersion, currentGitHead, candidate, latestPlan, currentDataSchemaVersion] = await Promise.all([
     readPackageVersion(root),
     readGitHead(root),
     verifyCandidate(root, env),
     latestRollbackPlan(env),
+    readInstalledDataSchemaVersion(env),
   ]);
   const candidateManifestSchema =
     typeof candidate.manifest?.schema_version === "number"
       ? candidate.manifest.schema_version
       : null;
   const candidateDataSchema =
-    typeof candidate.manifest?.data_schema_version === "number" &&
-    Number.isSafeInteger(candidate.manifest.data_schema_version) &&
-    candidate.manifest.data_schema_version >= 0
+    safeDataSchemaVersion(candidate.manifest?.data_schema_version)
       ? candidate.manifest.data_schema_version
       : null;
-  const compatibilityStatus =
-    candidate.status.verification_status === "fail" ? "blocked" : "unknown";
+  const compatibilityStatus = dataCompatibilityStatus(
+    candidate.status,
+    currentDataSchemaVersion,
+    candidateDataSchema,
+  );
 
   return {
     schema_version: 1,
@@ -568,12 +640,14 @@ export async function buildUpdateSnapshot(
     },
     candidate: candidate.status,
     compatibility: {
-      current_data_schema_version: null,
+      current_data_schema_version: currentDataSchemaVersion,
       minimum_supported_data_schema_version: null,
       candidate_manifest_schema_version: candidateManifestSchema,
       candidate_data_schema_version: candidateDataSchema,
-      migration_required: null,
-      migration_supported: null,
+      migration_required: currentDataSchemaVersion === null || candidateDataSchema === null
+        ? null
+        : currentDataSchemaVersion !== candidateDataSchema,
+      migration_supported: false,
       status: compatibilityStatus,
     },
     rollback: {
@@ -590,10 +664,7 @@ export async function buildUpdateSnapshot(
       manual_update_only: true,
     },
     authority_boundary: AUTHORITY_BOUNDARY,
-    next_safe_action:
-      candidate.status.verification_status === "pass"
-        ? "Candidate archive integrity is verified, but supported product data-schema compatibility and migration requirements are unknown. Establish them before applying the update manually."
-        : "Generate or configure a release bundle with matching sha256 and manifest sidecars before update.",
+    next_safe_action: updateNextSafeAction(candidate.status, compatibilityStatus),
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };
 }
@@ -603,11 +674,13 @@ export async function verifyUpdateCandidate(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateActionResult> {
   const candidate = await verifyCandidate(root, env);
-  return actionResult("verify_candidate", candidate.status, {
-    next_safe_action:
-      candidate.status.verification_status === "pass"
-        ? `Candidate archive integrity is verified. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`
-        : `Fix the release archive, sha256 sidecar, or manifest. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`,
+  const currentDataSchemaVersion = await readInstalledDataSchemaVersion(env);
+  const candidateDataSchemaVersion = safeDataSchemaVersion(candidate.manifest?.data_schema_version)
+    ? candidate.manifest.data_schema_version
+    : null;
+  const compatibilityStatus = dataCompatibilityStatus(candidate.status, currentDataSchemaVersion, candidateDataSchemaVersion);
+  return actionResult("verify_candidate", candidate.status, compatibilityStatus, {
+    next_safe_action: updateNextSafeAction(candidate.status, compatibilityStatus),
   });
 }
 
@@ -618,6 +691,11 @@ export async function prepareManualUpdate(
 ): Promise<UpdateActionResult> {
   assertConfirmation(options.confirm, "PRE_UPDATE_BACKUP");
   const candidate = await verifyCandidate(root, env);
+  const currentDataSchemaVersion = await readInstalledDataSchemaVersion(env);
+  const candidateDataSchemaVersion = safeDataSchemaVersion(candidate.manifest?.data_schema_version)
+    ? candidate.manifest.data_schema_version
+    : null;
+  const compatibilityStatus = dataCompatibilityStatus(candidate.status, currentDataSchemaVersion, candidateDataSchemaVersion);
   const backup = await createRecoveryBackup(env);
   if (!backup.backup_id) {
     throw new Error("pre_update_backup_failed");
@@ -629,14 +707,11 @@ export async function prepareManualUpdate(
     backup.backup_id,
     backup.backup_manifest_path ?? null,
   );
-  return actionResult("prepare_update", candidate.status, {
+  return actionResult("prepare_update", candidate.status, compatibilityStatus, {
     pre_update_backup_id: backup.backup_id,
     pre_update_backup_manifest_path: backup.backup_manifest_path,
     rollback_plan_id: plan.id,
     rollback_plan_path: plan.path,
-    next_safe_action:
-      candidate.status.verification_status === "pass"
-        ? `Pre-update backup and rollback plan are recorded. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`
-        : `Backup and rollback plan are recorded; fix candidate verification. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`,
+    next_safe_action: `${updateNextSafeAction(candidate.status, compatibilityStatus)} Pre-update backup and rollback-plan records are evidence only and do not enable application replacement.`,
   });
 }

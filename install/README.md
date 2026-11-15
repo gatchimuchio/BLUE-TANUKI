@@ -398,17 +398,18 @@ or live LLM credentials can remain unset during local setup.
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
 source installers documented above. Packaged product Setup blocks every
-in-place app replacement while product-wide data compatibility and migration
-are unknown, even when `--force` or `-Force` is supplied. For a normal setup
-attempt, the resident is not stopped and the candidate is not staged. Setup
-may first restore a previously interrupted, verified transaction.
+in-place app replacement, even when the installed data-schema version matches
+the candidate or `--force` / `-Force` is supplied. The compatibility marker
+enables only post-uninstall data reattachment; it does not enable an app update.
+For a normal setup attempt, the resident is not stopped and the candidate is not
+staged. Setup may first restore a previously interrupted, verified transaction.
 
-After uninstall with data retained, packaged Setup accepts only a staged
-app/runtime inventory that matches the compatibility marker recorded with that
-data root. A missing marker or different inventory is blocked. This preserves
-same-build reinstall while preventing a different package from reusing
-unverified product data. Source-development installers reject packaged product
-data roots so the two install modes cannot overwrite or mix that state.
+After uninstall with data retained, packaged Setup accepts only a candidate
+whose product data-schema version matches the marker recorded with that data
+root. A missing legacy marker or different version is blocked. This allows
+explicitly version-compatible data reattachment without claiming migration
+support. Source-development installers reject packaged product data roots so
+the two install modes cannot overwrite or mix that state.
 
 `-ResetConfig` or `RESET_CONFIG=1` applies only to the developer source
 installers. It does not authorize a packaged product update or migration.

@@ -8,6 +8,7 @@ import {
   PRODUCT_SCOPE_PREVIEW_RUNTIME_PLUGIN_PATHS,
   PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS,
 } from "../packages/protocol/src/product_scope_contract.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
 
 interface PackageJson {
@@ -225,6 +226,7 @@ interface ReleaseManifest {
   schema_version: 1;
   name: "blue-tanuki";
   version: string;
+  data_schema_version: typeof PRODUCT_DATA_SCHEMA_VERSION;
   created_at: string;
   archive: {
     file: string;
@@ -622,6 +624,7 @@ async function writeIntegrityFiles(
     schema_version: 1,
     name: "blue-tanuki",
     version,
+    data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
     created_at: new Date().toISOString(),
     archive: {
       file: archiveName,

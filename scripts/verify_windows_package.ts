@@ -10,11 +10,13 @@ import {
   parseHeadlessShellRevision,
   PLAYWRIGHT_CORE_VERSION,
 } from "./playwright_browser_runtime.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 interface ExternalManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   archive?: {
     file?: string;
@@ -266,6 +268,7 @@ function assertSafeEntry(entry: string): void {
 function assertManifest(manifest: ExternalManifest, archive: string, actualSha: string): string {
   if (manifest.schema_version !== 1) throw new Error("manifest schema_version must be 1");
   if (manifest.name !== "blue-tanuki") throw new Error("manifest name must be blue-tanuki");
+  if (manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) throw new Error("manifest data_schema_version mismatch");
   if (manifest.package_type !== "windows-x64-zip-installer") throw new Error("manifest package_type mismatch");
   if (manifest.archive?.file !== path.basename(archive)) throw new Error("manifest archive file mismatch");
   if (manifest.archive?.sha256 !== actualSha) throw new Error("manifest archive sha256 mismatch");

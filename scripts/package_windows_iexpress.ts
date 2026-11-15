@@ -18,6 +18,7 @@ import { hashEmbeddedBase64PayloadSync } from "./embedded_payload.js";
 import { sha256File } from "./package_windows.ts";
 import { windowsShortPath } from "./windows_short_path.js";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 interface PackageJson {
   version?: string;
@@ -27,6 +28,7 @@ interface ProductInstallerManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   installer?: { file?: string; size_bytes?: number; sha256?: string };
   archive?: { file?: string; size_bytes?: number; sha256?: string };
@@ -37,6 +39,7 @@ interface WindowsExeManifest {
   schema_version: 1;
   name: "blue-tanuki";
   version: string;
+  data_schema_version: typeof PRODUCT_DATA_SCHEMA_VERSION;
   package_type: "windows-x64-iexpress-self-extracting-exe-installer";
   created_at: string;
   installer: { file: string; size_bytes: number; sha256: string };
@@ -168,6 +171,7 @@ function main(): void {
   if (sourceCmdHash !== expectedSourceCmdHash) throw new Error("source setup command SHA-256 mismatch");
   const sourceCmdManifest = JSON.parse(readFileSync(sourceCmdManifestPath, "utf8")) as ProductInstallerManifest;
   if (sourceCmdManifest.name !== "blue-tanuki" || sourceCmdManifest.version !== version ||
+      sourceCmdManifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION ||
       sourceCmdManifest.package_type !== "windows-x64-self-extracting-cmd-installer" ||
       sourceCmdManifest.installer?.sha256?.toLowerCase() !== sourceCmdHash) {
     throw new Error("source setup command manifest does not match the current Windows installer");
@@ -176,6 +180,9 @@ function main(): void {
   const payloadHash = sha256File(payload);
   if (payloadHash !== readSha256Sidecar(payloadShaPath)) throw new Error("Windows payload ZIP SHA-256 mismatch");
   const payloadManifest = JSON.parse(readFileSync(payloadManifestPath, "utf8")) as ProductInstallerManifest;
+  if (payloadManifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) {
+    throw new Error("Windows installer payload data-schema version does not match the product contract");
+  }
   if (payloadManifest.name !== "blue-tanuki" || payloadManifest.version !== version ||
       payloadManifest.package_type !== "windows-x64-zip-installer" ||
       payloadManifest.archive?.file !== path.basename(payload) ||
@@ -231,6 +238,7 @@ function main(): void {
       schema_version: 1,
       name: "blue-tanuki",
       version,
+      data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
       package_type: "windows-x64-iexpress-self-extracting-exe-installer",
       created_at: new Date().toISOString(),
       installer: { file: path.basename(outputExe), size_bytes: installerStat.size, sha256: installerHash },

@@ -9,6 +9,7 @@ import {
   sha256File,
 } from "./package_windows.ts";
 import { windowsArtifactDir } from "./windows_artifact_dir.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type ProductInstallerKind =
   | "windows-x64-self-extracting-cmd-installer"
@@ -28,6 +29,7 @@ interface ProductInstallerManifest {
   schema_version: 1;
   name: "blue-tanuki";
   version: string;
+  data_schema_version: typeof PRODUCT_DATA_SCHEMA_VERSION;
   package_type: ProductInstallerKind;
   created_at: string;
   installer: {
@@ -314,6 +316,7 @@ async function writeProductInstaller(target: ProductInstallerTarget): Promise<vo
     schema_version: 1,
     name: "blue-tanuki",
     version: pkg.version,
+    data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
     package_type: target.packageType,
     created_at: new Date().toISOString(),
     installer: {

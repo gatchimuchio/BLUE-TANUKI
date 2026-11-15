@@ -12,12 +12,14 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { hashEmbeddedBase64PayloadSync, sha256FileSync } from "./embedded_payload.js";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 import { windowsShortPath } from "./windows_short_path.js";
 
 interface WindowsExeManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   installer?: { file?: string; size_bytes?: number; sha256?: string };
   bootstrapper?: { file?: string; size_bytes?: number; sha256?: string; implementation?: string };
@@ -81,6 +83,7 @@ function assertManifest(
   payloadHash: string,
 ): void {
   if (manifest.schema_version !== 1 || manifest.name !== "blue-tanuki" || manifest.version !== version ||
+      manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION ||
       manifest.package_type !== "windows-x64-iexpress-self-extracting-exe-installer") {
     throw new Error("Windows .exe installer manifest identity mismatch");
   }

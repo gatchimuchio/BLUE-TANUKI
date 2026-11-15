@@ -463,13 +463,20 @@ function Assert-ManagedWindowsProductDataMarker {
   try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch {
     throw "Product data ownership marker is invalid: $markerPath"
   }
-  if ($null -eq $marker -or $marker.schema_version -notin @(1, 2) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+  if ($null -eq $marker -or $marker.schema_version -notin @(1, 2, 3) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
       -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $data), [System.StringComparison]::OrdinalIgnoreCase) -or
       -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $install), [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Product data ownership marker does not match the requested install and data roots.'
   }
-  if ($marker.schema_version -eq 2 -and [string]$marker.managed_files_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+  if ($marker.schema_version -in @(2, 3) -and [string]$marker.managed_files_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
     throw 'Product data compatibility marker does not contain a valid managed product-file inventory digest.'
+  }
+  if ($marker.schema_version -eq 3) {
+    $dataSchemaVersion = 0L
+    if (-not [long]::TryParse([string]$marker.data_schema_version, [ref]$dataSchemaVersion) -or
+        $dataSchemaVersion -lt 1 -or $dataSchemaVersion -gt 2147483647) {
+      throw 'Product data compatibility marker does not contain a valid data-schema version.'
+    }
   }
   if ($IncludeMarker) { return [pscustomobject]@{ data_root = $data; marker = $marker } }
   return $data
@@ -481,6 +488,7 @@ function Assert-ManagedWindowsProductData {
     [Parameter(Mandatory = $true)][string]$InstallRoot
   )
   $validated = Assert-ManagedWindowsProductDataMarker -DataRoot $DataRoot -InstallRoot $InstallRoot -VerifyTree -IncludeMarker
+  if ($validated.marker.schema_version -eq 3) { return 'managed-v3' }
   if ($validated.marker.schema_version -eq 2) { return 'managed-v2' }
   return 'managed-v1'
 }

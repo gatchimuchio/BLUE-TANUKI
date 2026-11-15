@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { readPackage, root, sha256File } from "./package_windows.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type MacArch = "x64" | "arm64";
 
@@ -11,6 +12,7 @@ interface MacAppManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: string;
   source_commit?: string;
   artifact?: { file?: string; size_bytes?: number; sha256?: string };
@@ -81,7 +83,8 @@ function plistValue(plist: string, key: string): string {
 }
 
 function assertManifest(manifest: MacAppManifest, version: string, arch: MacArch, dmg: string, sha: string): void {
-  if (manifest.schema_version !== 1 || manifest.name !== "blue-tanuki") throw new Error("DMG manifest identity is invalid");
+  if (manifest.schema_version !== 1 || manifest.name !== "blue-tanuki" ||
+      manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) throw new Error("DMG manifest identity or data-schema version is invalid");
   if (manifest.version !== version || manifest.package_type !== `macos-${arch}-native-app-dmg`) {
     throw new Error("DMG manifest version or architecture is invalid");
   }

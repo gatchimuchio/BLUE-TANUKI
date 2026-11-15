@@ -4,6 +4,7 @@ import { windowsArtifactDir } from "./windows_artifact_dir.js";
 import { fileURLToPath } from "node:url";
 import { hashEmbeddedBase64PayloadSync, readTextBeforeEmbeddedPayloadSync } from "./embedded_payload.js";
 import { readPackage, root, sha256File } from "./package_windows.ts";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "../packages/protocol/src/product_data_schema.js";
 
 type ProductInstallerKind =
   | "windows-x64-self-extracting-cmd-installer"
@@ -15,6 +16,7 @@ interface ProductInstallerManifest {
   schema_version?: number;
   name?: string;
   version?: string;
+  data_schema_version?: number;
   package_type?: ProductInstallerKind;
   installer?: {
     file?: string;
@@ -138,6 +140,7 @@ function assertManifest(
   if (manifest.schema_version !== 1) throw new Error("manifest schema_version must be 1");
   if (manifest.name !== "blue-tanuki") throw new Error("manifest name must be blue-tanuki");
   if (manifest.version !== version) throw new Error("manifest version mismatch");
+  if (manifest.data_schema_version !== PRODUCT_DATA_SCHEMA_VERSION) throw new Error("manifest data_schema_version mismatch");
   if (manifest.package_type !== target.packageType) throw new Error("manifest package_type mismatch");
   if (manifest.installer?.file !== path.basename(target.installerPath)) throw new Error("manifest installer.file mismatch");
   if (manifest.installer?.size_bytes !== statSync(target.installerPath).size) throw new Error("manifest installer size mismatch");

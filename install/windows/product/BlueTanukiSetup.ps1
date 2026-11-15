@@ -303,7 +303,7 @@ function Register-Uninstaller($InstallRootResolved, $DataRootResolved, $Version)
   New-ItemProperty -Path $key -Name "BlueTanukiDataRoot" -Value $DataRootResolved -PropertyType String -Force | Out-Null
 }
 
-function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootResolved, $Version, $PackageManifestSha256) {
+function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootResolved, $Version, $PackageManifestSha256, $DataSchemaVersion) {
   $managedFilesSha256 = Write-ManagedTreeInventory -Root $InventoryRoot `
     -MetadataFileName 'blue-tanuki-install.json' -InventoryFileName 'blue-tanuki-managed-files.json' `
     -ProductId 'blue-tanuki-product-install'
@@ -313,6 +313,7 @@ function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootRe
     install_root = $InstallRootResolved
     data_root = $DataRootResolved
     version = $Version
+    data_schema_version = $DataSchemaVersion
     package_manifest_sha256 = $PackageManifestSha256
     managed_files_sha256 = $managedFilesSha256
   }
@@ -320,16 +321,20 @@ function Write-InstallMetadata($InventoryRoot, $InstallRootResolved, $DataRootRe
   $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
 }
 
-function Write-DataInstallMetadata($DataRootResolved, $InstallRootResolved, $Version, $ManagedFilesSha256) {
+function Write-DataInstallMetadata($DataRootResolved, $InstallRootResolved, $Version, $ManagedFilesSha256, $DataSchemaVersion) {
   if ($ManagedFilesSha256 -notmatch '^[0-9a-fA-F]{64}$') {
     Fail 'The staged product file inventory could not be bound to retained user data.'
   }
+  if ($DataSchemaVersion -lt 1) {
+    Fail 'The packaged product data-schema version is invalid.'
+  }
   $metadata = [ordered]@{
-    schema_version = 2
+    schema_version = 3
     product_id = "blue-tanuki-product-data"
     install_root = $InstallRootResolved
     data_root = $DataRootResolved
     version = $Version
+    data_schema_version = $DataSchemaVersion
     managed_files_sha256 = $ManagedFilesSha256.ToLowerInvariant()
   }
   $metadataPath = Join-Path $DataRootResolved "blue-tanuki-product-data.json"
@@ -370,10 +375,13 @@ function Assert-DataRootAdoptable($DataRootResolved, $InstallRootResolved, $Exis
     try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch {
       Fail "Product data ownership marker is invalid: $markerPath"
     }
-    if ($marker.schema_version -notin @(1, 2) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+    if ($marker.schema_version -notin @(1, 2, 3) -or $marker.product_id -ne 'blue-tanuki-product-data' -or
         -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $DataRootResolved), [System.StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity $InstallRootResolved), [System.StringComparison]::OrdinalIgnoreCase)) {
       Fail "Product data ownership marker points to a different install or data root. No data was changed."
+    }
+    if ($marker.schema_version -eq 3 -and ([long]$marker.data_schema_version -lt 1 -or [long]$marker.data_schema_version -gt 2147483647)) {
+      Fail "Product data compatibility marker has an invalid data_schema_version. No data was changed."
     }
     return
   }
@@ -392,12 +400,14 @@ function Assert-DataPackageCompatibility($DataRootResolved, $StagedInstallRoot) 
   } catch {
     Fail "Retained product data compatibility could not be verified. No product files or user data were changed: $($_.Exception.Message)"
   }
-  if ($marker.schema_version -ne 2 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
-      [string]$marker.managed_files_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
-    Fail 'Retained product data compatibility is unknown. The installed package did not record a compatible product-file inventory, so setup is blocked.'
+  if ($marker.schema_version -ne 3 -or $marker.product_id -ne 'blue-tanuki-product-data' -or
+      [long]$marker.data_schema_version -lt 1 -or [long]$marker.data_schema_version -gt 2147483647 -or
+      -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.data_root)), (Get-InstallPathIdentity $DataRootResolved), [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals((Get-InstallPathIdentity ([string]$marker.install_root)), (Get-InstallPathIdentity ([string]$stagedMetadata.install_root)), [System.StringComparison]::OrdinalIgnoreCase)) {
+    Fail 'Retained product data compatibility is unknown. The data root has no recognized product data-schema version, so setup is blocked.'
   }
-  if (-not [string]::Equals([string]$marker.managed_files_sha256, [string]$stagedMetadata.managed_files_sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
-    Fail 'The package differs from the product build associated with retained data. Data compatibility and migration are unknown, so setup is blocked.'
+  if ([long]$marker.data_schema_version -ne [long]$stagedMetadata.data_schema_version) {
+    Fail 'The package product data-schema version differs from the retained data marker. Migration is unsupported; setup is blocked and all existing data is preserved.'
   }
 }
 
@@ -420,6 +430,11 @@ try {
   if ($packageManifest.schema_version -ne 1 -or $packageManifest.name -ne 'blue-tanuki' -or $packageManifest.package_type -ne 'windows-x64-zip-installer') {
     Fail "Packaged installer manifest does not identify a BLUE-TANUKI Windows installer."
   }
+  $packageDataSchemaVersion = 0L
+  if (-not [long]::TryParse([string]$packageManifest.data_schema_version, [ref]$packageDataSchemaVersion) -or
+      $packageDataSchemaVersion -lt 1 -or $packageDataSchemaVersion -gt 2147483647) {
+    Fail "Packaged installer manifest has no supported product data-schema version."
+  }
   $manifestSha256 = Get-Sha256HexFromFile -Path $manifestPath
   $version = [string]$packageManifest.version
   $safeTargets = Assert-SafeInstallTargets -InstallRoot $InstallRoot -DataRoot $DataRoot -SourceRoot $packageRoot
@@ -441,7 +456,7 @@ try {
     try { [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved) } catch {
       Fail "Refusing to replace $installRootResolved because ownership and installed structure could not be verified. No files were changed. $($_.Exception.Message)"
     }
-    Fail 'In-place product replacement is blocked while product-wide persisted-data compatibility and migration are unknown; existing data was preserved.'
+    Fail 'In-place product replacement is unsupported. A matching product data-schema declaration does not authorize an application update; the existing application and data were preserved.'
   }
   Assert-DataRootAdoptable $dataRootResolved $installRootResolved $existingProductInstall
   Assert-RegistryTargetCompatible $installRootResolved
@@ -468,7 +483,7 @@ try {
   Expand-BundledNode $packageRoot $stageRoot $packageManifest
   Copy-DirectoryContents $sourceLaunchers $stageRoot
   Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $stageRoot 'blue-tanuki-package-manifest.json')
-  Write-InstallMetadata $stageRoot $installRootResolved $dataRootResolved $version $manifestSha256
+  Write-InstallMetadata $stageRoot $installRootResolved $dataRootResolved $version $manifestSha256 $packageDataSchemaVersion
   [void](Assert-ManagedWindowsProductInstall -InstallRoot $stageRoot -DataRoot $dataRootResolved -MetadataInstallRoot $installRootResolved)
   Assert-NoReparsePointsInTree -Path $stageRoot -Label 'StagedProductInstall'
   Assert-DataPackageCompatibility $dataRootResolved $stageRoot
@@ -487,7 +502,9 @@ try {
     $newMoved = $true
     [void](Assert-ManagedWindowsProductInstall -InstallRoot $installRootResolved -DataRoot $dataRootResolved)
     $installedMetadata = Get-Content -LiteralPath (Join-Path $installRootResolved 'blue-tanuki-install.json') -Raw | ConvertFrom-Json
-    Write-DataInstallMetadata $dataRootResolved $installRootResolved $version ([string]$installedMetadata.managed_files_sha256)
+    if (-not (Test-Path -LiteralPath (Join-Path $dataRootResolved 'blue-tanuki-product-data.json'))) {
+      Write-DataInstallMetadata $dataRootResolved $installRootResolved $version ([string]$installedMetadata.managed_files_sha256) $packageDataSchemaVersion
+    }
     Install-Shortcuts $installRootResolved $DesktopShortcut
     Register-Uninstaller $installRootResolved $dataRootResolved $version
     if (-not $NoLaunch) {
