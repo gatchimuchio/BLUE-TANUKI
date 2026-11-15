@@ -3887,12 +3887,13 @@ describe("WebChatChannel — Update surface", () => {
         }),
         verifyCandidate: async () => {
           actions.push("verify");
-          return { action: "verify_candidate", used_for_authority: false };
+          return { action: "verify_candidate", compatibility_status: "unknown", used_for_authority: false };
         },
         prepareUpdate: async (body) => {
           actions.push(`prepare:${String(body.confirm)}`);
           return {
             action: "prepare_update",
+            compatibility_status: "unknown",
             pre_update_backup_id: "backup-fixture",
             rollback_plan_id: "rollback-fixture",
             used_for_authority: false,

@@ -4056,6 +4056,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function renderUpdateActionResult(body) {
         const result = body.result || body;
         setText("update-action-status", result.action ? result.action + " completed" : "completed");
+        if (result.compatibility_status) {
+          setText("update-compatibility-status", result.compatibility_status);
+          byId("update-compatibility-status").className = "badge " +
+            (result.compatibility_status === "pass" ? "good" : result.compatibility_status === "blocked" ? "bad" : "warn");
+        }
         setText("update-next-action-status", result.next_safe_action || "not loaded");
         byId("update-action-status").className = "badge review";
         setText("update-json", compactJson(redactRuntimeValue(result)));

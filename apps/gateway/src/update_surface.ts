@@ -73,6 +73,7 @@ export interface UpdateActionResult {
   action: "verify_candidate" | "prepare_update";
   status: "completed";
   candidate: UpdateCandidateStatus;
+  compatibility_status: UpdateSnapshot["compatibility"]["status"];
   rollback_plan_id?: string;
   rollback_plan_path?: string;
   pre_update_backup_id?: string;
@@ -154,6 +155,9 @@ const AUTHORITY_BOUNDARY: UpdateAuthorityBoundary = {
   recovery_backup_used_for_authority: false,
   used_for_authority: false,
 };
+
+const DATA_COMPATIBILITY_NOT_ESTABLISHED =
+  "Product data-schema compatibility and migration support are unknown. Do not apply this candidate until both are supported and verified.";
 
 const REQUIRED_CORE_PATHS = PRODUCT_SCOPE_CORE_RELEASE_PATHS;
 
@@ -513,7 +517,7 @@ function actionResult(
   candidate: UpdateCandidateStatus,
   values: Omit<
     UpdateActionResult,
-    "schema_version" | "surface" | "action" | "status" | "candidate" | "authority_boundary" | "used_for_authority" | "hds_brain_remains_authority" | "evidence_source"
+    "schema_version" | "surface" | "action" | "status" | "candidate" | "compatibility_status" | "authority_boundary" | "used_for_authority" | "hds_brain_remains_authority" | "evidence_source"
   >,
 ): UpdateActionResult {
   return {
@@ -522,6 +526,7 @@ function actionResult(
     action,
     status: "completed",
     candidate,
+    compatibility_status: candidate.verification_status === "fail" ? "blocked" : "unknown",
     ...values,
     authority_boundary: AUTHORITY_BOUNDARY,
     used_for_authority: false,
@@ -601,8 +606,8 @@ export async function verifyUpdateCandidate(
   return actionResult("verify_candidate", candidate.status, {
     next_safe_action:
       candidate.status.verification_status === "pass"
-        ? "Create a pre-update backup before applying the verified bundle manually."
-        : "Fix the release archive, sha256 sidecar, or manifest before update.",
+        ? `Candidate archive integrity is verified. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`
+        : `Fix the release archive, sha256 sidecar, or manifest. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`,
   });
 }
 
@@ -631,7 +636,7 @@ export async function prepareManualUpdate(
     rollback_plan_path: plan.path,
     next_safe_action:
       candidate.status.verification_status === "pass"
-        ? "Stop BLUE-TANUKI, apply the verified bundle manually, then rerun doctor/audit/release validation."
-        : "Backup and rollback plan are recorded; fix candidate verification before applying any update.",
+        ? `Pre-update backup and rollback plan are recorded. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`
+        : `Backup and rollback plan are recorded; fix candidate verification. ${DATA_COMPATIBILITY_NOT_ESTABLISHED}`,
   });
 }
