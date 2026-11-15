@@ -412,6 +412,12 @@ function invokeNativeProvider(
         signal: "aborted" });
     };
 
+    child.stdin?.on("error", () => {
+      // A closed provider may reject a late cancellation write asynchronously.
+      // On Linux the systemd unit remains the owner until its process tree ends.
+      if (platform !== "linux" && !closeObserved) child.kill();
+    });
+
     child.once("spawn", () => report({ state: "worker_started", observed_at_ms: Date.now(),
       worker_pid: child.pid, worker_platform: platform }));
 
