@@ -3073,7 +3073,7 @@ export class OperationPlanLedger {
     if (!Number.isSafeInteger(control.deadline_at_ms) || control.deadline_at_ms <= nowMs) {
       throw new Error("plan_wait_deadline_invalid");
     }
-    if (plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown"].includes(binding.status))) {
+    if (plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown", "verification_failed"].includes(binding.status))) {
       throw new Error("plan_wait_execution_unresolved");
     }
     const planIdDigest = operationPlanDigest(current.plan.plan_id);
