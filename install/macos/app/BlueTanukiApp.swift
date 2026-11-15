@@ -51,15 +51,55 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             return
         }
 
-        beginOperation("インストールまたは更新を実行しています。", detail: "完了するまでアプリを終了できません。") {
+        let isInstalled = fileManager.fileExists(atPath: installRoot.path)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = isInstalled ? "BLUE-TANUKIを更新しますか？" : "BLUE-TANUKIをインストールしますか？"
+        alert.informativeText = isInstalled
+            ? "この配布物の製品data-schemaが現在の設定と一致し、現在版より新しい場合だけ更新します。常駐を停止し、既存の設定とユーザーデータを保持します。"
+            : "製品を現在のユーザーへインストールします。設定とユーザーデータは既定で保持されます。"
+        alert.addButton(withTitle: "キャンセル")
+        alert.addButton(withTitle: isInstalled ? "更新" : "インストール")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        beginOperation(isInstalled ? "更新しています。" : "インストールしています。", detail: "完了するまでアプリを終了できません。") {
             try self.verifyInstaller(installer, sidecar: sidecar)
-            try self.runShell(installer, arguments: ["--no-launch"])
+            let arguments = isInstalled ? ["--no-launch", "--update"] : ["--no-launch"]
+            try self.runShell(installer, arguments: arguments)
         } completion: { result in
             switch result {
             case .success:
-                self.setStatus("インストール処理が完了しました。", detail: "「コントロールセンターを開く」を選ぶと製品を起動します。")
+                self.setStatus(isInstalled ? "更新処理が完了しました。" : "インストール処理が完了しました。", detail: "「コントロールセンターを開く」を選ぶと製品を起動します。")
             case .failure(let error):
-                self.showFailure("インストール処理", error: error)
+                self.showFailure(isInstalled ? "更新" : "インストール", error: error)
+            }
+        }
+    }
+
+    @objc private func rollbackProduct() {
+        guard let installer = resource("BlueTanukiSetup.command"),
+              let sidecar = resource("BlueTanukiSetup.command.sha256") else {
+            setStatus("インストーラーが見つかりません。", detail: "このアプリの配布物を確認してください。")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "前のBLUE-TANUKIへ戻しますか？"
+        alert.informativeText = "保持されている前版と現在版のdata-schemaが一致し、両方の管理対象treeを検証できた場合だけ戻します。常駐を停止し、設定とユーザーデータは変更しません。"
+        alert.addButton(withTitle: "キャンセル")
+        alert.addButton(withTitle: "前の版へ戻す")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        beginOperation("前の版へ戻しています。", detail: "保持版と現在版を検証し、完了するまでアプリを終了できません。") {
+            try self.verifyInstaller(installer, sidecar: sidecar)
+            try self.runShell(installer, arguments: ["--no-launch", "--rollback"])
+        } completion: { result in
+            switch result {
+            case .success:
+                self.setStatus("rollbackが完了しました。", detail: "「コントロールセンターを開く」を選ぶと製品を起動します。")
+            case .failure(let error):
+                self.showFailure("前の版へのrollback", error: error)
             }
         }
     }
@@ -246,6 +286,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
         let firstRow = NSStackView(views: [
             makeButton("インストールまたは更新", action: #selector(installOrUpdate)),
+            makeButton("前の版へ戻す…", action: #selector(rollbackProduct)),
             makeButton("コントロールセンターを開く", action: #selector(openControlCenter)),
         ])
         firstRow.orientation = .horizontal

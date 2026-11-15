@@ -397,17 +397,19 @@ or live LLM credentials can remain unset during local setup.
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
-source installers documented above. Normal packaged product Setup still blocks
-in-place replacement; the Windows packaged Setup source has explicit `-Update`
-and `-Rollback` options. `-Update` is manual only, requires a newer semantic
-version and an exact product data-schema match, does not allow config reset or
-doctor skip, and retains one verified previous app tree. `-Rollback` restores
-that tree and retires the replaced app after verification. `-force` / `-Force`
-does not authorize an update, and no data migration is implemented. These
-Windows source paths have not been exercised as installed update/rollback and
-are not release-verified.
-Linux/macOS packaged Setup continues to block in-place replacement. Setup may
-first restore a previously interrupted, verified Windows transaction.
+source installers documented above. Normal packaged product Setup blocks
+replacement unless the operator explicitly supplies an update or rollback
+option. Windows uses `-Update` and `-Rollback`; Linux/macOS uses `--update` and
+`--rollback`. Update requires a newer semantic version, an exact product
+data-schema match, a verified installed tree, a retained regular configuration,
+the packaged doctor, and confirmed resident shutdown. It keeps one verified
+previous app/runtime pair. Rollback restores that pair and retains the
+previously active pair after verification. Config reset, doctor skip, and
+`-force` / `--force` cannot authorize replacement, and no data migration is
+implemented. The macOS product app offers explicit confirmation for update and
+rollback. These source paths have not been exercised as installed
+update/rollback and are not release-verified. Setup may first recover a
+previously interrupted, verified transaction.
 
 After uninstall with data retained, packaged Setup accepts only a candidate
 whose product data-schema version matches the marker recorded with that data

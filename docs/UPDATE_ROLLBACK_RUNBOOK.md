@@ -1,6 +1,6 @@
 # BLUE-TANUKI Update / Rollback / Recovery Runbook
 
-BLUE-TANUKI does not implement an automatic updater. Packaged Windows Setup now contains explicit manual `-Update` and `-Rollback` source paths. `-Update` requires a newer semantic version, exact product data-schema agreement, a verified installed tree, a retained regular configuration, a passing candidate doctor, and confirmed resident shutdown; it stages the candidate before replacing app files and keeps one verified previous app. `-Rollback` requires matching schemas and verified active/previous trees, then restores the retained app after stopping the resident. Neither path migrates product data. These source paths have not been exercised as installed update/rollback and are not release evidence. Linux/macOS Setup still blocks in-place replacement. Release and packaged-installer manifests declare the product-wide data-schema version defined in [`PERSISTED_DATA_SCHEMA.md`](PERSISTED_DATA_SCHEMA.md); matching declarations do not enable schema migration. `--force` never authorizes replacement.
+BLUE-TANUKI does not implement an automatic updater. Packaged Windows Setup has explicit manual `-Update` and `-Rollback` source paths. Packaged Linux/macOS Setup has matching explicit `--update` and `--rollback` paths; the macOS app asks the operator before either operation. Updates require a newer semantic version, exact product data-schema agreement, a verified installed app/runtime tree, a retained regular configuration, a passing candidate doctor, and confirmed resident shutdown. The candidate is staged before app/runtime replacement, and one verified previous app/runtime pair is retained. Rollback requires matching schemas and verified active/previous trees, then restores the retained package after stopping the resident. Neither path migrates product data. Windows and Unix source paths have not been exercised as installed update/rollback and are not release evidence. Release and packaged-installer manifests declare the product-wide data-schema version defined in [`PERSISTED_DATA_SCHEMA.md`](PERSISTED_DATA_SCHEMA.md); matching declarations do not enable schema migration. `--force` never authorizes replacement.
 
 ## Distribution readiness gate
 
@@ -71,8 +71,10 @@ blue-tanuki resident-stop
 ## 1. Before Update
 
 1. Stop the gateway if it is running.
-   - Portable resident users should run `blue-tanuki resident-stop`.
-2. Record the current commit or release bundle name.
+   - Packaged Setup confirms resident shutdown before changing app/runtime files.
+   - Portable resident users can run `blue-tanuki resident-stop`.
+2. Record the current commit or release bundle name and inspect the installed
+   package version.
 3. Back up local config and data:
    - Prefer Control Center `Backup Now` when the gateway is healthy enough to
      serve the WebChat UI.
@@ -92,16 +94,41 @@ node apps/gateway/dist/main.js --audit-verify
 If audit verification fails, stop the update and handle audit recovery first.
 
 P10 does not implement update-before-backup. P11 adds manual update readiness,
-pre-update recovery backup, and rollback-plan evidence. It still does not
-implement automatic update rollback.
+pre-update recovery backup, and rollback-plan evidence. Packaged Setup now also
+retains one verified app/runtime package generation for an explicit local
+rollback. Neither rollback path restores product data or replaces the
+Control Center's recovery backup.
 
-P11 keeps update manual-only. The Control Center Update screen verifies a
+P11 keeps Control Center update manual-only. The Control Center Update screen verifies a
 configured release bundle sidecar set and records rollback evidence, but it does
 not inspect every installed persisted-data store, apply migrations, replace app
 files, download updates, run a background updater, or provide a signed native
 installer. It compares the declared product data-schema version from the
 candidate manifest with the installed marker. A match is version-declaration
 evidence only; no application replacement may proceed on that evidence.
+Packaged Setup's separate explicit update flow is narrower: it requires the
+exact shared data-schema version and a newer package version, preserves
+configuration, runs the packaged doctor against the candidate, stops the
+resident, and retains one verified previous package. It does not apply a schema
+migration or claim complete product-data backup coverage.
+
+## Packaged Setup update and rollback
+
+Linux users run the verified .run installer with --update or --rollback.
+macOS command-installer users use --update or --rollback; the bundled macOS
+product app offers explicit confirmation buttons for update and rollback.
+Windows users use -Update or -Rollback in packaged Setup. In-place replacement
+without the explicit option remains blocked, and -Force does not authorize it.
+
+The installer keeps the current settings and product data in place. It requires
+matching product data-schema declarations and one verified previous app/runtime
+pair. An update candidate must have a strictly newer semantic version. Rollback
+uses the retained pair and consumes that pair only after the active package is
+verified; the package that was active before rollback becomes the new retained
+version. A stale or ambiguous transaction path blocks the operation and is
+preserved for inspection. Runtime execution on packaged Windows/Linux/macOS
+installations remains unverified; this source implementation is not release
+evidence.
 
 ## Control Center update controls
 
@@ -125,11 +152,11 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
    replacement.
    The release-manifest format version is not a product data-schema version.
 7. The Control Center path remains evidence-only and never replaces application
-   files. Windows source includes a separate manual `BlueTanukiSetup.cmd -Update`
-   path, but installed update/rollback has not been run and remains unverified.
-   Linux/macOS replacement is unsupported. Do not use `--force` or copy source
-   files over an installed product.
-8. After a verified Windows update or rollback, start the product and inspect
+   files. Packaged Setup has a separate manual update / rollback path for
+   Windows, Linux, and macOS, but installed update/rollback has not been run and
+   remains unverified. Do not use `--force` or copy source files over an installed
+   product.
+8. After a verified packaged update or rollback, start the product and inspect
    doctor/audit state. A source parse/build alone does not establish installed
    update success.
 
@@ -137,8 +164,8 @@ After uninstall with data retained, product Setup permits reattachment only
 when the retained marker has the same product data-schema version as the
 candidate package and all product roots match. Legacy or missing markers and a
 different version are treated as unknown/incompatible; the retained data is not
-changed. A matching schema declaration permits data reuse after uninstall, not
-in-place application replacement.
+changed. A matching schema declaration permits data reuse after uninstall; it
+does not by itself authorize in-place application replacement.
 
 If post-update validation fails, restore the previous app directory or source
 commit and restore only data covered by a verified recovery backup. If any data

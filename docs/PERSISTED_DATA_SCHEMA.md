@@ -20,9 +20,12 @@ native credential storeが含まれる。使用者が指定した外部workspace
   fail-closedにする。旧Windows marker schema 1/2、旧Linux/macOS marker schema 1
   には製品データ互換性版がないため、版1として推測しない。
 - 同じ版の宣言はデータ形式の互換性だけを示し、migrationや個別storeの意味互換を
-  証明しない。Windows packaged Setupには明示的なmanual `-Update`／`-Rollback`
-  のsource経路があるが、installed runtimeは未検証である。Linux/macOS Setupの
-  in-place replacementは未実装。更新画面の一致表示自体は置換許可を意味しない。
+  証明しない。Packaged SetupにはWindowsのmanual `-Update`／`-Rollback`と
+  Linux/macOSのmanual `--update`／`--rollback`がある。更新はstrictly newerな
+  package、完全一致したdata-schema、検証済みapp/runtime、既存設定、candidate
+  doctor、常駐停止を要求し、前版app/runtimeを一組だけ保持する。installed runtimeは
+  未検証であり、migration・個別store検証・data rollbackを提供しない。Control Center
+  の一致表示自体は置換許可を意味しない。
 
 版1はこの契約の初版であり、既存の未記録dataに遡及適用しない。既存storeの
 schema versionやmigrationを一律1へ変更するものではない。

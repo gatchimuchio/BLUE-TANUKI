@@ -40,11 +40,17 @@ support and release-claim boundary, not a defect waiver and not authority:
   now carry the shared `PRODUCT_DATA_SCHEMA_VERSION`. Legacy markers remain
   `unknown`; a version mismatch is blocked because automatic migration is not
   supported. The version declaration is not live inspection of each store.
-- Packaged Windows/Linux/macOS Setup still refuses in-place replacement.
-  Matching data-schema declarations permit only post-uninstall data
-  reattachment; they do not establish the app replacement, full backup coverage,
-  installed update, or rollback path.
-- No source or release-bundle replacement procedure is currently supported.
+- Packaged Windows/Linux/macOS Setup now contains explicit manual update and
+  rollback source paths. Updates require a newer semantic version, matching
+  product data-schema declarations, a verified candidate and installed
+  app/runtime tree, a retained configuration, a passing candidate doctor, and
+  confirmed resident shutdown. One verified previous app/runtime pair is
+  retained. The macOS product app exposes explicit confirmation for update and
+  rollback. Installed execution remains unverified and is not release evidence.
+  Matching data-schema declarations do not establish migration support or
+  complete backup coverage.
+- Source and release-bundle replacement outside the packaged Setup path remain
+  unsupported.
 - Automatic updater is not shipped.
 - Runtime app-file replacement / runtime auto-apply update is not shipped.
 - A release-manifest format version is not a product-data schema version.

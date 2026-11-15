@@ -69,6 +69,42 @@ assert_no_overlap_target "$BIN_ROOT" "$CONFIG_ROOT" BIN_ROOT CONFIG_ROOT
 assert_no_overlap_target "$BIN_ROOT" "$RUNTIME_ROOT" BIN_ROOT RUNTIME_ROOT
 assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
 
+INSTALL_PARENT=${INSTALL_ROOT%/*}
+INSTALL_NAME=${INSTALL_ROOT##*/}
+RUNTIME_PARENT=${RUNTIME_ROOT%/*}
+RUNTIME_NAME=${RUNTIME_ROOT##*/}
+ROLLBACK_POINTER="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-rollback-current"
+PREVIOUS_SUFFIX=
+PREVIOUS_APP_ROOT=
+PREVIOUS_RUNTIME_ROOT=
+if [ -e "$ROLLBACK_POINTER" ] || [ -L "$ROLLBACK_POINTER" ]; then
+  [ -f "$ROLLBACK_POINTER" ] && [ ! -L "$ROLLBACK_POINTER" ] || fail "rollback reference is not a regular file; the installation was preserved: $ROLLBACK_POINTER"
+  [ "$(wc -c < "$ROLLBACK_POINTER" | tr -d '[:space:]')" -le 128 ] &&
+    [ "$(wc -l < "$ROLLBACK_POINTER" | tr -d '[:space:]')" = 1 ] || fail "rollback reference has an unexpected shape; the installation was preserved"
+  PREVIOUS_SUFFIX=$(cat "$ROLLBACK_POINTER")
+  case "$PREVIOUS_SUFFIX" in *.*) ;; *) fail "rollback reference suffix is invalid; the installation was preserved" ;; esac
+  previous_left=${PREVIOUS_SUFFIX%%.*}
+  previous_right=${PREVIOUS_SUFFIX#*.}
+  case "$previous_right" in *.*) fail "rollback reference suffix is invalid; the installation was preserved" ;; esac
+  case "$previous_left:$previous_right" in ''|:*|*:|*[!0-9:]*) fail "rollback reference suffix is invalid; the installation was preserved" ;; esac
+  PREVIOUS_APP_ROOT="$INSTALL_PARENT/.$INSTALL_NAME.blue-tanuki-rollback-$PREVIOUS_SUFFIX"
+  PREVIOUS_RUNTIME_ROOT="$RUNTIME_PARENT/.$RUNTIME_NAME.blue-tanuki-rollback-$PREVIOUS_SUFFIX"
+  [ -d "$PREVIOUS_APP_ROOT" ] && [ ! -L "$PREVIOUS_APP_ROOT" ] || fail "retained rollback application is missing or unsafe; the installation was preserved: $PREVIOUS_APP_ROOT"
+  [ -d "$PREVIOUS_RUNTIME_ROOT" ] && [ ! -L "$PREVIOUS_RUNTIME_ROOT" ] || fail "retained rollback runtime is missing or unsafe; the installation was preserved: $PREVIOUS_RUNTIME_ROOT"
+  assert_managed_product_install "$PREVIOUS_APP_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$PREVIOUS_RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE" "$INSTALL_ROOT" "$RUNTIME_ROOT"
+fi
+
+for rollback_entry in "$INSTALL_PARENT"/.$INSTALL_NAME.blue-tanuki-rollback-*; do
+  [ -e "$rollback_entry" ] || [ -L "$rollback_entry" ] || continue
+  rollback_entry_suffix=${rollback_entry##*blue-tanuki-rollback-}
+  [ "$rollback_entry_suffix" = "$PREVIOUS_SUFFIX" ] || fail "an unfinished or unreferenced update path exists; run the packaged Setup recovery first. No files were removed: $rollback_entry"
+done
+for rollback_entry in "$RUNTIME_PARENT"/.$RUNTIME_NAME.blue-tanuki-rollback-*; do
+  [ -e "$rollback_entry" ] || [ -L "$rollback_entry" ] || continue
+  rollback_entry_suffix=${rollback_entry##*blue-tanuki-rollback-}
+  [ "$rollback_entry_suffix" = "$PREVIOUS_SUFFIX" ] || fail "an unfinished or unreferenced runtime update path exists; run the packaged Setup recovery first. No files were removed: $rollback_entry"
+done
+
 PURGE="${PURGE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 QUIET="${QUIET:-0}"
@@ -261,6 +297,15 @@ fi
 
 if [ "$DRY_RUN" != "1" ]; then assert_product_autostart_clear; fi
 cd /
+if [ -n "$PREVIOUS_SUFFIX" ]; then
+  assert_managed_product_install "$PREVIOUS_APP_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$PREVIOUS_RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE" "$INSTALL_ROOT" "$RUNTIME_ROOT"
+  if [ "$DRY_RUN" != "1" ]; then
+    rm -f -- "$ROLLBACK_POINTER" || fail "rollback reference could not be removed; the installed product was preserved"
+    [ ! -e "$ROLLBACK_POINTER" ] && [ ! -L "$ROLLBACK_POINTER" ] || fail "rollback reference remained; the installed product was preserved"
+  fi
+  remove_target "$PREVIOUS_APP_ROOT" previous_app
+  remove_target "$PREVIOUS_RUNTIME_ROOT" previous_runtime
+fi
 remove_target "$INSTALL_ROOT" app
 remove_target "$RUNTIME_ROOT" runtime
 

@@ -66,11 +66,15 @@ the app and launcher while preserving env/audit/session data. Use Windows
 removed.
 
 Windows `-Force` and macOS/Linux `FORCE=1` apply only to the source-development
-installers. Normal packaged product Setup blocks in-place replacement. Windows
-packaged Setup source includes a separate manual `-Update` / `-Rollback` path
-with same-schema checks and one retained app version, but installed execution
-has not been verified and is not release evidence. Linux/macOS replacement
-remains blocked. `-Force` does not bypass these checks. After uninstall, retained
+installers. Normal packaged product Setup blocks replacement unless the operator
+explicitly selects update or rollback. Packaged Windows Setup accepts
+`-Update` / `-Rollback`; Linux/macOS Setup accepts `--update` /
+`--rollback`, and the macOS app exposes confirmation for those operations.
+Updates require a strictly newer package, matching data-schema declarations,
+verified app/runtime trees, a retained regular configuration, a passing
+candidate doctor, and confirmed resident shutdown. Setup retains one verified
+previous app/runtime pair. Installed execution has not been verified and is not
+release evidence. `-Force` does not bypass these checks. After uninstall, retained
 data can be reattached only to a staged app/runtime inventory matching its
 recorded compatibility marker. Reset flags for developer installs do not
 authorize product-data migration.
