@@ -37,8 +37,8 @@ export interface JMemoryApprovalReference {
 
 /**
  * Internal seam for a read-only J-owned approval lookup. A caller-provided
- * boolean is deliberately not accepted. This package-private implementation
- * is not wired to a production J store by C03.01.
+ * boolean is deliberately not accepted. JMemoryCommitCoordinator supplies
+ * the lookup from its canonical J store; the write API remains package-private.
  */
 export interface JMemoryApprovalReader {
   readVerifiedMemoryApproval(reference: JMemoryApprovalReference): unknown;

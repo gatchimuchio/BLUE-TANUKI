@@ -10,9 +10,9 @@ import {
 import type { MemoryUpdateReceiptV1 } from "@blue-tanuki/protocol";
 
 /**
- * Internal M update API. It accepts only a parsed-content candidate and a
- * read-only J approval lookup; it is intentionally absent from the package
- * barrel until a real J producer and recovery path are implemented.
+ * Internal M update API. JMemoryCommitCoordinator owns the producer and
+ * recovery path, and supplies only a read-only verified J approval lookup.
+ * Keep this write API out of the package barrel so callers cannot bypass J.
  */
 export class MemoryUpdateLedger {
   private readonly store: MTransactionStore;

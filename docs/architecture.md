@@ -100,6 +100,12 @@ DecisionLog (audit chain に追記)
 
 **RESUME は人間のみ**。Executor からの feedback で SUSPEND を覆す経路は設計上存在しない。これにより「下流が暴走しても上流の判断を上書きできない」という containment property が保たれる。
 
+#### Jが許可する永続M更新
+
+Jが承認する永続記憶更新は、JMemoryCommitCoordinatorがJ側のpending/outboxを確定し、MemoryUpdateLedger／MTransactionStoreが参照専用のJ承認（update ID・J event ID・内容digest）を自身の取引内で再照合してMイベント・射影・receiptを保存する。CoordinatorはreceiptをJへ照合・記録し、再起動時はpending更新を照合して復帰する。破損した派生射影は正本イベントから再構成し、正本の破損や照合不能ではfail-closedにする。
+
+この経路はGoalPurposeMemoryConsumer、MeaningUpdateMemoryConsumer、OperationPlanLedgerの承認済み記憶更新に使われる。GatewayはHDSへprivate-state storageを渡す。Mのcommit APIはHDS package内に留め、公開barrelから直接書込みさせない。ここで確認できるのはこれらの永続更新経路であり、全M用途・全仕事・全OSの接続成立を意味しない。
+
 #### 現行Operation Planのrevision継続
 
 Owner Taskの複数stepを改訂するとき、既に検証済みのstepは変更できず、未実行部分だけを改訂できる。現在のrevisionに同じstepのbindingがない場合、完了判定は全revisionで定義digestが変化していないstepに限り、過去revisionの一意な検証済みbinding・そのsource revisionのrequest IDに結び付く結果・M receiptを再照合して利用できる。評価証拠は現revisionへ束縛する。source revisionや結果を一意に確認できない場合は達成を保留する。これは完了証拠の継承だけであり、executor command、承認、実行権限は再利用しない。定義変更・曖昧な候補・未解決作用・不確認M receiptは引き続き保留する。同一task identityを共有するplanの `verification_failed` bindingも、報告成功の結果を検証できておらず作用状態が未確定なため、タスク完了を保留する。結果の確定・照合が済むまでpeer/child planの達成でこの未解決状態を覆さない。`verification_failed` のあるplanは待機登録も拒否し、時間経過によって未確定作用を解決済みに見せない。待機・復旧検査・重複作用防止・task横断完了判定は共通の未解決試行判定を使う。
