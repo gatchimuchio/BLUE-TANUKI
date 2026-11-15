@@ -25,6 +25,9 @@ import {
   GitHubPullRequestUpdateTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
+  SettingsWriteArgumentsSchema,
+  SettingsWriteTargetVersionObservationSchema,
+  settingsWriteTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
   MCP_CALL_POTENTIAL_EFFECTS,
   canonicalGitHubWriteTargetVersionObservation,
@@ -97,6 +100,7 @@ import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
+import { isSettingsWriteTool } from "./tools/settings_write.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -787,6 +791,18 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: memory.personalization.stop target version does not match command or plan source");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "settings.write") {
+      const observation = SettingsWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const parsedArgs = SettingsWriteArgumentsSchema.safeParse(snapshot.payload.arguments);
+      if (!hds_binding?.operation_plan_binding_digest || !parsedArgs.success ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.request_payload_digest !== operationPlanDigest({
+            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
+          }) || observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
+        throw new Error("Executor approval rejected: settings.write target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else {
       throw new Error("Executor approval rejected: target version evidence is unsupported for this tool command");
     }
@@ -865,6 +881,11 @@ function approveCommandForExecution(
       (!hds_binding?.operation_plan_binding_digest ||
         target_version_observation?.schema_version !== "blue-tanuki.memory-personalization-target-version.v1")) {
     throw new Error("Executor approval rejected: memory.personalization.stop requires an Operation Plan-bound target version observation");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "settings.write" &&
+      (!hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.settings-write-target-version.v1")) {
+    throw new Error("Executor approval rejected: settings.write requires an Operation Plan-bound target version observation");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "mcp.call" &&
       (!hds_binding?.operation_plan_binding_digest ||
@@ -1115,6 +1136,31 @@ export class Executor {
           observation.entry_hash !== args.entry_hash ||
           observation.target_identity_digest !== memoryPersonalizationTargetIdentityDigest(args.reference, args.entry_hash)) {
         throw new Error("memory.personalization.stop target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
+    }
+    if (command.payload.tool_name === "settings.write") {
+      if (!operationPlanBindingDigest) {
+        throw new Error("settings.write target version resolver requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("settings.write");
+      if (!tool || !isSettingsWriteTool(tool) || !tool.inspect_target_version) {
+        throw new Error("settings.write target version resolver requires the registered built-in adapter");
+      }
+      const parsedArgs = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
+      if (!parsedArgs.success) throw new Error("settings.write arguments are invalid");
+      const observation = SettingsWriteTargetVersionObservationSchema.parse(
+        await inspectTargetVersion(tool, command.payload.arguments, {
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          observation.request_payload_digest !== operationPlanDigest({
+            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
+          }) || observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
+        throw new Error("settings.write target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
     }
@@ -1419,6 +1465,42 @@ export class Executor {
           review.physical_deletion !== false || review.used_for_authority !== false || review.may_execute !== false ||
           !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("memory.personalization.stop content review returned evidence for another command or target");
+      }
+      return review;
+    }
+    if (command.payload.tool_name === "settings.write") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("settings.write content review requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("settings.write");
+      if (!tool || !isSettingsWriteTool(tool) || !tool.inspect_content_review) {
+        throw new Error("settings.write content review requires the registered built-in adapter");
+      }
+      const observation = await this.inspectCommandTargetVersion(command, env, operationPlanBindingDigest, signal);
+      if (!observation || observation.schema_version !== "blue-tanuki.settings-write-target-version.v1") {
+        throw new Error("settings.write content review could not obtain verified target evidence");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(signal ? { signal } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      assertNotCancelled();
+      if (!("kind" in review) || review.kind !== "settings_write") {
+        throw new Error("settings.write content review returned an unsupported projection");
+      }
+      const { review_digest, ...reviewBase } = review;
+      const parsedArgs = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
+      if (!parsedArgs.success || review.operation !== "settings.write" ||
+          review.request_payload_digest !== operationPlanDigest({
+            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
+          }) || review.target_version_digest !== operationPlanDigest(observation) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.command_digest !== operationPlanDigest(command) || review.no_store !== true ||
+          review.used_for_authority !== false || review.may_execute !== false ||
+          !Array.isArray(review.changes) || review.changes.length < 1 || review.changes.length > 4 ||
+          !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("settings.write content review returned evidence for another command or target");
       }
       return review;
     }

@@ -7,9 +7,11 @@ export {
   type ToolExecutionLifecycleObservation,
   type FileEditDiffContentReview,
   type McpCallContentReview,
+  type SettingsWriteContentReview,
   type ToolContentReview,
 } from "./registry.js";
 export { createMemoryPersonalizationStopTool, isMemoryPersonalizationStopTool } from "./memory_personalization.js";
+export { createSettingsWriteTool, isSettingsWriteTool, type SettingsWritePort } from "./settings_write.js";
 export {
   composioAllowedToolkits,
   composioAllowedActions,

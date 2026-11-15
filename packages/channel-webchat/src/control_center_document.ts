@@ -393,7 +393,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="verify-llm-settings" type="button">Verify LLM</button>
             <button id="save-settings" class="primary" type="button" disabled>Save Settings</button>
           </div>
-          <p class="muted">Settings are read-only here until the HDS Operation Plan and no-store L3 final-review path is connected. No settings changes are saved from this page.</p>
+          <p class="muted">No settings changes are saved from this page. Supported non-secret LLM runtime values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</p>
           <div class="status-grid">
             <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>
             <div class="metric"><span>Model</span><span id="settings-model-status">not loaded</span></div>

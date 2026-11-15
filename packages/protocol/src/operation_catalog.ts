@@ -133,6 +133,14 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     10_000,
   ),
   toolDescriptor(
+    "settings.write",
+    "packages/blue-tanuki/src/tools/settings_write.ts#createSettingsWriteTool",
+    "internal_runtime",
+    ["settings_change", "write"],
+    ["tool:settings.write", "settings:write"],
+    15_000,
+  ),
+  toolDescriptor(
     "http.fetch",
     "packages/blue-tanuki/src/tools/builtin.ts#httpFetchTool",
     "external_api",
@@ -477,6 +485,7 @@ export const OPERATOR_SURFACE_OPERATION_IDS = Object.freeze({
     "file.write",
     "file.edit",
     "memory.personalization.stop",
+    "settings.write",
     "browser.snapshot",
     "github.write",
     "browser.automation",

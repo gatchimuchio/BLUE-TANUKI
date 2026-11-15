@@ -34,6 +34,7 @@ import {
   LLMComputeAdapter,
   ToolRegistry,
   createMemoryPersonalizationStopTool,
+  createSettingsWriteTool,
   createExecutorApprovalAuthority,
   captureExecutorCommandForApproval,
   executorCommandDigest,
@@ -144,6 +145,7 @@ import type {
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
   WebChatMemoryPersonalizationStopContentReview,
+  WebChatSettingsWriteContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatD4RuntimeCancellationStatus,
@@ -164,7 +166,7 @@ import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
-import { createWebChatSettingsSurface } from "./settings_surface.js";
+import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -312,6 +314,7 @@ interface PendingApproval {
   content_review_file_edit_target_version_digest?: string;
   content_review_file_delete_target_version_digest?: string;
   content_review_memory_personalization_target_version_digest?: string;
+  content_review_settings_write_target_version_digest?: string;
   content_review_mcp_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
@@ -1138,6 +1141,7 @@ async function serveWithOwnerLease(
   const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
+  tools.register(createSettingsWriteTool(createGatewaySettingsWritePort(process.env)));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
@@ -5504,6 +5508,36 @@ async function serveWithOwnerLease(
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "settings.write" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "settings_write" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review: WebChatSettingsWriteContentReview = {
+          kind: "settings_write",
+          command_id,
+          command_digest: pending.command_digest,
+          review_digest: snapshot.review_digest,
+          operation: "settings.write",
+          changes: snapshot.changes,
+          request_payload_digest: snapshot.request_payload_digest,
+          target_version_digest: snapshot.target_version_digest,
+          operation_plan_binding_digest: snapshot.operation_plan_binding_digest,
+          no_store: true,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_settings_write_target_version_digest: review.target_version_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -5835,6 +5869,26 @@ async function serveWithOwnerLease(
         return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "settings.write") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_settings_write_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
+        return current && "kind" in current && current.kind === "settings_write" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_settings_write_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return signal?.aborted ? "cancelled" : "unavailable";
+      }
+    }
     if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.delete") {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -6084,7 +6138,8 @@ async function serveWithOwnerLease(
         isGmailMessageTrashReviewCommand(p.command) ||
         (p.command.type === "tool_call" &&
           (p.command.payload.tool_name === "file.edit" || p.command.payload.tool_name === "file.delete" ||
-            p.command.payload.tool_name === "memory.personalization.stop" || p.command.payload.tool_name === "mcp.call" ||
+            p.command.payload.tool_name === "memory.personalization.stop" || p.command.payload.tool_name === "settings.write" ||
+            p.command.payload.tool_name === "mcp.call" ||
             (p.command.payload.tool_name === "github.write" &&
               ["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create"].includes(String(p.command.payload.arguments.operation))) ||
             (p.command.payload.tool_name === "google.calendar.write" &&

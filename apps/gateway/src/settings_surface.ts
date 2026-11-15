@@ -1,8 +1,10 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { composioStatus } from "@blue-tanuki/core";
+import { createHmac, randomBytes } from "node:crypto";
+import { composioStatus, type SettingsWritePort } from "@blue-tanuki/core";
 import type { WebChatSettingsSurface } from "@blue-tanuki/channel-webchat";
-import { parseEnvFile } from "./env_file.js";
+import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
+import type { SettingsWritePatch } from "@blue-tanuki/protocol";
 import {
   setupConfigFromEnv,
   type SetupProviderKind,
@@ -13,6 +15,7 @@ import {
 } from "./llm_config.js";
 import type { PluginRuntime } from "./plugin_loader.js";
 import {
+  applySettingsPatch,
   assessLlmComputeReadiness,
   type LlmComputeReadiness,
   verifyLlmProvisioning,
@@ -191,6 +194,126 @@ async function readEnvFileEnv(filePath: string | undefined): Promise<Env> {
 function envFilePath(env: Env): string | undefined {
   const raw = env.BLUE_TANUKI_ENV_FILE;
   return raw && raw.trim().length > 0 ? path.resolve(raw) : undefined;
+}
+
+export function createGatewaySettingsWritePort(env: Env = process.env): SettingsWritePort {
+  const bindingKey = randomBytes(32);
+  let writeTail: Promise<void> = Promise.resolve();
+  const serializeWrite = async <T>(write: () => Promise<T>): Promise<T> => {
+    const previous = writeTail;
+    let release!: () => void;
+    writeTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await write();
+    } finally {
+      release();
+    }
+  };
+  const inspectCurrent = async () => {
+    const target = envFilePath(env);
+    if (!target) throw new Error("settings_write_env_file_unavailable");
+    const before = await fs.lstat(target).catch(() => undefined);
+    if (!before || !before.isFile() || before.isSymbolicLink()) {
+      throw new Error("settings_write_target_not_regular_file");
+    }
+    const rawBytes = await fs.readFile(target);
+    const after = await fs.lstat(target).catch(() => undefined);
+    if (!after || !after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino ||
+        before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
+        rawBytes.byteLength !== after.size) {
+      throw new Error("settings_write_target_changed_during_observation");
+    }
+    const raw = rawBytes.toString("utf8");
+    if (!Buffer.from(raw, "utf8").equals(rawBytes)) throw new Error("settings_write_env_file_not_utf8");
+    const parsed = parseEnvFile(raw);
+    if (parsed.warnings.length > 0) throw new Error("settings_write_env_file_malformed");
+    const config = setupConfigFromEnv({ ...env, ...parsed.values });
+    const targetStateDigest = createHmac("sha256", bindingKey)
+      .update(JSON.stringify([path.resolve(target), String(after.dev), String(after.ino), after.size,
+        after.mtimeMs, after.ctimeMs]), "utf8")
+      .update(rawBytes)
+      .digest("hex");
+    return {
+      target,
+      raw,
+      config,
+      target_state_digest: targetStateDigest,
+      values: {
+        model: config.llm.model ?? null,
+        temperature: config.llm.temperature ?? null,
+        max_tokens: config.llm.max_tokens ?? null,
+        timeout_ms: config.llm.timeout_ms ?? null,
+      },
+    };
+  };
+  return {
+    inspect: async () => {
+      const state = await inspectCurrent();
+      return { target_state_digest: state.target_state_digest, values: state.values };
+    },
+    apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string) => serializeWrite(async () => {
+      const state = await inspectCurrent();
+      if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
+          state.target_state_digest !== expectedTargetStateDigest) {
+        throw new Error("settings_write_target_changed_before_invoke");
+      }
+      const nextConfig = applySettingsPatch(state.config, { llm: patch.llm });
+      const updates: Record<string, string> = {};
+      if (patch.llm.model !== undefined) {
+        const providerModelKey: Record<SetupProviderKind, string> = {
+          stub: "LLM_MODEL",
+          anthropic: "ANTHROPIC_MODEL",
+          openai: "OPENAI_MODEL",
+          "openai-compatible": "OPENAI_COMPAT_MODEL",
+          openrouter: "OPENROUTER_MODEL",
+        };
+        updates[providerModelKey[state.config.llm.provider]] = patch.llm.model;
+        updates.LLM_MODEL = patch.llm.model;
+      }
+      if (patch.llm.temperature !== undefined) updates.BLUE_TANUKI_LLM_TEMPERATURE = String(patch.llm.temperature);
+      if (patch.llm.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.llm.max_tokens);
+      if (patch.llm.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.llm.timeout_ms);
+      const content = patchEnvDocument(state.raw, updates);
+      const latest = await inspectCurrent();
+      if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
+        throw new Error("settings_write_target_changed_before_persist");
+      }
+      await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write" });
+      const saved = await inspectCurrent();
+      const expectedValues = {
+        model: patch.llm.model ?? state.values.model,
+        temperature: patch.llm.temperature ?? state.values.temperature,
+        max_tokens: patch.llm.max_tokens ?? state.values.max_tokens,
+        timeout_ms: patch.llm.timeout_ms ?? state.values.timeout_ms,
+      };
+      if (JSON.stringify(saved.values) !== JSON.stringify(expectedValues)) {
+        throw new Error("settings_write_readback_mismatch");
+      }
+      return { changed_keys: Object.keys(updates).sort(), restart_required: true as const };
+    }),
+  };
+}
+
+function patchEnvDocument(raw: string, updates: Record<string, string>): string {
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  const finalNewline = raw.endsWith("\n");
+  const lines = raw.split(/\r?\n/u);
+  if (finalNewline) lines.pop();
+  const seen = new Set<string>();
+  const remaining = new Map(Object.entries(updates));
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/u.exec(line);
+    const key = match?.[1];
+    if (!key || !remaining.has(key)) continue;
+    if (seen.has(key)) throw new Error("settings_write_target_key_duplicated");
+    seen.add(key);
+    lines[index] = `${key}=${JSON.stringify(remaining.get(key))}`;
+    remaining.delete(key);
+  }
+  for (const [key, value] of remaining) lines.push(`${key}=${JSON.stringify(value)}`);
+  return lines.join(newline) + (finalNewline || lines.length > 0 ? newline : "");
 }
 
 function apiKeySet(env: Env, provider: SetupProviderKind): boolean {
@@ -891,7 +1014,7 @@ export function renderSettingsHtml(): string {
           <button class="secondary" id="verify-llm-btn" type="button">Verify LLM</button>
           <button class="primary" id="save-btn" type="button" disabled>Save</button>
         </div>
-        <div class="notice warn" id="settings-write-status">Settings are read-only because HDS L3 final review is not connected to this surface. No settings changes are saved here.</div>
+        <div class="notice warn" id="settings-write-status">This page does not save settings. Supported non-secret LLM values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</div>
         <div class="notice" id="notice"></div>
       </div>
     </div>

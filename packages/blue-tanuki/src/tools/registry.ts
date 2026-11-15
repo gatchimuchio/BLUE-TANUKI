@@ -10,6 +10,7 @@ import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation
 import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
@@ -18,7 +19,7 @@ export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation 
   GoogleDrivePermissionCreateTargetVersionObservation | GoogleDrivePublicLinkCreateTargetVersionObservation |
   GoogleDriveTrashTargetVersionObservation |
   GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation |
-  McpCallTargetVersionObservation;
+  McpCallTargetVersionObservation | SettingsWriteTargetVersionObservation;
 
 /** No-store projection of one exact, plan-bound GitHub issue.create payload. */
 export interface GitHubIssueCreateContentReview {
@@ -657,6 +658,25 @@ export interface MemoryPersonalizationStopContentReview {
   may_execute: false;
 }
 
+/** No-store exact before/after view for a non-secret Gateway settings patch. */
+export interface SettingsWriteContentReview {
+  kind: "settings_write";
+  operation: "settings.write";
+  changes: readonly {
+    key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms";
+    before: string | number | null;
+    after: string | number;
+  }[];
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** No-store owner review of one exact native-live MCP request and its freshly observed target. */
 export interface McpCallContentReview {
   kind: "mcp_call";
@@ -889,7 +909,7 @@ export interface GoogleDriveFileTrashContentReview {
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | GmailMessageTrashContentReview |
   GmailMessageModifyContentReview |
   FileEditDiffContentReview | FileDeleteTargetContentReview |
-  MemoryPersonalizationStopContentReview | McpCallContentReview |
+  MemoryPersonalizationStopContentReview | SettingsWriteContentReview | McpCallContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
   GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubPullRequestUpdateContentReview | GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview |

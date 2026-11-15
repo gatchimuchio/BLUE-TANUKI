@@ -6267,6 +6267,47 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "停止対象を再確認";
           return;
         }
+        if (review.kind === "settings_write") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const allowedKeys = ["llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms"];
+          const changesValid = Array.isArray(review.changes) && review.changes.length > 0 && review.changes.length <= 4 &&
+            review.changes.every(function (change) {
+              return change && allowedKeys.includes(change.key) &&
+                (change.before === null || typeof change.before === "string" || typeof change.before === "number") &&
+                (typeof change.after === "string" || typeof change.after === "number");
+            });
+          if (review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false || !changesValid ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest)) {
+            throw new Error("設定変更の確認内容がこのL3承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "GatewayのLLM実行設定変更";
+          view.appendChild(heading);
+          review.changes.forEach(function (change) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = change.key + ": ";
+            const value = document.createElement("span");
+            value.textContent = String(change.before === null ? "(未設定)" : change.before) + " → " + String(change.after);
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "API資格情報・provider・endpoint・承認設定・pathは変更対象外です。この内容はno-storeで表示され、承認後に対象版を再照合して設定ファイルへ反映します。Gatewayの再起動が必要です。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "設定差分を再確認";
+          return;
+        }
         if (review.kind === "browser_form_input") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           let parsedUrl = null;

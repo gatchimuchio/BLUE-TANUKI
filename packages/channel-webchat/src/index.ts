@@ -29,6 +29,7 @@ export {
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatMemoryPersonalizationStopContentReview,
+  type WebChatSettingsWriteContentReview,
   type WebChatGoalPurposeRelationContentReview,
   type WebChatBrowserFormGetContentReview,
   type WebChatBrowserFormInputContentReview,

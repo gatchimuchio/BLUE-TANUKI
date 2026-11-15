@@ -904,6 +904,25 @@ export interface WebChatMemoryPersonalizationStopContentReview {
   may_execute: false;
 }
 
+export interface WebChatSettingsWriteContentReview {
+  kind: "settings_write";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  operation: "settings.write";
+  changes: readonly {
+    key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms";
+    before: string | number | null;
+    after: string | number;
+  }[];
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGitHubIssueCreateContentReview {
   kind: "github_issue_create";
   command_id: string;
@@ -1352,7 +1371,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
-  WebChatMemoryPersonalizationStopContentReview | WebChatMcpCallContentReview |
+  WebChatMemoryPersonalizationStopContentReview | WebChatSettingsWriteContentReview | WebChatMcpCallContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
   WebChatBrowserFormInputContentReview |
   WebChatBrowserLinkNavigationContentReview |
