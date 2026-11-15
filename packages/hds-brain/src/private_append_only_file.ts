@@ -68,6 +68,7 @@ export class HDSPrivateAppendOnlyFile {
     try {
       appendFileSync(opened.fd, value, "utf8");
       fsyncSync(opened.fd);
+      if (opened.created) syncDirectoryChain(dirname(this.filepath), this.directoryIdentity);
       this.identity = opened.identity;
       this.absentAtConstruction = false;
     } catch (error) {
@@ -89,7 +90,7 @@ export class HDSPrivateAppendOnlyFile {
     if (failed) throw failure;
   }
 
-  private open(mode: "read" | "append"): { fd: number; identity: FileIdentity } | undefined {
+  private open(mode: "read" | "append"): { fd: number; identity: FileIdentity; created: boolean } | undefined {
     assertDirectoryPath(dirname(this.filepath), this.directoryIdentity);
     const before = tryLstat(this.filepath);
     if (this.absentAtConstruction) {
@@ -118,7 +119,11 @@ export class HDSPrivateAppendOnlyFile {
         throw new Error("hds_private_file_identity_changed");
       }
       if (process.platform !== "win32") fchmodSync(fd, 0o600);
-      return { fd, identity: { dev: descriptorStat.dev, ino: descriptorStat.ino } };
+      return {
+        fd,
+        identity: { dev: descriptorStat.dev, ino: descriptorStat.ino },
+        created: this.absentAtConstruction && mode === "append",
+      };
     } catch (error) {
       closeSync(fd);
       throw error;
@@ -134,17 +139,67 @@ function ensureDirectoryPath(path: string): void {
     current = join(current, part);
     let stat = tryLstat(current);
     if (!stat) {
+      let created = false;
       try {
         mkdirSync(current, { mode: 0o700 });
+        created = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
       stat = tryLstat(current);
+      if (created) syncDirectoryChain(dirname(current));
     }
     if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new Error("hds_private_file_directory_must_be_real");
     }
   }
+}
+
+/** Persist newly created directory entries on POSIX before reporting append success. */
+function syncDirectoryChain(path: string, expected?: readonly DirectoryIdentity[]): void {
+  // Node's portable Win32 fs API does not expose a directory handle suitable for fsync.
+  if (process.platform === "win32") return;
+
+  const absolutePath = resolve(path);
+  const root = parse(absolutePath).root;
+  let current = absolutePath;
+  while (true) {
+    syncDirectory(current, expected?.find((entry) => entry.path === current));
+    if (current === root) return;
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+function syncDirectory(path: string, expected?: DirectoryIdentity): void {
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const directoryOnly = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+  const fd = openSync(path, constants.O_RDONLY | noFollow | directoryOnly);
+  let failed = false;
+  let failure: unknown;
+  try {
+    const descriptorStat = fstatSync(fd, { bigint: true });
+    const pathStat = tryLstat(path);
+    if (!pathStat || pathStat.isSymbolicLink() || !pathStat.isDirectory() ||
+        descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino ||
+        (expected && (descriptorStat.dev !== expected.dev || descriptorStat.ino !== expected.ino))) {
+      throw new Error("hds_private_file_directory_identity_changed");
+    }
+    fsyncSync(fd);
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  try {
+    closeSync(fd);
+  } catch (error) {
+    if (!failed) {
+      failed = true;
+      failure = error;
+    }
+  }
+  if (failed) throw failure;
 }
 
 function captureDirectoryIdentity(path: string): readonly DirectoryIdentity[] {
