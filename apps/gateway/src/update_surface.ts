@@ -41,11 +41,12 @@ export interface UpdateSnapshot {
   };
   candidate: UpdateCandidateStatus;
   compatibility: {
-    current_data_schema_version: 1;
-    minimum_supported_data_schema_version: 1;
+    current_data_schema_version: number | null;
+    minimum_supported_data_schema_version: number | null;
     candidate_manifest_schema_version: number | null;
-    migration_required: boolean;
-    migration_supported: boolean;
+    candidate_data_schema_version: number | null;
+    migration_required: boolean | null;
+    migration_supported: boolean | null;
     status: "pass" | "blocked" | "unknown";
   };
   rollback: {
@@ -92,6 +93,7 @@ interface PackageJson {
 
 interface ReleaseManifest {
   schema_version?: unknown;
+  data_schema_version?: unknown;
   name?: unknown;
   version?: unknown;
   archive?: {
@@ -437,16 +439,18 @@ export async function buildUpdateSnapshot(
     verifyCandidate(root, env),
     latestRollbackPlan(env),
   ]);
-  const candidateSchema =
+  const candidateManifestSchema =
     typeof candidate.manifest?.schema_version === "number"
       ? candidate.manifest.schema_version
       : null;
+  const candidateDataSchema =
+    typeof candidate.manifest?.data_schema_version === "number" &&
+    Number.isSafeInteger(candidate.manifest.data_schema_version) &&
+    candidate.manifest.data_schema_version >= 0
+      ? candidate.manifest.data_schema_version
+      : null;
   const compatibilityStatus =
-    candidate.status.verification_status === "pass"
-      ? "pass"
-      : candidate.status.verification_status === "missing"
-        ? "unknown"
-        : "blocked";
+    candidate.status.verification_status === "fail" ? "blocked" : "unknown";
 
   return {
     schema_version: 1,
@@ -458,11 +462,12 @@ export async function buildUpdateSnapshot(
     },
     candidate: candidate.status,
     compatibility: {
-      current_data_schema_version: 1,
-      minimum_supported_data_schema_version: 1,
-      candidate_manifest_schema_version: candidateSchema,
-      migration_required: false,
-      migration_supported: true,
+      current_data_schema_version: null,
+      minimum_supported_data_schema_version: null,
+      candidate_manifest_schema_version: candidateManifestSchema,
+      candidate_data_schema_version: candidateDataSchema,
+      migration_required: null,
+      migration_supported: null,
       status: compatibilityStatus,
     },
     rollback: {
@@ -480,7 +485,7 @@ export async function buildUpdateSnapshot(
     authority_boundary: AUTHORITY_BOUNDARY,
     next_safe_action:
       candidate.status.verification_status === "pass"
-        ? "Create a pre-update backup, then apply the release bundle manually and rerun validation."
+        ? "Candidate archive integrity is verified, but supported product data-schema compatibility and migration requirements are unknown. Establish them before applying the update manually."
         : "Generate or configure a release bundle with matching sha256 and manifest sidecars before update.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };

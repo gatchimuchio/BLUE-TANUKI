@@ -3854,12 +3854,13 @@ describe("WebChatChannel — Update surface", () => {
             secret_material: false,
           },
           compatibility: {
-            current_data_schema_version: 1,
-            minimum_supported_data_schema_version: 1,
+            current_data_schema_version: null,
+            minimum_supported_data_schema_version: null,
             candidate_manifest_schema_version: 1,
-            migration_required: false,
-            migration_supported: true,
-            status: "pass",
+            candidate_data_schema_version: null,
+            migration_required: null,
+            migration_supported: null,
+            status: "unknown",
           },
           rollback: {
             pre_update_backup_available: true,
