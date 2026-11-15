@@ -115,6 +115,12 @@ User flow:
 5. Use Conversation / WebChat in the Control Center.
 ```
 
+The macOS BLUE-TANUKI app also provides Safe Mode, stop, and normal-mode
+restart actions. To leave Safe Mode, choose **通常モードで再起動** in the app;
+this uses the managed launcher to stop the Safe Mode process and start the
+Gateway normally with the saved settings. It does not rewrite saved settings
+or schedules. Confirm the live mode and schedule state in Control Center.
+
 Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
 Normal Windows users should not run source builds. Download
 `BlueTanukiSetup-<version>-windows-x64.exe` and run it. The

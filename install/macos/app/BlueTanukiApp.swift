@@ -95,11 +95,26 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         }
     }
 
+    @objc private func restartNormally() {
+        beginOperation("通常モードで再起動しています。", detail: "Safe Modeのプロセスを停止し、保存済みの設定からGatewayを起動します。") {
+            try self.validateInstalledProduct()
+            let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
+            try self.runShell(launcher, arguments: ["restart"])
+        } completion: { result in
+            switch result {
+            case .success:
+                self.setStatus("通常モードへの再起動が完了しました。", detail: "実際の稼働状態とscheduleはコントロールセンターで確認してください。")
+            case .failure(let error):
+                self.showFailure("通常モードへの再起動", error: error)
+            }
+        }
+    }
+
     @objc private func startSafeMode() {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Safe Modeで起動しますか？"
-        alert.informativeText = "常駐Gatewayを停止してSafe Modeで再起動します。実行中の仕事は中断される場合があります。LLM provider・外部connectorとruntime scheduleは停止し、保存済みの設定・scheduleは変更しません。通常モードへ戻すには「停止」の後に「コントロールセンターを開く」を選んでください。"
+        alert.informativeText = "常駐Gatewayを停止してSafe Modeで再起動します。実行中の仕事は中断される場合があります。LLM provider・外部connectorとruntime scheduleは停止し、保存済みの設定・scheduleは変更しません。通常モードへ戻すには「通常モードで再起動」を選んでください。"
         alert.addButton(withTitle: "キャンセル")
         alert.addButton(withTitle: "Safe Modeで起動")
         guard alert.runModal() == .alertSecondButtonReturn else { return }
@@ -111,7 +126,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         } completion: { result in
             switch result {
             case .success:
-                self.setStatus("Safe Modeで起動しました。", detail: "LLM provider・外部connectorは停止し、runtime scheduleは一時停止しています。通常モードへ戻すには「停止」の後に「コントロールセンターを開く」を選んでください。")
+                self.setStatus("Safe Modeで起動しました。", detail: "LLM provider・外部connectorは停止し、runtime scheduleは一時停止しています。通常モードへ戻すには「通常モードで再起動」を選んでください。")
             case .failure(let error):
                 self.showFailure("Safe Modeへの切替", error: error)
             }
@@ -187,6 +202,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
         let secondRow = NSStackView(views: [
             makeButton("Safe Modeで起動", action: #selector(startSafeMode)),
+            makeButton("通常モードで再起動", action: #selector(restartNormally)),
             makeButton("停止", action: #selector(stopProduct)),
         ])
         secondRow.orientation = .horizontal
