@@ -443,6 +443,11 @@ function invokeNativeProvider(
       if (code !== 0) {
         reportProviderStateUnknown();
         const diagnostic = Buffer.concat(stderr).toString("utf8").trim();
+        const linuxFailure = linuxIsolationFailureMessage(platform, diagnostic);
+        if (linuxFailure) {
+          reject(new Error(linuxFailure));
+          return;
+        }
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
         reject(new Error(`shell.exec ${isolationPlatformLabel(platform)} isolation failed before a verified result was produced${safeDiagnostic}`));
         return;
@@ -471,6 +476,30 @@ function invokeNativeProvider(
     watchdog = setTimeout(cancel, request.timeoutMs + PROCESS_TREE_SHUTDOWN_GRACE_MS);
     if (signal?.aborted) onAbort();
   });
+}
+
+function linuxIsolationFailureMessage(platform: NodeJS.Platform, diagnostic: string): string | undefined {
+  if (platform !== "linux") return undefined;
+  const match = /^linux_isolation_error:([a-zA-Z0-9_:.-]{1,256})$/u.exec(diagnostic);
+  if (!match) return undefined;
+  const code = match[1] ?? "";
+
+  const notStarted: Readonly<Record<string, string>> = {
+    linux_isolation_prerequisite_missing:
+      "Linuxの隔離実行に必要なBubblewrap／systemdが見つかりません。コマンドは起動していません。対応環境で必要なOS部品を用意してから再試行してください。",
+    linux_user_manager_unavailable:
+      "現在のユーザーのsystemd管理サービスを確認できません。コマンドは起動していません。ログイン中のsystemdユーザーセッションでBLUE-TANUKIを起動してください。",
+    linux_cgroup_v2_unavailable:
+      "Linux cgroup v2を利用できません。コマンドは起動していません。cgroup v2を提供する対応Linux環境で実行してください。",
+    linux_resource_controllers_unavailable:
+      "LinuxのCPU・メモリ・プロセス数制限を確認できません。コマンドは起動していません。必要なcgroup controllerを提供する対応環境で再試行してください。",
+    systemd_run_unavailable:
+      "systemd-runを起動できませんでした。コマンドは起動していません。systemdユーザーサービスの状態を確認してから再試行してください。",
+  };
+  if (Object.hasOwn(notStarted, code)) return notStarted[code];
+
+  const codeLabel = code.length <= 160 ? `（診断コード: ${code}）` : "";
+  return `Linux隔離providerが実行状態または停止完了を確認できませんでした。作用結果は不明です。状態を確認するまで同じコマンドを自動再試行しないでください。${codeLabel}`;
 }
 
 function validateNativeResult(value: unknown): NativeShellResult {
