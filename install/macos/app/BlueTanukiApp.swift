@@ -117,6 +117,9 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                 if healthLine == "resident_health=not_ready" {
                     return ResidentProductStatus.runningNotReady
                 }
+                if healthLine == "resident_health=unobserved_non_loopback_binding" {
+                    return ResidentProductStatus.runningHealthUnobserved
+                }
                 throw AppError.invalidResidentStatus
             }
             if let statusLine,
@@ -133,6 +136,8 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                 self.setStatus("Gatewayのヘルス応答を確認しました。", detail: "これはローカルのhealthz応答です。実際のSafe Mode、接続、schedule状態はコントロールセンターで確認してください。")
             case .success(.runningNotReady):
                 self.setStatus("Gatewayプロセスは稼働中ですが、healthz応答を確認できません。", detail: "プロセスは自動停止・再起動していません。ログとDoctorを確認してから再操作してください。")
+            case .success(.runningHealthUnobserved):
+                self.setStatus("Gatewayプロセスは稼働中です。", detail: "WEBCHAT_HOSTがloopback以外のため、この画面ではhealthzを確認していません。実際の応答は接続先のControl Centerで確認してください。")
             case .success(.starting):
                 self.setStatus("Gatewayを起動中です。", detail: "起動完了後の実際の稼働状態はコントロールセンターで確認してください。")
             case .success(.stopped):
@@ -440,6 +445,7 @@ private enum AppError: Error, CustomStringConvertible {
 private enum ResidentProductStatus {
     case running
     case runningNotReady
+    case runningHealthUnobserved
     case starting
     case stopped
 }

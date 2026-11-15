@@ -429,7 +429,7 @@ server.listen(port, "127.0.0.1");
 
 wait_gateway_health() {
   health_timeout_seconds=${1:-15}
-  health_host=$(webchat_host)
+  health_host=${2:-$(webchat_host)}
   health_port=$(webchat_port)
   "$NODE_EXE" - "$health_host" "$health_port" "$health_timeout_seconds" <<'NODE'
 "use strict";
@@ -619,7 +619,10 @@ resident_status() {
   watchdog_pid=$(resolve_owned_pid watchdog "$WATCHDOG_PID_FILE") || return 2
   if [ -n "$pid" ]; then
     echo "resident_status=running pid=$pid"
-    if wait_gateway_health 2; then
+    local_health_host=$(control_center_loopback_host 2>/dev/null || true)
+    if [ -z "$local_health_host" ]; then
+      echo "resident_health=unobserved_non_loopback_binding"
+    elif wait_gateway_health 2 "$local_health_host"; then
       echo "resident_health=ready"
     else
       echo "resident_health=not_ready"
