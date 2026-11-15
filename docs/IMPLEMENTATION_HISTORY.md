@@ -14,7 +14,7 @@
 | `pnpm docs:check` | FAIL。Markdown検査PASS後、日本語基底ゲートが今回変更していない登録済み移行負債7文書のhash不整合を報告。license gateは未到達。 |
 | Windows native helper build、cancel／timeout runtime、全workspace suite、全OS、製品全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
 
-**状態・限界:** TypeScript sourceのcleanup所有境界を修正した。Windowsでの実停止、ACL復元、helperのbounded shutdownは未確認であり、Windows shell isolationや製品全体の成立証拠ではない。日本語基底ゲートが指摘した7文書は今回変更対象外の既存不整合であり、その台帳是正は別施工に残す。Linux挙動、C08.03 provider試験、外部作用、別repo、公開／出荷判断は変更していない。実装commitとpush後のrecovery refを下記へ追記する。
+**状態・限界:** TypeScript sourceのcleanup所有境界を修正した。Windowsでの実停止、ACL復元、helperのbounded shutdownは未確認であり、Windows shell isolationや製品全体の成立証拠ではない。日本語基底ゲートが指摘した7文書は今回変更対象外の既存不整合であり、その台帳是正は別施工に残す。Linux挙動、C08.03 provider試験、外部作用、別repo、公開／出荷判断は変更していない。implementation commit=`e7240e5eb0c4512ba7d8f756d21784fc694c8b1b`をGitHub `main`へpush済み。commit後のlocal recovery branchとremote backup tagはcurrent=`e7240e5eb0c4512ba7d8f756d21784fc694c8b1b`、previous=`309d6d6c8340f80405c3091d68d02f248ac3c8e1`で一致。
 
 ## 2026-11-14 — rev5.3 QE_BUILD / WebChat owner-task audio input
 
