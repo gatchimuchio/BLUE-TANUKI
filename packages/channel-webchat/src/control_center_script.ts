@@ -2319,13 +2319,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return "good";
       }
 
+      function runtimeGatewayTone(body) {
+        const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
+        const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
+        const gatewayStatus = body.gateway_status || "unknown";
+        if (gatewayStatus === "degraded" || invariantOk === false || auditOk === false) return "bad";
+        if (gatewayStatus === "running" && invariantOk === true && auditOk === true) return "good";
+        return "warn";
+      }
+
       function updatePermanentUseStatus(body) {
         const pendingApprovals = Number(body.pending_approvals_count ?? 0);
         const pendingSchedules = Number(body.pending_schedule_approvals_count ?? 0);
         const safeMode = body.safe_mode === true;
         const modeLabel = typeof body.safe_mode === "boolean" ? (safeMode ? "Safe Mode" : "通常モード") : "未確認";
         const items = [
-          ["Gateway", body.gateway_status || "unknown", body.gateway_status === "ready" ? "good" : "warn"],
+          ["Gateway", body.gateway_status || "unknown", runtimeGatewayTone(body)],
           ["動作モード", modeLabel, safeMode ? "review" : body.safe_mode === false ? "good" : "warn"],
           ["HDS", labelForBoolean(body.hds_invariants_ok), toneForBoolean(body.hds_invariants_ok)],
           ["Audit", labelForBoolean(body.audit_chain_valid), toneForBoolean(body.audit_chain_valid)],
@@ -3412,11 +3421,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const gatewayStatus = body.gateway_status || "unknown";
         const safeMode = body.safe_mode === true;
         const modeLabel = typeof body.safe_mode === "boolean" ? (safeMode ? "Safe Mode" : "通常モード") : "未確認";
-        const gatewayTone = gatewayStatus === "degraded" || invariantOk === false || auditOk === false
-          ? "bad"
-          : gatewayStatus === "running" && invariantOk === true && auditOk === true
-            ? "good"
-            : "warn";
+        const gatewayTone = runtimeGatewayTone(body);
         setText("gateway-status", gatewayStatus);
         byId("gateway-status").className = "badge " + gatewayTone;
         setText("runtime-mode", modeLabel);
