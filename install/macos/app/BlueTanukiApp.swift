@@ -95,6 +95,29 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         }
     }
 
+    @objc private func startSafeMode() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Safe Modeで起動しますか？"
+        alert.informativeText = "常駐Gatewayを停止してSafe Modeで再起動します。実行中の仕事は中断される場合があります。LLM provider・外部connectorとruntime scheduleは停止し、保存済みの設定・scheduleは変更しません。通常モードへ戻すには「停止」の後に「コントロールセンターを開く」を選んでください。"
+        alert.addButton(withTitle: "キャンセル")
+        alert.addButton(withTitle: "Safe Modeで起動")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        beginOperation("Safe Modeで再起動しています。", detail: "保存済みの設定・scheduleは変更しません。") {
+            try self.validateInstalledProduct()
+            let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
+            try self.runShell(launcher, arguments: ["safe-mode"])
+        } completion: { result in
+            switch result {
+            case .success:
+                self.setStatus("Safe Modeで起動しました。", detail: "LLM provider・外部connectorは停止し、runtime scheduleは一時停止しています。通常モードへ戻すには「停止」の後に「コントロールセンターを開く」を選んでください。")
+            case .failure(let error):
+                self.showFailure("Safe Modeへの切替", error: error)
+            }
+        }
+    }
+
     @objc private func uninstallProduct() {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -130,7 +153,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 390),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 455),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -163,20 +186,28 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         firstRow.spacing = 10
 
         let secondRow = NSStackView(views: [
+            makeButton("Safe Modeで起動", action: #selector(startSafeMode)),
             makeButton("停止", action: #selector(stopProduct)),
-            makeButton("ログを表示", action: #selector(showLogs)),
-            makeButton("アンインストール…", action: #selector(uninstallProduct)),
         ])
         secondRow.orientation = .horizontal
         secondRow.alignment = .centerY
         secondRow.distribution = .fillEqually
         secondRow.spacing = 10
 
+        let thirdRow = NSStackView(views: [
+            makeButton("ログを表示", action: #selector(showLogs)),
+            makeButton("アンインストール…", action: #selector(uninstallProduct)),
+        ])
+        thirdRow.orientation = .horizontal
+        thirdRow.alignment = .centerY
+        thirdRow.distribution = .fillEqually
+        thirdRow.spacing = 10
+
         let footer = NSTextField(wrappingLabelWithString: "配布状態: 署名なし・公証未提出。署名・公証済みの製品リリースではありません。")
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
 
-        let stack = NSStackView(views: [title, subtitle, statusLabel, detailLabel, firstRow, secondRow, footer])
+        let stack = NSStackView(views: [title, subtitle, statusLabel, detailLabel, firstRow, secondRow, thirdRow, footer])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.distribution = .fill
@@ -192,8 +223,10 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             stack.bottomAnchor.constraint(lessThanOrEqualTo: window.contentView!.bottomAnchor, constant: -24),
             firstRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             secondRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            thirdRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             firstRow.heightAnchor.constraint(equalToConstant: 36),
             secondRow.heightAnchor.constraint(equalToConstant: 36),
+            thirdRow.heightAnchor.constraint(equalToConstant: 36),
         ])
 
         self.window = window
