@@ -66,11 +66,16 @@ assert_linux_runtime_compatibility() {
   fi
 }
 
-INSTALL_ROOT="${INSTALL_ROOT:-${BLUE_TANUKI_INSTALL_ROOT:-$DEFAULT_INSTALL_ROOT}}"
-DATA_ROOT="${DATA_ROOT:-${BLUE_TANUKI_DATA_ROOT:-$DEFAULT_DATA_ROOT}}"
-CONFIG_ROOT="${CONFIG_ROOT:-${BLUE_TANUKI_CONFIG_ROOT:-$DEFAULT_CONFIG_ROOT}}"
-RUNTIME_ROOT="${RUNTIME_ROOT:-${BLUE_TANUKI_RUNTIME_ROOT:-$DATA_ROOT/runtime}}"
-BIN_ROOT="${BIN_ROOT:-${BLUE_TANUKI_BIN_ROOT:-$HOME/.local/bin}}"
+# Packaged install paths use OS defaults or explicit CLI options, never inherited
+# developer/source-installer environment overrides.
+unset INSTALL_ROOT DATA_ROOT CONFIG_ROOT RUNTIME_ROOT BIN_ROOT \
+  BLUE_TANUKI_INSTALL_ROOT BLUE_TANUKI_DATA_ROOT BLUE_TANUKI_CONFIG_ROOT \
+  BLUE_TANUKI_RUNTIME_ROOT BLUE_TANUKI_BIN_ROOT
+INSTALL_ROOT="$DEFAULT_INSTALL_ROOT"
+DATA_ROOT="$DEFAULT_DATA_ROOT"
+CONFIG_ROOT="$DEFAULT_CONFIG_ROOT"
+RUNTIME_ROOT="$DATA_ROOT/runtime"
+BIN_ROOT="$HOME/.local/bin"
 CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
 # Developer source-installer environment switches must not alter packaged setup.
 # The explicit CLI options below are the only way to change these modes.
@@ -84,7 +89,8 @@ ROLLBACK_MODE=0
 
 usage() {
   cat <<USAGE
-Usage: ./BlueTanukiSetup.sh [--update|--rollback] [--install-root DIR] [--data-root DIR] [--config-root DIR] [--bin-root DIR] [--no-launch]
+Usage: ./BlueTanukiSetup.sh [--update|--rollback] [--install-root DIR] [--data-root DIR] [--config-root DIR]
+  [--runtime-root DIR] [--bin-root DIR] [--no-launch]
 
 Installs, explicitly updates, or rolls back BLUE-TANUKI from this packaged ${PLATFORM_LABEL} installer archive.
 Normal users should not run source builds.
