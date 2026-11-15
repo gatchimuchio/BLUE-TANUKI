@@ -367,6 +367,7 @@ function invokeNativeProvider(
     let closeObserved = false;
     let processTreeConfirmed = false;
     let providerStateUnknownReported = false;
+    let stdoutExceededBound = false;
     let watchdog: NodeJS.Timeout | undefined;
     let cancelFallback: NodeJS.Timeout | undefined;
 
@@ -393,11 +394,14 @@ function invokeNativeProvider(
       try {
         child.stdin?.write("cancel\n");
       } catch {
-        child.kill();
+        if (platform !== "linux") child.kill();
       }
       cancelFallback = setTimeout(() => {
         if (!closeObserved) {
-          child.kill();
+          // Linux commands are owned by a systemd unit that outlives this helper.
+          // Killing only the helper can orphan the command, so wait for its bounded
+          // unit lifetime and report uncertainty while shutdown is still pending.
+          if (platform !== "linux") child.kill();
           reportProviderStateUnknown();
         }
       }, PROCESS_TREE_SHUTDOWN_GRACE_MS);
@@ -415,11 +419,16 @@ function invokeNativeProvider(
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       stdoutBytes += buffer.byteLength;
       if (stdoutBytes > MAX_NATIVE_RESPONSE_BYTES) {
+        if (platform === "linux") {
+          stdoutExceededBound = true;
+          stdout.length = 0;
+          return;
+        }
         fail(new Error("shell.exec native isolation response exceeded its bound"));
         child.kill();
         return;
       }
-      stdout.push(buffer);
+      if (!stdoutExceededBound) stdout.push(buffer);
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -450,6 +459,11 @@ function invokeNativeProvider(
         }
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
         reject(new Error(`shell.exec ${isolationPlatformLabel(platform)} isolation failed before a verified result was produced${safeDiagnostic}`));
+        return;
+      }
+      if (stdoutExceededBound) {
+        reportProviderStateUnknown();
+        reject(new Error("shell.exec native isolation response exceeded its bound"));
         return;
       }
       let parsed: unknown;

@@ -4,6 +4,8 @@
 
 起動にはBubblewrap、稼働中のsystemd user manager、`cpu`・`memory`・`pids` controllerを持つcgroup v2が必要である。systemdが完了を返し、service cgroupが空であることを確認するまで通常結果を返さない。実行時間、CPU、memory、process数、出力、単一fileサイズを制限し、`/tmp`は容量制限付きtmpfsとする。command環境は小さなallowlistから構成し、Gatewayのcredentialを継承しない。shell root内の通常fileはhard linkを拒否し、root外のinodeを共有するfileの読取・変更を防ぐ。
 
+中止要求時はsystemd unitの停止を依頼し、helperはunitの終了とservice cgroupの空を確認してから応答する。TypeScript側はLinux helperだけを強制終了してunitから切り離さず、停止確認を待つ。systemd unitには要求ごとの`RuntimeMaxSec`が設定され、最大実行時間後も結果が確認できなければ状態不明として扱う。
+
 書込み可能workspaceはhost上の領域をbind mountしており、現在aggregate disk quotaを持たない。`LimitFSIZE`は単一fileの上限であり、複数file合計の容量制限ではない。このためdisk exhaustionに対するresource containmentが残る。rootには小さく専用のworkspaceを指定すること。この制約が残る間、D07.02全体の成立やrelease evidenceとは扱わない。
 
 実装中のruntime確認はWSL2で行った。WSL2の結果をnative Linuxと同一視しない。手動GitHub Actionsによるhosted Ubuntuのbuildとfocused testも補助証拠に限定し、installed Linux製品、native実機QA、release readinessを示すものではない。
