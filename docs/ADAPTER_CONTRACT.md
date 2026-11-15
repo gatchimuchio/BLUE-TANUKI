@@ -76,3 +76,7 @@ Adapters remain Layer B unless explicitly promoted through documented review. La
 The dedicated D4 Runtime credential may read `GET /runtime/snapshot` for a bounded status projection validated by `D4RuntimeStatusProjectionSchema`. It contains only Gateway/HDS status flags, counts capped at 1,000,000, an observation timestamp, `evidence_source=["INTERNAL_STATE"]`, and the non-authority markers `used_for_authority=false` and `may_execute=false`. It does not expose the Control Center snapshot, approval details, scheduled task details, operator surfaces, execution receipts, or HDS internals. Invalid or incomplete status data fails closed with HTTP 503.
 
 The ordinary WebChat credential retains the existing Control Center snapshot response. A D4 status projection is an `INTERNAL_STATE` observation; it does not prove provider connectivity, external action completion, installed-product health, permission, approval, or release readiness. The D4 application consumer remains a separate integration surface.
+
+### D4 Runtime通知の投影
+
+専用D4 Runtime bearerによる`GET /notifications`は、`D4RuntimeNotificationsProjectionSchema`で検証する限定投影を返す。既知の通知種別を固定カテゴリへ写し、カテゴリ・重大度・発生時刻だけを最大64件返す。通知ID、題名、本文、source、request／command ID、Approval／監査の詳細、次の操作は含めない。不正または上限超過はHTTP 503でfail-closedにする。通常WebChat bearerには従来の詳細通知応答を維持する。この投影は`INTERNAL_STATE`の表示根拠に限り、authority、permission、approval、executionを生成しない。このAPI境界だけではD4製品側consumerの接続・実動を証明しない。

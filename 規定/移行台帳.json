@@ -13,7 +13,7 @@
     { "path": "CLAIM.md", "sha256": "02d7f591f16f31099117c8eba386539697f7b5c7e0c6c6acddef2c25f0dcc757" },
     { "path": "CONFIG.md", "sha256": "5ab6ff6460561b702147201565c7cfa4c0e2fdccc2d23685ac4b16a1b98dc03e" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
-    { "path": "docs/ADAPTER_CONTRACT.md", "sha256": "593489f2c1555d86efb5ca617cccdd54844e661b41d86cd7bf4bd4bc978efcfa" },
+    { "path": "docs/ADAPTER_CONTRACT.md", "sha256": "c6e2b3e931b80815b903578fda01afd4c02d7dbfa5cc84c0d129a55017fcab45" },
     { "path": "docs/BLUE_TANUKI_AUTHORITY_MODEL.md", "sha256": "f4f66c41a2ba0df24f879729318fb1ee6f81b43d46d16ce50027f621d9c08e21" },
     { "path": "docs/CAPABILITY_ENVELOPE.md", "sha256": "38fd5137502e8d6d3ae0711bc291842c953052f5bc4ae4e621a04655120773fb" },
     { "path": "docs/CHANNEL_PROMOTION_GATE.md", "sha256": "9f8a3422eb02d2923f48ab5441e003ea518e4e38bf6acaff58ef114fcefb0cac" },

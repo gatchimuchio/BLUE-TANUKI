@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
   GoalCompletionRulesSchema,
+  D4RuntimeNotificationsProjectionSchema,
   D4RuntimeStatusProjectionSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
@@ -25,6 +26,8 @@ import {
   TRANSIENT_IMAGE_MAX_BYTES,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   type GoalCompletionRules,
+  type D4RuntimeNotificationCategory,
+  type D4RuntimeNotificationsProjection,
   type InboundRequest,
   type TransientAudioInput,
   type TransientImageInput,
@@ -108,6 +111,21 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
 const INBOUND_TOKEN_ACTOR = "webchat-inbound-token-holder";
 const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
+
+const D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND: Record<
+  WebChatNotificationKind,
+  D4RuntimeNotificationCategory
+> = {
+  approval_required: "owner_attention",
+  approval_interrupted: "interrupted_work",
+  operation_outcome_unknown: "outcome_unknown",
+  schedule_fired: "scheduled_activity",
+  schedule_delivery_unknown: "outcome_unknown",
+  cron_recovery_state_unavailable: "recovery_unavailable",
+  schedule_failed: "service_issue",
+  connector_failure: "service_issue",
+  audit_warning: "audit_integrity_issue",
+};
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
 const MAX_MULTIMODAL_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
@@ -2671,6 +2689,33 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     return parsed.success ? parsed.data : null;
   }
 
+  /** D4 Runtimeには通知本文やsource識別子を含めず、上限付きカテゴリだけを投影する。 */
+  private projectD4RuntimeNotifications(value: unknown): D4RuntimeNotificationsProjection | null {
+    if (!Array.isArray(value) || value.length > 64) return null;
+    const notifications = value.map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+      const item = entry as Record<string, unknown>;
+      const category = typeof item.kind === "string"
+        ? D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND[item.kind as WebChatNotificationKind]
+        : undefined;
+      return {
+        category,
+        severity: item.severity,
+        occurred_at_ms: item.timestamp,
+      };
+    });
+    const parsed = D4RuntimeNotificationsProjectionSchema.safeParse({
+      schema_version: "blue-tanuki.d4-runtime-notifications.v1",
+      runtime_id: this.opts.d4_runtime_intent?.runtime_id,
+      notifications,
+      observed_at_ms: Date.now(),
+      evidence_source: ["INTERNAL_STATE"],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    return parsed.success ? parsed.data : null;
+  }
+
   private checkSettingsAuth(req: IncomingMessage): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
@@ -3184,24 +3229,56 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res: ServerResponse,
   ): Promise<void> {
     if (!this.opts.notifications) {
-      res.writeHead(404, { "content-type": "application/json" });
+      res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ error: "notifications_not_configured" }));
       return;
     }
     if (req.method !== "GET") {
-      res.writeHead(405, { "content-type": "application/json" });
+      res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if (!this.checkRuntimeProjectionAuth(req)) {
-      res.writeHead(401, { "content-type": "application/json" });
+    const d4RuntimeProjection = this.checkAuth(req, "d4_runtime");
+    if (!d4RuntimeProjection && !this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    const notifications = await this.opts.notifications.list();
+    let notifications: readonly WebChatNotificationItem[];
+    try {
+      notifications = await this.opts.notifications.list();
+    } catch {
+      res.writeHead(503, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(JSON.stringify({ error: "notifications_unavailable" }));
+      return;
+    }
+    if (d4RuntimeProjection) {
+      const projection = this.projectD4RuntimeNotifications(notifications);
+      if (projection === null) {
+        res.writeHead(503, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ error: "runtime_notifications_projection_unavailable" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(JSON.stringify(projection));
+      return;
+    }
     res.writeHead(200, {
       "content-type": "application/json",
       "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
     });
     res.end(JSON.stringify({ notifications }));
   }
