@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import type { AuditRecord } from "./types.js";
+import { HDSPrivateAppendOnlyFile } from "./private_append_only_file.js";
 
 /**
  * Append-only audit log with hash-chain.
@@ -32,21 +31,13 @@ export interface AuditOptions {
 
 export class AuditLog {
   private entries: AuditEntry[] = [];
-  private readonly filepath?: string;
+  private readonly storage?: HDSPrivateAppendOnlyFile;
   private persistenceFailure = false;
 
   constructor(opts: AuditOptions = {}) {
-    this.filepath = opts.filepath;
-    if (this.filepath && existsSync(this.filepath)) {
-      this.loadFromFile();
-    } else if (this.filepath) {
-      // Ensure parent directory exists, but do not create the file —
-      // first append() will create it.
-      const dir = dirname(this.filepath);
-      if (dir && !existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-    }
+    this.storage = opts.filepath ? new HDSPrivateAppendOnlyFile(opts.filepath) : undefined;
+    const existing = this.storage?.readUtf8IfPresent();
+    if (existing !== undefined) this.loadFromRaw(existing);
   }
 
   append(log: AuditRecord): AuditEntry {
@@ -62,9 +53,9 @@ export class AuditLog {
     const entry_hash = this.computeHash(index, log, prev_hash);
     const entry: AuditEntry = { index, log, prev_hash, entry_hash };
 
-    if (this.filepath) {
+    if (this.storage) {
       try {
-        appendFileSync(this.filepath, JSON.stringify(entry) + "\n");
+        this.storage.appendUtf8(JSON.stringify(entry) + "\n");
       } catch (error) {
         this.persistenceFailure = true;
         throw error;
@@ -100,7 +91,7 @@ export class AuditLog {
 
   /** Whether appended records survive a process restart through this log. */
   isPersistent(): boolean {
-    return this.filepath !== undefined;
+    return this.storage !== undefined;
   }
 
   private computeHash(index: number, log: AuditRecord, prev_hash: string): string {
@@ -109,18 +100,14 @@ export class AuditLog {
       .digest("hex");
   }
 
-  private loadFromFile(): void {
-    if (!this.filepath) return;
-    const raw = readFileSync(this.filepath, "utf8");
+  private loadFromRaw(raw: string): void {
     const lines = raw.split("\n").filter((l: string) => l.trim().length > 0);
     for (const line of lines) {
       const parsed = JSON.parse(line) as AuditEntry;
       this.entries.push(parsed);
     }
     if (!this.verify()) {
-      throw new Error(
-        `AuditLog: chain verification failed on load from ${this.filepath}`,
-      );
+      throw new Error("AuditLog: chain verification failed on load");
     }
   }
 }
