@@ -6233,9 +6233,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const argsObject = isObject(review.arguments) && !Array.isArray(review.arguments);
           const argsText = argsObject ? JSON.stringify(review.arguments, null, 2) : "";
           const resourceHashValid = requestKind === "resource_read"
-            ? isDigest(review.resource_uri_sha256) && review.tool_name === "resource:" + review.resource_uri_sha256 &&
-              argsObject && Object.keys(review.arguments).length === 0
-            : review.resource_uri_sha256 === undefined;
+            ? isDigest(review.resource_uri_sha256) && argsObject &&
+              (review.resource_template_sha256 !== undefined
+                ? isDigest(review.resource_template_sha256) && typeof review.resource_template_name === "string" &&
+                  review.resource_template_name.length > 0 && review.resource_template_name.length <= 200 &&
+                  review.tool_name === "resource-template:" + review.resource_template_sha256 &&
+                  Object.values(review.arguments).every(function (value) { return typeof value === "string" && value.length <= 4096; })
+                : review.resource_template_name === undefined && review.tool_name === "resource:" + review.resource_uri_sha256 &&
+                  Object.keys(review.arguments).length === 0)
+            : review.resource_uri_sha256 === undefined && review.resource_template_name === undefined &&
+              review.resource_template_sha256 === undefined;
           const promptArgumentsValid = requestKind !== "prompt_get" || argsObject &&
             Object.values(review.arguments).every(function (value) { return typeof value === "string" && value.length <= 4096; });
           let endpoint = null;
@@ -6268,6 +6275,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               observedTarget.connection_digest !== review.connection_digest || observedTarget.catalog_digest !== review.catalog_digest ||
               (observedTarget.request_kind || "tool_call") !== requestKind ||
               observedTarget.resource_uri_sha256 !== review.resource_uri_sha256 ||
+              observedTarget.resource_template_name !== review.resource_template_name ||
+              observedTarget.resource_template_sha256 !== review.resource_template_sha256 ||
               observedTarget.tool_name !== review.tool_name || observedTarget.input_schema_sha256 !== review.input_schema_sha256 ||
               typeof review.tool_name !== "string" || review.tool_name.length < 1 || review.tool_name.length > 200 ||
               !descriptionValid(review.server_name, 200) || !descriptionValid(review.server_version, 200) ||
@@ -6278,7 +6287,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = (requestKind === "resource_read" ? "MCP resource read" :
+          const resourceTemplateRead = requestKind === "resource_read" && review.resource_template_sha256 !== undefined;
+          heading.textContent = (resourceTemplateRead ? "MCP resource template read" : requestKind === "resource_read" ? "MCP resource read" :
             requestKind === "prompt_get" ? "MCP prompt get" : "MCP tool call") + "（高リスク・L3最終確認）";
           view.appendChild(heading);
           const note = document.createElement("p");
@@ -6291,13 +6301,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["server identity", String(review.server_name || "unknown") + " / " + String(review.server_version || "unknown")],
             ["connection digest", review.connection_digest],
             ["catalog digest", review.catalog_digest],
-            [requestKind === "resource_read" ? "resource identity" : requestKind === "prompt_get" ? "prompt name" : "tool name",
-              requestKind === "resource_read" ? review.resource_uri_sha256 : review.tool_name],
+            [resourceTemplateRead ? "resource template name" : requestKind === "resource_read" ? "resource identity" : requestKind === "prompt_get" ? "prompt name" : "tool name",
+              resourceTemplateRead ? review.resource_template_name : requestKind === "resource_read" ? review.resource_uri_sha256 : review.tool_name],
+            ...(resourceTemplateRead ? [["resource template digest", review.resource_template_sha256]] : []),
             [requestKind === "resource_read" ? "resource title" : requestKind === "prompt_get" ? "prompt title" : "tool title",
               review.tool_title || "(none)"],
             ["description (untrusted)", review.tool_description || "(none)"],
             ["description digest", review.description_sha256 || "(none)"],
-            [requestKind === "resource_read" ? "resource read binding digest" : requestKind === "prompt_get" ? "prompt arguments digest" : "input schema digest",
+            [resourceTemplateRead ? "resource template binding digest" : requestKind === "resource_read" ? "resource read binding digest" : requestKind === "prompt_get" ? "prompt arguments digest" : "input schema digest",
               review.input_schema_sha256],
             ["target version digest", review.target_version_digest],
             ["Operation Plan binding", review.operation_plan_binding_digest]
@@ -6314,7 +6325,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           effectList.textContent = "可能な作用: " + review.potential_effects.join("・");
           view.appendChild(effectList);
           const argsHeading = document.createElement("strong");
-          argsHeading.textContent = "tool arguments（送信候補）";
+          argsHeading.textContent = resourceTemplateRead ? "template variables（送信候補）" : "tool arguments（送信候補）";
           view.appendChild(argsHeading);
           const argsPre = document.createElement("pre");
           argsPre.textContent = argsText;

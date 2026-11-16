@@ -1853,11 +1853,14 @@ export function operationPlanResultValidationMatches(
     const parameters = step.parameters;
     const expected = validation.expected;
     const requestKind = parameters.request_kind ?? "tool_call";
+    const templateRead = requestKind === "resource_read" && parameters.resource_template_sha256 !== undefined;
     const hasExplicitRequestKind = Object.hasOwn(parameters, "request_kind");
     const expectedArgumentsDigest = operationPlanDigest(parameters.arguments ?? null);
     const expectedKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
       "schema_version", "tool_name", ...(hasExplicitRequestKind ? ["request_kind"] : []),
-      ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])];
+      ...(requestKind === "resource_read" && templateRead
+        ? ["resource_template_name", "resource_template_sha256"]
+        : requestKind === "resource_read" ? ["resource_uri_sha256"] : [])];
     const outputKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
       "may_execute", "result", "result_digest", "schema_version", "source_is_untrusted", "tool_name",
       "used_for_authority", ...(hasExplicitRequestKind ? ["request_kind"] : []),
@@ -1869,14 +1872,19 @@ export function operationPlanResultValidationMatches(
       expected.catalog_digest === parameters.catalog_digest && expected.tool_name === parameters.tool_name &&
       expected.input_schema_sha256 === parameters.input_schema_sha256 &&
       (!hasExplicitRequestKind || expected.request_kind === requestKind) &&
-      (requestKind !== "resource_read" || expected.resource_uri_sha256 === parameters.resource_uri_sha256) &&
+      (requestKind !== "resource_read" || (templateRead
+        ? expected.resource_template_name === parameters.resource_template_name &&
+          expected.resource_template_sha256 === parameters.resource_template_sha256
+        : expected.resource_uri_sha256 === parameters.resource_uri_sha256)) &&
       expected.arguments_sha256 === expectedArgumentsDigest &&
       Object.keys(output).sort().join(",") === outputKeys.sort().join(",") &&
       output.schema_version === "blue-tanuki.mcp-call-result.v1" &&
       output.connection_digest === expected.connection_digest && output.catalog_digest === expected.catalog_digest &&
       output.tool_name === expected.tool_name && output.input_schema_sha256 === expected.input_schema_sha256 &&
       (!hasExplicitRequestKind || output.request_kind === requestKind) &&
-      (requestKind !== "resource_read" || output.resource_uri_sha256 === parameters.resource_uri_sha256) &&
+      (requestKind !== "resource_read" || (templateRead
+        ? typeof output.resource_uri_sha256 === "string" && /^[a-f0-9]{64}$/.test(output.resource_uri_sha256)
+        : output.resource_uri_sha256 === parameters.resource_uri_sha256)) &&
       output.arguments_sha256 === expected.arguments_sha256 && typeof output.result_digest === "string" &&
       /^[a-f0-9]{64}$/.test(output.result_digest) && outputResult.success &&
       operationPlanDigest(output.result) === output.result_digest && output.source_is_untrusted === true &&
@@ -2573,11 +2581,13 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
   if (step.operation === "mcp.call") {
     const requestKind = parameters?.request_kind ?? "tool_call";
+    const templateRead = requestKind === "resource_read" && parameters?.resource_template_sha256 !== undefined;
     const parameterKeys = parameters ? Object.keys(parameters).sort().join(",") : "";
     const allowedParameterKeys = [
       "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name",
       "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,tool_name",
       "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name",
+      "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_template_name,resource_template_sha256,tool_name",
     ];
     if (step.adapter !== "external_api" || step.target.kind !== "external_service" || !parameters ||
         parameters.profile !== "native-live" || typeof parameters.connection_digest !== "string" ||
@@ -2589,10 +2599,17 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         !/^[a-f0-9]{64}$/.test(parameters.input_schema_sha256) || !isFileSearchResultRecord(parameters.arguments) ||
         containsMcpSensitiveKey(parameters.arguments) || Buffer.byteLength(JSON.stringify(parameters.arguments), "utf8") > 64 * 1024 ||
         !["tool_call", "resource_read", "prompt_get"].includes(requestKind as string) ||
-        (requestKind === "resource_read" && (typeof parameters.resource_uri_sha256 !== "string" ||
+        (requestKind === "resource_read" && !templateRead && (typeof parameters.resource_uri_sha256 !== "string" ||
           !/^[a-f0-9]{64}$/.test(parameters.resource_uri_sha256) ||
           parameters.tool_name !== `resource:${parameters.resource_uri_sha256}` || Object.keys(parameters.arguments).length !== 0)) ||
-        (requestKind !== "resource_read" && parameters.resource_uri_sha256 !== undefined) ||
+        (templateRead && (typeof parameters.resource_template_name !== "string" ||
+          parameters.resource_template_name.trim() !== parameters.resource_template_name ||
+          parameters.resource_template_name.length < 1 || parameters.resource_template_name.length > 200 ||
+          typeof parameters.resource_template_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(parameters.resource_template_sha256) ||
+          parameters.resource_uri_sha256 !== undefined || parameters.tool_name !== `resource-template:${parameters.resource_template_sha256}` ||
+          Object.values(parameters.arguments).some((entry) => typeof entry !== "string" || entry.length > 4_096))) ||
+        (requestKind !== "resource_read" && (parameters.resource_uri_sha256 !== undefined ||
+          parameters.resource_template_name !== undefined || parameters.resource_template_sha256 !== undefined)) ||
         (requestKind === "prompt_get" && Object.values(parameters.arguments).some((entry) =>
           typeof entry !== "string" || entry.length > 4_096)) ||
         step.effects.length !== MCP_CALL_POTENTIAL_EFFECTS.length ||
@@ -2601,10 +2618,12 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         !step.permission.final_review_required || !step.permission.approval_gate_required ||
         !step.permission.hds_brain_authority_required || step.command_generated_by_adapter_only ||
         !allowedParameterKeys.includes(parameterKeys) ||
-        (requestKind === "resource_read" && parameterKeys !==
-          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name") ||
+        (requestKind === "resource_read" && parameterKeys !== (templateRead
+          ? "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_template_name,resource_template_sha256,tool_name"
+          : "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name")) ||
         (requestKind !== "resource_read" && parameterKeys ===
-          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name")) return false;
+          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name") ||
+        (requestKind !== "resource_read" && templateRead)) return false;
     const preparation = step.preparation;
     if (!preparation || preparation.depends_on.length !== 0 || preparation.bindings.length !== 0 ||
         preparation.preconditions.length !== 0 || preparation.compensation.available || preparation.validation.length !== 1) return false;
@@ -2614,7 +2633,9 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
     const hasExplicitRequestKind = Object.hasOwn(parameters, "request_kind");
     const expectedValidationKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
       "schema_version", "tool_name", ...(hasExplicitRequestKind ? ["request_kind"] : []),
-      ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])].sort();
+      ...(requestKind === "resource_read" && templateRead
+        ? ["resource_template_name", "resource_template_sha256"]
+        : requestKind === "resource_read" ? ["resource_uri_sha256"] : [])].sort();
     return validation.method === "mcp_call_result_matches" &&
       operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
       isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") === expectedValidationKeys.join(",") &&
@@ -2622,7 +2643,10 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       expected.connection_digest === parameters.connection_digest && expected.catalog_digest === parameters.catalog_digest &&
       expected.tool_name === parameters.tool_name && expected.input_schema_sha256 === parameters.input_schema_sha256 &&
       (!hasExplicitRequestKind || expected.request_kind === requestKind) &&
-      (requestKind !== "resource_read" || expected.resource_uri_sha256 === parameters.resource_uri_sha256) &&
+      (requestKind !== "resource_read" || (templateRead
+        ? expected.resource_template_name === parameters.resource_template_name &&
+          expected.resource_template_sha256 === parameters.resource_template_sha256
+        : expected.resource_uri_sha256 === parameters.resource_uri_sha256)) &&
       expected.arguments_sha256 === argumentsDigest;
   }
   if (step.operation === "file.search") {

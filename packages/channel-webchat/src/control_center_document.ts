@@ -172,7 +172,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             </div>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
             <label><input id="owner-task-include-mcp-catalog" type="checkbox" /> MCP catalog metadataを計画入力へ含める</label>
-            <p class="muted">既定はOFFです。有効にすると、設定済みcredentialless loopback MCP接続からtool・固定resource・prompt・resource-templateのcatalog metadataを取得し、この計画のC providerへ送信します。resource／prompt本文やcredentialはこのcatalog取得では読み取らず、MCP requestも送信しません。出力は未実行の計画候補です。request候補の実行には通常のJ再審査、現在catalogとの再照合、必要なL3最終確認が残ります。resource-templateのURI展開には対応しません。</p>
+            <p class="muted">既定はOFFです。有効にすると、設定済みcredentialless loopback MCP接続からtool・固定resource・prompt・対応するscalar resource-templateのcatalog metadataを取得し、この計画のC providerへ送信します。raw resource URI/template URI、resource／prompt本文やcredentialはこのcatalog取得では読み取らず、MCP requestも送信しません。出力は未実行の計画候補です。request候補の実行には通常のJ再審査、現在catalogとの再照合、必要なL3最終確認が残ります。</p>
             <label for="owner-task-image">画像を添付（JPEG/PNG、1枚、最大5 MiB、一時入力）</label>
             <input id="owner-task-image" type="file" accept="image/jpeg,image/png" />
             <p class="muted">画像bytesはこの依頼の計算入力にだけ使い、履歴・Mへ保存しません。Canvas成果物本文と画像は同じ仕事へ併せて渡せます。どちらも計算入力に限り、権限・承認根拠にはなりません。</p>

@@ -369,6 +369,8 @@ const OperationPlanMcpCatalogResourceTemplateSchema = z.object({
   title: z.string().max(200).nullable(),
   description: z.string().max(2_048).nullable(),
   uri_template_sha256: Digest,
+  variable_names: z.array(z.string().trim().min(1).max(200)).max(128).nullable().optional(),
+  read_request_sha256: Digest.nullable().optional(),
   mime_type: z.string().max(120).nullable(),
 }).strict();
 

@@ -683,6 +683,8 @@ export interface McpCallContentReview {
   operation: "mcp.call";
   request_kind: McpRequestKind;
   resource_uri_sha256?: string;
+  resource_template_name?: string;
+  resource_template_sha256?: string;
   profile: "native-live";
   command_digest: string;
   review_digest: string;

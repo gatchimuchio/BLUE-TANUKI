@@ -14,6 +14,8 @@ export const McpCallTargetVersionObservationSchema = z.object({
   tool_name: z.string().min(1).max(200),
   input_schema_sha256: DigestSchema,
   resource_uri_sha256: DigestSchema.optional(),
+  resource_template_name: z.string().trim().min(1).max(200).optional(),
+  resource_template_sha256: DigestSchema.optional(),
   command_digest: DigestSchema,
   operation_plan_binding_digest: DigestSchema,
   target_state: z.literal("available"),
@@ -22,10 +24,17 @@ export const McpCallTargetVersionObservationSchema = z.object({
 }).strict().superRefine((observation, context) => {
   const requestKind = observation.request_kind ?? "tool_call";
   if (requestKind === "resource_read") {
-    if (!observation.resource_uri_sha256 || observation.tool_name !== `resource:${observation.resource_uri_sha256}`) {
+    const hasTemplateName = observation.resource_template_name !== undefined;
+    const hasTemplateDigest = observation.resource_template_sha256 !== undefined;
+    const templateTarget = hasTemplateName && hasTemplateDigest &&
+      observation.tool_name === `resource-template:${observation.resource_template_sha256}`;
+    const fixedTarget = !hasTemplateName && !hasTemplateDigest && observation.resource_uri_sha256 !== undefined &&
+      observation.tool_name === `resource:${observation.resource_uri_sha256}`;
+    if (!observation.resource_uri_sha256 || !(templateTarget || fixedTarget)) {
       context.addIssue({ code: "custom", message: "mcp_resource_target_binding_invalid" });
     }
-  } else if (observation.resource_uri_sha256 !== undefined) {
+  } else if (observation.resource_uri_sha256 !== undefined || observation.resource_template_name !== undefined ||
+      observation.resource_template_sha256 !== undefined) {
     context.addIssue({ code: "custom", message: "mcp_resource_target_binding_invalid" });
   }
 });

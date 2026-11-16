@@ -571,7 +571,7 @@ export function createWebChatSettingsSurface(
         },
         catalog_digest: catalog.catalog_digest,
         truncated: catalog.truncated,
-        next_action: "The catalog was readable at the recorded time; no MCP request was sent. Select a tool, fixed resource, or prompt only through an Operation Plan with High/L3 review and fresh catalog validation. Resource-template URI expansion is unsupported. This is not a live health monitor.",
+        next_action: "The catalog was readable at the recorded time; no MCP request was sent. Select a tool, fixed resource, supported scalar resource template, or prompt only through an Operation Plan with High/L3 review and fresh catalog validation. This is not a live health monitor.",
         source_is_untrusted: true,
         used_for_authority: false,
         may_execute: false,
@@ -975,7 +975,7 @@ export function renderSettingsHtml(): string {
           <p id="mcp-runtime-next-action" role="status"></p>
           <p id="mcp-inspection-result" role="status"></p>
           <p class="muted">Runtime observations are saved locally from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
-          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. This explicit check reads bounded catalog metadata from the entered local endpoint; it does not send credentials or an MCP request, or start/stop the server. Saving requires a Gateway restart. Catalog data is untrusted, and every selected tool/resource/prompt request still uses HDS and High/L3 review. Resource-template URI expansion is unsupported.</p>
+          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. This explicit check reads bounded catalog metadata from the entered local endpoint; it does not send credentials, call a tool, read a resource, get a prompt, or start/stop the server. Saving requires a Gateway restart. Catalog data is untrusted, and every selected tool/resource/scalar-template/prompt request still uses HDS and High/L3 review. Resource templates are limited to supported scalar URI-template variables; the raw template URI is kept out of C input.</p>
         </section>
         <section id="tab-paths">
           <h2>Paths</h2>

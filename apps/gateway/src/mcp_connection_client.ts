@@ -9,6 +9,7 @@ import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSche
   type OperationPlanMcpCatalogContext } from "@blue-tanuki/protocol";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
 import { mcpRuntimeObservationStore, type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
+import { expandMcpUriTemplate, mcpUriTemplateVariableNames } from "./mcp_uri_template.js";
 
 export const BLUE_TANUKI_MCP_PROTOCOL_VERSION = "2026-07-28" as const;
 export const BLUE_TANUKI_MCP_TRANSPORT = "streamable_http" as const;
@@ -48,6 +49,8 @@ export interface McpResourceCatalogEntry extends McpCatalogEntry {
 
 export interface McpResourceTemplateCatalogEntry extends McpCatalogEntry {
   readonly uri_template_sha256: string;
+  readonly variable_names: readonly string[] | null;
+  readonly read_request_sha256: string | null;
   readonly mime_type: string | null;
 }
 
@@ -155,7 +158,7 @@ export async function inspectMcpToolPlanningCatalog(
       name: requireMcpPlanningText(template.name, 200),
       title: optionalMcpPlanningText(template.title, 200),
       description: optionalMcpPlanningText(template.description, 2_048),
-      uri_template_sha256: digestJson(template.uriTemplate),
+      ...resourceTemplatePlanningMetadata(template.uriTemplate),
       mime_type: optionalMcpPlanningText(template.mimeType, 120),
     }));
     const prompts = snapshot.prompts.map((prompt) => ({
@@ -365,11 +368,17 @@ function projectMcpCatalog(
     resource_templates: resourceTemplates.slice(0, MAX_CATALOG_ITEMS).flatMap((template) => {
       const name = safeText(template.name, 200);
       if (!name) return [];
+      const uri_template_sha256 = digestJson(template.uriTemplate);
+      const variable_names = mcpUriTemplateVariableNames(template.uriTemplate);
       return [{
         name,
         title: safeText(template.title, 200),
         description_sha256: digestOptionalText(template.description),
-        uri_template_sha256: digestJson(template.uriTemplate),
+        uri_template_sha256,
+        variable_names,
+        read_request_sha256: variable_names
+          ? mcpResourceTemplateReadRequestDigest(uri_template_sha256, variable_names)
+          : null,
         mime_type: safeText(template.mimeType, 120),
         source_is_untrusted: true as const,
         used_for_authority: false as const,
@@ -580,7 +589,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       runtimeObservations.recordCatalogReachable(getEndpoint());
       catalogObserved = true;
       const candidate = parseMcpCallArguments(args);
-      assertCandidateMatchesCatalog(candidate, catalog, snapshot);
+      const resourceUri = assertCandidateMatchesCatalog(candidate, catalog, snapshot);
       const observation = McpCallTargetVersionObservationSchema.parse({
         schema_version: "blue-tanuki.mcp-call-target-version.v1",
         connection_digest: catalog.connection_digest,
@@ -588,7 +597,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         request_kind: candidate.request_kind,
         tool_name: candidate.tool_name,
         input_schema_sha256: candidate.input_schema_sha256,
-        ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
+        ...(candidate.request_kind === "resource_read" && resourceUri
+          ? { resource_uri_sha256: digestJson(resourceUri) } : {}),
+        ...(candidate.resource_template_name ? { resource_template_name: candidate.resource_template_name } : {}),
+        ...(candidate.resource_template_sha256 ? { resource_template_sha256: candidate.resource_template_sha256 } : {}),
         command_digest: inspectOptions.command_digest,
         operation_plan_binding_digest: inspectOptions.operation_plan_binding_digest,
         target_state: "available",
@@ -611,7 +623,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
   const tool: Tool = {
     name: "mcp.call",
     adapter_version: "1.0.0-rc.1",
-    description: "Sends one catalog-bound MCP tool/resource/prompt request through HDS-J selection, fresh target observation and L3 final review.",
+    description: "Sends one catalog-bound MCP tool/resource/resource-template/prompt request through HDS-J selection, fresh target observation and L3 final review.",
     required_capabilities: requireToolOperationDescriptor("mcp.call").required_capabilities,
     async inspect_target_version(args, inspectOptions) {
       if (!inspectOptions) throw new Error("mcp_operation_plan_binding_required");
@@ -634,6 +646,8 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         tool_name: candidate.tool_name,
         input_schema_sha256: candidate.input_schema_sha256,
         ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
+        ...(candidate.resource_template_name ? { resource_template_name: candidate.resource_template_name } : {}),
+        ...(candidate.resource_template_sha256 ? { resource_template_sha256: candidate.resource_template_sha256 } : {}),
         arguments: candidate.arguments,
       });
       const reviewBase: Omit<McpCallContentReview, "review_digest"> = {
@@ -641,7 +655,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         operation: "mcp.call",
         profile: "native-live",
         request_kind: candidate.request_kind,
-        ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
+        ...(candidate.request_kind === "resource_read" && observation.resource_uri_sha256
+          ? { resource_uri_sha256: observation.resource_uri_sha256 } : {}),
+        ...(candidate.resource_template_name ? { resource_template_name: candidate.resource_template_name } : {}),
+        ...(candidate.resource_template_sha256 ? { resource_template_sha256: candidate.resource_template_sha256 } : {}),
         command_digest: reviewOptions.command_digest,
         request_payload_digest: requestPayloadDigest,
         target_version_digest: operationPlanDigest(observation),
@@ -676,7 +693,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           (observation.data.request_kind ?? "tool_call") !== candidate.request_kind ||
           observation.data.tool_name !== candidate.tool_name ||
           observation.data.input_schema_sha256 !== candidate.input_schema_sha256 ||
-          observation.data.resource_uri_sha256 !== candidate.resource_uri_sha256) {
+          (candidate.resource_template_sha256 === undefined &&
+            observation.data.resource_uri_sha256 !== candidate.resource_uri_sha256) ||
+          observation.data.resource_template_name !== candidate.resource_template_name ||
+          observation.data.resource_template_sha256 !== candidate.resource_template_sha256) {
         throw new Error("mcp_target_version_binding_invalid");
       }
       if (ctx.signal?.aborted) throw new Error("mcp_call_cancelled_before_dispatch");
@@ -689,9 +709,11 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         const catalog = projectMcpCatalog(snapshot, getEndpoint());
         runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
-        assertCandidateMatchesCatalog(candidate, catalog, snapshot);
+        const resourceUri = assertCandidateMatchesCatalog(candidate, catalog, snapshot);
         if (catalog.catalog_digest !== observation.data.catalog_digest ||
-            catalog.connection_digest !== observation.data.connection_digest) {
+            catalog.connection_digest !== observation.data.connection_digest ||
+            candidate.request_kind === "resource_read" && (!resourceUri ||
+              digestJson(resourceUri) !== observation.data.resource_uri_sha256)) {
           throw new McpAdapterError("mcp_catalog_changed_after_review");
         }
         if (ctx.signal?.aborted) throw new McpAdapterError("mcp_call_cancelled_before_dispatch");
@@ -703,10 +725,8 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           if (toolResult.isError === true) throw new McpAdapterError("mcp_server_reported_tool_failure");
           result = toolResult;
         } else if (candidate.request_kind === "resource_read") {
-          const uriSha256 = candidate.resource_uri_sha256!;
-          const resource = snapshot.resources.find((entry) => digestJson(entry.uri) === uriSha256);
-          if (!resource) throw new McpAdapterError("mcp_resource_disappeared_after_review");
-          result = await client.readResource({ uri: resource.uri }, { cacheMode: "bypass" });
+          if (!resourceUri) throw new McpAdapterError("mcp_resource_disappeared_after_review");
+          result = await client.readResource({ uri: resourceUri }, { cacheMode: "bypass" });
         } else {
           result = await client.getPrompt({
             name: candidate.tool_name,
@@ -732,7 +752,8 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           catalog_digest: candidate.catalog_digest,
           tool_name: candidate.tool_name,
           input_schema_sha256: candidate.input_schema_sha256,
-          ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
+          ...(candidate.request_kind === "resource_read" && resourceUri
+            ? { resource_uri_sha256: digestJson(resourceUri) } : {}),
           arguments_sha256: operationPlanDigest(candidate.arguments),
           result_digest: operationPlanDigest(parsedSanitizedResult.data),
           result: parsedSanitizedResult.data,
@@ -777,6 +798,8 @@ interface NativeMcpCallArguments {
   readonly tool_name: string;
   readonly input_schema_sha256: string;
   readonly resource_uri_sha256?: string;
+  readonly resource_template_name?: string;
+  readonly resource_template_sha256?: string;
   readonly arguments: Record<string, unknown>;
 }
 
@@ -785,8 +808,11 @@ class McpAdapterError extends Error {}
 function parseMcpCallArguments(value: Record<string, unknown>): NativeMcpCallArguments {
   const requestKind = value.request_kind === undefined ? "tool_call" : value.request_kind;
   const expectedKeys = requestKind === "resource_read"
-    ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind",
-      "resource_uri_sha256", "tool_name"]
+    ? value.resource_template_sha256 !== undefined
+      ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind",
+        "resource_template_name", "resource_template_sha256", "tool_name"]
+      : ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind",
+        "resource_uri_sha256", "tool_name"]
     : requestKind === "prompt_get"
       ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind", "tool_name"]
       : requestKind === "tool_call"
@@ -801,15 +827,26 @@ function parseMcpCallArguments(value: Record<string, unknown>): NativeMcpCallArg
       value.tool_name.length < 1 || value.tool_name.length > 200 || value.tool_name.trim() !== value.tool_name ||
       /[\u0000-\u001f\u007f]/.test(value.tool_name) || typeof value.input_schema_sha256 !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.input_schema_sha256) ||
-      requestKind === "resource_read" && (typeof value.resource_uri_sha256 !== "string" ||
-        !/^[a-f0-9]{64}$/.test(value.resource_uri_sha256) || value.tool_name !== `resource:${value.resource_uri_sha256}`) ||
-      requestKind !== "resource_read" && value.resource_uri_sha256 !== undefined) {
+      requestKind === "resource_read" && value.resource_template_sha256 === undefined &&
+        (typeof value.resource_uri_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.resource_uri_sha256) ||
+          value.tool_name !== `resource:${value.resource_uri_sha256}`) ||
+      requestKind === "resource_read" && value.resource_template_sha256 !== undefined &&
+        (typeof value.resource_template_name !== "string" || value.resource_template_name.length < 1 ||
+          value.resource_template_name.length > 200 || value.resource_template_name.trim() !== value.resource_template_name ||
+          /[\u0000-\u001f\u007f]/.test(value.resource_template_name) ||
+          typeof value.resource_template_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.resource_template_sha256) ||
+          value.resource_uri_sha256 !== undefined || value.tool_name !== `resource-template:${value.resource_template_sha256}`) ||
+      requestKind !== "resource_read" && (value.resource_uri_sha256 !== undefined ||
+        value.resource_template_name !== undefined || value.resource_template_sha256 !== undefined)) {
     throw new McpAdapterError("mcp_call_arguments_invalid");
   }
   const parsedArguments = OperationJsonValueSchema.safeParse(value.arguments);
   if (!parsedArguments.success || !isRecord(parsedArguments.data) || containsSecretLikeKey(parsedArguments.data) ||
       Buffer.byteLength(JSON.stringify(parsedArguments.data), "utf8") > MAX_PROPOSAL_ARGUMENT_BYTES ||
-      requestKind === "resource_read" && Object.keys(parsedArguments.data).length !== 0 ||
+      requestKind === "resource_read" && value.resource_template_sha256 === undefined &&
+        Object.keys(parsedArguments.data).length !== 0 ||
+      requestKind === "resource_read" && value.resource_template_sha256 !== undefined &&
+        Object.values(parsedArguments.data).some((entry) => typeof entry !== "string" || entry.length > 4_096) ||
       requestKind === "prompt_get" && Object.values(parsedArguments.data).some((entry) =>
         typeof entry !== "string" || entry.length > 4_096)) {
     throw new McpAdapterError("mcp_call_arguments_invalid");
@@ -821,7 +858,9 @@ function parseMcpCallArguments(value: Record<string, unknown>): NativeMcpCallArg
     catalog_digest: value.catalog_digest,
     tool_name: value.tool_name,
     input_schema_sha256: value.input_schema_sha256,
-    ...(requestKind === "resource_read" ? { resource_uri_sha256: value.resource_uri_sha256 as string } : {}),
+    ...(typeof value.resource_uri_sha256 === "string" ? { resource_uri_sha256: value.resource_uri_sha256 } : {}),
+    ...(typeof value.resource_template_name === "string" ? { resource_template_name: value.resource_template_name } : {}),
+    ...(typeof value.resource_template_sha256 === "string" ? { resource_template_sha256: value.resource_template_sha256 } : {}),
     arguments: parsedArguments.data,
   };
 }
@@ -830,7 +869,7 @@ function assertCandidateMatchesCatalog(
   candidate: NativeMcpCallArguments,
   catalog: McpCatalogProjection,
   snapshot: Awaited<ReturnType<typeof readMcpCatalogSnapshot>>,
-): void {
+): string | undefined {
   if (catalog.connection_digest !== candidate.connection_digest || catalog.catalog_digest !== candidate.catalog_digest) {
     throw new McpAdapterError("mcp_catalog_changed_after_review");
   }
@@ -839,9 +878,28 @@ function assertCandidateMatchesCatalog(
     if (matches.length !== 1 || matches[0]?.input_schema_sha256 !== candidate.input_schema_sha256) {
       throw new McpAdapterError("mcp_catalog_changed_after_review");
     }
-    return;
+    return undefined;
   }
   if (candidate.request_kind === "resource_read") {
+    if (candidate.resource_template_name && candidate.resource_template_sha256) {
+      const projectedTemplates = catalog.resource_templates.filter((template) =>
+        template.name === candidate.resource_template_name &&
+        template.uri_template_sha256 === candidate.resource_template_sha256);
+      const rawTemplates = snapshot.resource_templates.filter((template) =>
+        template.name === candidate.resource_template_name &&
+        digestJson(template.uriTemplate) === candidate.resource_template_sha256);
+      const rawTemplate = rawTemplates[0];
+      const variableNames = rawTemplate ? mcpUriTemplateVariableNames(rawTemplate.uriTemplate) : null;
+      if (projectedTemplates.length !== 1 || rawTemplates.length !== 1 || !rawTemplate || !variableNames ||
+          projectedTemplates[0]?.read_request_sha256 !== candidate.input_schema_sha256 ||
+          candidate.input_schema_sha256 !== mcpResourceTemplateReadRequestDigest(candidate.resource_template_sha256, variableNames) ||
+          candidate.tool_name !== `resource-template:${candidate.resource_template_sha256}`) {
+        throw new McpAdapterError("mcp_resource_template_catalog_changed_after_review");
+      }
+      const expandedUri = expandMcpUriTemplate(rawTemplate.uriTemplate, candidate.arguments);
+      if (!expandedUri) throw new McpAdapterError("mcp_resource_template_arguments_invalid");
+      return expandedUri;
+    }
     const uriSha256 = candidate.resource_uri_sha256;
     const projected = catalog.resources.filter((resource) => resource.uri_sha256 === uriSha256);
     const raw = snapshot.resources.filter((resource) => digestJson(resource.uri) === uriSha256);
@@ -852,7 +910,7 @@ function assertCandidateMatchesCatalog(
         Object.keys(candidate.arguments).length !== 0) {
       throw new McpAdapterError("mcp_catalog_changed_after_review");
     }
-    return;
+    return raw[0]!.uri;
   }
   const projected = catalog.prompts.filter((prompt) => prompt.name === candidate.tool_name);
   const raw = snapshot.prompts.filter((prompt) => prompt.name === candidate.tool_name);
@@ -861,6 +919,7 @@ function assertCandidateMatchesCatalog(
       !mcpPromptArgumentsMatch(raw[0]?.arguments ?? [], candidate.arguments)) {
     throw new McpAdapterError("mcp_prompt_arguments_invalid_or_catalog_changed");
   }
+  return undefined;
 }
 
 function getMcpRequestReviewMetadata(
@@ -881,6 +940,23 @@ function getMcpRequestReviewMetadata(
     };
   }
   if (candidate.request_kind === "resource_read") {
+    if (candidate.resource_template_name && candidate.resource_template_sha256) {
+      const raw = snapshot.resource_templates.find((entry) => entry.name === candidate.resource_template_name &&
+        digestJson(entry.uriTemplate) === candidate.resource_template_sha256);
+      const projected = catalog.resource_templates.find((entry) => entry.name === candidate.resource_template_name &&
+        entry.uri_template_sha256 === candidate.resource_template_sha256);
+      const variableNames = raw ? mcpUriTemplateVariableNames(raw.uriTemplate) : null;
+      if (!raw || !projected || !variableNames || projected.read_request_sha256 !== candidate.input_schema_sha256 ||
+          candidate.input_schema_sha256 !== mcpResourceTemplateReadRequestDigest(candidate.resource_template_sha256, variableNames) ||
+          !expandMcpUriTemplate(raw.uriTemplate, candidate.arguments)) {
+        throw new McpAdapterError("mcp_resource_template_review_stale");
+      }
+      return {
+        title: optionalMcpPlanningText(raw.title, 200),
+        description: optionalMcpPlanningText(raw.description, 2_048),
+        description_sha256: projected.description_sha256,
+      };
+    }
     const raw = snapshot.resources.find((entry) => digestJson(entry.uri) === candidate.resource_uri_sha256);
     const projected = catalog.resources.find((entry) => entry.uri_sha256 === candidate.resource_uri_sha256);
     if (!raw || !projected || projected.read_request_sha256 !== candidate.input_schema_sha256) {
@@ -1058,4 +1134,21 @@ function digestJson(value: unknown): string {
 
 function mcpResourceReadRequestDigest(uriSha256: string): string {
   return operationPlanDigest({ schema_version: "blue-tanuki.mcp-resource-read-request.v1", uri_sha256: uriSha256 });
+}
+
+function mcpResourceTemplateReadRequestDigest(uriTemplateSha256: string, variableNames: readonly string[]): string {
+  return operationPlanDigest({ schema_version: "blue-tanuki.mcp-resource-template-read.v1",
+    uri_template_sha256: uriTemplateSha256, variable_names: [...variableNames] });
+}
+
+function resourceTemplatePlanningMetadata(uriTemplate: string) {
+  const uri_template_sha256 = digestJson(uriTemplate);
+  const variable_names = mcpUriTemplateVariableNames(uriTemplate);
+  return {
+    uri_template_sha256,
+    variable_names,
+    read_request_sha256: variable_names
+      ? mcpResourceTemplateReadRequestDigest(uri_template_sha256, variable_names)
+      : null,
+  };
 }

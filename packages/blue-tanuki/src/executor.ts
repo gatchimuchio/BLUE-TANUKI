@@ -788,7 +788,9 @@ function approveCommandForExecution(
           observation.connection_digest !== args.connection_digest || observation.catalog_digest !== args.catalog_digest ||
           observation.tool_name !== args.tool_name || observation.input_schema_sha256 !== args.input_schema_sha256 ||
           (observation.request_kind ?? "tool_call") !== (args.request_kind ?? "tool_call") ||
-          observation.resource_uri_sha256 !== args.resource_uri_sha256 ||
+          (args.resource_template_sha256 === undefined && observation.resource_uri_sha256 !== args.resource_uri_sha256) ||
+          observation.resource_template_name !== args.resource_template_name ||
+          observation.resource_template_sha256 !== args.resource_template_sha256 ||
           observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest) {
         throw new Error("Executor approval rejected: mcp.call target version does not match command or plan source");
@@ -1085,7 +1087,9 @@ export class Executor {
           observation.catalog_digest !== args.catalog_digest || observation.tool_name !== args.tool_name ||
           observation.input_schema_sha256 !== args.input_schema_sha256 ||
           (observation.request_kind ?? "tool_call") !== (args.request_kind ?? "tool_call") ||
-          observation.resource_uri_sha256 !== args.resource_uri_sha256 ||
+          (args.resource_template_sha256 === undefined && observation.resource_uri_sha256 !== args.resource_uri_sha256) ||
+          observation.resource_template_name !== args.resource_template_name ||
+          observation.resource_template_sha256 !== args.resource_template_sha256 ||
           observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("mcp.call target version resolver returned evidence for another command or plan source");
@@ -1421,6 +1425,8 @@ export class Executor {
           request_kind: args.request_kind ?? "tool_call", connection_digest: args.connection_digest,
           catalog_digest: args.catalog_digest, tool_name: args.tool_name, input_schema_sha256: args.input_schema_sha256,
           ...(typeof args.resource_uri_sha256 === "string" ? { resource_uri_sha256: args.resource_uri_sha256 } : {}),
+          ...(typeof args.resource_template_name === "string" ? { resource_template_name: args.resource_template_name } : {}),
+          ...(typeof args.resource_template_sha256 === "string" ? { resource_template_sha256: args.resource_template_sha256 } : {}),
           arguments: args.arguments })
         : "invalid";
       let endpointOriginValid = false;
@@ -1434,10 +1440,14 @@ export class Executor {
         } catch { /* invalid MCP endpoint origin remains non-reviewable */ }
       }
       const isDigest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+      const templateRead = args.request_kind === "resource_read" && typeof args.resource_template_sha256 === "string";
       const hasOptionalText = (value: unknown, max: number): boolean => value === null ||
         typeof value === "string" && value.length > 0 && value.length <= max && !/[\r\n\u0000-\u001f\u007f]/.test(value);
       const reviewMatches = "kind" in review && review.kind === "mcp_call" &&
-        Object.keys(review).sort().join(",") === [...expectedKeys, ...(review.resource_uri_sha256 !== undefined ? ["resource_uri_sha256"] : [])].sort().join(",") &&
+        Object.keys(review).sort().join(",") === [...expectedKeys,
+          ...(review.resource_uri_sha256 !== undefined ? ["resource_uri_sha256"] : []),
+          ...(review.resource_template_name !== undefined ? ["resource_template_name"] : []),
+          ...(review.resource_template_sha256 !== undefined ? ["resource_template_sha256"] : [])].sort().join(",") &&
         args.profile === "native-live" && isDigest(args.connection_digest) && isDigest(args.catalog_digest) &&
         typeof args.tool_name === "string" && typeof args.input_schema_sha256 === "string" &&
         isDigest(args.input_schema_sha256) && typeof args.arguments === "object" && args.arguments !== null && !Array.isArray(args.arguments) &&
@@ -1447,7 +1457,12 @@ export class Executor {
         isDigest(review.target_version_digest) && endpointOriginValid && isDigest(review.endpoint_path_digest) &&
         review.connection_digest === args.connection_digest && review.catalog_digest === args.catalog_digest &&
         review.request_kind === (args.request_kind ?? "tool_call") &&
-        review.resource_uri_sha256 === args.resource_uri_sha256 &&
+        (templateRead
+          ? isDigest(review.resource_uri_sha256) && review.resource_template_name === args.resource_template_name &&
+            review.resource_template_sha256 === args.resource_template_sha256
+          : review.resource_uri_sha256 === args.resource_uri_sha256) &&
+        (review.resource_template_name === args.resource_template_name) &&
+        (review.resource_template_sha256 === args.resource_template_sha256) &&
         review.tool_name === args.tool_name && isDigest(review.input_schema_sha256) &&
         review.input_schema_sha256 === args.input_schema_sha256 &&
         (review.description_sha256 === null || isDigest(review.description_sha256));
@@ -1456,9 +1471,14 @@ export class Executor {
         review.target_version_digest === operationPlanDigest(observation.data) &&
         observation.data.command_digest === operationPlanDigest(command) &&
         observation.data.operation_plan_binding_digest === operationPlanBindingDigest &&
+        review.resource_uri_sha256 === observation.data.resource_uri_sha256 &&
         observation.data.connection_digest === args.connection_digest && observation.data.catalog_digest === args.catalog_digest &&
         (observation.data.request_kind ?? "tool_call") === (args.request_kind ?? "tool_call") &&
-        observation.data.resource_uri_sha256 === args.resource_uri_sha256 &&
+        (templateRead
+          ? isDigest(observation.data.resource_uri_sha256) &&
+            observation.data.resource_template_name === args.resource_template_name &&
+            observation.data.resource_template_sha256 === args.resource_template_sha256
+          : observation.data.resource_uri_sha256 === args.resource_uri_sha256) &&
         observation.data.tool_name === args.tool_name && observation.data.input_schema_sha256 === args.input_schema_sha256 &&
         operationPlanDigest(review.arguments) === operationPlanDigest(args.arguments) &&
         Array.isArray(review.potential_effects) &&
