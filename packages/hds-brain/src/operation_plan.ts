@@ -20,7 +20,8 @@ import {
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
   type OperationPlanGoalRelationAdoptionAssessment,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
-  ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
+  ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema, inspectExecutionResultDelivery,
+  type ExecutionAdmission, type ExecutionGoalVersionBinding, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema, type OperationPlanExternalReceiptObservation,
   FileSearchTargetVersionObservationSchema,
   GoogleCalendarEventTargetObservationSchema,
@@ -84,6 +85,11 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+export interface OperationPlanExecutionGoalIdentity {
+  readonly operation_plan_binding_digest: string;
+  readonly task_identity_digest: string;
+  readonly goal_version_binding: ExecutionGoalVersionBinding;
+}
 function isUnresolvedOperationAttempt(status: Binding["status"]): boolean {
   return status === "selected" || status === "intent_committed" || status === "outcome_unknown" ||
     status === "verification_failed";
@@ -4847,6 +4853,90 @@ export class OperationPlanLedger {
     if (!match) throw new Error("plan_execution_task_identity_unavailable");
     return operationPlanTaskIdentityDigest(match.p);
   }
+  /** Exact current plan task and purpose identity for HDS issuance and pre-dispatch recheck. */
+  executionGoalIdentity(command: ExecuteCommand): OperationPlanExecutionGoalIdentity | undefined {
+    const issuedId = this.issuedBindings.get(command);
+    if (issuedId === undefined) {
+      if (this.issuedBindingIds.has(command.id)) throw new Error("plan_execution_goal_identity_unavailable");
+      return undefined;
+    }
+    if (issuedId !== command.id) throw new Error("plan_execution_goal_identity_mismatch");
+    const match = this.binding(issuedId);
+    if (!match || match.b.command_id !== command.id || command.type !== "tool_call" ||
+        command.upstream_decision.commit_decision !== "ASSERT" ||
+        command.upstream_decision.request_id !== match.b.request_id ||
+        command.upstream_decision.commit_hash !== match.b.commit_hash ||
+        !this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
+        this.goalPurposeRelationIssue(match.p) !== undefined) {
+      throw new Error("plan_execution_goal_identity_stale");
+    }
+    const task_identity_digest = operationPlanTaskIdentityDigest(match.p);
+    let operation_plan_binding_digest: string | undefined;
+    if (match.b.status === "selected") {
+      operation_plan_binding_digest = this.executionSourceBindingDigest(command);
+    } else if (match.b.status === "intent_committed") {
+      const admission = match.b.execution_admission;
+      if (!this.activePlanAttempts.has(issuedId) || !admission ||
+          admission.task_identity_digest !== task_identity_digest) {
+        throw new Error("plan_execution_goal_identity_attempt_stale");
+      }
+      const currentRevision = match.p.revisions.at(-1);
+      const selectedRevision = match.p.revisions.find((revision) => revision.digest === match.b.revision_digest);
+      const selectedStep = selectedRevision?.plan.steps.find((step) => step.step_id === match.b.step_id);
+      const prepared = currentRevision
+        ? prepareOperationPlan(currentRevision.plan, { now_ms: this.nowMs(), results: match.p.results, observations: [] })
+        : undefined;
+      const preparedStep = prepared?.kind === "inspected"
+        ? prepared.plan.steps.find((step) => step.step_id === match.b.step_id) : undefined;
+      const currentSourceDigest = selectedStep
+        ? operationPlanExecutionSourceDigest(match.p, match.b, selectedStep) : undefined;
+      let goalRelationAssessmentCurrent = true;
+      if (selectedStep && match.b.goal_relation_adoption_assessment) {
+        try {
+          goalRelationAssessmentCurrent = this.goalRelationAdoptionAssessment(match.p, selectedStep).assessment_digest ===
+            match.b.goal_relation_adoption_assessment.assessment_digest;
+        } catch { goalRelationAssessmentCurrent = false; }
+      }
+      let memoryInterpretationDependenciesCurrent = true;
+      if (match.p.memory_interpretation_dependencies?.length) {
+        try { this.assertMemoryInterpretationDependenciesCurrent(match.p); }
+        catch { memoryInterpretationDependenciesCurrent = false; }
+      }
+      if (!currentRevision || currentRevision.digest !== match.b.revision_digest || !selectedStep || !preparedStep ||
+          prepared?.kind !== "inspected" ||
+          prepared.summary.steps.find((step) => step.step_id === match.b.step_id)?.status !== "ready" ||
+          stepDigest(selectedStep) !== match.b.step_digest || stepDigest(preparedStep) !== stepDigest(match.b.prepared_step) ||
+          commandPayloadDigest(command) !== match.b.payload_digest || operationPlanDigest(command) !== match.b.command_digest ||
+          !matchesCanonicalExecutorCommandDigest(command, match.b.executor_command_digest) ||
+          this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id)) ||
+          this.taskGoalIsAchieved(task_identity_digest) || this.requestGoalCriteriaIssue(match.p, selectedStep) !== undefined ||
+          !goalRelationAssessmentCurrent || !memoryInterpretationDependenciesCurrent ||
+          !this.computeSourceObservationsAreCurrent(match.p, this.nowMs()) ||
+          currentSourceDigest !== admission.operation_plan_binding_digest) {
+        throw new Error("plan_execution_goal_identity_source_stale");
+      }
+      operation_plan_binding_digest = admission.operation_plan_binding_digest;
+    } else {
+      throw new Error("plan_execution_goal_identity_not_dispatchable");
+    }
+    if (!operation_plan_binding_digest) throw new Error("plan_execution_goal_identity_binding_missing");
+    const purpose = match.p.goal_purpose_binding;
+    const goal_version_binding = ExecutionGoalVersionBindingSchema.parse(purpose
+      ? { goal_id_digest: createHash("sha256").update(purpose.goal_ref, "utf8").digest("hex"),
+          purpose_version: purpose.purpose_version, purpose_digest: purpose.purpose_digest }
+      : { goal_id_digest: operationPlanDigest({ schema_version: "blue-tanuki.operation-plan-goal-id.v1", task_identity_digest }),
+          purpose_version: 1,
+          purpose_digest: createHash("sha256").update(match.p.goal, "utf8").digest("hex") });
+    if (match.b.status === "intent_committed") {
+      const admittedPurpose = match.b.execution_admission?.goal_version_binding;
+      if (admittedPurpose?.goal_id_digest !== goal_version_binding.goal_id_digest ||
+          admittedPurpose?.purpose_version !== goal_version_binding.purpose_version ||
+          admittedPurpose?.purpose_digest !== goal_version_binding.purpose_digest) {
+        throw new Error("plan_execution_goal_identity_purpose_stale");
+      }
+    }
+    return { operation_plan_binding_digest, task_identity_digest, goal_version_binding };
+  }
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
       command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION);
@@ -4917,13 +5007,10 @@ export class OperationPlanLedger {
     const match = this.binding(command.id);
     const binding = match?.b;
     const now = this.nowMs();
-    const sourceBindingDigest = this.executionSourceBindingDigest(command);
-    const taskIdentityDigest = this.executionTaskIdentityDigest(command);
-    const currentGoalVersionBinding = match?.p.goal_purpose_binding
-      ? { goal_id_digest: createHash("sha256").update(match.p.goal_purpose_binding.goal_ref, "utf8").digest("hex"),
-          purpose_version: match.p.goal_purpose_binding.purpose_version,
-          purpose_digest: match.p.goal_purpose_binding.purpose_digest }
-      : undefined;
+    const executionGoalIdentity = this.executionGoalIdentity(command);
+    const sourceBindingDigest = executionGoalIdentity?.operation_plan_binding_digest;
+    const taskIdentityDigest = executionGoalIdentity?.task_identity_digest;
+    const currentGoalVersionBinding = executionGoalIdentity?.goal_version_binding;
     const goalVersionBindingMatches = admitted.goal_version_binding?.goal_id_digest === currentGoalVersionBinding?.goal_id_digest &&
       admitted.goal_version_binding?.purpose_version === currentGoalVersionBinding?.purpose_version &&
       admitted.goal_version_binding?.purpose_digest === currentGoalVersionBinding?.purpose_digest;

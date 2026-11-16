@@ -3,7 +3,7 @@ import { OperationCommandExecutionResultSchema, OperationJsonValueSchema } from 
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const Time = z.number().int().positive().safe();
-/** Digest-only identity for the exact HDS-adopted purpose version; it carries no authority. */
+/** Digest-only identity for the exact HDS-checked task goal version; it carries no authority. */
 export const ExecutionGoalVersionBindingSchema = z.object({
   goal_id_digest: Digest,
   purpose_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),

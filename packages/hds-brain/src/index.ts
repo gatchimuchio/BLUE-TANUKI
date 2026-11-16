@@ -13,7 +13,8 @@ export { OperationPlanLedger, operationPlanDigest, operationPlanResultValidation
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
   type OperationPlanReceiptReconciliationAuthorization,
   type OperationPlanOwnerSelectedFileStateObservationAuthorization,
-  type OperationPlanGoalPurposeRelationReviewContent, type OperationPlanSavedResultReturnProjection } from "./operation_plan.js";
+  type OperationPlanGoalPurposeRelationReviewContent, type OperationPlanSavedResultReturnProjection,
+  type OperationPlanExecutionGoalIdentity } from "./operation_plan.js";
 export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,

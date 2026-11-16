@@ -905,19 +905,18 @@ function approveCommandForExecution(
         target_version_observation?.schema_version !== "blue-tanuki.mcp-call-target-version.v1")) {
     throw new Error("Executor approval rejected: mcp.call requires an Operation Plan-bound target version observation");
   }
-  if (!hds_binding && runtime.require_hds_execution_binding) {
-    throw new Error("Executor approval rejected: HDS execution authority binding is required");
+  if (runtime.require_hds_execution_binding &&
+      (!hds_binding || !hds_binding.task_identity_digest || !hds_binding.goal_version_binding)) {
+    throw new Error("Executor approval rejected: HDS task and goal-version binding are required");
   }
   const hds_source_context_digest = hds_binding
     ? consumeHdsExecutionAuthorityBinding(command, hds_binding)
     : null;
   if (hds_binding &&
-      ((hds_binding.operation_plan_binding_digest === undefined) !== (hds_binding.task_identity_digest === undefined) ||
-        (hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
-        (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)) ||
+      ((hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
+        !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest) ||
         ((hds_binding.operation_id === undefined) !== (hds_binding.adapter_version === undefined)) ||
-        (hds_binding.goal_version_binding !== undefined &&
-          !ExecutionGoalVersionBindingSchema.safeParse(hds_binding.goal_version_binding).success) ||
+        !ExecutionGoalVersionBindingSchema.safeParse(hds_binding.goal_version_binding).success ||
         (snapshot.type === "tool_call" && (hds_binding.operation_id !== snapshot.payload.tool_name ||
           hds_binding.adapter_version !== getToolOperationDescriptor(snapshot.payload.tool_name)?.adapter_version)) ||
         (snapshot.type !== "tool_call" && hds_binding.operation_id !== undefined) ||

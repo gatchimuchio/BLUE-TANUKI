@@ -9,9 +9,9 @@ export interface ExecutionIntentTicket {
   operation_plan_binding_digest?: string;
   /** Exact Broker target-version observation; digest only, not target identity. */
   target_version_observation_digest?: string;
-  /** J所有計画のtask digest。未計画の要求では省略する。 */
+  /** HDSが固定した計画または受理済み依頼のtask digest。開発用非HDS経路では未設定の場合がある。 */
   task_identity_digest?: string;
-  /** Exact HDS-adopted purpose version; digest-only and non-authoritative. */
+  /** HDSが固定した目的版。digest-only and non-authoritative. */
   goal_version_binding?: ExecutionGoalVersionBinding;
   /** Exact reviewed adapter identity for a tool command; identity only, not authority. */
   operation_id?: string;
