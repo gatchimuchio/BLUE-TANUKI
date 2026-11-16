@@ -679,7 +679,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
           const byCommand = currentByCommand.get(archived.command_key);
           if (byTicket || byCommand) {
             if (!byTicket || byTicket.command_key !== archived.command_key || byCommand?.ticket_id !== archived.ticket_id ||
-                JSON.stringify(Object.entries(byTicket).sort()) !== JSON.stringify(Object.entries(archived).sort())) {
+                !isDeepStrictEqual(byTicket, archived)) {
               throw new Error("broker_restore_task_receipt_conflict");
             }
             return null;
@@ -1030,7 +1030,7 @@ function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: bool
     if (receipts.length !== latest.size) return false;
     for (const receipt of receipts) {
       const event = latest.get(receipt.ticket_id);
-      if (!event || JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event).sort())) return false;
+      if (!event || !isDeepStrictEqual(receipt, event)) return false;
     }
     const outbox = database.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox").all() as
       { ticket_id: string; delivery_json: string; delivery_digest: string }[];
@@ -1281,7 +1281,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
           validateReceipt(receipt);
           const event = latest.get(row.ticket_id);
           if (!event || duplicateTicket || receipt.ticket_id !== row.ticket_id || receipt.command_key !== row.command_key ||
-              JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event.receipt).sort())) {
+              !isDeepStrictEqual(receipt, event.receipt)) {
             receiptProjectionMismatchCount++;
           }
         } catch {

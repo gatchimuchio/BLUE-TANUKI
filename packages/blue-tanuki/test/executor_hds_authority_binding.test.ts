@@ -230,20 +230,24 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     expect(binding.goal_governance_projection_digest).toBe(operationPlanDigest(log.frame.goal_governance));
     expect(binding.goal_governance_used_for_authority).toBe(false);
     expect(Object.keys(binding).sort()).toEqual([
-      "goal_governance_projection_digest", "goal_governance_used_for_authority", "schema_version", "source_context_digest",
+      "goal_governance_projection_digest", "goal_governance_used_for_authority", "goal_version_binding",
+      "schema_version", "source_context_digest", "task_identity_digest",
     ]);
     expect(JSON.stringify(binding)).not.toContain("fixture-owner");
     expect(JSON.stringify(binding)).not.toContain("hello world");
-    expect(() => authority.approve(command, proof, digest)).toThrow(/binding is required/);
+    expect(() => authority.approve(command, proof, digest)).toThrow(/HDS task and goal-version binding are required/);
 
     authority.approve(command, proof, digest, binding);
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.command_digest).toBe(digest);
+    expect(tickets[0]!.hds_source_context_digest).toBe(binding.source_context_digest);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v9",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
+      task_identity_digest: binding.task_identity_digest,
+      goal_version_binding: binding.goal_version_binding,
     })).digest("hex"));
     expect(() => authority.approve(command, proof, digest, binding)).toThrow(/already consumed/);
   });
@@ -320,12 +324,17 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     authority.approve(command, proof, digest, binding, targetVersion);
 
     expect(tickets).toHaveLength(1);
+    expect(tickets[0]!.hds_source_context_digest).toBe(binding.source_context_digest);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v9",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
+      operation_plan_binding_digest: binding.operation_plan_binding_digest,
+      target_id: binding.target_id,
       task_identity_digest: binding.task_identity_digest,
+      goal_version_binding: binding.goal_version_binding,
+      ...(binding.operation_id ? { operation_id: binding.operation_id, adapter_version: binding.adapter_version } : {}),
       target_version_observation_digest: operationPlanDigest(targetVersion),
     })).digest("hex"));
   });

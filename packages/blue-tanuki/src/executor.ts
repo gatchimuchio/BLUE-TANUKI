@@ -931,7 +931,10 @@ function approveCommandForExecution(
           !/^[a-f0-9]{64}$/.test(hds_binding.broker_target_version_observation_digest)))) {
     throw new Error("Executor approval rejected: HDS execution binding has an invalid Operation Plan, adapter, task identity, or target-version digest");
   }
-  const approved = snapshot as ApprovedCommand;
+  // HDS provenance seals are bound to the exact issued command object. Keep
+  // that identity through approval and dispatch; recursive freezing below
+  // prevents post-approval mutation. Non-HDS approvals keep the canonical copy.
+  const approved = (hds_binding ? command : snapshot) as ApprovedCommand;
   const clock = readApprovalClock(runtime);
   const ticket: Readonly<ExecutionIntentTicket> = Object.freeze({
     ticket_id: randomUUID(), execution_epoch: runtime.execution_epoch,

@@ -261,9 +261,16 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           final_review_required: approval.final_review_required, reason: "synthetic goal completion evidence fixture",
         }, executorCommandDigest(selected.command), executionBinding, targetObservation);
         const admission = executionAdmissionForCommand(selected.command, authority.receipt(approved));
+        expect(admission.hds_source_context_digest).toBe(executionBinding.source_context_digest);
+        const admissionWithoutSourceContext = { ...admission };
+        delete admissionWithoutSourceContext.hds_source_context_digest;
+        expect(hds.beginOperationPlanAttempt(selected.command, admissionWithoutSourceContext)).toBe(false);
+        expect(hds.beginOperationPlanAttempt(selected.command, {
+          ...admission, hds_source_context_digest: "0".repeat(64),
+        })).toBe(false);
         expect(hds.beginOperationPlanAttempt(selected.command, admission)).toBe(true);
         const feedback = await searchExecutor.execute(approved, { save_result_delivery: true });
-        expect(feedback.status).toBe("success");
+        expect(feedback.status, feedback.error).toBe("success");
         expect(reconcileExecutionResults(hds, executionStore, executionEpoch)).toMatchObject({ adopted: 1, deferred: 0 });
         const finalized = finalizeCommandOutput({ hds, command: selected.command, feedback,
           request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel",
@@ -883,6 +890,13 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       }, executorCommandDigest(selectedSearch.command), searchExecutionBinding, targetObservation);
       const searchAdmission = executionAdmissionForCommand(selectedSearch.command, searchAuthority.receipt(approvedSearch));
       expect(searchAdmission.task_identity_digest).toBe(taskIdentityDigest);
+      expect(searchAdmission.hds_source_context_digest).toBe(searchExecutionBinding.source_context_digest);
+      const admissionWithoutSourceContext = { ...searchAdmission };
+      delete admissionWithoutSourceContext.hds_source_context_digest;
+      expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, admissionWithoutSourceContext)).toBe(false);
+      expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, {
+        ...searchAdmission, hds_source_context_digest: "f".repeat(64),
+      })).toBe(false);
       const { task_identity_digest: _missingTaskIdentity, ...admissionWithoutTaskIdentity } = searchAdmission;
       expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, admissionWithoutTaskIdentity)).toBe(false);
       expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, {
