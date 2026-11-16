@@ -5267,3 +5267,30 @@ Desktop失効はnonce・操作名・応答全体・`LIVE_RUNTIME`・正確な`{"
 このbatchはrev6.0 P2 QE_BUILDのAndroid資格ライフサイクルsliceであり、製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、P13 owner GO保留を維持する。通常Task開始・取消・中断復帰、Desktop BrokerからBLUE C/J/Mまでの実仕事、Android installed動作、更新／削除は未成立。D4-PocketはDevice Link境界の読み取り照合だけで、変更なし。C08.03実provider、秘密credential、実外部業務作用、公開・出荷操作は行っていない。
 
 変更したAndroid source・unit test・READMEをcommit `f42e5d38b0fb769dfd34077989208f8daa2f597b`としてGitHub `main`へfast-forward push済み。作業開始`main`=`2149d5a290508be5f2a3f23ff3dc57779f43023e`。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。local／remote backup refsはこの作業batchのcloseout時に最新二世代へ更新・再読込する。
+
+## 2026-11-17 — rev6.0 QE_BUILD / iOS Device Link task source
+
+### 対象・目的
+
+対象はiOS native Device Link入口とTask操作source。rev6.0 P2の全製品・全5OS一括施工の一部として、iOS側でDesktopとのpairing、Task申請と状態操作を行うsource経路を用意し、iOS Simulator向けにcompile・app bundle生成できる状態にする。実BrokerからBLUE Runtime／Gateway／C/J/Mまで仕事が通ることや、iOS製品の運用成立をこの変更だけで主張しない。
+
+### 変更と限定確認
+
+`apps/mobile-ios/`にSwiftUI app、Xcode project／shared scheme、Device Link credentialのKeychain保管、invitationによるpairing、TLS certificate pinning、Task catalog／submission／status／start／cancelのclient sourceを追加した。submission前にsession IDだけをKeychainへ記録し、Desktopのrequest一覧で照合できるまで再送を止めるcross-launch checkpointを設けた。Mobileの投影へTask結果本文を返さず、Desktop owner confirmationとBroker側の承認再検査を前提にする。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| GitHub Actions手動run [#43947886163](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43947886163)、source SHA `4a6ca406a8e45dd3bb75b115b31456b9a53bb849`、macOS 15.8.2／Xcode 16.4／iOS Simulator SDK 18.5 | PASS。署名なし`xcodebuild build`、arm64／x86_64 simulator target、app bundle存在と`NSLocalNetworkUsageDescription`を確認。 |
+| GitHub Actions run #1 `43945042431`／SHA `7108192a25905abf7114b0b922f2ec6a4e35e1c6` | FAIL。`NWConnection.send` completion引数がNetwork.frameworkのAPI型と不一致。 |
+| GitHub Actions run #2 `43947351516`／SHA `d4c03d8b4d4ea29924affe7990ef04a809f5c1b2` | FAIL。初回修正後のcompletion呼出しに閉じ括弧の構文誤り。 |
+| iOS unit／integration suite、Simulator起動・実画面操作、Desktop Broker接続、iOS Keychain／TLS実行、iPhone実機、installed package | NOT_RUN。 |
+
+最初のcompiler errorはApple Network.frameworkの`NWConnection.SendCompletion.contentProcessed`に合わせ、`.contentProcessed { error in ... }`で修正した。二回目に検出した括弧誤りも修正し、三回目は同じmacOS workflowのbuildとbundle確認が成功した。CI相当確認はcompileとbundle設定のみであり、runtime／installed QAではない。
+
+### 状態・限界
+
+iOS client sourceはCODE_PRESENT、Simulator向けsource buildはPASS。D4 BrokerからBLUE Runtime Adapter／Gateway／C/J/Mへ仕事を通す実consumer、一気通貫Task、通知、lifecycle復帰、更新、削除は未確認または未成立。iOS全体入口は引き続き`BUILD_GAP`。Keychainのcross-launch checkpointもsource上の実装であり、iOS実環境での永続性・復元動作は未確認。製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、C08.03実provider・OD-03 live外部作用・別repo変更・P13 owner公開／出荷GO保留を維持する。秘密credential、実provider、外部作用、D4-Pocket source変更は行っていない。
+
+### Git・作業資産
+
+開始時GitHub `main`=`627e4ea907bd695f3cd19201a983f95324b70d1c`。source commit `7108192a`、API修正`d4c03d8b`、構文修正`4a6ca406`をvalidation branchで保持し、最後の正確なsource SHAをGitHub `main`へfast-forward pushした。local／remote `main`とlocal／remote backup current=`4a6ca406a8e45dd3bb75b115b31456b9a53bb849`、previous=`627e4ea907bd695f3cd19201a983f95324b70d1c`へ競合検出付きで更新した。Actions artifact uploadなし、ローカルiOS build生成物なし。作業中からある`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更で保持した。`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のstale metadata削除はPermission deniedとなったため、ACL・metadataを変更せず保留した。
