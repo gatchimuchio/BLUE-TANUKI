@@ -42,6 +42,11 @@ interface EmergencyStopAuthority {
   }): void;
 }
 
+export interface EmergencyStopCancellationContext {
+  actor: string;
+  requested_at_ms: number;
+}
+
 export class EmergencyStopControl {
   private durable: EmergencyStopDurableState;
   private reasonText: string | null = null;
@@ -51,7 +56,7 @@ export class EmergencyStopControl {
   constructor(private readonly options: {
     readonly store: EmergencyStopStateStore;
     readonly authority: EmergencyStopAuthority;
-    readonly abortRunningExecutions: () => void;
+    readonly abortRunningExecutions: (context: EmergencyStopCancellationContext) => void;
     readonly now?: () => number;
   }) {
     this.durable = options.store.load();
@@ -85,7 +90,6 @@ export class EmergencyStopControl {
   get reason(): string | null { return this.reasonText; }
 
   activate(context: { actor: string; reason?: string }): EmergencyStopSnapshot {
-    this.options.abortRunningExecutions();
     this.reasonText = context.reason ?? "owner emergency stop";
     if (!this.durable.active) {
       const activation = { control_event_id: randomUUID(), actor: context.actor,
@@ -94,6 +98,14 @@ export class EmergencyStopControl {
         activation, last_clear: this.durable.last_clear };
       try { this.durable = this.options.store.activate(activation); }
       catch { this.stateStoreAvailable = false; }
+    }
+    // Latch the deny state before asking workers to cancel. A cancellation callback
+    // failure must never leave new execution admissible or undo the emergency stop.
+    try {
+      this.options.abortRunningExecutions({ actor: context.actor, requested_at_ms: this.now() });
+    } catch {
+      // Active execution observations remain authoritative for local worker state;
+      // this cancellation request does not claim that local or external work stopped.
     }
     if (this.durable.activation && !this.durable.activation.audit_recorded) this.recordActivationIfPossible(false);
     return this.snapshot();

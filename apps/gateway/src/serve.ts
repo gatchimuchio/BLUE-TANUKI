@@ -1395,8 +1395,22 @@ async function serveWithOwnerLease(
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
-    abortRunningExecutions: () => {
-      activeTaskExecutions.abortAll();
+    abortRunningExecutions: ({ actor, requested_at_ms }) => {
+      for (const execution of activeTaskExecutions.snapshot()) {
+        try {
+          requestTaskExecutionCancellation(execution.command_id, {
+            actor,
+            requested_at_ms,
+            token_kind: "owner_task",
+          });
+        } catch (error) {
+          gatewayLog.error("emergency-stop cancellation request failed; worker stop remains unconfirmed", {
+            command_id: execution.command_id,
+            error: error instanceof Error ? error.message : String(error),
+            used_for_authority: false,
+          });
+        }
+      }
     },
   });
   const router = new InboundRouter({
@@ -1705,9 +1719,14 @@ async function serveWithOwnerLease(
 
   function requestTaskExecutionCancellation(
     command_id: string,
-    ctx: { actor: string; token_kind: TaskExecutionCancellationTokenKind },
+    ctx: { actor: string; token_kind: TaskExecutionCancellationTokenKind; requested_at_ms?: number },
   ) {
-    const cancellation = activeTaskExecutions.requestCancel(command_id, ctx.actor, Date.now(), ctx.token_kind);
+    const cancellation = activeTaskExecutions.requestCancel(
+      command_id,
+      ctx.actor,
+      ctx.requested_at_ms ?? Date.now(),
+      ctx.token_kind,
+    );
     if (!cancellation) return null;
     if (cancellation.status === "cancel_requested") {
       const requestedAt = cancellation.cancel_requested_at_ms;
