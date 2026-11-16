@@ -290,11 +290,15 @@ async function connectMcpClient(endpoint: URL, fetcher: McpFetch, signal?: Abort
 }
 
 async function readMcpCatalogSnapshot(client: Client) {
+  const serverCapabilities = client.getServerCapabilities();
+  // Only enumerate methods the server advertised; an omitted capability remains unknown, not a
+  // proof that the server has no such data.
   const [toolPage, resourcePage, resourceTemplatePage, promptPage] = await Promise.all([
-    client.listTools(),
-    client.listResources(),
-    client.listResourceTemplates(),
-    client.listPrompts(),
+    serverCapabilities?.tools !== undefined ? client.listTools() : Promise.resolve({ tools: [] }),
+    serverCapabilities?.resources !== undefined ? client.listResources() : Promise.resolve({ resources: [] }),
+    serverCapabilities?.resources !== undefined
+      ? client.listResourceTemplates() : Promise.resolve({ resourceTemplates: [] }),
+    serverCapabilities?.prompts !== undefined ? client.listPrompts() : Promise.resolve({ prompts: [] }),
   ]);
   return {
     tools: toolPage.tools ?? [],
@@ -302,7 +306,7 @@ async function readMcpCatalogSnapshot(client: Client) {
     resource_templates: resourceTemplatePage.resourceTemplates ?? [],
     prompts: promptPage.prompts ?? [],
     server_info: client.getServerVersion(),
-    server_capabilities: client.getServerCapabilities(),
+    server_capabilities: serverCapabilities,
   };
 }
 
