@@ -19,7 +19,7 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - 申請一覧に同じsessionが現れたことを確認するまで次の申請を拒否する。開始・取消は毎回最新Task状態を再取得し、開始候補／`pending`／`running`に合致する場合だけ一度要求する。開始許可はBroker側の再検査に委ね、取消要求を実停止と扱わない。
 - Task一覧は申請ID・指示hash・状態・結果hash・結果本文の有無だけを扱い、結果本文・監査識別子をMobileへ返さない。
 
-Task一覧のforeground再取得は申請checkpointの照合だけに使い、自動再申請・開始・取消は行わない。既存Taskの個別状態は使用者が明示して照会する。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。通知、更新、installed package削除も未成立。Android emulator・実機、KeyStore実動、release packageで検査していない。
+Task一覧のforeground再取得は申請checkpointの照合だけに使い、自動再申請・開始・取消は行わない。既存Taskの個別状態は使用者が明示して照会する。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。通知、更新、installed package削除も未成立。Android emulator・実機、KeyStore実動は未確認。
 
 ## ビルドと限定確認
 
@@ -31,4 +31,6 @@ JDK 17、Android SDK Platform 37、Build Tools 36.0.0を使う。OneDrive外か�
 
 2026-11-17の限定確認では、OneDrive外・ASCII pathの新規`%TEMP%`コピーで`:app:testDebugUnitTest :app:assembleDebug`が成功し、unit test 21件がすべてPASSした。Task契約parse／入力制約／結果本文拒否／evidence-source制限を含む。debug APKは検証コピー内だけに生成した。最初のコピーは既存`app/build`出力を含みGradleが出力先を削除できず失敗したため、既生成物を除いたコピーで再実行した。OneDrive checkoutでの失敗原因が日本語pathか同期・ACLのどちらかは切り分けていない。
 
-debug APKは一時検証コピーにのみ生成したローカル開発用成果物であり、release packageではない。署名鍵とPlay Store設定は含まない。この施工時にAndroid emulator／実機は接続していない。
+2026-11-17のrelease variant限定生成では、commit `c798362ddfbb0a6c8c87de81c3c4f2e3243dd1d9`をgit archiveからOneDrive外・ASCII pathの新規`%TEMP%`コピーへ展開し、`:app:assembleRelease :app:bundleRelease`が成功した。生成物は未署名で、APKは689,754 bytes（SHA-256 `c3c4ee10592b673005531b3ece25026b62e788663dc592879981e15a9f483648`）、AABは691,409 bytes（SHA-256 `c6f2625b17178333187c9d160d4100576438d3701a343b07fdbb7031d16eb79d`）。生成物は一時検証コピー内にのみ保持し、署名、install、起動、Android emulator／実機、実Desktop Broker接続は行っていない。この限定生成はinstalled product、実動、配布準備の証拠ではない。
+
+debug APKも一時検証コピーにのみ生成したローカル開発用成果物である。署名鍵とPlay Store設定は含まない。
