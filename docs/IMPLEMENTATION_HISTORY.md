@@ -5294,3 +5294,35 @@ iOS client sourceはCODE_PRESENT、Simulator向けsource buildはPASS。D4 Broke
 ### Git・作業資産
 
 開始時GitHub `main`=`627e4ea907bd695f3cd19201a983f95324b70d1c`。source commit `7108192a`、API修正`d4c03d8b`、構文修正`4a6ca406`をvalidation branchで保持し、最後の正確なsource SHAをGitHub `main`へfast-forward pushした。local／remote `main`とlocal／remote backup current=`4a6ca406a8e45dd3bb75b115b31456b9a53bb849`、previous=`627e4ea907bd695f3cd19201a983f95324b70d1c`へ競合検出付きで更新した。Actions artifact uploadなし、ローカルiOS build生成物なし。作業中からある`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更で保持した。`.git/worktrees/blue-tanuki-health-2026-11-07-windows`のstale metadata削除はPermission deniedとなったため、ACL・metadataを変更せず保留した。
+
+## 2026-11-17 — rev6.0 QE_BUILD / Android Device Link Task operations and iOS start result reporting
+
+### 主語・目的
+
+主語はBLUE-TANUKI製品全体。目的はAndroid／iOS Device Linkからの仕事操作を安全なBroker接続のsource経路へ広げ、申請結果不明時の再送と、Brokerが受理していない開始要求を処理済みと誤表示する状態を防ぐこと。これは全431要求・全機能・全5OSを対象とするP2全体施工の一部であり、モバイル単独の完成を意味しない。
+
+### 変更と接続状態
+
+Android native入口にTaskカタログ、実行環境／workspaceカタログ、metadataのみのMCP一覧、Task申請、利用者自身の申請一覧、状態照会、開始、取消を追加した。Task契約は識別子、列挙値、payload形状、応答projectionを厳密に確認し、Task結果本文・MCP tool schema・credentialをMobileへ返さない。
+
+Task申請前にsession IDだけをAndroid Keystore保護の暗号化領域へ保存し、正確なreadbackを確認する。送信結果が不明な場合はDesktop request一覧で同一sessionを観測するまで再申請を止め、送信し直さない。開始は最新状態がstart candidateのときだけ要求し、requestが実際に送信されたかとBrokerが処理したかを区別する。iOS側にも同じ送信状態の区別を反映した。
+
+これはMobile sourceからDevice Link transportまでのCODE_PRESENTである。Desktop BrokerからBLUE Runtime Adapter／Gateway／C／J／Mへ同一Taskを通す実consumerと一気通貫の仕事経路は未成立であり、Android／iOSの製品入口はBUILD_GAPを維持する。D4-Pocketは読み取り照合のみで、別repoの変更はない。
+
+### QE_BUILD限定確認
+
+| 確認 | 結果 |
+|---|---|
+| Android source commit 0cb107fefad8bd8388da85032718c5a0a8d9e4faのOneDrive外ASCII一時コピーで app unit tests と debug assemble、JDK 17／Android SDK Platform 37 | PASS。21 tests、failure 0、error 0。 |
+| Android debug APK | PASS。969,059 bytes、SHA-256 1fe83a5e55f64fc72ba5c3a41fecf0b39b889f23ab42fd8a1f73175f5eccd0d4。 |
+| iOS manual workflow_dispatch run [#43955448713](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/43955448713)、source SHA 0cb107fefad8bd8388da85032718c5a0a8d9e4fa、macos-15-arm64 runner／Xcode 16.4／iOS Simulator SDK 18.5 | PASS。unsigned xcodebuild、app bundleとNSLocalNetworkUsageDescriptionを確認。 |
+| Git diff check | PASS。 |
+| Android emulator／実機、iOS Simulator起動・画面操作、Android Keystore／iOS Keychainの実環境、Desktop Broker接続、BLUE C/J/M runtime縦断、installed package、全5OSのQC／QA | NOT_RUN。 |
+
+Android検証コピー C:\Users\ohira\AppData\Local\Temp\blue-tanuki-android-task-73c4bc77efc94214aa86227194f8cadc は検証後、build processがないことを確認してWindowsゴミ箱へ移動した。これは空き容量回収の計上ではない。Android debug APKは同じ一時コピー内だけで生成し、外部配布していない。
+
+### 状態・保護・Git
+
+製品はQE_BUILDのまま。SYSTEM_SHAPED=false、BUILD_COVERED=false、QE_QC／QE_QA未開始、P13=PENDING_OWNER_GOを維持する。C08.03実provider、資格情報、実外部業務作用、D4-Pocket変更、公開・出荷操作は行っていない。protected untracked .codex-attachments/、.codex-remote-attachments/、packages/blue-tanuki/native/linux-isolation/target/を未変更で保持した。
+
+検証対象source commit 0cb107fefad8bd8388da85032718c5a0a8d9e4faはorigin/main 130745aa3d4774e6e3aa0290ab15db07d9fdcbdeの子で、Actionsの成功結果はこの正確なsource SHAだけを対象とする。作業開始時のlocal recovery current／previous branchとremote backup tagは130745aa3d4774e6e3aa0290ab15db07d9fdcbde／4a6ca406a8e45dd3bb75b115b31456b9a53bb849。Git fetchは対象SHAを取得した後、古い.git/worktrees/blue-tanuki-health-2026-11-07-windows管理情報の削除がPermission deniedとなった。このmetadataとACLは変更・迂回せず保持した。
