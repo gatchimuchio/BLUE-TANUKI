@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { executorCommandDigest, type ExecutionIntentTicket } from "@blue-tanuki/core";
-import { canonicalFileSearchTargetVersionObservation, FileSearchTargetVersionObservationSchema,
+import { ExecutionAdmissionSchema, canonicalFileSearchTargetVersionObservation, FileSearchTargetVersionObservationSchema,
   requireToolOperationDescriptor, type ExecuteCommand, type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
 import { isHostAudienceDigest } from "./host_audience_identity.js";
 
@@ -31,26 +31,28 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
   if (packet.type !== "execute" || packet.worker_id !== worker_id ||
       Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation",
         "operation_plan_binding_digest", "task_identity_digest", "host_audience_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
-  const ticket = packet.ticket as ExecutionIntentTicket;
+  let ticket: ExecutionIntentTicket;
+  try { ticket = ExecutionAdmissionSchema.parse(packet.ticket); }
+  catch { throw new Error("file_search_worker_ticket_invalid"); }
   const command = packet.command as Extract<ExecuteCommand, { type: "tool_call" }>;
   let target_version_observation: FileSearchTargetVersionObservation;
   try { target_version_observation = FileSearchTargetVersionObservationSchema.parse(packet.target_version_observation); }
   catch { throw new Error("file_search_worker_target_version_invalid"); }
+  const fileSearchAdapter = requireToolOperationDescriptor("file.search");
+  const targetVersionDigest = createHash("sha256")
+    .update(canonicalFileSearchTargetVersionObservation(target_version_observation), "utf8").digest("hex");
   const requestedRoot = command?.payload?.arguments?.root;
-  if (!ticket || Object.keys(ticket).some((key) => !["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest",
-      "execution_epoch", "issued_at_ms", "expires_at_ms"].includes(key)) ||
-      !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
-      ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((value) => /^[0-9a-f]{64}$/.test(value)) ||
-      !Number.isSafeInteger(ticket.issued_at_ms) || !Number.isSafeInteger(ticket.expires_at_ms) ||
-      ticket.issued_at_ms <= 0 || ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000 ||
-      now_ms < ticket.issued_at_ms || now_ms >= ticket.expires_at_ms || command?.type !== "tool_call" ||
+  if (now_ms < ticket.issued_at_ms || now_ms >= ticket.expires_at_ms || command?.type !== "tool_call" ||
       command.payload?.tool_name !== "file.search" || command.upstream_decision?.commit_decision !== "ASSERT" ||
       typeof command.upstream_decision.request_id !== "string" || command.upstream_decision.request_id.length < 1 ||
       command.upstream_decision.request_id.length > 200 || ticket.execution_epoch !== expected_execution_epoch ||
+      ticket.operation_id !== "file.search" || ticket.adapter_version !== fileSearchAdapter.adapter_version ||
+      ticket.target_version_observation_digest !== targetVersionDigest ||
       typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !== createHash("sha256").update(requestedRoot, "utf8").digest("hex") ||
       ticket.command_digest !== executorCommandDigest(command) ||
       ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
-      packet.operation_plan_binding_digest !== target_version_observation.operation_plan_binding_digest ||
+      ticket.operation_plan_binding_digest !== target_version_observation.operation_plan_binding_digest ||
+      packet.operation_plan_binding_digest !== ticket.operation_plan_binding_digest ||
       packet.task_identity_digest !== ticket.task_identity_digest || packet.task_identity_digest !== expected_task_identity_digest ||
       !isHostAudienceDigest(packet.host_audience_digest) || packet.host_audience_digest !== expected_host_audience_digest ||
       (packet.task_identity_digest !== undefined &&
