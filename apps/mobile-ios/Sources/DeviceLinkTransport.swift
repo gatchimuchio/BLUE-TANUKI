@@ -140,7 +140,7 @@ final class DeviceLinkTransport {
             sent.resolve(.success(()))
           }
         }
-      })
+      )
       try sent.wait(until: deadline)
 
       var responseBytes = try receiveSingleFrame(from: connection, until: deadline)
