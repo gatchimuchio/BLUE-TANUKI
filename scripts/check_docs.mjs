@@ -10,9 +10,9 @@ const requiredDocs = [
   "docs/BACKUP_REF_MIGRATION.md",
   "docs/QE_CURRENT_AUTHORITY.md",
   "docs/qe/現行/MANIFEST.json",
-  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev5_3.json",
-  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev5_3.json",
-  "docs/qe/現行/03_BLUE-TANUKI_Codex施工指示書_rev5_3.json",
+  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json",
+  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json",
+  "docs/qe/現行/03_BLUE-TANUKI_Codex全域施工指示書_rev6_0_確定.json",
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -146,8 +146,8 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 const qeGovernanceRequired = {
   "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE", "三点セットの作成・提出はGitHub反映の許可ではない"],
   "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "現行ピンの三文書すべて", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべて", "履歴", "MANIFEST.json", "rev5.3", "次の局所BUILD_BATCH選定"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main", "rev5.3"],
+  "docs/QE_CURRENT_AUTHORITY.md": ["現行正本", "三点一組", "履歴", "MANIFEST.json", "rev6.0", "全域P2一括施工"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main", "rev6.0"],
   "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ", "最新の三点正本全文を読み直す"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
   "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],
@@ -184,30 +184,31 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
   }
 }
 
-// 公開された三点正本を唯一の現行施工指示として照合する。旧版のhistoryは対象外。
+// 公開された三点正本を唯一の現行施工指示として照合する。履歴版は対象外。
 const qeManifest = JSON.parse(read("docs/qe/現行/MANIFEST.json"));
 const qeCanonicalFiles = Object.keys(qeManifest.文書 ?? {});
 const qeParsed = {};
-if (qeManifest.版 !== "5.3" || qeCanonicalFiles.length !== 3) {
-  failures.push("現行QE manifestがrev5.3・三文書ではない");
+const expectedCanonicalFiles = [
+  "01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json",
+  "02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json",
+  "03_BLUE-TANUKI_Codex全域施工指示書_rev6_0_確定.json",
+].sort();
+if (qeManifest.版 !== "6.0" || JSON.stringify([...qeCanonicalFiles].sort()) !== JSON.stringify(expectedCanonicalFiles)) {
+  failures.push("現行QE manifestがrev6.0・三文書ではない");
 }
 const activeNames = fs.readdirSync(path.join(root, "docs/qe/現行")).filter(file => /^0[1-3]_.*\.json$/.test(file)).sort();
 if (JSON.stringify(activeNames) !== JSON.stringify([...qeCanonicalFiles].sort())) {
   failures.push("現行ディレクトリに現行三点以外の版/不足ファイルが混在");
 }
 for (const file of qeCanonicalFiles) {
-  const rel = `docs/qe/現行/${file}`;
+  const rel = "docs/qe/現行/" + file;
   if (!exists(rel)) continue;
   const actualHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, rel))).digest("hex");
   const doc = JSON.parse(read(rel));
   qeParsed[file.slice(0, 2)] = doc;
   if (actualHash !== qeManifest.文書[file].SHA256) failures.push(`${rel}: manifest SHA-256不一致`);
-  if (doc.識別?.版 !== "5.3" || doc.識別?.公開 !== true || /未採用|リポジトリ未反映/.test(doc.識別?.状態 ?? "") || Object.hasOwn(doc.正本切替 ?? {}, "秘匿")) {
-    failures.push(`${rel}: 旧版・未採用状態または非公開規則が現行三点正本に残存`);
-  }
-  if (doc.版管理?.採用記録?.対象?.includes("gatchimuchio/BLUE-TANUKI") !== true ||
-      doc.権限境界_rev5_3?.リポジトリ反映?.includes("個別命令") !== true) {
-    failures.push(`${rel}: 指示者による明示的なリポジトリ採用と製品施工の分離が欠落`);
+  if (doc.識別?.版 !== "6.0" || doc.識別?.公開 === false) {
+    failures.push(`${rel}: rev6.0でない、または公開禁止の現行正本`);
   }
   if (!read("docs/QE_CURRENT_AUTHORITY.md").includes(actualHash)) {
     failures.push(`${rel}: 現行ピンにSHA-256がない`);
@@ -217,48 +218,57 @@ const qeActualCounts = {
   要求: qeParsed["01"]?.要求?.length,
   親成果: qeParsed["02"]?.親成果?.length,
   施工単位: qeParsed["02"]?.施工単位?.length,
-  親QC候補: qeParsed["03"]?.親QC候補?.length,
-  局所QC候補: qeParsed["03"]?.局所QC候補?.length,
+  詳細条項: qeParsed["03"]?.["全63詳細条項別_実装命令"]?.length,
+  不変契約: qeParsed["01"]?.不変契約?.length,
+  親QC候補: qeParsed["03"]?.["P6全260親QC_確定実行命令"]?.length,
+  局所QC候補: qeParsed["03"]?.["P5全396局所QC_確定実行命令"]?.length,
   競合能力基準: qeParsed["01"]?.競合能力基準?.length,
+  対象OS: qeParsed["03"]?.五OS別_十操作固定?.length,
 };
 for (const [name, count] of Object.entries(qeActualCounts)) {
   if (count !== qeManifest.母集団?.[name]) failures.push(`QE現行正本母集団 ${name}: ${count} != ${qeManifest.母集団?.[name]}`);
 }
-// ID連結と原点資料の責任境界を構造的に検査。歴史的な原文詳細は規範ではない。
+// 全域要求・施工索引・QC母集団が rev6.0 の一組で連結されることを照合する。
 const qeSpec = qeParsed["01"];
 const qePlan = qeParsed["02"];
 const qeWork = qeParsed["03"];
 if (qeSpec && qePlan && qeWork) {
   const requirementIDs = qeSpec.要求.map(item => item.ID);
   const unitIDs = qePlan.施工単位.map(item => item.ID);
+  const parentIDs = qePlan.親成果.map(item => item.ID);
   const reqSet = new Set(requirementIDs);
   const unitSet = new Set(unitIDs);
-  if (reqSet.size !== requirementIDs.length || unitSet.size !== unitIDs.length) failures.push("QE要件/施工索引にID重複");
-  if (JSON.stringify([...requirementIDs].sort()) !== JSON.stringify([...(qeWork.要求ID台帳照合?.["431"] ?? [])].sort())) {
-    failures.push("QE仕様書431要求とCodex指示書の要求ID台帳が不一致");
+  if (reqSet.size !== requirementIDs.length || unitSet.size !== unitIDs.length || new Set(parentIDs).size !== parentIDs.length) {
+    failures.push("QE要件/親成果/施工索引にID重複");
   }
+  const commandRequirementIDs = qeWork["全431仕様要求別_実装命令"].map(item => item.要求ID);
+  const sourceRequirementIDs = qeWork.出典照合?.要求ID ?? [];
+  if (JSON.stringify([...requirementIDs].sort()) !== JSON.stringify([...commandRequirementIDs].sort()) ||
+      JSON.stringify([...requirementIDs].sort()) !== JSON.stringify([...sourceRequirementIDs].sort())) {
+    failures.push("QE仕様書431要求とCodex施工命令/出典照合のIDが不一致");
+  }
+  const commandParentIDs = qeWork["全65親成果別_固有施工命令"].map(item => item.親);
+  if (commandParentIDs.some(id => !parentIDs.includes(id))) failures.push("Codex施工命令が不存在の親成果を参照");
   for (const unit of qePlan.施工単位) {
     for (const req of unit.要求ID ?? []) if (!reqSet.has(req)) failures.push(`施工単位${unit.ID}に不存在の要求ID: ${req}`);
   }
-  for (const test of qeWork.局所QC候補) {
-    if (!unitSet.has(test.単位)) failures.push(`局所QC ${test.ID}が不存在の施工単位を参照: ${test.単位}`);
+  for (const test of qeWork["P5全396局所QC_確定実行命令"]) {
+    if (!unitSet.has(test.施工索引)) failures.push(`局所QC ${test.ID}が不存在の施工索引を参照: ${test.施工索引}`);
   }
-  if (Object.hasOwn(qeSpec["HDS有限射影と学習"] ?? {}, "原典") ||
-      (qeSpec["欠損・決定待ち"] ?? []).some(item => item.ID === "OD-02" || /HDS原点|HDS原典/.test(item.事項 ?? "")) ||
-      (qeSpec.要求 ?? []).some(item => /HDS原点|HDS原典/.test(item.成立内容 ?? "")) ||
-      (qePlan.施工単位 ?? []).some(item => /HDS原点|内部HDS原典/.test(item.拒否条件 ?? "")) ||
-      (qeWork.局所QC候補 ?? []).some(item => /HDS原点|内部HDS原典/.test(item.成立条件 ?? ""))) {
-    failures.push("現行製品仕様/施工/検査に不存在のHDS原点資料の依存が復活");
+  const indexedUnits = qeWork["全198索引別_十手順確定"].map(item => item.ID);
+  if (JSON.stringify([...unitIDs].sort()) !== JSON.stringify([...indexedUnits].sort())) {
+    failures.push("QE施工工程の198索引とCodex施工命令のIDが不一致");
   }
-  if (!qeWork.最初に実行する命令_rev5?.施工?.includes("全製品") ||
-      !qePlan.施工方式_rev5?.全体施工?.includes("一工程")) {
-    failures.push("全域一括施工の現行工程・指示が欠落");
+  const phases = new Set(qePlan.工程.map(item => item.ID));
+  if (["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"].some(id => !phases.has(id)) ||
+      !qeWork.施工実行方式?.本体?.includes("P2") ||
+      !qeWork.起動命令?.一文?.includes("P0からP9")) {
+    failures.push("rev6.0全域P0-P9工程またはP2先行施工命令が欠落");
   }
-  if (!qeWork.LLM読取規約?.注意?.includes("現行repo pin") ||
-      !qeWork.施工起動ゲート_rev5_3?.未委任状態?.includes("製品実装は未委任") ||
-      !qePlan.根拠参照?.三点の所在?.includes("docs/qe/現行") ||
-      /提出候補|未反映/.test(qeSpec.版管理?.本版 ?? "")) {
-    failures.push("rev5.3現行採用後も提出ZIPの未採用状態・施工権限混同が残存");
+  if (qeManifest.採用記録?.根拠?.includes("2026-11-16") !== true ||
+      qeManifest.変更の責任境界?.採用?.includes("rev6.0") !== true ||
+      qeManifest.変更の責任境界?.施工?.includes("P0-P9") !== true) {
+    failures.push("owner採用・製品施工委任の記録が欠落");
   }
 }
 if (exists("docs/IMPLEMENTATION_INSTRUCTIONS.md")) {
