@@ -27,8 +27,8 @@ export function renderCurrentCliGoalCompletionStatusProjection(input: {
   request_id_digest: string;
 }): string {
   const fallback = "達成判定: 未確認（このCLI照会に対応する検証済みJ状態を確認できません）";
-  if (!/^[a-f0-9]{64}$/.test(input.request_id_digest) || !input.hds.reconcileOperationPlanMemory()) return fallback;
   try {
+    if (!/^[a-f0-9]{64}$/.test(input.request_id_digest) || !input.hds.reconcileOperationPlanMemory()) return fallback;
     const projection = projectOperationPlanStatus(input.hds.getRuntimeSnapshot().operation_plans);
     if (projection.status !== "available" || projection.used_for_authority !== false ||
         projection.raw_payload_exposed !== false) return fallback;
