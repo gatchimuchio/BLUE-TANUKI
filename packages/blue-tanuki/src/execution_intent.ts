@@ -7,6 +7,8 @@ export interface ExecutionIntentTicket {
   proof_digest: string;
   /** Exact J-selected Operation Plan source; provenance digest, not authority. */
   operation_plan_binding_digest?: string;
+  /** Exact selected OperationTarget.id; kept separate from the target version and exposed only to J/Broker. */
+  target_id?: string;
   /** Exact Broker target-version observation; digest only, not target identity. */
   target_version_observation_digest?: string;
   /** HDSが固定した計画または受理済み依頼のtask digest。開発用非HDS経路では未設定の場合がある。 */

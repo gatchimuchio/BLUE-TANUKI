@@ -13,7 +13,8 @@ export type ExecutionGoalVersionBinding = z.infer<typeof ExecutionGoalVersionBin
 /** Executorで発行された同一性を、作用前にJの私有bindingへ結合する。権限ではない。 */
 export const ExecutionAdmissionSchema = z.object({
   ticket_id: z.string().uuid(), command_key: Digest, command_digest: Digest, proof_digest: Digest,
-  operation_plan_binding_digest: Digest.optional(), target_version_observation_digest: Digest.optional(),
+  operation_plan_binding_digest: Digest.optional(), target_id: z.string().min(1).max(300).optional(),
+  target_version_observation_digest: Digest.optional(),
   task_identity_digest: Digest.optional(), goal_version_binding: ExecutionGoalVersionBindingSchema.optional(),
   operation_id: z.string().min(1).max(200).optional(),
   adapter_version: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/).optional(),

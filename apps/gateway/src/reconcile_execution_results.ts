@@ -11,10 +11,11 @@ export function executionAdmissionForCommand(command: ExecuteCommand, receipt: E
     throw new Error("plan_executor_admission_mismatch");
   }
   const { ticket_id, command_key, command_digest, proof_digest, operation_plan_binding_digest,
-    target_version_observation_digest, task_identity_digest, goal_version_binding, operation_id, adapter_version,
+    target_id, target_version_observation_digest, task_identity_digest, goal_version_binding, operation_id, adapter_version,
     execution_epoch, issued_at_ms, expires_at_ms } = receipt;
   return ExecutionAdmissionSchema.parse({ ticket_id, command_key, command_digest, proof_digest,
     ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+    ...(target_id ? { target_id } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(task_identity_digest ? { task_identity_digest } : {}),
     ...(goal_version_binding ? { goal_version_binding } : {}),

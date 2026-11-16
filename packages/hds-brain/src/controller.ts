@@ -304,9 +304,10 @@ export interface HDSRuntimeSnapshot {
 
 /** An in-process, non-serializable provenance seal for one exact HDS-issued command. */
 export interface HDSExecutionAuthorityBinding {
-  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v7";
+  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v8";
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly target_id?: string;
   readonly task_identity_digest: string;
   readonly operation_id?: string;
   readonly adapter_version?: string;
@@ -320,6 +321,7 @@ interface HDSExecutionAuthorityBindingRecord {
   readonly command: ExecuteCommand;
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly target_id?: string;
   readonly task_identity_digest: string;
   readonly operation_id?: string;
   readonly adapter_version?: string;
@@ -374,9 +376,10 @@ export function consumeHdsExecutionAuthorityBinding(
 ): string {
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   if (!record || HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command) !== record || record.command !== command || record.consumed ||
-      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v7" ||
+      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v8" ||
       binding.source_context_digest !== record.source_context_digest ||
       binding.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+      binding.target_id !== record.target_id ||
       binding.task_identity_digest !== record.task_identity_digest ||
       binding.operation_id !== record.operation_id ||
       binding.adapter_version !== record.adapter_version ||
@@ -402,9 +405,10 @@ export function isHdsExecutionGoalVersionBindingCurrent(
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   return !!record && HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command) === record &&
     record.command === command && record.consumed &&
-    binding.schema_version === "blue-tanuki.hds-execution-authority-binding.v7" &&
+    binding.schema_version === "blue-tanuki.hds-execution-authority-binding.v8" &&
     binding.source_context_digest === record.source_context_digest &&
     binding.operation_plan_binding_digest === record.operation_plan_binding_digest &&
+    binding.target_id === record.target_id &&
     binding.task_identity_digest === record.task_identity_digest &&
     binding.operation_id === record.operation_id && binding.adapter_version === record.adapter_version &&
     binding.broker_target_version_observation_digest === record.broker_target_version_observation_digest &&
@@ -3870,6 +3874,10 @@ ${planControl.question}`,
     const requestIdentity = requestExecutionGoalIdentity(source);
     const planIdentity = this.operationPlans.executionGoalIdentity(command);
     const operation_plan_binding_digest = planIdentity?.operation_plan_binding_digest;
+    const target_id = planIdentity?.target_id;
+    if ((operation_plan_binding_digest === undefined) !== (target_id === undefined)) {
+      throw new Error("HDS execution Operation Plan target identity is incomplete");
+    }
     const task_identity_digest = planIdentity?.task_identity_digest ?? requestIdentity.task_identity_digest;
     const toolDescriptor = command.type === "tool_call"
       ? getToolOperationDescriptor(command.payload.tool_name)
@@ -4550,6 +4558,7 @@ ${planControl.question}`,
         if (operation_plan_binding_digest !== undefined) {
           const current = this.operationPlans.executionGoalIdentity(command);
           return current?.operation_plan_binding_digest === operation_plan_binding_digest &&
+            current.target_id === target_id &&
             current.task_identity_digest === task_identity_digest &&
             current.goal_version_binding.goal_id_digest === goalVersionBinding.goal_id_digest &&
             current.goal_version_binding.purpose_version === goalVersionBinding.purpose_version &&
@@ -4579,7 +4588,7 @@ ${planControl.question}`,
     }
     const goalGovernanceProjectionDigest = goalGovernance ? operationPlanDigest(goalGovernance) : undefined;
     const source_context_digest = sha256({
-      schema_version: "blue-tanuki.hds-execution-source-context.v7",
+      schema_version: "blue-tanuki.hds-execution-source-context.v8",
       request_id: source.request_id,
       command_id: command.id,
       commit_hash: source.commit.hash,
@@ -4597,6 +4606,7 @@ ${planControl.question}`,
       goal_projection_state: projection.state,
       goal_authority_status: projection.authority.status,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(target_id ? { target_id } : {}),
       task_identity_digest,
       ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
@@ -4606,9 +4616,10 @@ ${planControl.question}`,
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
     });
     const binding: HDSExecutionAuthorityBinding = Object.freeze({
-      schema_version: "blue-tanuki.hds-execution-authority-binding.v7",
+      schema_version: "blue-tanuki.hds-execution-authority-binding.v8",
       source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(target_id ? { target_id } : {}),
       task_identity_digest,
       ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
@@ -4619,6 +4630,7 @@ ${planControl.question}`,
     });
     const record: HDSExecutionAuthorityBindingRecord = { command, source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(target_id ? { target_id } : {}),
       task_identity_digest,
       ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
@@ -4653,6 +4665,7 @@ ${planControl.question}`,
         admitted.goal_version_binding?.purpose_digest === record?.goal_version_binding?.purpose_digest;
       if (!record || record.command !== command || !record.consumed || !record.operation_plan_binding_digest ||
           !record.task_identity_digest || admitted.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+          admitted.target_id !== record.target_id ||
           admitted.task_identity_digest !== record.task_identity_digest ||
           !goalVersionBindingMatches ||
           !record.is_goal_version_current() ||

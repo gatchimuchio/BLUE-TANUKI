@@ -66,6 +66,15 @@ export interface PendingToolLifecycleEvidence {
 export type PendingTaskExecutionCancellationEvidence = TaskExecutionCancellationEvidence;
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
+  if (admission.target_id !== undefined) {
+    return digest(JSON.stringify(["blue-tanuki.execution-admission.v6", admission.ticket_id, admission.command_key,
+      admission.command_digest, admission.proof_digest, admission.operation_plan_binding_digest ?? null,
+      admission.target_id, admission.target_version_observation_digest ?? null, admission.task_identity_digest ?? null,
+      admission.goal_version_binding ? [admission.goal_version_binding.goal_id_digest,
+        admission.goal_version_binding.purpose_version, admission.goal_version_binding.purpose_digest] : null,
+      admission.operation_id ?? null, admission.adapter_version ?? null,
+      admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
+  }
   if (admission.goal_version_binding !== undefined) {
     return digest(JSON.stringify(["blue-tanuki.execution-admission.v5", admission.ticket_id, admission.command_key,
       admission.command_digest, admission.proof_digest, admission.operation_plan_binding_digest ?? null,
@@ -96,7 +105,7 @@ export function executionAdmissionDigest(admission: ExecutionAdmission): string 
 }
 const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean =>
   ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
-    "target_version_observation_digest", "task_identity_digest", "operation_id", "adapter_version",
+    "target_id", "target_version_observation_digest", "task_identity_digest", "operation_id", "adapter_version",
     "execution_epoch", "issued_at_ms", "expires_at_ms"]
     .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]) &&
   isDeepStrictEqual(a.goal_version_binding ?? null, b.goal_version_binding ?? null);
@@ -147,6 +156,9 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   issue(ticket: Readonly<ExecutionIntentTicket>): void {
     this.transaction(() => {
       validateTicket(ticket);
+      if (ticket.operation_plan_binding_digest !== undefined && ticket.target_id === undefined) {
+        throw new Error("execution_ticket_target_id_required");
+      }
       validateCurrentAdapterVersion(ticket);
       this.assertOwnerEpoch(ticket);
       if (this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(ticket.command_key)) {
@@ -161,6 +173,9 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     this.transaction(() => {
       const receipt = this.current(ticket, now_ms);
       if (receipt.state !== "issued") throw new Error("Executor ticket consumption rejected: already consumed");
+      if (receipt.operation_plan_binding_digest !== undefined && receipt.target_id === undefined) {
+        throw new Error("execution_ticket_target_id_required");
+      }
       // 単回消費、開始意思、開始eventを同一commitにする。下流はこの後だけ。
       receipt.state = "intent_committed"; receipt.consumed_at_ms = now_ms;
       this.save(receipt); this.appendEvent(receipt, now_ms);
@@ -1343,6 +1358,8 @@ function validateTicket(ticket: ExecutionIntentTicket): void {
       (ticket.operation_id !== undefined && (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(ticket.operation_id) ||
         !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$/.test(ticket.adapter_version ?? ""))) ||
       (ticket.operation_plan_binding_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.operation_plan_binding_digest)) ||
+      (ticket.target_id !== undefined && (typeof ticket.target_id !== "string" || ticket.target_id.length < 1 ||
+        ticket.target_id.length > 300 || ticket.operation_plan_binding_digest === undefined)) ||
       (ticket.target_version_observation_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.target_version_observation_digest)) ||
       (ticket.operation_plan_binding_digest !== undefined && ticket.task_identity_digest === undefined) ||
       (ticket.task_identity_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.task_identity_digest)) ||
@@ -1362,7 +1379,7 @@ function validateCurrentAdapterVersion(ticket: ExecutionIntentTicket): void {
 function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
   const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
-    "target_version_observation_digest", "task_identity_digest", "goal_version_binding", "operation_id", "adapter_version",
+    "target_id", "target_version_observation_digest", "task_identity_digest", "goal_version_binding", "operation_id", "adapter_version",
     "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
     "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_task_identity_digest",

@@ -87,6 +87,7 @@ type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
 export interface OperationPlanExecutionGoalIdentity {
   readonly operation_plan_binding_digest: string;
+  readonly target_id: string;
   readonly task_identity_digest: string;
   readonly goal_version_binding: ExecutionGoalVersionBinding;
 }
@@ -4928,18 +4929,23 @@ export class OperationPlanLedger {
       throw new Error("plan_execution_goal_identity_stale");
     }
     const task_identity_digest = operationPlanTaskIdentityDigest(match.p);
+    const selectedRevision = match.p.revisions.find((revision) => revision.digest === match.b.revision_digest);
+    const selectedStep = selectedRevision?.plan.steps.find((step) => step.step_id === match.b.step_id);
+    if (!selectedStep || stepDigest(selectedStep) !== match.b.step_digest ||
+        selectedStep.target.id !== match.b.prepared_step.target.id) {
+      throw new Error("plan_execution_goal_identity_target_unavailable");
+    }
+    const target_id = selectedStep.target.id;
     let operation_plan_binding_digest: string | undefined;
     if (match.b.status === "selected") {
       operation_plan_binding_digest = this.executionSourceBindingDigest(command);
     } else if (match.b.status === "intent_committed") {
       const admission = match.b.execution_admission;
       if (!this.activePlanAttempts.has(issuedId) || !admission ||
-          admission.task_identity_digest !== task_identity_digest) {
+          admission.task_identity_digest !== task_identity_digest || admission.target_id !== target_id) {
         throw new Error("plan_execution_goal_identity_attempt_stale");
       }
       const currentRevision = match.p.revisions.at(-1);
-      const selectedRevision = match.p.revisions.find((revision) => revision.digest === match.b.revision_digest);
-      const selectedStep = selectedRevision?.plan.steps.find((step) => step.step_id === match.b.step_id);
       const prepared = currentRevision
         ? prepareOperationPlan(currentRevision.plan, { now_ms: this.nowMs(), results: match.p.results, observations: [] })
         : undefined;
@@ -4992,7 +4998,7 @@ export class OperationPlanLedger {
         throw new Error("plan_execution_goal_identity_purpose_stale");
       }
     }
-    return { operation_plan_binding_digest, task_identity_digest, goal_version_binding };
+    return { operation_plan_binding_digest, target_id, task_identity_digest, goal_version_binding };
   }
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
@@ -5066,6 +5072,7 @@ export class OperationPlanLedger {
     const now = this.nowMs();
     const executionGoalIdentity = this.executionGoalIdentity(command);
     const sourceBindingDigest = executionGoalIdentity?.operation_plan_binding_digest;
+    const targetIdMatches = admitted.target_id === executionGoalIdentity?.target_id;
     const taskIdentityDigest = executionGoalIdentity?.task_identity_digest;
     const currentGoalVersionBinding = executionGoalIdentity?.goal_version_binding;
     const goalVersionBindingMatches = admitted.goal_version_binding?.goal_id_digest === currentGoalVersionBinding?.goal_id_digest &&
@@ -5078,6 +5085,8 @@ export class OperationPlanLedger {
       ? "execution_admission_command_mismatch"
       : admitted.task_identity_digest !== taskIdentityDigest
         ? "execution_admission_task_identity_mismatch"
+        : !targetIdMatches
+          ? "execution_admission_target_id_mismatch"
         : !goalVersionBindingMatches
           ? "execution_admission_goal_version_mismatch"
         : !Number.isSafeInteger(now) || now <= 0 || !Number.isSafeInteger(admitted.issued_at_ms) ||

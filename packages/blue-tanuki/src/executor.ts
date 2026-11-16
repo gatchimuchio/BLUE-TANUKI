@@ -918,6 +918,9 @@ function approveCommandForExecution(
     : null;
   if (hds_binding &&
       ((hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
+        (hds_binding.target_id !== undefined && (typeof hds_binding.target_id !== "string" ||
+          hds_binding.target_id.length < 1 || hds_binding.target_id.length > 300)) ||
+        ((hds_binding.operation_plan_binding_digest === undefined) !== (hds_binding.target_id === undefined)) ||
         !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest) ||
         ((hds_binding.operation_id === undefined) !== (hds_binding.adapter_version === undefined)) ||
         !ExecutionGoalVersionBindingSchema.safeParse(hds_binding.goal_version_binding).success ||
@@ -935,12 +938,13 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v7",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v8",
       command_digest,
       proof,
       hds_source_context_digest,
       ...(hds_binding?.operation_plan_binding_digest
         ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
+      ...(hds_binding?.target_id ? { target_id: hds_binding.target_id } : {}),
       ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
       ...(hds_binding?.goal_version_binding ? { goal_version_binding: hds_binding.goal_version_binding } : {}),
       ...(hds_binding?.operation_id ? { operation_id: hds_binding.operation_id,
@@ -949,6 +953,7 @@ function approveCommandForExecution(
     })).digest("hex"),
     ...(hds_binding?.operation_plan_binding_digest
       ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
+    ...(hds_binding?.target_id ? { target_id: hds_binding.target_id } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
     ...(hds_binding?.goal_version_binding ? { goal_version_binding: hds_binding.goal_version_binding } : {}),
@@ -986,6 +991,13 @@ function assertTicketCurrent(record: ApprovedCommandRecord): number {
   if (record.ticket.execution_epoch !== record.runtime.execution_epoch || now.wall >= record.ticket.expires_at_ms ||
       now.monotonic - record.issued_monotonic_ms >= record.runtime.ttl_ms) {
     throw new Error("Executor rejected command: approval ticket expired or epoch changed");
+  }
+  const binding = record.hds_binding;
+  if (record.ticket.operation_plan_binding_digest !== binding?.operation_plan_binding_digest ||
+      record.ticket.target_id !== binding?.target_id ||
+      (binding?.operation_plan_binding_digest !== undefined &&
+        (!binding.target_id || record.ticket.target_id !== binding.target_id))) {
+    throw new Error("Executor rejected command: Operation Plan target identity changed or is missing");
   }
   return now.wall;
 }
