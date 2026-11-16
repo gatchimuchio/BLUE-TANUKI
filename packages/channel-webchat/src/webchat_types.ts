@@ -1795,8 +1795,13 @@ export interface WebChatOperatorSurfaces {
 }
 
 export interface WebChatOptions {
-  /** HTTP/WS port. Required. */
+  /** HTTP(S)/WS(S) port. Required. */
   port: number;
+  /** Optional server identity for direct HTTPS/WSS. Both values are read by the host application. */
+  tls?: {
+    readonly cert: Buffer;
+    readonly key: Buffer;
+  };
   /**
    * Bearer token required on POST /inbound and POST /ws-ticket.
    * Must be ≥8 chars; throws on construction otherwise.

@@ -7,6 +7,10 @@ import {
   type ServerResponse,
   type Server as HttpServer,
 } from "node:http";
+import {
+  createServer as createHttpsServer,
+  type Server as HttpsServer,
+} from "node:https";
 import * as path from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
@@ -617,7 +621,7 @@ function findAotanuAssetRoot(): string {
  */
 export class WebChatChannel implements InboundChannel, OutboundChannel {
   readonly name = "webchat";
-  private server: HttpServer | null = null;
+  private server: HttpServer | HttpsServer | null = null;
   private wss: WebSocketServer | null = null;
   private handler: InboundHandler | null = null;
   private readonly conns = new Map<string, Set<WebSocket>>();
@@ -794,7 +798,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     this.starting = true;
     this.handler = handler;
 
-    this.server = createServer((req, res) => {
+    const handleHttp = (req: IncomingMessage, res: ServerResponse): void => {
       this.handleHttp(req, res).catch((e) => {
         // eslint-disable-next-line no-console
         console.error("[webchat] http handler error:", e);
@@ -803,7 +807,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           res.end(JSON.stringify({ error: "internal_error" }));
         }
       });
-    });
+    };
+    this.server = this.opts.tls
+      ? createHttpsServer({ key: this.opts.tls.key, cert: this.opts.tls.cert, minVersion: "TLSv1.2" }, handleHttp)
+      : createServer(handleHttp);
 
     this.wss = new WebSocketServer({ noServer: true });
     this.server.on("upgrade", (req, socket, head) => {

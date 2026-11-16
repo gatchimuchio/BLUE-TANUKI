@@ -162,6 +162,7 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 
 設計上の制約:
 - bind 既定 `127.0.0.1` (loopback only)。外部公開は明示的に `WEBCHAT_HOST` を変える必要がある
+- `WEBCHAT_TLS_CERT_FILE`と`WEBCHAT_TLS_KEY_FILE`を別個の通常ファイルとして両方設定した場合、WebChatを直接HTTPS/WSSで起動する。片方欠落・同一path・symlink・通常ファイル以外・POSIX private keyのgroup/other権限は起動拒否。未設定時は既存のHTTP/WS動作とloopback既定を保つ
 - `WEBCHAT_TOKEN` は `/inbound` と通常の `/ws-ticket` 用に8文字以上必須。D4 Runtime用ticket発行と意図入力は別の `BLUE_TANUKI_D4_RUNTIME_TOKEN`・固定 `BLUE_TANUKI_D4_RUNTIME_ID` を使い、通常WebChat資格とは分離する
 - `BLUE_TANUKI_D4_RUNTIME_TOKEN` はsetup時にWindows DPAPI CurrentUser／macOS Keychain／Linux Secret Serviceへ保存し、env fileには `BLUE_TANUKI_D4_RUNTIME_TOKEN_REF` だけを残せる。Gatewayは起動時にOS保護参照を解決し、設定状態は値を返さずstorage種別だけを表示する。tokenとruntime IDは対で必須。手動env設定は使用できるが、外部接続やD4アプリ側の接続成立を意味しない
 - D4 Runtimeは同じsessionで `/runtime/ws-ticket` を先に呼び、返された単回ticketで `/ws` に接続してからUUIDv4の`submission_id`付き `/runtime/intent` を送る。応答接続がなければ`409 not_dispatched`となりclaim／HDS handlerは呼ばれず、再接続後は同じIDで再送できる。ticketは期限付きで、raw runtime/session ID・intent・submission ID・credential・画像/音声本文はInbox／状態応答に含めず、保存するsubmission ID digest、runtime/session scope digest、token-keyed payload HMAC、request ID、dispatch stateだけから同一受付を照合する。添付はGateway内で上限・形式を検査し、byte digestを冪等性HMACへ含めて、一回限りのephemeral contextとしてCへ渡す。raw base64は受付recordから外し、bufferはhandler終了後にzero-fillする。同じID・異入力は`409`、inbox保存失敗は`503`でhandlerへ渡さない。handlerが未起動の場合もclaim前に`503 runtime_intent_handler_unavailable`を返し、同じIDを後で安全に再送できる。HDS出力が同じscopeへ送られた場合、その接続だけが既存`channel_send` frameを受信する。`202`は受付のみを示す

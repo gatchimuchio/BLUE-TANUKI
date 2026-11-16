@@ -97,8 +97,10 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `WEBCHAT_TOKEN`             | `serve`      | Bearer token for `/inbound` and `/ws-ticket`          | none (hard error)  |
 | `WEBCHAT_RESUME_TOKEN`      | `serve`      | Separate Bearer token for `/resume`; must differ from `WEBCHAT_TOKEN` | none (hard error)  |
 | `BLUE_TANUKI_MAINTENANCE_TOKEN` | `serve` | Separate Bearer token for `/update/*` and `/recovery/*`; must differ from WebChat tokens | none (hard error) |
-| `WEBCHAT_PORT`              | `serve`      | HTTP/WS listen port                                   | `8787`             |
-| `WEBCHAT_HOST`              | `serve`      | HTTP/WS bind host                                     | `127.0.0.1`        |
+| `WEBCHAT_PORT`              | `serve`      | HTTP(S)/WS(S) listen port                            | `8787`             |
+| `WEBCHAT_HOST`              | `serve`      | HTTP(S)/WS(S) bind host                              | `127.0.0.1`        |
+| `WEBCHAT_TLS_CERT_FILE`     | optional     | PEM certificate chain file for direct HTTPS/WSS       | none (HTTP/WS)      |
+| `WEBCHAT_TLS_KEY_FILE`      | optional     | PEM private key file paired with the certificate      | none (HTTP/WS)      |
 | `LLM_BACKEND`               | all modes    | Default LLM provider: `stub`, `anthropic`, `openai`, `openai-compatible`, or `openrouter` | `stub` |
 | `LLM_DEFAULT_BACKEND`       | optional     | Fallback default provider name when `LLM_BACKEND` is unset | none |
 | `LLM_ENDPOINT`              | optional     | Generic OpenAI-compatible endpoint                    | none               |
@@ -178,6 +180,13 @@ taskモードの文字起こしは、確度情報のない未信頼なC入力と
 WebChatのowner taskは、ownerが仕事文面と委任目的を指定して明示送信した場合に限り、音声1件を同じC計算の入力として添付できる。この経路は`BLUE_TANUKI_LLM_AUDIO_TASK_CAPABLE_MODELS_JSON`で許可されたtask対応modelを必須とし、未対応時は文字起こしだけの応答へ格下げせずC計算を失敗させる。画像1枚との併用は可能で、その場合は同一modelの画像入力許可も必要。Canvas成果物とは併用しない。raw audioは一回の依頼にだけ渡し、依頼digestには形式・長さ・hashだけを含め、受信後はbufferを消去する。文字起こし専用経路は引き続きownerが候補を確認してから計画欄へ明示入力する方式であり、直接task添付とは別である。音声内容は未信頼で、owner task選択も本人確認・承認・実行権限を作らない。
 
 ---
+
+Direct TLS is enabled only when `WEBCHAT_TLS_CERT_FILE` and
+`WEBCHAT_TLS_KEY_FILE` are both set to separate regular files. On POSIX, the
+private key file must have no group or other permissions; on Windows, protect
+its ACL for the Gateway owner. The PEM contents are read locally and are not
+logged. Without these variables, the existing HTTP/WS listener remains in use;
+the default bind stays loopback.
 
 ## 2.1 Plugin Loader And Permissions
 
