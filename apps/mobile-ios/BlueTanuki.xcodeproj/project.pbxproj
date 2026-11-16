@@ -1,0 +1,68 @@
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  classes = {};
+  objectVersion = 56;
+  objects = {
+    A10000000000000000000001 = { isa = PBXBuildFile; fileRef = A10000000000000000000011; };
+    A10000000000000000000002 = { isa = PBXBuildFile; fileRef = A10000000000000000000012; };
+    A10000000000000000000003 = { isa = PBXBuildFile; fileRef = A10000000000000000000013; };
+    A10000000000000000000004 = { isa = PBXBuildFile; fileRef = A10000000000000000000014; };
+    A10000000000000000000005 = { isa = PBXBuildFile; fileRef = A10000000000000000000015; };
+    A10000000000000000000006 = { isa = PBXBuildFile; fileRef = A10000000000000000000016; };
+    B20000000000000000000001 = { isa = PBXBuildFile; fileRef = B20000000000000000000002; };
+    A10000000000000000000011 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlueTanukiApp.swift; sourceTree = "<group>"; };
+    A10000000000000000000012 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+    A10000000000000000000013 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLinkModels.swift; sourceTree = "<group>"; };
+    A10000000000000000000014 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLinkStore.swift; sourceTree = "<group>"; };
+    A10000000000000000000015 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLinkTransport.swift; sourceTree = "<group>"; };
+    A10000000000000000000016 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLinkViewModel.swift; sourceTree = "<group>"; };
+    B20000000000000000000002 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTaskModels.swift; sourceTree = "<group>"; };
+    A10000000000000000000017 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlueTanuki.app; sourceTree = BUILT_PRODUCTS_DIR; };
+    A10000000000000000000021 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+    A10000000000000000000022 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+    A10000000000000000000023 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+      A10000000000000000000001, A10000000000000000000002, A10000000000000000000003,
+      A10000000000000000000004, A10000000000000000000005, A10000000000000000000006,
+      B20000000000000000000001,
+    ); runOnlyForDeploymentPostprocessing = 0; };
+    A10000000000000000000031 = { isa = PBXGroup; children = (A10000000000000000000032, A10000000000000000000018); sourceTree = "<group>"; };
+    A10000000000000000000032 = { isa = PBXGroup; children = (
+      A10000000000000000000011, A10000000000000000000012, A10000000000000000000013,
+      A10000000000000000000014, A10000000000000000000015, A10000000000000000000016,
+      B20000000000000000000002,
+    ); path = Sources; sourceTree = "<group>"; };
+    A10000000000000000000018 = { isa = PBXGroup; children = (A10000000000000000000017); name = Products; sourceTree = "<group>"; };
+    A10000000000000000000041 = { isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000061; buildPhases = (
+      A10000000000000000000023, A10000000000000000000021, A10000000000000000000022,
+    ); buildRules = (); dependencies = (); name = BlueTanuki; productName = BlueTanuki; productReference = A10000000000000000000017; productType = "com.apple.product-type.application"; };
+    A10000000000000000000051 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600; TargetAttributes = { A10000000000000000000041 = { CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = A10000000000000000000062; compatibilityVersion = "Xcode 14.0"; developmentRegion = ja; hasScannedForEncodings = 0; knownRegions = (ja, en, Base); mainGroup = A10000000000000000000031; productRefGroup = A10000000000000000000018; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000041); };
+    A10000000000000000000061 = { isa = XCConfigurationList; buildConfigurations = (A10000000000000000000071, A10000000000000000000072); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+    A10000000000000000000062 = { isa = XCConfigurationList; buildConfigurations = (A10000000000000000000073, A10000000000000000000074); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+    A10000000000000000000071 = { isa = XCBuildConfiguration; buildSettings = {
+      CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES;
+      INFOPLIST_KEY_CFBundleDisplayName = "BLUE-TANUKI";
+      INFOPLIST_KEY_NSLocalNetworkUsageDescription = "手動で結合したDesktop Brokerへの安全なDevice Link接続に使用します。";
+      IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.bluetanuki.ios;
+      PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+      SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1;
+    }; name = Debug; };
+    A10000000000000000000072 = { isa = XCBuildConfiguration; buildSettings = {
+      CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES;
+      INFOPLIST_KEY_CFBundleDisplayName = "BLUE-TANUKI";
+      INFOPLIST_KEY_NSLocalNetworkUsageDescription = "手動で結合したDesktop Brokerへの安全なDevice Link接続に使用します。";
+      IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.bluetanuki.ios;
+      PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+      SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1;
+    }; name = Release; };
+    A10000000000000000000073 = { isa = XCBuildConfiguration; buildSettings = {
+      CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos;
+      SWIFT_VERSION = 5.0;
+    }; name = Debug; };
+    A10000000000000000000074 = { isa = XCBuildConfiguration; buildSettings = {
+      CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos;
+      SWIFT_VERSION = 5.0;
+    }; name = Release; };
+  };
+  rootObject = A10000000000000000000051;
+}
