@@ -58,6 +58,7 @@ interface ExternalManifest {
 }
 
 const root = process.cwd();
+const ARCHIVE_LIST_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 
 const REQUIRED_ENTRIES = [
   "BlueTanukiSetup.cmd",
@@ -176,7 +177,10 @@ function commandExists(command: string): boolean {
 
 function listZipEntries(archive: string): string[] {
   if (commandExists("unzip")) {
-    const result = spawnSync("unzip", ["-Z1", archive], { encoding: "utf8" });
+    const result = spawnSync("unzip", ["-Z1", archive], {
+      encoding: "utf8",
+      maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+    });
     if (result.status === 0) {
       return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     }
@@ -187,7 +191,10 @@ function listZipEntries(archive: string): string[] {
       "import sys,zipfile\n" +
       "with zipfile.ZipFile(sys.argv[1]) as z:\n" +
       "  print('\\n'.join(z.namelist()))\n";
-    const result = spawnSync(py, ["-c", script, archive], { encoding: "utf8" });
+    const result = spawnSync(py, ["-c", script, archive], {
+      encoding: "utf8",
+      maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+    });
     if (result.status === 0) {
       return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     }
@@ -197,7 +204,10 @@ function listZipEntries(archive: string): string[] {
       "Add-Type -AssemblyName System.IO.Compression.FileSystem; " +
       "$z=[IO.Compression.ZipFile]::OpenRead(" + JSON.stringify(archive) + "); " +
       "try { $z.Entries | ForEach-Object { $_.FullName } } finally { $z.Dispose() }";
-    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], { encoding: "utf8" });
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
+      encoding: "utf8",
+      maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+    });
     if (result.status === 0) {
       return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     }

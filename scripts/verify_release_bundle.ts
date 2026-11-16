@@ -39,6 +39,7 @@ interface ReleaseManifest {
 }
 
 const root = process.cwd();
+const ARCHIVE_LIST_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 const VERIFY_WORK_DIR = path.join(root, ".codex-tmp", "release-verify");
 
 export interface ExtractedReleaseCommand {
@@ -394,7 +395,10 @@ function parseArchiveList(stdout: string): string[] {
 }
 
 function listTarEntries(archiveFile: string): string[] {
-  const result = spawnSync("tar", ["-tf", archiveFile], { encoding: "utf8" });
+  const result = spawnSync("tar", ["-tf", archiveFile], {
+    encoding: "utf8",
+    maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+  });
   if (result.status !== 0) {
     throw new Error(`tar list failed: ${result.stderr || result.stdout}`);
   }
@@ -402,7 +406,10 @@ function listTarEntries(archiveFile: string): string[] {
 }
 
 function listZipEntries(archiveFile: string): string[] {
-  const unzip = spawnSync("unzip", ["-Z1", archiveFile], { encoding: "utf8" });
+  const unzip = spawnSync("unzip", ["-Z1", archiveFile], {
+    encoding: "utf8",
+    maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+  });
   if (unzip.status === 0) {
     return parseArchiveList(unzip.stdout);
   }
@@ -412,7 +419,10 @@ function listZipEntries(archiveFile: string): string[] {
     "with zipfile.ZipFile(sys.argv[1]) as z:\n" +
     "    sys.stdout.write('\\n'.join(z.namelist()))\n";
   for (const py of ["python3", "python"]) {
-    const result = spawnSync(py, ["-c", pyScript, archiveFile], { encoding: "utf8" });
+    const result = spawnSync(py, ["-c", pyScript, archiveFile], {
+      encoding: "utf8",
+      maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+    });
     if (result.status === 0) {
       return parseArchiveList(result.stdout);
     }
@@ -420,7 +430,10 @@ function listZipEntries(archiveFile: string): string[] {
 
   // On Windows, bsdtar commonly supports zip listing even though GNU tar on
   // Linux does not. Keep it as a final cross-platform fallback.
-  const tar = spawnSync("tar", ["-tf", archiveFile], { encoding: "utf8" });
+  const tar = spawnSync("tar", ["-tf", archiveFile], {
+    encoding: "utf8",
+    maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+  });
   if (tar.status === 0) {
     return parseArchiveList(tar.stdout);
   }
