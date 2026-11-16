@@ -132,14 +132,15 @@ final class DeviceLinkTransport {
       connection.send(
         content: wire,
         contentContext: .defaultMessage,
-        isComplete: true
-      ) { error in
-        if let error {
-          sent.resolve(.failure(error))
-        } else {
-          sent.resolve(.success(()))
+        isComplete: true,
+        completion: .contentProcessed { error in
+          if let error {
+            sent.resolve(.failure(error))
+          } else {
+            sent.resolve(.success(()))
+          }
         }
-      }
+      })
       try sent.wait(until: deadline)
 
       var responseBytes = try receiveSingleFrame(from: connection, until: deadline)
