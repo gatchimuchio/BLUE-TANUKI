@@ -325,6 +325,7 @@ interface HDSExecutionAuthorityBindingRecord {
   readonly adapter_version?: string;
   readonly broker_target_version_observation_digest?: string;
   readonly goal_version_binding?: ExecutionGoalVersionBinding;
+  readonly is_goal_version_current: () => boolean;
   readonly goal_governance_projection_digest?: string;
   readonly goal_governance_used_for_authority?: false;
   consumed: boolean;
@@ -360,6 +361,28 @@ export function consumeHdsExecutionAuthorityBinding(
   }
   record.consumed = true;
   return record.source_context_digest;
+}
+
+/** Recheck the exact HDS-issued goal-purpose version immediately before dispatch. */
+export function isHdsExecutionGoalVersionBindingCurrent(
+  command: ExecuteCommand,
+  binding: HDSExecutionAuthorityBinding,
+): boolean {
+  const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
+  return !!record && HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command) === record &&
+    record.command === command && record.consumed &&
+    binding.schema_version === "blue-tanuki.hds-execution-authority-binding.v6" &&
+    binding.source_context_digest === record.source_context_digest &&
+    binding.operation_plan_binding_digest === record.operation_plan_binding_digest &&
+    binding.task_identity_digest === record.task_identity_digest &&
+    binding.operation_id === record.operation_id && binding.adapter_version === record.adapter_version &&
+    binding.broker_target_version_observation_digest === record.broker_target_version_observation_digest &&
+    binding.goal_version_binding?.goal_id_digest === record.goal_version_binding?.goal_id_digest &&
+    binding.goal_version_binding?.purpose_version === record.goal_version_binding?.purpose_version &&
+    binding.goal_version_binding?.purpose_digest === record.goal_version_binding?.purpose_digest &&
+    binding.goal_governance_projection_digest === record.goal_governance_projection_digest &&
+    binding.goal_governance_used_for_authority === record.goal_governance_used_for_authority &&
+    record.is_goal_version_current();
 }
 
 /**
@@ -4459,6 +4482,20 @@ ${planControl.question}`,
     const goalVersionBinding = source.goal_purpose_binding
       ? ExecutionGoalVersionBindingSchema.parse(source.goal_purpose_binding)
       : undefined;
+    const isGoalVersionCurrent = (): boolean => {
+      if (!goalVersionBinding) return true;
+      try {
+        const currentProjection = this.getGoalGovernanceProjection();
+        if (!currentProjection || currentProjection.used_for_authority !== false) return false;
+        const currentGoal = currentProjection.goals.find((goal) =>
+          createHash("sha256").update(goal.goal_ref, "utf8").digest("hex") === goalVersionBinding.goal_id_digest);
+        return currentGoal?.goal_kind === "delegated" &&
+          currentGoal.current_version === goalVersionBinding.purpose_version &&
+          currentGoal.current_purpose_digest === goalVersionBinding.purpose_digest;
+      } catch {
+        return false;
+      }
+    };
     const goalGovernance = source.frame.goal_governance;
     if (goalGovernance && goalGovernance.used_for_authority !== false) {
       throw new Error("HDS goal governance projection must remain non-authoritative");
@@ -4512,7 +4549,7 @@ ${planControl.question}`,
       ...(goalVersionBinding ? { goal_version_binding: Object.freeze({ ...goalVersionBinding }) } : {}),
       ...(goalGovernanceProjectionDigest
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
-      consumed: false };
+      is_goal_version_current: isGoalVersionCurrent, consumed: false };
     HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, record);
     HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.set(command, record);
     return binding;

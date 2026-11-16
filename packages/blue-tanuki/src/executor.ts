@@ -44,7 +44,8 @@ import {
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
 } from "@blue-tanuki/protocol";
-import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired,
+  isHdsExecutionGoalVersionBindingCurrent, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ApprovalOperation, ApprovalRisk, HDSExecutionAuthorityBinding } from "@blue-tanuki/hds-brain";
 import type {
   ExecuteCommand,
@@ -222,6 +223,8 @@ export interface ExecutorExecutionContext {
   before_execute?: () => void;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
   before_tool_dispatch?: () => void;
+  /** 外部adapter／channel送信の実呼出し直前にGateway停止条件を同期検査する。 */
+  before_action_dispatch?: () => void;
   /** 最終フォームGETの実送信直前にだけGateway停止条件とstage receiptを再照合する。 */
   before_browser_form_submit?: () => void;
   /** Gatewayの永続J bindingがあるtool adapter結果だけ、私有outboxへ渡す。 */
@@ -252,6 +255,7 @@ interface ApprovedCommandRecord {
   command_digest: string;
   consumed: boolean;
   ticket: Readonly<ExecutionIntentTicket>;
+  hds_binding?: HDSExecutionAuthorityBinding;
   issued_monotonic_ms: number;
   runtime: ApprovalRuntime;
   target_version_observation?: BrokerTargetVersionObservation;
@@ -271,6 +275,13 @@ interface ApprovalRuntime {
 
 // 権限記録をreflection可能なpropertyや直列化commandへ載せない。
 const APPROVED_COMMAND_RECORDS = new WeakMap<ExecuteCommand, ApprovedCommandRecord>();
+
+function assertCurrentHdsGoalVersion(command: ExecuteCommand): void {
+  const binding = APPROVED_COMMAND_RECORDS.get(command)?.hds_binding;
+  if (binding && !isHdsExecutionGoalVersionBindingCurrent(command, binding)) {
+    throw new Error("Executor dispatch rejected: current HDS goal-purpose version is unavailable or changed");
+  }
+}
 const TARGET_RESOURCE_LOCK_TAILS = new Map<string, Promise<void>>();
 
 async function acquireTargetResourceLock(key: string): Promise<() => void> {
@@ -946,6 +957,7 @@ function approveCommandForExecution(
   APPROVED_COMMAND_RECORDS.set(approved, {
     proof, authority_id: runtime.authority_id, command_digest, consumed: false,
     ticket, issued_monotonic_ms: clock.monotonic, runtime,
+    ...(hds_binding ? { hds_binding } : {}),
     ...(target_version_observation ? { target_version_observation } : {}),
   });
   freezeApprovalContent(approved);
@@ -2276,6 +2288,7 @@ export class Executor {
     let invocation: ExecutionInvocationBoundary | undefined;
     const markInvoked = (boundary: ExecutionInvocationBoundary): void => {
       const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
+      assertCurrentHdsGoalVersion(cmd);
       record.runtime.assert_execution_owner?.();
       const now = assertTicketCurrent(record);
       record.runtime.store?.markInvocation(record.ticket, boundary, now);
@@ -2295,11 +2308,17 @@ export class Executor {
           break;
         case "tool_call":
           feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal,
-            context.before_tool_dispatch, context.before_browser_form_submit);
+            context.before_tool_dispatch, context.before_browser_form_submit, () => {
+              context.before_action_dispatch?.();
+              assertCurrentHdsGoalVersion(cmd);
+            });
           break;
         case "channel_send":
           feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash,
-            cmd.upstream_decision.request_id, markInvoked, context.signal);
+            cmd.upstream_decision.request_id, markInvoked, context.signal, () => {
+              context.before_action_dispatch?.();
+              assertCurrentHdsGoalVersion(cmd);
+            });
           break;
         case "noop":
           {
@@ -2600,6 +2619,7 @@ export class Executor {
     signal?: AbortSignal,
     before_tool_dispatch?: () => void,
     before_browser_form_submit?: () => void,
+    before_action_dispatch?: () => void,
   ): Promise<ExecuteFeedback> {
     const { id, payload, constraints } = command;
     const commit_hash = command.upstream_decision.commit_hash;
@@ -2677,6 +2697,7 @@ export class Executor {
           assertTicketCurrent(record);
           record.runtime.assert_execution_owner?.();
           before_tool_dispatch?.();
+          before_action_dispatch?.();
           if (signal?.aborted) throw new Error("File search worker dispatch cancelled");
           dispatched = true;
         },
@@ -2727,18 +2748,26 @@ export class Executor {
       }
       if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
       const adapterTimeout = remainingTimeoutMs();
-      markInvoked("tool_adapter");
-      const invocation = Promise.resolve().then(() => tool.invoke(payload.arguments, {
-        command_id: id,
-        upstream_commit_hash: commit_hash,
-        idempotency_key: record.ticket.command_key,
-        command_digest: record.ticket.command_digest,
-        operation_plan_command_digest: operationPlanDigest(command),
-        target_version_observation: record.target_version_observation,
-        signal: controller.signal,
-        ...(before_browser_form_submit ? { before_browser_form_submit } : {}),
-        on_execution_lifecycle: observeLifecycle,
-      }));
+      const guardedBrowserFormSubmit = before_browser_form_submit ? (): void => {
+        assertCurrentHdsGoalVersion(command);
+        before_browser_form_submit();
+      } : undefined;
+      const invocation = Promise.resolve().then(() => {
+        if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
+        before_action_dispatch?.();
+        markInvoked("tool_adapter");
+        return tool.invoke(payload.arguments, {
+          command_id: id,
+          upstream_commit_hash: commit_hash,
+          idempotency_key: record.ticket.command_key,
+          command_digest: record.ticket.command_digest,
+          operation_plan_command_digest: operationPlanDigest(command),
+          target_version_observation: record.target_version_observation,
+          signal: controller.signal,
+          ...(guardedBrowserFormSubmit ? { before_browser_form_submit: guardedBrowserFormSubmit } : {}),
+          on_execution_lifecycle: observeLifecycle,
+        });
+      });
       if (releaseTargetLock) {
         adapterOwnsTargetLock = true;
         // Keep the target serialized until the real adapter promise settles, even if
@@ -2788,6 +2817,7 @@ export class Executor {
     request_id: string | undefined,
     markInvoked: (boundary: ExecutionInvocationBoundary) => void,
     signal?: AbortSignal,
+    before_action_dispatch?: () => void,
   ): Promise<ExecuteFeedback> {
     if (signal?.aborted) {
       return { command_id: id, status: "failed", error: "channel_send_cancelled_before_dispatch",
@@ -2795,7 +2825,9 @@ export class Executor {
         metrics: { duration_ms: elapsedMilliseconds(start) } };
     }
     if (this.deps.dispatcher) {
+      before_action_dispatch?.();
       markInvoked("channel_adapter");
+      before_action_dispatch?.();
       const r = await this.deps.dispatcher.dispatch(payload, {
         command_id: id,
         upstream_commit_hash: commit_hash,

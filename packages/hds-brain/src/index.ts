@@ -175,6 +175,7 @@ export {
   type OwnerMemoryJudgmentReassessmentProposal,
   type OwnerMeaningUpdateProposalReview,
   consumeHdsExecutionAuthorityBinding,
+  isHdsExecutionGoalVersionBindingCurrent,
   memoryCitationReviewAuditDigest,
 } from "./controller.js";
 export {

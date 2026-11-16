@@ -2845,6 +2845,10 @@ async function serveWithOwnerLease(
             recheckFailureMemoryApproval();
             if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
           },
+          before_action_dispatch: () => {
+            recheckFailureMemoryApproval();
+            if (emergencyStop.active) throw new Error("action_dispatch_emergency_stop_active");
+          },
           before_browser_form_submit: () => {
             recheckFailureMemoryApproval();
             if (emergencyStop.active) throw new Error("browser_form_submit_emergency_stop_active");
