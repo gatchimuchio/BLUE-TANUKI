@@ -4,6 +4,7 @@ export interface FailureMemoryEnvironment {
   BLUE_TANUKI_FAILURE_MEMORY_FILE?: string;
   BLUE_TANUKI_FAILURE_MEMORY_DIR?: string;
   BLUE_TANUKI_SESSION_DIR?: string;
+  BLUE_TANUKI_STATE_ROOT?: string;
   BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE?: string;
 }
 
@@ -19,6 +20,12 @@ export function resolveFailureMemoryFilePath(env: FailureMemoryEnvironment): str
   // failure memory under that managed data root until Setup writes an explicit path.
   const sessionDir = env.BLUE_TANUKI_SESSION_DIR?.trim();
   if (sessionDir) return path.join(path.resolve(sessionDir), "failure-memory", "failure-memory.json");
+
+  // A deployment that configures only the product state root still expects
+  // failure-control state and its developer handoffs to survive restarts.
+  const stateRoot = env.BLUE_TANUKI_STATE_ROOT?.trim();
+  if (stateRoot) return path.join(path.resolve(stateRoot), "private-state", "failure-memory", "failure-memory.json");
+
   return undefined;
 }
 
