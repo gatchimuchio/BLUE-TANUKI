@@ -7,8 +7,10 @@ BLUE-TANUKI Gateway directly.
 
 ## Current implementation
 
-- Generate a 128-bit device ID for the owner to use when issuing a one-time
-  Desktop invitation.
+- Generate and persist a 128-bit device ID for the owner to use when issuing a
+  one-time Desktop invitation. The app reads it back at startup, reuses the
+  credential's device ID when migrating an older local credential, and does
+  not allow ID rotation while a credential is stored.
 - Enter the invitation fields inside the native Android screen, require the
   invitation's device ID to match this installation, and explicitly compare
   the Desktop host and certificate fingerprint before pairing.

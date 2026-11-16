@@ -44,7 +44,9 @@ public final class MainActivity extends Activity {
     private EditText invitationSecretInput;
     private CheckBox confirmation;
     private Button pairButton;
+    private Button newIdButton;
     private String deviceId;
+    private boolean identityReady;
     private boolean permissionRequestPending;
     private volatile boolean foreground;
     private volatile boolean busy;
@@ -55,9 +57,17 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         credentialStore = new AndroidCredentialStore(getApplicationContext());
-        deviceId = DeviceInvitation.newDeviceId();
+        try {
+            deviceId = credentialStore.loadOrCreateDeviceId();
+            identityReady = true;
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            deviceId = null;
+            identityReady = false;
+        }
         setContentView(buildScreen());
-        setStatus("未接続です。端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。");
+        setStatus(identityReady
+                ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
+                : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
     }
 
     @Override
@@ -137,15 +147,23 @@ public final class MainActivity extends Activity {
         content.addView(deviceIdView, matchWrap());
         updateDeviceId();
 
-        Button newId = new Button(this);
-        newId.setText("新しい端末IDを生成");
-        newId.setOnClickListener(view -> {
-            deviceId = DeviceInvitation.newDeviceId();
-            updateDeviceId();
-            clearPairingInputs();
-            setStatus("新しい端末IDを生成しました。これに対する新しいDesktop招待を発行してください。");
+        newIdButton = new Button(this);
+        newIdButton.setText("未結合時に新しい端末IDを保存");
+        newIdButton.setEnabled(identityReady && !credentialStore.contains());
+        newIdButton.setOnClickListener(view -> {
+            if (busy || !identityReady) return;
+            try {
+                deviceId = credentialStore.rotateDeviceId();
+                updateDeviceId();
+                clearPairingInputs();
+                setStatus("新しい端末IDをこのアプリへ保存し、再読込を確認しました。古い招待は使わず、このID向けの招待を発行してください。");
+            } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                identityReady = false;
+                newIdButton.setEnabled(false);
+                setStatus("端末IDを安全に保存・再読込できません。招待登録を停止しています。");
+            }
         });
-        content.addView(newId, matchWrap());
+        content.addView(newIdButton, matchWrap());
 
         TextView pairingHeading = section("一回限りのDesktop招待");
         content.addView(pairingHeading, matchWrap());
@@ -191,6 +209,10 @@ public final class MainActivity extends Activity {
 
     private void beginPairing() {
         if (busy || !foreground) {
+            return;
+        }
+        if (!identityReady || deviceId == null) {
+            setStatus("端末IDを安全に保存・再読込できないため、招待登録を停止しています。");
             return;
         }
         if (!confirmation.isChecked()) {
@@ -264,12 +286,15 @@ public final class MainActivity extends Activity {
         try {
             credential = credentialStore.read();
         } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            if (newIdButton != null) newIdButton.setEnabled(false);
             setStatus("Keystore資格を読み取れません。保存済み資格を代用せず、Desktopへ接続しません。");
             return;
         }
         if (credential == null) {
+            if (newIdButton != null) newIdButton.setEnabled(identityReady && foreground);
             return;
         }
+        if (newIdButton != null) newIdButton.setEnabled(false);
         if (credential.expiresAt <= System.currentTimeMillis() / 1000L) {
             setStatus("保存資格の有効期限が切れています。自動延長・再結合は行わず、Desktop ownerへ確認してください。");
             return;
@@ -374,7 +399,7 @@ public final class MainActivity extends Activity {
 
     private void updateDeviceId() {
         if (deviceIdView != null) {
-            deviceIdView.setText(deviceId);
+            deviceIdView.setText(deviceId == null ? "端末IDを利用できません" : deviceId);
         }
     }
 

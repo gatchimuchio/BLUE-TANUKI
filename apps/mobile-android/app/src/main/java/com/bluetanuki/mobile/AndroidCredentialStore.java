@@ -20,6 +20,7 @@ import javax.crypto.spec.GCMParameterSpec;
 final class AndroidCredentialStore {
     private static final String KEY_ALIAS = "blue-tanuki-device-link-aes-v1";
     private static final String PREFS_NAME = "device_link_encrypted_v1";
+    private static final String DEVICE_ID_KEY = "device_id";
     private static final String VALUE_KEY = "credential";
     private static final String ACTIVE_DIGEST_KEY = "active_credential_sha256";
     private static final String AAD = "com.bluetanuki.mobile/device-link/v1";
@@ -28,6 +29,51 @@ final class AndroidCredentialStore {
 
     AndroidCredentialStore(Context context) {
         preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    }
+
+    synchronized String loadOrCreateDeviceId() throws CredentialStoreException {
+        String stored = preferences.getString(DEVICE_ID_KEY, null);
+        if (stored != null) {
+            validateDeviceId(stored);
+            return stored;
+        }
+
+        if (preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY)) {
+            DeviceCredential credential = read();
+            if (credential == null) {
+                throw new CredentialStoreException();
+            }
+            return persistDeviceId(credential.deviceId);
+        }
+        return persistDeviceId(DeviceInvitation.newDeviceId());
+    }
+
+    synchronized String rotateDeviceId() throws CredentialStoreException {
+        if (preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY)) {
+            throw new CredentialStoreException();
+        }
+        return persistDeviceId(DeviceInvitation.newDeviceId());
+    }
+
+    private String persistDeviceId(String deviceId) throws CredentialStoreException {
+        validateDeviceId(deviceId);
+        if (!preferences.edit().putString(DEVICE_ID_KEY, deviceId).commit()) {
+            throw new CredentialStoreException();
+        }
+        String readBack = preferences.getString(DEVICE_ID_KEY, null);
+        validateDeviceId(readBack);
+        if (!deviceId.equals(readBack)) {
+            throw new CredentialStoreException();
+        }
+        return readBack;
+    }
+
+    private static void validateDeviceId(String deviceId) throws CredentialStoreException {
+        try {
+            DeviceInvitation.requireHex(deviceId, 32);
+        } catch (DeviceInvitation.InvitationException exception) {
+            throw new CredentialStoreException();
+        }
     }
 
     synchronized DeviceCredential read() throws CredentialStoreException {
@@ -39,7 +85,15 @@ final class AndroidCredentialStore {
         if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
             throw new CredentialStoreException();
         }
-        return decrypt(encoded);
+        DeviceCredential credential = decrypt(encoded);
+        String deviceId = preferences.getString(DEVICE_ID_KEY, null);
+        if (deviceId != null) {
+            validateDeviceId(deviceId);
+            if (!deviceId.equals(credential.deviceId)) {
+                throw new CredentialStoreException();
+            }
+        }
+        return credential;
     }
 
     private DeviceCredential decrypt(String encoded) throws CredentialStoreException {
@@ -70,6 +124,9 @@ final class AndroidCredentialStore {
         byte[] plaintext = null;
         byte[] envelope = null;
         try {
+            if (!credential.deviceId.equals(loadOrCreateDeviceId())) {
+                throw new CredentialStoreException();
+            }
             if (preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY)) {
                 throw new CredentialStoreException();
             }
@@ -108,7 +165,7 @@ final class AndroidCredentialStore {
     }
 
     synchronized boolean contains() {
-        return preferences.contains(VALUE_KEY);
+        return preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY);
     }
 
     private SecretKey key() throws Exception {
