@@ -217,9 +217,9 @@ describe("Gmail approval content review projection", () => {
     }))).toBe(true);
   });
 
-  it("requires a successful explicit reveal before accepting the matching digest", () => {
+  it("requires a successful explicit reveal before accepting the matching draft digest", () => {
     const input = command({
-      operation: "message.send",
+      operation: "draft.create",
       to: "owner@example.test",
       subject: "hello",
       body_text: "body",

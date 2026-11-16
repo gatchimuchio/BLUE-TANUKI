@@ -113,7 +113,8 @@ describe("Developer Operator surface", () => {
 
   it("uses only existing downstream capability names", () => {
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toEqual(
-      requiredCapabilitiesForSurface("developer").filter((permission) => permission !== "settings:write"),
+      requiredCapabilitiesForSurface("developer").filter((permission) =>
+        permission !== "settings:write" && permission !== "tool:settings.write"),
     );
     expect(getDeveloperSurfaceSnapshot().operations.map((operation) => operation.kind).sort()).toEqual(
       [...OPERATOR_SURFACE_OPERATION_IDS.developer].sort(),
@@ -121,12 +122,21 @@ describe("Developer Operator surface", () => {
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:file.search");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:memory.personalization.stop");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("settings:write");
+    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("tool:settings.write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:github.write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:shell.exec");
     expect(getDeveloperOperationSpec("github.read").capabilities).not.toContain("secrets:GITHUB_TOKEN");
     expect(getDeveloperOperationSpec("file.edit").capabilities).toContain("fs:read");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("authority:write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("hds:bypass");
+    expect(getDeveloperOperationSpec("settings.write")).toMatchObject({
+      approval_level: "L3_final_review",
+      approval_risk: "high",
+      final_review_required: true,
+      preview: false,
+      disabled_by_default: false,
+      downstream_tools: ["settings.write"],
+    });
   });
 
   it("builds digest-only invocation traces", () => {

@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "../packages/hds-brain/dist/index.js";
-import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, executorCommandDigest, LLMComputeAdapter,
+import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, executorCommandDigest,
+  gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest, LLMComputeAdapter,
   LLMRegistry, ToolRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "../packages/blue-tanuki/dist/index.js";
 import { createGatewayInternalInboundRequest, type ExecuteCommand, type InboundRequest, type OperationPlan } from "../packages/protocol/dist/index.js";
 import { GatewayExecutionIntentStore } from "../apps/gateway/src/execution_intent_store.js";
@@ -33,17 +34,29 @@ interface AcceptedMutation {
 interface InspectionFixture {
   server: Server;
   endpoint: Promise<string>;
-  status: () => { effects: number; read_queries: number; llm_requests: number; accepted: AcceptedMutation[] };
+  status: () => { effects: number; read_queries: number; profile_reads: number; llm_requests: number; accepted: AcceptedMutation[] };
 }
+
+const RECEIPT_SMOKE_GMAIL_PARAMETERS = Object.freeze({ operation: "message.send", to: "inspection@example.invalid",
+  subject: "synthetic D08.01", body_text: "local inspection fixture only" });
+const RECEIPT_SMOKE_GMAIL_PAYLOAD_DIGEST = gmailWriteRequestPayloadDigest(RECEIPT_SMOKE_GMAIL_PARAMETERS);
 
 function inspectionFixture(): InspectionFixture {
   const accepted: AcceptedMutation[] = [];
   let effects = 0;
   let readQueries = 0;
+  let profileReads = 0;
   let llmRequests = 0;
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (request.method === "GET" && url.pathname === "/profile") {
+        profileReads += 1;
+        if (request.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) { response.writeHead(401).end(); return; }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ emailAddress: "fixture-owner@example.invalid" }));
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
         const chunks: Buffer[] = [];
         for await (const chunk of request as IncomingMessage) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -79,13 +92,15 @@ function inspectionFixture(): InspectionFixture {
       const body = Buffer.concat(chunks).toString("utf8");
       const key = request.headers["idempotency-key"];
       const commandDigest = request.headers["x-command-digest"];
+      const payloadDigest = request.headers["x-fixture-payload-digest"];
       if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
-          typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest) || !body) {
+          typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+          payloadDigest !== RECEIPT_SMOKE_GMAIL_PAYLOAD_DIGEST || !body) {
         response.writeHead(400).end();
         return;
       }
       effects += 1;
-      accepted.push({ idempotency_key: key, command_digest: commandDigest, payload_digest: digest(body), receipt_id: `fixture-receipt-${effects}` });
+      accepted.push({ idempotency_key: key, command_digest: commandDigest, payload_digest: payloadDigest, receipt_id: `fixture-receipt-${effects}` });
       // 受理後に応答を破棄し、Gateway側では作用結果を不明にする。
       response.destroy();
     })().catch(() => { if (!response.destroyed) response.destroy(); });
@@ -99,7 +114,8 @@ function inspectionFixture(): InspectionFixture {
       resolve(`http://127.0.0.1:${address.port}`);
     });
   });
-  return { server, endpoint, status: () => ({ effects, read_queries: readQueries, llm_requests: llmRequests, accepted: [...accepted] }) };
+  return { server, endpoint, status: () => ({ effects, read_queries: readQueries, profile_reads: profileReads,
+    llm_requests: llmRequests, accepted: [...accepted] }) };
 }
 
 function internalRequest(content: string): InboundRequest {
@@ -109,8 +125,9 @@ function internalRequest(content: string): InboundRequest {
 
 function candidate(requestId: string): OperationPlan {
   const target = { kind: "external_service" as const, id: "gmail" };
-  const parameters = { operation: "message.send", to: "inspection@example.invalid", subject: "synthetic D08.01",
-    body_text: "local inspection fixture only" };
+  const parameters = RECEIPT_SMOKE_GMAIL_PARAMETERS;
+  const targetIdentityDigest = gmailWriteTargetIdentityDigest(parameters);
+  const requestPayloadDigest = gmailWriteRequestPayloadDigest(parameters);
   return {
     version: "operation-core.v1", plan_id: `receipt-smoke-${requestId}`, request_id: requestId, state: "planned",
     steps: [{ step_id: "send-one", operation: "gmail.write", target, state: "planned", effects: ["external_send", "write", "credential_access"],
@@ -118,7 +135,9 @@ function candidate(requestId: string): OperationPlan {
         hds_brain_authority_required: true, approval_gate_required: true },
       adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false, parameters,
       preparation: { depends_on: [], bindings: [], preconditions: [],
-        validation: [{ check_id: "synthetic-accepted", method: "result_equals", target, expected: { mutation_status: "confirmed" } }],
+        validation: [{ check_id: "synthetic-send-verified", method: "gmail_message_send_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-message-send-result-validation.v1", operation: "message.send",
+            target_identity_digest: targetIdentityDigest, request_payload_digest: requestPayloadDigest } }],
         compensation: { available: false, reason: "an external send cannot be recalled" } } }],
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true,
@@ -149,10 +168,16 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string,
     const hds = new HDSUpperController({ operation_plan_state: planStore });
     const tools = new ToolRegistry();
     const gmailTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
-      const response = await fetch(new URL("/send", inspectionEndpoint), { method: target.method,
-        headers: { authorization: `Bearer ${target.token}`, "content-type": target.contentType ?? "application/json",
-          "idempotency-key": target.idempotency_key!, "x-command-digest": target.command_digest!, "x-google-path": target.path },
-        body: target.body ?? "" });
+      const profileRead = target.path === "/gmail/v1/users/me/profile";
+      const response = await fetch(new URL(profileRead ? "/profile" : "/send", inspectionEndpoint), {
+        method: target.method,
+        headers: profileRead ? { authorization: `Bearer ${target.token}` } : {
+          authorization: `Bearer ${target.token}`, "content-type": target.contentType ?? "application/json",
+          "idempotency-key": target.idempotency_key!, "x-command-digest": target.command_digest!, "x-google-path": target.path,
+          "x-fixture-payload-digest": RECEIPT_SMOKE_GMAIL_PAYLOAD_DIGEST,
+        },
+        ...(target.body !== undefined ? { body: target.body } : {}),
+      });
       return { status: response.status, ok: response.ok, content_type: response.headers.get("content-type"),
         body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
     } });
@@ -272,6 +297,7 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT = inspectionEndpoint;
     env.BLUE_TANUKI_FIXTURE_GMAIL_ENDPOINT = inspectionEndpoint;
     env.BLUE_TANUKI_FIXTURE_GMAIL_TOKEN = FIXTURE_TOKEN;
+    env.BLUE_TANUKI_FIXTURE_GMAIL_PAYLOAD_DIGEST = RECEIPT_SMOKE_GMAIL_PAYLOAD_DIGEST;
     env.GMAIL_ACCESS_TOKEN = FIXTURE_TOKEN;
     env.LLM_BACKEND = "fixture-candidate";
     env.LLM_PROVIDERS_JSON = JSON.stringify([{ name: "fixture-candidate",
@@ -381,7 +407,7 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
       assert.equal(pending.final_review_required, true);
       assert.equal(pending.content_review_required, true);
       assert.ok(pending.approval_token, "the WebChat resume route must issue its one-use approval token");
-      const contentReview = await requestJson<{ command_id: string; command_digest: string; operation: string;
+      const contentReview = await requestJson<{ command_id: string; command_digest: string; review_digest: string; operation: string;
         to: string; subject: string; body_text: string; used_for_authority: false }>(
         `/approval/${encodeURIComponent(pending.command_id)}/content`, {}, true);
       assert.equal(contentReview.command_id, pending.command_id);
@@ -390,8 +416,9 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
       assert.equal(contentReview.subject, "synthetic D08.01");
       assert.equal(contentReview.body_text, "local inspection fixture only");
       assert.equal(contentReview.used_for_authority, false);
+      assert.match(contentReview.review_digest, /^[a-f0-9]{64}$/);
       await requestJson(`/approval/${encodeURIComponent(pending.command_id)}`, {
-        verdict: "approve", approval_token: pending.approval_token, content_review_digest: contentReview.command_digest,
+        verdict: "approve", approval_token: pending.approval_token, content_review_digest: contentReview.review_digest,
       }, true);
       await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0]?.steps[0]?.status === "outcome_unknown",
         "served Broker action with accepted response loss");

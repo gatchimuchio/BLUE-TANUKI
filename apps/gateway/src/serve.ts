@@ -5910,7 +5910,7 @@ async function serveWithOwnerLease(
       try {
         const snapshot = await executor.inspectCommandContentReview(pending.command);
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_trash") return null;
-        const review = projectGmailMessageTrashContentReview(pending.command, pending.command_digest, snapshot);
+        const review = projectGmailMessageTrashContentReview(pending.command, operationPlanDigest(pending.command), snapshot);
         if (!review || !review.review_digest || !review.provider_state_digest) return null;
         pendingApprovals.set(command_id, {
           ...pending,
@@ -5928,7 +5928,7 @@ async function serveWithOwnerLease(
       try {
         const snapshot = await executor.inspectCommandContentReview(pending.command);
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_modify") return null;
-        const review = projectGmailMessageModifyContentReview(pending.command, pending.command_digest, snapshot);
+        const review = projectGmailMessageModifyContentReview(pending.command, operationPlanDigest(pending.command), snapshot);
         if (!review || !review.review_digest || !review.provider_state_digest) return null;
         pendingApprovals.set(command_id, {
           ...pending,
@@ -5945,7 +5945,7 @@ async function serveWithOwnerLease(
         hds.operationPlanCommandIsCurrent(pending.command)) {
       const snapshot = await executor.inspectCommandContentReview(pending.command);
       if (!snapshot || "diff" in snapshot || "kind" in snapshot) return null;
-      const review = projectGmailDraftSendContentReview(pending.command, pending.command_digest, snapshot);
+      const review = projectGmailDraftSendContentReview(pending.command, operationPlanDigest(pending.command), snapshot);
       if (!review || review.kind !== "gmail_write_content" || !review.provider_state_digest || !review.review_digest) return null;
       pendingApprovals.set(command_id, {
         ...pending,
@@ -5973,7 +5973,7 @@ async function serveWithOwnerLease(
         return null;
       }
     }
-    const review = projectGmailWriteContentReview(pending.command, pending.command_digest, verifiedSnapshot);
+    const review = projectGmailWriteContentReview(pending.command, operationPlanDigest(pending.command), verifiedSnapshot);
     if (!review) return null;
     pendingApprovals.set(command_id, {
       ...pending,
@@ -6237,7 +6237,7 @@ async function serveWithOwnerLease(
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, undefined, signal);
         if (signal?.aborted) return "cancelled";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_trash") return "unavailable";
-        const validation = validateGmailMessageTrashContentReview(pending.command, pending.command_digest, current,
+        const validation = validateGmailMessageTrashContentReview(pending.command, operationPlanDigest(pending.command), current,
           pending.content_review_digest, content_review_digest, snapshot);
         if (validation !== "valid") return validation;
         if (snapshot.provider_state_digest !== pending.content_review_provider_state_digest) return "stale";
@@ -6258,7 +6258,7 @@ async function serveWithOwnerLease(
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, undefined, signal);
         if (signal?.aborted) return "cancelled";
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "gmail_message_modify") return "unavailable";
-        const validation = validateGmailMessageModifyContentReview(pending.command, pending.command_digest, current,
+        const validation = validateGmailMessageModifyContentReview(pending.command, operationPlanDigest(pending.command), current,
           pending.content_review_digest, content_review_digest, snapshot);
         if (validation !== "valid") return validation;
         if (snapshot.provider_state_digest !== pending.content_review_provider_state_digest) return "stale";
@@ -6274,7 +6274,7 @@ async function serveWithOwnerLease(
     if (isGmailDraftSendReviewCommand(pending.command)) {
       const validation = validateGmailDraftSendContentReview(
         pending.command,
-        pending.command_digest,
+        operationPlanDigest(pending.command),
         executorCommandDigest(pending.command) === pending.command_digest &&
           hds.operationPlanCommandIsCurrent(pending.command),
         pending.content_review_digest,
@@ -6315,7 +6315,7 @@ async function serveWithOwnerLease(
           return signal?.aborted ? "cancelled" : "unavailable";
         }
       }
-      const validation = validateGmailWriteContentReview(pending.command, pending.command_digest, current,
+      const validation = validateGmailWriteContentReview(pending.command, operationPlanDigest(pending.command), current,
         pending.content_review_digest, content_review_digest, snapshot);
       if (validation !== "valid" || !isGmailMessageSendReviewCommand(pending.command)) return validation;
       if (!pending.content_review_provider_state_digest) return "required";

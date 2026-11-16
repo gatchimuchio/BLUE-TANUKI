@@ -6,16 +6,18 @@ if (fixtureGmailEndpoint) {
   const fixtureTool = createGmailWriteTool({
     env: { GMAIL_ACCESS_TOKEN: process.env.BLUE_TANUKI_FIXTURE_GMAIL_TOKEN },
     request: async (target) => {
-      const response = await fetch(new URL("/send", fixtureGmailEndpoint), {
+      const profileRead = target.path === "/gmail/v1/users/me/profile";
+      const response = await fetch(new URL(profileRead ? "/profile" : "/send", fixtureGmailEndpoint), {
         method: target.method,
-        headers: {
+        headers: profileRead ? { authorization: `Bearer ${target.token}` } : {
           authorization: `Bearer ${target.token}`,
           "content-type": target.contentType ?? "application/json",
           "idempotency-key": target.idempotency_key,
           "x-command-digest": target.command_digest,
           "x-google-path": target.path,
+          "x-fixture-payload-digest": process.env.BLUE_TANUKI_FIXTURE_GMAIL_PAYLOAD_DIGEST,
         },
-        body: target.body ?? "",
+        ...(target.body !== undefined ? { body: target.body } : {}),
       });
       return {
         status: response.status,

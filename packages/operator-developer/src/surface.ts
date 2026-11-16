@@ -66,6 +66,18 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     audit_trace: ["surface", "downstream_tool_name", "memory_reference_digest", "final_review_result"],
   },
   {
+    kind: "settings.write",
+    label: "Change bounded Gateway settings through owner-reviewed L3 operation",
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
+    preview: false,
+    disabled_by_default: false,
+    downstream_tools: ["settings.write"],
+    capabilities: requireOperationDescriptor("settings.write").required_capabilities,
+    audit_trace: ["surface", "downstream_tool_name", "changed_setting_keys", "final_review_result"],
+  },
+  {
     kind: "browser.snapshot",
     label: "Capture browser state through disabled-by-default preview tooling",
     approval_level: "L2_operate",
@@ -115,9 +127,10 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
   },
 ] as const;
 
-// settings:write remains an HDS operation capability for L3 review, not a plugin manifest permission.
+// settings.write remains a core HDS L3 operation, not a Developer Operator plugin permission.
 export const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = Object.freeze(
-  requiredCapabilitiesForSurface("developer").filter((permission) => permission !== "settings:write"),
+  requiredCapabilitiesForSurface("developer").filter((permission) =>
+    permission !== "settings:write" && permission !== "tool:settings.write"),
 );
 
 export function getDeveloperOperationSpec(kind: DeveloperOperationKind): DeveloperOperationSpec {

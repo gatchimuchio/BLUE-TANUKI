@@ -32,5 +32,5 @@
     "default": "getDeveloperSurfaceSnapshot",
     "surface": "getDeveloperSurfaceSnapshot"
   },
-  "description": "Layer A Developer Operator surface. It declares existing downstream file, memory-personalization, shell, GitHub, and browser-preview capabilities; HDS-BRAIN and the Approval Gate retain authority, and the surface does not add authority."
+  "description": "Layer A Developer Operator surface. It describes existing downstream file, memory-personalization, bounded settings, shell, GitHub, and browser-preview operations. Settings writes use core HDS L3 review; HDS-BRAIN and the Approval Gate retain authority, and the surface does not add authority."
 }
