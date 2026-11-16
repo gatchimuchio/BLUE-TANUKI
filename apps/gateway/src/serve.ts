@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { resolve as resolvePath } from "node:path";
 import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
@@ -1066,6 +1067,30 @@ export function gatewayInboundAllowsDownstream(boundary: Pick<GatewayInboundBoun
   return boundary.boundary_ok;
 }
 
+interface WebChatTransportConfig {
+  host: string;
+  publicHost: string;
+  tls?: { cert: Buffer; key: Buffer };
+}
+
+function webchatTransportFromEnvironment(env: NodeJS.ProcessEnv): WebChatTransportConfig {
+  const host = nonEmptyEnv(env.WEBCHAT_HOST) ?? "127.0.0.1";
+  const publicHost = nonEmptyEnv(env.WEBCHAT_PUBLIC_HOST) ?? host;
+  const tls = webchatTlsFromEnvironment(env);
+  if (!isLoopbackWebChatHost(publicHost) && !tls) {
+    throw new Error("webchat_non_loopback_public_binding_requires_tls");
+  }
+  return { host, publicHost, ...(tls ? { tls } : {}) };
+}
+
+function isLoopbackWebChatHost(host: string): boolean {
+  const normalized = host.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (normalized === "localhost" || normalized === "localhost.") return true;
+  const family = isIP(normalized);
+  if (family === 4) return Number(normalized.split(".", 1)[0]) === 127;
+  return family === 6 && normalized === "::1";
+}
+
 function webchatTlsFromEnvironment(env: NodeJS.ProcessEnv): { cert: Buffer; key: Buffer } | undefined {
   const certificatePath = nonEmptyEnv(env.WEBCHAT_TLS_CERT_FILE);
   const privateKeyPath = nonEmptyEnv(env.WEBCHAT_TLS_KEY_FILE);
@@ -1111,14 +1136,14 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
 }
 
 export async function serve(): Promise<ServeShutdown> {
-  const webchatTls = webchatTlsFromEnvironment(process.env);
+  const webchatTransport = webchatTransportFromEnvironment(process.env);
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
   let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
   let approvalRecoveryStore: GatewayApprovalRecoveryStore | undefined;
   try {
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     approvalRecoveryStore = GatewayApprovalRecoveryStore.fromEnvironment(process.env);
-    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations, approvalRecoveryStore, webchatTls);
+    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations, approvalRecoveryStore, webchatTransport);
   } catch (error) {
     approvalRecoveryStore?.close();
     mcpRuntimeObservations?.close();
@@ -1151,7 +1176,7 @@ async function serveWithOwnerLease(
   ownerLease: GatewayRuntimeOwnerLease,
   mcpRuntimeObservations: McpRuntimeObservationStore,
   approvalRecoveryStore: GatewayApprovalRecoveryStore,
-  webchatTls: { cert: Buffer; key: Buffer } | undefined,
+  webchatTransport: WebChatTransportConfig,
 ): Promise<ServeShutdown> {
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
@@ -4594,8 +4619,8 @@ async function serveWithOwnerLease(
         outcome: "supports" | "conflicts" | "unknown"; actor: string }) => submitGoalPurposeRelationReviewProposal(input),
       maintenance_token: maintenanceToken,
       webhook_token: process.env.WEBHOOK_TOKEN,
-      host: process.env.WEBCHAT_HOST ?? "127.0.0.1",
-      ...(webchatTls ? { tls: webchatTls } : {}),
+      host: webchatTransport.host,
+      ...(webchatTransport.tls ? { tls: webchatTransport.tls } : {}),
       settings: createWebChatSettingsSurface({
         env: process.env,
         plugins,
@@ -7717,7 +7742,8 @@ async function serveWithOwnerLease(
   gatewayLog.info("inbound channels", { channels: router.list().join(", ") });
   gatewayLog.info("outbound channels", { channels: dispatcher.list().join(", ") });
   gatewayLog.info("webchat listening", {
-    url: `${webchatTls ? "https" : "http"}://${process.env.WEBCHAT_HOST ?? "127.0.0.1"}:${port}`,
+    url: `${webchatTransport.tls ? "https" : "http"}://${webchatTransport.publicHost.includes(":")
+      ? `[${webchatTransport.publicHost.replace(/^\[|\]$/g, "")}]` : webchatTransport.publicHost}:${port}`,
   });
 
   return {

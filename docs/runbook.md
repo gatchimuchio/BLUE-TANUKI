@@ -99,6 +99,7 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `BLUE_TANUKI_MAINTENANCE_TOKEN` | `serve` | Separate Bearer token for `/update/*` and `/recovery/*`; must differ from WebChat tokens | none (hard error) |
 | `WEBCHAT_PORT`              | `serve`      | HTTP(S)/WS(S) listen port                            | `8787`             |
 | `WEBCHAT_HOST`              | `serve`      | HTTP(S)/WS(S) bind host                              | `127.0.0.1`        |
+| `WEBCHAT_PUBLIC_HOST`       | `serve` / Docker | TLS必須判定に使う公開側bind host。実際の公開境界と一致させる | `WEBCHAT_HOST`（Composeは`127.0.0.1`） |
 | `WEBCHAT_TLS_CERT_FILE`     | optional     | PEM certificate chain file for direct HTTPS/WSS       | none (HTTP/WS)      |
 | `WEBCHAT_TLS_KEY_FILE`      | optional     | PEM private key file paired with the certificate      | none (HTTP/WS)      |
 | `LLM_BACKEND`               | all modes    | Default LLM provider: `stub`, `anthropic`, `openai`, `openai-compatible`, or `openrouter` | `stub` |
@@ -181,12 +182,7 @@ WebChatのowner taskは、ownerが仕事文面と委任目的を指定して明�
 
 ---
 
-Direct TLS is enabled only when `WEBCHAT_TLS_CERT_FILE` and
-`WEBCHAT_TLS_KEY_FILE` are both set to separate regular files. On POSIX, the
-private key file must have no group or other permissions; on Windows, protect
-its ACL for the Gateway owner. The PEM contents are read locally and are not
-logged. Without these variables, the existing HTTP/WS listener remains in use;
-the default bind stays loopback.
+`WEBCHAT_TLS_CERT_FILE` と `WEBCHAT_TLS_KEY_FILE` に別々の通常ファイルを指定すると、WebChat は直接 HTTPS/WSS を使う。POSIX では秘密鍵の group/other 権限を禁止し、Windows では Gateway owner のみに ACL を制限する。PEM 本文はローカルで読み、ログへ出さない。TLS 未設定で loopback 以外へ公開する構成は起動時に拒否する。通常起動の既定 bind は loopback。
 
 ## 2.1 Plugin Loader And Permissions
 
@@ -482,9 +478,7 @@ The repository includes a single-host Docker packaging path:
 WEBCHAT_TOKEN=<...> WEBCHAT_RESUME_TOKEN=<...> docker compose up --build
 ```
 
-The compose service maps `${WEBCHAT_PORT:-8787}` to the same container port,
-sets `WEBCHAT_HOST=0.0.0.0`, and stores audit/session data in the named
-`blue_tanuki_data` volume under `/data`.
+Compose は host 側の `${WEBCHAT_PORT:-8787}` を `127.0.0.1` のみに公開し、container 内では `WEBCHAT_HOST=0.0.0.0` で待ち受ける。`WEBCHAT_PUBLIC_HOST=127.0.0.1` はこの loopback 限定 bind を Gateway の TLS 判定へ伝える。監査・session data は `/data` 配下の `blue_tanuki_data` named volume に保存する。LAN 公開が必要な場合は loopback へ終端する TLS reverse proxy を使うか、実際の公開 host に合わせて Gateway を直接 TLS 設定する。直接 TLS なしの non-loopback 公開は Gateway が fail-closed で拒否する。
 
 The image does not contain secrets. Pass `WEBCHAT_TOKEN`,
 `WEBCHAT_RESUME_TOKEN`, and any provider/channel tokens through the deployment

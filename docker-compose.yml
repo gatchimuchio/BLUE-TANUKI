@@ -5,9 +5,10 @@ services:
     image: blue-tanuki:local
     restart: unless-stopped
     ports:
-      - "${WEBCHAT_PORT:-8787}:${WEBCHAT_PORT:-8787}"
+      - "127.0.0.1:${WEBCHAT_PORT:-8787}:${WEBCHAT_PORT:-8787}"
     environment:
       WEBCHAT_HOST: "0.0.0.0"
+      WEBCHAT_PUBLIC_HOST: "127.0.0.1"
       WEBCHAT_PORT: "${WEBCHAT_PORT:-8787}"
       WEBCHAT_TOKEN: "${WEBCHAT_TOKEN:?WEBCHAT_TOKEN is required}"
       WEBCHAT_RESUME_TOKEN: "${WEBCHAT_RESUME_TOKEN:?WEBCHAT_RESUME_TOKEN is required}"
