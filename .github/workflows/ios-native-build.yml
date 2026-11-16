@@ -1,0 +1,64 @@
+name: iOS Simulator手動build（署名なし）
+run-name: iOS Simulator source build ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-native-source-build
+  cancel-in-progress: false
+
+jobs:
+  ios-simulator-build:
+    name: iOS Simulatorアプリを署名なしでbuild
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: 対象commitを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: 対象refを限定
+        shell: bash
+        env:
+          SELECTED_REF: ${{ github.ref }}
+        run: |
+          if [[ "$SELECTED_REF" != "refs/heads/main" && "$SELECTED_REF" != "refs/heads/codex/ios-native-product-validation" ]]; then
+            echo "Unsupported ref: $SELECTED_REF" >&2
+            exit 1
+          fi
+
+      - name: 対象commitとApple toolchainを記録
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: iOS Simulatorアプリを署名なしでbuild
+        shell: bash
+        run: |
+          xcodebuild \
+            -project apps/mobile-ios/BlueTanuki.xcodeproj \
+            -scheme BlueTanuki \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/blue-tanuki-ios-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: app bundleとlocal-network purposeを確認
+        shell: bash
+        run: |
+          app="$RUNNER_TEMP/blue-tanuki-ios-derived/Build/Products/Debug-iphonesimulator/BlueTanuki.app"
+          test -d "$app"
+          purpose="$(/usr/libexec/PlistBuddy -c 'Print NSLocalNetworkUsageDescription' "$app/Info.plist")"
+          test -n "$purpose"
+          echo "Built unsigned iOS Simulator bundle: $app"
