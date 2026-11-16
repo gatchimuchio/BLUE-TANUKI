@@ -1,4 +1,4 @@
-import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
+import { getToolOperationDescriptor, requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation, type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation, type GmailWriteTargetVersionObservation,
   type GoogleCalendarWriteTargetVersionObservation, type GoogleDriveWriteTargetVersionObservation,
@@ -972,6 +972,8 @@ export type ToolCapability = string;
 export interface Tool {
   readonly name: string;
   readonly description: string;
+  /** Concrete implementation release; must match the reviewed operation descriptor for planned use. */
+  readonly adapter_version?: string;
   readonly required_capabilities?: readonly ToolCapability[];
   /** Read-only target resolver; Executor only trusts registered built-in adapters. */
   inspect_target_version?(args: Record<string, unknown>, options?: {
@@ -996,6 +998,10 @@ export class ToolRegistry {
   register(tool: Tool): void {
     if (this.tools.has(tool.name)) {
       throw new Error(`Tool already registered: ${tool.name}`);
+    }
+    const descriptor = getToolOperationDescriptor(tool.name);
+    if (tool.adapter_version !== undefined && descriptor?.adapter_version !== tool.adapter_version) {
+      throw new Error(`Tool adapter version does not match its reviewed descriptor: ${tool.name}`);
     }
     this.tools.set(tool.name, tool);
   }
@@ -1024,6 +1030,7 @@ export class ToolRegistry {
  */
 export const echoTool: Tool = {
   name: "echo",
+  adapter_version: "1.0.0-rc.1",
   description: "Returns its arguments verbatim. Phase 0 smoke test only.",
   required_capabilities: requireToolOperationDescriptor("echo").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {

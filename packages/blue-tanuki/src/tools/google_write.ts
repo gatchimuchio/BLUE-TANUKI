@@ -4779,6 +4779,7 @@ export async function invokeGoogleDriveWrite(
 export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempotency_key" | "command_digest"> = {}): Tool {
   return {
     name: "gmail.write",
+    adapter_version: "1.0.0-rc.1",
     description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
     required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
     async inspect_target_version(args, resolverOptions = {}): Promise<GmailWriteTargetVersionObservation> {
@@ -4979,6 +4980,7 @@ export function createGoogleCalendarWriteTool(
   });
   return {
     name: "google.calendar.write",
+    adapter_version: "1.0.0-rc.1",
     description: "Create one non-recurring event after a current freebusy recheck. Explicit attendees on event.create produce invitation emails. event.invite adds up to 20 explicit attendees to a confirmed primary-calendar event, series, or exact occurrence owned by this account while preserving the complete current attendee array and writable RSVP fields. Because Calendar PATCH replaces attendee arrays and sendUpdates=all notifies all guests, no-store Owner review shows retained attendees, new invitees, and every notification recipient before L3 approval. The exact recurrence scope and event version are rechecked before the write. Update the summary or delete a confirmed event as separate operations. Calendar data is non-authoritative.",
     required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
     async inspect_target_version(args, inspectOptions = {}): Promise<GoogleCalendarWriteTargetVersionObservation> {
@@ -5108,6 +5110,7 @@ export const googleCalendarWriteTool: Tool = createGoogleCalendarWriteTool();
 
 export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",
+  adapter_version: "1.0.0-rc.1",
   description: "Create one bounded text file, replace one existing text/plain blob, grant one direct Drive user reader/writer access, grant one separately reviewed anyone-with-link reader permission on an owner-owned My Drive text file with discovery disabled, or move one owner-owned My Drive text/plain file to reversible trash. Every update, permission grant, and trash operation requires separate current L3 review; trash never permanently deletes.",
   required_capabilities: requireToolOperationDescriptor("google.drive.write").required_capabilities,
   async inspect_target_version(args, resolverOptions = {}): Promise<GoogleDriveWriteTargetVersionObservation | GoogleDriveUpdateTargetVersionObservation |

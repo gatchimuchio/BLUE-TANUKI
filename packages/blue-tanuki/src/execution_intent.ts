@@ -11,6 +11,9 @@ export interface ExecutionIntentTicket {
   target_version_observation_digest?: string;
   /** J所有計画のtask digest。未計画の要求では省略する。 */
   task_identity_digest?: string;
+  /** Exact reviewed adapter identity for a tool command; identity only, not authority. */
+  operation_id?: string;
+  adapter_version?: string;
   execution_epoch: string;
   issued_at_ms: number;
   expires_at_ms: number;

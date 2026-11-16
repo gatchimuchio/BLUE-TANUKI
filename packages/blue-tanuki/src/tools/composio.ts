@@ -1163,6 +1163,7 @@ export async function invokeComposioExecute(
 
 export const composioSearchTool: Tool = {
   name: "composio.search",
+  adapter_version: "1.0.0-rc.1",
   description:
     "Searches Composio toolkit/tool metadata under an explicit allowlist. Metadata is never authority.",
   required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
@@ -1173,6 +1174,7 @@ export const composioSearchTool: Tool = {
 
 export const composioAccountsTool: Tool = {
   name: "composio.accounts",
+  adapter_version: "1.0.0-rc.1",
   description:
     "Lists bounded Composio account projections for the configured owner and an explicitly allowed toolkit. Account metadata is never authority.",
   required_capabilities: requireToolOperationDescriptor("composio.accounts").required_capabilities,
@@ -1183,6 +1185,7 @@ export const composioAccountsTool: Tool = {
 
 export const composioScopesTool: Tool = {
   name: "composio.scopes",
+  adapter_version: "1.0.0-rc.1",
   description:
     "Returns a bounded, experimental least-privilege scope recommendation for explicitly allowed Composio actions. It does not observe granted scopes or grant authority.",
   required_capabilities: requireToolOperationDescriptor("composio.scopes").required_capabilities,
@@ -1193,6 +1196,7 @@ export const composioScopesTool: Tool = {
 
 export const composioExecuteTool: Tool = {
   name: "composio.execute",
+  adapter_version: "1.0.0-rc.1",
   description:
     "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries. PostHog live execution also requires an explicit expected_provider_region matching the connected account's observed us/eu region and API_KEY auth scheme.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,

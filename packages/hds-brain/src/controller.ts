@@ -21,7 +21,7 @@ import type {
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
 } from "@blue-tanuki/protocol";
-import { ExecutionAdmissionSchema } from "@blue-tanuki/protocol";
+import { ExecutionAdmissionSchema, getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
@@ -303,10 +303,12 @@ export interface HDSRuntimeSnapshot {
 
 /** An in-process, non-serializable provenance seal for one exact HDS-issued command. */
 export interface HDSExecutionAuthorityBinding {
-  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v4";
+  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v5";
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
   readonly task_identity_digest?: string;
+  readonly operation_id?: string;
+  readonly adapter_version?: string;
   readonly broker_target_version_observation_digest?: string;
   readonly goal_governance_projection_digest?: string;
   readonly goal_governance_used_for_authority?: false;
@@ -317,6 +319,8 @@ interface HDSExecutionAuthorityBindingRecord {
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
   readonly task_identity_digest?: string;
+  readonly operation_id?: string;
+  readonly adapter_version?: string;
   readonly broker_target_version_observation_digest?: string;
   readonly goal_governance_projection_digest?: string;
   readonly goal_governance_used_for_authority?: false;
@@ -336,10 +340,12 @@ export function consumeHdsExecutionAuthorityBinding(
 ): string {
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   if (!record || HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command) !== record || record.command !== command || record.consumed ||
-      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v4" ||
+      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v5" ||
       binding.source_context_digest !== record.source_context_digest ||
       binding.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
       binding.task_identity_digest !== record.task_identity_digest ||
+      binding.operation_id !== record.operation_id ||
+      binding.adapter_version !== record.adapter_version ||
       binding.broker_target_version_observation_digest !== record.broker_target_version_observation_digest ||
       binding.goal_governance_projection_digest !== record.goal_governance_projection_digest ||
       binding.goal_governance_used_for_authority !== record.goal_governance_used_for_authority) {
@@ -3805,6 +3811,15 @@ ${planControl.question}`,
     if ((operation_plan_binding_digest === undefined) !== (task_identity_digest === undefined)) {
       throw new Error("HDS task identity does not match the current Operation Plan source");
     }
+    const toolDescriptor = command.type === "tool_call"
+      ? getToolOperationDescriptor(command.payload.tool_name)
+      : undefined;
+    if (command.type === "tool_call" && (!toolDescriptor?.adapter_version ||
+        toolDescriptor.operation_id !== command.payload.tool_name)) {
+      throw new Error("HDS tool command has no reviewed adapter version");
+    }
+    const operation_id = toolDescriptor?.operation_id;
+    const adapter_version = toolDescriptor?.adapter_version;
     let brokerTargetVersionObservationDigest: string | undefined;
     if (command.type === "tool_call" && command.payload.tool_name === "file.search") {
       if (brokerTargetVersionObservation === undefined) {
@@ -4440,7 +4455,7 @@ ${planControl.question}`,
     }
     const goalGovernanceProjectionDigest = goalGovernance ? operationPlanDigest(goalGovernance) : undefined;
     const source_context_digest = sha256({
-      schema_version: "blue-tanuki.hds-execution-source-context.v4",
+      schema_version: "blue-tanuki.hds-execution-source-context.v5",
       request_id: source.request_id,
       command_id: command.id,
       commit_hash: source.commit.hash,
@@ -4459,16 +4474,18 @@ ${planControl.question}`,
       goal_authority_status: projection.authority.status,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
       ...(task_identity_digest ? { task_identity_digest } : {}),
+      ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
     });
     const binding: HDSExecutionAuthorityBinding = Object.freeze({
-      schema_version: "blue-tanuki.hds-execution-authority-binding.v4",
+      schema_version: "blue-tanuki.hds-execution-authority-binding.v5",
       source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
       ...(task_identity_digest ? { task_identity_digest } : {}),
+      ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
@@ -4477,6 +4494,7 @@ ${planControl.question}`,
     const record: HDSExecutionAuthorityBindingRecord = { command, source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
       ...(task_identity_digest ? { task_identity_digest } : {}),
+      ...(operation_id ? { operation_id, adapter_version } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
@@ -4497,9 +4515,15 @@ ${planControl.question}`,
       try { admitted = ExecutionAdmissionSchema.parse(admission); }
       catch { onRejected?.("execution_admission_required_or_invalid"); return false; }
       const record = HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command);
+      const adapterIdentityMatches = command.type === "tool_call"
+        ? !!record && record.operation_id === command.payload.tool_name && !!record.adapter_version &&
+          admitted.operation_id === record.operation_id && admitted.adapter_version === record.adapter_version
+        : !!record && record.operation_id === undefined && record.adapter_version === undefined &&
+          admitted.operation_id === undefined && admitted.adapter_version === undefined;
       if (!record || record.command !== command || !record.consumed || !record.operation_plan_binding_digest ||
           !record.task_identity_digest || admitted.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
           admitted.task_identity_digest !== record.task_identity_digest ||
+          !adapterIdentityMatches ||
           admitted.target_version_observation_digest !== record.broker_target_version_observation_digest) {
         onRejected?.("hds_execution_admission_binding_mismatch");
         return false;

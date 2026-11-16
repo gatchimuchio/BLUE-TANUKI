@@ -36,6 +36,7 @@ const PATCH_FIELDS = {
 export function createSettingsWriteTool(port: SettingsWritePort): Tool {
   const tool: Tool = {
     name: "settings.write",
+    adapter_version: "1.0.0-rc.1",
     description: "Apply one explicit non-secret LLM runtime settings patch through the HDS Operation Plan and L3 review.",
     required_capabilities: requireToolOperationDescriptor("settings.write").required_capabilities,
     async inspect_target_version(rawArgs, options = {}): Promise<SettingsWriteTargetVersionObservation> {

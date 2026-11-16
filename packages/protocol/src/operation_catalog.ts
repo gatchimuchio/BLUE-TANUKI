@@ -7,6 +7,8 @@ import type { OperationAdapterKind, OperationEffect } from "./operation_core.js"
 export interface OperationDescriptor {
   operation_id: string;
   descriptor_version: string;
+  /** Reviewed release identity of the concrete registered adapter implementation. */
+  adapter_version?: string;
   implementation_ref: string;
   tool_name?: string;
   adapter: OperationAdapterKind;
@@ -17,6 +19,9 @@ export interface OperationDescriptor {
 }
 
 type DescriptorInput = Omit<OperationDescriptor, "descriptor_version">;
+
+/** Current BLUE adapter package release; bump only with the reviewed implementation set. */
+export const CURRENT_OPERATION_ADAPTER_VERSION = "1.0.0-rc.1";
 
 /** Maximum plausible effects of an unreviewed MCP tool proposal. */
 export const MCP_CALL_POTENTIAL_EFFECTS = Object.freeze([
@@ -52,6 +57,7 @@ function toolDescriptor(
 ): OperationDescriptor {
   return freezeDescriptor({
     operation_id: toolName,
+    adapter_version: CURRENT_OPERATION_ADAPTER_VERSION,
     implementation_ref,
     tool_name: toolName,
     adapter,

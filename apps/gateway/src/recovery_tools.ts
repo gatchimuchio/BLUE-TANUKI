@@ -110,6 +110,7 @@ export function createRecoveryMutationTools(
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
+    adapter_version: "1.0.0-rc.1",
     description: "Restore one explicitly selected local recovery backup after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
     async invoke(raw, ctx?: ToolContext) {
@@ -147,6 +148,7 @@ export function createRecoveryMutationTools(
   };
   const resetRecoveryProviderTool: Tool = {
     name: "recovery.reset_provider",
+    adapter_version: "1.0.0-rc.1",
     description: "Reset the configured LLM provider to the offline stub after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.reset_provider").required_capabilities,
     async invoke(raw) {
@@ -156,6 +158,7 @@ export function createRecoveryMutationTools(
   };
   const resetRecoveryConnectorTool: Tool = {
     name: "recovery.reset_connector",
+    adapter_version: "1.0.0-rc.1",
     description: "Reset connector configuration to dry-run after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.reset_connector").required_capabilities,
     async invoke(raw) {
@@ -165,6 +168,7 @@ export function createRecoveryMutationTools(
   };
   const factoryResetRecoveryTool: Tool = {
     name: "recovery.factory_reset",
+    adapter_version: "1.0.0-rc.1",
     description: "Reset local runtime state while preserving audit and recovery roots after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.factory_reset").required_capabilities,
     async invoke(raw) {

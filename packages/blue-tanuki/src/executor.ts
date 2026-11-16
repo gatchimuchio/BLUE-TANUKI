@@ -35,6 +35,7 @@ import {
   canonicalExecutorCommandSnapshot,
   normalizeGmailAddressList,
   inspectExecutionResultDelivery,
+  getToolOperationDescriptor,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   AgentDelegationContractSchema,
   OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
@@ -902,9 +903,13 @@ function approveCommandForExecution(
       ((hds_binding.operation_plan_binding_digest === undefined) !== (hds_binding.task_identity_digest === undefined) ||
         (hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
         (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)) ||
+        ((hds_binding.operation_id === undefined) !== (hds_binding.adapter_version === undefined)) ||
+        (snapshot.type === "tool_call" && (hds_binding.operation_id !== snapshot.payload.tool_name ||
+          hds_binding.adapter_version !== getToolOperationDescriptor(snapshot.payload.tool_name)?.adapter_version)) ||
+        (snapshot.type !== "tool_call" && hds_binding.operation_id !== undefined) ||
         (hds_binding.broker_target_version_observation_digest !== undefined &&
           !/^[a-f0-9]{64}$/.test(hds_binding.broker_target_version_observation_digest)))) {
-    throw new Error("Executor approval rejected: HDS execution binding has an invalid Operation Plan, task identity, or target-version digest");
+    throw new Error("Executor approval rejected: HDS execution binding has an invalid Operation Plan, adapter, task identity, or target-version digest");
   }
   const approved = snapshot as ApprovedCommand;
   const clock = readApprovalClock(runtime);
@@ -913,19 +918,23 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v5",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v6",
       command_digest,
       proof,
       hds_source_context_digest,
       ...(hds_binding?.operation_plan_binding_digest
         ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
       ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
+      ...(hds_binding?.operation_id ? { operation_id: hds_binding.operation_id,
+        adapter_version: hds_binding.adapter_version } : {}),
       ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     })).digest("hex"),
     ...(hds_binding?.operation_plan_binding_digest
       ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
+    ...(hds_binding?.operation_id ? { operation_id: hds_binding.operation_id,
+      adapter_version: hds_binding.adapter_version } : {}),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
   });
   runtime.store?.issue(ticket);
@@ -2886,6 +2895,22 @@ export class Executor {
       throw new Error("Executor rejected command: approval proof decision is not executable");
     }
     assertApprovalProofMatchesHdsPolicy(cmd, proof);
+    if (cmd.type === "tool_call") {
+      const { operation_id, adapter_version } = record.ticket;
+      if (record.runtime.require_hds_execution_binding && (!operation_id || !adapter_version)) {
+        throw new Error("Executor rejected command: reviewed adapter identity is required");
+      }
+      if (operation_id !== undefined || adapter_version !== undefined) {
+        const descriptor = getToolOperationDescriptor(cmd.payload.tool_name);
+        const tool = this.deps.tools.get(cmd.payload.tool_name);
+        if (operation_id !== cmd.payload.tool_name || adapter_version !== descriptor?.adapter_version ||
+            tool?.adapter_version !== adapter_version) {
+          throw new Error("Executor rejected command: reviewed adapter version does not match the loaded implementation");
+        }
+      }
+    } else if (record.ticket.operation_id !== undefined || record.ticket.adapter_version !== undefined) {
+      throw new Error("Executor rejected command: non-tool command has a tool adapter identity");
+    }
     // adapter/historyのawait前に同期消費する。失敗でも承認を復活させず、
     // 次の試行には新しい上流採否を必要とする。
     const now = assertTicketCurrent(record);

@@ -38,6 +38,7 @@ const BUILTIN_MEMORY_PERSONALIZATION_TOOLS = new WeakSet<Tool>();
 export function createMemoryPersonalizationStopTool(store: MemoryPersonalizationStorePort): Tool {
   const tool: Tool = {
     name: "memory.personalization.stop",
+    adapter_version: "1.0.0-rc.1",
     description: "Stop future memory citation and personalization use of one exact retained memory record.",
     required_capabilities: requireToolOperationDescriptor("memory.personalization.stop").required_capabilities,
     async inspect_target_version(rawArgs, options = {}): Promise<MemoryPersonalizationTargetVersionObservation> {

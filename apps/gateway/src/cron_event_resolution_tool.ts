@@ -16,6 +16,7 @@ export function createCronEventResolutionTool(
 ): Tool {
   return {
     name: "schedule.resolve_event",
+    adapter_version: "1.0.0-rc.1",
     description: "Request an HDS L3 no-replay disposition for one exact unsettled Cron event.",
     required_capabilities: requireToolOperationDescriptor("schedule.resolve_event").required_capabilities,
     async invoke(args, ctx) {

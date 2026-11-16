@@ -420,6 +420,7 @@ export interface OperationAdapterRegistryStepEvidence {
   step_id: string;
   operation: string;
   descriptor_version: string;
+  adapter_version?: string;
   implementation_ref: string;
   required_effects: readonly OperationEffect[];
   required_capabilities: readonly string[];
@@ -507,6 +508,7 @@ export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): Operat
       step_id: step.step_id,
       operation: step.operation,
       descriptor_version: operationDescriptor.descriptor_version,
+      ...(operationDescriptor.adapter_version ? { adapter_version: operationDescriptor.adapter_version } : {}),
       implementation_ref: operationDescriptor.implementation_ref,
       required_effects: [...operationDescriptor.effects],
       required_capabilities: [...operationDescriptor.required_capabilities],

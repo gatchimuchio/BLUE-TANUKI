@@ -547,6 +547,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
 
   const tool: Tool = {
     name: "mcp.call",
+    adapter_version: "1.0.0-rc.1",
     description: "Calls one catalog-bound MCP tool through HDS-J selection, fresh target observation and L3 final review.",
     required_capabilities: requireToolOperationDescriptor("mcp.call").required_capabilities,
     async inspect_target_version(args, inspectOptions) {

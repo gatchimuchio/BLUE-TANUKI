@@ -175,6 +175,7 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
 
 export const shellExecTool: Tool = {
   name: "shell.exec",
+  adapter_version: "1.0.0-rc.1",
   description:
     "Run a bounded command only inside a verified Windows or Linux isolation provider; macOS and other unsupported operating systems fail closed before process creation. Native isolation must be installed. For an explicitly requested test after an owner-reviewed file.edit, set same_workspace_as_file_root=true and summary_only=true; this returns exit status, text byte counts and digests without captured output. Then reread the same relative file with file.search. Nonzero exit or timeout is a failed test; never restore automatically. If recovery is requested, inspect current state and propose a fresh owner-reviewed inverse file.edit.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,

@@ -149,24 +149,28 @@ export class RuntimeScheduleManager {
     return [
       {
         name: "schedule.list",
+        adapter_version: "1.0.0-rc.1",
         description: "List runtime schedules without exposing schedule content.",
         required_capabilities: requireToolOperationDescriptor("schedule.list").required_capabilities,
         invoke: async () => this.list(),
       },
       {
         name: "schedule.create",
+        adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule create request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.create").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
       {
         name: "schedule.update",
+        adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule update request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.update").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
       {
         name: "schedule.delete",
+        adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule delete request.",
         required_capabilities: requireToolOperationDescriptor("schedule.delete").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
