@@ -5243,3 +5243,27 @@ task-generated local artifactsなし。`.codex-attachments/`、`.codex-remote-at
 ### 作業資産とGit
 
 変更した`packages/blue-tanuki/src/tools/shell_exec.ts`、`docs/ROADMAP.md`、本履歴をGit管理する。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、`packages/blue-tanuki/native/linux-isolation/target/`は保持し、workspace buildによるignored `dist/`以外の作業生成物は追加していない。作業開始HEADは`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`。実装commit=`efc5a88`を`main`へfast-forward pushした。local recovery branch／remote backup tag current=`efc5a88`、previous=`5b2aec0892bd346428cd9b10c7a6e88dd39e9728`を更新し、push前に一致を確認した。commit時にstale `.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除がPermission deniedになったが、commit／pushは成功し、metadata／ACLの変更や迂回は行っていない。
+
+## 2026-11-17 — rev6.0 QE_BUILD / Android Device Link revoke and local recovery
+
+### 対象・目的
+
+対象はAndroid native Device Linkの端末資格ライフサイクル。Desktopの失効と端末内資格削除を正確なLIVE_RUNTIME応答で束縛し、通信不能時の端末内削除を別操作として明示する。終端応答不明時の自動再送、HDS権限の生成、Desktop失効を装うローカル記録を避ける。
+
+### 変更と限定確認
+
+Desktop失効はnonce・操作名・応答全体・`LIVE_RUNTIME`・正確な`{"状態":"失効"}` projectionを確認してから端末内資格を削除し、readbackする。拒否・fixture・応答不明では資格を保持する。通信不能時の削除はKeystore保護下の非権威記録（最大32件）と端末内資格削除を一括保存し、双方のreadback後にだけ成功とする。TLS handshake後のforeground世代も再確認し、background遷移後の新規送信を抑止する。Android minSdk 23にない`java.util.function`／Stream API参照を避けた。
+
+| QE_BUILD限定確認 | 結果 |
+|---|---|
+| OneDrive外のASCII `%TEMP%`新規コピーで`:app:testDebugUnitTest :app:assembleDebug` | PASS。14/14 unit test、debug assemble成功。JDK 17／Android SDK Platform 37。 |
+| `git diff --check` | PASS。 |
+| Desktop Broker実接続・実失効、Android Emulator／実機、API 23 runtime、release package、全5OS・全製品結合QC／QA | NOT_RUN／未成立。 |
+
+最初の一時コピーは既存`app/build`出力を含んでGradleの削除に失敗したため、`.gradle`と全`build`を除いた新規コピーで同じ確認を再実行した。過去のOneDrive checkout失敗原因がpath文字・同期・ACLのどれかは未特定。debug APKは一時コピー内だけに生成した。検証用一時tree 2件（4,300,860 bytes／4,720,603 bytes）は検証後にWindowsゴミ箱へ移動した。これは容量回収ではない。
+
+### 状態・Git・次の範囲
+
+このbatchはrev6.0 P2 QE_BUILDのAndroid資格ライフサイクルsliceであり、製品全体`SYSTEM_SHAPED=false`／`BUILD_COVERED=false`、QE_QC／QE_QA未開始、P13 owner GO保留を維持する。通常Task開始・取消・中断復帰、Desktop BrokerからBLUE C/J/Mまでの実仕事、Android installed動作、更新／削除は未成立。D4-PocketはDevice Link境界の読み取り照合だけで、変更なし。C08.03実provider、秘密credential、実外部業務作用、公開・出荷操作は行っていない。
+
+変更したAndroid source・unit test・READMEをcommit `f42e5d38b0fb769dfd34077989208f8daa2f597b`としてGitHub `main`へfast-forward push済み。作業開始`main`=`2149d5a290508be5f2a3f23ff3dc57779f43023e`。protected untracked `.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`は未変更。local／remote backup refsはこの作業batchのcloseout時に最新二世代へ更新・再読込する。
