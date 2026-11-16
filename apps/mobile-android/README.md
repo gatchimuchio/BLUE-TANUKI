@@ -10,7 +10,7 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - Android 17 / API 37では、手動確認したDesktop Brokerへ接続する目的を説明した後に限り、OSのlocal-network runtime permissionを要求する。拒否時はDesktopへの全network accessを無効のままにする。
 - TLS接続ごとに、上限とtimeoutを定めたDevice Link requestを一度だけ送る。requestがDesktopへ届いた可能性がある場合、招待を再送しない。
 - 返却されたdevice credentialはAndroid Keystore鍵で保護するAES-GCM ciphertextとしてのみ保存する。secure storageへの保存またはreadbackに失敗した場合、pairing完了と扱わない。
-- アプリがforegroundへ戻ったときに保存済みcredentialを確認する。backgroundへ移る際は接続socketを閉じる。
+- アプリがforegroundへ戻ったときに保存済みcredentialを確認し、Desktop確認に成功した場合はこの端末のTask申請一覧を一度だけread-onlyで再取得する。backgroundへ移る際は接続socketを閉じる。
 - 通常の解除はDesktopへ`端末離脱`を一度だけ送り、要求nonceと正確な失効応答を確認した後、端末内資格を削除してreadbackする。曖昧な応答では資格を保持し、自動再送しない。
 - 通信不能時の端末内資格削除は、Desktop側の失効と別の回復操作として明示する。資格の削除と、Desktop失効未確認・権限影響なしを固定した最大32件の非権威回復記録を同じKeystore保護状態へ保存し、両方のreadback後にだけ完了表示する。
 - foreground世代が変わった場合、TLS handshake後・要求送信前に再確認し、backgroundから新しい要求を送らない。
@@ -19,7 +19,7 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - 申請一覧に同じsessionが現れたことを確認するまで次の申請を拒否する。開始・取消は毎回最新Task状態を再取得し、開始候補／`pending`／`running`に合致する場合だけ一度要求する。開始許可はBroker側の再検査に委ね、取消要求を実停止と扱わない。
 - Task一覧は申請ID・指示hash・状態・結果hash・結果本文の有無だけを扱い、結果本文・監査識別子をMobileへ返さない。
 
-Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。通知、lifecycle復帰、更新、installed package削除も未成立。Android emulator・実機、KeyStore実動、release packageで検査していない。
+Task一覧のforeground再取得は申請checkpointの照合だけに使い、自動再申請・開始・取消は行わない。既存Taskの個別状態は使用者が明示して照会する。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。通知、更新、installed package削除も未成立。Android emulator・実機、KeyStore実動、release packageで検査していない。
 
 ## ビルドと限定確認
 

@@ -8,7 +8,10 @@ struct BlueTanukiApp: App {
   var body: some Scene {
     WindowGroup {
       ContentView(model: model)
-        .onAppear { model.loadLocalState() }
+        .onAppear {
+          model.loadLocalState()
+          model.resumeTaskState()
+        }
         .onChange(of: scenePhase) { phase in
           model.setForeground(phase == .active)
         }

@@ -11,6 +11,7 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 - アプリがforegroundを離れるとactive transportをcancelする。申請送信前にKeychainへsession IDだけを`WhenUnlockedThisDeviceOnly`で記録し、結果不明時はアプリ再起動後も端末申請一覧との照合まで新規申請を止める。依頼本文やTask本文は端末へ永続保存しない。
 - Desktop Brokerから実行系と登録Workspaceを読み、Workspaceに束縛した新しい対話sessionからTask申請を一度だけ送る。申請はDesktop owner確認待ちとして扱う。
 - この端末のTask申請一覧とrequest-bound状態を明示照会できる。開始候補の場合だけ直前に状態を再照会して開始要求を出し、Broker側のApproval／Permission再検査に委ねる。
+- アプリ起動時とbackgroundからforegroundへ戻ったときにTask申請一覧をread-onlyで取得し、Keychainの保留中session IDと一致する申請が見つかった場合だけcheckpointを解除する。自動再申請・開始・取消は行わず、既存Taskの個別状態は使用者が明示して照会する。
 - 取消はTaskの現在状態を照会してから一度だけ要求する。取消要求受付をworker停止・外部処理停止と同一視しない。
 - Task投影は識別子・状態・hash・結果本文の有無に限り、依頼本文・結果本文・Tool名・schema・credential・Approval情報・監査識別子を表示しない。
 - MCPを使う申請は明示取得した`metadata_only`能力snapshot hashを任意で添付する。能力名・接続先・schema・credential・結果はMobileへ返さず、hashは権限にならない。
@@ -20,7 +21,7 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 
 Mobile側にはDevice Link契約に沿ったTask申請・状態照会・開始要求・取消要求のsourceを追加した。D4 BrokerとBLUE Runtime Adapterを通る一仕事が、BLUE Gateway／C/J/Mへ実際に届き、承認・作用・結果・M・復帰まで一気通貫に動いたことは未確認である。公開repoではD4のDevice Link／AgentTask契約を確認できるが、D4側の`blue_tanuki_adapter`は参照READMEのみで、実装sourceは見つかっていない。Gatewayの既存runtime-intent経路とこのBroker操作を結ぶ実consumerも未確認である。
 
-通知、lifecycleからのTask復帰、更新・rollback、package削除処理も未実装である。結果不明の申請はKeychain内のsession ID checkpointで再起動後も新規送信を停止し、Desktop一覧で一致した場合だけ保留を解除する。照合できない場合はDesktop ownerがAgent Centerで確認するまで停止を維持する。このsource変更だけではG10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
+通知、更新・rollback、package削除処理は未実装である。結果不明の申請はKeychain内のsession ID checkpointで再起動後も新規送信を停止し、Desktop一覧で一致した場合だけ保留を解除する。照合できない場合はDesktop ownerがAgent Centerで確認するまで停止を維持する。このsource変更だけではD4 BrokerとBLUE Gateway／C/J/Mを通る実経路、G10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
 
 iOS targetはunsigned source段階であり、Simulatorまたは実機へのinstall・起動は未実施。local-network permission、Keychainの実動、実Desktop Brokerとのpairing、Task操作およびBLUEのC/J/Mを通る仕事は未確認である。
 

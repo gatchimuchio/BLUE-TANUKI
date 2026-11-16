@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
     private final Map<String, MobileTaskContract.TaskStatus> taskStatuses = new HashMap<>();
     private boolean taskSubmissionNeedsReconciliation;
     private boolean taskStateUncertain;
+    private boolean refreshOwnedTaskRequestsAfterForeground;
     private boolean updatingTaskSpinners;
     private volatile boolean taskOperationInFlight;
     private volatile boolean taskSubmissionInFlight;
@@ -116,6 +117,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         foreground = true;
+        refreshOwnedTaskRequestsAfterForeground = true;
         loadTaskCheckpoint();
         verifyStoredCredential();
         refreshTaskControls();
@@ -454,6 +456,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if (credentialStateUncertain) {
+            refreshOwnedTaskRequestsAfterForeground = false;
             refreshCredentialControls(credentialStore.contains());
             setStatus("保存資格または回復記録の状態を確定できません。通信・再結合を停止しています。アプリを再起動して状態を読み直してください。");
             return;
@@ -463,20 +466,24 @@ public final class MainActivity extends Activity {
             credential = credentialStore.read();
         } catch (AndroidCredentialStore.CredentialStoreException exception) {
             credentialStateUncertain = true;
+            refreshOwnedTaskRequestsAfterForeground = false;
             refreshCredentialControls(true);
             setStatus("Keystore資格を読み取れません。保存済み資格を代用せず、Desktopへ接続しません。");
             return;
         }
         if (credential == null) {
+            refreshOwnedTaskRequestsAfterForeground = false;
             refreshCredentialControls(false);
             return;
         }
         refreshCredentialControls(true);
         if (credential.expiresAt <= System.currentTimeMillis() / 1000L) {
+            refreshOwnedTaskRequestsAfterForeground = false;
             setStatus("保存資格の有効期限が切れています。自動延長・再結合は行わず、Desktop ownerへ確認してください。");
             return;
         }
         if (!hasLocalNetworkPermission()) {
+            refreshOwnedTaskRequestsAfterForeground = false;
             setStatus("Desktop接続にはAndroidのローカルネットワーク許可が必要です。上の許可ボタンからOSへ要求してください。");
             return;
         }
@@ -484,11 +491,13 @@ public final class MainActivity extends Activity {
         refreshCredentialControls(true);
         setStatus("foregroundでKeystore資格を再読取し、Desktopへ端末確認を行っています。");
         long operationGeneration = generation.get();
+        AtomicBoolean connectionConfirmed = new AtomicBoolean(false);
         worker.execute(() -> {
             try {
                 DeviceLinkTransport.Exchange exchange = transport.check(credential,
                         () -> canSend(operationGeneration));
                 PairingResponseParser.requireConnectedResponse(exchange.response, exchange.nonce);
+                connectionConfirmed.set(true);
                 postStatus(operationGeneration, "Desktop Brokerが端末確認を受理しました。これは現在の接続状態の観測であり、仕事の実行や承認を示しません。");
             } catch (PairingResponseParser.PairingRejectedException exception) {
                 postStatus(operationGeneration, "Desktop Brokerが端末確認を拒否または停止しました。資格を使った仕事は行いません。");
@@ -499,9 +508,25 @@ public final class MainActivity extends Activity {
                     busy = false;
                     refreshCredentialControls(credentialStore.contains());
                     refreshRecoveryAuditSummary();
+                    finishForegroundCredentialCheck(operationGeneration, connectionConfirmed.get());
                 });
             }
         });
+    }
+
+    private void finishForegroundCredentialCheck(long operationGeneration, boolean connectionConfirmed) {
+        if (!refreshOwnedTaskRequestsAfterForeground || !foreground || busy) return;
+        if (generation.get() != operationGeneration) {
+            verifyStoredCredential();
+            return;
+        }
+        refreshOwnedTaskRequestsAfterForeground = false;
+        if (connectionConfirmed) refreshOwnedTaskRequests();
+    }
+
+    private void continueForegroundCredentialCheckAfterTaskOperation() {
+        if (!refreshOwnedTaskRequestsAfterForeground || !foreground || busy) return;
+        verifyStoredCredential();
     }
 
     private void beginDesktopRevocation() {
@@ -1027,6 +1052,7 @@ public final class MainActivity extends Activity {
                             : "画面非表示中に操作が終了しました。結果を推測せず、復帰後に状態を照会してください。";
                 }
                 refreshCredentialControls(credentialStore.contains());
+                continueForegroundCredentialCheckAfterTaskOperation();
             });
         });
     }

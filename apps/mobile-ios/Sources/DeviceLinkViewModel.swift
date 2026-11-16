@@ -94,6 +94,7 @@ final class DeviceLinkViewModel: ObservableObject {
   private let lifecycle = DeviceLinkLifecycleGate()
   private var pendingInvitation: DeviceLinkCredential?
   private var pendingTaskSessionID: String?
+  private var refreshOwnedTasksAfterForeground = false
 
   func loadLocalState() {
     guard !busy else { return }
@@ -121,6 +122,7 @@ final class DeviceLinkViewModel: ObservableObject {
     guard changed else { return }
     if value {
       loadLocalState()
+      resumeTaskState()
     } else {
       pendingInvitation = nil
       hostPreview = nil
@@ -129,6 +131,16 @@ final class DeviceLinkViewModel: ObservableObject {
       includeMcpCapability = false
       transport.cancelActive()
     }
+  }
+
+  func resumeTaskState() {
+    guard lifecycle.isForeground(), paired, !credentialExpired else { return }
+    guard !busy else {
+      refreshOwnedTasksAfterForeground = true
+      return
+    }
+    refreshOwnedTasksAfterForeground = false
+    refreshOwnedTasks()
   }
 
   func selectRuntime(_ runtimeID: String) {
@@ -516,6 +528,7 @@ final class DeviceLinkViewModel: ObservableObject {
       let result = Result { try action(evidence) }
       DispatchQueue.main.async {
         self.busy = false
+        defer { self.scheduleOwnedTaskRefreshAfterForeground() }
         guard self.lifecycle.isCurrent(epoch) else {
           if evidence.taskSubmissionMayHaveReachedDesktop {
             self.taskInstruction = ""
@@ -553,6 +566,14 @@ final class DeviceLinkViewModel: ObservableObject {
           self.taskMessage = failureMessage(error, evidence)
         }
       }
+    }
+  }
+
+  private func scheduleOwnedTaskRefreshAfterForeground() {
+    guard refreshOwnedTasksAfterForeground, lifecycle.isForeground(), !busy else { return }
+    refreshOwnedTasksAfterForeground = false
+    DispatchQueue.main.async { [weak self] in
+      self?.refreshOwnedTasks()
     }
   }
 
