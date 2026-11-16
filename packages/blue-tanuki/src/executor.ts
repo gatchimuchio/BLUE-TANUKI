@@ -938,7 +938,7 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v8",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v9",
       command_digest,
       proof,
       hds_source_context_digest,
@@ -954,6 +954,7 @@ function approveCommandForExecution(
     ...(hds_binding?.operation_plan_binding_digest
       ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
     ...(hds_binding?.target_id ? { target_id: hds_binding.target_id } : {}),
+    ...(hds_source_context_digest ? { hds_source_context_digest } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
     ...(hds_binding?.goal_version_binding ? { goal_version_binding: hds_binding.goal_version_binding } : {}),
@@ -993,7 +994,8 @@ function assertTicketCurrent(record: ApprovedCommandRecord): number {
     throw new Error("Executor rejected command: approval ticket expired or epoch changed");
   }
   const binding = record.hds_binding;
-  if (record.ticket.operation_plan_binding_digest !== binding?.operation_plan_binding_digest ||
+  if (record.ticket.hds_source_context_digest !== binding?.source_context_digest ||
+      record.ticket.operation_plan_binding_digest !== binding?.operation_plan_binding_digest ||
       record.ticket.target_id !== binding?.target_id ||
       (binding?.operation_plan_binding_digest !== undefined &&
         (!binding.target_id || record.ticket.target_id !== binding.target_id))) {

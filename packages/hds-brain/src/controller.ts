@@ -4665,6 +4665,7 @@ ${planControl.question}`,
         admitted.goal_version_binding?.purpose_digest === record?.goal_version_binding?.purpose_digest;
       if (!record || record.command !== command || !record.consumed || !record.operation_plan_binding_digest ||
           !record.task_identity_digest || admitted.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+          admitted.hds_source_context_digest !== record.source_context_digest ||
           admitted.target_id !== record.target_id ||
           admitted.task_identity_digest !== record.task_identity_digest ||
           !goalVersionBindingMatches ||

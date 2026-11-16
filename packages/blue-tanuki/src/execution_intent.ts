@@ -5,6 +5,8 @@ export interface ExecutionIntentTicket {
   command_key: string;
   command_digest: string;
   proof_digest: string;
+  /** Digest of the exact HDS source context; provenance only, never authority. */
+  hds_source_context_digest?: string;
   /** Exact J-selected Operation Plan source; provenance digest, not authority. */
   operation_plan_binding_digest?: string;
   /** Exact selected OperationTarget.id; kept separate from the target version and exposed only to J/Broker. */
