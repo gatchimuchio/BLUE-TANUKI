@@ -417,18 +417,19 @@ final class DeviceLinkViewModel: ObservableObject {
           allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
         )
         let status = try MobileTaskContract.status(statusBody, draft: draft)
-        guard case .startCandidate = status else { return status }
+        guard case .startCandidate = status else { return (status, false) }
         let body = try self.mobileTaskBody(
           credential, operation: "AgentTask端末実行", payload: ["申請ID": draft.id],
           allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
         )
-        return .task(try MobileTaskContract.started(body, draft: draft))
+        return (.task(try MobileTaskContract.started(body, draft: draft)), true)
       },
-      onSuccess: { status in
+      onSuccess: { result in
+        let status = result.0
         self.taskStatuses[draft.id] = status
-        self.taskMessage = status == .startCandidate
-          ? "開始候補ではなくなりました。最新状態を表示しています。"
-          : "Brokerが開始要求を処理しました。権限はBrokerで再検査され、Task本文は表示しません。"
+        self.taskMessage = result.1
+          ? "Brokerが開始要求を処理しました。権限はBrokerで再検査され、Task本文は表示しません。"
+          : "開始候補ではなくなりました。開始要求は送信せず、最新状態を表示しています。"
       }
     )
   }

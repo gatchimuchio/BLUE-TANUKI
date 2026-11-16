@@ -1,6 +1,7 @@
 package com.bluetanuki.mobile;
 
 import java.util.Map;
+import java.util.Set;
 
 final class PairingResponseParser {
     private PairingResponseParser() {}
@@ -85,6 +86,26 @@ final class PairingResponseParser {
                     !"失効".equals(StrictJson.string(body, "状態"))) {
                 throw new PairingUnknownException();
             }
+        } catch (PairingRejectedException | PairingUnknownException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new PairingUnknownException();
+        }
+    }
+
+    static Map<String, Object> requireAcceptedResponse(String json, String nonce, String operation,
+                                                       Set<String> allowedEvidence)
+            throws PairingRejectedException, PairingUnknownException {
+        try {
+            Map<String, Object> envelope = StrictJson.object(StrictJson.parse(json));
+            String status = requireEnvelope(envelope, nonce, operation);
+            if ("rejected".equals(status) || "suspended".equals(status)) {
+                throw new PairingRejectedException();
+            }
+            if (!allowedEvidence.contains(StrictJson.string(envelope, "evidence_source"))) {
+                throw new PairingUnknownException();
+            }
+            return StrictJson.object(envelope.get("body"));
         } catch (PairingRejectedException | PairingUnknownException exception) {
             throw exception;
         } catch (Exception exception) {

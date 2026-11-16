@@ -44,6 +44,81 @@ final class StrictJson {
         return true;
     }
 
+    static String encode(Object value) throws JsonException {
+        StringBuilder output = new StringBuilder();
+        writeValue(output, value, 0, new int[] { 0 });
+        return output.toString();
+    }
+
+    private static void writeValue(StringBuilder output, Object value, int depth, int[] nodes)
+            throws JsonException {
+        if (depth > MAX_DEPTH || ++nodes[0] > MAX_NODES) throw new JsonException();
+        if (value == null) {
+            output.append("null");
+        } else if (value instanceof String) {
+            writeString(output, (String) value);
+        } else if (value instanceof Boolean) {
+            output.append(value);
+        } else if (value instanceof Byte || value instanceof Short || value instanceof Integer ||
+                value instanceof Long) {
+            output.append(value);
+        } else if (value instanceof List<?>) {
+            List<?> values = (List<?>) value;
+            output.append('[');
+            for (int index = 0; index < values.size(); index++) {
+                if (index > 0) output.append(',');
+                writeValue(output, values.get(index), depth + 1, nodes);
+            }
+            output.append(']');
+        } else if (value instanceof Map<?, ?>) {
+            Map<?, ?> values = (Map<?, ?>) value;
+            output.append('{');
+            boolean first = true;
+            for (Map.Entry<?, ?> entry : values.entrySet()) {
+                if (!(entry.getKey() instanceof String)) throw new JsonException();
+                if (!first) output.append(',');
+                first = false;
+                writeString(output, (String) entry.getKey());
+                output.append(':');
+                writeValue(output, entry.getValue(), depth + 1, nodes);
+            }
+            output.append('}');
+        } else {
+            throw new JsonException();
+        }
+        if (output.length() > 4 * 1024 * 1024) throw new JsonException();
+    }
+
+    private static void writeString(StringBuilder output, String value) throws JsonException {
+        output.append('"');
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            switch (current) {
+                case '"': output.append("\\\""); break;
+                case '\\': output.append("\\\\"); break;
+                case '\b': output.append("\\b"); break;
+                case '\f': output.append("\\f"); break;
+                case '\n': output.append("\\n"); break;
+                case '\r': output.append("\\r"); break;
+                case '\t': output.append("\\t"); break;
+                default:
+                    if (current < 0x20) {
+                        output.append(String.format("\\u%04x", (int) current));
+                    } else if (Character.isHighSurrogate(current)) {
+                        if (index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1))) {
+                            throw new JsonException();
+                        }
+                        output.append(current).append(value.charAt(++index));
+                    } else if (Character.isLowSurrogate(current)) {
+                        throw new JsonException();
+                    } else {
+                        output.append(current);
+                    }
+            }
+        }
+        output.append('"');
+    }
+
     static String string(Map<String, Object> value, String key) throws JsonException {
         Object found = value.get(key);
         if (!(found instanceof String)) {

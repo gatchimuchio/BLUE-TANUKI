@@ -15,6 +15,10 @@ import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLContext;
@@ -27,6 +31,10 @@ final class DeviceLinkTransport {
     private static final int READ_TIMEOUT_MS = 5_000;
     private static final int MAX_REQUEST_BYTES = 64 * 1024;
     private static final int MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+    private static final Set<String> TASK_OPERATIONS = new HashSet<>(Arrays.asList(
+            "実行系列挙", "作業領域一覧", "対話開始", "対話終了", "AgentTask端末申請",
+            "AgentTask端末申請一覧", "AgentTask端末MCP能力取得", "AgentTask端末状態",
+            "AgentTask端末実行", "AgentTask端末取消"));
 
     private final AtomicReference<SSLSocket> activeSocket = new AtomicReference<>();
 
@@ -55,6 +63,34 @@ final class DeviceLinkTransport {
                 "端末離脱");
         return new Exchange(nonce, exchange(credential.host, credential.port,
                 credential.certificateSha256, request, canSend));
+    }
+
+    Exchange taskOperation(DeviceCredential credential, String operation, Map<String, Object> content,
+                           SendGuard canSend) throws TransportException {
+        if (credential == null || content == null || !TASK_OPERATIONS.contains(operation) ||
+                credential.expiresAt <= System.currentTimeMillis() / 1000L ||
+                canSend == null || !canSend.canSend()) {
+            throw new TransportException(false);
+        }
+        String nonce = DeviceInvitation.newDeviceId();
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("版", 1);
+        request.put("HostID", credential.hostId);
+        request.put("端末ID", credential.deviceId);
+        request.put("資格ID", credential.credentialId);
+        request.put("資格秘密", credential.credentialSecret);
+        request.put("nonce", nonce);
+        request.put("発行時刻", System.currentTimeMillis() / 1000L);
+        request.put("操作", operation);
+        request.put("内容", content);
+        final String serialized;
+        try {
+            serialized = StrictJson.encode(request);
+        } catch (StrictJson.JsonException exception) {
+            throw new TransportException(false);
+        }
+        return new Exchange(nonce, exchange(credential.host, credential.port,
+                credential.certificateSha256, serialized, canSend));
     }
 
     void closeActive() {
