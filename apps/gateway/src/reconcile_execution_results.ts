@@ -11,11 +11,13 @@ export function executionAdmissionForCommand(command: ExecuteCommand, receipt: E
     throw new Error("plan_executor_admission_mismatch");
   }
   const { ticket_id, command_key, command_digest, proof_digest, operation_plan_binding_digest,
-    target_version_observation_digest, task_identity_digest, execution_epoch, issued_at_ms, expires_at_ms } = receipt;
+    target_version_observation_digest, task_identity_digest, operation_id, adapter_version,
+    execution_epoch, issued_at_ms, expires_at_ms } = receipt;
   return ExecutionAdmissionSchema.parse({ ticket_id, command_key, command_digest, proof_digest,
     ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
-    ...(task_identity_digest ? { task_identity_digest } : {}), execution_epoch, issued_at_ms, expires_at_ms });
+    ...(task_identity_digest ? { task_identity_digest } : {}),
+    ...(operation_id ? { operation_id, adapter_version } : {}), execution_epoch, issued_at_ms, expires_at_ms });
 }
 
 /** 別DB間の配送。現世代だけJへ渡し、旧世代はprivate evidenceへ隔離する。 */
