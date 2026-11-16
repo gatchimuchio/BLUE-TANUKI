@@ -64,6 +64,12 @@ export interface McpCatalogProjection {
   /** Digest of the bounded catalog projection and connection digest. */
   readonly catalog_digest: string;
   readonly server_info: { readonly name: string; readonly version: string } | null;
+  /** Untrusted capability claims from the MCP server; null means no capability object was supplied. */
+  readonly server_advertised_capabilities: {
+    readonly tools: boolean;
+    readonly resources: boolean;
+    readonly prompts: boolean;
+  } | null;
   readonly tools: readonly McpToolCatalogEntry[];
   readonly resources: readonly McpResourceCatalogEntry[];
   readonly resource_templates: readonly McpResourceTemplateCatalogEntry[];
@@ -296,6 +302,7 @@ async function readMcpCatalogSnapshot(client: Client) {
     resource_templates: resourceTemplatePage.resourceTemplates ?? [],
     prompts: promptPage.prompts ?? [],
     server_info: client.getServerVersion(),
+    server_capabilities: client.getServerCapabilities(),
   };
 }
 
@@ -303,7 +310,8 @@ function projectMcpCatalog(
   snapshot: Awaited<ReturnType<typeof readMcpCatalogSnapshot>>,
   endpoint: URL,
 ): McpCatalogProjection {
-  const { tools, resources, resource_templates: resourceTemplates, prompts, server_info: serverInfo } = snapshot;
+  const { tools, resources, resource_templates: resourceTemplates, prompts, server_info: serverInfo,
+    server_capabilities: serverCapabilities } = snapshot;
   const projection = {
     schema_version: "blue-tanuki.mcp-catalog-projection.v1",
     protocol_version: BLUE_TANUKI_MCP_PROTOCOL_VERSION,
@@ -312,6 +320,11 @@ function projectMcpCatalog(
     server_info: serverInfo?.name && serverInfo.version
       ? { name: boundedIdentifier(serverInfo.name), version: boundedIdentifier(serverInfo.version) }
       : null,
+    server_advertised_capabilities: serverCapabilities ? {
+      tools: serverCapabilities.tools !== undefined,
+      resources: serverCapabilities.resources !== undefined,
+      prompts: serverCapabilities.prompts !== undefined,
+    } : null,
     tools: tools.slice(0, MAX_CATALOG_ITEMS).flatMap((tool) => {
       const name = safeText(tool.name, 200);
       if (!name) return [];

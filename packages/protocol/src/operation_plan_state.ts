@@ -331,7 +331,7 @@ export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-source-observations-memory-citation.v2";
 export const OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-mcp-tool-catalog.v1";
+  "blue-tanuki.plan-compute-mcp-tool-catalog.v2";
 export const OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-owner-selected-mcp-result.v1";
 /** Parent identity for an explicit result-backed continuation; it grants no authority. */
@@ -391,6 +391,11 @@ export const OperationPlanMcpCatalogContextSchema = z.object({
   connection_digest: Digest,
   catalog_digest: Digest,
   catalog_completeness: z.literal("unknown"),
+  server_advertised_capabilities: z.object({
+    tools: z.boolean(),
+    resources: z.boolean(),
+    prompts: z.boolean(),
+  }).strict().nullable().optional(),
   tools: z.array(OperationPlanMcpCatalogToolSchema).max(128),
   resources: z.array(OperationPlanMcpCatalogResourceSchema).max(128).optional(),
   resource_templates: z.array(OperationPlanMcpCatalogResourceTemplateSchema).max(128).optional(),
