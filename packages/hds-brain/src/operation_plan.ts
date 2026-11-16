@@ -4909,31 +4909,37 @@ export class OperationPlanLedger {
       return false;
     }
     if (!this.isBound(command.id)) return true;
-    const admitted = admission === undefined ? undefined : ExecutionAdmissionSchema.parse(admission);
+    if (admission === undefined) {
+      onRejected?.("execution_admission_required");
+      return false;
+    }
+    const admitted = ExecutionAdmissionSchema.parse(admission);
     const binding = this.binding(command.id)?.b;
-    if (admitted) {
-      const now = this.nowMs();
-      const admissionFailure = !binding?.executor_command_digest || admitted.command_digest !== binding.executor_command_digest ||
-          admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")
-        ? "execution_admission_command_mismatch"
-        : admitted.task_identity_digest !== this.executionTaskIdentityDigest(command)
-          ? "execution_admission_task_identity_mismatch"
-          : !Number.isSafeInteger(now) || now <= 0 || !Number.isSafeInteger(admitted.issued_at_ms) ||
-              !Number.isSafeInteger(admitted.expires_at_ms)
-            ? "execution_admission_clock_invalid"
-            : now < admitted.issued_at_ms
-              ? "execution_admission_not_yet_valid"
-              : now >= admitted.expires_at_ms
-                ? "execution_admission_expired"
-                : undefined;
-      if (admissionFailure) {
-        onRejected?.(admissionFailure);
-        return false;
-      }
+    const now = this.nowMs();
+    const sourceBindingDigest = this.executionSourceBindingDigest(command);
+    const taskIdentityDigest = this.executionTaskIdentityDigest(command);
+    const admissionFailure = !binding?.executor_command_digest || !sourceBindingDigest || !taskIdentityDigest ||
+        admitted.command_digest !== binding.executor_command_digest ||
+        admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
+        admitted.operation_plan_binding_digest !== sourceBindingDigest
+      ? "execution_admission_command_mismatch"
+      : admitted.task_identity_digest !== taskIdentityDigest
+        ? "execution_admission_task_identity_mismatch"
+        : !Number.isSafeInteger(now) || now <= 0 || !Number.isSafeInteger(admitted.issued_at_ms) ||
+            !Number.isSafeInteger(admitted.expires_at_ms)
+          ? "execution_admission_clock_invalid"
+          : now < admitted.issued_at_ms
+            ? "execution_admission_not_yet_valid"
+            : now >= admitted.expires_at_ms
+              ? "execution_admission_expired"
+              : undefined;
+    if (admissionFailure) {
+      onRejected?.(admissionFailure);
+      return false;
     }
     this.change((state) => { for (const p of state.plans) {
       const b = p.bindings.find((b) => b.command_id === command.id);
-      if (b) { b.status = "intent_committed"; if (admitted) b.execution_admission = admitted; }
+      if (b) { b.status = "intent_committed"; b.execution_admission = admitted; }
     } });
     this.activePlanAttempts.add(this.issuedBindings.get(command) ?? command.id);
     freezeCommand(command);

@@ -65,6 +65,12 @@ export interface PendingToolLifecycleEvidence {
 export type PendingTaskExecutionCancellationEvidence = TaskExecutionCancellationEvidence;
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
+  if (admission.operation_plan_binding_digest !== undefined || admission.target_version_observation_digest !== undefined) {
+    return digest(JSON.stringify(["blue-tanuki.execution-admission.v3", admission.ticket_id, admission.command_key,
+      admission.command_digest, admission.proof_digest, admission.operation_plan_binding_digest ?? null,
+      admission.target_version_observation_digest ?? null, admission.task_identity_digest ?? null,
+      admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
+  }
   return admission.task_identity_digest
     ? digest(JSON.stringify(["blue-tanuki.execution-admission.v2", admission.ticket_id, admission.command_key,
         admission.command_digest, admission.proof_digest, admission.task_identity_digest, admission.execution_epoch,

@@ -21,6 +21,7 @@ import type {
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
 } from "@blue-tanuki/protocol";
+import { ExecutionAdmissionSchema } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
@@ -323,6 +324,7 @@ interface HDSExecutionAuthorityBindingRecord {
 }
 
 const HDS_EXECUTION_AUTHORITY_BINDINGS = new WeakMap<object, HDSExecutionAuthorityBindingRecord>();
+const HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS = new WeakMap<ExecuteCommand, HDSExecutionAuthorityBindingRecord>();
 
 /**
  * Consume the private seal once. Copying its public digest cannot recreate the
@@ -333,7 +335,7 @@ export function consumeHdsExecutionAuthorityBinding(
   binding: HDSExecutionAuthorityBinding,
 ): string {
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
-  if (!record || record.command !== command || record.consumed ||
+  if (!record || HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command) !== record || record.command !== command || record.consumed ||
       binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v4" ||
       binding.source_context_digest !== record.source_context_digest ||
       binding.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
@@ -4472,14 +4474,16 @@ ${planControl.question}`,
       ...(goalGovernanceProjectionDigest
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
     });
-    HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest,
+    const record: HDSExecutionAuthorityBindingRecord = { command, source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
       ...(task_identity_digest ? { task_identity_digest } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
-      consumed: false });
+      consumed: false };
+    HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, record);
+    HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.set(command, record);
     return binding;
   }
   beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission, onRejected?: (reason: string) => void): boolean {
@@ -4488,7 +4492,20 @@ ${planControl.question}`,
       onRejected?.("hds_inflight_source_mismatch");
       return false;
     }
-    const allowed = this.operationPlans.beginAttempt(command, admission, onRejected);
+    let admitted = admission;
+    if (this.operationPlans.isBound(command.id)) {
+      try { admitted = ExecutionAdmissionSchema.parse(admission); }
+      catch { onRejected?.("execution_admission_required_or_invalid"); return false; }
+      const record = HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.get(command);
+      if (!record || record.command !== command || !record.consumed || !record.operation_plan_binding_digest ||
+          !record.task_identity_digest || admitted.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+          admitted.task_identity_digest !== record.task_identity_digest ||
+          admitted.target_version_observation_digest !== record.broker_target_version_observation_digest) {
+        onRejected?.("hds_execution_admission_binding_mismatch");
+        return false;
+      }
+    }
+    const allowed = this.operationPlans.beginAttempt(command, admitted, onRejected);
     if (allowed && this.operationPlans.isBound(command.id)) this.planEvent("intent_committed", command.id);
     return allowed;
   }
