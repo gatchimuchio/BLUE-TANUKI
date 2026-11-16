@@ -8,7 +8,8 @@ import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceip
   ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
-  getOperationDescriptor, getToolOperationDescriptor, type ExecutionAdmission, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
+  ExecutionGoalVersionBindingSchema, getOperationDescriptor, getToolOperationDescriptor,
+  type ExecutionAdmission, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -65,6 +66,14 @@ export interface PendingToolLifecycleEvidence {
 export type PendingTaskExecutionCancellationEvidence = TaskExecutionCancellationEvidence;
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
+  if (admission.goal_version_binding !== undefined) {
+    return digest(JSON.stringify(["blue-tanuki.execution-admission.v5", admission.ticket_id, admission.command_key,
+      admission.command_digest, admission.proof_digest, admission.operation_plan_binding_digest ?? null,
+      admission.target_version_observation_digest ?? null, admission.task_identity_digest ?? null,
+      [admission.goal_version_binding.goal_id_digest, admission.goal_version_binding.purpose_version,
+        admission.goal_version_binding.purpose_digest], admission.operation_id ?? null, admission.adapter_version ?? null,
+      admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
+  }
   if (admission.operation_id !== undefined || admission.adapter_version !== undefined) {
     return digest(JSON.stringify(["blue-tanuki.execution-admission.v4", admission.ticket_id, admission.command_key,
       admission.command_digest, admission.proof_digest, admission.operation_plan_binding_digest ?? null,
@@ -89,7 +98,8 @@ const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean
   ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
     "target_version_observation_digest", "task_identity_digest", "operation_id", "adapter_version",
     "execution_epoch", "issued_at_ms", "expires_at_ms"]
-    .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]);
+    .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]) &&
+  isDeepStrictEqual(a.goal_version_binding ?? null, b.goal_version_binding ?? null);
 
 /** 私有の実行所有記録。Jのcheckpointと別取引であり、権限の復元元ではない。 */
 export class GatewayExecutionIntentStore implements ExecutionIntentStore {
@@ -1336,6 +1346,8 @@ function validateTicket(ticket: ExecutionIntentTicket): void {
       (ticket.target_version_observation_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.target_version_observation_digest)) ||
       (ticket.operation_plan_binding_digest !== undefined && ticket.task_identity_digest === undefined) ||
       (ticket.task_identity_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.task_identity_digest)) ||
+      (ticket.goal_version_binding !== undefined &&
+        !ExecutionGoalVersionBindingSchema.safeParse(ticket.goal_version_binding).success) ||
       !Number.isSafeInteger(ticket.issued_at_ms) || ticket.issued_at_ms <= 0 || !Number.isSafeInteger(ticket.expires_at_ms) ||
       ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000) {
     throw new Error("execution_ticket_invalid");
@@ -1350,7 +1362,7 @@ function validateCurrentAdapterVersion(ticket: ExecutionIntentTicket): void {
 function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
   const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
-    "target_version_observation_digest", "task_identity_digest", "operation_id", "adapter_version",
+    "target_version_observation_digest", "task_identity_digest", "goal_version_binding", "operation_id", "adapter_version",
     "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
     "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_task_identity_digest",

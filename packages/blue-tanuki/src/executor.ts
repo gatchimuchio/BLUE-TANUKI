@@ -35,6 +35,7 @@ import {
   canonicalExecutorCommandSnapshot,
   normalizeGmailAddressList,
   inspectExecutionResultDelivery,
+  ExecutionGoalVersionBindingSchema,
   getToolOperationDescriptor,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   AgentDelegationContractSchema,
@@ -904,6 +905,8 @@ function approveCommandForExecution(
         (hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
         (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)) ||
         ((hds_binding.operation_id === undefined) !== (hds_binding.adapter_version === undefined)) ||
+        (hds_binding.goal_version_binding !== undefined &&
+          !ExecutionGoalVersionBindingSchema.safeParse(hds_binding.goal_version_binding).success) ||
         (snapshot.type === "tool_call" && (hds_binding.operation_id !== snapshot.payload.tool_name ||
           hds_binding.adapter_version !== getToolOperationDescriptor(snapshot.payload.tool_name)?.adapter_version)) ||
         (snapshot.type !== "tool_call" && hds_binding.operation_id !== undefined) ||
@@ -918,13 +921,14 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v6",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v7",
       command_digest,
       proof,
       hds_source_context_digest,
       ...(hds_binding?.operation_plan_binding_digest
         ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
       ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
+      ...(hds_binding?.goal_version_binding ? { goal_version_binding: hds_binding.goal_version_binding } : {}),
       ...(hds_binding?.operation_id ? { operation_id: hds_binding.operation_id,
         adapter_version: hds_binding.adapter_version } : {}),
       ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
@@ -933,6 +937,7 @@ function approveCommandForExecution(
       ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
     ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
+    ...(hds_binding?.goal_version_binding ? { goal_version_binding: hds_binding.goal_version_binding } : {}),
     ...(hds_binding?.operation_id ? { operation_id: hds_binding.operation_id,
       adapter_version: hds_binding.adapter_version } : {}),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,

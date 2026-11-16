@@ -1,4 +1,4 @@
-import type { ExecutionResultDelivery } from "@blue-tanuki/protocol";
+import type { ExecutionGoalVersionBinding, ExecutionResultDelivery } from "@blue-tanuki/protocol";
 /** Executor所有の消費・開始意思。Jの採否や環境Permissionを代替しない。 */
 export interface ExecutionIntentTicket {
   ticket_id: string;
@@ -11,6 +11,8 @@ export interface ExecutionIntentTicket {
   target_version_observation_digest?: string;
   /** J所有計画のtask digest。未計画の要求では省略する。 */
   task_identity_digest?: string;
+  /** Exact HDS-adopted purpose version; digest-only and non-authoritative. */
+  goal_version_binding?: ExecutionGoalVersionBinding;
   /** Exact reviewed adapter identity for a tool command; identity only, not authority. */
   operation_id?: string;
   adapter_version?: string;

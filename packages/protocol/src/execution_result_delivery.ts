@@ -3,11 +3,19 @@ import { OperationCommandExecutionResultSchema, OperationJsonValueSchema } from 
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const Time = z.number().int().positive().safe();
+/** Digest-only identity for the exact HDS-adopted purpose version; it carries no authority. */
+export const ExecutionGoalVersionBindingSchema = z.object({
+  goal_id_digest: Digest,
+  purpose_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  purpose_digest: Digest,
+}).strict();
+export type ExecutionGoalVersionBinding = z.infer<typeof ExecutionGoalVersionBindingSchema>;
 /** Executorで発行された同一性を、作用前にJの私有bindingへ結合する。権限ではない。 */
 export const ExecutionAdmissionSchema = z.object({
   ticket_id: z.string().uuid(), command_key: Digest, command_digest: Digest, proof_digest: Digest,
   operation_plan_binding_digest: Digest.optional(), target_version_observation_digest: Digest.optional(),
-  task_identity_digest: Digest.optional(), operation_id: z.string().min(1).max(200).optional(),
+  task_identity_digest: Digest.optional(), goal_version_binding: ExecutionGoalVersionBindingSchema.optional(),
+  operation_id: z.string().min(1).max(200).optional(),
   adapter_version: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/).optional(),
   execution_epoch: z.string().uuid(), issued_at_ms: Time, expires_at_ms: Time,
 }).strict().refine((v) => v.expires_at_ms > v.issued_at_ms && v.expires_at_ms - v.issued_at_ms <= 600_000 &&

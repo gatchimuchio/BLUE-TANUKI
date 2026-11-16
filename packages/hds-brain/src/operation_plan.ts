@@ -4914,10 +4914,19 @@ export class OperationPlanLedger {
       return false;
     }
     const admitted = ExecutionAdmissionSchema.parse(admission);
-    const binding = this.binding(command.id)?.b;
+    const match = this.binding(command.id);
+    const binding = match?.b;
     const now = this.nowMs();
     const sourceBindingDigest = this.executionSourceBindingDigest(command);
     const taskIdentityDigest = this.executionTaskIdentityDigest(command);
+    const currentGoalVersionBinding = match?.p.goal_purpose_binding
+      ? { goal_id_digest: createHash("sha256").update(match.p.goal_purpose_binding.goal_ref, "utf8").digest("hex"),
+          purpose_version: match.p.goal_purpose_binding.purpose_version,
+          purpose_digest: match.p.goal_purpose_binding.purpose_digest }
+      : undefined;
+    const goalVersionBindingMatches = admitted.goal_version_binding?.goal_id_digest === currentGoalVersionBinding?.goal_id_digest &&
+      admitted.goal_version_binding?.purpose_version === currentGoalVersionBinding?.purpose_version &&
+      admitted.goal_version_binding?.purpose_digest === currentGoalVersionBinding?.purpose_digest;
     const admissionFailure = !binding?.executor_command_digest || !sourceBindingDigest || !taskIdentityDigest ||
         admitted.command_digest !== binding.executor_command_digest ||
         admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
@@ -4925,6 +4934,8 @@ export class OperationPlanLedger {
       ? "execution_admission_command_mismatch"
       : admitted.task_identity_digest !== taskIdentityDigest
         ? "execution_admission_task_identity_mismatch"
+        : !goalVersionBindingMatches
+          ? "execution_admission_goal_version_mismatch"
         : !Number.isSafeInteger(now) || now <= 0 || !Number.isSafeInteger(admitted.issued_at_ms) ||
             !Number.isSafeInteger(admitted.expires_at_ms)
           ? "execution_admission_clock_invalid"
