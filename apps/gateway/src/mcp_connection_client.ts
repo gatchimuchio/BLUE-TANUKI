@@ -119,7 +119,10 @@ export async function inspectMcpToolPlanningCatalog(
     const snapshot = await readMcpCatalogSnapshot(client);
     const catalog = projectMcpCatalog(snapshot, endpoint);
     const listedTools = snapshot.tools;
-    if (listedTools.length > MAX_CATALOG_ITEMS) throw new Error("mcp_catalog_planning_context_invalid");
+    if (listedTools.length > MAX_CATALOG_ITEMS || snapshot.resources.length > MAX_CATALOG_ITEMS ||
+        snapshot.resource_templates.length > MAX_CATALOG_ITEMS || snapshot.prompts.length > MAX_CATALOG_ITEMS) {
+      throw new Error("mcp_catalog_planning_context_invalid");
+    }
     const tools = listedTools.map((tool) => ({
       name: requireMcpPlanningText(tool.name, 200),
       title: optionalMcpPlanningText(tool.title, 200),
@@ -130,6 +133,37 @@ export async function inspectMcpToolPlanningCatalog(
     if (new Set(tools.map((tool) => tool.name)).size !== tools.length) {
       throw new Error("mcp_catalog_planning_context_invalid");
     }
+    const resources = snapshot.resources.map((resource) => ({
+      name: requireMcpPlanningText(resource.name, 200),
+      title: optionalMcpPlanningText(resource.title, 200),
+      description: optionalMcpPlanningText(resource.description, 2_048),
+      uri_sha256: digestJson(resource.uri),
+      mime_type: optionalMcpPlanningText(resource.mimeType, 120),
+    }));
+    const resourceTemplates = snapshot.resource_templates.map((template) => ({
+      name: requireMcpPlanningText(template.name, 200),
+      title: optionalMcpPlanningText(template.title, 200),
+      description: optionalMcpPlanningText(template.description, 2_048),
+      uri_template_sha256: digestJson(template.uriTemplate),
+      mime_type: optionalMcpPlanningText(template.mimeType, 120),
+    }));
+    const prompts = snapshot.prompts.map((prompt) => ({
+      name: requireMcpPlanningText(prompt.name, 200),
+      title: optionalMcpPlanningText(prompt.title, 200),
+      description: optionalMcpPlanningText(prompt.description, 2_048),
+      arguments: (prompt.arguments ?? []).map((argument) => ({
+        name: requireMcpPlanningText(argument.name, 200),
+        description: optionalMcpPlanningText(argument.description, 2_048),
+        required: argument.required === true,
+      })),
+      arguments_sha256: digestJson(prompt.arguments ?? []),
+    }));
+    if (new Set(resources.map((resource) => resource.uri_sha256)).size !== resources.length ||
+        new Set(resourceTemplates.map((template) => template.uri_template_sha256)).size !== resourceTemplates.length ||
+        new Set(prompts.map((prompt) => prompt.name)).size !== prompts.length ||
+        prompts.some((prompt) => new Set(prompt.arguments.map((argument) => argument.name)).size !== prompt.arguments.length)) {
+      throw new Error("mcp_catalog_planning_context_invalid");
+    }
     const context = OperationPlanMcpCatalogContextSchema.parse({
       schema_version: "blue-tanuki.operation-plan-mcp-catalog-context.v1" as const,
       protocol_version: BLUE_TANUKI_MCP_PROTOCOL_VERSION,
@@ -138,6 +172,9 @@ export async function inspectMcpToolPlanningCatalog(
       catalog_digest: catalog.catalog_digest,
       catalog_completeness: "unknown" as const,
       tools,
+      resources,
+      resource_templates: resourceTemplates,
+      prompts,
       source_is_untrusted: true as const,
       used_for_authority: false as const,
       may_execute: false as const,

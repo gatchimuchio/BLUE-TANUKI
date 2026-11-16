@@ -353,7 +353,37 @@ const OperationPlanMcpCatalogToolSchema = z.object({
   input_schema_sha256: Digest,
 }).strict();
 
-/** Explicitly selected, short-lived MCP tool metadata supplied to C as untrusted planning data only. */
+const OperationPlanMcpCatalogResourceSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  title: z.string().max(200).nullable(),
+  description: z.string().max(2_048).nullable(),
+  uri_sha256: Digest,
+  mime_type: z.string().max(120).nullable(),
+}).strict();
+
+const OperationPlanMcpCatalogResourceTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  title: z.string().max(200).nullable(),
+  description: z.string().max(2_048).nullable(),
+  uri_template_sha256: Digest,
+  mime_type: z.string().max(120).nullable(),
+}).strict();
+
+const OperationPlanMcpCatalogPromptArgumentSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().max(2_048).nullable(),
+  required: z.boolean(),
+}).strict();
+
+const OperationPlanMcpCatalogPromptSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  title: z.string().max(200).nullable(),
+  description: z.string().max(2_048).nullable(),
+  arguments: z.array(OperationPlanMcpCatalogPromptArgumentSchema).max(128),
+  arguments_sha256: Digest,
+}).strict();
+
+/** Explicitly selected, short-lived MCP discovery metadata supplied to C as untrusted planning data only. */
 export const OperationPlanMcpCatalogContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.operation-plan-mcp-catalog-context.v1"),
   protocol_version: z.string().trim().min(1).max(64),
@@ -362,6 +392,9 @@ export const OperationPlanMcpCatalogContextSchema = z.object({
   catalog_digest: Digest,
   catalog_completeness: z.literal("unknown"),
   tools: z.array(OperationPlanMcpCatalogToolSchema).max(128),
+  resources: z.array(OperationPlanMcpCatalogResourceSchema).max(128).optional(),
+  resource_templates: z.array(OperationPlanMcpCatalogResourceTemplateSchema).max(128).optional(),
+  prompts: z.array(OperationPlanMcpCatalogPromptSchema).max(128).optional(),
   source_is_untrusted: z.literal(true),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
