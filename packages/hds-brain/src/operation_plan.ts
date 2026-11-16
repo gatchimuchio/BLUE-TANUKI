@@ -860,12 +860,16 @@ function operationPlanExecutionSourceDigest(
 ): string {
   const revision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
   if (!revision) throw new Error("plan_execution_source_binding_stale");
+  const descriptor = getOperationDescriptor(step.operation);
+  if (!descriptor || descriptor.operation_id !== binding.operation || descriptor.adapter !== step.adapter) {
+    throw new Error("plan_execution_source_descriptor_stale");
+  }
   const memoryInterpretationDependencies = plan.memory_interpretation_dependencies ?? [];
   const hasMemoryInterpretationDependencies = memoryInterpretationDependencies.length > 0;
   return operationPlanDigest({
     schema_version: hasMemoryInterpretationDependencies
-      ? "blue-tanuki.operation-plan-execution-source.v2"
-      : "blue-tanuki.operation-plan-execution-source.v1",
+      ? "blue-tanuki.operation-plan-execution-source.v3"
+      : "blue-tanuki.operation-plan-execution-source.v2",
     owner_digest: operationPlanDigest(plan.owner),
     channel: plan.channel,
     original_goal_digest: operationPlanDigest(plan.goal),
@@ -877,6 +881,7 @@ function operationPlanExecutionSourceDigest(
     prepared_step_digest: operationPlanDigest(binding.prepared_step),
     operation: binding.operation,
     adapter: step.adapter,
+    operation_descriptor_digest: operationPlanDigest(descriptor),
     target_digest: operationPlanDigest(binding.prepared_step.target),
     effects_digest: operationPlanDigest(binding.prepared_step.effects),
     parameters_digest: operationPlanDigest(binding.prepared_step.parameters ?? {}),
@@ -4815,7 +4820,7 @@ export class OperationPlanLedger {
         match.b.status !== "selected" || !currentRevision ||
         !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
         this.requestGoalCriteriaIssue(match.p, step) !== undefined ||
-        match.b.operation !== descriptor.operation_id || command.type !== "tool_call" ||
+        match.b.operation !== descriptor.operation_id || descriptor.adapter !== step.adapter || command.type !== "tool_call" ||
         command.payload.tool_name !== descriptor.tool_name || commandPayloadDigest(command) !== match.b.payload_digest ||
         operationPlanDigest(command) !== match.b.command_digest ||
         command.upstream_decision.request_id !== match.b.request_id ||

@@ -83,12 +83,16 @@
     {
       "field": "adapter_version",
       "meaning": "exact implementation adapter version",
-      "current": "OperationDescriptor.descriptor_version and implementation_ref",
+      "current": "operationPlanExecutionSourceDigest commits OperationDescriptor.descriptor_version and implementation_ref; its operation_plan_binding_digest reaches ExecutionIntentTicket/receipt; no separate adapter_version",
       "paths": [
         "packages/protocol/src/operation_catalog.ts",
-        "packages/protocol/src/operation_core.ts"
+        "packages/protocol/src/operation_core.ts",
+        "packages/hds-brain/src/operation_plan.ts",
+        "packages/blue-tanuki/src/execution_intent.ts",
+        "packages/blue-tanuki/src/executor.ts",
+        "apps/gateway/src/execution_intent_store.ts"
       ],
-      "status": "FIELD_GAP; no equality with adapter version assumed"
+      "status": "DESCRIPTOR_VERSION_AND_IMPLEMENTATION_REF_BOUND; distinct exact adapter_version remains FIELD_GAP"
     },
     {
       "field": "epoch",
@@ -225,16 +229,22 @@
       "現行path": [
         "packages/protocol/src/operation_catalog.ts",
         "packages/protocol/src/operation_core.ts",
-        "packages/blue-tanuki/src/tools/registry.ts"
+        "packages/blue-tanuki/src/tools/registry.ts",
+        "packages/hds-brain/src/operation_plan.ts",
+        "packages/blue-tanuki/src/execution_intent.ts",
+        "packages/blue-tanuki/src/executor.ts",
+        "apps/gateway/src/execution_intent_store.ts"
       ],
       "現行symbol": [
         "getOperationDescriptor",
         "OperationPlanSchema",
-        "ToolRegistry"
+        "ToolRegistry",
+        "operationPlanExecutionSourceDigest",
+        "ExecutionIntentTicket"
       ],
       "consumer": "Gateway/Executor registered adapters",
-      "状態": "CODE_PRESENT_DESCRIPTOR_WITH_GAPS",
-      "gap": "全能力でadapter_versionと実implementation identityのticket binding未確認"
+      "状態": "DESCRIPTOR_VERSION_AND_IMPLEMENTATION_REF_BOUND; ADAPTER_VERSION_GAP",
+      "gap": "operation_plan_binding_digestはdescriptor版とimplementation_refに結合しticket/receiptまで伝わる。exact adapter_versionは未定義で、adapter実体versionのruntime確認も未接続。"
     },
     {
       "ID": "EDGE-EXECUTION",
