@@ -1,414 +1,67 @@
-# BLUE-TANUKI エージェント実装・監査規定
+# BLUE-TANUKI｜AGENTS.md｜作業標準要領：QE6/LLM-JP/1
+固定=全5OS; 独立作業開始時は三文書すべてと適用AGENTS.mdを読み直す; 三点セットの作成・提出はGitHub反映の許可ではない。
 
-この文書は、BLUE-TANUKI で作業する AI 実装エージェントの全リポジトリ共通規定である。通常のアプリ雛形向けの案内ではない。短い規則と後段の詳細が重なる場合は、HDS-BRAIN の権限、承認、監査、復旧、配布整合性、owner の安全をより強く保つ解釈を採る。
+適用=本repo全域のCodex施工方法・作業安全・監査・停止・復旧・検査・Git保全。言語=日本語基底; 固定API/型/識別子/規格名のみ原字維持。定義正本=規定/00_日本語基底規定.md; 語彙=規定/01_基底語彙.md; 例外=規定/02_資産分類と局所例外.md＋規定/局所例外台帳.json; 移行負債=規定/移行台帳.json。英語資産を自動例外化しない。
 
-実務手順は本規定に従う [`docs/作業標準要領.md`](docs/作業標準要領.md) に定める。D4-POCKET の確認済み版を BLUE-TANUKI 用に翻案したものであり、参照先の変更、技術構成、工程状態を自動採用しない。
+## 0｜文書階層・適用状態
 
-## 第I部 共通基底規律
+責任={指示者/責任者:owner(原文目的・委任・仕様採用・出荷GO),設計者:ChatGPT(仕様・全体設計・施工命令の正当性),施工者:Codex(現物観測・決定済み設計の実装/結線/限定検査/是正/報告),使用者:製品エンドユーザー(L1/L2/L3・実作用委任/取消)}; 同一人物でも役割の権限は混線させない。
+文書={仕様:製品が満たす全要求/安全/受入下限,工程:その仕様を造る全体因果順・工程出口,指示:その工程の具体施工操作,AGENTS.md:各操作の標準工法・環境・権限・検査・異常処置}; 従属=owner原文・上位安全>仕様>工程>指示>本要領>近傍AGENTS/補助要領>現物証拠>旧記録。工程は仕様を、指示は工程/仕様を、本要領はいずれも変更不可。工法が難しくても仕様を書換えず、対象・根拠・代替・影響を設計者へ返す。施工者の実装技術選択は既定契約内のみ。
+rev6確定三点=01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json(SHA256:956373347dd68d460f08e1f8737a118f2dd48a9b56f8b54712f6d92f7094e47e);02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json(SHA256:88a86ab48cd22d7d49f9a3f4d8d41a89d0473a05dfdb68d84a08639298edee85);03_BLUE-TANUKI_Codex全域施工指示書_rev6_0_確定.json(SHA256:f226eea3a5f507e5d4517ea8fc71f88dd76e609e3adde3429ef03dc92b97b1d9)。この三点は2026-11-16確定成果物であり、圧縮版は復号して内容同一性を照合可能。
+repo採用状態=docs/QE_CURRENT_AUTHORITY.mdがrev5.3をpin中; rev6三点の作成・圧縮・本要領更新だけでは、そのpin/manifestの改訂・製品施工開始・実資格使用・外部実作用・別repo編集・出荷GOを意味しない。ownerからrev6一組の実体を受領し採用/施工を明示委任された場合のみSHAと有効版を照合して適用。原典が入手不能/不一致なら推測施工せず対象を未観測/保留とし、他の委任済み安全作業は継続。現行pin変更を本要領の都合で先行しない。
+過去rev1～rev5.5・旧BUILD_BATCH・旧RC・過去PASS/FAIL=当時の履歴/反証; 現行仕様/進捗に自動転化せず、同定・変更影響・原因照合時だけ参照。外部HDS理論の未格納原文をrepo製品BUILDの隠れた前提にしない。技術原理/仕様/工程の公開可; 実credential/secret/本人データ・no-store内容・実運転rawは公開不可。公開文書許可≠製品出荷許可。
 
-## 0. QE施工の最上位原則と正本
+## 1｜作業入力・唯一の施工主語
 
-本リポジトリの品質体系は、ownerが定めたQE（品質工学）へ統一する。「QEが開発全体を包含し、完成した実物にQC（品質管理）を適用し、その証拠から個別対象のQA（品質保証）を判定する」という本プロジェクト固有の作用・包含関係を採用する。一般の品質規格や全組織で普遍的に成り立つ階層の主張ではない。
+各独立作業開始/切替/再開=owner最新原文・対象repo・有効三点全件(版/SHA/内容)・root/近傍AGENTS・実HEAD(local/remote)・dirty/他writer・現行consumer・権限・HOLDを照合; 同一全域作業中の小索引参照は必要節と現物だけ再同期。クラウドCodexの未提示カスタム指示/他セッション内部記憶を原典扱いしない。
+毎操作=主語(対象製品/Task/担当)∧目的(原文/goal版)∧手段(実code/現在permission)∧入力/出力∧所有者∧producer→consumer∧受入/拒否∧観測/失敗∧再開条件。作業量、モデル、テスト数、commit数、チケット数、文書作成を製品目的へ代入禁止。
+施工範囲=BLUE-TANUKI repoのみ。D4Pocket/MINIDORAその他repoへの書込は個別委任までHOLD; BLUE側contract/adapter・隔離fixtureは進行。事前に存在するユーザー/他writer差分は不破壊; 既存安全確認・要件・検査母集団・合格下限は勝手に削除/skip/再分類しない。
+実装優先=既存健全資産の能力継承→既存contract拡張→既存package内必要最小module→必要時のみ新adapter。現行AST/callsite/実pathを観測して接続; 推測path、死コード、独自wrapper、不要dependency/refactor/抽象化、別build経路・host逃避・新二重正本を作らない。必要な代替策は根因/採否/環境/検査/撤去条件を残す。
 
-**開発順：全体設計 → 一気通貫で全体実装 → システムの結合形状成立 → 実物へのQC（観測・全体検査・原因分析・改善・再検査） → 対象別QA → ownerの独立した公開・出荷判断。** 先に局所の品質保証を198回完成させて製品を組み上げる方式は採用しない。安全第一・品質第二を維持し、安全・承認・秘密・監査・停止の保護は実装中も常時有効にする。
+## 2｜全製品施工：数量固定・順番固定
 
-owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報と三文書の実体は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) から参照する。2026-11-14のowner指示により、技術設計・三点正本・要求対応表について従来の非公開・Public Git転載禁止条件を廃止した。文書の公開と製品の出荷GO、実資格情報・実運転データの保護、他repo変更・実外部作用の権限は別である。ownerが新しい三点一組を指定したら、manifestと三文書のhashを照合し現行ピンを更新する。旧版・旧pin・完了した作業は履歴として保持し、通常作業で旧版を現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合だけ参照する。現行三点正本や実リポジトリが読めなければ推測で補わず、欠落条件を明記する。リポジトリに存在しない外部理論の原点資料を施工上の要求・欠損・公開判断へ加えない。
+母集団={製品要求431,親成果65,施工索引198,詳細条項63,不変契約34,競合基準61,局所QC396,親QC260,最終OS5}; 全ID同一性と要求下限を保持。198索引は漏れ防止/追跡・後段QC照合用; 198回の個別開始・個別承認・局所PASS・正式QA・Git確定ゲートへ変換禁止。
+工程=P0全域HEAD/実物/431/65/198/61/5OS一回測量→P1全体interface・権限・因果・責務・配布/検査媒体確定→P2全体躯体一括構築→P3 SYSTEM_SHAPED通水→P4 BUILD_COVERED全数欠損0照合→P5完成実物396局所QC→P6完成実物260親QC+61競合+5OS総合QC→P7根因是正/影響全域再QC→P8対象/版/OS/ABI/API/arch/署名/physical caveat別QA→P9owner独立GO・公開配布。前工程の偽合格/勝手な再編/局所品質前置禁止。
+P2断面={A:全65親/431要求とC/J/M/HDS/Approval/Broker/Gateway/channel/provider/skill/memory/Andon/event/UI/5OS/install/update/uninstallの全ソース・実consumer位置,B:原文目的→C→J→現在環境権限→隔離作用→実結果→M→帰還/異常/取消/再開の実呼出系,C:F01-F21/H01-H03/E01-E07/G01-G10・Google/GitHub/file/browser/MCP/skills/channels/schedule/音声/画像/remote/学習/61比較の能力を全接続,D:5OS native入口と配布package・起動・使用・権限/credential・Device Link・通知・更新/rollback・削除を全結線}; 独立区画は同じ全域施工サイクルで並進; 依存参考は個別品質ゲートではない。
+P3=実製品入口→設定/認証→仕事→C→J→review→Broker→隔離consumer→結果→M→応答→停止/再開を1巡; 正常/deny/unknown/Andonを観測。P3成立≠P4成立。
+P4=431+65+198+63+34+61を実source symbol→caller→callee→consumer→実state・5OS package/使用/更新/削除へ紐付け、未配線BUILD_GAP=0; LIVE権限待ちと実装欠損を混同禁止。P4≠QC/QA/GO。
+QE_BUILD中=構文/型/必要build/短時間全域smoke/重大Authority・秘密・Approval・監査・非冪等安全負例のみ; 細切れQC/QA/全test/毎索引Git/人間レビューを挟まない。実装中重大欠陥は遮断/必要最小是正し別区画へ進む。P5以降に局所396・親260・61比較・故障注入/長期/性能/資源/復旧・5OSを全数検査し、FAILは原因→P1/P2/実装まで遡り同scope再QC; 旧FAIL・期待値・母集団を書換えない。
+状態={工程:QE_BUILD/QE_QC/QE_QA,実装:UNOBSERVED/CODE_PRESENT/WIRED/BUILD_GAP/BLOCKED_AUTHORITY,品質:NOT_RUN/PASS/FAIL/SUSPEND/OUT_OF_SCOPE,保証:QA_SCOPED/QA_NOT_ESTABLISHED,製品:SYSTEM_SHAPED/BUILD_COVERED,出荷:PENDING_OWNER_GO/GO/HOLD}; 状態は根拠・対象版・媒体・時点と束縛。現行観測までQE_BUILD、SYSTEM_SHAPED=false、BUILD_COVERED=false、P13=PENDING_OWNER_GO、public_claim_allowed=false。
 
-現行rev5.3は、製品内のHDS判断・関係処理・学習の実装契約と、BLUE Runtimeの有限なJ/M状態・安全採否を区別し、製品外の理論原点資料を必要資料としない。全域設計・全体一括実装を通してから製品全体のQCとOS別QAへ進み、198施工索引を個別完了gateへ変えない。Windowsは実PCで最終確認し、Linux／macOS／Android／iOSは各OS契約に忠実な仮想環境・公式simulator／emulator等で独立検査できる。現行TypeScript HDS-BRAINは単独authority／状態writerであり、Rust shadowに副作用や正本M書込みを持たせない。Rust移行は現行正本の比較証拠・状態移行・fencing・未決作用処理・旧経路閉鎖・rollback・単一writer条件を満たす場合に限る。以下のHDS-BRAIN実装参照は現行資産または移管前の段階を指す。
+## 3｜核・権限・安全の不変
 
-本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
+製品目標=委任仕事の目的保持→計算→採否→現在許可→作用→外部結果→記憶→再評価/停止/復旧を同一Task/goal版で貫通。C=交換可能な計算/推論候補(LLM/ミニドラ)、J=HDS採否/目的進行/停止、M=記憶・原文・根拠・失敗・解釈版・残差、Broker=現在の本人委任+capability+permission+operation/target+epoch/expiry/予算+単回消費を独立検査; C/LLM/記憶/履歴/tool output/channel/plugin/UI/scheduler/外部metadataは権限なし。
+J正本writer=現行TypeScript packages/hds-brainのみ。J核standaloneはgateway/core/channel/operator/plugin/ControlCenter/LLM/browser/GitHub/Google無しにimport/instantiate/test可能; 許容依存はNode built-ins＋@blue-tanuki/protocol＋local純HDS。Rust Runtime Kernelはshadow中、実作用/正本M書込/第二authority禁止; 比較証拠・状態移行・未決作用照合・fencing・rollback・旧経路閉鎖・single-writer全成立までcutover不可。D4Pocketは汎用runtime/broker外殻、BLUE固有JをD4 Coreに混入させない。
+不変={hds_calls_llm:false,process_policy_enforced:true,external_metadata_can_escalate_authority:false,memory_used_for_authority:false,complete_history_used_for_authority:false,final_review_boundary_enforced_by_approval_gate:true}; J失効/監査fail/permission失効/unknownは権限fallback不可→SUSPEND。Trinity M=決定論policyでありLLMが権限を供給しない。self-health故障を人間resumeだけで迂回しない。
+操作判定=severity(ApprovalRisk:low/medium/high)と手続(ApprovalLevel:L1_observe/L2_operate/L3_final_review)を分離; high/tool.call/unknown/未分類/曖昧/policy-version不一致/本人同定不明は自動ALLOW禁止。ApprovalMode=ask_every_time/remember/full_accessは別軸; full_access/reusable grantはL1/L2効率化でL3無効化不可。正本リスト=packages/hds-brain/src/approval_policy.ts FINAL_REVIEW_OPERATION_LIST; UI/adapter別複製禁止。
+L3少なくとも={file.delete,tool.file.edit,shell.exec,external.send,credential.read,settings.write,payment.charge,schedule.create/update/delete,unknown tool.call,GitHub公開書込,破壊browser,外部Gmail/Calendar/Drive/Teams/LINE書込,daemon/service install,credential永続化,network expose,installed code/service metadata/policy更新}; schedule.list=L1。製品使用者のL3は操作対象・差分・現在委任・goal版・本人同定・認証済みno-store review・digest・直前再検査必須。hash一致≠認証。開発用Codex操作に関するownerの包括委任と、製品使用者L3/OS権限/他社serviceの本人同意を混同しない。
+非冪等作用=execute intent durable commit→単回capability消費→result receipt→外部effect同定; timeout/error/unknownはOUTCOME_UNKNOWNとして保持し無断再送不可。取消受付≠worker停止≠外部取消≠effect消失。Andon/新作用遮断=J/queue/auditの故障と独立; fail-safeは新作用を閉じる。再開時は現行goal/task/epoch/ticket/target/adapter/permission・結果不明照合・根因除去・fenceを再検査。
+入力=rawを独立fail-closed audit用に限定保持→canonicalize→schema→origin/integrity→replay→authority/eligibility→audit→ALLOWまたはSUSPEND。無効inboundをhistory/reply/approval origin/executionへ転送禁止。output audit=最終表示/外部handoff前、packages/hds-brain standalone、digest/metadataだけ記録、raw本文/実秘密不保存、承認権限なし。CompleteHistoryStore=append/verify/replay/export・hash-chain互換・F:<id>・used_for_authority=false、UI projectionはdigest/metadataだけ。Runtime Invariants evidenceも非権限、expected/actual/guarantee kind/report digestを区別。
+入口分離=runtime/control/diagnostic/repair-recovery/build-release/development-only; doctor/setup/installer/migration/admin/fixtureを通常runtimeへ静的混入禁止。preview packageをgateway hard dependencyにしない。未承認の第三者skill・隠れたplugin権限・agent-driven authority core/black-box authority/emotion機構/無審査ClawHub実行禁止。安全なadapter互換の実装対象は要求から削らない。
 
-**三点セットの作成・提出はGitHub反映の許可ではない。** 2026-11-14のowner明示指示によるrev5.3現行採用・AGENTS.md等の直接改修は、製品本体の施工開始とは区別する。製品施工は別途有効な開発委任と現行三点正本に従う。C08.03の実provider検証保留、D4Pocket／ミニドラの別repo変更に必要な別途許可、P13の製品出荷保留を維持する。
+## 4｜製品面・5OS・異常
 
-## 1. 日本語基底
+operator=Writing/Daily/Developerの3面同格（現v1.0範囲固定）; 共通J/Approval/Audit/Layer A/Bとcapability envelopeを遵守。plugins/skills/adapters=Layer B下流、canonical inbound/outbound、typed error、declared fs/network/process/credential accessのみ、audit trace、Runtime Invariants; 受入参照=docs/PLUGIN_REVIEW_GATE.md,PLUGIN_HIG.md,SKILL_LOADER_CONTRACT.md,ADAPTER_CONTRACT.md,CAPABILITY_ENVELOPE.md,CONFORMANCE.md; pnpm plugin:review -- --package <dir> は証拠であって権限ではない。
+channel={WebChat/Telegram:first-party,Slack/Discord/Teams/LINE:first-party-preview until owner live credential smoke+回復/各inbound listener,WhatsApp:reserved-third-party/core_supported=false/warranty=none}; WhatsAppをBaileys/WAHA/WhatsApp Web/Business API/Twilioでfirst-party化禁止。昇格=pnpm validate:channels+redacted証拠+setup/secret/live/inbound/outbound/backoff/error/audit非権限。高リスク/未完成=preview隔離。
+対象OS={Windows, Linux, macOS, Android, iOS}; Windows-firstは施工順であって対象縮小不可。desktop3OSはnative導入→起動/仕事→OS permission→停止/復旧→更新/削除。WSL/WSLg/headless≠Linux native保証。mobile2OSは各native入口、OS権限、native秘密保管、認証済Device Link、仕事/状態/承認/取消/復旧、更新/削除を別製品面で実装; Dart/platform-channel/logへsecret返却禁止、非TLS fallback/切断後無断再送/端末UIのJ/Broker権限代行禁止。remote mobile client≠端末単体C/J/M実行; F16のみでは5OS完成にならない。
+検査媒体=Windows所有実PCのSetup→uninstall最終観測; Linux/macOS/Android/iOSはOS規格忠実な仮想/hosted/公式emulator・simulatorで各独立QC/QA。標準ABI/API/arch/署名/配布/物理API/Store未再現だけ個別HOLD、全物理機保有は要求しない。OS間証拠の代用禁止。使用者が5分で使えると主張するには実導入・onboarding・credential・Control Center・doctor・運転/回復/rollback/削除の証拠が必要; installer一回成功≠恒久運転品質。
+比較=OpenClaw/Muse既知の仕事/consumer深度/導入・回復/長期運転/安全・互換を61IDで観測; 機能名数、channel数、mockで完全包含主張禁止。P13/1.0.0-rc.1/GA HOLDを独立維持; owner GO前の公開・外部配布・完成AGI/完全上位互換の実証済み対外表示禁止。自動app files置換契約外、配布/署名/license/rollback/秘密除外はP9判定。
 
-日本語を唯一の基底規定言語とする。表示上の優先順位ではなく、対象、差異、関係、目的、境界、採否、検証、監査を日本語で先に成立させる。
+## 5｜作業止め・再開・証拠
 
-- 正本: [`規定/00_日本語基底規定.md`](規定/00_日本語基底規定.md)
-- 基底語彙: [`規定/01_基底語彙.md`](規定/01_基底語彙.md)
-- 資産分類と例外: [`規定/02_資産分類と局所例外.md`](規定/02_資産分類と局所例外.md)
-- 機械可読索引: [`規定/正本索引.json`](規定/正本索引.json)
+停止する作用={未委任LIVE外部送信/実支払/公開/削除/他repo実変更,秘密・本人データ漏出危険,J/Broker二重正本/単回許可破壊,結果不明の非冪等再送,重大不可逆破壊,現在permission不足,安全なSUSPEND不能}; 当該作用を即遮断し原因/影響/解除条件を記録。停止しない全域施工={旧資料入手不可,単一系統未実装,credential未付与,C08.03 real provider保留,他repo非委任,Apple署名/Store資格不足,物理端末不足,局所型修正}; 影響区画だけAUTH_HOLD/ENV_HOLD、独立した安全なコード・隔離接続を継続。ownerの過去停止は要領改訂だけで解除しない; 新たな製品施工は明示委任が必要。
+分類={BUILD_GAP:source/実consumer欠損,DESIGN_CONFLICT:上位契約衝突,AUTH_HOLD:現在委任不足,ENV_HOLD:OS/署名/資格未成立,OUTCOME_UNKNOWN:外部効果不明,QC_FAIL:仕様不適合,QA_NOT_RUN:OS保証未実施}; 安全FAILを件数加点で相殺/skip再分類禁止。設計衝突は施工者が目的/上位を改訂せず設計者へ差し戻す。
+証拠源={CONFIG,INTERNAL_STATE,FIXTURE,LIVE_RUNTIME,EXTERNAL_EVIDENCE}; code/type/build/fixture/自己health表示≠real provider/installed product/各OS QA。PASSは実行入力・対象SHA・OS/版・観測・結果と結合し、未実行はNOT_RUN。旧試験・過去worker結果を現在保証に流用禁止。今回起因/既存/環境/未確定とrelease_blocker/post_v1_scope/known_limitationは別軸で記録。前値・失敗・取消・旧GO・不明結果を消去せず追記・原因と新証拠で更新。
+作業結果最小={原典SHA,実HEAD,要求/親/索引/条項/OS/QC ID,producer→consumer実symbol,変更効果,許可/隔離範囲,実行した最小確認,NOT_RUNと理由,欠損とHOLD条件,回復/次の結線対象}; 独立日報/チケット体系/逐次人間確認を追加しない。工程進捗はP0–P9出口と事実で判定、局所PASS/数字で加算完成判定禁止。
 
-多言語は、外部 API、プロトコル、規格、構文、固定識別子、固有名、原文証拠など、実務上やむを得ない箇所に限り局所例外として認める。例外は `規定/局所例外台帳.json` に記録しなければ成立しない。既存の英語資産は例外へ自動昇格させず、`規定/移行台帳.json` の未解消負債として扱う。
+## 6｜開発環境・検査
 
-コード、コマンド、API、型、環境変数、パッケージ名、外部製品名など、互換性・正確性のため既存表記が必要なものは維持する。それらは日本語で成立した意味を参照するラベルであり、日本語の意味を逆定義しない。
+標準=Windowsで編集/ビルド/テスト/Git、Node>=22.14.0・Corepack pnpm=9.12.0、WSL/LinuxはUnix配布必要時のみ(ext4作業場所、WSL内/mnt/c非採用)。hostのpnpm/tsx/一時パス障害は環境原因として復旧、製品code迂回で隠さない。対象OSの最終要求は上記5OSのまま。
+QE_BUILDの限定確認=pnpm typecheck、pnpm build、影響範囲のpnpm exec vitest run <対象test>、権限中核ならpnpm hds:standalone、短時間実consumer smoke・必要な安全拒否例。全pnpm test、docs:check、validate:repo-health、doctor、validate:packaging、smoke:serve/smoke:resume、故障/性能/5OS詳細は対応するP5/P6/P8で実行; 規定/文書変更時は関係docs:check/日本語規定検査、release変更時はbundle/GA/verifyに必要な保護検査を省略しない。テストを削除・恒久SKIPして前進扱い禁止; 実行不能はNOT_RUN/理由。
+CI=自動CI禁止。GitHub Actionsは不足OS build・artifact・重い検査の補助のみworkflow_dispatch手動; push/pull_request/merge_group自動trigger・必須status check・CI-green完成判定・PR必須化禁止。必要な手動検査一時branchはcommit固定/局所確認用、失敗commitはmain反映せず検査後に成功SHAだけfast-forward、remote照合後安全整理。actions結果は対象SHA限定の補助証拠。
 
-## 2. 中核規則と全体系の責任分界
+## 7｜Git保全・完了
 
-BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観測・記憶・帰還まで統治するAGIエージェントシステムの成立である。既存HDS-BRAINの独立した制御・認可資産を維持し、C（計算）、J（HDS判断）、M（可変記憶）、作用能力境界、環境帰還を一気通貫の実経路へ接続する。HDSの基底理論とC/J/Mの実装上の責任分離を同一視しない。
-
-- Cは候補生成・推論・計画・計算を担当する。既存LLMを使用でき、同じ計算契約でミニドラへ交換できる。Cの出力は権限ではない。
-- J／BLUE Runtimeは委任された目的の保持、候補の採否、進行・停止、記憶更新の判断を担当する。移管前の現行writerはTypeScript HDS-BRAINであり、現行正本が定めるsingle-writer cutover条件が成立するまでは単独authorityを保つ。上位委任そのものを勝手に変更しない。
-- Mは記憶・根拠・失敗・解釈版・残差の保持を担う。Jの判断根拠に利用できるが、過去承認を現在の権限に復活させない。
-- 作用能力境界はHDS採否とは独立に、現在の実行環境Permission、対象同一性、期限、単回消費、必要なowner承認を検査する。
-- D4Pocket（旧GUI-Shell）は汎用GUI／Runtime／Brokerの外殻として接続する設計対象。BLUE固有のJ／HDS意味機構をD4の汎用Shell Coreへ埋め込まず、認証されたAdapter境界を使う。D4側コードの変更には別repoの限定委任を要する。
-
-**一つの仕事が「目的 → C → J → 環境権限 → 作用 → 結果 → M → 継続・復旧・終了」を通ることを実装目標とする。** 型・schema・fixtureだけで当該仕事が完遂したと報告しない。
-
-判断・権限は移管前の現行実装ではHDS-BRAINに一元化し、人間ownerは最終責任と明示的GOを保持する。現行正本の条件付きcutover後もRuntime Kernelを唯一のJ authority／writerとし、二重経路を残さない。LLM、tool、channel、plugin、skill、operator、installer、外部API、memory、history、UI、schedulerは下流装置である。HDS-BRAINのstandalone、Approval Gate、L3最終レビュー、hash-chain audit、Runtime Invariants、capability envelope、Layer A/B、fail-closedは移管中も維持する。
-
-## 3. 規則の優先順位と現物照合
-
-1. 上位の安全・実行環境・権限境界。
-2. 現在のowner/userの明示指示。工程方法論の変更は指示を反映するが、HDS-BRAIN、Approval、監査、復旧、release gate、owner GO、operator安全を無断で弱めない。
-3. ownerが最新版と明示した仕様書・工程表・施工指示書の三点一組。**製品の要求・全体工程・施工対象・完了条件の唯一の正本**。追加の独立したactive implementation instructionを正本化しない。日本語意味正本は規定/00_日本語基底規定.mdを確認する。
-4. 本AGENTS.mdと近傍AGENTS.override.md／AGENTS.mdは共通の安全・権限・証拠・環境・Git保全の規律。三点正本の全体一括施工を局所BUILD_BATCH選定方式へ変更できない。対象固有の安全条件は限定・強化できる。
-5. 契約・コード・試験・現物を観測した進捗。旧版、過去会話、他repoの完成値は履歴や反証材料であり、現行証拠ではない。
-
-毎作業の最新HEAD、dirty state、現行指示を再確認する。rev1.1のNOT_STARTEDや古いSHAで現行成果を上書き・消去しない。過去の作業履歴や公開ロードマップに旧来の「毎小単位の詳細試験・品質保証・Git完結」が残る場合、それらは当時の記録であり、現行三点正本のQE工程を上書きしない。**実資格情報・実運転データ・実行権限・出荷条件については保護を維持する。**
-
-「HDSで判断」「品質を高く」などの抽象指示だけを施工命令としない。対象、目的、入力、作用、正本所有、採否、後続consumer、結果観測・帰還、成立条件を操作として特定する。反論・追加形式・定量化は元の対象と因果に関係する場合にだけ要求する。工学的な妥当性は現在の根拠・整合・因果・現実適合と更新可能性で判断し、形式的留保だけを停止理由にしない。
-
-## 4. 不変の優先順位
-
-1. 安全性
-2. 堅牢性
-3. UX、operator の明瞭性、監査可能性
-4. 契約と runtime の整合性
-5. 機能・channel・拡張範囲
-6. 利便性
-
-機能数や便利さは、安全、権限境界、最終レビュー、監査、復旧、検証証拠を上回らない。安全または堅牢性を弱める機能は拒否するか、無効な preview 境界へ隔離する。
-
-## 5. 作業開始と意図的な切れ目
-
-独立した作業の開始・切替・再開、およびセッション・担当の交代時には、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) で現行一組の版・文書名・hashを確定し、三文書すべてと適用AGENTS.mdを読み直す。読む三文書はその現行pinが指す一組だけとする。ownerの現行原文指示、最新HEAD・差分、今回の対象コードも再確認する。過去の仕様書・工程表・施工指示書、完了記録、進捗履歴全体はログとして保持するが、通常の作業開始時に一覧化・再読しない。今回の依存・変更系譜・矛盾を解くために必要な場合に限り、該当する記録の必要部分を参照する。前回の状態を記憶だけで確定せず、現行正本と現物から再構成する。連続する一作業内の小単位切替では関係する節と実物を再同期し、QC／QAや全テスト、バックアップ回転を挟まない。
-
-198の小単位は実装漏れ防止の索引であり、**常時実行対象は431要求・全機能・全5OS・全producer／consumerを含む製品全域の一括施工**とする。小単位や直近の未接続consumerを「次に選ぶ独立施工案件」にしない。各単位のCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYは全域残差を把握するためだけに保持する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
-
-作業開始時に対象・目的・到達状態・依存・現在許可された作用を記述し、関連コード、既存検査、契約・責任境界を確認する。関連しないrefactor、依存更新、独自wrapper、実装されないschema増殖、非必要な抽象化を禁止する。read-onlyの調査subagentは並列利用できるが、同一work blockの編集・Git操作・正本確定は単一writerへ集約する。他者の差分をreset、revert、clean、上書きで消さない。
-
-技術的に継続できない構文・型・接続欠陥と、安全・権限・機密の実際の逸脱はその場で修復・遮断する。実物全体の動作後でなければ有意に評価できない詳細欠陥、性能・耐久・境界網羅はQC候補として保持し、委任済みの次の実装へ進む。
-
-## 6. P-Series基準面・検証環境
-
-BLUE-TANUKIでは自動CIを廃止している。.github/workflowsへの新たなworkflowやpush／PR必須checkを無断追加しない。ローカル開発・限定実行・実機証拠を各々の条件で扱い、他環境の成功を転記しない。
-
-ownerの2026-10-19指示により、D4-Pocket現行AGENTS.md §3.1のActions使用条件をBLUE向けに適用する。GitHub ActionsはローカルにないOSのbuild、artifact生成、ローカルでは不足する重い検査・testの補助に必要な場合に限り、`workflow_dispatch`のみで使用できる。push／pull_request／merge_group等の自動trigger、必須status check、自動CI、CI greenによる完成判定は禁止し、ローカル検証を品質基準面とする。
-
-手動Actions検査で一時branchを使う場合は検査対象commitの固定だけに用い、PRや自動triggerを作らない。失敗中のcommitをmainへ入れず、同branchで修正・再検査し、対象検査が閉じた後に成功した正確なcommitだけをmainへfast-forwardする。remote HEAD照合後、一時branchをlocal／remote双方で削除する。必要性、対象commit、trigger、結果、artifact、証明する範囲としない範囲を記録する。workflow追加時はactive ROADMAPまたはphase instructionに目的を置き、手動起動限定をlocal conformanceで検査する。この使用許可はD4のActions条件に限定し、BLUE固有のAuthority、Approval、Audit、秘密、QE段階、release gate、owner GOを変更しない。品質基準面の変更や試験の削除・常時skipはこのQE移行に含めない。
-
-QE_BUILD中は限定した技術疎通と重大な安全欠陥の阻止、QE_QC中は全体品質の観測と改良、QE_QA中は個別対象の保証判定を行う。危険な未接続実行路は有効化せず、合成・隔離端点で全体実装を先行する。
-
-## 7. 工程状態・証拠と完成の射程
-
-QE_BUILDではCODE_PRESENT（コード存在）、WIRED（呼出し接続）、BUILD_GAP（未接続）、SYSTEM_SHAPED（試験用の一仕事が目的から結果・記憶・復帰まで縦断）、BUILD_COVERED（設計で要求された機能群の結合形状）を区別する。各機能の局所PASSは全体品質を証明しない。
-
-BUILD_COVERED後にQE_QCとして実物の機能・安全・故障・性能・資源・OS差・継続性・互換性を検査する。QCが検出した欠陥の原因を設計・実装まで遡って修正し、同じ条件で再検査する。QE_QAはQCの証拠に基づく対象・版・機能・OS・条件別のQA_SCOPED／QA_NOT_ESTABLISHEDである。どの状態もowner GOやAGI理論証明を自動生成しない。
-
-証拠源はCONFIG、INTERNAL_STATE、LIVE_RUNTIME、EXTERNAL_EVIDENCE、FIXTURE。既存テストの数、mockやschema、自己生成のhealth値を実際の統治経路・installed製品の証拠へ昇格させない。BUILD中の最小疎通をQC・QAと呼ばず、QC未開始を理由に実装経路の接続を無期限に止めない。
-
-記録は「何が実際に動いたか」「次consumerはどこか」「未接続・未確認は何か」「実行した確認／未実行と理由」を優先する。取消受付・worker停止・外部作用停止・結果不明を混同しない。証拠不足でも安全のための拒否・SUSPENDは維持する。
-
-## 8. 入力・信頼境界
-
-構造化、parse 済み、schema 形状、別 component 由来という理由で入力を安全とみなさない。権限、permission、execution、approval、audit identity、workspace、command、表示、recovery、release に影響する入力は、必要に応じて次を扱う。
-
-- fail-closed audit 用の raw input 保持
-- canonicalization / normalization
-- schema / structure validation
-- origin validation
-- integrity / tamper check
-- replay protection
-- authority / execution eligibility
-- audit emission
-- fail-closed / `SUSPEND`
-
-raw invalid input は、独立した fail-closed audit のため HDS-BRAIN へ渡せる場合を除き、gateway history、reply、approval origin、execution に使用しない。外部データ、UI state、adapter/channel/plugin metadata、memory、complete history、diagnostics、tool/LLM output は権限を生成・昇格・置換・迂回できない。
-
-## 9. 実行経路と回避策
-
-通常の production / runtime path は小さく責任限定に保つ。diagnostic、setup、installer、repair、recovery、migration、release verification、fixture、bootstrap、administrative command を黙って混ぜない。追加経路は runtime、control、diagnostic、repair/recovery、build/release、development-only のいずれかへ分類する。
-
-失敗を通ったように見せるための wrapper、shim、別 build path、環境 bypass、host 固有 workaround を導入しない。必要な場合は、元の失敗、根本原因、既存機構で不足する理由、責任範囲、対象環境、検証、恒久性、撤去条件を記録する。
-
-開発環境、local validation、release proof、external runner、対象製品環境を分離する。一環境の成功を別環境の証明にしない。host 制約は product regression と分け、architecture 変更で隠さない。
-
-## 10. Contract と runtime の接続
-
-schema、interface、protocol、adapter contract、capability、manifest、policy、audit/invariant contract、fixture、success profile は、存在するだけでは完成しない。次を特定する。
-
-- 消費する production / runtime / validator / governed execution path
-- 実際に通す validation / conformance path
-- reject、block、audit、SUSPEND すべき負例
-- 意図して未接続または延期した部分
-
-## 11. 禁止事項・開発の包含対象
-
-- custom pnpm wrapper、無関係な依存更新、host制約を隠すbypass、無承認のOS workaroundを導入しない。
-- preview packageをgatewayのhard dependencyにしない。doctor／setup／audit／installer／repairを通常runtimeへ静的importしない。
-- 無効inboundをhistory/reply/approval origin/executionへ通さず、credential errorをsafe_to_ignoreにせず、未検証を成功へ変換しない。
-- agent-driven authority core、emotion機能、WhatsApp first-party core、危険なthird-party skillの無審査実行、権限の隠れた昇格、black-box authorityを追加しない。
-- OpenClaw／Museの機能全体を包含する開発目的は保持する。ClawHub等の無審査直接実行型互換は禁止するが、安全・隔離・権限を満たす互換Adapterは将来の個別施工対象として評価する。channel数の誇示を品質指標にせず、未包含機能を黙って要求母集団から削除しない。
-- CLI-only最終UX、無審査preview昇格、GA／完全上位互換の未実証公開主張を行わない。
-- 設計・原理・HDS・QEの技術文書は公開可能とする。実資格、トークン、利用者の運転状態、個人情報、no-store review本文、機微なraw証拠はPublic Gitに入れない。文書公開と実データの漏洩防止を分ける。
-
-実装上の安全・秘密・認可に不足がある機能は無効・保留にするが、設計済み全体目的から消したことにはしない。
-
-## 第II部 BLUE-TANUKI固有の保護規律
-
-## 12. 製品姿勢と HDS-BRAIN 境界
-
-BLUE-TANUKI は local owner operation を前提とする。
-
-```text
-Full access may be the default.
-Final-review remains non-bypassable.
-No black box exists in the HDS authority path.
-HDS-BRAIN is the standalone current authority kernel until an explicit verified single-writer cutover.
-```
-
-owner-operated や自己責任を堅牢性低下の理由にしない。first-run success を製品完成とみなさない。
-
-### Standalone
-
-`packages/hds-brain` は移管前の現行authority／migration assetとして、`apps/gateway`、`@blue-tanuki/core`、channel/operator packages、plugin loader、Control Center、LLM/browser/GitHub/Google client なしに import、instantiate、test できなければならない。許容依存は Node built-ins、`@blue-tanuki/protocol`、local pure HDS-BRAIN modules に限る。target Runtime KernelもGatewayや下流toolなしに独立起動・決定論的再生・安全停止できる必要があり、shadow期間は作用・正本更新を行わない。
-
-### 下流装置
-
-下流装置は感知、生成、実行、保存、表示、報告を行えるが、次を行えない。
-
-- 権限判断または承認の代替
-- privilege 昇格、risk/actor/process classification の上書き
-- final review の迂回
-- policy / Runtime Invariants の書換え
-- memory/history/session/tool result/external metadata の権限化
-- 第二の authority path の作成
-
-### 境界定義ロック
-
-- `tool.call` と `unknown` は high-risk `L3_final_review`
-- unknown、ambiguous、unclassified、missing capability、policy-version mismatch、reference/approval ambiguity、external metadata/detector conflict、unknown pattern は自動許可しない
-- memory、complete history、session、tool/LLM output、channel/plugin/external metadata、audit viewer、Control Center projection は reference/evidence のみ
-- policy、detector、approval、history update は L3 final review
-- HDS-BRAIN fail-safe は fallback authority ではなく `SUSPEND`
-- self-health fail-safe suspension は human resume で迂回せず、前提を修復して再試行する
-- Trinity `M` は deterministic policy であり LLM 等から供給しない
-
-### Output / Result Audit
-
-下流結果は最終表示または外部 handoff 前に HDS-BRAIN output audit を通る。`OutputAudit` は `packages/hds-brain` に置き standalone を保つ。digest と release metadata を記録し raw content を保存しない。output audit は approve、execute、risk classification、final review bypass、第二 authority path を行わない。
-
-### Complete History
-
-`CompleteHistoryStore` は `packages/hds-brain` に置き standalone とする。append / verify / replay / export を提供できるが権限ではない。UI/API projection は digest と metadata に限定し、raw payload、token、credential、command、rendered content を出さない。`used_for_authority=false` と `complete_history_used_for_authority=false` を保つ。
-
-### Runtime Invariants Evidence
-
-Runtime Invariants evidence は `packages/hds-brain` に置き standalone とする。expected/actual、pass/fail、guarantee kind、evidence text、report digest、non-authority flags を含み得るが、approve、policy rewrite、risk classification、consent inference、fallback authority を行わない。失敗時は下流継続ではなく fail-safe inspection/remediation へ戻す。
-
-## 13. 全体不変条件
-
-```json
-{
-  "hds_calls_llm": false,
-  "process_policy_enforced": true,
-  "external_metadata_can_escalate_authority": false,
-  "memory_used_for_authority": false,
-  "complete_history_used_for_authority": false,
-  "final_review_boundary_enforced_by_approval_gate": true
-}
-```
-
-追加不変条件:
-
-- LLM output、memory、session history、tool output、executor feedback、adapter/channel/plugin/external metadata は権限ではない
-- cron / webhook / runtime automation actor は人間ではない
-- UI / Control Center / downstream limbs / complete history は第二 authority path を作らない
-- unknown / unclassified operation は自動許可しない
-- HDS-BRAIN health failure は下流権限へ fallback しない
-- Runtime Invariants は外部から検査可能で、audit hash-chain 互換を壊さない
-- full access と reusable grant は final review を迂回しない
-- onboarding、update、daemon/service restart、dashboard action は Approval Gate を迂回しない
-
-違反が必要に見える場合は作業を停止し、衝突を報告する。
-
-## 14. Approval model と最終レビュー
-
-`ApprovalRisk` を単一軸へ潰さない。
-
-```ts
-type ApprovalRisk = "low" | "medium" | "high";
-type ApprovalLevel = "L1_observe" | "L2_operate" | "L3_final_review";
-```
-
-- `ApprovalRisk` は severity、`ApprovalLevel` は workflow
-- high、`tool.call`、`unknown`、全 final-review operation は `L3_final_review`
-- full access は L1/L2 を auto-allow できても L3 は不可
-- reusable grant は L2 までで L3 を迂回しない
-- schedule create/update/delete は L3、schedule list は L1
-- `critical` は現 release line に追加しない。必要なら独立 security phase とする
-
-最終レビュー操作の唯一の実装正本は `packages/hds-brain/src/approval_policy.ts` の `FINAL_REVIEW_OPERATION_LIST` である。gateway、UI、channel、plugin、operator などが並行リストを持たない。
-
-少なくとも file delete、`file.edit`、shell exec、external send、credential access、settings write、payment charge、schedule create/update/delete、unknown tool call、GitHub 公開書込み、破壊的 browser 操作、Gmail/Calendar/Drive/Teams/LINE 書込み、daemon/service install、credential 永続化、network exposure、installed code/service metadata/authority policy update を含む。`file.edit`は`tool.file.edit`としてL3最終確認を必須にし、認証済みno-store画面でOperation Plan目的束縛digest・対象版・実差分を確認する。承認前・作用直前の再照合に失敗したら編集しない。差分本文は監査・M・historyへ保存せず、確認projectionは権限ではない。追加時は operation 名、risk、level、full-access containment、reusable-grant non-bypass、audit、docs、rollback/failure を同時に成立させる。
-
-## 15. Operator usability
-
-`first-run success != permanent usability` とする。user-facing operation は setup、normal use、failure、recovery、update、必要な rollback/removal、次 action、audit trace を持つ。
-
-error は「何が失敗したか、なぜか、安全か、owner が次に何をするか、再試行できるか、何が変更されたか、audit/log はどこか」を答える。source knowledge を要求する出力は developer diagnostics と明示する。
-
-「初心者が 5 分で使用可能」は、支援 OS、前提確認、one-command/guided setup、credential check、Control Center、最初の WebChat、optional Telegram、actionable doctor、credential/daemon state、failure rollback の全証拠が揃うまで主張しない。installer は guided first-run を加速するが保証ではなく、secret を表示・log しない。
-
-恒久利用は startup reliability、service clarity、update 時の config 保持、update/rollback runbook、actionable doctor、channel/credential matrix、audit verification、approval/schedule/notification visibility、安全な uninstall/purge、背景 mutation の可視性を要する。
-
-## 16. Runtime automation と外部書込み
-
-- future automation の create/update/delete は L3、list は L1
-- pending/rejected/timed-out automation は実行しない
-- automation actor は non-human 専用経路から HDS-BRAIN へ入る
-- snapshot に payload 内容を出さず digest/hash のみ許容する
-- external write は downstream、capability 宣言、Approval Gate、audit を必要とし、public/irreversible は原則 L3
-- `browser.read` と browser automation を区別し、sandbox/network/credential/risk/audit/resource/failure/live-smoke が揃うまで automation は preview-only
-
-## 17. Memory / F-reference
-
-memory は context、preference、continuity、audit reference に限る。permission 昇格、approval skip、privileged action、owner consent 推定、current policy override に使わない。append-only、`F:<id>`、hash-chain compatibility、`used_for_authority=false` を保つ。権限化は独立 security phase 以外で行わない。
-
-## 18. Surface、adapter、channel
-
-first-party operator surface は Writing / Daily / Developer の三つで同格とし v1.0 GA 範囲では固定する。各 surface は HDS-BRAIN downstream、既存 tool 利用、operation 単位の L1/L2/L3、audit、containment、Layer A を保つ。追加は owner 決定と別 phase を要する。
-
-adapter / plugin / skill は Layer B の下流装置であり、capability 宣言、canonical inbound/outbound、typed error、audit trace、Runtime Invariants を要する。LLM を authority path から呼ばず、Approval Gate や HDS policy を迂回せず、undeclared filesystem/network/process/credential access を求めない。受入時は `docs/PLUGIN_REVIEW_GATE.md`、`PLUGIN_HIG.md`、`SKILL_LOADER_CONTRACT.md`、`ADAPTER_CONTRACT.md`、`CAPABILITY_ENVELOPE.md`、`CONFORMANCE.md` を確認し、`pnpm plugin:review -- --package <dir>` を通す。その結果も non-authority evidence である。
-
-channel 状態:
-
-- WebChat / Telegram: first-party
-- Slack / Discord / Teams / LINE: owner-run credentialed live smoke、回復性、Teams/LINE inbound listener closure 前は `first-party-preview`
-- WhatsApp: 意図的な `reserved-third-party`、`core_supported=false`、`warranty=none`
-
-Baileys、WAHA、WhatsApp Web automation、first-party WhatsApp Business API、Twilio WhatsApp の first-party core、hidden hook を実装しない。channel 数を品質指標にしない。昇格には `pnpm validate:channels`、redacted owner evidence、setup/credential/live-smoke/inbound/outbound/backoff/actionable error/conformance/metadata non-authority が必要である。
-
-未完成・実験的・高リスク・第三者的機能は preview へ隔離し、conformance、permission、audit、Runtime Invariants、support level、failure mode が揃うまで昇格しない。
-
-### 最終対応OSの規定（5OS）
-
-BLUE-TANUKIの新AGI製品の完成対象は**Windows／Linux／macOS／Android／iOSの5OS**。Windows-firstは開発順序であって最終製品の対象を減らさない。対応済みという現状主張ではない。
-
-Windows、Linux native、macOSはそれぞれDesktopの導入・通常仕事・権限・復旧を実装する。WSL／WSLg／headlessの証拠をLinux nativeへ転用しない。AndroidとiOSは独立したMobile製品入口とし、native導入／初期設定、OS権限、秘密保管、認証済みDevice Link、仕事の開始・状態観測・Owner承認・取消・中断復帰、更新・削除を各OS別に成立させる。
-
-Mobileの招待・device credential等の秘密はnative境界に置き、Dart、platform-channelの戻り値、ログ、traceへ返さない。TLS以外への自動fallback、切断後の無断再送、Mobile UIがHDS-JまたはD4Pocket Brokerの権限を代行する経路を禁止する。D4Pocketの既存Mobile契約を参照し、別repo変更は限定委任に従う。
-
-「MobileクライアントがDesktop Brokerを経由して仕事を行う」ことと「Mobile端末単独でC/J/Mや実作用を稼働させる」ことは別能力。後者を本規定だけで実装済み・必要条件成立とは扱わない。
-
-従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後に各OSの規格・権限・配布契約に沿ってQC／QAを独立に行い、AndroidとiOSの証拠を相互代用しない。物理機能・署名・Store等、仮想環境で再現できない条件は別に未確認範囲を示す。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
-
-## 19. 競合比較・互換性と公開境界
-
-OpenClawとMuseは機能名の数ではなく、実際にできる仕事、接続の深さ、導入・回復・長期運転、統治・互換性を比べる対象とする。旧OpenClaw拒否監査は危険patternの反証材料として保持するが、今回の完全包含という製品目標を縮小するために使わない。既知の未包含を隠したり、安全保護を解除して包含済みと報告したりしない。
-
-P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのまま維持する。全体実装・QC・対象別QA・必要なOS／live証拠・ownerの明示GOが揃うまで、GAや完全上位互換・AGI完成を実証済みの対外主張へ昇格させない。
-
-## 第III部 現行QE施工・再同期規律
-
-## 20. QE施工運転・全域設計と全体一括実装
-
-現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書の三点だけを正本とする。現行版はP0全域実物棚卸し→P1全域設計→P2全体一括実装を一つの施工経路として進め、依存consumerを同時に制作・結線する。docs/QE_CURRENT_AUTHORITY.mdは三点実体への唯一の現行ポインタ、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdと閉じたbatch記録は履歴とする。旧版の局所工程・全OS物理実機必須・毎小単位QC/QAは現行三点で上書きし、実行権限・実資格・出荷GOは別に保護する。
-
-工程状態は現行三点正本のP0全域棚卸し→P1全域設計→P2全体一括実装→P3 SYSTEM_SHAPED→P4 BUILD_COVERED→P5/P6 QC→P7根因修正・再QC→P8 OS別QA→P9責任者GOに従う。198施工単位は漏れ検出・実装traceの索引であって、順番または198個の完了・品質ゲートではない。
-
-旧BUILD_BATCH識別子は**過去の施工履歴**に限って参照し、今後の施工選択・個別完了・次工程への合否判定には使わない。途中保存のGit checkpointは必要時に設けてよいが、施工対象は終始、全要求・全機能・全5OSの製品全域である。未接続consumerは同じ全域施工の残差として接続する。独立した作業の開始・再開時には現行三点セット全文と適用AGENTS.mdを読み直す。履歴は必要時だけ参照し、型・schema・mockだけで完遂と報告しない。
-
-施工指示は現行三点正本へ一元化し、別の「次の局所BUILD_BATCH指示書」を生成・選択しない。作業中断・再開の記録には全域の目的、完成状態、全機能・全OSの残差、安全条件、停止条件、必要な技術確認、Git復元点、再同期条件を含める。198索引は追跡と後段QC候補のために使う。
-
-本規定の採用だけで製品作業を再開しない。最新owner停止指示、C08.03実provider試験の保留、別repo・実業務・公開行為の限定承認を維持する。
-
-## 21. QE品質活動とGit閉包
-
-### 1. BUILDとQC・QAの責務
-
-小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの途中成果であり、全test・QA合格・全体検査・個別commit/pushを閉鎖条件にしない。必要な途中Git保全は全域施工の継続を支える技術操作であり、新たな局所施工の選定条件ではない。BUILD_COVERED後に全体QE_QC、根因修正・再検査、対象別QAへ進む。owner GOは独立する。
-
-### 2. 安全を維持した実装中の最小確認
-
-QE_BUILD中に必要なのは、構文・型・変更したproducer／consumerの疎通と作業継続を阻む欠陥の除去である。重大なAuthority、Approval、秘密、監査、非冪等外部作用を変更する場合は、無権限実行を防ぐため必要な局所否定確認をその場で行う。危険な作用経路は保護が確認できるまでdisable／SUSPENDとし、実credentialや実外部作用を使用しない。既存test・検査・保護を削除・恒久skipして進行を速くしたことにはしない。
-
-必要なGit checkpointでは対象の型検査・必要なbuild・接続部分の短時間smoke・差分チェックを実施する。環境復元または依存変更時はfrozen lockfileを照合する。HDS権限中核を変更したバッチでは関連するstandaloneと安全確認を行う。全体pnpm test、全数conformance、故障注入、耐久、性能、全OS、競合比較は完成した実物を対象とするQE_QCへ配置する。release経路に関する別の必須保護検査・GA／bundle／verify、ownerの実機検査は省略しない。
-
-実行すべき対象確認の例：pnpm typecheck、pnpm build、pnpm exec vitest run <対象のtest file>、pnpm hds:standalone。QE_QCの開始後にpnpm test、pnpm docs:check、pnpm validate:repo-health、pnpm run doctor、pnpm validate:packaging、必要なsmoke／実機を実施する。規定・文書更新では変更に関係するdocs:check／日本語基底監査、release変更ではGA／bundle／verifyを必ず扱う。実行不能ならNOT_RUNと根拠を記録し、公開保証へ昇格させない。
-
-### 3. 全域施工の途中記録
-
-全域施工が前進させた実挙動と全機能・全OSの未接続残差を記録する。関連するcode・contract・必要なdocs／履歴は整合させ、一小単位ごとの文書更新儀式・全体QC・品質保証を廃止する。無関係なrefactor、不要な抽象化、一時物は除去し、安全を壊す既知欠陥は即修正または遮断する。
-
-### 4. Git運用と復旧点（D4Pocket方式）
-
-mainを唯一の開発正本とし、単一writerが製品の全域施工または統治改訂の編集前にorigin/main、ローカルHEAD、dirty差分と他writerを確認する。小単位の切替ごとにバックアップ世代を回さない。
-
-**D4Pocketと統一する正規方式は、ローカル復旧用branch二本（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）とGitHub上のPR-neutralなtag二本（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）。** 現backup-mainをprevへ退避し、編集前mainをbackup-mainへ保存する。確認済みの旧remote tag SHAを期待値とするforce-with-leaseで二本を原子的にpushし、tag二本のremote SHAとmainを照合する。GitHub上の同名backup branchを正規世代として維持しない。
-
-**移行状態はMIGRATION_COMPLETE（2026-10-12）。** remote backup tag二本への保存とSHA照合後、旧remote backup branch二本を期待SHA付きatomic pushで整理した。local recovery branch二本とremote tag二本は同じ二世代に揃っている。完了時SHA、手順、検証証拠はdocs/BACKUP_REF_MIGRATION.mdを参照する。今後もref競合、他writer更新、照合不足があれば変更を止め、完了宣言しない。
-
-明示委任された作業の実際のGit保全時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。**三点文書の作成・提出だけでpushを起動しない。** tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは確認・権限なく実施しない。secret、credential、個人情報、実運転状態、no-store review本文、監査raw、debug一時物をGitに混ぜない。公開可能な技術設計・QE/HDS施工文書をこれらと同一視しない。reset --hard／cleanで既存作業を消さない。
-
-### 5. 旧規定との移行
-
-本§21は旧§21の「各phaseでfull test、個別QA、毎回backup/commit/push」をQE方式へ正式置換する。これはテスト体系や安全保護の廃止ではなく、適用時期と対象の配置変更である。下位の旧作業標準・指示・進捗に矛盾が残るときは公開可能な差分を記録し、次の認可済み規定同期バッチで改訂する。
-
-### 6. Validation
-
-旧文書のAGENTS.md#6-validationから参照される互換見出し。現行の検証強度・実行時期・未実施の扱いは本§21.2と§21.3を正本とする。小単位ごとにfull suiteの合格を要求する旧文書の手順は、QE_BUILDの方法として適用しない。ただし安全に必要な限定否定確認、出荷時の必須検査、正確な未実施記録は維持する。
-
-### 7. Git closure
-
-旧文書のAGENTS.md#7-git-closureから参照される互換見出し。現行Git規則は本§21.4を正本とし、D4Pocket方式のlocal二世代branch／remote二世代tagとする。旧remote backup branchはtag二本の移行・remote照合まで保全し、移行完了後だけ競合検出付きで整理する。毎小単位の世代回転は行わない。
-
-## 22. 環境
-
-Windows-firstは開発・施工の優先順であり、5OSの最終製品対象を縮退させない。OS別の実装・QC／QAはdocs/PLATFORM_TARGETS_QE.mdを参照する。
-
-owner 指示により、通常の編集・ビルド・テスト・起動・Git 操作は Windows を標準とする。Windows で成立する開発に WSL を必須としない。WSL / native Linux は、Unix 実行属性を必要とする配布生成・検証など、Windows で成立しない作業の補助環境として使用する。再現手順は `docs/開発環境.md` を参照する。
-
-環境条件:
-
-- Corepack pnpm 9.12.0
-- Node 22.14.0 以上
-- WSL / native Linux で検証するときは ext4 workspace を使用する
-- WSL 内の active workspace に `/mnt/c` を使わない。Windows 側の通常開発場所を禁止する意味ではない
-
-`pnpm` がない場合は Node / Corepack / pnpm を確認・復旧し、それでも不可なら環境制約として報告する。product code で隠さない。WSL で `tsx` が Windows の一時パスを掴む場合は、product regression と混同せず安全な Linux 一時ディレクトリを使用する。
-
-`pnpm smoke:serve` / `pnpm smoke:resume` は既知失敗扱いではない。smoke、root workspace、release gate を扱う phase では実行し、通常 phase で省略した場合は scope 上未実行と報告する。credential 不在の `pnpm smoke:live` は SKIP を許容する。
-
-## 23. 文書規則
-
-- internal-design perspective を保ち marketing 最適化しない
-- 不要な legal commentary を追加しない
-- 安全優先順位を弱めない
-- 精密な engineering language を用いる
-- unsupported / unsafe path を first-party 外として明示する
-- non-goals と gap を完成機能から区別する
-- current implementation と target state、first-run と permanent-use を分ける
-- HDS原理・技術仕様・コア設計の公開を一律に禁止しない。公開対象の技術文書と、実資格・実運転・個人データを分別する
-- active docs を日本語正本化し、固定識別子だけを必要範囲で併記する
-- 過去文書は現行仕様として無言再利用しない
-
-## 24. 毎タスクでの正本確認・目的再同期
-
-独立作業の開始・切替・再開時に以下を行う。全域施工中の小単位参照は再読の手掛かりであって、別の作業開始や施工選定ではない。
-
-1. 最新owner原文指示、[`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) の現行版・文書名・hash、rootと最寄りのAGENTS.mdを確認する。独立した作業の開始・切替・再開時は、現行ピンが指す仕様書・工程表・施工指示書の三文書すべてと適用AGENTS.mdを読み直す。同一作業内の連続した小単位切替では、関係する節と現物を再同期する。前回の状態は記憶だけで確定せず、現行ピンと現物から再構成する。旧版・完了記録・進捗履歴全体はログとして保持し、依存・変更系譜・矛盾の確認に必要な場合だけ該当箇所を参照する。
-2. 現在のmain HEAD、remote、dirty差分、ownerや他writerの作業と未決作用、実資格・個人データの扱いを確認する。
-3. 今回の全域施工対象、目的、作用、入出力、全機能・全OSの接続状態、期待する観測、安全保護、停止条件を固定する。
-4. 関連contract／本番呼出し先／局所testを確認し、必要十分なコードを連結する。次の実装を進められない欠陥は直す。
-5. CODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYを全域残差として記録し、切れ目で指示を再読する。小単位ごとのQC・QA・全suite・Git世代回転は挟まない。
-6. 必要なGit checkpointでのみ§21の限定技術確認・Git閉包・報告を行い、製品全域の施工を継続する。ownerの停止指示や危険な未承認作用があれば該当作用を停止する。
-
-初回には規定/00_日本語基底規定.md、SECURITY.md、AUDIT.md、CONFIG.md、README.md、CHANGELOG.md、docs/作業標準要領.mdも必要に応じて確認する。以後の再読はAGENTS・現行目的と指示・影響コードを必須とし、無関係な全文書の再生成を義務化しない。作業の中断点はモデル内部の消去保証ではなく、正本と現物から状態を作り直すためのものとする。
-
-## 25. 最終報告
-
-BUILD中の報告は次を中心に簡潔にする：QE_STAGE、431要求・全機能・5OSの全域施工状態、実際に通るようになった仕事／consumer、全域のBUILD_GAP、安全境界、行った技術確認と未実施、原因分類、実際のmain HEAD、commit/push、remote HEAD、backup refsと復元点。旧BUILD_BATCHと単位IDは履歴識別にのみ使用する。細分化した小単位のQA合格を成果として報告しない。
-
-QE_QCでは対象実物・版・環境・機能母集団、欠陥と根因、修正と再検査、未観測の範囲を報告する。QE_QAでは個別の対象・版・OS・条件・証拠源と、QA_SCOPED／QA_NOT_ESTABLISHEDを記録する。製品releaseに必要なowner GOは独立に扱う。
-
-残存項目のrelease_blocker／post_v1_scope／known_limitation、原因の今回起因／既存／環境限定／未確定は別軸。未検証・未同期・未接続を隠さず、公開阻害を言い換えて消さない。実際に行っていない試験をPASSとしない。
-
-## 26. 参照元の採否と範囲
-
-- D4Pocket（旧GUI-Shell）のAGENTS.mdの2026-10-12確認版から：正本と現物照合、作業の限定、安全優先、証拠分類、信頼境界、通常経路最小化、環境差、wrapper説明責任、single writer、owner GO独立を抽出した。
-- 移植しない：D4固有のFlutter／Rust／Swift／Windows／macOS transport実装、D4の閉鎖済み工程、D4用試験成功値、別repoへの書込権。
-- ownerの現行開発方針から：毎タスクAGENTS.md・指示書を再読して目的ドリフトを抑制し、切れ目を意図的に設ける。ただし一気通貫実装を最優先とし、QCと対象別QAを後段に配置する。
-- 本文の既存§§12〜18にあるHDS-BRAIN standalone、L3、Approval、audit、memory非権限、Runtime Invariants、channel／plugin／operator境界は継続適用する。原理文書の公開可否と運転上の安全境界を混同しない。
-
+正本=main直接更新・PR不要・単一writer; 編集前origin/main/local HEAD/dirty/他writer/権限/復元点確認、remote変更時は競合を解消してからfast-forward; reset --hard/clean/force main/他者差分の削除禁止。Git checkpointは全域作業の必要時のみ、198索引単位のcommit/push/backup回転禁止。ownerがこのrepoの直接改訂を委任した範囲で限定commit→main push→remote SHA照合。文書提供だけでGitHub更新許可を推定しない。
+復旧正規refs=local refs/heads/codex/backup-main,refs/heads/codex/backup-main-prev; remote refs/tags/codex/backup-main,refs/tags/codex/backup-main-prev。docs/BACKUP_REF_MIGRATION.mdのMIGRATION_COMPLETE(2026-10-12)を保持し、必要な保全時は現SHA/期待SHA/force-with-lease/atomic pushの適否とowner許可を確認; 世代を無検証上書きしない。公開できる設計文書と秘密情報を分別してstage。
+作業完了条件=今回委任された対象の実差分と検証射程、現HEAD/remote、未実施/保留/危険停止/復帰条件を明示; 「AGENTS更新=rev6 repo採用」「SOURCE_EXISTS=SYSTEM_SHAPED」「BUILD_COVERED=QC/QA/GO」「文書公開=製品出荷」を全て禁止。旧参照互換=本節は旧AGENTS.md#7-git-closure相当、前節は#6-validation相当。
