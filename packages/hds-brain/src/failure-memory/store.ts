@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { HDSPrivateReplaceableFile } from "../private_append_only_file.js";
 import { sha256Hex, stableJson } from "../complete-history/codec.js";
 import {
   candidateFromCommand,
@@ -67,20 +66,19 @@ export interface LLMFailureSignatureProposal {
 
 export class FailureMemoryStore {
   private readonly filepath?: string;
+  private readonly persistence?: HDSPrivateReplaceableFile;
   private readonly now: () => Date;
   private signatures: FailureSignature[] = [];
   private learningLineageRecords: FailureLearningLineageRecord[] = [];
 
   constructor(opts: FailureMemoryStoreOptions = {}) {
     this.filepath = opts.filepath;
+    this.persistence = this.filepath ? new HDSPrivateReplaceableFile(this.filepath) : undefined;
     this.now = opts.now ?? (() => new Date());
-    if (this.filepath && existsSync(this.filepath)) {
-      this.loadFromFile();
-    } else if (this.filepath) {
-      const dir = dirname(this.filepath);
-      if (dir && !existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
+    const persisted = this.persistence?.readUtf8IfPresent();
+    if (persisted !== undefined) {
+      this.loadFromRaw(persisted);
+    } else if (this.persistence) {
       this.persist();
     }
   }
@@ -443,9 +441,9 @@ export class FailureMemoryStore {
     return this.signatures.find((signature) => equivalentKey(signature) === key) ?? null;
   }
 
-  private loadFromFile(): void {
+  private loadFromRaw(value: string): void {
     if (!this.filepath) return;
-    const raw = readFileSync(this.filepath, "utf8").trim();
+    const raw = value.trim();
     if (!raw) {
       this.signatures = [];
       return;
@@ -459,8 +457,7 @@ export class FailureMemoryStore {
   }
 
   private persist(): void {
-    if (!this.filepath) return;
-    writeFileSync(this.filepath, JSON.stringify(this.exportSnapshot(), null, 2) + "\n");
+    this.persistence?.replaceUtf8(JSON.stringify(this.exportSnapshot(), null, 2) + "\n");
   }
 }
 

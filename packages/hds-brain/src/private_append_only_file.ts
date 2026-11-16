@@ -9,7 +9,11 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
 
 interface FileIdentity {
@@ -127,6 +131,129 @@ export class HDSPrivateAppendOnlyFile {
     } catch (error) {
       closeSync(fd);
       throw error;
+    }
+  }
+}
+
+/** Mutable private snapshot file bound to one directory and regular-file identity. */
+export class HDSPrivateReplaceableFile {
+  readonly filepath: string;
+  private readonly directoryIdentity: readonly DirectoryIdentity[];
+  private identity?: FileIdentity;
+  private absentAtConstruction = false;
+  private replaceFailed = false;
+
+  constructor(filepath: string) {
+    this.filepath = resolve(filepath);
+    ensureDirectoryPath(dirname(this.filepath));
+    this.directoryIdentity = captureDirectoryIdentity(dirname(this.filepath));
+    const existing = tryLstat(this.filepath);
+    if (existing) {
+      if (!isSingleLinkRegularFile(existing)) {
+        throw new Error("hds_private_replaceable_file_must_be_a_single_link_regular_file");
+      }
+      this.identity = { dev: existing.dev, ino: existing.ino };
+    } else {
+      this.absentAtConstruction = true;
+    }
+  }
+
+  readUtf8IfPresent(): string | undefined {
+    if (this.replaceFailed) throw new Error("hds_private_replaceable_file_disabled_after_failure");
+    this.assertDirectory();
+    const before = tryLstat(this.filepath);
+    if (this.absentAtConstruction) {
+      if (before) throw new Error("hds_private_replaceable_file_identity_changed");
+      return undefined;
+    }
+    if (!before || !isSingleLinkRegularFile(before) || !this.identity ||
+        before.dev !== this.identity.dev || before.ino !== this.identity.ino) {
+      throw new Error("hds_private_replaceable_file_identity_changed");
+    }
+
+    const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    const fd = openSync(this.filepath, constants.O_RDONLY | noFollow);
+    try {
+      this.assertDirectory();
+      const descriptorStat = fstatSync(fd, { bigint: true });
+      const pathStat = tryLstat(this.filepath);
+      if (!pathStat || !isSingleLinkRegularFile(descriptorStat) || !isSingleLinkRegularFile(pathStat) ||
+          descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino ||
+          descriptorStat.dev !== this.identity.dev || descriptorStat.ino !== this.identity.ino) {
+        throw new Error("hds_private_replaceable_file_identity_changed");
+      }
+      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      return readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** Write a complete new snapshot privately, then atomically replace the old one. */
+  replaceUtf8(value: string): void {
+    if (this.replaceFailed) throw new Error("hds_private_replaceable_file_disabled_after_failure");
+    this.assertCurrentPath();
+    const temporaryPath = join(dirname(this.filepath), `.${randomUUID()}.tmp`);
+    const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    let fd: number | undefined;
+    let replacementIdentity: FileIdentity | undefined;
+    let committed = false;
+    try {
+      this.assertDirectory();
+      fd = openSync(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+      writeFileSync(fd, value, "utf8");
+      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      fsyncSync(fd);
+      const descriptorStat = fstatSync(fd, { bigint: true });
+      const pathStat = tryLstat(temporaryPath);
+      if (!pathStat || !isSingleLinkRegularFile(descriptorStat) || !isSingleLinkRegularFile(pathStat) ||
+          descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino) {
+        throw new Error("hds_private_replaceable_file_temporary_identity_changed");
+      }
+      replacementIdentity = { dev: descriptorStat.dev, ino: descriptorStat.ino };
+      closeSync(fd);
+      fd = undefined;
+
+      this.assertCurrentPath();
+      renameSync(temporaryPath, this.filepath);
+      committed = true;
+      const installed = tryLstat(this.filepath);
+      if (!installed || !replacementIdentity || !isSingleLinkRegularFile(installed) ||
+          installed.dev !== replacementIdentity.dev || installed.ino !== replacementIdentity.ino) {
+        throw new Error("hds_private_replaceable_file_identity_changed_after_replace");
+      }
+      this.identity = replacementIdentity;
+      this.absentAtConstruction = false;
+      syncDirectoryChain(dirname(this.filepath), this.directoryIdentity);
+    } catch (error) {
+      if (committed) this.replaceFailed = true;
+      throw error;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      if (!committed) {
+        try {
+          unlinkSync(temporaryPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+  }
+
+  private assertDirectory(): void {
+    assertDirectoryPath(dirname(this.filepath), this.directoryIdentity);
+  }
+
+  private assertCurrentPath(): void {
+    this.assertDirectory();
+    const current = tryLstat(this.filepath);
+    if (this.absentAtConstruction) {
+      if (current) throw new Error("hds_private_replaceable_file_identity_changed");
+      return;
+    }
+    if (!current || !isSingleLinkRegularFile(current) || !this.identity ||
+        current.dev !== this.identity.dev || current.ino !== this.identity.ino) {
+      throw new Error("hds_private_replaceable_file_identity_changed");
     }
   }
 }
