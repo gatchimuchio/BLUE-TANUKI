@@ -86,6 +86,33 @@ public final class PairingResponseParserTest {
                         accepted.replace("\"接続中\"", "\"許可\""), NONCE));
     }
 
+    @Test
+    public void terminalLeaveRequiresExactRequestAndRevokedProjection() throws Exception {
+        String accepted = "{\"request_id\":\"" + NONCE + "\",\"operation\":\"端末離脱\"," +
+                "\"status\":\"accepted\",\"evidence_source\":\"LIVE_RUNTIME\"," +
+                "\"audit_event_id\":\"event-3\",\"error\":null,\"health\":null," +
+                "\"body\":{\"状態\":\"失効\"},\"shutdown_requested\":false}";
+        PairingResponseParser.requireDisconnectedResponse(accepted, NONCE);
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.requireDisconnectedResponse(
+                        accepted.replace("\"失効\"", "\"接続中\""), NONCE));
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.requireDisconnectedResponse(accepted,
+                        "2".repeat(32)));
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.requireDisconnectedResponse(
+                        accepted.replace("LIVE_RUNTIME", "FIXTURE"), NONCE));
+
+        String rejected = "{\"request_id\":\"" + NONCE + "\",\"operation\":\"端末離脱\"," +
+                "\"status\":\"rejected\",\"evidence_source\":\"LIVE_RUNTIME\"," +
+                "\"audit_event_id\":\"event-4\",\"error\":{\"code\":\"拒否\"," +
+                "\"message\":\"Desktop拒否\",\"recoverable\":false," +
+                "\"audit_event_required\":true,\"fail_closed\":true}," +
+                "\"health\":null,\"body\":null,\"shutdown_requested\":false}";
+        assertThrows(PairingResponseParser.PairingRejectedException.class,
+                () -> PairingResponseParser.requireDisconnectedResponse(rejected, NONCE));
+    }
+
     private String body() {
         return "{\"版\":1,\"HostID\":\"" + HOST_ID + "\",\"接続先Host\":\"192.168.1.10\"," +
                 "\"port\":7443,\"証明書hash\":\"" + CERTIFICATE + "\",\"端末ID\":\"" +

@@ -30,22 +30,31 @@ final class DeviceLinkTransport {
 
     private final AtomicReference<SSLSocket> activeSocket = new AtomicReference<>();
 
-    Exchange pair(DeviceInvitation invitation) throws TransportException {
+    Exchange pair(DeviceInvitation invitation, SendGuard canSend) throws TransportException {
         String nonce = DeviceInvitation.newDeviceId();
         String request = request(invitation.hostId, invitation.deviceId, invitation.invitationId,
                 invitation.invitationSecret, nonce, System.currentTimeMillis() / 1000L,
                 "端末結合");
         return new Exchange(nonce, exchange(invitation.host, invitation.port,
-                invitation.certificateSha256, request));
+                invitation.certificateSha256, request, canSend));
     }
 
-    Exchange check(DeviceCredential credential) throws TransportException {
+    Exchange check(DeviceCredential credential, SendGuard canSend) throws TransportException {
         String nonce = DeviceInvitation.newDeviceId();
         String request = request(credential.hostId, credential.deviceId, credential.credentialId,
                 credential.credentialSecret, nonce, System.currentTimeMillis() / 1000L,
                 "端末確認");
         return new Exchange(nonce, exchange(credential.host, credential.port,
-                credential.certificateSha256, request));
+                credential.certificateSha256, request, canSend));
+    }
+
+    Exchange leave(DeviceCredential credential, SendGuard canSend) throws TransportException {
+        String nonce = DeviceInvitation.newDeviceId();
+        String request = request(credential.hostId, credential.deviceId, credential.credentialId,
+                credential.credentialSecret, nonce, System.currentTimeMillis() / 1000L,
+                "端末離脱");
+        return new Exchange(nonce, exchange(credential.host, credential.port,
+                credential.certificateSha256, request, canSend));
     }
 
     void closeActive() {
@@ -59,12 +68,16 @@ final class DeviceLinkTransport {
         }
     }
 
-    private String exchange(String host, int port, String certificateSha256, String request)
+    private String exchange(String host, int port, String certificateSha256, String request,
+                            SendGuard canSend)
             throws TransportException {
         boolean dispatchAttempted = false;
         SSLSocket tls = null;
         byte[] requestBytes = null;
         try {
+            if (canSend == null || !canSend.canSend()) {
+                throw new IOException("request_cancelled_before_connect");
+            }
             DeviceInvitation.requirePrivateIpv4(host);
             DeviceInvitation.requireHex(certificateSha256, 64);
             requestBytes = (request + "\n").getBytes(StandardCharsets.UTF_8);
@@ -79,6 +92,9 @@ final class DeviceLinkTransport {
             tls.setSoTimeout(READ_TIMEOUT_MS);
             tls.setTcpNoDelay(true);
             tls.startHandshake();
+            if (!canSend.canSend()) {
+                throw new IOException("request_cancelled_before_send");
+            }
 
             OutputStream output = tls.getOutputStream();
             dispatchAttempted = true;
@@ -175,6 +191,10 @@ final class DeviceLinkTransport {
             super("device_link_transport_failed");
             this.requestMayHaveReachedDesktop = requestMayHaveReachedDesktop;
         }
+    }
+
+    interface SendGuard {
+        boolean canSend();
     }
 
     static final class Exchange {

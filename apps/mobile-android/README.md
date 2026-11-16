@@ -11,8 +11,11 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - TLS接続ごとに、上限とtimeoutを定めたDevice Link requestを一度だけ送る。requestがDesktopへ届いた可能性がある場合、招待を再送しない。
 - 返却されたdevice credentialはAndroid Keystore鍵で保護するAES-GCM ciphertextとしてのみ保存する。secure storageへの保存またはreadbackに失敗した場合、pairing完了と扱わない。
 - アプリがforegroundへ戻ったときに保存済みcredentialを確認する。backgroundへ移る際は接続socketを閉じる。
+- 通常の解除はDesktopへ`端末離脱`を一度だけ送り、要求nonceと正確な失効応答を確認した後、端末内資格を削除してreadbackする。曖昧な応答では資格を保持し、自動再送しない。
+- 通信不能時の端末内資格削除は、Desktop側の失効と別の回復操作として明示する。資格の削除と、Desktop失効未確認・権限影響なしを固定した最大32件の非権威回復記録を同じKeystore保護状態へ保存し、両方のreadback後にだけ完了表示する。
+- foreground世代が変わった場合、TLS handshake後・要求送信前に再確認し、backgroundから新しい要求を送らない。
 
-現行の実装範囲は初回pairingと接続確認までである。Taskの操作、取消、lifecycleからの復帰、更新、削除は未実装。release buildではなく、Android実機でも検査していない。
+現行の実装範囲はpairing、接続確認、Desktop失効、通信不能時の端末内回復までである。通常Taskの操作・取消、lifecycleからのTask復帰、更新、package削除は未実装。D4のDevice Link contractへの接続sourceがある状態であり、実Desktop Broker／BLUE Gateway／C/J/Mを通る一仕事の実動は未確認。release buildではなく、Android実機でも検査していない。
 
 ## ビルドと限定確認
 
@@ -22,6 +25,6 @@ JDK 17、Android SDK Platform 37、Build Tools 36.0.0を使う。OneDrive外か�
 .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
 ```
 
-このPCのOneDrive checkoutでは、Gradle Test Workerがtest classを読み込めず、`assembleDebug`も生成済みdex出力を置き換えられずに失敗する。OneDrive外の新しい`%TEMP%` pathへ初回入口sourceを複製した検査では、当時のunit test 10件と`assembleDebug`が成功した。端末ID継続性を加えた現行sourceは`assembleDebug`のみ成功しており、この更新後のunit testは再実行していない。失敗の原因が日本語pathか同期・ACLのどちらかは切り分けていない。
+2026-11-17の限定確認では、OneDrive外・ASCII pathの新規`%TEMP%`コピー（既存`.gradle`と全`build`生成物を除外）で`:app:testDebugUnitTest :app:assembleDebug`が成功し、unit test 14件がすべてPASSした。最初のコピーは`app/build`の既存生成物を含み、Gradleが出力先を削除できず失敗したため、生成物なしの新規コピーで再実行した。OneDrive checkoutでの失敗原因が日本語pathか同期・ACLのどちらかは切り分けていない。
 
-生成されたdebug APKはローカルの開発用成果物であり、release packageではない。署名鍵とPlay Store設定は含まない。この施工時にAndroid emulator／実機は接続していない。
+debug APKは一時検証コピーにのみ生成したローカル開発用成果物であり、release packageではない。署名鍵とPlay Store設定は含まない。この施工時にAndroid emulator／実機は接続していない。

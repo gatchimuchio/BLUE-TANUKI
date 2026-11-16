@@ -69,6 +69,29 @@ final class PairingResponseParser {
         }
     }
 
+    static void requireDisconnectedResponse(String json, String nonce)
+            throws PairingRejectedException, PairingUnknownException {
+        try {
+            Map<String, Object> envelope = StrictJson.object(StrictJson.parse(json));
+            String status = requireEnvelope(envelope, nonce, "端末離脱");
+            if ("rejected".equals(status) || "suspended".equals(status)) {
+                throw new PairingRejectedException();
+            }
+            if (!"LIVE_RUNTIME".equals(StrictJson.string(envelope, "evidence_source"))) {
+                throw new PairingUnknownException();
+            }
+            Map<String, Object> body = StrictJson.object(envelope.get("body"));
+            if (!StrictJson.hasExactKeys(body, "状態") ||
+                    !"失効".equals(StrictJson.string(body, "状態"))) {
+                throw new PairingUnknownException();
+            }
+        } catch (PairingRejectedException | PairingUnknownException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new PairingUnknownException();
+        }
+    }
+
     private static String requireEnvelope(Map<String, Object> envelope, String nonce,
                                           String operation)
             throws StrictJson.JsonException, PairingUnknownException {

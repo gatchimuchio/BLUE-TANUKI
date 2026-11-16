@@ -18,6 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,12 +46,19 @@ public final class MainActivity extends Activity {
     private CheckBox confirmation;
     private Button pairButton;
     private Button newIdButton;
+    private Button leaveButton;
+    private Button localDeleteButton;
+    private TextView recoveryAuditView;
     private String deviceId;
     private boolean identityReady;
     private boolean permissionRequestPending;
+    private volatile boolean credentialStateUncertain;
+    private boolean recoveryAuditUnavailable;
     private volatile boolean foreground;
     private volatile boolean busy;
     private volatile boolean pairingInFlight;
+    private volatile boolean disconnectInFlight;
+    private volatile boolean localDeleteInFlight;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -65,6 +73,8 @@ public final class MainActivity extends Activity {
             identityReady = false;
         }
         setContentView(buildScreen());
+        refreshCredentialControls(credentialStore.contains());
+        refreshRecoveryAuditSummary();
         setStatus(identityReady
                 ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
                 : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
@@ -83,6 +93,12 @@ public final class MainActivity extends Activity {
         generation.incrementAndGet();
         if (pairingInFlight && statusView != null) {
             setStatus("結合中にアプリがbackgroundへ移りました。Desktop結果を確認するまで不明状態とし、招待を再利用しないでください。");
+        }
+        if (disconnectInFlight && statusView != null) {
+            setStatus("解除通信中にアプリがbackgroundへ移りました。Desktop失効の結果は不明です。自動再送せず、Desktop側の端末状態を確認してください。");
+        }
+        if (localDeleteInFlight && statusView != null) {
+            setStatus("端末内削除中にアプリがbackgroundへ移りました。復帰後に資格と回復記録を読み直して状態を確認します。");
         }
         transport.closeActive();
         super.onStop();
@@ -198,6 +214,28 @@ public final class MainActivity extends Activity {
         pairButton.setOnClickListener(view -> beginPairing());
         content.addView(pairButton, matchWrap());
 
+        TextView linkRecoveryHeading = section("端末連携の解除と回復");
+        content.addView(linkRecoveryHeading, matchWrap());
+        TextView linkRecoveryHelp = new TextView(this);
+        linkRecoveryHelp.setText("通常の解除はDesktopへ失効を要求し、正確な成功応答の後に端末内資格を削除します。通信できない場合の端末内削除は別操作です。端末内削除だけではDesktop側の資格は失効せず、実行中の仕事も停止しません。");
+        linkRecoveryHelp.setTextSize(14);
+        content.addView(linkRecoveryHelp, matchWrap());
+
+        leaveButton = new Button(this);
+        leaveButton.setText("Desktopで失効して、この端末の資格を削除");
+        leaveButton.setOnClickListener(view -> beginDesktopRevocation());
+        content.addView(leaveButton, matchWrap());
+
+        localDeleteButton = new Button(this);
+        localDeleteButton.setText("この端末から保存資格だけを削除");
+        localDeleteButton.setOnClickListener(view -> beginLocalCredentialDelete());
+        content.addView(localDeleteButton, matchWrap());
+
+        recoveryAuditView = new TextView(this);
+        recoveryAuditView.setTextSize(13);
+        recoveryAuditView.setPadding(0, dp(6), 0, dp(4));
+        content.addView(recoveryAuditView, matchWrap());
+
         TextView boundary = new TextView(this);
         boundary.setText("MobileはOwner承認、権限、実行判断を作りません。Desktop BrokerがDevice Link資格、監査、許可操作を判定します。結果不明の要求は自動再送しません。");
         boundary.setTextSize(13);
@@ -243,12 +281,14 @@ public final class MainActivity extends Activity {
         busy = true;
         pairingInFlight = true;
         pairButton.setEnabled(false);
+        refreshCredentialControls(false);
         setStatus("Desktopへ一回限りの結合要求を送信しています。画面を閉じると通信を停止します。");
         long operationGeneration = generation.get();
         worker.execute(() -> {
             AtomicBoolean stored = new AtomicBoolean(false);
             try {
-                DeviceLinkTransport.Exchange exchange = transport.pair(invitation);
+                DeviceLinkTransport.Exchange exchange = transport.pair(invitation,
+                        () -> canSend(operationGeneration));
                 DeviceCredential credential = PairingResponseParser.parse(exchange.response, invitation,
                         exchange.nonce, System.currentTimeMillis() / 1000L);
                 credentialStore.saveAndVerify(credential);
@@ -270,7 +310,7 @@ public final class MainActivity extends Activity {
                 mainHandler.post(() -> {
                     busy = false;
                     pairingInFlight = false;
-                    pairButton.setEnabled(foreground);
+                    refreshCredentialControls(stored.get() || credentialStore.contains());
                     clearPairingInputs();
                     if (stored.get()) verifyStoredCredential();
                 });
@@ -282,19 +322,25 @@ public final class MainActivity extends Activity {
         if (!foreground || busy) {
             return;
         }
+        if (credentialStateUncertain) {
+            refreshCredentialControls(credentialStore.contains());
+            setStatus("保存資格または回復記録の状態を確定できません。通信・再結合を停止しています。アプリを再起動して状態を読み直してください。");
+            return;
+        }
         final DeviceCredential credential;
         try {
             credential = credentialStore.read();
         } catch (AndroidCredentialStore.CredentialStoreException exception) {
-            if (newIdButton != null) newIdButton.setEnabled(false);
+            credentialStateUncertain = true;
+            refreshCredentialControls(true);
             setStatus("Keystore資格を読み取れません。保存済み資格を代用せず、Desktopへ接続しません。");
             return;
         }
         if (credential == null) {
-            if (newIdButton != null) newIdButton.setEnabled(identityReady && foreground);
+            refreshCredentialControls(false);
             return;
         }
-        if (newIdButton != null) newIdButton.setEnabled(false);
+        refreshCredentialControls(true);
         if (credential.expiresAt <= System.currentTimeMillis() / 1000L) {
             setStatus("保存資格の有効期限が切れています。自動延長・再結合は行わず、Desktop ownerへ確認してください。");
             return;
@@ -304,12 +350,13 @@ public final class MainActivity extends Activity {
             return;
         }
         busy = true;
-        pairButton.setEnabled(false);
+        refreshCredentialControls(true);
         setStatus("foregroundでKeystore資格を再読取し、Desktopへ端末確認を行っています。");
         long operationGeneration = generation.get();
         worker.execute(() -> {
             try {
-                DeviceLinkTransport.Exchange exchange = transport.check(credential);
+                DeviceLinkTransport.Exchange exchange = transport.check(credential,
+                        () -> canSend(operationGeneration));
                 PairingResponseParser.requireConnectedResponse(exchange.response, exchange.nonce);
                 postStatus(operationGeneration, "Desktop Brokerが端末確認を受理しました。これは現在の接続状態の観測であり、仕事の実行や承認を示しません。");
             } catch (PairingResponseParser.PairingRejectedException exception) {
@@ -319,10 +366,212 @@ public final class MainActivity extends Activity {
             } finally {
                 mainHandler.post(() -> {
                     busy = false;
-                    pairButton.setEnabled(foreground);
+                    refreshCredentialControls(credentialStore.contains());
+                    refreshRecoveryAuditSummary();
                 });
             }
         });
+    }
+
+    private void beginDesktopRevocation() {
+        if (!foreground || busy || credentialStateUncertain) return;
+        final DeviceCredential credential;
+        try {
+            credential = credentialStore.read();
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            credentialStateUncertain = true;
+            refreshCredentialControls(true);
+            setStatus("保存資格を読めないためDesktop失効要求を停止しました。端末内資格を使いません。");
+            return;
+        }
+        if (credential == null) {
+            refreshCredentialControls(false);
+            setStatus("端末内に保存資格がありません。Desktop側の端末状態は別途確認してください。");
+            return;
+        }
+        if (credential.expiresAt <= System.currentTimeMillis() / 1000L) {
+            setStatus("保存資格の期限が切れているため端末から失効要求を送れません。Desktop owner側で失効してください。");
+            return;
+        }
+        if (!hasLocalNetworkPermission()) {
+            requestLocalNetworkPermission();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Desktopとの端末結合を解除")
+                .setMessage("Desktop Brokerへ端末離脱を一度だけ要求します。解除応答を確認した後に端末内資格を削除します。通信中断時はDesktop側の失効状態が不明になり、実行中または送信済みの仕事の停止は保証されません。")
+                .setNegativeButton("キャンセル", (dialog, which) -> {})
+                .setPositiveButton("Desktopへ失効を要求", (dialog, which) -> performDesktopRevocation(credential))
+                .show();
+    }
+
+    private void performDesktopRevocation(DeviceCredential selected) {
+        if (!foreground || busy || credentialStateUncertain || !hasLocalNetworkPermission()) return;
+        final DeviceCredential credential;
+        try {
+            credential = credentialStore.read();
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            credentialStateUncertain = true;
+            refreshCredentialControls(true);
+            setStatus("保存資格を再読込できないため、Desktop失効要求を送信しませんでした。");
+            return;
+        }
+        if (credential == null || !selected.sameValue(credential)) {
+            refreshCredentialControls(credential != null);
+            setStatus("確認画面を開いた後に保存資格が変わりました。失効要求を止めました。状態を再確認してください。");
+            return;
+        }
+        busy = true;
+        disconnectInFlight = true;
+        refreshCredentialControls(true);
+        setStatus("Desktopへ端末離脱を送信しています。応答不明時は自動再送しません。");
+        long operationGeneration = generation.get();
+        worker.execute(() -> {
+            try {
+                DeviceLinkTransport.Exchange exchange = transport.leave(credential,
+                        () -> canSend(operationGeneration));
+                PairingResponseParser.requireDisconnectedResponse(exchange.response, exchange.nonce);
+                credentialStore.clearRevokedCredential();
+                postStatus(operationGeneration,
+                        "Desktopの失効応答と端末内資格の削除後readbackを確認しました。実行中・送信済みの仕事の停止は保証されません。");
+            } catch (PairingResponseParser.PairingRejectedException exception) {
+                postStatus(operationGeneration,
+                        "Desktopが端末離脱を拒否または停止しました。保存資格は保持しています。Desktop ownerへ確認してください。");
+            } catch (PairingResponseParser.PairingUnknownException exception) {
+                postStatus(operationGeneration,
+                        "Desktop応答を失効成功と確認できませんでした。資格を保持し、自動再送しません。Desktop側で状態を確認してください。");
+            } catch (DeviceLinkTransport.TransportException exception) {
+                if (exception.requestMayHaveReachedDesktop) {
+                    postStatus(operationGeneration,
+                            "失効要求の結果が不明です。資格を保持し、自動再送しません。Desktop ownerへ失効状態を確認してください。");
+                } else {
+                    postStatus(operationGeneration,
+                            "失効要求は送信前に停止しました。資格は保持しています。接続を確認してから手動で再操作してください。");
+                }
+            } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                credentialStateUncertain = true;
+                postStatus(operationGeneration,
+                        "Desktopの失効応答は確認しましたが、端末内資格の削除後readbackを確認できません。失効を再送せず、端末内状態を再確認してください。");
+            } finally {
+                mainHandler.post(() -> {
+                    busy = false;
+                    disconnectInFlight = false;
+                    if (foreground && generation.get() == operationGeneration) {
+                        refreshCredentialControls(credentialStore.contains());
+                        refreshRecoveryAuditSummary();
+                    } else if (foreground) {
+                        verifyStoredCredential();
+                    }
+                });
+            }
+        });
+    }
+
+    private void beginLocalCredentialDelete() {
+        if (!foreground || busy || credentialStateUncertain || recoveryAuditUnavailable) return;
+        final DeviceCredential credential;
+        try {
+            credential = credentialStore.read();
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            credentialStateUncertain = true;
+            refreshCredentialControls(true);
+            setStatus("保存資格を読めないため端末内削除を停止しました。");
+            return;
+        }
+        if (credential == null) {
+            refreshCredentialControls(false);
+            setStatus("端末内に保存資格がありません。削除記録は追加していません。");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("端末内資格だけを削除")
+                .setMessage("この操作は端末内の保存資格だけを削除し、Desktop側の結合を失効させません。実行中・送信済みの仕事も停止しません。Desktop ownerに失効を確認するか、失効未確認のまま進める必要がある場合だけ実行してください。非権威の端末内回復記録を同じ保護領域へ保存します。")
+                .setNegativeButton("キャンセル", (dialog, which) -> {})
+                .setPositiveButton("端末内だけ削除", (dialog, which) -> performLocalCredentialDelete(credential))
+                .show();
+    }
+
+    private void performLocalCredentialDelete(DeviceCredential selected) {
+        if (!foreground || busy || credentialStateUncertain || recoveryAuditUnavailable) return;
+        final DeviceCredential credential;
+        try {
+            credential = credentialStore.read();
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            credentialStateUncertain = true;
+            refreshCredentialControls(true);
+            setStatus("保存資格を再読込できないため端末内削除を停止しました。");
+            return;
+        }
+        if (credential == null || !selected.sameValue(credential)) {
+            refreshCredentialControls(credential != null);
+            setStatus("確認画面を開いた後に保存資格が変わりました。端末内削除を止めました。");
+            return;
+        }
+        busy = true;
+        localDeleteInFlight = true;
+        refreshCredentialControls(true);
+        setStatus("端末内資格の削除と回復記録を同じ保護領域へ保存しています。");
+        long operationGeneration = generation.get();
+        worker.execute(() -> {
+            try {
+                DeviceLinkLocalRecoveryAudit.Event event = credentialStore.deleteCredentialLocally();
+                if (event == null) throw new AndroidCredentialStore.CredentialStoreException();
+                postStatus(operationGeneration,
+                        "端末内資格の不在と非権威の回復記録を再読込で確認しました。Desktop側の失効は未確認です。");
+            } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                credentialStateUncertain = true;
+                postStatus(operationGeneration,
+                        "端末内資格または回復記録の削除状態を確認できません。通信・再結合を停止しました。アプリを再起動して状態を読み直してください。");
+            } finally {
+                mainHandler.post(() -> {
+                    busy = false;
+                    localDeleteInFlight = false;
+                    refreshCredentialControls(credentialStore.contains());
+                    refreshRecoveryAuditSummary();
+                });
+            }
+        });
+    }
+
+    private boolean canSend(long operationGeneration) {
+        return foreground && generation.get() == operationGeneration && !isFinishing() && !isDestroyed();
+    }
+
+    private void refreshCredentialControls(boolean credentialPresent) {
+        if (pairButton == null) return;
+        boolean usableCredential = credentialPresent;
+        if (usableCredential) {
+            try {
+                DeviceCredential current = credentialStore.read();
+                usableCredential = current != null &&
+                        current.expiresAt > System.currentTimeMillis() / 1000L;
+            } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                credentialStateUncertain = true;
+                usableCredential = false;
+            }
+        }
+        boolean ready = foreground && !busy && !credentialStateUncertain;
+        pairButton.setEnabled(ready && !credentialPresent);
+        newIdButton.setEnabled(identityReady && ready && !credentialPresent);
+        if (leaveButton != null) {
+            leaveButton.setEnabled(ready && usableCredential && hasLocalNetworkPermission());
+        }
+        if (localDeleteButton != null) {
+            localDeleteButton.setEnabled(ready && credentialPresent && !recoveryAuditUnavailable);
+        }
+    }
+
+    private void refreshRecoveryAuditSummary() {
+        if (recoveryAuditView == null) return;
+        try {
+            List<DeviceLinkLocalRecoveryAudit.Event> events = credentialStore.readLocalRecoveryAudit();
+            recoveryAuditUnavailable = false;
+            recoveryAuditView.setText("端末内回復記録: " + events.size() + "件（内部状態のみ。Desktopの監査・失効を証明しません）");
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            recoveryAuditUnavailable = true;
+            recoveryAuditView.setText("端末内回復記録を確認できません。端末内資格のみの削除を停止しています。");
+            refreshCredentialControls(credentialStore.contains());
+        }
     }
 
     private void postStatus(long operationGeneration, String message) {
