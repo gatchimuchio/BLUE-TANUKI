@@ -73,7 +73,8 @@ export function executionAdmissionDigest(admission: ExecutionAdmission): string 
         admission.command_digest, admission.proof_digest, admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
 }
 const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean =>
-  ["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
+  ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
+    "target_version_observation_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
     .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]);
 
 /** 私有の実行所有記録。Jのcheckpointと別取引であり、権限の復元元ではない。 */
@@ -152,7 +153,10 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     this.transaction(() => {
       const receipt = this.current(ticket, now_ms);
       if (receipt.state !== "intent_committed" || receipt.worker_id !== undefined ||
-          worker.task_identity_digest !== ticket.task_identity_digest) throw new Error("Executor worker binding rejected");
+          worker.task_identity_digest !== ticket.task_identity_digest ||
+          worker.operation_plan_binding_digest !== ticket.operation_plan_binding_digest) {
+        throw new Error("Executor worker binding rejected");
+      }
       Object.assign(receipt, { worker_id: worker.worker_id, worker_pid: worker.worker_pid,
         worker_platform: worker.worker_platform, worker_started_at_ms: worker.worker_started_at_ms,
         ...(worker.task_identity_digest ? { worker_task_identity_digest: worker.task_identity_digest } : {}),
@@ -1309,6 +1313,9 @@ export function inspectExecutionIntentRecoveryLedger(options: {
 function validateTicket(ticket: ExecutionIntentTicket): void {
   if (!ticket || !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
       ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((v) => /^[0-9a-f]{64}$/.test(v)) ||
+      (ticket.operation_plan_binding_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.operation_plan_binding_digest)) ||
+      (ticket.target_version_observation_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.target_version_observation_digest)) ||
+      (ticket.operation_plan_binding_digest !== undefined && ticket.task_identity_digest === undefined) ||
       (ticket.task_identity_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.task_identity_digest)) ||
       !Number.isSafeInteger(ticket.issued_at_ms) || ticket.issued_at_ms <= 0 || !Number.isSafeInteger(ticket.expires_at_ms) ||
       ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000) {
@@ -1317,7 +1324,8 @@ function validateTicket(ticket: ExecutionIntentTicket): void {
 }
 function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
-  const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
+  const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "operation_plan_binding_digest",
+    "target_version_observation_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
     "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_task_identity_digest",
     "worker_operation_plan_binding_digest", "worker_exit_observed_at_ms",
@@ -1333,6 +1341,8 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
       (receipt.worker_task_identity_digest !== undefined &&
         (!/^[0-9a-f]{64}$/.test(receipt.worker_task_identity_digest) || receipt.worker_task_identity_digest !== receipt.task_identity_digest)) ||
       (receipt.worker_operation_plan_binding_digest !== undefined && !/^[0-9a-f]{64}$/.test(receipt.worker_operation_plan_binding_digest)) ||
+      (receipt.operation_plan_binding_digest !== undefined && receipt.worker_operation_plan_binding_digest !== undefined &&
+        receipt.worker_operation_plan_binding_digest !== receipt.operation_plan_binding_digest) ||
       ((receipt.result_delivery_digest !== undefined) !== (receipt.result_delivery_acknowledged !== undefined)) ||
       (receipt.result_delivery_acknowledged !== undefined && typeof receipt.result_delivery_acknowledged !== "boolean") ||
       (receipt.result_delivery_disposition !== undefined && !["reconciled", "stale_generation_evidence"].includes(receipt.result_delivery_disposition)) ||

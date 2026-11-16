@@ -5,6 +5,10 @@ export interface ExecutionIntentTicket {
   command_key: string;
   command_digest: string;
   proof_digest: string;
+  /** Exact J-selected Operation Plan source; provenance digest, not authority. */
+  operation_plan_binding_digest?: string;
+  /** Exact Broker target-version observation; digest only, not target identity. */
+  target_version_observation_digest?: string;
   /** J所有計画のtask digest。未計画の要求では省略する。 */
   task_identity_digest?: string;
   execution_epoch: string;

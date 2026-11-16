@@ -900,8 +900,11 @@ function approveCommandForExecution(
     : null;
   if (hds_binding &&
       ((hds_binding.operation_plan_binding_digest === undefined) !== (hds_binding.task_identity_digest === undefined) ||
-        (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)))) {
-    throw new Error("Executor approval rejected: HDS task identity does not match its Operation Plan source");
+        (hds_binding.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.operation_plan_binding_digest)) ||
+        (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)) ||
+        (hds_binding.broker_target_version_observation_digest !== undefined &&
+          !/^[a-f0-9]{64}$/.test(hds_binding.broker_target_version_observation_digest)))) {
+    throw new Error("Executor approval rejected: HDS execution binding has an invalid Operation Plan, task identity, or target-version digest");
   }
   const approved = snapshot as ApprovedCommand;
   const clock = readApprovalClock(runtime);
@@ -910,13 +913,18 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v5",
       command_digest,
       proof,
       hds_source_context_digest,
+      ...(hds_binding?.operation_plan_binding_digest
+        ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
       ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
       ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     })).digest("hex"),
+    ...(hds_binding?.operation_plan_binding_digest
+      ? { operation_plan_binding_digest: hds_binding.operation_plan_binding_digest } : {}),
+    ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
   });

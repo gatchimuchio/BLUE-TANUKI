@@ -70,13 +70,15 @@
     {
       "field": "target_id",
       "meaning": "stable target identity, separate from target version",
-      "current": "target_identity_digest/target_id_digest/OperationTarget",
+      "current": "OperationTarget.id in selected OperationPlan; ExecutionIntentTicket carries operation_plan_binding_digest and target_version_observation_digest, not raw id; target_identity_digest remains separate",
       "paths": [
         "packages/protocol/src/operation_core.ts",
+        "packages/blue-tanuki/src/execution_intent.ts",
         "packages/hds-brain/src/operation_plan.ts",
-        "packages/blue-tanuki/src/executor.ts"
+        "packages/blue-tanuki/src/executor.ts",
+        "apps/gateway/src/execution_intent_store.ts"
       ],
-      "status": "FIELD_SEMANTIC_GAP; a digest is not the target id"
+      "status": "OperationTarget.id PRESENT in plan; ticket/receipt carry plan-binding and target-version digests; no direct target_id field. Digest is not target ID."
     },
     {
       "field": "adapter_version",
