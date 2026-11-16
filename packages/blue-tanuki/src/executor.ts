@@ -787,6 +787,8 @@ function approveCommandForExecution(
           typeof args.tool_name !== "string" || typeof args.input_schema_sha256 !== "string" ||
           observation.connection_digest !== args.connection_digest || observation.catalog_digest !== args.catalog_digest ||
           observation.tool_name !== args.tool_name || observation.input_schema_sha256 !== args.input_schema_sha256 ||
+          (observation.request_kind ?? "tool_call") !== (args.request_kind ?? "tool_call") ||
+          observation.resource_uri_sha256 !== args.resource_uri_sha256 ||
           observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest) {
         throw new Error("Executor approval rejected: mcp.call target version does not match command or plan source");
@@ -1082,6 +1084,8 @@ export class Executor {
       if (args.profile !== "native-live" || observation.connection_digest !== args.connection_digest ||
           observation.catalog_digest !== args.catalog_digest || observation.tool_name !== args.tool_name ||
           observation.input_schema_sha256 !== args.input_schema_sha256 ||
+          (observation.request_kind ?? "tool_call") !== (args.request_kind ?? "tool_call") ||
+          observation.resource_uri_sha256 !== args.resource_uri_sha256 ||
           observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("mcp.call target version resolver returned evidence for another command or plan source");
@@ -1406,7 +1410,7 @@ export class Executor {
       const expectedKeys = ["arguments", "catalog_digest", "command_digest", "connection_digest", "description_sha256",
         "endpoint_origin", "endpoint_path_digest", "input_schema_sha256", "kind", "may_execute", "no_store", "operation",
         "operation_plan_binding_digest", "potential_effects", "profile", "request_payload_digest", "review_digest",
-        "server_name", "server_version", "target_version_digest", "target_version_observation", "tool_description",
+        "request_kind", "server_name", "server_version", "target_version_digest", "target_version_observation", "tool_description",
         "tool_name", "tool_title", "used_for_authority"];
       const observation = "kind" in review && review.kind === "mcp_call"
         ? McpCallTargetVersionObservationSchema.safeParse(review.target_version_observation) : null;
@@ -1414,8 +1418,10 @@ export class Executor {
         typeof args.catalog_digest === "string" && typeof args.tool_name === "string" &&
         typeof args.input_schema_sha256 === "string"
         ? operationPlanDigest({ schema_version: "blue-tanuki.mcp-call-request.v1", profile: args.profile,
-          connection_digest: args.connection_digest, catalog_digest: args.catalog_digest, tool_name: args.tool_name,
-          input_schema_sha256: args.input_schema_sha256, arguments: args.arguments })
+          request_kind: args.request_kind ?? "tool_call", connection_digest: args.connection_digest,
+          catalog_digest: args.catalog_digest, tool_name: args.tool_name, input_schema_sha256: args.input_schema_sha256,
+          ...(typeof args.resource_uri_sha256 === "string" ? { resource_uri_sha256: args.resource_uri_sha256 } : {}),
+          arguments: args.arguments })
         : "invalid";
       let endpointOriginValid = false;
       if ("kind" in review && review.kind === "mcp_call" && typeof review.endpoint_origin === "string") {
@@ -1431,7 +1437,7 @@ export class Executor {
       const hasOptionalText = (value: unknown, max: number): boolean => value === null ||
         typeof value === "string" && value.length > 0 && value.length <= max && !/[\r\n\u0000-\u001f\u007f]/.test(value);
       const reviewMatches = "kind" in review && review.kind === "mcp_call" &&
-        Object.keys(review).sort().join(",") === [...expectedKeys].sort().join(",") &&
+        Object.keys(review).sort().join(",") === [...expectedKeys, ...(review.resource_uri_sha256 !== undefined ? ["resource_uri_sha256"] : [])].sort().join(",") &&
         args.profile === "native-live" && isDigest(args.connection_digest) && isDigest(args.catalog_digest) &&
         typeof args.tool_name === "string" && typeof args.input_schema_sha256 === "string" &&
         isDigest(args.input_schema_sha256) && typeof args.arguments === "object" && args.arguments !== null && !Array.isArray(args.arguments) &&
@@ -1440,6 +1446,8 @@ export class Executor {
         isDigest(review.request_payload_digest) && review.request_payload_digest === requestPayloadDigest &&
         isDigest(review.target_version_digest) && endpointOriginValid && isDigest(review.endpoint_path_digest) &&
         review.connection_digest === args.connection_digest && review.catalog_digest === args.catalog_digest &&
+        review.request_kind === (args.request_kind ?? "tool_call") &&
+        review.resource_uri_sha256 === args.resource_uri_sha256 &&
         review.tool_name === args.tool_name && isDigest(review.input_schema_sha256) &&
         review.input_schema_sha256 === args.input_schema_sha256 &&
         (review.description_sha256 === null || isDigest(review.description_sha256));
@@ -1449,6 +1457,8 @@ export class Executor {
         observation.data.command_digest === operationPlanDigest(command) &&
         observation.data.operation_plan_binding_digest === operationPlanBindingDigest &&
         observation.data.connection_digest === args.connection_digest && observation.data.catalog_digest === args.catalog_digest &&
+        (observation.data.request_kind ?? "tool_call") === (args.request_kind ?? "tool_call") &&
+        observation.data.resource_uri_sha256 === args.resource_uri_sha256 &&
         observation.data.tool_name === args.tool_name && observation.data.input_schema_sha256 === args.input_schema_sha256 &&
         operationPlanDigest(review.arguments) === operationPlanDigest(args.arguments) &&
         Array.isArray(review.potential_effects) &&

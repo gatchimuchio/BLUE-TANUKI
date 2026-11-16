@@ -610,7 +610,7 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
   }
   if (projection.schema_version === "operation-plan-saved-result-return.v12") {
     return [
-      "保存済みMCP tool結果のdigest-only報告です。Jの結果検証とM receiptを照合済みです。MCP応答本文は保存・返却していません。",
+      "保存済みMCP応答のdigest-only報告です。Jの結果検証とM receiptを照合済みです。MCP応答本文はここでは保存・返却していません。",
       `connection digest: ${projection.connection_digest}`,
       `catalog digest: ${projection.catalog_digest}`,
       `tool name digest: ${projection.tool_name_digest}`,

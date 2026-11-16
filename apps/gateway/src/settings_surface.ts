@@ -404,7 +404,7 @@ export function buildSettingsSnapshot(
     try {
       mcpEndpoint = parseLoopbackMcpEndpoint(mcpEndpointRaw).href;
       mcpStatus = "configured_unverified";
-      mcpNextAction = "The endpoint is configured. This page does not probe connectivity. If settings changed, restart Gateway; otherwise use the last runtime observation below and select tools only through an Operation Plan with High/L3 review.";
+      mcpNextAction = "The endpoint is configured. This page does not probe connectivity. If settings changed, restart Gateway; otherwise use the last runtime observation below and select an MCP tool, fixed resource, or prompt only through an Operation Plan with High/L3 review.";
     } catch {
       mcpStatus = "invalid_endpoint";
       mcpNextAction = "The stored endpoint is invalid and is hidden. Replace it with a credentialless 127.0.0.1 or ::1 HTTP/HTTPS endpoint without userinfo, query, or fragment, then restart Gateway.";
@@ -551,7 +551,7 @@ export function createWebChatSettingsSurface(
         return {
           status: "preflight_failed",
           connection: observation.connection,
-          next_action: "No MCP tool was called. Check that the owner-managed local server is running at this endpoint, then run this check again. This check does not inspect or stop a previous tool call.",
+          next_action: "No MCP request was sent. Check that the owner-managed local server is running at this endpoint, then run this catalog check again. This check does not inspect or stop a previous request.",
           source_is_untrusted: true,
           used_for_authority: false,
           may_execute: false,
@@ -571,7 +571,7 @@ export function createWebChatSettingsSurface(
         },
         catalog_digest: catalog.catalog_digest,
         truncated: catalog.truncated,
-        next_action: "The catalog was readable at the recorded time; no MCP tool was called. Select tools only through an Operation Plan with High/L3 review. This is not a live health monitor.",
+        next_action: "The catalog was readable at the recorded time; no MCP request was sent. Select a tool, fixed resource, or prompt only through an Operation Plan with High/L3 review and fresh catalog validation. Resource-template URI expansion is unsupported. This is not a live health monitor.",
         source_is_untrusted: true,
         used_for_authority: false,
         may_execute: false,
@@ -975,7 +975,7 @@ export function renderSettingsHtml(): string {
           <p id="mcp-runtime-next-action" role="status"></p>
           <p id="mcp-inspection-result" role="status"></p>
           <p class="muted">Runtime observations are saved locally from normal MCP use, not a live health check. They contain no endpoint path, tool name, or response body and do not grant authority.</p>
-          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. This explicit check reads bounded catalog metadata from the entered local endpoint; it does not send credentials, call tools, or start/stop the server. Saving requires a Gateway restart. Catalog data is untrusted, and every selected tool still uses HDS and High/L3 review.</p>
+          <p class="muted">MCP accepts credentialless loopback HTTP/HTTPS only. This explicit check reads bounded catalog metadata from the entered local endpoint; it does not send credentials or an MCP request, or start/stop the server. Saving requires a Gateway restart. Catalog data is untrusted, and every selected tool/resource/prompt request still uses HDS and High/L3 review. Resource-template URI expansion is unsupported.</p>
         </section>
         <section id="tab-paths">
           <h2>Paths</h2>

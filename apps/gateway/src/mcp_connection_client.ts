@@ -5,7 +5,7 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { MCP_CALL_POTENTIAL_EFFECTS, OperationJsonValueSchema, OperationPlanSchema,
   McpCallTargetVersionObservationSchema, OperationPlanMcpCatalogContextSchema,
   requireToolOperationDescriptor,
-  type OperationJsonValue, type OperationPlan, type McpCallTargetVersionObservation,
+  type OperationJsonValue, type OperationPlan, type McpCallTargetVersionObservation, type McpRequestKind,
   type OperationPlanMcpCatalogContext } from "@blue-tanuki/protocol";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
 import { mcpRuntimeObservationStore, type McpRuntimeObservationStore } from "./mcp_connection_observation.js";
@@ -42,6 +42,7 @@ export interface McpToolCatalogEntry extends McpCatalogEntry {
 
 export interface McpResourceCatalogEntry extends McpCatalogEntry {
   readonly uri_sha256: string;
+  readonly read_request_sha256: string;
   readonly mime_type: string | null;
 }
 
@@ -113,8 +114,8 @@ export function inspectMcpCatalogFromSettings(
 
 /**
  * Reads bounded catalog metadata to bind the planning context to the same digest used by the
- * executor. Only tool definitions are returned to C; no tool is invoked and no resource or prompt
- * content is read.
+ * executor. Bounded tool/resource/prompt metadata is returned to C; no MCP request is sent and no
+ * resource or prompt content is read.
  */
 export async function inspectMcpToolPlanningCatalog(
   options: McpCatalogInspectionOptions,
@@ -139,13 +140,17 @@ export async function inspectMcpToolPlanningCatalog(
     if (new Set(tools.map((tool) => tool.name)).size !== tools.length) {
       throw new Error("mcp_catalog_planning_context_invalid");
     }
-    const resources = snapshot.resources.map((resource) => ({
-      name: requireMcpPlanningText(resource.name, 200),
-      title: optionalMcpPlanningText(resource.title, 200),
-      description: optionalMcpPlanningText(resource.description, 2_048),
-      uri_sha256: digestJson(resource.uri),
-      mime_type: optionalMcpPlanningText(resource.mimeType, 120),
-    }));
+    const resources = snapshot.resources.map((resource) => {
+      const uri_sha256 = digestJson(resource.uri);
+      return {
+        name: requireMcpPlanningText(resource.name, 200),
+        title: optionalMcpPlanningText(resource.title, 200),
+        description: optionalMcpPlanningText(resource.description, 2_048),
+        uri_sha256,
+        read_request_sha256: mcpResourceReadRequestDigest(uri_sha256),
+        mime_type: optionalMcpPlanningText(resource.mimeType, 120),
+      };
+    });
     const resourceTemplates = snapshot.resource_templates.map((template) => ({
       name: requireMcpPlanningText(template.name, 200),
       title: optionalMcpPlanningText(template.title, 200),
@@ -345,11 +350,13 @@ function projectMcpCatalog(
     resources: resources.slice(0, MAX_CATALOG_ITEMS).flatMap((resource) => {
       const name = safeText(resource.name, 200);
       if (!name) return [];
+      const uri_sha256 = digestJson(resource.uri);
       return [{
         name,
         title: safeText(resource.title, 200),
         description_sha256: digestOptionalText(resource.description),
-        uri_sha256: digestJson(resource.uri),
+        uri_sha256,
+        read_request_sha256: mcpResourceReadRequestDigest(uri_sha256),
         mime_type: safeText(resource.mimeType, 120),
         source_is_untrusted: true as const,
         used_for_authority: false as const,
@@ -573,13 +580,15 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       runtimeObservations.recordCatalogReachable(getEndpoint());
       catalogObserved = true;
       const candidate = parseMcpCallArguments(args);
-      assertCandidateMatchesCatalog(candidate, catalog);
+      assertCandidateMatchesCatalog(candidate, catalog, snapshot);
       const observation = McpCallTargetVersionObservationSchema.parse({
         schema_version: "blue-tanuki.mcp-call-target-version.v1",
         connection_digest: catalog.connection_digest,
         catalog_digest: catalog.catalog_digest,
+        request_kind: candidate.request_kind,
         tool_name: candidate.tool_name,
         input_schema_sha256: candidate.input_schema_sha256,
+        ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
         command_digest: inspectOptions.command_digest,
         operation_plan_binding_digest: inspectOptions.operation_plan_binding_digest,
         target_state: "available",
@@ -602,7 +611,7 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
   const tool: Tool = {
     name: "mcp.call",
     adapter_version: "1.0.0-rc.1",
-    description: "Calls one catalog-bound MCP tool through HDS-J selection, fresh target observation and L3 final review.",
+    description: "Sends one catalog-bound MCP tool/resource/prompt request through HDS-J selection, fresh target observation and L3 final review.",
     required_capabilities: requireToolOperationDescriptor("mcp.call").required_capabilities,
     async inspect_target_version(args, inspectOptions) {
       if (!inspectOptions) throw new Error("mcp_operation_plan_binding_required");
@@ -614,28 +623,25 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       }
       const inspection = await inspectCandidate(args, reviewOptions);
       const { candidate, catalog, snapshot, observation } = inspection;
-      const matchedTools = snapshot.tools.filter((entry) => entry.name === candidate.tool_name);
-      if (matchedTools.length !== 1 || !endpoint) throw new Error("mcp_tool_review_unavailable");
-      const rawTool = matchedTools[0]!;
-      const projectedTool = catalog.tools.find((entry) => entry.name === candidate.tool_name);
-      if (!projectedTool || projectedTool.input_schema_sha256 !== candidate.input_schema_sha256) {
-        throw new Error("mcp_tool_review_stale");
-      }
-      const toolTitle = optionalMcpPlanningText(rawTool.title, 200);
-      const toolDescription = optionalMcpPlanningText(rawTool.description, 2_048);
+      const reviewMetadata = getMcpRequestReviewMetadata(candidate, catalog, snapshot);
+      if (!endpoint) throw new Error("mcp_request_review_unavailable");
       const requestPayloadDigest = operationPlanDigest({
         schema_version: "blue-tanuki.mcp-call-request.v1",
         profile: "native-live",
+        request_kind: candidate.request_kind,
         connection_digest: candidate.connection_digest,
         catalog_digest: candidate.catalog_digest,
         tool_name: candidate.tool_name,
         input_schema_sha256: candidate.input_schema_sha256,
+        ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
         arguments: candidate.arguments,
       });
       const reviewBase: Omit<McpCallContentReview, "review_digest"> = {
         kind: "mcp_call",
         operation: "mcp.call",
         profile: "native-live",
+        request_kind: candidate.request_kind,
+        ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
         command_digest: reviewOptions.command_digest,
         request_payload_digest: requestPayloadDigest,
         target_version_digest: operationPlanDigest(observation),
@@ -648,9 +654,9 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         server_name: catalog.server_info?.name ?? null,
         server_version: catalog.server_info?.version ?? null,
         tool_name: candidate.tool_name,
-        tool_title: toolTitle,
-        tool_description: toolDescription,
-        description_sha256: projectedTool.description_sha256,
+        tool_title: reviewMetadata.title,
+        tool_description: reviewMetadata.description,
+        description_sha256: reviewMetadata.description_sha256,
         input_schema_sha256: candidate.input_schema_sha256,
         arguments: candidate.arguments,
         potential_effects: [...MCP_CALL_POTENTIAL_EFFECTS],
@@ -667,8 +673,10 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
           observation.data.command_digest !== ctx.operation_plan_command_digest ||
           observation.data.connection_digest !== candidate.connection_digest ||
           observation.data.catalog_digest !== candidate.catalog_digest ||
+          (observation.data.request_kind ?? "tool_call") !== candidate.request_kind ||
           observation.data.tool_name !== candidate.tool_name ||
-          observation.data.input_schema_sha256 !== candidate.input_schema_sha256) {
+          observation.data.input_schema_sha256 !== candidate.input_schema_sha256 ||
+          observation.data.resource_uri_sha256 !== candidate.resource_uri_sha256) {
         throw new Error("mcp_target_version_binding_invalid");
       }
       if (ctx.signal?.aborted) throw new Error("mcp_call_cancelled_before_dispatch");
@@ -677,10 +685,11 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
       let catalogObserved = false;
       try {
         client = await connect(ctx.signal);
-        const catalog = projectMcpCatalog(await readMcpCatalogSnapshot(client), getEndpoint());
+        const snapshot = await readMcpCatalogSnapshot(client);
+        const catalog = projectMcpCatalog(snapshot, getEndpoint());
         runtimeObservations.recordCatalogReachable(getEndpoint());
         catalogObserved = true;
-        assertCandidateMatchesCatalog(candidate, catalog);
+        assertCandidateMatchesCatalog(candidate, catalog, snapshot);
         if (catalog.catalog_digest !== observation.data.catalog_digest ||
             catalog.connection_digest !== observation.data.connection_digest) {
           throw new McpAdapterError("mcp_catalog_changed_after_review");
@@ -688,24 +697,45 @@ export function createMcpCallTool(options: McpCallToolOptions): Tool {
         if (ctx.signal?.aborted) throw new McpAdapterError("mcp_call_cancelled_before_dispatch");
         dispatchStarted = true;
         runtimeObservations.recordDispatchStarted(getEndpoint());
-        const result = await client.callTool({ name: candidate.tool_name, arguments: candidate.arguments });
-        if (result.isError === true) throw new McpAdapterError("mcp_server_reported_tool_failure");
+        let result: unknown;
+        if (candidate.request_kind === "tool_call") {
+          const toolResult = await client.callTool({ name: candidate.tool_name, arguments: candidate.arguments });
+          if (toolResult.isError === true) throw new McpAdapterError("mcp_server_reported_tool_failure");
+          result = toolResult;
+        } else if (candidate.request_kind === "resource_read") {
+          const uriSha256 = candidate.resource_uri_sha256!;
+          const resource = snapshot.resources.find((entry) => digestJson(entry.uri) === uriSha256);
+          if (!resource) throw new McpAdapterError("mcp_resource_disappeared_after_review");
+          result = await client.readResource({ uri: resource.uri }, { cacheMode: "bypass" });
+        } else {
+          result = await client.getPrompt({
+            name: candidate.tool_name,
+            arguments: candidate.arguments as Record<string, string>,
+          });
+        }
         const parsedResult = OperationJsonValueSchema.safeParse(result);
         if (!parsedResult.success || !isRecord(parsedResult.data)) {
-          throw new McpAdapterError("mcp_tool_result_invalid");
+          throw new McpAdapterError("mcp_request_result_invalid");
         }
-        const resultBytes = Buffer.byteLength(JSON.stringify(parsedResult.data), "utf8");
-        if (resultBytes > MAX_TOOL_RESULT_BYTES) throw new McpAdapterError("mcp_tool_result_too_large");
+        const sanitizedResult = redactMcpResponseUris(parsedResult.data);
+        const parsedSanitizedResult = OperationJsonValueSchema.safeParse(sanitizedResult);
+        if (!parsedSanitizedResult.success || !isRecord(parsedSanitizedResult.data)) {
+          throw new McpAdapterError("mcp_request_result_invalid");
+        }
+        const resultBytes = Buffer.byteLength(JSON.stringify(parsedSanitizedResult.data), "utf8");
+        if (resultBytes > MAX_TOOL_RESULT_BYTES) throw new McpAdapterError("mcp_request_result_too_large");
         runtimeObservations.recordResponseReceived(getEndpoint());
         return {
           schema_version: "blue-tanuki.mcp-call-result.v1",
+          ...(candidate.explicit_request_kind ? { request_kind: candidate.request_kind } : {}),
           connection_digest: candidate.connection_digest,
           catalog_digest: candidate.catalog_digest,
           tool_name: candidate.tool_name,
           input_schema_sha256: candidate.input_schema_sha256,
+          ...(candidate.resource_uri_sha256 ? { resource_uri_sha256: candidate.resource_uri_sha256 } : {}),
           arguments_sha256: operationPlanDigest(candidate.arguments),
-          result_digest: operationPlanDigest(parsedResult.data),
-          result: parsedResult.data,
+          result_digest: operationPlanDigest(parsedSanitizedResult.data),
+          result: parsedSanitizedResult.data,
           source_is_untrusted: true,
           used_for_authority: false,
           may_execute: false,
@@ -740,46 +770,168 @@ export function registerMcpCallToolFromEnvironment(
 }
 
 interface NativeMcpCallArguments {
+  readonly request_kind: McpRequestKind;
+  readonly explicit_request_kind: boolean;
   readonly connection_digest: string;
   readonly catalog_digest: string;
   readonly tool_name: string;
   readonly input_schema_sha256: string;
+  readonly resource_uri_sha256?: string;
   readonly arguments: Record<string, unknown>;
 }
 
 class McpAdapterError extends Error {}
 
 function parseMcpCallArguments(value: Record<string, unknown>): NativeMcpCallArguments {
-  if (Object.keys(value).sort().join(",") !==
-      "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name" ||
+  const requestKind = value.request_kind === undefined ? "tool_call" : value.request_kind;
+  const expectedKeys = requestKind === "resource_read"
+    ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind",
+      "resource_uri_sha256", "tool_name"]
+    : requestKind === "prompt_get"
+      ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind", "tool_name"]
+      : requestKind === "tool_call"
+        ? value.request_kind === undefined
+          ? ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "tool_name"]
+          : ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "request_kind", "tool_name"]
+        : [];
+  if (Object.keys(value).sort().join(",") !== [...expectedKeys].sort().join(",") || expectedKeys.length === 0 ||
       value.profile !== "native-live" || typeof value.connection_digest !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.connection_digest) || typeof value.catalog_digest !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.catalog_digest) || typeof value.tool_name !== "string" ||
       value.tool_name.length < 1 || value.tool_name.length > 200 || value.tool_name.trim() !== value.tool_name ||
       /[\u0000-\u001f\u007f]/.test(value.tool_name) || typeof value.input_schema_sha256 !== "string" ||
-      !/^[a-f0-9]{64}$/.test(value.input_schema_sha256)) {
+      !/^[a-f0-9]{64}$/.test(value.input_schema_sha256) ||
+      requestKind === "resource_read" && (typeof value.resource_uri_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.resource_uri_sha256) || value.tool_name !== `resource:${value.resource_uri_sha256}`) ||
+      requestKind !== "resource_read" && value.resource_uri_sha256 !== undefined) {
     throw new McpAdapterError("mcp_call_arguments_invalid");
   }
   const parsedArguments = OperationJsonValueSchema.safeParse(value.arguments);
   if (!parsedArguments.success || !isRecord(parsedArguments.data) || containsSecretLikeKey(parsedArguments.data) ||
-      Buffer.byteLength(JSON.stringify(parsedArguments.data), "utf8") > MAX_PROPOSAL_ARGUMENT_BYTES) {
+      Buffer.byteLength(JSON.stringify(parsedArguments.data), "utf8") > MAX_PROPOSAL_ARGUMENT_BYTES ||
+      requestKind === "resource_read" && Object.keys(parsedArguments.data).length !== 0 ||
+      requestKind === "prompt_get" && Object.values(parsedArguments.data).some((entry) =>
+        typeof entry !== "string" || entry.length > 4_096)) {
     throw new McpAdapterError("mcp_call_arguments_invalid");
   }
   return {
+    request_kind: requestKind as McpRequestKind,
+    explicit_request_kind: value.request_kind !== undefined,
     connection_digest: value.connection_digest,
     catalog_digest: value.catalog_digest,
     tool_name: value.tool_name,
     input_schema_sha256: value.input_schema_sha256,
+    ...(requestKind === "resource_read" ? { resource_uri_sha256: value.resource_uri_sha256 as string } : {}),
     arguments: parsedArguments.data,
   };
 }
 
-function assertCandidateMatchesCatalog(candidate: NativeMcpCallArguments, catalog: McpCatalogProjection): void {
-  const matches = catalog.tools.filter((tool) => tool.name === candidate.tool_name);
-  if (catalog.connection_digest !== candidate.connection_digest || catalog.catalog_digest !== candidate.catalog_digest ||
-      matches.length !== 1 || matches[0]?.input_schema_sha256 !== candidate.input_schema_sha256) {
+function assertCandidateMatchesCatalog(
+  candidate: NativeMcpCallArguments,
+  catalog: McpCatalogProjection,
+  snapshot: Awaited<ReturnType<typeof readMcpCatalogSnapshot>>,
+): void {
+  if (catalog.connection_digest !== candidate.connection_digest || catalog.catalog_digest !== candidate.catalog_digest) {
     throw new McpAdapterError("mcp_catalog_changed_after_review");
   }
+  if (candidate.request_kind === "tool_call") {
+    const matches = catalog.tools.filter((tool) => tool.name === candidate.tool_name);
+    if (matches.length !== 1 || matches[0]?.input_schema_sha256 !== candidate.input_schema_sha256) {
+      throw new McpAdapterError("mcp_catalog_changed_after_review");
+    }
+    return;
+  }
+  if (candidate.request_kind === "resource_read") {
+    const uriSha256 = candidate.resource_uri_sha256;
+    const projected = catalog.resources.filter((resource) => resource.uri_sha256 === uriSha256);
+    const raw = snapshot.resources.filter((resource) => digestJson(resource.uri) === uriSha256);
+    if (!uriSha256 || projected.length !== 1 || raw.length !== 1 ||
+        candidate.tool_name !== `resource:${uriSha256}` ||
+        projected[0]?.read_request_sha256 !== candidate.input_schema_sha256 ||
+        candidate.input_schema_sha256 !== mcpResourceReadRequestDigest(uriSha256) ||
+        Object.keys(candidate.arguments).length !== 0) {
+      throw new McpAdapterError("mcp_catalog_changed_after_review");
+    }
+    return;
+  }
+  const projected = catalog.prompts.filter((prompt) => prompt.name === candidate.tool_name);
+  const raw = snapshot.prompts.filter((prompt) => prompt.name === candidate.tool_name);
+  if (projected.length !== 1 || raw.length !== 1 ||
+      projected[0]?.arguments_sha256 !== candidate.input_schema_sha256 ||
+      !mcpPromptArgumentsMatch(raw[0]?.arguments ?? [], candidate.arguments)) {
+    throw new McpAdapterError("mcp_prompt_arguments_invalid_or_catalog_changed");
+  }
+}
+
+function getMcpRequestReviewMetadata(
+  candidate: NativeMcpCallArguments,
+  catalog: McpCatalogProjection,
+  snapshot: Awaited<ReturnType<typeof readMcpCatalogSnapshot>>,
+): { readonly title: string | null; readonly description: string | null; readonly description_sha256: string | null } {
+  if (candidate.request_kind === "tool_call") {
+    const raw = snapshot.tools.find((entry) => entry.name === candidate.tool_name);
+    const projected = catalog.tools.find((entry) => entry.name === candidate.tool_name);
+    if (!raw || !projected || projected.input_schema_sha256 !== candidate.input_schema_sha256) {
+      throw new McpAdapterError("mcp_tool_review_stale");
+    }
+    return {
+      title: optionalMcpPlanningText(raw.title, 200),
+      description: optionalMcpPlanningText(raw.description, 2_048),
+      description_sha256: projected.description_sha256,
+    };
+  }
+  if (candidate.request_kind === "resource_read") {
+    const raw = snapshot.resources.find((entry) => digestJson(entry.uri) === candidate.resource_uri_sha256);
+    const projected = catalog.resources.find((entry) => entry.uri_sha256 === candidate.resource_uri_sha256);
+    if (!raw || !projected || projected.read_request_sha256 !== candidate.input_schema_sha256) {
+      throw new McpAdapterError("mcp_resource_review_stale");
+    }
+    return {
+      title: optionalMcpPlanningText(raw.title, 200),
+      description: optionalMcpPlanningText(raw.description, 2_048),
+      description_sha256: projected.description_sha256,
+    };
+  }
+  const raw = snapshot.prompts.find((entry) => entry.name === candidate.tool_name);
+  const projected = catalog.prompts.find((entry) => entry.name === candidate.tool_name);
+  if (!raw || !projected || projected.arguments_sha256 !== candidate.input_schema_sha256) {
+    throw new McpAdapterError("mcp_prompt_review_stale");
+  }
+  return {
+    title: optionalMcpPlanningText(raw.title, 200),
+    description: optionalMcpPlanningText(raw.description, 2_048),
+    description_sha256: projected.description_sha256,
+  };
+}
+
+function redactMcpResponseUris(value: unknown, depth = 0, budget = { nodes: 0 }): unknown {
+  budget.nodes++;
+  if (depth > 32 || budget.nodes > 100_000) throw new McpAdapterError("mcp_request_result_invalid");
+  if (Array.isArray(value)) {
+    if (value.length > 50_000) throw new McpAdapterError("mcp_request_result_invalid");
+    return value.map((entry) => redactMcpResponseUris(entry, depth + 1, budget));
+  }
+  if (!isRecord(value)) return value;
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "uri") continue;
+    result[key] = redactMcpResponseUris(nested, depth + 1, budget);
+  }
+  return result;
+}
+
+function mcpPromptArgumentsMatch(
+  declaredArguments: readonly { readonly name: string; readonly required?: boolean }[],
+  argumentsValue: Record<string, unknown>,
+): boolean {
+  const declaredNames = new Set(declaredArguments.map((argument) => argument.name));
+  if (declaredNames.size !== declaredArguments.length ||
+      Object.keys(argumentsValue).some((name) => !declaredNames.has(name)) ||
+      Object.entries(argumentsValue).some(([name, value]) => !name || typeof value !== "string" || value.length > 4_096)) {
+    return false;
+  }
+  return declaredArguments.every((argument) => argument.required !== true ||
+    typeof argumentsValue[argument.name] === "string");
 }
 
 function safeMcpFailure(error: unknown, fallback: string): Error {
@@ -902,4 +1054,8 @@ function digestJson(value: unknown): string {
     serialized = "invalid";
   }
   return createHash("sha256").update(serialized, "utf8").digest("hex");
+}
+
+function mcpResourceReadRequestDigest(uriSha256: string): string {
+  return operationPlanDigest({ schema_version: "blue-tanuki.mcp-resource-read-request.v1", uri_sha256: uriSha256 });
 }

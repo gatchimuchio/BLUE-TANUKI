@@ -350,6 +350,8 @@ export type OperationPlanSavedResultReturnProjection =
     readonly effect_observation: "reported_success";
     readonly connection_digest: string;
     readonly catalog_digest: string;
+    readonly request_kind: "tool_call" | "resource_read" | "prompt_get";
+    readonly resource_uri_sha256?: string;
     readonly tool_name_digest: string;
     readonly input_schema_sha256: string;
     readonly arguments_sha256: string;
@@ -1850,23 +1852,31 @@ export function operationPlanResultValidationMatches(
         !binding?.operation_plan_binding_digest || !binding.executor_command_digest) return false;
     const parameters = step.parameters;
     const expected = validation.expected;
+    const requestKind = parameters.request_kind ?? "tool_call";
+    const hasExplicitRequestKind = Object.hasOwn(parameters, "request_kind");
     const expectedArgumentsDigest = operationPlanDigest(parameters.arguments ?? null);
     const expectedKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
-      "schema_version", "tool_name"];
+      "schema_version", "tool_name", ...(hasExplicitRequestKind ? ["request_kind"] : []),
+      ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])];
     const outputKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
       "may_execute", "result", "result_digest", "schema_version", "source_is_untrusted", "tool_name",
-      "used_for_authority"];
+      "used_for_authority", ...(hasExplicitRequestKind ? ["request_kind"] : []),
+      ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])];
     const outputResult = OperationJsonValueSchema.safeParse(output.result);
-    return Object.keys(expected).sort().join(",") === expectedKeys.join(",") &&
+    return Object.keys(expected).sort().join(",") === expectedKeys.sort().join(",") &&
       expected.schema_version === "blue-tanuki.mcp-call-result-validation.v1" &&
       expected.connection_digest === parameters.connection_digest &&
       expected.catalog_digest === parameters.catalog_digest && expected.tool_name === parameters.tool_name &&
       expected.input_schema_sha256 === parameters.input_schema_sha256 &&
+      (!hasExplicitRequestKind || expected.request_kind === requestKind) &&
+      (requestKind !== "resource_read" || expected.resource_uri_sha256 === parameters.resource_uri_sha256) &&
       expected.arguments_sha256 === expectedArgumentsDigest &&
-      Object.keys(output).sort().join(",") === outputKeys.join(",") &&
+      Object.keys(output).sort().join(",") === outputKeys.sort().join(",") &&
       output.schema_version === "blue-tanuki.mcp-call-result.v1" &&
       output.connection_digest === expected.connection_digest && output.catalog_digest === expected.catalog_digest &&
       output.tool_name === expected.tool_name && output.input_schema_sha256 === expected.input_schema_sha256 &&
+      (!hasExplicitRequestKind || output.request_kind === requestKind) &&
+      (requestKind !== "resource_read" || output.resource_uri_sha256 === parameters.resource_uri_sha256) &&
       output.arguments_sha256 === expected.arguments_sha256 && typeof output.result_digest === "string" &&
       /^[a-f0-9]{64}$/.test(output.result_digest) && outputResult.success &&
       operationPlanDigest(output.result) === output.result_digest && output.source_is_untrusted === true &&
@@ -2562,6 +2572,13 @@ export function partitionOperationPlanCheckpointForRuntime(
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
   if (step.operation === "mcp.call") {
+    const requestKind = parameters?.request_kind ?? "tool_call";
+    const parameterKeys = parameters ? Object.keys(parameters).sort().join(",") : "";
+    const allowedParameterKeys = [
+      "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name",
+      "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,tool_name",
+      "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name",
+    ];
     if (step.adapter !== "external_api" || step.target.kind !== "external_service" || !parameters ||
         parameters.profile !== "native-live" || typeof parameters.connection_digest !== "string" ||
         !/^[a-f0-9]{64}$/.test(parameters.connection_digest) ||
@@ -2571,25 +2588,41 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         /[\u0000-\u001f\u007f]/.test(parameters.tool_name) || typeof parameters.input_schema_sha256 !== "string" ||
         !/^[a-f0-9]{64}$/.test(parameters.input_schema_sha256) || !isFileSearchResultRecord(parameters.arguments) ||
         containsMcpSensitiveKey(parameters.arguments) || Buffer.byteLength(JSON.stringify(parameters.arguments), "utf8") > 64 * 1024 ||
+        !["tool_call", "resource_read", "prompt_get"].includes(requestKind as string) ||
+        (requestKind === "resource_read" && (typeof parameters.resource_uri_sha256 !== "string" ||
+          !/^[a-f0-9]{64}$/.test(parameters.resource_uri_sha256) ||
+          parameters.tool_name !== `resource:${parameters.resource_uri_sha256}` || Object.keys(parameters.arguments).length !== 0)) ||
+        (requestKind !== "resource_read" && parameters.resource_uri_sha256 !== undefined) ||
+        (requestKind === "prompt_get" && Object.values(parameters.arguments).some((entry) =>
+          typeof entry !== "string" || entry.length > 4_096)) ||
         step.effects.length !== MCP_CALL_POTENTIAL_EFFECTS.length ||
         [...step.effects].sort().join(",") !== [...MCP_CALL_POTENTIAL_EFFECTS].sort().join(",") ||
         step.permission.risk !== "high" || step.permission.approval_level !== "L3_final_review" ||
         !step.permission.final_review_required || !step.permission.approval_gate_required ||
         !step.permission.hds_brain_authority_required || step.command_generated_by_adapter_only ||
-        Object.keys(parameters).sort().join(",") !== "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name") return false;
+        !allowedParameterKeys.includes(parameterKeys) ||
+        (requestKind === "resource_read" && parameterKeys !==
+          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name") ||
+        (requestKind !== "resource_read" && parameterKeys ===
+          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name")) return false;
     const preparation = step.preparation;
     if (!preparation || preparation.depends_on.length !== 0 || preparation.bindings.length !== 0 ||
         preparation.preconditions.length !== 0 || preparation.compensation.available || preparation.validation.length !== 1) return false;
     const validation = preparation.validation[0]!;
     const expected = validation.expected;
     const argumentsDigest = operationPlanDigest(parameters.arguments);
+    const hasExplicitRequestKind = Object.hasOwn(parameters, "request_kind");
+    const expectedValidationKeys = ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
+      "schema_version", "tool_name", ...(hasExplicitRequestKind ? ["request_kind"] : []),
+      ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])].sort();
     return validation.method === "mcp_call_result_matches" &&
       operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
-      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") ===
-        "arguments_sha256,catalog_digest,connection_digest,input_schema_sha256,schema_version,tool_name" &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") === expectedValidationKeys.join(",") &&
       expected.schema_version === "blue-tanuki.mcp-call-result-validation.v1" &&
       expected.connection_digest === parameters.connection_digest && expected.catalog_digest === parameters.catalog_digest &&
       expected.tool_name === parameters.tool_name && expected.input_schema_sha256 === parameters.input_schema_sha256 &&
+      (!hasExplicitRequestKind || expected.request_kind === requestKind) &&
+      (requestKind !== "resource_read" || expected.resource_uri_sha256 === parameters.resource_uri_sha256) &&
       expected.arguments_sha256 === argumentsDigest;
   }
   if (step.operation === "file.search") {
@@ -5785,6 +5818,9 @@ export class OperationPlanLedger {
         observed_at_ms: binding.result_observed_at_ms,
         operation: "mcp.call", status: "verified", effect_observation: "reported_success",
         connection_digest: parameters.connection_digest, catalog_digest: parameters.catalog_digest,
+        request_kind: mcpOutput.request_kind === "tool_call" || mcpOutput.request_kind === "resource_read" ||
+          mcpOutput.request_kind === "prompt_get" ? mcpOutput.request_kind : "tool_call",
+        ...(typeof mcpOutput.resource_uri_sha256 === "string" ? { resource_uri_sha256: mcpOutput.resource_uri_sha256 } : {}),
         tool_name_digest: operationPlanDigest(parameters.tool_name), input_schema_sha256: parameters.input_schema_sha256,
         arguments_sha256: mcpOutput.arguments_sha256 as string,
         tool_result_digest: mcpOutput.result_digest as string,
@@ -6831,11 +6867,16 @@ export class OperationPlanLedger {
           throw new Error("plan_compute_mcp_result_receipt_unavailable");
         }
         const excerpt = selectedMcpResultExcerpt(toolResult as OperationJsonValue);
+        const requestKind = outputRecord.request_kind === "tool_call" || outputRecord.request_kind === "resource_read" ||
+          outputRecord.request_kind === "prompt_get" ? outputRecord.request_kind : "tool_call";
+        const resourceUriSha256 = typeof outputRecord.resource_uri_sha256 === "string" ? outputRecord.resource_uri_sha256 : undefined;
         const ownerSelectionDigest = operationPlanDigest({ schema_version: "owner-selected-mcp-call-result.v1",
           owner_digest: operationPlanDigest(caller.user), channel_digest: operationPlanDigest(caller.channel),
           plan_id_digest: reference.plan_id_digest, revision_digest: revision.digest,
           step_id_digest: reference.step_id_digest, source_result_digest: binding.result_digest,
-          delivery_digest: binding.delivery_digest, tool_result_digest: outputRecord.result_digest });
+          delivery_digest: binding.delivery_digest, request_kind: requestKind,
+          ...(resourceUriSha256 ? { resource_uri_sha256: resourceUriSha256 } : {}),
+          tool_result_digest: outputRecord.result_digest });
         observations.push(OperationPlanComputeSourceObservationSchema.parse({
           schema_version: "operation-plan-compute-source-observation.v1",
           source: "owner_selected_mcp_call_result",
@@ -6855,6 +6896,8 @@ export class OperationPlanLedger {
           delivery_digest: binding.delivery_digest,
           connection_digest: outputRecord.connection_digest,
           catalog_digest: outputRecord.catalog_digest,
+          request_kind: requestKind,
+          ...(resourceUriSha256 ? { resource_uri_sha256: resourceUriSha256 } : {}),
           tool_name_digest: operationPlanDigest(outputRecord.tool_name),
           input_schema_sha256: outputRecord.input_schema_sha256,
           arguments_sha256: outputRecord.arguments_sha256,
@@ -7174,9 +7217,13 @@ export class OperationPlanLedger {
             observation.effect_observation !== "reported_success" || observation.source_is_untrusted !== true ||
             observation.adoption_status !== "observation_only" || observation.used_as_world_truth !== false ||
             observation.used_for_authority !== false || observation.may_execute !== false ||
-            !["connection_digest", "catalog_digest", "tool_name_digest", "input_schema_sha256", "arguments_sha256",
+            !["connection_digest", "catalog_digest", "request_kind", "tool_name_digest", "input_schema_sha256", "arguments_sha256",
               "tool_result_digest"].every((key) => typeof observation[key] === "string" &&
-                /^[a-f0-9]{64}$/.test(observation[key] as string))) {
+                (key === "request_kind" || /^[a-f0-9]{64}$/.test(observation[key] as string))) ||
+            !["tool_call", "resource_read", "prompt_get"].includes(observation.request_kind as string) ||
+            (observation.request_kind === "resource_read" && (typeof observation.resource_uri_sha256 !== "string" ||
+              !/^[a-f0-9]{64}$/.test(observation.resource_uri_sha256))) ||
+            (observation.request_kind !== "resource_read" && observation.resource_uri_sha256 !== undefined)) {
           throw new Error("plan_reflection_summary_not_available");
         }
         citations.push({ evidence_type: "mcp_call", record_id: identity.record_id,
@@ -7184,7 +7231,10 @@ export class OperationPlanLedger {
           receipt_digest: b.memory_receipt.receipt_digest, source_revision_digest: b.revision_digest,
           step_digest: b.step_digest, observed_at_ms: result.observed_at_ms, operation: "mcp.call",
           observation: { effect_observation: "reported_success", connection_digest: observation.connection_digest as string,
-            catalog_digest: observation.catalog_digest as string, tool_name_digest: observation.tool_name_digest as string,
+            catalog_digest: observation.catalog_digest as string,
+            request_kind: observation.request_kind as "tool_call" | "resource_read" | "prompt_get",
+            ...(typeof observation.resource_uri_sha256 === "string" ? { resource_uri_sha256: observation.resource_uri_sha256 } : {}),
+            tool_name_digest: observation.tool_name_digest as string,
             input_schema_sha256: observation.input_schema_sha256 as string,
             arguments_sha256: observation.arguments_sha256 as string, tool_result_digest: observation.tool_result_digest as string,
             source_is_untrusted: true }, adoption_status: "observation_only", counterevidence_status: "not_assessed",
@@ -7971,6 +8021,8 @@ export class OperationPlanLedger {
         outputRecord.result_digest !== source.tool_result_digest || outputRecord.connection_digest !== source.connection_digest ||
         outputRecord.catalog_digest !== source.catalog_digest || outputRecord.input_schema_sha256 !== source.input_schema_sha256 ||
         outputRecord.arguments_sha256 !== source.arguments_sha256 ||
+        (source.request_kind !== undefined && outputRecord.request_kind !== source.request_kind) ||
+        (source.resource_uri_sha256 !== undefined && outputRecord.resource_uri_sha256 !== source.resource_uri_sha256) ||
         operationPlanDigest(outputRecord.tool_name) !== source.tool_name_digest ||
         operationPlanDigest(toolResult) !== source.tool_result_digest) return false;
     const excerpt = selectedMcpResultExcerpt(toolResult as OperationJsonValue);
@@ -7981,7 +8033,10 @@ export class OperationPlanLedger {
       owner_digest: operationPlanDigest(candidate.owner), channel_digest: operationPlanDigest(candidate.channel),
       plan_id_digest: source.plan_id_digest, revision_digest: source.revision_digest,
       step_id_digest: source.step_id_digest, source_result_digest: source.source_result_digest,
-      delivery_digest: source.delivery_digest, tool_result_digest: source.tool_result_digest });
+      delivery_digest: source.delivery_digest,
+      ...(source.request_kind !== undefined ? { request_kind: source.request_kind } : {}),
+      ...(source.resource_uri_sha256 !== undefined ? { resource_uri_sha256: source.resource_uri_sha256 } : {}),
+      tool_result_digest: source.tool_result_digest });
     if (source.owner_selection_digest !== expectedSelectionDigest || source.tool_result_is_untrusted !== true) return false;
     return this.computeSourceObservationsAreCurrent(plan, nowMs, seen);
   }

@@ -173,6 +173,8 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
     delivery_digest: Digest,
     connection_digest: Digest,
     catalog_digest: Digest,
+    request_kind: z.enum(["tool_call", "resource_read", "prompt_get"]).optional(),
+    resource_uri_sha256: Digest.optional(),
     tool_name_digest: Digest,
     input_schema_sha256: Digest,
     arguments_sha256: Digest,
@@ -358,6 +360,7 @@ const OperationPlanMcpCatalogResourceSchema = z.object({
   title: z.string().max(200).nullable(),
   description: z.string().max(2_048).nullable(),
   uri_sha256: Digest,
+  read_request_sha256: Digest.optional(),
   mime_type: z.string().max(120).nullable(),
 }).strict();
 

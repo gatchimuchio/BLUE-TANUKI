@@ -52,14 +52,29 @@ function verifiedNativeMcpCallBinding(b: Binding): boolean {
   const preparation = step.preparation;
   const validation = preparation?.validation[0];
   const expected = validation?.expected;
+  const requestKind = parameters?.request_kind ?? "tool_call";
+  const parameterKeys = parameters ? Object.keys(parameters).sort().join(",") : "";
+  const hasExplicitRequestKind = !!parameters && Object.hasOwn(parameters, "request_kind");
   if (b.operation !== "mcp.call" || b.status !== "verified" || step.operation !== "mcp.call" ||
       step.adapter !== "external_api" || step.target.kind !== "external_service" || !parameters ||
-      !hasExactKeys(parameters, ["arguments", "catalog_digest", "connection_digest", "input_schema_sha256", "profile", "tool_name"]) ||
+      ![
+        "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,tool_name",
+        "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,tool_name",
+        "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name",
+      ].includes(parameterKeys) ||
+      !["tool_call", "resource_read", "prompt_get"].includes(requestKind as string) ||
       parameters.profile !== "native-live" || !isDigest(parameters.connection_digest) ||
       step.target.id !== `mcp:${parameters.connection_digest}` || !isDigest(parameters.catalog_digest) ||
       typeof parameters.tool_name !== "string" || parameters.tool_name.length < 1 || parameters.tool_name.length > 200 ||
       parameters.tool_name.trim() !== parameters.tool_name || /[\u0000-\u001f\u007f]/u.test(parameters.tool_name) ||
       !isDigest(parameters.input_schema_sha256) || !isRecord(parameters.arguments) ||
+      (requestKind === "resource_read" && (typeof parameters.resource_uri_sha256 !== "string" ||
+        !isDigest(parameters.resource_uri_sha256) || parameters.tool_name !== `resource:${parameters.resource_uri_sha256}` ||
+        Object.keys(parameters.arguments).length !== 0 || parameterKeys !==
+          "arguments,catalog_digest,connection_digest,input_schema_sha256,profile,request_kind,resource_uri_sha256,tool_name")) ||
+      (requestKind !== "resource_read" && parameters.resource_uri_sha256 !== undefined) ||
+      (requestKind === "prompt_get" && Object.values(parameters.arguments).some((entry) =>
+        typeof entry !== "string" || entry.length > 4_096)) ||
       containsMcpSensitiveKey(parameters.arguments) ||
       Buffer.byteLength(JSON.stringify(parameters.arguments), "utf8") > 64 * 1024 ||
       step.effects.length !== MCP_CALL_POTENTIAL_EFFECTS.length ||
@@ -71,10 +86,13 @@ function verifiedNativeMcpCallBinding(b: Binding): boolean {
       preparation.preconditions.length !== 0 || preparation.compensation.available || preparation.validation.length !== 1 ||
       validation?.method !== "mcp_call_result_matches" || !isRecord(expected) ||
       !hasExactKeys(expected, ["arguments_sha256", "catalog_digest", "connection_digest", "input_schema_sha256",
-        "schema_version", "tool_name"]) ||
+        "schema_version", "tool_name", ...(hasExplicitRequestKind ? ["request_kind"] : []),
+        ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])]) ||
       expected.schema_version !== "blue-tanuki.mcp-call-result-validation.v1" ||
       expected.connection_digest !== parameters.connection_digest || expected.catalog_digest !== parameters.catalog_digest ||
       expected.tool_name !== parameters.tool_name || expected.input_schema_sha256 !== parameters.input_schema_sha256 ||
+      (hasExplicitRequestKind && expected.request_kind !== requestKind) ||
+      (requestKind === "resource_read" && expected.resource_uri_sha256 !== parameters.resource_uri_sha256) ||
       expected.arguments_sha256 !== stableDigest(parameters.arguments) ||
       stableDigest(validation.target) !== stableDigest(step.target) ||
       !isDigest(b.execution_admission?.task_identity_digest) || !isDigest(b.command_digest) ||
@@ -90,6 +108,8 @@ function mcpCallResultObservation(p: Plan, b: Binding, result: Plan["results"][n
   const step = revision?.plan.steps.find((entry) => entry.step_id === b.step_id);
   const parameters = b.prepared_step.parameters;
   const output = result.output;
+  const requestKind = parameters?.request_kind ?? "tool_call";
+  const hasExplicitRequestKind = !!parameters && Object.hasOwn(parameters, "request_kind");
   if (!verifiedNativeMcpCallBinding(b) || !revision || !step || !parameters ||
       stableDigest(step) !== b.step_digest || stableDigest(step) !== stableDigest(b.prepared_step) ||
       result.plan_id !== revision.plan.plan_id || result.request_id !== revision.plan.request_id ||
@@ -98,10 +118,13 @@ function mcpCallResultObservation(p: Plan, b: Binding, result: Plan["results"][n
       !Number.isSafeInteger(result.observed_at_ms) || result.observed_at_ms !== b.result_observed_at_ms ||
       !isRecord(output) || !hasExactKeys(output, ["arguments_sha256", "catalog_digest", "connection_digest",
         "input_schema_sha256", "may_execute", "result", "result_digest", "schema_version",
-        "source_is_untrusted", "tool_name", "used_for_authority"]) ||
+        "source_is_untrusted", "tool_name", "used_for_authority", ...(hasExplicitRequestKind ? ["request_kind"] : []),
+        ...(requestKind === "resource_read" ? ["resource_uri_sha256"] : [])]) ||
       output.schema_version !== "blue-tanuki.mcp-call-result.v1" ||
       output.connection_digest !== parameters.connection_digest || output.catalog_digest !== parameters.catalog_digest ||
       output.tool_name !== parameters.tool_name || output.input_schema_sha256 !== parameters.input_schema_sha256 ||
+      (hasExplicitRequestKind && output.request_kind !== requestKind) ||
+      (requestKind === "resource_read" && output.resource_uri_sha256 !== parameters.resource_uri_sha256) ||
       output.arguments_sha256 !== stableDigest(parameters.arguments) || !isDigest(output.result_digest) ||
       !isRecord(output.result) || stableDigest(output.result) !== output.result_digest ||
       output.source_is_untrusted !== true || output.used_for_authority !== false || output.may_execute !== false) {
@@ -123,6 +146,8 @@ function mcpCallResultObservation(p: Plan, b: Binding, result: Plan["results"][n
     operation_plan_binding_digest: b.operation_plan_binding_digest!,
     connection_digest: parameters.connection_digest,
     catalog_digest: parameters.catalog_digest,
+    request_kind: requestKind,
+    ...(requestKind === "resource_read" ? { resource_uri_sha256: parameters.resource_uri_sha256 as string } : {}),
     tool_name_digest: stableDigest(parameters.tool_name),
     input_schema_sha256: parameters.input_schema_sha256,
     arguments_sha256: output.arguments_sha256,

@@ -8,7 +8,7 @@ import { getToolOperationDescriptor, requireToolOperationDescriptor, type FileSe
   type GoogleDriveTrashTargetVersionObservation,
   type GitHubWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
-import type { McpCallTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { McpCallTargetVersionObservation, McpRequestKind } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 
@@ -681,6 +681,8 @@ export interface SettingsWriteContentReview {
 export interface McpCallContentReview {
   kind: "mcp_call";
   operation: "mcp.call";
+  request_kind: McpRequestKind;
+  resource_uri_sha256?: string;
   profile: "native-live";
   command_digest: string;
   review_digest: string;

@@ -6227,10 +6227,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const review = await response.json();
         if (review.kind === "mcp_call") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const requestKind = review.request_kind;
           const exactEffects = ["browser_action", "credential_access", "delete", "external_send", "process_spawn",
             "read", "schedule_change", "settings_change", "write"];
           const argsObject = isObject(review.arguments) && !Array.isArray(review.arguments);
           const argsText = argsObject ? JSON.stringify(review.arguments, null, 2) : "";
+          const resourceHashValid = requestKind === "resource_read"
+            ? isDigest(review.resource_uri_sha256) && review.tool_name === "resource:" + review.resource_uri_sha256 &&
+              argsObject && Object.keys(review.arguments).length === 0
+            : review.resource_uri_sha256 === undefined;
+          const promptArgumentsValid = requestKind !== "prompt_get" || argsObject &&
+            Object.values(review.arguments).every(function (value) { return typeof value === "string" && value.length <= 4096; });
           let endpoint = null;
           try { endpoint = new URL(review.endpoint_origin); } catch { /* invalid origin keeps approval closed */ }
           const localOrigin = endpoint && endpoint.origin === review.endpoint_origin && endpoint.pathname === "/" &&
@@ -6243,6 +6250,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           };
           const cacheControl = response.headers.get("cache-control") || "";
           if (review.command_id !== commandId || review.operation !== "mcp.call" || review.profile !== "native-live" ||
+              !["tool_call", "resource_read", "prompt_get"].includes(requestKind) || !resourceHashValid || !promptArgumentsValid ||
               review.no_store !== true || !/(?:^|,)\\s*no-store\\s*(?:,|$)/i.test(cacheControl) ||
               review.used_for_authority !== false || review.may_execute !== false || !localOrigin ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) || !isDigest(review.request_payload_digest) ||
@@ -6258,6 +6266,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               observedTarget.may_execute !== false || observedTarget.command_digest !== review.command_digest ||
               observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
               observedTarget.connection_digest !== review.connection_digest || observedTarget.catalog_digest !== review.catalog_digest ||
+              (observedTarget.request_kind || "tool_call") !== requestKind ||
+              observedTarget.resource_uri_sha256 !== review.resource_uri_sha256 ||
               observedTarget.tool_name !== review.tool_name || observedTarget.input_schema_sha256 !== review.input_schema_sha256 ||
               typeof review.tool_name !== "string" || review.tool_name.length < 1 || review.tool_name.length > 200 ||
               !descriptionValid(review.server_name, 200) || !descriptionValid(review.server_version, 200) ||
@@ -6268,11 +6278,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "MCP tool call（高リスク・L3最終確認）";
+          heading.textContent = (requestKind === "resource_read" ? "MCP resource read" :
+            requestKind === "prompt_get" ? "MCP prompt get" : "MCP tool call") + "（高リスク・L3最終確認）";
           view.appendChild(heading);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "loopback MCP serverとtool情報は未信頼です。下記入力はこの作用の正確な候補で、表示だけではtoolを呼びません。MCPは記載した全影響のいずれも起こし得ます。catalogが変われば実行を停止します。";
+          note.textContent = "loopback MCP serverと応答は未信頼です。下記はこのrequestの正確な候補で、表示だけではMCP requestを送信しません。MCPは記載した全影響のいずれも起こし得ます。catalogが変われば実行を停止します。";
           view.appendChild(note);
           [
             ["loopback endpoint origin", review.endpoint_origin],
@@ -6280,11 +6291,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["server identity", String(review.server_name || "unknown") + " / " + String(review.server_version || "unknown")],
             ["connection digest", review.connection_digest],
             ["catalog digest", review.catalog_digest],
-            ["tool name", review.tool_name],
-            ["tool title", review.tool_title || "(none)"],
-            ["tool description (untrusted)", review.tool_description || "(none)"],
+            [requestKind === "resource_read" ? "resource identity" : requestKind === "prompt_get" ? "prompt name" : "tool name",
+              requestKind === "resource_read" ? review.resource_uri_sha256 : review.tool_name],
+            [requestKind === "resource_read" ? "resource title" : requestKind === "prompt_get" ? "prompt title" : "tool title",
+              review.tool_title || "(none)"],
+            ["description (untrusted)", review.tool_description || "(none)"],
             ["description digest", review.description_sha256 || "(none)"],
-            ["input schema digest", review.input_schema_sha256],
+            [requestKind === "resource_read" ? "resource read binding digest" : requestKind === "prompt_get" ? "prompt arguments digest" : "input schema digest",
+              review.input_schema_sha256],
             ["target version digest", review.target_version_digest],
             ["Operation Plan binding", review.operation_plan_binding_digest]
           ].forEach(function (field) {
