@@ -22,6 +22,7 @@ import { executionAdmissionForCommand } from "../apps/gateway/src/reconcile_exec
 
 const FIXTURE_TOKEN = "receipt-smoke-local-fixture-only";
 const GATEWAY_WORKER_PATH = fileURLToPath(new URL("./fixtures/gateway_serve_worker.mjs", import.meta.url));
+const GATEWAY_STARTUP_TIMEOUT_MS = 60_000;
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 interface AcceptedMutation {
@@ -328,8 +329,8 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     child = undefined;
     if (code !== 0) throw new Error(`gateway_fixture_shutdown_failed:${code ?? signal ?? "unknown"}`);
   }
-  async function waitFor(check: () => Promise<boolean>, label: string): Promise<void> {
-    const deadline = Date.now() + 20_000;
+  async function waitFor(check: () => Promise<boolean>, label: string, timeoutMs = 20_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (child && child.exitCode !== null) throw new Error(`${label}: gateway exited (${child.exitCode}); ${diagnostics}`);
       if (await check()) return;
@@ -371,7 +372,8 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     for (const stream of [child.stdout, child.stderr]) stream?.on("data", (data) => {
       diagnostics = (diagnostics + String(data)).slice(-12000);
     });
-    await waitFor(async () => { try { return (await fetch(`${base}/healthz`)).ok; } catch { return false; } }, `${name} Gateway health`);
+    await waitFor(async () => { try { return (await fetch(`${base}/healthz`)).ok; } catch { return false; } },
+      `${name} Gateway health`, GATEWAY_STARTUP_TIMEOUT_MS);
 
     const ticket = await requestJson<{ ticket: string }>("/ws-ticket", { user: "fixture-owner" });
     socket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(ticket.ticket)}`);
