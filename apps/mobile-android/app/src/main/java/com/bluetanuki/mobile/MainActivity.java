@@ -205,16 +205,24 @@ public final class MainActivity extends Activity {
         statusView.setBackgroundColor(0xffeaf2f8);
         content.addView(statusView, matchWrap());
 
-        TextView networkPermissionHelp = new TextView(this);
-        networkPermissionHelp.setText("Android 17以降では、Desktop BrokerへのLAN接続にOSのローカルネットワーク許可が必要です。許可しても、アプリは入力されたprivate IPv4と証明書hashにだけ接続します。");
-        networkPermissionHelp.setTextSize(14);
-        networkPermissionHelp.setPadding(0, dp(12), 0, dp(4));
-        content.addView(networkPermissionHelp, matchWrap());
+        if (requiresLocalNetworkRuntimePermission(Build.VERSION.SDK_INT)) {
+            TextView networkPermissionHelp = new TextView(this);
+            networkPermissionHelp.setText("Android 17以降では、Desktop BrokerへのLAN接続にOSのローカルネットワーク許可が必要です。許可しても、アプリは入力されたprivate IPv4と証明書hashにだけ接続します。");
+            networkPermissionHelp.setTextSize(14);
+            networkPermissionHelp.setPadding(0, dp(12), 0, dp(4));
+            content.addView(networkPermissionHelp, matchWrap());
 
-        Button networkPermissionButton = new Button(this);
-        networkPermissionButton.setText("Desktop接続のローカルネットワーク許可");
-        networkPermissionButton.setOnClickListener(view -> requestLocalNetworkPermission());
-        content.addView(networkPermissionButton, matchWrap());
+            Button networkPermissionButton = new Button(this);
+            networkPermissionButton.setText("Desktop接続のローカルネットワーク許可");
+            networkPermissionButton.setOnClickListener(view -> requestLocalNetworkPermission());
+            content.addView(networkPermissionButton, matchWrap());
+        } else {
+            TextView networkPermissionInfo = new TextView(this);
+            networkPermissionInfo.setText("このAndroidバージョンでは専用のローカルネットワーク許可は必要ありません。Device Linkは招待で確認したprivate IPv4へTLSで接続します。");
+            networkPermissionInfo.setTextSize(14);
+            networkPermissionInfo.setPadding(0, dp(12), 0, dp(4));
+            content.addView(networkPermissionInfo, matchWrap());
+        }
 
         TextView idHeading = section("端末登録");
         content.addView(idHeading, matchWrap());
@@ -809,20 +817,30 @@ public final class MainActivity extends Activity {
     }
 
     private boolean hasLocalNetworkPermission() {
-        return Build.VERSION.SDK_INT < 37 ||
+        return !requiresLocalNetworkRuntimePermission(Build.VERSION.SDK_INT) ||
                 checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) ==
                         PackageManager.PERMISSION_GRANTED;
+    }
+
+    static boolean requiresLocalNetworkRuntimePermission(int sdkInt) {
+        return sdkInt >= 37;
     }
 
     private void requestLocalNetworkPermission() {
         if (!foreground || permissionRequestPending) {
             return;
         }
-        if (Build.VERSION.SDK_INT < 37 || hasLocalNetworkPermission()) {
+        if (!requiresLocalNetworkRuntimePermission(Build.VERSION.SDK_INT)) {
             if (credentialStore.contains()) {
                 verifyStoredCredential();
-            } else if (Build.VERSION.SDK_INT < 37) {
+            } else {
                 setStatus("このAndroidでは専用のローカルネットワーク許可は必要ありません。Desktop招待を入力して一度限りの結合を行ってください。");
+            }
+            return;
+        }
+        if (hasLocalNetworkPermission()) {
+            if (credentialStore.contains()) {
+                verifyStoredCredential();
             } else {
                 setStatus("ローカルネットワーク許可を確認しました。Desktop招待を入力して一度限りの結合を行ってください。");
             }
