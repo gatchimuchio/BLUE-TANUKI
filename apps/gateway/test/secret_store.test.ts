@@ -280,6 +280,31 @@ describe("LLM secret store", () => {
     }
   });
 
+  it("does not report protected storage when raw environment material takes precedence", () => {
+    const llmEnv = {
+      OPENROUTER_API_KEY: "fixture-raw-llm-key",
+      OPENROUTER_API_KEY_REF: "os-keyring:v2:linux:OPENROUTER_API_KEY:00000000-0000-0000-0000-000000000001",
+    };
+    expect(resolveLLMSecretRefs(llmEnv, { platform: "linux" }).OPENROUTER_API_KEY)
+      .toBe("fixture-raw-llm-key");
+    expect(llmSecretStorageStatus(llmEnv, "openrouter", "linux")).toMatchObject({
+      raw_env_present: true,
+      secret_ref_present: true,
+      os_protected: false,
+      storage: "env_file",
+    });
+
+    expect(connectorSecretStorageStatus({
+      GITHUB_TOKEN: "fixture-raw-connector-token",
+      GITHUB_TOKEN_REF: "os-keyring:v2:linux:GITHUB_TOKEN:00000000-0000-0000-0000-000000000002",
+    }, "GITHUB_TOKEN", "linux")).toMatchObject({
+      raw_env_present: true,
+      secret_ref_present: true,
+      os_protected: false,
+      storage: "env_file",
+    });
+  });
+
   it("rejects OS keyring refs bound to a different platform or key", () => {
     expect(() => resolveLLMSecretRefs(
       { OPENROUTER_API_KEY_REF: "os-keyring:v1:darwin:OPENROUTER_API_KEY" },

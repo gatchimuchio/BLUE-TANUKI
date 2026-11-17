@@ -515,8 +515,8 @@ export function llmSecretStorageStatus(
   const raw = key ? Boolean(env[key]) : false;
   const ref = key ? Boolean(env[secretRefKey(key)]) : false;
   const refValue = key ? env[secretRefKey(key)] : undefined;
-  const dpapi = ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
-  const osKeyring = key !== null && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
+  const dpapi = !raw && ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const osKeyring = !raw && key !== null && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
   const protectedStorage = dpapi
     ? "win32_dpapi_current_user"
     : osKeyring
@@ -552,8 +552,8 @@ export function connectorSecretStorageStatus(
   const raw = Boolean(env[key]);
   const ref = Boolean(env[secretRefKey(key)]);
   const refValue = env[secretRefKey(key)];
-  const dpapi = ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
-  const osKeyring = refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
+  const dpapi = !raw && ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const osKeyring = !raw && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
   const protectedStorage = dpapi
     ? "win32_dpapi_current_user"
     : osKeyring
