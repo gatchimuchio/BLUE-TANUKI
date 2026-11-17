@@ -70,6 +70,8 @@ import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { EmergencyStopControl } from "./emergency_stop_control.js";
+import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -276,7 +278,17 @@ async function runCliWithExecutionStore(
     ...(operationPlanState ? { operation_plan_state: operationPlanState,
       operation_plan_memory: operationResultMemoryStorage(process.env) } : {}),
   });
+  let emergencyStopStateStore: EmergencyStopStateStore | undefined;
   try {
+  emergencyStopStateStore = EmergencyStopStateStore.fromEnvironment(process.env);
+  const emergencyStop = new EmergencyStopControl({
+    store: emergencyStopStateStore,
+    authority: hds,
+    // The one-shot runtime holds the same exclusive owner lease as serve and
+    // checks the durable stop latch before it creates a command or Executor.
+    // There cannot be another Gateway process to cancel while this lease is held.
+    abortRunningExecutions: () => {},
+  });
   ownerLease.assertActive();
   const startupRecovery = reconcileStartupExecutionState(hds, executionStore, ownerLease.executionEpoch);
   gatewayLog.info("CLI startup saved-result reconciliation", {
@@ -297,6 +309,22 @@ async function runCliWithExecutionStore(
       wait_compute_reconciliation_ready: startupRecovery.wait_compute_reconciliation_ready,
     });
     throw new Error("gateway_startup_reconciliation_unresolved");
+  }
+
+  if (emergencyStop.active) {
+    hds.onAuthorityEvent("emergency_stop_blocked", {
+      request_id: inbound.id,
+      actor: inbound.user,
+      reason: emergencyStop.reason ?? "owner emergency stop active",
+    });
+    gatewayLog.warn("CLI one-shot request blocked by the durable emergency stop", {
+      request_id: inbound.id,
+      executor_started: false,
+      used_for_authority: false,
+    });
+    process.stdout.write("[emergency-stop-active] 実行停止が有効です。Control Centerで停止理由を確認してから解除してください。\n");
+    auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+    return;
   }
 
   if (goalCompletionStatus) {
@@ -792,6 +820,7 @@ async function runCliWithExecutionStore(
     chain_valid: hds.getAudit().verify(),
   });
   } finally {
+    emergencyStopStateStore?.close();
     hds.closeOperationPlanMemory();
   }
 }

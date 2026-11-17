@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EmergencyStopStateStore } from "../src/emergency_stop_state_store.js";
 
 const startup = vi.hoisted(() => ({
   reconcile: vi.fn(),
@@ -51,6 +52,46 @@ describe("CLI startup execution recovery", () => {
 
     expect(startup.reconcile).toHaveBeenCalledTimes(1);
     expect(startup.loadPluginRuntime).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.registerTools).not.toHaveBeenCalled();
+  });
+
+  it("blocks one-shot CLI processing when the durable emergency stop is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-cli-emergency-stop-"));
+    roots.push(root);
+    const stateRoot = join(root, "state");
+    vi.stubEnv("BLUE_TANUKI_STATE_ROOT", stateRoot);
+    vi.stubEnv("BLUE_TANUKI_AUDIT_DIR", join(root, "audit"));
+    vi.stubEnv("BLUE_TANUKI_MEMORY_FILE", join(root, "memory.jsonl"));
+    const stopStore = EmergencyStopStateStore.fromEnvironment(process.env);
+    stopStore.activate({
+      control_event_id: "00000000-0000-4000-8000-000000000001",
+      actor: "owner",
+      occurred_at_ms: 1,
+    });
+    stopStore.close();
+
+    const pluginRuntime = {
+      enforceLLMConfig: vi.fn(),
+      enforceSessionConfig: vi.fn(),
+      enforceAuditConfig: vi.fn(),
+      registerTools: vi.fn(),
+    };
+    startup.loadPluginRuntime.mockResolvedValue(pluginRuntime);
+    startup.reconcile.mockReturnValue({
+      ready: true,
+      adopted: 0,
+      deferred: 0,
+      stale_generation_archived: 0,
+      memory_ready: true,
+      result_store_readable: true,
+      wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0,
+      wait_compute_reconciliation_ready: true,
+    });
+
+    await runCli(["synthetic request"]);
+
+    expect(startup.reconcile).toHaveBeenCalledTimes(1);
     expect(pluginRuntime.registerTools).not.toHaveBeenCalled();
   });
 });
