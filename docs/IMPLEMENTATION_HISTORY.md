@@ -5326,3 +5326,29 @@ Android検証コピー C:\Users\ohira\AppData\Local\Temp\blue-tanuki-android-tas
 製品はQE_BUILDのまま。SYSTEM_SHAPED=false、BUILD_COVERED=false、QE_QC／QE_QA未開始、P13=PENDING_OWNER_GOを維持する。C08.03実provider、資格情報、実外部業務作用、D4-Pocket変更、公開・出荷操作は行っていない。protected untracked .codex-attachments/、.codex-remote-attachments/、packages/blue-tanuki/native/linux-isolation/target/を未変更で保持した。
 
 検証対象source commit 0cb107fefad8bd8388da85032718c5a0a8d9e4faはorigin/main 130745aa3d4774e6e3aa0290ab15db07d9fdcbdeの子で、Actionsの成功結果はこの正確なsource SHAだけを対象とする。作業開始時のlocal recovery current／previous branchとremote backup tagは130745aa3d4774e6e3aa0290ab15db07d9fdcbde／4a6ca406a8e45dd3bb75b115b31456b9a53bb849。Git fetchは対象SHAを取得した後、古い.git/worktrees/blue-tanuki-health-2026-11-07-windows管理情報の削除がPermission deniedとなった。このmetadataとACLは変更・迂回せず保持した。
+
+## 2026-11-17 — rev6.0 QE_BUILD / Linux shell workspace write isolation
+
+### 主語・目的
+
+主語はBLUE-TANUKI製品全体。目的はLinuxの`shell.exec`でホストworkspaceへの永続書込みを残さず、workspace変更を行う既存の`file.write`／`file.edit`経路との責任境界を保つこと。この実装はrev6.0 P2全域施工の一部分であり、Linux shell機能や製品全体の完成を意味しない。
+
+### 変更とQE_BUILD限定確認
+
+Linux isolation helperはホストworkspaceをread-onlyでbindし、Bubblewrapの一時overlay上だけでshell commandを実行する。overlay mountの実体とmemory／swap制限を確認できない場合はfail-closedで実行を拒否する。Linux shell toolの説明に一時workspaceの性質を明記し、既存integration testにはoverlay内のwrite／editが終了後にホストへ残らない確認を追加した。
+
+| 確認 | 結果 |
+|---|---|
+| Windows開発環境の`cargo fmt --check`、Linux target `cargo check`、workspace `pnpm typecheck`、`pnpm docs:check`、`git diff --check`（実装commit `e23a1226`） | PASS。 |
+| Actions手動run [#44074722434](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/44074722434)、SHA `e23a1226` | FAIL。hosted runnerがBubblewrap user namespace mappingを拒否。runner security policyは変更せず。 |
+| Actions手動run [#44076920406](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/44076920406)、SHA `f3895724` | FAIL。workspace buildとRust helper compileは成功したが、runnerに`memory.swap.max`がなく、integrationはfail-closedで拒否された。 |
+| Actions手動run [#44078183256](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/44078183256)、Ubuntu 26.04、正確なSHA `c823122cd168b70fae20b1e06f243e09ae4e4f40` | PASS。workspace `pnpm build`とRust helper compileを確認。Rust test binaryは0 tests。実runtime integrationは`memory_swap_controller_unavailable`のためSKIPPED／NOT_RUN。 |
+| workflow YAML parse、`workflow_dispatch`のみであること、`git diff --check` | PASS。 |
+
+run #53のworkflow summaryはruntime scopeをNOT_RUNと理由付きで記録した。Bubblewrap runner policyを変更する回避策は入れていない。run #53はbuild／compile evidenceであり、Linux実runtime、installed製品、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの証拠ではない。製品はQE_BUILDのまま。C08.03実provider、実credential、外部業務作用、他repo変更、公開／出荷判断は行っていない。
+
+### Git・作業資産
+
+実装・workflow commit `c823122cd168b70fae20b1e06f243e09ae4e4f40`をrun #53完了後にGitHub `main`へfast-forwardした。local／remote recovery currentは同SHA、previousは開始時main `f1a1008ae3bbf387af29626900c2ec38c1937660`。検証branchはlocal／remote双方で削除した。Git操作中に古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除がPermission deniedとなったが、metadata・ACL変更や迂回は行っていない。
+
+`.codex-attachments/`と`.codex-remote-attachments/`は保持した。`packages/blue-tanuki/native/linux-isolation/target/`は29,650,224 bytesの再生成可能なRust build出力で、作業プロセスがないことを確認したが、OneDrive配下のReparsePointであるため同期削除伝播を避けて保持し、ゴミ箱へ移動していない。これは空き容量回収ではない。
