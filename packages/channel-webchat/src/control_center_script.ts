@@ -3550,12 +3550,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("approval-summary", String(pending.length) + " pending");
         byId("approval-summary").className = "badge " + (pending.length > 0 ? "review" : "good");
         const emergencyStopActive = Boolean(emergencyStop && emergencyStop.active);
-        const emergencyStopStatus = emergencyStopActive
+        let emergencyStopStatus = emergencyStopActive
           ? emergencyStop.audit_recovery_status === "pending" ? "active · audit pending"
             : emergencyStop.audit_recovery_status === "state_unavailable" ? "active · state unavailable" : "active"
           : "clear";
+        if (emergencyStopActive && emergencyStop.clear_blocked_by_active_work === true) {
+          emergencyStopStatus += " · local command still settling";
+        }
         setText("approval-emergency-status", emergencyStopStatus);
         byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
+        byId("clear-emergency-stop").disabled = !emergencyStopActive ||
+          (emergencyStop && emergencyStop.clear_blocked_by_active_work === true);
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);
         setText("active-execution-count", activeExecutions.length);

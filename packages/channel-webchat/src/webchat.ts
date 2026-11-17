@@ -2983,9 +2983,21 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const context = readApprovalControlContext(body);
-      const result = action === "activate"
-        ? await this.opts.approval.emergencyStop.activate(context)
-        : await this.opts.approval.emergencyStop.clear(context);
+      let result: unknown;
+      try {
+        result = action === "activate"
+          ? await this.opts.approval.emergencyStop.activate(context)
+          : await this.opts.approval.emergencyStop.clear(context);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "emergency_stop_action_failed";
+        const blockedByActiveWork = action === "clear" && reason === "emergency_stop_clear_blocked_active_work";
+        res.writeHead(blockedByActiveWork ? 409 : 500, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify({ error: blockedByActiveWork ? reason : "emergency_stop_action_failed" }));
+        return;
+      }
       res.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",

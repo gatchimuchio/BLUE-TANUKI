@@ -1436,6 +1436,8 @@ async function serveWithOwnerLease(
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
+    hasUnsettledWork: () => activeCommandFinalizations.size > 0 || executionTasks.size > 0 ||
+      activeTaskExecutions.snapshot().length > 0,
     abortRunningExecutions: ({ actor, requested_at_ms }) => {
       for (const execution of activeTaskExecutions.snapshot()) {
         try {

@@ -13,6 +13,7 @@ export interface EmergencyStopSnapshot {
   clear_reason: string | null;
   audit_recovery_status: EmergencyStopAuditRecoveryStatus;
   execution_blocked: boolean;
+  clear_blocked_by_active_work: boolean;
   hds_brain_remains_authority: true;
   used_for_authority: false;
   evidence_source: readonly ("INTERNAL_STATE" | "LIVE_RUNTIME")[];
@@ -57,6 +58,7 @@ export class EmergencyStopControl {
     readonly store: EmergencyStopStateStore;
     readonly authority: EmergencyStopAuthority;
     readonly abortRunningExecutions: (context: EmergencyStopCancellationContext) => void;
+    readonly hasUnsettledWork?: () => boolean;
     readonly now?: () => number;
   }) {
     this.durable = options.store.load();
@@ -68,6 +70,7 @@ export class EmergencyStopControl {
 
   snapshot(): EmergencyStopSnapshot {
     const active = this.durable.active;
+    const clearBlockedByActiveWork = active && (this.options.hasUnsettledWork?.() ?? false);
     return {
       active,
       activated_at: this.durable.activation?.occurred_at_ms ?? null,
@@ -80,6 +83,7 @@ export class EmergencyStopControl {
         : !this.stateStoreAvailable ? "state_unavailable"
           : this.durable.activation?.audit_recorded ? "recorded" : "pending",
       execution_blocked: active,
+      clear_blocked_by_active_work: clearBlockedByActiveWork,
       hds_brain_remains_authority: true,
       used_for_authority: false,
       evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
@@ -114,6 +118,7 @@ export class EmergencyStopControl {
   clear(context: { actor: string; reason?: string }): EmergencyStopSnapshot {
     if (!this.durable.active) return this.snapshot();
     if (!this.stateStoreAvailable) throw new Error("emergency_stop_state_store_unavailable");
+    if (this.options.hasUnsettledWork?.()) throw new Error("emergency_stop_clear_blocked_active_work");
     if (!this.durable.activation?.audit_recorded && !this.recordActivationIfPossible(true)) {
       throw new Error("emergency_stop_audit_recovery_pending");
     }
