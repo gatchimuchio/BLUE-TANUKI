@@ -20,7 +20,7 @@
     { "path": "docs/COMPOSIO_CONNECTOR.md", "sha256": "16c0af99475eff4f42491a3f14ae660d4a2f05989d2b670f9ce9072dfaeff6c4" },
     { "path": "docs/CONFORMANCE_TARGETS.md", "sha256": "a61ae0feec14a5cb85168f37bf66d4c8be6b7b721e29320c85d323bbdedd9f7a" },
     { "path": "docs/CONFORMANCE.md", "sha256": "3eab601d44f92c7d1c992cdbb6b8493d1e4cb729239c17d2d8b98b3882aeb4b7" },
-    { "path": "docs/CREDENTIAL_READINESS_MATRIX.md", "sha256": "a5b2eff3614358b3fede4397b9684a2675f7268aa2246cddcb95856a71338ea4" },
+    { "path": "docs/CREDENTIAL_READINESS_MATRIX.md", "sha256": "090fdfe7123e596ca1bc2bc6650f409089b099d50dedd6f5d00dad8a98d6b790" },
     { "path": "docs/doctor-output.md", "sha256": "985c19d70d053a9255e6a7ba8982dfad5ec2a3217e415fd8a025e866a8748a28" },
     { "path": "docs/EXTERNAL_TOOL_AUTHORITY_BOUNDARY.md", "sha256": "f2e343e8f9c304292d610ec81acd18ef811efd9a23f9757102fef631c97c2cd7" },
     { "path": "docs/GA_BAR_DEFINITION.md", "sha256": "f018a4f626050189ca8516624fb060966c746d7385909a83ea7a42421236bb0a" },
