@@ -1226,10 +1226,12 @@ async function serveWithOwnerLease(
   let jMRestoreStoreQuiesced: "j_control" | "m_state" | null = null;
   let meaningUpdateRestoreStoreQuiesced: "meaning_update_j_control" | "meaning_update_m_state" | null = null;
   let brokerRestoreStoreQuiesced = false;
+  let operationPlanRestoreCommandId: string | null = null;
   let canonicalStoreRestoreMaintenanceCommandId: string | null = null;
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
-    canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey) =>
-      storeKey === "cron_events" ? cronEventsStoreQuiesced
+    canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey, context) =>
+      storeKey === "operation_plans" ? operationPlanRestoreCommandId === context?.command_id
+        : storeKey === "cron_events" ? cronEventsStoreQuiesced
         : storeKey === "broker" ? brokerRestoreStoreQuiesced
           : storeKey === "meaning_update_j_control" || storeKey === "meaning_update_m_state"
             ? storeKey === meaningUpdateRestoreStoreQuiesced
@@ -2797,6 +2799,7 @@ async function serveWithOwnerLease(
       gatewayLog.warn("operation-plan restore was not started", { command_id: cmd.id, reason: "plan_refresh_busy" });
       return { status: "operation_plan_recovery_refresh_busy" };
     }
+    if (operationPlanRestore) operationPlanRestoreCommandId = cmd.id;
     let cronEventsRestoreQuiesced = false;
     const reopenCronEventStoreAfterRestore = () => {
       if (cronEventsRestoreQuiesced && cronEventStore.isClosed()) {
@@ -3558,6 +3561,7 @@ async function serveWithOwnerLease(
               } else {
                 await loadRecoveryInspectionModule();
                 hds.refreshOperationPlansAfterRecoveryRestore(cmd, recoveryEvidence);
+                operationPlanRestoreCommandId = null;
               }
             }
           } catch {

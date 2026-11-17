@@ -106,7 +106,12 @@ export function normalizeRecoveryMutationArguments(
 export function createRecoveryMutationTools(
   env: NodeJS.ProcessEnv = process.env,
   getBrokerStore?: () => GatewayExecutionIntentStore | undefined,
-  options: { readonly canonicalStoreRestoreQuiesced?: (storeKey: CanonicalStateStoreKey) => boolean } = {},
+  options: {
+    readonly canonicalStoreRestoreQuiesced?: (
+      storeKey: CanonicalStateStoreKey,
+      context?: Pick<ToolContext, "command_id">,
+    ) => boolean;
+  } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
@@ -120,8 +125,8 @@ export function createRecoveryMutationTools(
       }
       if ((args.store_key === "j_control" || args.store_key === "m_state" ||
            args.store_key === "meaning_update_j_control" || args.store_key === "meaning_update_m_state" ||
-           args.store_key === "broker" || args.store_key === "cron_events") &&
-          options.canonicalStoreRestoreQuiesced?.(args.store_key) !== true) {
+           args.store_key === "broker" || args.store_key === "cron_events" || args.store_key === "operation_plans") &&
+          options.canonicalStoreRestoreQuiesced?.(args.store_key, ctx) !== true) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }
       if (args.store_key === "broker" && !/^[a-f0-9]{64}$/.test(ctx?.idempotency_key ?? "")) {

@@ -138,7 +138,7 @@ describe("Recovery mutation tool boundary", () => {
     })).toThrow("invalid_recovery_request");
   });
 
-  it("requires a live quiesce receipt for J/M and Cron selected-store restore", async () => {
+  it("requires a live quiesce receipt for every selected store restore with a runtime consumer", async () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
@@ -174,6 +174,27 @@ describe("Recovery mutation tool boundary", () => {
       .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
     await expect(restore?.invoke({ backup_id: "fixture", store_key: "meaning_update_j_control", confirm: "RESTORE" }))
       .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    const operationPlanRestore = createRecoveryMutationTools({}, undefined, {
+      canonicalStoreRestoreQuiesced: (storeKey, context) =>
+        storeKey === "operation_plans" && context?.command_id === "active-restore-command",
+    }).find((tool) => tool.name === "recovery.restore");
+    const operationPlanArguments = {
+      backup_id: "fixture",
+      store_key: "operation_plans",
+      scope_kind: "operation_plan",
+      scope_digest: "a".repeat(64),
+      confirm: "RESTORE",
+    };
+    await expect(operationPlanRestore?.invoke(operationPlanArguments, {
+      command_id: "different-command",
+      upstream_commit_hash: "fixture-commit",
+      idempotency_key: "b".repeat(64),
+    })).rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    await expect(operationPlanRestore?.invoke(operationPlanArguments, {
+      command_id: "active-restore-command",
+      upstream_commit_hash: "fixture-commit",
+      idempotency_key: "c".repeat(64),
+    })).rejects.toThrow("operation_plan_scope_unverified");
     const meaningRestore = createRecoveryMutationTools({}, undefined, {
       canonicalStoreRestoreQuiesced: (storeKey) => storeKey === "meaning_update_j_control",
     }).find((tool) => tool.name === "recovery.restore");
