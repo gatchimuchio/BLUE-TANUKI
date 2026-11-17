@@ -1005,8 +1005,8 @@ export class ToolRegistry {
       throw new Error(`Tool already registered: ${tool.name}`);
     }
     const descriptor = getToolOperationDescriptor(tool.name);
-    if (tool.adapter_version !== undefined && descriptor?.adapter_version !== tool.adapter_version) {
-      throw new Error(`Tool adapter version does not match its reviewed descriptor: ${tool.name}`);
+    if (!descriptor?.adapter_version || tool.adapter_version !== descriptor.adapter_version) {
+      throw new Error(`Tool adapter version is missing or does not match its reviewed descriptor: ${tool.name}`);
     }
     this.tools.set(tool.name, tool);
   }

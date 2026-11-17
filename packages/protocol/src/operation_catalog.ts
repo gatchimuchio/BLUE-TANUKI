@@ -8,7 +8,7 @@ export interface OperationDescriptor {
   operation_id: string;
   descriptor_version: string;
   /** Reviewed release identity of the concrete registered adapter implementation. */
-  adapter_version?: string;
+  adapter_version: string;
   implementation_ref: string;
   tool_name?: string;
   adapter: OperationAdapterKind;
@@ -79,6 +79,7 @@ function operationDescriptor(
 ): OperationDescriptor {
   return freezeDescriptor({
     operation_id,
+    adapter_version: CURRENT_OPERATION_ADAPTER_VERSION,
     implementation_ref,
     adapter,
     effects,
