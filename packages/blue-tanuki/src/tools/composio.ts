@@ -169,6 +169,19 @@ function jsonDigest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Stable digest used to bind a selected Composio JSON schema across catalog observations. */
+export function composioSchemaDigest(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 function assertConfigured(env: Env): string {
   const key = envValue(env, "COMPOSIO_API_KEY");
   if (!key) {
@@ -918,7 +931,7 @@ function catalogToolProjection(value: unknown, expectedToolkit: string): Record<
   const scopes = Array.isArray(value.scopes)
     ? value.scopes.filter((scope): scope is string => typeof scope === "string").slice(0, 100)
     : [];
-  return {
+  const projection = {
     slug: slug.slice(0, 160),
     name: name.slice(0, 240),
     toolkit,
@@ -930,6 +943,61 @@ function catalogToolProjection(value: unknown, expectedToolkit: string): Record<
     input_parameters: inputParameters,
     output_parameters: outputParameters,
   };
+  return {
+    ...projection,
+    input_schema_sha256: composioSchemaDigest(inputParameters),
+    output_schema_sha256: composioSchemaDigest(outputParameters),
+  };
+}
+
+async function assertComposioInputSchemaUnchanged(params: {
+  toolkit: string;
+  tool: string;
+  expectedInputSchemaSha256: string;
+  apiBaseUrl: string;
+  apiKey: string;
+  maxBytes: number;
+  request: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(params.expectedInputSchemaSha256)) {
+    throw new Error("input_schema_sha256 must be a SHA-256 digest; mutation_sent=false");
+  }
+  const path = new URL("/api/v3.1/tools", `${params.apiBaseUrl}/`);
+  path.searchParams.set("toolkit_slug", params.toolkit.toLowerCase());
+  path.searchParams.set("query", params.tool);
+  path.searchParams.set("limit", String(MAX_SEARCH_LIMIT));
+  path.searchParams.set("toolkit_versions", "latest");
+  path.searchParams.set("include_deprecated", "false");
+  assertToolExecutionNotCancelled(params.signal, "composio.execute");
+  const response = await params.request({
+    api_base_url: params.apiBaseUrl,
+    path: `${path.pathname}${path.search}`,
+    method: "GET",
+    toolkit: params.toolkit.toLowerCase(),
+    query: params.tool,
+    limit: MAX_SEARCH_LIMIT,
+    api_key: params.apiKey,
+    maxBytes: params.maxBytes,
+  }, params.signal);
+  if (!response.ok) throw catalogResponseError(response);
+  if (response.truncated) {
+    throw new Error("Composio action schema response exceeded the configured limit; mutation_sent=false");
+  }
+  const data = parseJsonOrText(response.body);
+  if (!isRecord(data) || !Array.isArray(data.items)) {
+    throw new Error("Composio action schema response did not contain a tools list; mutation_sent=false");
+  }
+  const exactItems = data.items.filter((item) => isRecord(item) && isRecord(item.toolkit) &&
+    typeof item.slug === "string" && item.slug.toLowerCase() === params.tool.toLowerCase() &&
+    typeof item.toolkit.slug === "string" && item.toolkit.slug.toLowerCase() === params.toolkit.toLowerCase());
+  if (exactItems.length !== 1 || !isRecord(exactItems[0]) || !isRecord(exactItems[0].input_parameters) ||
+      exactItems[0].is_deprecated !== false) {
+    throw new Error("Composio action schema was missing, ambiguous, incomplete, or deprecated; mutation_sent=false");
+  }
+  if (composioSchemaDigest(exactItems[0].input_parameters) !== params.expectedInputSchemaSha256) {
+    throw new Error("Composio action input schema changed since selection; owner must review the current schema; mutation_sent=false");
+  }
 }
 
 export async function invokeComposioSearch(
@@ -1095,6 +1163,10 @@ export async function invokeComposioExecute(
       "expected_provider_region=us|eu is required for PostHog live execution; mutation_sent=false",
     );
   }
+  const inputSchemaSha256 = stringArg(args, "input_schema_sha256", false);
+  if (!inputSchemaSha256 || !/^[a-f0-9]{64}$/.test(inputSchemaSha256)) {
+    throw new Error("input_schema_sha256 is required for live execution; mutation_sent=false");
+  }
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
   const accounts = await readComposioAccounts({
@@ -1125,6 +1197,16 @@ export async function invokeComposioExecute(
       "Composio connected account is missing, not PRIVATE ACTIVE, disabled, outside the configured owner/toolkit, or has unknown/mismatched PostHog auth scheme or region; mutation_sent=false",
     );
   }
+  await assertComposioInputSchemaUnchanged({
+    toolkit,
+    tool,
+    expectedInputSchemaSha256: inputSchemaSha256,
+    apiBaseUrl,
+    apiKey,
+    maxBytes,
+    request: opts.searchRequest ?? defaultComposioSearchRequest,
+    signal: opts.signal,
+  });
   assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
     api_base_url: apiBaseUrl,
@@ -1170,7 +1252,7 @@ export const composioSearchTool: Tool = {
   name: "composio.search",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Searches Composio toolkit/tool metadata under an explicit allowlist. Metadata is never authority.",
+    "Searches Composio toolkit/action metadata under an explicit allowlist and returns canonical input/output schema digests. Metadata is never authority.",
   required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeComposioSearch(args);
@@ -1203,7 +1285,7 @@ export const composioExecuteTool: Tool = {
   name: "composio.execute",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries. PostHog live execution also requires an explicit expected_provider_region matching the connected account's observed us/eu region and API_KEY auth scheme.",
+    "Executes Composio actions only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries. Live execution requires input_schema_sha256 from action inspection and rechecks the provider schema immediately before dispatch. PostHog live execution also requires an explicit expected_provider_region matching the connected account's observed us/eu region and API_KEY auth scheme.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioExecute(args, { signal: context.signal });

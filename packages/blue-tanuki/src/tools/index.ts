@@ -20,6 +20,7 @@ export {
   composioLiveExecutionEnabled,
   composioApiBaseUrl,
   composioStatus,
+  composioSchemaDigest,
   classifyComposioAction,
   composioSearchTool,
   composioAccountsTool,

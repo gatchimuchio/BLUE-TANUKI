@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   composioStatus,
+  composioSchemaDigest,
   invokeComposioAccounts,
   invokeComposioExecute,
   invokeComposioScopes,
@@ -12,6 +13,31 @@ import {
   type ComposioScopesTarget,
   type ComposioSearchTarget,
 } from "../src/tools/index.js";
+
+const issueInputSchema = { type: "object", properties: { title: { type: "string" } } };
+const issueInputSchemaSha256 = composioSchemaDigest(issueInputSchema);
+
+function actionSchemaResponse(toolkit: string, slug: string, inputParameters: Record<string, unknown> = issueInputSchema) {
+  return {
+    status: 200,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({ items: [{
+      slug,
+      name: slug,
+      toolkit: { slug: toolkit },
+      description: "Fixture action",
+      version: "fixture-1",
+      no_auth: false,
+      is_deprecated: false,
+      scopes: ["repo"],
+      input_parameters: inputParameters,
+      output_parameters: { type: "object" },
+    }] }),
+    truncated: false,
+    request_id: "req_action_schema_fixture",
+  };
+}
 
 const activeAccount = {
   id: "conn_owner_github_1",
@@ -52,6 +78,11 @@ function accountResponse(account: Record<string, unknown> = activeAccount) {
 }
 
 describe("Composio connector", () => {
+  it("hashes schema objects independently of JSON key order", () => {
+    expect(composioSchemaDigest({ type: "object", properties: { title: { type: "string" } } }))
+      .toBe(composioSchemaDigest({ properties: { title: { type: "string" } }, type: "object" }));
+  });
+
   it("is disabled by default and reports non-authority status", () => {
     const status = composioStatus({});
     expect(status).toMatchObject({
@@ -139,6 +170,12 @@ describe("Composio connector", () => {
     });
     expect(JSON.stringify(result)).toContain("GITHUB_LIST_ISSUES");
     expect(JSON.stringify(result)).toContain("repo");
+    expect(result).toMatchObject({
+      tools: [{
+        input_schema_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        output_schema_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }],
+    });
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
   });
 
@@ -614,6 +651,7 @@ describe("Composio connector", () => {
         toolkit: "github",
         tool: "GITHUB_CREATE_AN_ISSUE",
         connected_account_id: "conn_owner_github_1",
+        input_schema_sha256: issueInputSchemaSha256,
       },
       {
         env: {
@@ -663,11 +701,13 @@ describe("Composio connector", () => {
         tool: "POSTHOG_CREATE_INSIGHT",
         connected_account_id: "conn_owner_posthog_1",
         expected_provider_region: "eu",
+        input_schema_sha256: issueInputSchemaSha256,
         payload: { name: "fixture" },
       },
       {
         env,
         accountsRequest: async () => accountResponse(activePostHogAccount),
+        searchRequest: async () => actionSchemaResponse("posthog", "POSTHOG_CREATE_INSIGHT"),
         request,
       },
     );
@@ -699,6 +739,7 @@ describe("Composio connector", () => {
         tool: "POSTHOG_CREATE_INSIGHT",
         connected_account_id: "conn_owner_posthog_1",
         expected_provider_region: "us",
+        input_schema_sha256: issueInputSchemaSha256,
       },
       {
         env,
@@ -714,6 +755,7 @@ describe("Composio connector", () => {
         tool: "POSTHOG_CREATE_INSIGHT",
         connected_account_id: "conn_owner_posthog_1",
         expected_provider_region: "eu",
+        input_schema_sha256: issueInputSchemaSha256,
       },
       {
         env,
@@ -721,6 +763,7 @@ describe("Composio connector", () => {
           ...activePostHogAccount,
           auth_config: { auth_scheme: "OAUTH2" },
         }),
+        searchRequest: async () => actionSchemaResponse("posthog", "POSTHOG_CREATE_INSIGHT"),
         request,
       },
     )).rejects.toThrow(/unknown\/mismatched PostHog auth scheme or region/);
@@ -732,6 +775,7 @@ describe("Composio connector", () => {
         tool: "POSTHOG_CREATE_INSIGHT",
         connected_account_id: "conn_owner_posthog_1",
         expected_provider_region: "eu",
+        input_schema_sha256: issueInputSchemaSha256,
       },
       {
         env,
@@ -739,6 +783,7 @@ describe("Composio connector", () => {
           ...activePostHogAccount,
           state: { authScheme: "API_KEY", val: { region: "https://eu.posthog.com" } },
         }),
+        searchRequest: async () => actionSchemaResponse("posthog", "POSTHOG_CREATE_INSIGHT"),
         request,
       },
     )).rejects.toThrow(/unknown\/mismatched PostHog auth scheme or region/);
@@ -815,6 +860,7 @@ describe("Composio connector", () => {
         toolkit: "github",
         tool: "GITHUB_CREATE_AN_ISSUE",
         connected_account_id: "conn_owner_github_1",
+        input_schema_sha256: issueInputSchemaSha256,
         payload: { title: "hello" },
       },
       {
@@ -840,6 +886,10 @@ describe("Composio connector", () => {
         accountsRequest: async (target) => {
           accountLookup = target;
           return accountResponse();
+        },
+        searchRequest: async (target) => {
+          expect(target).toMatchObject({ toolkit: "github", query: "GITHUB_CREATE_AN_ISSUE", method: "GET" });
+          return actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE");
         },
       },
     );
@@ -880,12 +930,60 @@ describe("Composio connector", () => {
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
   });
 
+  it("requires a selected schema digest and rejects schema drift before action dispatch", async () => {
+    let accountLookupDispatched = false;
+    let executeDispatched = false;
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+
+    await expect(invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1" },
+      { env, accountsRequest: async () => {
+        accountLookupDispatched = true;
+        return accountResponse();
+      } },
+    )).rejects.toThrow(/input_schema_sha256 is required for live execution/);
+    expect(accountLookupDispatched).toBe(false);
+
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "github",
+        tool: "GITHUB_CREATE_AN_ISSUE",
+        connected_account_id: "conn_owner_github_1",
+        input_schema_sha256: issueInputSchemaSha256,
+      },
+      {
+        env,
+        accountsRequest: async () => {
+          accountLookupDispatched = true;
+          return accountResponse();
+        },
+        searchRequest: async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE", {
+          type: "object", properties: { title: { type: "string" }, repository: { type: "string" } },
+        }),
+        request: async () => {
+          executeDispatched = true;
+          return actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE");
+        },
+      },
+    )).rejects.toThrow(/input schema changed since selection/);
+    expect(accountLookupDispatched).toBe(true);
+    expect(executeDispatched).toBe(false);
+  });
+
   it("passes cancellation to the Composio request and never returns a success after abort", async () => {
     const controller = new AbortController();
     let seenSignal: AbortSignal | undefined;
     let called = false;
     await expect(invokeComposioExecute(
-      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1", payload: { title: "fixture" } },
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+        input_schema_sha256: issueInputSchemaSha256, payload: { title: "fixture" } },
       {
         env: {
           COMPOSIO_API_KEY: "composio-test-value",
@@ -903,6 +1001,7 @@ describe("Composio connector", () => {
           throw new Error("request aborted; mutation_status=not_confirmed");
         },
         accountsRequest: async () => accountResponse(),
+        searchRequest: async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"),
       },
     )).rejects.toThrow(/mutation_status=not_confirmed/);
     expect(called).toBe(true);
@@ -912,7 +1011,8 @@ describe("Composio connector", () => {
     alreadyCancelled.abort();
     let dispatchedAfterCancel = false;
     await expect(invokeComposioExecute(
-      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1", payload: { title: "fixture" } },
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+        input_schema_sha256: issueInputSchemaSha256, payload: { title: "fixture" } },
       {
         env: {
           COMPOSIO_API_KEY: "composio-test-value",
