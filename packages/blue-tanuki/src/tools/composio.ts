@@ -122,20 +122,27 @@ interface ComposioActionEffectRegistryEntry {
   entry_id: string;
   toolkit: string;
   tool: string;
+  input_schema_sha256: string;
+  output_schema_sha256: string;
+  action_definition_sha256: string;
   effects: readonly ComposioRegisteredActionEffect[];
 }
 
-const COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION = "1.0.0";
+const COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION = "1.1.0";
 
 /**
- * This list is code-reviewed data, never populated from provider metadata or environment settings.
- * Keep it narrow: actions absent from the list remain discoverable but cannot be used live.
+ * Entries pin exact code-reviewed input/output schema and action-definition digests; provider
+ * metadata and environment settings never populate the registry. The sole current row matches
+ * the test fixture only; no live provider schema is registered. Provider schema drift stays unreviewed.
  */
 const COMPOSIO_ACTION_EFFECT_REGISTRY: readonly ComposioActionEffectRegistryEntry[] = Object.freeze([
   Object.freeze({
-    entry_id: "github.issue.create.v1",
+    entry_id: "github.issue.create.fixture-schema.v1",
     toolkit: "github",
     tool: "GITHUB_CREATE_AN_ISSUE",
+    input_schema_sha256: "75a323804435b510db3f8cc7fda9a750763b0ee894a8e28a00ffafc4823ee03a",
+    output_schema_sha256: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
+    action_definition_sha256: "a7dea94a84dd997dc18129bc636ce71d7c2a4868d2df7bf826b515a19d4aec71",
     effects: Object.freeze(["external_send", "write"] as const),
   }),
 ]);
@@ -159,7 +166,10 @@ export function resolveComposioActionEffectRegistryBinding(params: {
   const entry = COMPOSIO_ACTION_EFFECT_REGISTRY.find((candidate) =>
     candidate.toolkit === toolkit && candidate.tool.toLowerCase() === tool.toLowerCase());
   if (!entry || ![params.inputSchemaSha256, params.outputSchemaSha256, params.actionDefinitionSha256]
-    .every((digest) => /^[a-f0-9]{64}$/.test(digest))) return undefined;
+    .every((digest) => /^[a-f0-9]{64}$/.test(digest)) ||
+      entry.input_schema_sha256 !== params.inputSchemaSha256 ||
+      entry.output_schema_sha256 !== params.outputSchemaSha256 ||
+      entry.action_definition_sha256 !== params.actionDefinitionSha256) return undefined;
 
   const entryBase = {
     schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1" as const,
@@ -167,6 +177,9 @@ export function resolveComposioActionEffectRegistryBinding(params: {
     registry_entry_id: entry.entry_id,
     toolkit: entry.toolkit,
     tool: entry.tool,
+    input_schema_sha256: entry.input_schema_sha256,
+    output_schema_sha256: entry.output_schema_sha256,
+    action_definition_sha256: entry.action_definition_sha256,
     effects: [...entry.effects],
   };
   const entrySha256 = operationPlanDigest(entryBase);
