@@ -70,6 +70,7 @@ interface ExternalManifest {
 }
 
 const root = process.cwd();
+const ARCHIVE_LIST_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 
 function requiredKeyringEntries(platform: UnixPlatform, arch: UnixArch): string[] {
   const packages = platform === "linux"
@@ -223,9 +224,17 @@ function readManifest(file: string): ExternalManifest {
 }
 
 function listTarEntries(archive: string): string[] {
-  const result = spawnSync("tar", ["-tf", archive], { encoding: "utf8" });
+  const result = spawnSync("tar", ["-tf", archive], {
+    encoding: "utf8",
+    maxBuffer: ARCHIVE_LIST_MAX_BUFFER_BYTES,
+  });
+  if (result.error) {
+    throw new Error(`tar list failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
-    throw new Error(`tar list failed: ${result.stderr || result.stdout}`);
+    throw new Error(
+      `tar list failed (exit ${result.status}): ${result.stderr.trim() || "no stderr output"}`,
+    );
   }
   return result.stdout
     .split(/\r?\n/)
