@@ -91,26 +91,31 @@ export async function invokeShellExec(
   validateShellCommand(cmd, argv);
   const timeoutMs = positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
+  const providerPath = opts.nativeProviderPath ??
+    (process.platform === "win32" ? packagedWindowsProviderPath() : packagedLinuxProviderPath());
 
   if (opts.signal?.aborted) {
     throw new Error("shell.exec aborted before isolated process creation");
   }
   if (opts.targetVersionObservation) {
     const expected = ShellExecTargetVersionObservationSchema.parse(opts.targetVersionObservation);
-    const current = await inspectShellExecTargetVersion(args, {
+    const current = await inspectShellExecTargetVersionCore(args, {
       env,
       command_digest: expected.command_digest,
       ...(expected.operation_plan_binding_digest
         ? { operation_plan_binding_digest: expected.operation_plan_binding_digest } : {}),
-    });
+    }, false);
     if (JSON.stringify(current) !== JSON.stringify(expected)) {
       throw new Error("shell.exec sandbox root or cwd changed after owner review; request fresh review");
     }
   }
 
-  const providerPath = opts.nativeProviderPath ??
-    (process.platform === "win32" ? packagedWindowsProviderPath() : packagedLinuxProviderPath());
   await assertProviderOutsideRoot(providerPath, shellRoot, process.platform);
+  if (!await shellExecIsolationProviderAvailable(env, providerPath)) {
+    throw new Error(
+      `shell.exec is disabled because ${shellExecIsolationUnavailableReason(process.platform)}; no process was started`,
+    );
+  }
   const safeEnv = process.platform === "win32"
     ? safeHelperEnvironment(env, shellRoot)
     : safeLinuxHelperEnvironment();
@@ -154,17 +159,23 @@ export async function invokeShellExec(
   };
 }
 
-export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
+export async function shellExecIsolationProviderAvailable(
+  env: Readonly<Env> = process.env,
+  providerPathOverride?: string,
+): Promise<boolean> {
   if (process.platform === "win32") {
-    const providerPath = packagedWindowsProviderPath();
+    const providerPath = providerPathOverride ?? packagedWindowsProviderPath();
+    const systemRoot = envValue(env, "SystemRoot") ?? envValue(env, "WINDIR");
+    if (!systemRoot) return false;
     const stat = await fs.stat(providerPath).catch(() => null);
-    return stat?.isFile() === true && await probeWindowsIsolationProvider(providerPath);
+    return stat?.isFile() === true && await probeWindowsIsolationProvider(providerPath, systemRoot);
   }
   if (process.platform !== "linux" || typeof process.getuid !== "function") return false;
   const uid = process.getuid();
   const runtimeDirectory = `/run/user/${uid}`;
+  const providerPath = providerPathOverride ?? packagedLinuxProviderPath();
   const required = [
-    packagedLinuxProviderPath(),
+    providerPath,
     "/usr/bin/bwrap",
     "/usr/bin/systemd-run",
     "/usr/bin/systemctl",
@@ -183,7 +194,7 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
   }
   const swapLimit = await fs.stat("/sys/fs/cgroup/memory.swap.max").catch(() => null);
   if (!swapLimit?.isFile()) return false;
-  return await probeLinuxIsolationProvider(packagedLinuxProviderPath());
+  return await probeLinuxIsolationProvider(providerPath);
 }
 
 export const shellExecTool: Tool = {
@@ -204,16 +215,29 @@ export const shellExecTool: Tool = {
   },
 };
 
+type ShellExecTargetVersionOptions = {
+  env?: Readonly<Env>;
+  operation_plan_binding_digest?: string;
+  command_digest?: string;
+  platform?: NodeJS.Platform;
+  /** Test seam for source-import tests; invocation always probes the actual provider path. */
+  isolationProviderAvailable?: () => Promise<boolean>;
+};
+
 export async function inspectShellExecTargetVersion(
   args: Record<string, unknown>,
-  options: {
-    env?: Readonly<Env>;
-    operation_plan_binding_digest?: string;
-    command_digest?: string;
-    platform?: NodeJS.Platform;
-  } = {},
+  options: ShellExecTargetVersionOptions = {},
 ): Promise<ShellExecTargetVersionObservation> {
-  assertShellExecPlatformSupported(options.platform ?? process.platform);
+  return await inspectShellExecTargetVersionCore(args, options, true);
+}
+
+async function inspectShellExecTargetVersionCore(
+  args: Record<string, unknown>,
+  options: ShellExecTargetVersionOptions,
+  requireProviderAvailability: boolean,
+): Promise<ShellExecTargetVersionObservation> {
+  const platform = options.platform ?? process.platform;
+  assertShellExecPlatformSupported(platform);
   const commandDigest = options.command_digest;
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
     throw new Error("shell.exec target resolver requires the exact command digest");
@@ -238,6 +262,14 @@ export async function inspectShellExecTargetVersion(
   const [rootIdentityDigest, cwdIdentityDigest] = await Promise.all([
     directoryIdentityDigest(shellRoot), directoryIdentityDigest(cwd),
   ]);
+  if (requireProviderAvailability) {
+    const providerAvailable = await (options.isolationProviderAvailable ?? (() => shellExecIsolationProviderAvailable(env)))();
+    if (!providerAvailable) {
+      throw new Error(
+        `shell.exec is disabled because ${shellExecIsolationUnavailableReason(platform)}; no process was started`,
+      );
+    }
+  }
   return ShellExecTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.shell-exec-target-version.v1",
     command_digest: commandDigest,
@@ -375,9 +407,7 @@ async function probeLinuxIsolationProvider(providerPath: string): Promise<boolea
   });
 }
 
-async function probeWindowsIsolationProvider(providerPath: string): Promise<boolean> {
-  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (!systemRoot) return false;
+async function probeWindowsIsolationProvider(providerPath: string, systemRoot: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const stdout: Buffer[] = [];
     let outputBytes = 0;

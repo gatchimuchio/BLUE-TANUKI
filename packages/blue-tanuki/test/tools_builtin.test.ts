@@ -65,7 +65,7 @@ import {
   type HttpFetchOptions,
 } from "../src/tools/builtin.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
+import { inspectShellExecTargetVersion as inspectShellExecTargetVersionRaw } from "../src/tools/shell_exec.js";
 import { SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE } from "../src/tools/shell_exec_profile.js";
 import { inspectGoogleDriveWriteTargetVersion } from "../src/tools/google_write.js";
 
@@ -73,6 +73,14 @@ const ctx = {
   command_id: "cmd-1",
   upstream_commit_hash: "hash-1",
 };
+
+const inspectShellExecTargetVersion = (
+  args: Record<string, unknown>,
+  options: Parameters<typeof inspectShellExecTargetVersionRaw>[1] = {},
+) => inspectShellExecTargetVersionRaw(args, {
+  ...options,
+  isolationProviderAvailable: async () => true,
+});
 
 describe("built-in tools", () => {
   it("registerBuiltinTools registers tools and their capabilities", () => {
@@ -3118,6 +3126,20 @@ describe("built-in tools", () => {
     })).rejects.toThrow(/macOS has no verified native process isolation provider.*no process was started/);
   });
 
+  it("shell.exec does not issue target review evidence when its OS provider is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-provider-unavailable-"));
+    try {
+      await expect(inspectShellExecTargetVersionRaw({ cmd: "node", args: [] }, {
+        env: shellTestEnv(root),
+        command_digest: "b".repeat(64),
+        platform: "win32",
+        isolationProviderAvailable: async () => false,
+      })).rejects.toThrow(/Windows AppContainer isolation provider or required Job Object limits are unavailable; no process was started/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("shell.exec resolves only the fixed development-only synthetic test profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-synthetic-profile-"));
     const env = shellTestEnv(root, {
@@ -3310,7 +3332,11 @@ describe("built-in tools", () => {
     const args = { cmd: "node", args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`], cwd: "work" };
     try {
       if (!tool?.inspect_target_version) throw new Error("built-in shell target resolver was not registered");
-      const observation = await tool.inspect_target_version(args, { env, command_digest: "a".repeat(64) });
+      const observation = await tool.inspect_target_version(args, {
+        env,
+        command_digest: "a".repeat(64),
+        isolationProviderAvailable: async () => true,
+      });
       expect(observation).toMatchObject({
         schema_version: "blue-tanuki.shell-exec-target-version.v1",
         operation_plan_binding_digest: null,
