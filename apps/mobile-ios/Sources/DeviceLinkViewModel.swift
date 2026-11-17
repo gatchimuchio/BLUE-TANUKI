@@ -84,6 +84,7 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var taskStatuses: [String: MobileTaskStatus] = [:]
   @Published private(set) var mcpSnapshot: MobileMCPCapabilitySnapshot?
   @Published private(set) var taskSubmissionNeedsReconciliation = false
+  @Published private(set) var reinstallReviewRequired = false
   @Published var selectedRuntimeID = ""
   @Published var selectedWorkspaceID = ""
   @Published var taskInstruction = ""
@@ -108,6 +109,10 @@ final class DeviceLinkViewModel: ObservableObject {
         message = recoveryAuditCount > 0
           ? "未結合です。端末内資格の削除記録がありますが、Desktop側の失効は未確認です。ownerへ確認してから再結合してください。"
           : "未結合です。Desktopで一回限りの招待を発行してください。"
+      }
+      if reinstallReviewRequired {
+        message = "再インストールを検知しました。旧端末資格は利用せず、Desktop側の失効状態をownerに確認してから再結合してください。"
+        taskMessage = "以前のTaskが残っている可能性があります。Desktop Agent Centerで状態を確認してから新しい申請を送ってください。"
       }
       if taskSubmissionNeedsReconciliation {
         taskMessage = "前回のTask申請をDesktop一覧と照合するまで新規申請を停止しています。"
@@ -579,7 +584,7 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func preparePairing(rawInvitation: inout String) {
     defer { rawInvitation.removeAll(keepingCapacity: false) }
-    guard lifecycle.isForeground(), !busy, !paired else { return }
+    guard lifecycle.isForeground(), !busy, !paired, !reinstallReviewRequired else { return }
     do {
       let state = try store.loadOrCreate()
       guard state.credential == nil else {
@@ -613,8 +618,19 @@ final class DeviceLinkViewModel: ObservableObject {
     message = "結合を取り消しました。Desktopへ要求は送っていません。"
   }
 
+  func acknowledgeReinstallReview() {
+    guard lifecycle.isForeground(), !busy, reinstallReviewRequired else { return }
+    do {
+      try store.acknowledgeReinstallReview()
+      reinstallReviewRequired = store.reinstallReviewRequired
+      message = "Desktop ownerが旧端末状態を確認しました。新しい招待の接続先と証明書指紋も照合してください。"
+    } catch {
+      message = "再インストール後の端末状態を安全に更新できません。ネットワーク操作を停止しています。"
+    }
+  }
+
   func confirmPairing() {
-    guard lifecycle.isForeground(), !busy,
+    guard lifecycle.isForeground(), !busy, !reinstallReviewRequired,
           let invitation = pendingInvitation else { return }
     pendingInvitation = nil
     hostPreview = nil
@@ -851,6 +867,7 @@ final class DeviceLinkViewModel: ObservableObject {
     recoveryAuditCount = state.recoveryAudit.count
     pendingTaskSessionID = state.pendingTaskSessionID
     taskSubmissionNeedsReconciliation = state.pendingTaskSessionID != nil
+    reinstallReviewRequired = store.reinstallReviewRequired
   }
 
   private static func safeFailure(_ error: Error, fallback: String) -> String {

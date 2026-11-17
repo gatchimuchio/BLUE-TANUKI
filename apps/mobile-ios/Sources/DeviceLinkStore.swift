@@ -6,45 +6,129 @@ struct DeviceLinkStoredState {
   let credential: DeviceLinkCredential?
   let recoveryAudit: [[String: Any]]
   let pendingTaskSessionID: String?
+  let installScopeID: String?
 }
 
 final class DeviceLinkStore {
   private let service = "com.bluetanuki.ios.device-link.v1"
   private let account = "native-state"
+  private let installMarker = DeviceLinkInstallMarker()
+  private(set) var reinstallReviewRequired = false
 
   func loadOrCreate() throws -> DeviceLinkStoredState {
-    if let stored = try read() { return stored }
-    let initial = DeviceLinkStoredState(
+    let install = try installMarker.loadOrCreate()
+    reinstallReviewRequired = install.reinstallDetected && !install.reinstallReviewAcknowledged
+    if let stored = try read() {
+      if let storedInstallScopeID = stored.installScopeID {
+        if storedInstallScopeID == install.id {
+          if install.pending { try installMarker.markReady(id: install.id) }
+          return stored
+        }
+        guard install.pending else { throw DeviceLinkFailure.storage }
+        try installMarker.markReinstallDetected(id: install.id)
+        reinstallReviewRequired = true
+        let recovered = try recoveryStateAfterReinstall(stored, installScopeID: install.id)
+        try write(recovered)
+        guard let verified = try read(), equivalent(verified, recovered) else {
+          throw DeviceLinkFailure.storage
+        }
+        try installMarker.markReady(id: install.id)
+        return verified
+      }
+      if install.reinstallDetected {
+        guard install.pending else { throw DeviceLinkFailure.storage }
+        try installMarker.markReinstallDetected(id: install.id)
+        reinstallReviewRequired = true
+        let recovered = try recoveryStateAfterReinstall(stored, installScopeID: install.id)
+        try write(recovered)
+        guard let verified = try read(), equivalent(verified, recovered) else {
+          throw DeviceLinkFailure.storage
+        }
+        try installMarker.markReady(id: install.id)
+        return verified
+      }
+      let migrated = DeviceLinkStoredState(
+        deviceID: stored.deviceID,
+        credential: stored.credential,
+        recoveryAudit: stored.recoveryAudit,
+        pendingTaskSessionID: stored.pendingTaskSessionID,
+        installScopeID: install.id
+      )
+      try write(migrated)
+      guard let verified = try read(), equivalent(verified, migrated) else {
+        throw DeviceLinkFailure.storage
+      }
+      try installMarker.markReady(id: install.id)
+      return verified
+    }
+    let initial = try initialState(installScopeID: install.id)
+    try write(initial)
+    guard let verified = try read(), equivalent(verified, initial) else {
+      throw DeviceLinkFailure.storage
+    }
+    try installMarker.markReady(id: install.id)
+    return verified
+  }
+
+  private func initialState(installScopeID: String) throws -> DeviceLinkStoredState {
+    DeviceLinkStoredState(
       deviceID: try DeviceLinkJSON.randomHex(byteCount: 16),
       credential: nil,
       recoveryAudit: [],
-      pendingTaskSessionID: nil
+      pendingTaskSessionID: nil,
+      installScopeID: installScopeID
     )
-    try write(initial)
-    guard let verified = try read(), verified.deviceID == initial.deviceID,
-          verified.credential == nil, verified.recoveryAudit.isEmpty,
-          verified.pendingTaskSessionID == nil else {
+  }
+
+  private func recoveryStateAfterReinstall(
+    _ stored: DeviceLinkStoredState,
+    installScopeID: String
+  ) throws -> DeviceLinkStoredState {
+    let audit: [[String: Any]]
+    if stored.credential == nil {
+      audit = stored.recoveryAudit
+    } else {
+      audit = try DeviceLinkLocalRecoveryAudit.append(
+        stored.recoveryAudit,
+        event: DeviceLinkLocalRecoveryAudit.event()
+      )
+    }
+    return DeviceLinkStoredState(
+      deviceID: stored.deviceID,
+      credential: nil,
+      recoveryAudit: audit,
+      pendingTaskSessionID: stored.pendingTaskSessionID,
+      installScopeID: installScopeID
+    )
+  }
+
+  func acknowledgeReinstallReview() throws {
+    let install = try installMarker.loadOrCreate()
+    guard !install.pending, install.reinstallDetected, !install.reinstallReviewAcknowledged else {
       throw DeviceLinkFailure.storage
     }
-    return verified
+    try installMarker.markReinstallReviewAcknowledged(id: install.id)
+    reinstallReviewRequired = false
   }
 
   func storeCredential(_ credential: DeviceLinkCredential) throws -> DeviceLinkStoredState {
     let before = try loadOrCreate()
-    guard before.credential == nil, before.deviceID == credential.deviceID else {
+    guard !reinstallReviewRequired, before.credential == nil, before.deviceID == credential.deviceID else {
       throw DeviceLinkFailure.storage
     }
     let next = DeviceLinkStoredState(
       deviceID: before.deviceID,
       credential: credential,
       recoveryAudit: before.recoveryAudit,
-      pendingTaskSessionID: before.pendingTaskSessionID
+      pendingTaskSessionID: before.pendingTaskSessionID,
+      installScopeID: before.installScopeID
     )
     try write(next)
     guard let verified = try read(), verified.deviceID == next.deviceID,
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
-          verified.pendingTaskSessionID == next.pendingTaskSessionID else {
+          verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
     return verified
@@ -57,13 +141,15 @@ final class DeviceLinkStore {
       deviceID: before.deviceID,
       credential: nil,
       recoveryAudit: before.recoveryAudit,
-      pendingTaskSessionID: before.pendingTaskSessionID
+      pendingTaskSessionID: before.pendingTaskSessionID,
+      installScopeID: before.installScopeID
     )
     try write(next)
     guard let verified = try read(), verified.deviceID == next.deviceID,
           verified.credential == nil,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
-          verified.pendingTaskSessionID == next.pendingTaskSessionID else {
+          verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
     return verified
@@ -78,13 +164,15 @@ final class DeviceLinkStore {
       deviceID: before.deviceID,
       credential: nil,
       recoveryAudit: nextAudit,
-      pendingTaskSessionID: before.pendingTaskSessionID
+      pendingTaskSessionID: before.pendingTaskSessionID,
+      installScopeID: before.installScopeID
     )
     try write(next)
     guard let verified = try read(), verified.deviceID == next.deviceID,
           verified.credential == nil,
           auditEquals(verified.recoveryAudit, nextAudit),
           verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.installScopeID == next.installScopeID,
           let recorded = verified.recoveryAudit.last,
           NSDictionary(dictionary: recorded).isEqual(to: event) else {
       throw DeviceLinkFailure.storage
@@ -102,13 +190,15 @@ final class DeviceLinkStore {
       deviceID: before.deviceID,
       credential: before.credential,
       recoveryAudit: before.recoveryAudit,
-      pendingTaskSessionID: sessionID
+      pendingTaskSessionID: sessionID,
+      installScopeID: before.installScopeID
     )
     try write(next)
     guard let verified = try read(), verified.deviceID == next.deviceID,
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
-          verified.pendingTaskSessionID == sessionID else {
+          verified.pendingTaskSessionID == sessionID,
+          verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
     return verified
@@ -121,13 +211,15 @@ final class DeviceLinkStore {
       deviceID: before.deviceID,
       credential: before.credential,
       recoveryAudit: before.recoveryAudit,
-      pendingTaskSessionID: nil
+      pendingTaskSessionID: nil,
+      installScopeID: before.installScopeID
     )
     try write(next)
     guard let verified = try read(), verified.deviceID == next.deviceID,
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
-          verified.pendingTaskSessionID == nil else {
+          verified.pendingTaskSessionID == nil,
+          verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
     return verified
@@ -161,9 +253,11 @@ final class DeviceLinkStore {
     let object = try DeviceLinkJSON.object(data, maximumBytes: 16 * 1024)
     let version = DeviceLinkJSON.integer(object["version"])
     let versionOneKeys: Set<String> = ["version", "device_id", "credential", "local_recovery_audit"]
-    let versionTwoKeys: Set<String> = versionOneKeys.union(["pending_task_session_id"])
+    let versionTwoKeys = versionOneKeys.union(["pending_task_session_id"])
+    let versionThreeKeys = versionTwoKeys.union(["install_scope_id"])
     let validShape = (version == 1 && DeviceLinkJSON.exactKeys(object, versionOneKeys)) ||
-      (version == 2 && DeviceLinkJSON.exactKeys(object, versionTwoKeys))
+      (version == 2 && DeviceLinkJSON.exactKeys(object, versionTwoKeys)) ||
+      (version == 3 && DeviceLinkJSON.exactKeys(object, versionThreeKeys))
     guard validShape,
           let deviceID = object["device_id"] as? String,
           DeviceLinkJSON.isHex(deviceID, length: 32),
@@ -189,21 +283,34 @@ final class DeviceLinkStore {
     } else {
       throw DeviceLinkFailure.storage
     }
+    let installScopeID: String?
+    if version < 3 {
+      installScopeID = nil
+    } else if let value = object["install_scope_id"] as? String, DeviceLinkJSON.isHex(value, length: 32) {
+      installScopeID = value
+    } else {
+      throw DeviceLinkFailure.storage
+    }
     return DeviceLinkStoredState(
       deviceID: deviceID,
       credential: credential,
       recoveryAudit: rawAudit,
-      pendingTaskSessionID: pendingTaskSessionID
+      pendingTaskSessionID: pendingTaskSessionID,
+      installScopeID: installScopeID
     )
   }
 
   private func write(_ state: DeviceLinkStoredState) throws {
+    guard let installScopeID = state.installScopeID, DeviceLinkJSON.isHex(installScopeID, length: 32) else {
+      throw DeviceLinkFailure.storage
+    }
     let object: [String: Any] = [
-      "version": 2,
+      "version": 3,
       "device_id": state.deviceID,
       "credential": state.credential.map { $0.storageObject() as Any } ?? NSNull(),
       "local_recovery_audit": state.recoveryAudit,
       "pending_task_session_id": state.pendingTaskSessionID.map { $0 as Any } ?? NSNull(),
+      "install_scope_id": installScopeID,
     ]
     var data = try DeviceLinkJSON.encode(object, maximumBytes: 16 * 1024)
     defer { data.resetBytes(in: 0..<data.count) }
@@ -226,5 +333,154 @@ final class DeviceLinkStore {
 
   private func auditEquals(_ left: [[String: Any]], _ right: [[String: Any]]) -> Bool {
     NSDictionary(dictionary: ["events": left]).isEqual(to: ["events": right])
+  }
+
+  private func equivalent(_ left: DeviceLinkStoredState, _ right: DeviceLinkStoredState) -> Bool {
+    left.deviceID == right.deviceID && left.credential == right.credential &&
+      auditEquals(left.recoveryAudit, right.recoveryAudit) &&
+      left.pendingTaskSessionID == right.pendingTaskSessionID &&
+      left.installScopeID == right.installScopeID
+  }
+
+}
+
+private struct DeviceLinkInstallScope {
+  let id: String
+  let pending: Bool
+  let reinstallDetected: Bool
+  let reinstallReviewAcknowledged: Bool
+}
+
+/** A sandbox marker lets a reinstall discard Keychain state that outlives the app container. */
+private final class DeviceLinkInstallMarker {
+  private let schema = "blue-tanuki.ios.install-scope.v1"
+  private let filename = ".blue-tanuki-install-scope-v1.json"
+
+  func loadOrCreate() throws -> DeviceLinkInstallScope {
+    let url = try markerURL()
+    if FileManager.default.fileExists(atPath: url.path) {
+      return try read(url)
+    }
+    let scope = DeviceLinkInstallScope(
+      id: try DeviceLinkJSON.randomHex(byteCount: 16), pending: true,
+      reinstallDetected: false, reinstallReviewAcknowledged: false
+    )
+    try write(scope, to: url)
+    return scope
+  }
+
+  func markReinstallDetected(id: String) throws {
+    let url = try markerURL()
+    let current = try read(url)
+    guard current.id == id, current.pending else { throw DeviceLinkFailure.storage }
+    if !current.reinstallDetected || current.reinstallReviewAcknowledged {
+      try write(DeviceLinkInstallScope(
+        id: id, pending: true, reinstallDetected: true, reinstallReviewAcknowledged: false
+      ), to: url)
+    }
+  }
+
+  func markReinstallReviewAcknowledged(id: String) throws {
+    let url = try markerURL()
+    let current = try read(url)
+    guard current.id == id, !current.pending, current.reinstallDetected else {
+      throw DeviceLinkFailure.storage
+    }
+    try write(DeviceLinkInstallScope(
+      id: id, pending: false, reinstallDetected: true, reinstallReviewAcknowledged: true
+    ), to: url)
+  }
+
+  func markReady(id: String) throws {
+    let url = try markerURL()
+    let current = try read(url)
+    guard current.id == id else { throw DeviceLinkFailure.storage }
+    guard current.pending else { return }
+    try write(DeviceLinkInstallScope(
+      id: id, pending: false, reinstallDetected: current.reinstallDetected,
+      reinstallReviewAcknowledged: current.reinstallReviewAcknowledged
+    ), to: url)
+  }
+
+  private func markerURL() throws -> URL {
+    guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+      throw DeviceLinkFailure.storage
+    }
+    let directory = support.appendingPathComponent("BlueTanuki", isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      return directory.appendingPathComponent(filename, isDirectory: false)
+    } catch {
+      throw DeviceLinkFailure.storage
+    }
+  }
+
+  private func read(_ url: URL) throws -> DeviceLinkInstallScope {
+    do {
+      let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+      guard attributes[.type] as? FileAttributeType == .typeRegular,
+            let size = attributes[.size] as? NSNumber, size.intValue <= 512 else {
+        throw DeviceLinkFailure.storage
+      }
+      let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+      let object = try DeviceLinkJSON.object(data, maximumBytes: 512)
+      guard DeviceLinkJSON.exactKeys(object, ["schema_version", "install_scope_id", "state",
+        "reinstall_detected", "reinstall_review_acknowledged"]),
+            object["schema_version"] as? String == schema,
+            let id = object["install_scope_id"] as? String, DeviceLinkJSON.isHex(id, length: 32),
+            let state = object["state"] as? String, state == "pending" || state == "ready",
+            let reinstallDetected = DeviceLinkJSON.boolean(object["reinstall_detected"]),
+            let reinstallReviewAcknowledged = DeviceLinkJSON.boolean(object["reinstall_review_acknowledged"]),
+            (!reinstallReviewAcknowledged || (reinstallDetected && state == "ready")) else {
+        throw DeviceLinkFailure.storage
+      }
+      try ensureExcludedFromBackup(url)
+      return DeviceLinkInstallScope(
+        id: id, pending: state == "pending", reinstallDetected: reinstallDetected,
+        reinstallReviewAcknowledged: reinstallReviewAcknowledged
+      )
+    } catch let error as DeviceLinkFailure {
+      throw error
+    } catch {
+      throw DeviceLinkFailure.storage
+    }
+  }
+
+  private func write(_ scope: DeviceLinkInstallScope, to url: URL) throws {
+    do {
+      let object: [String: Any] = [
+        "schema_version": schema,
+        "install_scope_id": scope.id,
+        "state": scope.pending ? "pending" : "ready",
+        "reinstall_detected": scope.reinstallDetected,
+        "reinstall_review_acknowledged": scope.reinstallReviewAcknowledged,
+      ]
+      let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+      try data.write(to: url, options: [.atomic])
+      try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+      try ensureExcludedFromBackup(url)
+      let verified = try read(url)
+      guard verified.id == scope.id, verified.pending == scope.pending,
+            verified.reinstallDetected == scope.reinstallDetected,
+            verified.reinstallReviewAcknowledged == scope.reinstallReviewAcknowledged else {
+        throw DeviceLinkFailure.storage
+      }
+    } catch let error as DeviceLinkFailure {
+      throw error
+    } catch {
+      throw DeviceLinkFailure.storage
+    }
+  }
+
+  private func ensureExcludedFromBackup(_ url: URL) throws {
+    do {
+      try (url as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
+      let excluded = try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true
+      guard excluded else { throw DeviceLinkFailure.storage }
+    } catch let error as DeviceLinkFailure {
+      throw error
+    } catch {
+      throw DeviceLinkFailure.storage
+    }
   }
 }

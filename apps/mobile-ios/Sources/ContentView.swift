@@ -83,19 +83,29 @@ struct ContentView: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
                 }
+                if model.reinstallReviewRequired {
+                  Text("再インストールを検知しました。Desktop Agent Centerで旧端末の失効状態と以前のTask状態を確認してください。確認するまで招待の検証を止めています。")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                  Button("Desktop側の旧端末状態を確認済み") {
+                    model.acknowledgeReinstallReview()
+                  }
+                  .disabled(model.busy)
+                }
                 SecureField("招待JSON（1行）", text: $invitation)
                   .textContentType(.none)
                   .textInputAutocapitalization(.never)
                   .autocorrectionDisabled()
                   .font(.system(.footnote, design: .monospaced))
                   .accessibilityIdentifier("device-link-invitation")
+                  .disabled(model.busy || model.reinstallReviewRequired)
                 Button("招待を検証して接続先を表示") {
                   var raw = invitation
                   invitation = ""
                   model.preparePairing(rawInvitation: &raw)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.busy || invitation.isEmpty)
+                .disabled(model.busy || invitation.isEmpty || model.reinstallReviewRequired)
               }
               .frame(maxWidth: .infinity, alignment: .leading)
             }

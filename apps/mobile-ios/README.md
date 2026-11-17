@@ -5,6 +5,8 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 ## 現在のsource
 
 - Device IDをランダム生成し、Device Link資格とともにiOS Keychainの`WhenUnlockedThisDeviceOnly`へ保存する。iCloud Keychain同期は無効にする。
+- Keychain状態はversion 3でApplication Support内のinstallation scope IDに束縛する。scope markerはアプリのcontainer内に置き、backup除外属性をreadback確認する。旧version 1/2状態は初回upgrade時に資格・Device ID・保留sessionを維持したまま移行する。
+- アプリを削除した瞬間のKeychain消去処理はiOSアプリから実行できないため、marker導入後の再インストールでは、初回起動時にcontainer marker欠落と旧Keychain scopeの不一致を検出する。旧資格だけを同じアプリ固有Keychain itemから除去し、Device ID・非権威回復記録・Task申請session checkpointはreadback確認後も保持する。Desktop Agent Centerで旧端末・Task状態を確認したというownerの明示操作まで招待検証を止め、結果不明Taskは申請一覧と一致するまで再送しない。状態不正や保存未確認では通信を開始しない。marker導入前に削除された旧version 1/2状態は、初回upgradeと区別できないため自動検出できない。これは削除時点での即時消去やiOS package deletionの完了証明ではない。
 - この端末IDに一致する、上限付き・厳密形式のDesktop招待だけを受け付ける。送信前にHost ID、private IPv4、port、証明書SHA-256指紋を表示し、使用者が照合する。
 - TLS 1.2／1.3で招待されたleaf証明書をpinし、有効性を確認する。接続ごとにnewline-framed requestを一度だけ送り、5秒の期限を設け、不正形式や余分な応答データを拒否する。
 - 明示的なpairing、接続確認、Desktop側の資格失効、および分離された端末内だけの資格削除を提供する。端末内削除では、上限付き・非権威の回復記録を保存し、readbackを確認する。
@@ -21,7 +23,7 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 
 Mobile側にはDevice Link契約に沿ったTask申請・状態照会・開始要求・取消要求のsourceを追加した。D4 BrokerとBLUE Runtime Adapterを通る一仕事が、BLUE Gateway／C/J/Mへ実際に届き、承認・作用・結果・M・復帰まで一気通貫に動いたことは未確認である。公開repoではD4のDevice Link／AgentTask契約を確認できるが、D4側の`blue_tanuki_adapter`は参照READMEのみで、実装sourceは見つかっていない。Gatewayの既存runtime-intent経路とこのBroker操作を結ぶ実consumerも未確認である。
 
-通知、更新・rollback、package削除処理は未実装である。結果不明の申請はKeychain内のsession ID checkpointで再起動後も新規送信を停止し、Desktop一覧で一致した場合だけ保留を解除する。照合できない場合はDesktop ownerがAgent Centerで確認するまで停止を維持する。このsource変更だけではD4 BrokerとBLUE Gateway／C/J/Mを通る実経路、G10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
+通知と更新・rollbackは未実装である。package削除後の初回起動では旧資格を使わず、Desktop側の旧端末・Task状態をownerが確認するまで招待検証を止める。結果不明Taskのsession checkpointは保持し、再結合後にDesktop申請一覧と一致するまで新規申請を止める。このsource変更だけではD4 BrokerとBLUE Gateway／C/J/Mを通る実経路、G10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
 
 iOS targetはunsigned source段階であり、Simulatorまたは実機へのinstall・起動は未実施。local-network permission、Keychainの実動、実Desktop Brokerとのpairing、Task操作およびBLUEのC/J/Mを通る仕事は未確認である。
 
