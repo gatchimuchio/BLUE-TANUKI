@@ -12,7 +12,8 @@ function run(args) {
   });
 }
 
-const tsc = run([join(root, "node_modules/typescript/bin/tsc"), "-b", "--noEmit", "--pretty", "false"]);
+// project referencesは参照先の宣言出力を必要とするため、build modeでは--noEmitを渡さない。
+const tsc = run([join(root, "node_modules/typescript/bin/tsc"), "-b", "--pretty", "false"]);
 
 if (tsc.error) {
   console.error(`[typecheck] ${tsc.error.message}`);
