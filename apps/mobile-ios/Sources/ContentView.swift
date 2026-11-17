@@ -245,11 +245,16 @@ struct ContentView: View {
           .frame(minHeight: 120, maxHeight: 180)
           .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
           .accessibilityIdentifier("mobile-task-instruction")
+        Text(taskInstructionCountLabel)
+          .font(.caption)
+          .foregroundStyle(taskInstructionWithinLimit ? .secondary : .red)
+          .accessibilityIdentifier("mobile-task-instruction-count")
         Text("依頼はDesktop owner確認待ちとして送信されます。開始候補の実行時もBrokerが現在の権限と承認を再検査します。")
           .font(.footnote)
         Button("DesktopへTask申請") { model.submitTask() }
           .buttonStyle(.borderedProminent)
-          .disabled(model.busy || model.credentialExpired || model.taskSubmissionNeedsReconciliation || matchingWorkspaces.isEmpty)
+          .disabled(model.busy || model.credentialExpired || model.taskSubmissionNeedsReconciliation ||
+                    matchingWorkspaces.isEmpty || !taskInstructionWithinLimit)
         if model.taskSubmissionNeedsReconciliation {
           Text("Keychainに申請sessionの照合記録があります。Desktopの申請一覧で同じsessionを確認するまで新規申請を停止しています。")
             .font(.footnote)
@@ -276,6 +281,22 @@ struct ContentView: View {
 
   private var matchingWorkspaces: [MobileTaskWorkspace] {
     model.workspaces.filter { $0.runtimeID == model.selectedRuntimeID }
+  }
+
+  private var taskInstructionScalarCount: Int {
+    model.taskInstruction.unicodeScalars.count
+  }
+
+  private var taskInstructionWithinLimit: Bool {
+    taskInstructionScalarCount <= MobileTaskContract.maximumInstructionUnicodeScalars
+  }
+
+  private var taskInstructionCountLabel: String {
+    let count = taskInstructionScalarCount.formatted()
+    let maximum = MobileTaskContract.maximumInstructionUnicodeScalars.formatted()
+    return taskInstructionWithinLimit
+      ? "依頼本文: \(count) / \(maximum) Unicode文字"
+      : "依頼本文が上限を超えています: \(count) / \(maximum) Unicode文字"
   }
 
   private func taskRow(_ task: MobileTaskDraft) -> some View {

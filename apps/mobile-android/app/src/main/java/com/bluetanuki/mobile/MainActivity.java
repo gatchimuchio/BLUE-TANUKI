@@ -14,8 +14,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -71,6 +73,7 @@ public final class MainActivity extends Activity {
     private Spinner runtimeSpinner;
     private Spinner workspaceSpinner;
     private EditText taskInstructionInput;
+    private TextView taskInstructionCountView;
     private CheckBox includeMcpCapability;
     private Button refreshCatalogButton;
     private Button refreshRequestsButton;
@@ -366,6 +369,22 @@ public final class MainActivity extends Activity {
         content.addView(includeMcpCapability, matchWrap());
 
         taskInstructionInput = addMultilineInput(content, "依頼内容（最大32,768 Unicode文字）");
+        taskInstructionCountView = new TextView(this);
+        content.addView(taskInstructionCountView, matchWrap());
+        taskInstructionInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence value, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence value, int start, int before, int count) {
+                refreshTaskInstructionCount();
+                refreshTaskControls();
+            }
+
+            @Override
+            public void afterTextChanged(Editable value) {}
+        });
+        refreshTaskInstructionCount();
         TextView instructionHelp = new TextView(this);
         instructionHelp.setText("送信後は依頼本文を画面から消去します。不明な結果は自動再送せず、申請一覧との照合を要求します。");
         instructionHelp.setTextSize(13);
@@ -900,8 +919,24 @@ public final class MainActivity extends Activity {
         includeMcpCapability.setEnabled(ready && mcpSnapshot != null && mcpSnapshot.usable());
         taskInstructionInput.setEnabled(ready && !taskSubmissionNeedsReconciliation);
         submitTaskButton.setEnabled(ready && !taskSubmissionNeedsReconciliation &&
-                !taskStateUncertain && workspaceSpinner.getSelectedItem() != null);
+                !taskStateUncertain && workspaceSpinner.getSelectedItem() != null &&
+                taskInstructionWithinLimit());
         refreshTaskList();
+    }
+
+    private void refreshTaskInstructionCount() {
+        if (taskInstructionInput == null || taskInstructionCountView == null) return;
+        int count = MobileTaskContract.instructionUnicodeScalarCount(taskInstructionInput.getText().toString());
+        boolean withinLimit = count <= MobileTaskContract.MAX_INSTRUCTION_UNICODE_SCALARS;
+        taskInstructionCountView.setText(withinLimit
+                ? "依頼本文: " + count + " / " + MobileTaskContract.MAX_INSTRUCTION_UNICODE_SCALARS + " Unicode文字"
+                : "依頼本文が上限を超えています: " + count + " / " +
+                        MobileTaskContract.MAX_INSTRUCTION_UNICODE_SCALARS + " Unicode文字");
+    }
+
+    private boolean taskInstructionWithinLimit() {
+        return taskInstructionInput == null || MobileTaskContract.instructionUnicodeScalarCount(
+                taskInstructionInput.getText().toString()) <= MobileTaskContract.MAX_INSTRUCTION_UNICODE_SCALARS;
     }
 
     private boolean taskNotificationsEnabled() {
@@ -1279,7 +1314,7 @@ public final class MainActivity extends Activity {
         if (!available.isEmpty()) workspaceSpinner.setSelection(0);
         updatingTaskSpinners = false;
         if (submitTaskButton != null) submitTaskButton.setEnabled(canUseMobileTask() &&
-                !taskSubmissionNeedsReconciliation && !available.isEmpty());
+                !taskSubmissionNeedsReconciliation && !available.isEmpty() && taskInstructionWithinLimit());
     }
 
     private void refreshTaskList() {

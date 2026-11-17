@@ -10,6 +10,7 @@ import java.util.Set;
 final class MobileTaskContract {
     private static final String REQUEST_ID_PATTERN = "^[a-f0-9]{32}$";
     private static final String HASH_PATTERN = "^sha256:[a-f0-9]{64}$";
+    static final int MAX_INSTRUCTION_UNICODE_SCALARS = 32_768;
 
     private MobileTaskContract() {}
 
@@ -79,9 +80,13 @@ final class MobileTaskContract {
 
     static void validateInstruction(String instruction) throws StrictJson.JsonException {
         if (instruction == null || instruction.trim().isEmpty() ||
-                instruction.codePointCount(0, instruction.length()) > 32_768) {
+                instructionUnicodeScalarCount(instruction) > MAX_INSTRUCTION_UNICODE_SCALARS) {
             throw new StrictJson.JsonException();
         }
+    }
+
+    static int instructionUnicodeScalarCount(String instruction) {
+        return instruction.codePointCount(0, instruction.length());
     }
 
     static Draft submission(Map<String, Object> body, String runtimeID, String sessionID,

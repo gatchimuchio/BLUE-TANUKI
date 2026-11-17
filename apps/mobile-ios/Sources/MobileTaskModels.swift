@@ -44,6 +44,7 @@ struct MobileMCPCapabilitySnapshot: Equatable {
 enum MobileTaskContract {
   private static let requestIDPattern = #"^[a-f0-9]{32}$"#
   private static let hashPattern = #"^sha256:[a-f0-9]{64}$"#
+  static let maximumInstructionUnicodeScalars = 32_768
 
   static func requestPayload(
     runtimeID: String,
@@ -56,7 +57,7 @@ enum MobileTaskContract {
           validAgentTaskIdentifier(workspaceID),
           validRequestID(sessionID),
           !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          instruction.unicodeScalars.count <= 32_768,
+          instruction.unicodeScalars.count <= maximumInstructionUnicodeScalars,
           mcpCapabilityHash.map({ matches($0, pattern: hashPattern) }) ?? true else {
       throw DeviceLinkFailure.invalid
     }
