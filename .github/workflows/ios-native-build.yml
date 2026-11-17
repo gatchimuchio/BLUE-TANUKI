@@ -59,6 +59,78 @@ jobs:
         run: |
           app="$RUNNER_TEMP/blue-tanuki-ios-derived/Build/Products/Debug-iphonesimulator/BlueTanuki.app"
           test -d "$app"
+          plutil -lint "$app/Info.plist"
           purpose="$(/usr/libexec/PlistBuddy -c 'Print NSLocalNetworkUsageDescription' "$app/Info.plist")"
           test -n "$purpose"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")"
+          test "$bundle_id" = "com.bluetanuki.ios"
           echo "Built unsigned iOS Simulator bundle: $app"
+
+      - name: Simulator appを検査付きartifactへ梱包
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/blue-tanuki-ios-derived/Build/Products/Debug-iphonesimulator/BlueTanuki.app"
+          out="$RUNNER_TEMP/blue-tanuki-ios-artifact"
+          mkdir -p "$out"
+          archive="$out/BlueTanuki-ios-simulator-${GITHUB_SHA}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+
+          SOURCE_COMMIT="$(git rev-parse HEAD)" \
+          XCODE_VERSION="$(xcodebuild -version | tr '\n' ' ')" \
+          IOS_SIMULATOR_SDK="$(xcrun --sdk iphonesimulator --show-sdk-version)" \
+          APP_BUNDLE="$(basename "$app")" \
+          APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")" \
+          APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")" \
+          ARCHIVE_PATH="$archive" \
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import zipfile
+
+          archive = pathlib.Path(os.environ["ARCHIVE_PATH"])
+          bundle_name = os.environ["APP_BUNDLE"]
+          executable = os.environ["APP_EXECUTABLE"]
+          with zipfile.ZipFile(archive) as package:
+              names = set(package.namelist())
+              if f"{bundle_name}/Info.plist" not in names:
+                  raise SystemExit("iOS Simulator archive has no app Info.plist")
+              if f"{bundle_name}/{executable}" not in names:
+                  raise SystemExit("iOS Simulator archive has no app executable")
+
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          manifest = {
+              "schema_version": "blue-tanuki.ios-simulator-build-artifact.v1",
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "xcode_version": os.environ["XCODE_VERSION"].strip(),
+              "ios_simulator_sdk": os.environ["IOS_SIMULATOR_SDK"],
+              "app_bundle_id": os.environ["APP_BUNDLE_ID"],
+              "target": "iOS Simulator",
+              "archive": {
+                  "name": archive.name,
+                  "bytes": archive.stat().st_size,
+                  "sha256": digest,
+              },
+              "signing": "not_performed",
+              "device_install": "not_run",
+              "physical_device": "not_run",
+              "app_store_submission": "not_submitted",
+          }
+          manifest_path = archive.parent / "manifest.json"
+          manifest_path.write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(f"iOS Simulator artifact: {archive.name} {archive.stat().st_size} bytes sha256={digest}")
+          print(f"iOS Simulator manifest: {manifest_path}")
+          PY
+
+      - name: Simulator app artifactを7日間保管
+        uses: actions/upload-artifact@v4
+        with:
+          name: blue-tanuki-ios-simulator-${{ github.sha }}
+          path: ${{ runner.temp }}/blue-tanuki-ios-artifact/*
+          if-no-files-found: error
+          retention-days: 7

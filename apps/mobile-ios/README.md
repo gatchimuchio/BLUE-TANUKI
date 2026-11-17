@@ -29,8 +29,10 @@ iOS targetはunsigned source段階であり、Simulatorまたは実機へのinst
 
 ## Build
 
-WindowsにはXcodeがない。iOS Simulator source buildは手動の[ios-native-build workflow](../../.github/workflows/ios-native-build.yml)で補助確認する。workflowは`workflow_dispatch`だけを受け付け、選択したcommitを署名せずbuildし、artifactを保存しない。
+WindowsにはXcodeがない。iOS Simulator source buildは手動の[ios-native-build workflow](../../.github/workflows/ios-native-build.yml)で補助確認する。workflowは`workflow_dispatch`だけを受け付け、選択したcommitを署名せずbuildする。bundle ID・local-network purpose・ZIP内のInfo.plist／実行ファイルを確認したunsigned `.app` ZIPとsource SHA／Xcode／SDK／artifact SHA-256を含むmanifestを、GitHub Actions artifactへ7日間保存する。
 
 XcodeのあるmacOSでは次を実行する。
 
 <pre><code>xcodebuild -project apps/mobile-ios/BlueTanuki.xcodeproj -scheme BlueTanuki -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TMPDIR/blue-tanuki-ios-derived" CODE_SIGNING_ALLOWED=NO build</code></pre>
+
+生成artifactはiOS Simulator専用のbuild出力であり、実機用IPA、署名、インストール・起動、実Desktop Broker接続、App Store提出、配布準備を証明しない。
