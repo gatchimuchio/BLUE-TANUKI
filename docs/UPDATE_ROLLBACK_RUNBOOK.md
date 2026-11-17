@@ -47,11 +47,14 @@ Backup / Restore screen:
   that store. Package-level restore without `store_key` is currently blocked;
   see the status note below.
 - `Reset Provider` clears LLM provider key/config material and writes
-  `LLM_BACKEND=stub`.
+  `LLM_BACKEND=stub`. After L3 review, the Gateway pauses Cron and drains active
+  commands before mutation; new work stays blocked until Gateway restart.
 - `Reset Connector` clears Composio key/allowlist/user config and writes
-  `COMPOSIO_DRY_RUN=true` plus `COMPOSIO_LIVE_EXECUTION=false`.
+  `COMPOSIO_DRY_RUN=true` plus `COMPOSIO_LIVE_EXECUTION=false`. It uses the same
+  runtime quiescence and restart hold.
 - `Factory Reset` clears local session, memory, failure-memory, schedules, and
   logs, while preserving `BLUE_TANUKI_AUDIT_DIR` and the recovery backup root.
+  It also uses the runtime quiescence and restart hold.
 
 2026-11-18 status: package-level `Restore` with no `store_key` is blocked by the
 running Gateway. It would replace the persistent audit hash-chain and runtime
@@ -61,6 +64,13 @@ before creating an L3 request or changing restore targets. Do not treat the
 Control Center button as a successful restore. Individual canonical-store
 restores remain available only through their existing store-specific gates. A
 stopped-Gateway package restore path is not yet connected.
+
+2026-11-18 status: Provider Reset, Connector Reset, and Factory Reset require
+the HDS L3 owner review. Before the mutation, Gateway pauses Cron and drains
+active command finalizations and executor tasks. It then blocks new commands,
+approval resumes, and Recovery mutation requests until the Gateway restarts.
+If Cron cannot be proven quiescent, the reset is not invoked; the runtime hold
+remains closed and a Gateway restart is required before further work.
 
 Recovery metadata, backup manifests, and action results are evidence only:
 `used_for_authority=false`. They cannot approve commands, resume suspended HDS
@@ -295,8 +305,8 @@ available:
    settings are broken or should be disconnected.
 8. Use `Factory Reset` only when local runtime state should be cleared. Audit and
    recovery roots are preserved; this is not an audit purge.
-9. After an available reset or an approved individual-store restore, restart the
-   gateway, run `doctor`, and run audit verification.
+9. After a reset, do not start new work until Gateway restart. After restart or
+   an approved individual-store restore, run `doctor` and audit verification.
 
 ## 7. Recovery: Audit Chain Broken
 

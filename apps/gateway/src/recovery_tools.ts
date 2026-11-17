@@ -111,6 +111,10 @@ export function createRecoveryMutationTools(
       storeKey: CanonicalStateStoreKey,
       context?: Pick<ToolContext, "command_id">,
     ) => boolean;
+    readonly runtimeResetQuiesced?: (
+      toolName: RecoveryToolName,
+      context?: Pick<ToolContext, "command_id">,
+    ) => boolean;
   } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
@@ -160,30 +164,39 @@ export function createRecoveryMutationTools(
   const resetRecoveryProviderTool: Tool = {
     name: "recovery.reset_provider",
     adapter_version: "1.0.0-rc.1",
-    description: "Reset the configured LLM provider to the offline stub after HDS L3 owner final review.",
+    description: "After HDS L3 owner final review, quiesce Gateway consumers and reset the configured LLM provider to the offline stub. Restart Gateway before new work.",
     required_capabilities: requireToolOperationDescriptor("recovery.reset_provider").required_capabilities,
-    async invoke(raw) {
+    async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.reset_provider", raw);
+      if (options.runtimeResetQuiesced?.("recovery.reset_provider", ctx) !== true) {
+        throw new Error("recovery_mutation_consumers_not_quiesced");
+      }
       return operatorSafeRecoveryResult(await invokeRecoverySafely(() => resetRecoveryProvider(env, { confirm: args.confirm })));
     },
   };
   const resetRecoveryConnectorTool: Tool = {
     name: "recovery.reset_connector",
     adapter_version: "1.0.0-rc.1",
-    description: "Reset connector configuration to dry-run after HDS L3 owner final review.",
+    description: "After HDS L3 owner final review, quiesce Gateway consumers and reset connector configuration to dry-run. Restart Gateway before new work.",
     required_capabilities: requireToolOperationDescriptor("recovery.reset_connector").required_capabilities,
-    async invoke(raw) {
+    async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.reset_connector", raw);
+      if (options.runtimeResetQuiesced?.("recovery.reset_connector", ctx) !== true) {
+        throw new Error("recovery_mutation_consumers_not_quiesced");
+      }
       return operatorSafeRecoveryResult(await invokeRecoverySafely(() => resetRecoveryConnector(env, { confirm: args.confirm })));
     },
   };
   const factoryResetRecoveryTool: Tool = {
     name: "recovery.factory_reset",
     adapter_version: "1.0.0-rc.1",
-    description: "Reset local runtime state while preserving audit and recovery roots after HDS L3 owner final review.",
+    description: "After HDS L3 owner final review, quiesce Gateway consumers and reset local runtime state while preserving audit and recovery roots. Restart Gateway before new work.",
     required_capabilities: requireToolOperationDescriptor("recovery.factory_reset").required_capabilities,
-    async invoke(raw) {
+    async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.factory_reset", raw);
+      if (options.runtimeResetQuiesced?.("recovery.factory_reset", ctx) !== true) {
+        throw new Error("recovery_mutation_consumers_not_quiesced");
+      }
       return operatorSafeRecoveryResult(await invokeRecoverySafely(() => factoryResetRecovery(env, { confirm: args.confirm })));
     },
   };

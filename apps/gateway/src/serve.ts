@@ -1228,6 +1228,35 @@ async function serveWithOwnerLease(
   let brokerRestoreStoreQuiesced = false;
   let operationPlanRestoreCommandId: string | null = null;
   let canonicalStoreRestoreMaintenanceCommandId: string | null = null;
+  let runtimeRecoveryMutationCommandId: string | null = null;
+  let runtimeRecoveryMutationToolName: RecoveryToolName | null = null;
+  let runtimeRecoveryMutationToolClaimed = false;
+  let runtimeRecoveryCronQuiesced = false;
+  const runtimeRecoveryResetToolName = (command: ExecuteCommand): RecoveryToolName | null => {
+    if (command.type !== "tool_call") return null;
+    const toolName = command.payload.tool_name;
+    if (toolName !== "recovery.reset_provider" && toolName !== "recovery.reset_connector" &&
+        toolName !== "recovery.factory_reset") return null;
+    try {
+      normalizeRecoveryMutationArguments(toolName, command.payload.arguments);
+      return toolName;
+    } catch {
+      return null;
+    }
+  };
+  const isRuntimeRecoveryMutationCommand = (command: ExecuteCommand): boolean =>
+    runtimeRecoveryResetToolName(command) !== null;
+  const isRecoveryToolCommand = (command: ExecuteCommand): boolean => command.type === "tool_call" &&
+    RECOVERY_TOOL_NAMES.includes(command.payload.tool_name as RecoveryToolName);
+  const recoveryMaintenanceBlockReason = (commandId: string): string | null => {
+    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== commandId) {
+      return "canonical_state_restore_in_progress";
+    }
+    if (runtimeRecoveryMutationCommandId && runtimeRecoveryMutationCommandId !== commandId) {
+      return "recovery_mutation_restart_required";
+    }
+    return null;
+  };
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
     canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey, context) =>
       storeKey === "operation_plans" ? operationPlanRestoreCommandId === context?.command_id
@@ -1236,6 +1265,13 @@ async function serveWithOwnerLease(
           : storeKey === "meaning_update_j_control" || storeKey === "meaning_update_m_state"
             ? storeKey === meaningUpdateRestoreStoreQuiesced
           : storeKey === jMRestoreStoreQuiesced,
+    runtimeResetQuiesced: (toolName, context) => {
+      if (toolName !== runtimeRecoveryMutationToolName ||
+          runtimeRecoveryMutationCommandId !== context?.command_id ||
+          !runtimeRecoveryCronQuiesced || runtimeRecoveryMutationToolClaimed) return false;
+      runtimeRecoveryMutationToolClaimed = true;
+      return true;
+    },
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
@@ -2100,21 +2136,40 @@ async function serveWithOwnerLease(
     let taskExecutionRegistered = opts.execution_registered ?? false;
     let resolveFinalization!: () => void;
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
-    if (!isBrokerRestore) activeCommandFinalizations.add(finalization);
+    const trackFinalization = !isBrokerRestore && !isRuntimeRecoveryMutationCommand(cmd);
+    if (trackFinalization) activeCommandFinalizations.add(finalization);
+    let result: { status: string } | undefined;
     try {
-      return await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext, executionController,
+      result = await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext, executionController,
         () => {
           if (taskExecutionRegistered) return;
           activeTaskExecutions.register(cmd.id, executionController);
           taskExecutionRegistered = true;
         });
     } finally {
+      if (isRuntimeRecoveryMutationCommand(cmd) && runtimeRecoveryMutationCommandId === cmd.id &&
+          !runtimeRecoveryMutationToolClaimed && runtimeRecoveryCronQuiesced) {
+        try {
+          await cron.resumeAfterRecoveryRestore({ restore_attempted: false, observation_verified: false });
+          runtimeRecoveryCronQuiesced = false;
+          runtimeRecoveryMutationCommandId = null;
+          runtimeRecoveryMutationToolName = null;
+          runtimeRecoveryMutationToolClaimed = false;
+        } catch {
+          runtimeRecoveryCronQuiesced = false;
+          if (result) result.status = "recovery_reset_not_started_restart_required";
+          gatewayLog.warn("recovery reset did not reach mutation; Cron resume failed and Gateway remains held", {
+            command_id_digest: digestString(cmd.id),
+          });
+        }
+      }
       if (taskExecutionRegistered && opts.finish_execution_registry_on_return !== false) {
         recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
       }
-      if (!isBrokerRestore) activeCommandFinalizations.delete(finalization);
+      if (trackFinalization) activeCommandFinalizations.delete(finalization);
       resolveFinalization();
     }
+    return result!;
   }
 
   async function executeAndEchoCore(
@@ -2157,12 +2212,13 @@ async function serveWithOwnerLease(
       );
       return { status: reason };
     }
-    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
+    const initialRecoveryMaintenanceBlockReason = recoveryMaintenanceBlockReason(cmd.id);
+    if (initialRecoveryMaintenanceBlockReason) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
-        reason: "canonical_state_restore_in_progress",
+        reason: initialRecoveryMaintenanceBlockReason,
       });
-      return { status: "canonical_state_restore_in_progress" };
+      return { status: initialRecoveryMaintenanceBlockReason };
     }
     const restoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
       ? cmd.payload.arguments.store_key
@@ -2536,12 +2592,13 @@ async function serveWithOwnerLease(
         reason: "memory_judgment_reassessment_has_no_executor_path", request_id: log.request_id });
       return { status: "memory_judgment_reassessment_has_no_executor_path" };
     }
-    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
+    const executorRecoveryMaintenanceBlockReason = recoveryMaintenanceBlockReason(cmd.id);
+    if (executorRecoveryMaintenanceBlockReason) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
-        reason: "canonical_state_restore_in_progress",
+        reason: executorRecoveryMaintenanceBlockReason,
       });
-      return { status: "canonical_state_restore_in_progress" };
+      return { status: executorRecoveryMaintenanceBlockReason };
     }
     let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
     onTaskExecutionRegistered();
@@ -2600,12 +2657,13 @@ async function serveWithOwnerLease(
     }
     const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
       "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
-    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
+    const preflightRecoveryMaintenanceBlockReason = recoveryMaintenanceBlockReason(cmd.id);
+    if (preflightRecoveryMaintenanceBlockReason) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
-        reason: "canonical_state_restore_in_progress",
+        reason: preflightRecoveryMaintenanceBlockReason,
       });
-      return { status: "canonical_state_restore_in_progress" };
+      return { status: preflightRecoveryMaintenanceBlockReason };
     }
     if (opts.expected_gmail_draft_provider_state_digest &&
         observedGmailDraftStateDigest !== opts.expected_gmail_draft_provider_state_digest) {
@@ -2902,6 +2960,46 @@ async function serveWithOwnerLease(
       }
       brokerRestoreStoreQuiesced = true;
       brokerRestoreQuiesced = true;
+    }
+    const runtimeRecoveryReset = runtimeRecoveryResetToolName(cmd);
+    if (runtimeRecoveryReset) {
+      const maintenanceBlockReason = recoveryMaintenanceBlockReason(cmd.id);
+      if (maintenanceBlockReason) return cancelledBeforeExecutor(maintenanceBlockReason);
+      if (pendingApprovals.size > 0) return cancelledBeforeExecutor("recovery_reset_pending_approvals");
+
+      runtimeRecoveryMutationCommandId = cmd.id;
+      runtimeRecoveryMutationToolName = runtimeRecoveryReset;
+      runtimeRecoveryMutationToolClaimed = false;
+      let cronQuiesced = false;
+      try {
+        cronQuiesced = await cron.quiesceForRecoveryRestore();
+      } catch {
+        // A partial stop cannot prove that Cron is quiescent. Keep the Gateway
+        // maintenance lock closed and require a process restart.
+      }
+      if (!cronQuiesced) {
+        return cancelledBeforeExecutor("recovery_reset_cron_quiescence_failed_restart_required");
+      }
+      runtimeRecoveryCronQuiesced = true;
+      while (activeCommandFinalizations.size > 0 || executionTasks.size > 0) {
+        await Promise.allSettled([
+          ...Array.from(activeCommandFinalizations),
+          ...Array.from(executionTasks),
+        ]);
+      }
+      if (pendingApprovals.size > 0) {
+        try {
+          await cron.resumeAfterRecoveryRestore({ restore_attempted: false, observation_verified: false });
+          runtimeRecoveryCronQuiesced = false;
+          runtimeRecoveryMutationCommandId = null;
+          runtimeRecoveryMutationToolName = null;
+          runtimeRecoveryMutationToolClaimed = false;
+        } catch {
+          runtimeRecoveryCronQuiesced = false;
+          return cancelledBeforeExecutor("recovery_reset_pending_approvals_cron_resume_failed_restart_required");
+        }
+        return cancelledBeforeExecutor("recovery_reset_pending_approvals");
+      }
     }
     let fb: ExecuteFeedback;
     if (emergencyStop.active) executionController.abort();
@@ -3705,8 +3803,17 @@ async function serveWithOwnerLease(
     ctx: WebChatResumeContext,
   ): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
+    const trackFinalization = !pending || !isRecoveryToolCommand(pending.command);
     if (verdict !== "approve" || !pending || !pendingApprovalNeedsContentReview(pending.command)) {
-      return await resumePendingApprovalCore(command_id, verdict, ctx);
+      let resolveFinalization!: () => void;
+      const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
+      if (trackFinalization) activeCommandFinalizations.add(finalization);
+      try {
+        return await resumePendingApprovalCore(command_id, verdict, ctx);
+      } finally {
+        if (trackFinalization) activeCommandFinalizations.delete(finalization);
+        resolveFinalization();
+      }
     }
 
     const executionController = new AbortController();
@@ -3721,12 +3828,12 @@ async function serveWithOwnerLease(
 
     let resolveFinalization!: () => void;
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
-    activeCommandFinalizations.add(finalization);
+    if (trackFinalization) activeCommandFinalizations.add(finalization);
     try {
       return await resumePendingApprovalCore(command_id, verdict, ctx, executionController);
     } finally {
       recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(command_id));
-      activeCommandFinalizations.delete(finalization);
+      if (trackFinalization) activeCommandFinalizations.delete(finalization);
       resolveFinalization();
     }
   }
@@ -3737,8 +3844,9 @@ async function serveWithOwnerLease(
     ctx: WebChatResumeContext,
     executionController?: AbortController,
   ): Promise<unknown> {
-    if (canonicalStoreRestoreMaintenanceCommandId) {
-      return { executed: false, status: "canonical_state_restore_in_progress" };
+    const recoveryMaintenanceReason = recoveryMaintenanceBlockReason(command_id);
+    if (recoveryMaintenanceReason) {
+      return { executed: false, status: recoveryMaintenanceReason };
     }
     const pending = pendingApprovals.get(command_id);
     if (!pending) {
@@ -4334,14 +4442,22 @@ async function serveWithOwnerLease(
     toolName: RecoveryToolName,
     rawArguments: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    if (canonicalStoreRestoreMaintenanceCommandId) {
+    const activeRecoveryMaintenanceReason = canonicalStoreRestoreMaintenanceCommandId
+      ? "canonical_state_restore_in_progress"
+      : runtimeRecoveryMutationCommandId ? "recovery_mutation_restart_required" : null;
+    if (activeRecoveryMaintenanceReason) {
       return {
-        status: "blocked_restore_in_progress",
+        status: activeRecoveryMaintenanceReason === "canonical_state_restore_in_progress"
+          ? "blocked_restore_in_progress" : "blocked_recovery_mutation_restart_required",
         executed: false,
         operation: toolName,
+        reason: activeRecoveryMaintenanceReason,
         l3_request_created: false,
         used_for_authority: false,
         may_execute: false,
+        next_action: activeRecoveryMaintenanceReason === "recovery_mutation_restart_required"
+          ? "復旧設定の変更後はGateway再起動が必要です。進行中の復旧処理を完了し、Gatewayを再起動してから新しい要求を作成してください。"
+          : "復旧作業中のため、新しい復旧要求は作成されません。現在の復旧処理の結果を確認してください。",
       };
     }
     const snapshot = await buildRecoverySnapshot(process.env);
@@ -6519,7 +6635,7 @@ async function serveWithOwnerLease(
 
   function cronNoReplayReview(command: ExecuteCommand): WebChatApprovalQueueItem["cron_no_replay_review"] {
     if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event") return undefined;
-    if (canonicalStoreRestoreMaintenanceCommandId) {
+    if (canonicalStoreRestoreMaintenanceCommandId || runtimeRecoveryMutationCommandId) {
       return {
         kind: "cron_no_replay",
         status: "verification_unavailable",
