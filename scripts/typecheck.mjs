@@ -12,15 +12,10 @@ function run(args) {
   });
 }
 
-const tsc = run([join(root, "node_modules/typescript/bin/tsc"), "-b"]);
-const clean = run([join(root, "scripts/clean.mjs")]);
+const tsc = run([join(root, "node_modules/typescript/bin/tsc"), "-b", "--noEmit", "--pretty", "false"]);
 
 if (tsc.error) {
   console.error(`[typecheck] ${tsc.error.message}`);
-  process.exit(1);
-}
-if (clean.error) {
-  console.error(`[typecheck:clean] ${clean.error.message}`);
   process.exit(1);
 }
 
