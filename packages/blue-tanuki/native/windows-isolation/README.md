@@ -1,9 +1,9 @@
 # Windowsシェル隔離provider
 
-`blue-tanuki-windows-isolation`は、`shell.exec`が使うWindows専用のnative helperである。ネットワークcapabilityを持たないAppContainerで対象commandを起動し、Job Objectへ割り当ててから実行を再開する。Jobのprocess数とmemory、実行時間、標準出力・標準エラーの上限を設定し、結果を返す前にJobが空であることを確認する。
+`blue-tanuki-windows-isolation`は、`shell.exec`が使うWindows専用のnative helperである。ネットワークcapabilityを持たないAppContainerで対象commandを起動し、Job Objectへ割り当ててから実行を再開する。Jobのprocess数とmemory、実行時間、標準出力・標準エラーの上限を設定し、結果を返す前にJobが空であることを確認する。`--probe`は一時AppContainer profileの作成・削除とJob Object制限の設定だけを確認し、workspaceのACL変更や対象commandの起動は行わない。このprobeはhelperの隔離primitiveが利用可能かを示す診断であり、特定commandの実行成功を証明しない。
 
 helperは、1回の呼出し中だけAppContainer SIDに`BLUE_TANUKI_SHELL_ROOT`のread/write/execute accessを与え、Jobが空になった後で権限を戻す。root配下にsecret-likeなpath componentまたはreparse pointがあれば拒否する。親からhelperへ渡す環境変数は`PATH`、`SystemRoot`、root内を指すtemporary/home pathに限り、対象commandにはその縮小済み環境を渡す。
 
 Rust `1.95.0`と固定`Cargo.lock`からWindows native host target `x86_64-pc-windows-msvc`でbuildし、`pnpm --filter @blue-tanuki/core build`が成果物を`dist/native`へコピーする。他OSではbuildも有効化もしない。ACL復元またはprocess tree終了を確認できないとき、helperは成功結果を返さない。
 
-AppContainer profileは`BlueTanukiShellExecWindowsV1`というWindows user単位のprofileであり、アプリ終了後もWindows側に残る。通常の取消経路外でhelperを強制終了すると、rootにAppContainer SIDのACEが残る可能性がある。次回helper呼出しは終了時にそのACEを削除する。このproviderはreleaseや5OS完成を示さない。
+AppContainer profileは`BlueTanukiShellExecWindowsV1`を接頭辞に持つ一意なWindows user単位のprofileであり、正常経路ではhelper呼出しごとに削除する。通常の取消経路外でhelperを強制終了すると、profileまたはrootにAppContainer SIDのACEが残る可能性がある。次回helper呼出しは終了時にrootのACEを削除する。未削除profileはWindows user環境に残るため、診断probeも削除結果を確認してから利用可能を返す。このproviderはreleaseや5OS完成を示さない。

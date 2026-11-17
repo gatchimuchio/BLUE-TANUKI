@@ -50,13 +50,15 @@ const LINUX_ISOLATOR_FILENAME = "blue-tanuki-linux-isolation";
 const MAX_NATIVE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_NATIVE_ERROR_BYTES = 16 * 1024;
 const PROCESS_TREE_SHUTDOWN_GRACE_MS = 5_000;
-const LINUX_ISOLATION_PROBE_TIMEOUT_MS = 5_000;
+const ISOLATION_PROBE_TIMEOUT_MS = 5_000;
 
 export function shellExecIsolationUnavailableReason(platform: NodeJS.Platform = process.platform): string {
   if (platform === "darwin") {
     return "macOS has no verified native process isolation provider in this build";
   }
-  if (platform === "win32") return "Windows AppContainer isolation provider is not installed";
+  if (platform === "win32") {
+    return "Windows AppContainer isolation provider or required Job Object limits are unavailable";
+  }
   if (platform === "linux") {
     return "Linux provider, temporary workspace overlay, systemd user manager, or memory/swap cgroup limits are unavailable";
   }
@@ -148,10 +150,9 @@ export async function invokeShellExec(
 
 export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
   if (process.platform === "win32") {
-    return await fs
-      .stat(packagedWindowsProviderPath())
-      .then((stat) => stat.isFile())
-      .catch(() => false);
+    const providerPath = packagedWindowsProviderPath();
+    const stat = await fs.stat(providerPath).catch(() => null);
+    return stat?.isFile() === true && await probeWindowsIsolationProvider(providerPath);
   }
   if (process.platform !== "linux" || typeof process.getuid !== "function") return false;
   const uid = process.getuid();
@@ -317,7 +318,7 @@ async function probeLinuxIsolationProvider(providerPath: string): Promise<boolea
     timer = setTimeout(() => {
       timedOut = true;
       child?.kill("SIGKILL");
-    }, LINUX_ISOLATION_PROBE_TIMEOUT_MS);
+    }, ISOLATION_PROBE_TIMEOUT_MS);
     try {
       child = spawn(providerPath, ["--probe"], {
         cwd: "/",
@@ -355,6 +356,70 @@ async function probeLinuxIsolationProvider(providerPath: string): Promise<boolea
         finish(result.workspace_overlay_available === true
           && result.workspace_writes_persist === false
           && result.memory_limit_bytes === 512 * 1024 * 1024);
+      } catch {
+        finish(false);
+      }
+    });
+  });
+}
+
+async function probeWindowsIsolationProvider(providerPath: string): Promise<boolean> {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot) return false;
+  return await new Promise<boolean>((resolve) => {
+    const stdout: Buffer[] = [];
+    let outputBytes = 0;
+    let timedOut = false;
+    let settled = false;
+    let child: ReturnType<typeof spawn> | undefined;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (available: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(available);
+    };
+    timer = setTimeout(() => {
+      timedOut = true;
+      child?.kill("SIGKILL");
+    }, ISOLATION_PROBE_TIMEOUT_MS);
+    try {
+      child = spawn(providerPath, ["--probe"], {
+        cwd: path.join(systemRoot, "System32"),
+        env: {
+          PATH: path.join(systemRoot, "System32"),
+          SystemRoot: systemRoot,
+          WINDIR: systemRoot,
+        },
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      finish(false);
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 4_096) {
+        child?.kill("SIGKILL");
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 4_096) child?.kill("SIGKILL");
+    });
+    child.once("error", () => finish(false));
+    child.once("close", (code) => {
+      if (code !== 0 || timedOut || outputBytes > 4_096) {
+        finish(false);
+        return;
+      }
+      try {
+        const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as Record<string, unknown>;
+        finish(result.appcontainer_profile_available === true
+          && result.job_object_limits_available === true);
       } catch {
         finish(false);
       }

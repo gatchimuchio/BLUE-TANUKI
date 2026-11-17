@@ -375,7 +375,13 @@ mod windows_provider {
     }
 
     pub fn main() {
-        match parse_request(std::env::args_os().skip(1)).and_then(|request| run(request)) {
+        let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+        let result = if args.len() == 1 && args[0] == OsStr::new("--probe") {
+            probe()
+        } else {
+            parse_request(args.into_iter()).and_then(|request| run(request))
+        };
+        match result {
             Ok(json) => {
                 println!("{json}");
             }
@@ -383,6 +389,30 @@ mod windows_provider {
                 eprintln!("{error}");
                 std::process::exit(2);
             }
+        }
+    }
+
+    fn probe() -> Result<String, String> {
+        let mut profile = AppContainerProfile::create()?;
+        let result = (|| {
+            let job = Handle::new(unsafe { CreateJobObjectW(null(), null()) }, "probe_job")?;
+            configure_job(job.raw())?;
+            if active_processes(job.raw())? != 0 {
+                return Err("windows_isolation_probe_job_not_empty".to_string());
+            }
+            Ok(())
+        })();
+        let cleanup = profile.delete();
+        match (result, cleanup) {
+            (Ok(()), Ok(())) => Ok(
+                "{\"appcontainer_profile_available\":true,\"job_object_limits_available\":true}"
+                    .to_string(),
+            ),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(cleanup_error)) => Err(format!(
+                "windows_isolation_probe_cleanup_failed:{error}:{cleanup_error}"
+            )),
         }
     }
 
