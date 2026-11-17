@@ -144,6 +144,11 @@ public final class MainActivity extends Activity {
     protected void onStop() {
         foreground = false;
         generation.incrementAndGet();
+        boolean taskDraftCleared = taskInstructionInput != null && taskInstructionInput.length() > 0;
+        if (taskInstructionInput != null) {
+            taskInstructionInput.setText("");
+            taskInstructionInput.clearFocus();
+        }
         taskStatuses.clear();
         refreshTaskList();
         if (pairingInFlight && statusView != null) {
@@ -160,6 +165,7 @@ public final class MainActivity extends Activity {
                     ? "Task申請中に画面が非表示になりました。自動再送せず、Desktop一覧で照合してください。"
                     : "画面非表示でTask操作を中断しました。結果を推測せず、復帰後に状態を照会してください。";
         }
+        if (taskDraftCleared) taskMessage += " 入力欄の本文は消去しました。";
         transport.closeActive();
         super.onStop();
     }
