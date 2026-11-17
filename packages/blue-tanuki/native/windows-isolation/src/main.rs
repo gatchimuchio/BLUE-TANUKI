@@ -32,8 +32,10 @@ mod windows_provider {
         SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileAttributesW, ReadFile, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_EXECUTE,
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        CreateFileW, GetFileAttributesW, GetFileInformationByHandle, ReadFile,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Environment::{
         FreeEnvironmentStringsW, GetEnvironmentStringsW,
@@ -581,7 +583,38 @@ mod windows_provider {
             }
             if metadata.is_dir() {
                 scan_directory(root, &path, depth + 1, visited)?;
+            } else if metadata.is_file() {
+                reject_hard_link(&path)?;
             }
+        }
+        Ok(())
+    }
+
+    fn reject_hard_link(path: &Path) -> Result<(), String> {
+        let path = wide(path.as_os_str());
+        let file = Handle::new(
+            unsafe {
+                CreateFileW(
+                    path.as_ptr(),
+                    FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                    null_mut(),
+                )
+            },
+            "root_file_metadata",
+        )?;
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(file.raw(), &mut information) } == 0 {
+            return Err(last_error("root_file_metadata_read"));
+        }
+        if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("windows_isolation_root_contains_reparse_point".to_string());
+        }
+        if information.nNumberOfLinks != 1 {
+            return Err("windows_isolation_root_contains_hard_link".to_string());
         }
         Ok(())
     }
