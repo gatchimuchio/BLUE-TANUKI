@@ -929,7 +929,7 @@ function main(): void {
 
   const settingsSurface = read("apps/gateway/src/settings_surface.ts");
   requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "writeEnvFileAtomic");
-  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "backup_label: \"settings\"");
+  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "backup_label: \"settings-write\"");
   requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "verifyLlmProvisioning");
   requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "Verify LLM");
 
