@@ -149,6 +149,14 @@ describe("LLM secret store", () => {
       );
       expect(first.ref).not.toBe(second.ref);
       expect(first.storage).toBe("win32_dpapi_current_user");
+      expect(llmSecretStorageStatus(
+        { [secretRefKey("OPENROUTER_API_KEY")]: first.ref },
+        "openrouter",
+        "win32",
+      )).toMatchObject({
+        os_protected: true,
+        storage: "win32_dpapi_current_user",
+      });
       expect(oldResolved.OPENROUTER_API_KEY).toBe("openrouter-old-secret");
       expect(newResolved.OPENROUTER_API_KEY).toBe("openrouter-new-secret");
       expect(await fs.readFile(pathFromDpapiRef(first.ref), "utf8")).not.toContain("openrouter-old-secret");
@@ -235,6 +243,28 @@ describe("LLM secret store", () => {
         { platform: "linux" },
       ),
     ).toThrow(/requires Windows DPAPI/);
+  });
+
+  it("does not report malformed Windows DPAPI refs as protected storage", () => {
+    const invalidRef = `win32-dpapi-current-user:file:${Buffer.from("relative/secret.dpapi", "utf8").toString("base64url")}`;
+    expect(llmSecretStorageStatus(
+      { OPENROUTER_API_KEY_REF: invalidRef },
+      "openrouter",
+      "win32",
+    )).toMatchObject({
+      secret_ref_present: true,
+      os_protected: false,
+      storage: "unknown",
+    });
+    expect(connectorSecretStorageStatus(
+      { GITHUB_TOKEN_REF: invalidRef },
+      "GITHUB_TOKEN",
+      "win32",
+    )).toMatchObject({
+      secret_ref_present: true,
+      os_protected: false,
+      storage: "unknown",
+    });
   });
 
   it("stores connector credentials as secret refs and resolves them with LLM refs", async () => {

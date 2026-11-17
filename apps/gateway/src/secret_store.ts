@@ -187,6 +187,15 @@ function pathFromRef(ref: string): string {
   return path.resolve(decoded);
 }
 
+function isWellFormedDpapiSecretRef(ref: string): boolean {
+  try {
+    pathFromRef(ref);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function powershellCommand(): string {
   return process.env.BLUE_TANUKI_POWERSHELL ?? "powershell.exe";
 }
@@ -515,7 +524,8 @@ export function llmSecretStorageStatus(
   const raw = key ? Boolean(env[key]) : false;
   const ref = key ? Boolean(env[secretRefKey(key)]) : false;
   const refValue = key ? env[secretRefKey(key)] : undefined;
-  const dpapi = !raw && ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const dpapi = !raw && ref && platform === "win32" && refValue !== undefined &&
+    isWellFormedDpapiSecretRef(refValue);
   const osKeyring = !raw && key !== null && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
   const protectedStorage = dpapi
     ? "win32_dpapi_current_user"
@@ -552,7 +562,8 @@ export function connectorSecretStorageStatus(
   const raw = Boolean(env[key]);
   const ref = Boolean(env[secretRefKey(key)]);
   const refValue = env[secretRefKey(key)];
-  const dpapi = !raw && ref && platform === "win32" && refValue?.startsWith(SECRET_REF_PREFIX) === true;
+  const dpapi = !raw && ref && platform === "win32" && refValue !== undefined &&
+    isWellFormedDpapiSecretRef(refValue);
   const osKeyring = !raw && refValue !== undefined && isMatchingOsKeyringRef(refValue, platform, key);
   const protectedStorage = dpapi
     ? "win32_dpapi_current_user"
