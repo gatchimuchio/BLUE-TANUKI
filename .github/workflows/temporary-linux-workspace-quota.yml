@@ -121,11 +121,8 @@ jobs:
         env:
           RUNTIME_UNAVAILABLE_REASON: ${{ steps.bwrap.outputs.reason }}
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
-          ## Linux shell runtime smoke
-
-          **NOT_RUN** — hosted runner prerequisite unavailable: `${RUNTIME_UNAVAILABLE_REASON}`. Linux runtime integration tests were not executed. The workflow did not modify runner security policy.
-          SUMMARY
+          printf '## Linux shell runtime smoke\n\n**NOT_RUN** — hosted runner prerequisite unavailable: `%s`. Linux runtime integration tests were not executed. The workflow did not modify runner security policy.\n' \
+            "$RUNTIME_UNAVAILABLE_REASON" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Capture transient user-service diagnostics after test failure
         if: failure()
