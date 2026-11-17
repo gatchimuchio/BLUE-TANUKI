@@ -17,6 +17,16 @@ export interface SettingsWritePort {
       temperature: number | null;
       max_tokens: number | null;
       timeout_ms: number | null;
+      composio: {
+        api_key_configured: boolean;
+        user_id: string | null;
+        allowed_toolkits: string | null;
+        allowed_actions: string | null;
+        revoked_actions: string | null;
+        api_base_url: string | null;
+        dry_run: boolean;
+        live_execution: boolean;
+      };
     };
   }>;
   apply(patch: SettingsWritePatch, expected_target_state_digest: string): Promise<{
@@ -33,11 +43,21 @@ const PATCH_FIELDS = {
   timeout_ms: "llm.timeout_ms",
 } as const;
 
+const COMPOSIO_PATCH_FIELDS = {
+  user_id: "composio.user_id",
+  allowed_toolkits: "composio.allowed_toolkits",
+  allowed_actions: "composio.allowed_actions",
+  revoked_actions: "composio.revoked_actions",
+  api_base_url: "composio.api_base_url",
+  dry_run: "composio.dry_run",
+  live_execution: "composio.live_execution",
+} as const;
+
 export function createSettingsWriteTool(port: SettingsWritePort): Tool {
   const tool: Tool = {
     name: "settings.write",
     adapter_version: "1.0.0-rc.1",
-    description: "Apply one explicit non-secret LLM runtime settings patch through the HDS Operation Plan and L3 review.",
+    description: "Apply one explicit non-secret Gateway LLM or Composio settings patch through the HDS Operation Plan and L3 review. API key bytes are never accepted.",
     required_capabilities: requireToolOperationDescriptor("settings.write").required_capabilities,
     async inspect_target_version(rawArgs, options = {}): Promise<SettingsWriteTargetVersionObservation> {
       const { patch } = parseArgs(rawArgs);
@@ -66,12 +86,14 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       if (target.target_state_digest !== observation.target_state_digest) {
         throw new Error("settings_write_target_changed_during_review");
       }
-      const changes = Object.entries(patch.llm).map(([field, after]) => {
-        const key = field as keyof typeof PATCH_FIELDS;
-        const before = target.values[key];
-        if (before === after) return null;
-        return { key: PATCH_FIELDS[key], before, after };
-      }).filter((change): change is NonNullable<typeof change> => change !== null);
+      const changes = patch.llm
+        ? Object.entries(patch.llm).map(([field, after]) => {
+          const key = field as keyof typeof PATCH_FIELDS;
+          const before = target.values[key];
+          if (before === after) return null;
+          return { key: PATCH_FIELDS[key], before, after };
+        }).filter((change): change is NonNullable<typeof change> => change !== null)
+        : buildComposioChanges(patch.composio!, target.values.composio);
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
         kind: "settings_write" as const,
@@ -110,6 +132,31 @@ function parseArgs(value: Record<string, unknown>): { patch: SettingsWritePatch 
   const parsed = SettingsWriteArgumentsSchema.safeParse(value);
   if (!parsed.success) throw new Error("settings_write_arguments_invalid");
   return parsed.data;
+}
+
+function buildComposioChanges(
+  patch: NonNullable<SettingsWritePatch["composio"]>,
+  current: Awaited<ReturnType<SettingsWritePort["inspect"]>>["values"]["composio"],
+): SettingsWriteContentReview["changes"] {
+  const changes: SettingsWriteContentReview["changes"][number][] = [];
+  for (const [field, after] of Object.entries(patch)) {
+    if (field === "clear_api_key") continue;
+    const key = field as keyof typeof COMPOSIO_PATCH_FIELDS;
+    const before = current[key];
+    if (before !== after) changes.push({ key: COMPOSIO_PATCH_FIELDS[key], before, after });
+  }
+  if (patch.clear_api_key === true) {
+    if (current.api_key_configured) changes.push({
+      key: "composio.api_key", before: "設定済み", after: "未設定",
+    });
+    if (current.dry_run !== true) changes.push({
+      key: "composio.dry_run", before: current.dry_run, after: true,
+    });
+    if (current.live_execution !== false) changes.push({
+      key: "composio.live_execution", before: current.live_execution, after: false,
+    });
+  }
+  return changes;
 }
 
 function requestPayloadDigest(patch: SettingsWritePatch): string {

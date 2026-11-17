@@ -463,7 +463,13 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
       return { target_scope: "task_type", target: `memory.personalization.stop:${reference}:${entry_hash}` };
     }
     if (command.payload.tool_name === "settings.write") {
-      return { target_scope: "task_type", target: "settings.write:gateway.runtime-config:llm.runtime" };
+      const patch = command.payload.arguments.patch;
+      const domains: string[] = [];
+      if (patch && typeof patch === "object" && !Array.isArray(patch)) {
+        if (Object.hasOwn(patch, "llm")) domains.push("llm.runtime");
+        if (Object.hasOwn(patch, "composio")) domains.push("composio.connector");
+      }
+      return { target_scope: "task_type", target: `settings.write:gateway.runtime-config:${domains.sort().join("+") || "invalid"}` };
     }
     if (command.payload.tool_name === "memory.citation.reassess") {
       const fields = ["citation_request_id", "citation_command_id", "target_record_id", "target_version",

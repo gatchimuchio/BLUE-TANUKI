@@ -71,6 +71,24 @@ The Windows installer stores these settings in:
 
 Do not store Composio keys in the install directory.
 
+### Control Center settings changes
+
+The WebChat Control Center prepares a `settings.write` Operation Plan for
+Composio configuration changes. Changed non-secret values are sent through the
+selected goal's normal Owner Task Compute and appear in that conversation/plan;
+do not enter secrets or sensitive personal data. It does not write
+`/settings/config` directly and does not call Composio while preparing the
+candidate. The owner must inspect the exact no-store L3 before/after list and
+approve the matching Operation Plan; the target env-file version is rechecked
+immediately before persistence. A successful write requires a Gateway restart.
+
+Composio API key bytes are not accepted by `settings.write` and are not sent in
+the candidate, conversation, or review. Key provisioning remains in the
+OS-protected setup path. A reviewed disconnect clears the key/reference and
+resets `COMPOSIO_DRY_RUN=true` and `COMPOSIO_LIVE_EXECUTION=false`; the review
+shows only configured/unconfigured state. Changing connector settings never
+performs a Composio discovery or action request.
+
 ## Tool Use
 
 Search metadata:

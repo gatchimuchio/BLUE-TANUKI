@@ -1757,7 +1757,7 @@ export class Executor {
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
           review.command_digest !== operationPlanDigest(command) || review.no_store !== true ||
           review.used_for_authority !== false || review.may_execute !== false ||
-          !Array.isArray(review.changes) || review.changes.length < 1 || review.changes.length > 4 ||
+          !Array.isArray(review.changes) || review.changes.length < 1 || review.changes.length > 10 ||
           !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("settings.write content review returned evidence for another command or target");
       }

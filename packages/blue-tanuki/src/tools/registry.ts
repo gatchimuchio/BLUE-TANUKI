@@ -698,9 +698,12 @@ export interface SettingsWriteContentReview {
   kind: "settings_write";
   operation: "settings.write";
   changes: readonly {
-    key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms";
-    before: string | number | null;
-    after: string | number;
+    key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
+      "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
+      "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
+      "composio.live_execution" | "composio.api_key";
+    before: string | number | boolean | null;
+    after: string | number | boolean | null;
   }[];
   request_payload_digest: string;
   target_version_digest: string;

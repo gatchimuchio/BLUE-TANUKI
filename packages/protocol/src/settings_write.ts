@@ -13,8 +13,29 @@ export const SettingsWritePatchSchema = z.object({
     temperature: z.number().finite().min(0).max(2).optional(),
     max_tokens: z.number().int().min(1).max(1_048_576).optional(),
     timeout_ms: z.number().int().min(100).max(600_000).optional(),
-  }).strict().refine((llm) => Object.keys(llm).length > 0, "at least one supported LLM setting is required"),
-}).strict();
+  }).strict().refine((llm) => Object.keys(llm).length > 0, "at least one supported LLM setting is required").optional(),
+  composio: z.object({
+    user_id: z.string().trim().min(1).max(512).nullable().optional(),
+    allowed_toolkits: z.string().trim().max(4_096).nullable().optional(),
+    allowed_actions: z.string().trim().max(8_192).nullable().optional(),
+    revoked_actions: z.string().trim().max(8_192).nullable().optional(),
+    api_base_url: z.string().trim().min(1).max(2_048).refine((value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+      } catch {
+        return false;
+      }
+    }, "Composio API base URL must be credentialless HTTPS without query or fragment").nullable().optional(),
+    dry_run: z.boolean().optional(),
+    live_execution: z.boolean().optional(),
+    clear_api_key: z.literal(true).optional(),
+  }).strict().refine((composio) => Object.keys(composio).length > 0, "at least one supported Composio setting is required")
+    .refine((composio) => composio.clear_api_key !== true ||
+      (composio.dry_run === undefined && composio.live_execution === undefined),
+    "disconnect resets dry_run and live_execution and cannot be combined with explicit values").optional(),
+}).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) === 1,
+  "exactly one settings domain must be changed per request");
 
 export const SettingsWriteArgumentsSchema = z.object({
   patch: SettingsWritePatchSchema,

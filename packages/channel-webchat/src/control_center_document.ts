@@ -291,7 +291,6 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div class="status-grid">
             <input id="connectors-token" type="password" autocomplete="current-password" placeholder="settings token" />
-            <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="Composio API key unchanged" />
             <input id="composio-user-id" type="text" autocomplete="off" placeholder="Composio user id" />
             <input id="composio-allowed-toolkits" type="text" autocomplete="off" placeholder="github,gmail,calendar" />
             <input id="composio-allowed-actions" type="text" autocomplete="off" placeholder="github:GITHUB_CREATE_AN_ISSUE" />
@@ -309,9 +308,9 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div class="action-row">
             <button id="load-connectors" class="primary" type="button">Load Connectors</button>
-            <button id="save-connectors" class="primary" type="button" disabled>Save Composio</button>
+            <button id="save-connectors" class="primary" type="button">Prepare Composio settings plan</button>
           </div>
-          <p class="muted">Connector settings are read-only here until the HDS Operation Plan and no-store L3 final-review path is connected. No connector changes are saved from this page.</p>
+          <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; key replacement remains in OS-protected setup, and disconnect is shown as a reviewed removal.</p>
           <div class="status-grid">
             <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>

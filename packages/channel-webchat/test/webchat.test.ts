@@ -2959,7 +2959,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
       expect(html).toContain("connectors-token");
-      expect(html).toContain("composio-api-key");
+      expect(html).not.toContain('id="composio-api-key"');
+      expect(html).toContain("Prepare Composio settings plan");
+      expect(html).toContain("API key values never enter the plan");
       expect(html).toContain("composio-user-id");
       expect(html).toContain("composio-allowed-toolkits");
       expect(html).toContain("composio-allowed-actions");
@@ -3171,6 +3173,7 @@ describe("WebChatChannel — Control Center shell", () => {
         },
       },
     });
+
     expect(valid.prompts[0]).toContain("owner L3 review");
     expect(valid.prompts[0]).toContain("Only this store will be selected");
     expect(valid.prompts[0]).toContain("pre-action backup");
@@ -3188,6 +3191,50 @@ describe("WebChatChannel — Control Center shell", () => {
       request: null,
       status: "select one verified store",
     });
+  });
+
+  it("routes Composio settings preparation through owner task planning without the settings write endpoint or API key input", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function saveConnectors()");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("async function verifyLlmSettings()", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const flow = CONTROL_CENTER_SCRIPT.slice(start, end);
+    expect(flow).toContain("postOwnerTaskCompute");
+    expect(flow).toContain("settings.write");
+    expect(flow).toContain("no-store L3 settings review");
+    expect(flow).not.toContain('postJson("/settings/config"');
+    expect(flow).not.toContain("composio-api-key");
+    expect(flow).not.toContain("COMPOSIO_API_KEY=");
+  });
+
+  it("sends only changed Composio values and omits unchanged identity and key material", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function connectorsPayload()");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("async function loadSettings()", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const fields: Record<string, { value: string; checked?: boolean }> = {
+      "composio-user-id": { value: "" },
+      "composio-allowed-toolkits": { value: "github" },
+      "composio-allowed-actions": { value: "github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE" },
+      "composio-revoked-actions": { value: "" },
+      "composio-api-base-url": { value: "https://backend.composio.dev" },
+      "composio-dry-run": { value: "true" },
+      "composio-live-execution": { value: "true" },
+      "composio-clear-api-key": { value: "", checked: false },
+    };
+    const result = new Script(`${CONTROL_CENTER_SCRIPT.slice(start, end)}\nconnectorsPayload()`).runInNewContext({
+      state: { connectorsSnapshot: {
+        api_key_configured: true, user_id_set: true, allowed_toolkits: "github",
+        allowed_actions: "github:GITHUB_CREATE_AN_ISSUE", revoked_actions: "",
+        api_base_url: "https://backend.composio.dev", dry_run: true, live_execution: false,
+      } },
+      byId: (id: string) => fields[id],
+      isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+    });
+    expect(result).toEqual({ patch: { composio: {
+      allowed_actions: "github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE",
+      live_execution: true,
+    } } });
   });
 
   it("serves only the bundled Aotanu spritesheet assets", async () => {

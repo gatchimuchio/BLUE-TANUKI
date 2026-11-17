@@ -244,6 +244,16 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
         temperature: config.llm.temperature ?? null,
         max_tokens: config.llm.max_tokens ?? null,
         timeout_ms: config.llm.timeout_ms ?? null,
+        composio: {
+          api_key_configured: Boolean(config.composio.api_key || config.composio.api_key_ref),
+          user_id: config.composio.user_id || null,
+          allowed_toolkits: config.composio.allowed_toolkits || null,
+          allowed_actions: config.composio.allowed_actions || null,
+          revoked_actions: config.composio.revoked_actions || null,
+          api_base_url: config.composio.api_base_url || null,
+          dry_run: config.composio.dry_run,
+          live_execution: config.composio.live_execution,
+        },
       },
     };
   };
@@ -258,9 +268,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
           state.target_state_digest !== expectedTargetStateDigest) {
         throw new Error("settings_write_target_changed_before_invoke");
       }
-      const nextConfig = applySettingsPatch(state.config, { llm: patch.llm });
       const updates: Record<string, string> = {};
-      if (patch.llm.model !== undefined) {
+      if (patch.llm?.model !== undefined) {
         const providerModelKey: Record<SetupProviderKind, string> = {
           stub: "LLM_MODEL",
           anthropic: "ANTHROPIC_MODEL",
@@ -271,9 +280,27 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
         updates[providerModelKey[state.config.llm.provider]] = patch.llm.model;
         updates.LLM_MODEL = patch.llm.model;
       }
-      if (patch.llm.temperature !== undefined) updates.BLUE_TANUKI_LLM_TEMPERATURE = String(patch.llm.temperature);
-      if (patch.llm.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.llm.max_tokens);
-      if (patch.llm.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.llm.timeout_ms);
+      if (patch.llm?.temperature !== undefined) updates.BLUE_TANUKI_LLM_TEMPERATURE = String(patch.llm.temperature);
+      if (patch.llm?.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.llm.max_tokens);
+      if (patch.llm?.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.llm.timeout_ms);
+      const composio = patch.composio;
+      if (composio) {
+        if (composio.user_id !== undefined) updates.COMPOSIO_USER_ID = composio.user_id ?? "";
+        if (composio.allowed_toolkits !== undefined) updates.COMPOSIO_ALLOWED_TOOLKITS = composio.allowed_toolkits ?? "";
+        if (composio.allowed_actions !== undefined) updates.COMPOSIO_ALLOWED_ACTIONS = composio.allowed_actions ?? "";
+        if (composio.revoked_actions !== undefined) updates.COMPOSIO_REVOKED_ACTIONS = composio.revoked_actions ?? "";
+        if (composio.api_base_url !== undefined) updates.COMPOSIO_API_BASE_URL = composio.api_base_url ?? "";
+        if (composio.clear_api_key === true) {
+          updates.COMPOSIO_API_KEY = "";
+          updates.COMPOSIO_API_KEY_REF = "";
+          updates.COMPOSIO_DRY_RUN = "true";
+          updates.COMPOSIO_LIVE_EXECUTION = "false";
+        } else {
+          if (composio.dry_run !== undefined) updates.COMPOSIO_DRY_RUN = String(composio.dry_run);
+          if (composio.live_execution !== undefined) updates.COMPOSIO_LIVE_EXECUTION = String(composio.live_execution);
+        }
+      }
+      if (Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
       const content = patchEnvDocument(state.raw, updates);
       const latest = await inspectCurrent();
       if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
@@ -282,10 +309,22 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
       await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write" });
       const saved = await inspectCurrent();
       const expectedValues = {
-        model: patch.llm.model ?? state.values.model,
-        temperature: patch.llm.temperature ?? state.values.temperature,
-        max_tokens: patch.llm.max_tokens ?? state.values.max_tokens,
-        timeout_ms: patch.llm.timeout_ms ?? state.values.timeout_ms,
+        model: patch.llm?.model ?? state.values.model,
+        temperature: patch.llm?.temperature ?? state.values.temperature,
+        max_tokens: patch.llm?.max_tokens ?? state.values.max_tokens,
+        timeout_ms: patch.llm?.timeout_ms ?? state.values.timeout_ms,
+        composio: {
+          ...state.values.composio,
+          ...(composio?.clear_api_key === true ? { api_key_configured: false, dry_run: true, live_execution: false } : {}),
+          ...(composio?.user_id !== undefined ? { user_id: composio.user_id } : {}),
+          ...(composio?.allowed_toolkits !== undefined ? { allowed_toolkits: composio.allowed_toolkits } : {}),
+          ...(composio?.allowed_actions !== undefined ? { allowed_actions: composio.allowed_actions } : {}),
+          ...(composio?.revoked_actions !== undefined ? { revoked_actions: composio.revoked_actions } : {}),
+          ...(composio?.api_base_url !== undefined ? { api_base_url: composio.api_base_url } : {}),
+          ...(composio?.clear_api_key !== true && composio?.dry_run !== undefined ? { dry_run: composio.dry_run } : {}),
+          ...(composio?.clear_api_key !== true && composio?.live_execution !== undefined
+            ? { live_execution: composio.live_execution } : {}),
+        },
       };
       if (JSON.stringify(saved.values) !== JSON.stringify(expectedValues)) {
         throw new Error("settings_write_readback_mismatch");

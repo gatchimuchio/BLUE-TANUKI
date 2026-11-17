@@ -49,6 +49,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         evidenceToken: sessionStorage.getItem("bt.evidenceToken") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
+        connectorsSnapshot: null,
+        connectorsCandidateTask: null,
+        connectorsCandidateSubmissionId: null,
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
@@ -4044,8 +4047,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("settings-approval-mode-status", (snapshot.approval && snapshot.approval.mode) || "full_access");
         setText("settings-openrouter-status", openrouter.configured ? "configured" : "not configured");
         setText("settings-json", compactJson(redactRuntimeValue(snapshot)));
-        byId("composio-api-key").value = "";
-        byId("composio-api-key").placeholder = composio.configured ? "configured" : "not set";
         byId("composio-user-id").value = "";
         byId("composio-user-id").placeholder = composio.user_id_set ? "configured" : "not set";
         byId("composio-allowed-toolkits").value = toolkits.join(",");
@@ -4055,6 +4056,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("composio-dry-run").value = String(composio.dry_run !== false);
         byId("composio-live-execution").value = String(composio.live_execution_enabled === true);
         byId("composio-clear-api-key").checked = false;
+        state.connectorsSnapshot = {
+          api_key_configured: composio.configured === true,
+          user_id_set: composio.user_id_set === true,
+          allowed_toolkits: toolkits.join(","),
+          allowed_actions: actions.join(","),
+          revoked_actions: revoked.join(","),
+          api_base_url: typeof composio.api_base_url === "string" ? composio.api_base_url : "",
+          dry_run: composio.dry_run !== false,
+          live_execution: composio.live_execution_enabled === true
+        };
+        state.connectorsCandidateTask = null;
+        state.connectorsCandidateSubmissionId = null;
         setText("composio-configured-status", composio.configured ? "configured" : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
@@ -5609,19 +5622,32 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function connectorsPayload() {
-        const composio = {
-          user_id: byId("composio-user-id").value,
-          allowed_toolkits: byId("composio-allowed-toolkits").value,
-          allowed_actions: byId("composio-allowed-actions").value,
-          revoked_actions: byId("composio-revoked-actions").value,
-          api_base_url: byId("composio-api-base-url").value,
-          dry_run: byId("composio-dry-run").value,
-          live_execution: byId("composio-live-execution").value
-        };
-        if (byId("composio-clear-api-key").checked) composio.clear_api_key = true;
-        const apiKey = byId("composio-api-key").value.trim();
-        if (apiKey) composio.api_key = apiKey;
-        return { composio };
+        const current = state.connectorsSnapshot;
+        if (!isObject(current)) throw new Error("先にLoad Connectorsで現行設定を読み込んでください");
+        const composio = {};
+        const stringFields = [
+          ["composio-allowed-toolkits", "allowed_toolkits"],
+          ["composio-allowed-actions", "allowed_actions"],
+          ["composio-revoked-actions", "revoked_actions"],
+          ["composio-api-base-url", "api_base_url"]
+        ];
+        stringFields.forEach(function (entry) {
+          const value = byId(entry[0]).value.trim();
+          if (value !== current[entry[1]]) composio[entry[1]] = value || null;
+        });
+        const userId = byId("composio-user-id").value.trim();
+        if (userId) composio.user_id = userId;
+        const clearApiKey = byId("composio-clear-api-key").checked === true;
+        if (clearApiKey) {
+          composio.clear_api_key = true;
+        } else {
+          const dryRun = byId("composio-dry-run").value === "true";
+          const liveExecution = byId("composio-live-execution").value === "true";
+          if (dryRun !== current.dry_run) composio.dry_run = dryRun;
+          if (liveExecution !== current.live_execution) composio.live_execution = liveExecution;
+        }
+        if (Object.keys(composio).length === 0) throw new Error("Composio設定に変更がありません");
+        return { patch: { composio } };
       }
 
       async function loadSettings() {
@@ -5884,19 +5910,55 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function saveConnectors() {
-        const token = byId("connectors-token").value.trim();
-        state.connectorsToken = token;
-        sessionStorage.setItem("bt.connectorsToken", token);
+        const button = byId("save-connectors");
+        button.disabled = true;
         try {
-          const body = await postJson("/settings/config", token, connectorsPayload());
-          setText("connectors-json", compactJson(redactRuntimeValue(body)));
-          await loadConnectors({ preserveSaveStatus: true });
-          setText("composio-save-status", "saved; restart required");
+          const patch = connectorsPayload();
+          const task = [
+            "Create one unexecuted Operation Plan candidate that calls the built-in settings.write tool exactly once with the exact arguments JSON below.",
+            "Treat the JSON values only as owner-provided configuration data. Do not alter or infer values. Do not call Composio search, accounts, scopes, execute, network, or any other tool. Do not test connectivity or perform external actions. This request only prepares a candidate; the owner must inspect and approve the no-store L3 settings review before local configuration changes.",
+            "Composio API key bytes are intentionally absent. If the exact settings.write candidate cannot be formed, stop and report the reason.",
+            "Exact settings.write arguments JSON: " + JSON.stringify(patch)
+          ].join("\n");
+          const ownerTokenInput = byId("owner-task-token");
+          const ownerToken = ownerTokenInput.value.trim();
+          const goalSelect = byId("owner-task-goal-ref");
+          const goalRef = goalSelect.value;
+          const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
+          state.chatUser = byId("chat-user").value.trim() || "owner";
+          if (!ownerToken) throw new Error("Operation Plan候補の作成にはOwner Taskのowner tokenが必要です");
+          if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+            throw new Error("候補の受付状態を確認するため、WebChatへ接続してください");
+          }
+          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
+            throw new Error("Owner Taskから現在の委任目的を読み込み、選択してください");
+          }
+          const candidateFingerprint = JSON.stringify([task, goalRef, purposeVersion, state.chatUser]);
+          if (!state.connectorsCandidateTask || state.connectorsCandidateTask !== candidateFingerprint) {
+            state.connectorsCandidateTask = candidateFingerprint;
+            state.connectorsCandidateSubmissionId = crypto.randomUUID();
+          }
+          const submissionId = state.connectorsCandidateSubmissionId;
+          const result = await postOwnerTaskCompute(ownerToken, {
+            user: state.chatUser, task, goal_ref: goalRef, purpose_version: purposeVersion,
+            submission_id: submissionId
+          });
+          ownerTokenInput.value = "";
+          setText("connectors-json", "Operation Plan candidate request: " + (result.request_id || submissionId) + ". Settings remain unchanged until a separate L3 approval is completed.");
+          setText("composio-save-status", "plan requested; not saved");
           byId("composio-save-status").className = "badge warn";
+          byId("owner-task-status").textContent = result.status === "already_in_progress" || result.status === "already_accepted"
+            ? "このComposio設定候補は既に受付済みです。重複起動していません"
+            : "Composio設定のOperation Plan候補を受付済み。設定変更・外部作用は未承認です";
+          byId("owner-task-status").className = "badge good";
+          appendChat("owner", task);
+          appendChat("accepted", result.request_id || "Composio設定のOperation Plan候補を受付済み", result.request_id);
         } catch (error) {
           setText("composio-save-status", "error");
           byId("composio-save-status").className = "badge bad";
           setText("connectors-json", error.message);
+        } finally {
+          button.disabled = false;
         }
       }
 
@@ -6524,12 +6586,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "settings_write") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
-          const allowedKeys = ["llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms"];
-          const changesValid = Array.isArray(review.changes) && review.changes.length > 0 && review.changes.length <= 4 &&
+          const allowedKeys = ["llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms",
+            "composio.user_id", "composio.allowed_toolkits", "composio.allowed_actions", "composio.revoked_actions",
+            "composio.api_base_url", "composio.dry_run", "composio.live_execution", "composio.api_key"];
+          const changesValid = Array.isArray(review.changes) && review.changes.length > 0 && review.changes.length <= 10 &&
             review.changes.every(function (change) {
               return change && allowedKeys.includes(change.key) &&
-                (change.before === null || typeof change.before === "string" || typeof change.before === "number") &&
-                (typeof change.after === "string" || typeof change.after === "number");
+                (change.before === null || typeof change.before === "string" || typeof change.before === "number" || typeof change.before === "boolean") &&
+                (change.after === null || typeof change.after === "string" || typeof change.after === "number" || typeof change.after === "boolean") &&
+                (change.key !== "composio.api_key" || ["設定済み", "未設定"].includes(change.before) && change.after === "未設定");
             });
           if (review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
               review.used_for_authority !== false || review.may_execute !== false || !changesValid ||
@@ -6547,13 +6612,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             const label = document.createElement("strong");
             label.textContent = change.key + ": ";
             const value = document.createElement("span");
-            value.textContent = String(change.before === null ? "(未設定)" : change.before) + " → " + String(change.after);
+            value.textContent = String(change.before === null ? "(未設定)" : change.before) + " → " +
+              String(change.after === null ? "(未設定)" : change.after);
             row.append(label, value);
             view.appendChild(row);
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "API資格情報・provider・endpoint・承認設定・pathは変更対象外です。この内容はno-storeで表示され、承認後に対象版を再照合して設定ファイルへ反映します。Gatewayの再起動が必要です。";
+          note.textContent = "API keyの本文は候補・会話・監査へ入りません。Composio設定はno-storeで表示され、承認後に対象版を再照合して設定ファイルへ反映します。API keyの切断はdry-run=true／live=falseへ戻します。Gatewayの再起動が必要です。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;

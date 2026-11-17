@@ -41,6 +41,19 @@ describe("approval policy", () => {
     expect(finalReviewRequired(ctx)).toBe(false);
   });
 
+  it("keeps LLM and Composio settings in separate high-risk final-review scopes", () => {
+    const llm = approvalContextFromCommand(toolCommand("settings.write", { patch: { llm: { model: "local-model" } } },
+      ["tool:settings.write", "settings:write"]), { actor: "owner", now: 1 });
+    const composio = approvalContextFromCommand(toolCommand("settings.write", { patch: { composio: { live_execution: true } } },
+      ["tool:settings.write", "settings:write"]), { actor: "owner", now: 1 });
+    expect(llm).toMatchObject({ operation: "settings.write", target_scope: "task_type",
+      target: "settings.write:gateway.runtime-config:llm.runtime", risk: "high" });
+    expect(composio).toMatchObject({ operation: "settings.write", target_scope: "task_type",
+      target: "settings.write:gateway.runtime-config:composio.connector", risk: "high" });
+    expect(finalReviewRequired(llm)).toBe(true);
+    expect(finalReviewRequired(composio)).toBe(true);
+  });
+
   it("allows non-final-review commands by default in full-access operator mode", () => {
     const cmd = toolCommand("file.write", { path: "docs/a.md" }, ["fs:write"]);
     const r = evaluateApproval(cmd, [], { actor: "alice", now: 1 });

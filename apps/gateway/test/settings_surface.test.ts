@@ -11,6 +11,7 @@ import { buildLLMBackendFromEnv } from "../src/llm_config.js";
 import { McpRuntimeObservationStore } from "../src/mcp_connection_observation.js";
 import {
   buildSettingsSnapshot,
+  createGatewaySettingsWritePort,
   createWebChatSettingsSurface,
   renderSettingsHtml,
   settingsSurfaceAllowed,
@@ -103,6 +104,57 @@ function runtime(): PluginRuntime {
 }
 
 describe("settings surface", () => {
+  it("writes Composio settings only through the target-bound settings port and disconnects safely", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-write-composio-"));
+    const envFile = path.join(dir, "blue-tanuki.env");
+    const secret = "composio-secret-fixture-never-display";
+    await fs.writeFile(envFile, [
+      `COMPOSIO_API_KEY=${JSON.stringify(secret)}`,
+      "COMPOSIO_API_KEY_REF=",
+      'COMPOSIO_USER_ID="fixture-user"',
+      'COMPOSIO_ALLOWED_TOOLKITS="github"',
+      'COMPOSIO_ALLOWED_ACTIONS="github:GITHUB_CREATE_AN_ISSUE"',
+      'COMPOSIO_REVOKED_ACTIONS=""',
+      'COMPOSIO_DRY_RUN="false"',
+      'COMPOSIO_LIVE_EXECUTION="true"',
+    ].join("\n") + "\n", "utf8");
+    try {
+      const settings = createGatewaySettingsWritePort({ BLUE_TANUKI_ENV_FILE: envFile });
+      const before = await settings.inspect();
+      expect(before.values.composio).toMatchObject({
+        api_key_configured: true,
+        user_id: "fixture-user",
+        allowed_toolkits: "github",
+        allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+        dry_run: false,
+        live_execution: true,
+      });
+      const updated = await settings.apply({ composio: {
+        allowed_actions: "github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE",
+      } }, before.target_state_digest);
+      expect(updated).toMatchObject({ changed_keys: ["COMPOSIO_ALLOWED_ACTIONS"], restart_required: true });
+      let after = await settings.inspect();
+      expect(after.values.composio.allowed_actions).toBe("github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE");
+      expect(after.values.composio.api_key_configured).toBe(true);
+
+      await settings.apply({ composio: { clear_api_key: true } }, after.target_state_digest);
+      after = await settings.inspect();
+      expect(after.values.composio).toMatchObject({
+        api_key_configured: false,
+        dry_run: true,
+        live_execution: false,
+      });
+      const persisted = await fs.readFile(envFile, "utf8");
+      expect(persisted).not.toContain(secret);
+      expect(persisted).toContain('COMPOSIO_API_KEY=""');
+      expect(persisted).toContain('COMPOSIO_API_KEY_REF=""');
+      expect(persisted).toContain('COMPOSIO_DRY_RUN="true"');
+      expect(persisted).toContain('COMPOSIO_LIVE_EXECUTION="false"');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a redacted settings snapshot", () => {
     const snapshot = buildSettingsSnapshot(
       {
