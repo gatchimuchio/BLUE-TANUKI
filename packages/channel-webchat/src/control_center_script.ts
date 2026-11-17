@@ -4360,18 +4360,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-pack-count", packs.backup_count ?? 0);
         setText("recovery-latest-backup", packs.latest_backup_id || envFile.latest_backup_path || "none");
         if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
-        const restoreReviewAvailable = restore.restore_review_request_available === true;
+        const fullRestoreReviewAvailable = restore.full_restore_review_request_available === true;
+        const storeRestoreReviewAvailable = restore.store_restore_review_request_available === true;
         const providerReviewAvailable = restore.provider_reset_review_request_available === true;
         const connectorReviewAvailable = restore.connector_reset_review_request_available === true;
         const factoryReviewAvailable = restore.factory_reset_review_request_available === true;
-        setText("recovery-restore-status", restoreReviewAvailable ? "owner review required" : "unavailable");
+        const fullRestoreBlockedOffline =
+          restore.full_restore_blocked_reason === "blocked_runtime_restore_requires_offline_gateway";
+        setText("recovery-restore-status", fullRestoreReviewAvailable
+          ? "owner review required"
+          : fullRestoreBlockedOffline ? "full restore unavailable from this Gateway" : "unavailable");
         setText("recovery-factory-reset-status", factoryReviewAvailable ? "owner review required" : "unavailable");
-        setText("recovery-action-guard", restore.blocked_reason === "owner_l3_review_required"
-          ? "Submitting a request only queues the exact action for owner L3 review. No recovery change runs until the owner approves it in the approval queue."
-          : "Recovery mutation status is unavailable.");
-        byId("restore-recovery-backup").disabled = !restoreReviewAvailable;
-        byId("recovery-restore-store").setAttribute("data-review-available", restoreReviewAvailable ? "true" : "false");
-        byId("restore-recovery-store").disabled = !restoreReviewAvailable || !byId("recovery-restore-store").value;
+        setText("recovery-action-guard", fullRestoreBlockedOffline
+          ? "Full restore is currently unavailable from this Gateway. A selected-store restore has its own scope and still requires owner L3 approval; it does not restore a whole job or its related stores."
+          : restore.blocked_reason === "owner_l3_review_required"
+            ? "Submitting a request only queues the exact action for owner L3 review. No recovery change runs until the owner approves it in the approval queue."
+            : "Recovery mutation status is unavailable.");
+        byId("restore-recovery-backup").disabled = !fullRestoreReviewAvailable;
+        byId("recovery-restore-store").setAttribute("data-review-available", storeRestoreReviewAvailable ? "true" : "false");
+        byId("restore-recovery-store").disabled = !storeRestoreReviewAvailable || !byId("recovery-restore-store").value;
         byId("reset-recovery-provider").disabled = !providerReviewAvailable;
         byId("reset-recovery-connector").disabled = !connectorReviewAvailable;
         byId("factory-reset-recovery").disabled = !factoryReviewAvailable;
@@ -4381,7 +4388,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
         setText("recovery-boundary-status", snapshot.mode || "read only");
         byId("recovery-boundary-status").className = "badge " + (snapshot.mode === "control_available" ? "review" : "good");
-        byId("recovery-restore-status").className = "badge " + (restoreReviewAvailable ? "review" : "warn");
+        byId("recovery-restore-status").className = "badge " + (fullRestoreReviewAvailable ? "review" : "warn");
         byId("recovery-factory-reset-status").className = "badge " + (factoryReviewAvailable ? "review" : "warn");
         byId("recovery-authority-status").className = "badge " + (authority.used_for_authority === true ? "bad" : "good");
         setHtml(

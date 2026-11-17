@@ -511,7 +511,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="status-grid">
             <input id="recovery-backup-id" type="text" autocomplete="off" placeholder="backup id or latest" />
             <button id="create-recovery-backup" type="button">Backup Now</button>
-            <button id="restore-recovery-backup" type="button" disabled>Request full restore review</button>
+            <button id="restore-recovery-backup" type="button" disabled>Full Restore Unavailable</button>
             <button id="reset-recovery-provider" type="button" disabled>Request Provider Reset Review</button>
             <button id="reset-recovery-connector" type="button" disabled>Request Connector Reset Review</button>
             <button id="factory-reset-recovery" type="button" disabled>Request Factory Reset Review</button>

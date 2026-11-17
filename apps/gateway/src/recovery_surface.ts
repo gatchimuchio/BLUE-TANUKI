@@ -90,6 +90,9 @@ export interface RecoverySnapshot {
   restore: {
     execution_available: boolean;
     restore_review_request_available: boolean;
+    full_restore_review_request_available: boolean;
+    full_restore_blocked_reason: "blocked_runtime_restore_requires_offline_gateway";
+    store_restore_review_request_available: boolean;
     backup_available: boolean;
     latest_backup_id: string | null;
     factory_reset_review_request_available: boolean;
@@ -2609,7 +2612,10 @@ export async function buildRecoverySnapshot(
     },
     restore: {
       execution_available: false,
-      restore_review_request_available: backups.latest_backup_id !== null,
+      restore_review_request_available: false,
+      full_restore_review_request_available: false,
+      full_restore_blocked_reason: "blocked_runtime_restore_requires_offline_gateway",
+      store_restore_review_request_available: backups.latest_backup_id !== null,
       backup_available: true,
       latest_backup_id: backups.latest_backup_id,
       factory_reset_review_request_available: envFile.configured,
@@ -2624,7 +2630,7 @@ export async function buildRecoverySnapshot(
     },
     authority_boundary: AUTHORITY_BOUNDARY,
     post_action_observation: publicPostActionObservation,
-    next_safe_action: "Submit an available recovery change for HDS L3 owner review. Maintenance access only queues the exact operation; it does not execute it. Canonical SQLite snapshots are not applied by generic Restore.",
+    next_safe_action: "Full-package restore is unavailable from this Gateway. If a canonical store is eligible, request its separately scoped restore for HDS L3 owner review. Store snapshots are independent, are not an atomic job-level restore point, and require restart plus cross-store residual inspection before affected work resumes.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };
 }
