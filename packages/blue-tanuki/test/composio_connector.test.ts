@@ -452,6 +452,47 @@ describe("Composio connector", () => {
     ).rejects.toThrow(/not allowed/);
   });
 
+  it("requires an exact toolkit/action pair in the live action allowlist", async () => {
+    for (const configuredAction of ["github:*", "issues.create"]) {
+      let accountLookupDispatched = false;
+      let executionDispatched = false;
+      await expect(invokeComposioExecute(
+        {
+          toolkit: "github",
+          tool: "issues.create",
+          connected_account_id: "conn_owner_github_1",
+        },
+        {
+          env: {
+            COMPOSIO_API_KEY: "composio-secret-value",
+            COMPOSIO_ALLOWED_TOOLKITS: "github",
+            COMPOSIO_ALLOWED_ACTIONS: configuredAction,
+            COMPOSIO_USER_ID: "owner-local",
+            COMPOSIO_DRY_RUN: "false",
+            COMPOSIO_LIVE_EXECUTION: "true",
+          },
+          accountsRequest: async () => {
+            accountLookupDispatched = true;
+            return accountResponse();
+          },
+          request: async () => {
+            executionDispatched = true;
+            return {
+              status: 200,
+              ok: true,
+              content_type: "application/json",
+              body: "{}",
+              truncated: false,
+              request_id: "req_fixture",
+            };
+          },
+        },
+      )).rejects.toThrow(/action not allowed/);
+      expect(accountLookupDispatched).toBe(false);
+      expect(executionDispatched).toBe(false);
+    }
+  });
+
   it("keeps external execution in dry-run by default", async () => {
     const result = await invokeComposioExecute(
       { toolkit: "github", tool: "issues.create", payload: { title: "hello" } },
@@ -478,6 +519,51 @@ describe("Composio connector", () => {
       used_for_authority: false,
     });
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("does not let caller-supplied intent downgrade the action classification", async () => {
+    for (const [tool, intent] of [
+      ["GITHUB_DELETE_REPO", "read"],
+      ["issues.create", "read"],
+    ] as const) {
+      let accountLookupDispatched = false;
+      let executionDispatched = false;
+      await expect(invokeComposioExecute(
+        {
+          toolkit: "github",
+          tool,
+          intent,
+          connected_account_id: "conn_owner_github_1",
+        },
+        {
+          env: {
+            COMPOSIO_API_KEY: "composio-secret-value",
+            COMPOSIO_ALLOWED_TOOLKITS: "github",
+            COMPOSIO_ALLOWED_ACTIONS: `github:${tool}`,
+            COMPOSIO_USER_ID: "owner-local",
+            COMPOSIO_DRY_RUN: "false",
+            COMPOSIO_LIVE_EXECUTION: "true",
+          },
+          accountsRequest: async () => {
+            accountLookupDispatched = true;
+            return accountResponse();
+          },
+          request: async () => {
+            executionDispatched = true;
+            return {
+              status: 200,
+              ok: true,
+              content_type: "application/json",
+              body: "{}",
+              truncated: false,
+              request_id: "req_fixture",
+            };
+          },
+        },
+      )).rejects.toThrow(/intent does not match the action classification/);
+      expect(accountLookupDispatched).toBe(false);
+      expect(executionDispatched).toBe(false);
+    }
   });
 
   it("requires explicit live execution opt-in before external calls", async () => {

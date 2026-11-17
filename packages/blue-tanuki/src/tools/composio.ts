@@ -277,6 +277,7 @@ function assertActionAllowed(
   revoked: readonly string[],
 ): void {
   const keys = actionKeys(toolkit, tool);
+  const exactActionKey = keys[0]!;
   if (revoked.some((item) => keys.includes(item.toLowerCase()))) {
     throw new Error(`Composio action revoked: ${toolkit}:${tool}; external_call_performed=false`);
   }
@@ -285,7 +286,7 @@ function assertActionAllowed(
       "COMPOSIO_ALLOWED_ACTIONS must explicitly allow a toolkit action before Composio live execution",
     );
   }
-  if (!allowed.some((item) => keys.includes(item.toLowerCase()))) {
+  if (!allowed.some((item) => item.trim().toLowerCase() === exactActionKey)) {
     throw new Error(`Composio action not allowed: ${toolkit}:${tool}; external_call_performed=false`);
   }
 }
@@ -1013,9 +1014,13 @@ export async function invokeComposioExecute(
     throw new Error("tool/action must be supplied for composio.execute; external_call_performed=false");
   }
   assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
-  const intent = classifyComposioAction(
-    stringArg(args, "intent", false) ?? tool,
-  );
+  const intent = classifyComposioAction(tool);
+  const suppliedIntent = stringArg(args, "intent", false);
+  if (suppliedIntent !== undefined && suppliedIntent !== intent) {
+    throw new Error(
+      `Composio intent does not match the action classification for ${tool}; external_call_performed=false`,
+    );
+  }
   const isPostHog = toolkit.toLowerCase() === "posthog";
   const expectedProviderRegionInput = stringArg(args, "expected_provider_region", false);
   const expectedProviderRegion = expectedProviderRegionInput?.toLowerCase();
