@@ -409,7 +409,9 @@ async function copyRuntimeDependencyClosure(
 
     if (ancestors.has(identity)) {
       const visibleDir = resolvePackagedDependencyDir(destinationPackageDir, packageName, appRoot);
-      if (!visibleDir || path.resolve(visibleDir) !== path.resolve(destination)) {
+      // The visible path is realpath-normalized; normalize the staging path too
+      // so equivalent macOS temporary-directory aliases do not look different.
+      if (!visibleDir || realpathSync(visibleDir) !== realpathSync(destination)) {
         throw new Error(`recursive runtime dependency ${identity} is not resolvable from ${destinationPackageDir}`);
       }
       continue;
