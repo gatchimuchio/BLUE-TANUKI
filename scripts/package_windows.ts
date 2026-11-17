@@ -318,9 +318,9 @@ function resolvePackagedDependencyDir(
   packageName: string,
   appRoot: string,
 ): string | null {
-  let current = path.resolve(fromDir);
+  let current = realpathSync(path.resolve(fromDir));
   const packageSegments = packageName.split("/");
-  const resolvedRoot = path.resolve(appRoot);
+  const resolvedRoot = realpathSync(path.resolve(appRoot));
   for (;;) {
     const candidate = path.join(current, "node_modules", ...packageSegments);
     if (existsSync(candidate)) return realpathSync(candidate);
