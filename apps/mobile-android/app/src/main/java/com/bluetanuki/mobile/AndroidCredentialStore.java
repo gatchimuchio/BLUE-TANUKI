@@ -52,14 +52,25 @@ final class AndroidCredentialStore {
             }
             return persistDeviceId(credential.deviceId);
         }
+        if (hasPendingTaskSubmissionCheckpoint()) {
+            throw new CredentialStoreException();
+        }
         return persistDeviceId(DeviceInvitation.newDeviceId());
     }
 
     synchronized String rotateDeviceId() throws CredentialStoreException {
-        if (preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY)) {
+        if (!canRotateDeviceId()) {
             throw new CredentialStoreException();
         }
         return persistDeviceId(DeviceInvitation.newDeviceId());
+    }
+
+    synchronized boolean canRotateDeviceId() {
+        return !contains() && !hasPendingTaskSubmissionCheckpoint();
+    }
+
+    synchronized boolean hasPendingTaskSubmissionCheckpoint() {
+        return preferences.contains(TASK_PENDING_KEY) || preferences.contains(TASK_PENDING_DIGEST_KEY);
     }
 
     private String persistDeviceId(String deviceId) throws CredentialStoreException {

@@ -21,6 +21,8 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 
 Task一覧のforeground再取得は申請checkpointの照合だけに使い、自動再申請・開始・取消は行わない。既存Taskの個別状態は使用者が明示して照会する。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。通知、更新、installed package削除も未成立。Android emulator・実機、KeyStore実動は未確認。
 
+未照合のTask申請checkpointが残る間は、資格がローカル削除された後も端末IDの再生成を停止する。Desktop一覧で同じsessionを照合してcheckpointが消えるまで、旧端末との対応を維持する。
+
 ## ビルドと限定確認
 
 JDK 17、Android SDK Platform 37、Build Tools 36.0.0を使う。OneDrive外かつASCII文字だけのpathにあるWindows checkoutで、次を実行する。

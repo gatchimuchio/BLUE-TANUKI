@@ -110,7 +110,9 @@ public final class MainActivity extends Activity {
         refreshRecoveryAuditSummary();
         setStatus(identityReady
                 ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
-                : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
+                : credentialStore.hasPendingTaskSubmissionCheckpoint()
+                        ? "未照合のTask申請記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
+                        : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
     }
 
     @Override
@@ -206,15 +208,29 @@ public final class MainActivity extends Activity {
 
         newIdButton = new Button(this);
         newIdButton.setText("未結合時に新しい端末IDを保存");
-        newIdButton.setEnabled(identityReady && !credentialStore.contains());
+        newIdButton.setEnabled(identityReady && credentialStore.canRotateDeviceId());
         newIdButton.setOnClickListener(view -> {
             if (busy || !identityReady) return;
+            if (!credentialStore.canRotateDeviceId()) {
+                loadTaskCheckpoint();
+                setStatus(taskSubmissionNeedsReconciliation || taskStateUncertain
+                        ? "未照合のTask申請が残っています。Desktopの申請一覧で照合するまで端末IDを変更しません。"
+                        : "既存の端末資格があるため、端末IDを変更しません。先にDesktopとの解除状態を確認してください。");
+                refreshCredentialControls(credentialStore.contains());
+                return;
+            }
             try {
                 deviceId = credentialStore.rotateDeviceId();
                 updateDeviceId();
                 clearPairingInputs();
                 setStatus("新しい端末IDをこのアプリへ保存し、再読込を確認しました。古い招待は使わず、このID向けの招待を発行してください。");
             } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                if (credentialStore.hasPendingTaskSubmissionCheckpoint() || credentialStore.contains()) {
+                    loadTaskCheckpoint();
+                    setStatus("端末状態が変わったためID変更を停止しました。端末IDは維持され、未照合Taskまたは既存資格を確認してください。");
+                    refreshCredentialControls(credentialStore.contains());
+                    return;
+                }
                 identityReady = false;
                 newIdButton.setEnabled(false);
                 setStatus("端末IDを安全に保存・再読込できません。招待登録を停止しています。");
@@ -707,8 +723,7 @@ public final class MainActivity extends Activity {
             }
         }
         boolean ready = foreground && !busy && !credentialStateUncertain;
-        pairButton.setEnabled(ready && !credentialPresent);
-        newIdButton.setEnabled(identityReady && ready && !credentialPresent);
+        pairButton.setEnabled(identityReady && ready && !credentialPresent);
         if (leaveButton != null) {
             leaveButton.setEnabled(ready && usableCredential && hasLocalNetworkPermission());
         }
@@ -716,6 +731,13 @@ public final class MainActivity extends Activity {
             localDeleteButton.setEnabled(ready && credentialPresent && !recoveryAuditUnavailable);
         }
         refreshTaskControls();
+        boolean pendingTaskState = taskSubmissionNeedsReconciliation || taskStateUncertain ||
+                credentialStore.hasPendingTaskSubmissionCheckpoint();
+        newIdButton.setText(pendingTaskState
+                ? "Task照合まで端末ID変更を停止中"
+                : "未結合時に新しい端末IDを保存");
+        newIdButton.setEnabled(identityReady && ready && !credentialPresent &&
+                !pendingTaskState && credentialStore.canRotateDeviceId());
     }
 
     private void refreshRecoveryAuditSummary() {
