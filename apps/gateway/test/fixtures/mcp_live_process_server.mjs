@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 
 const root = process.argv[2];
@@ -11,6 +11,9 @@ if (!root || !Number.isSafeInteger(requestedPort) || requestedPort < 0 || reques
 }
 
 let toolCalls = 0;
+let resourceReads = 0;
+let resourceTemplateReads = 0;
+let promptGets = 0;
 const mcpServer = new McpServer({ name: "BLUE-TANUKI local fixture", version: "1.0.0" });
 mcpServer.registerTool("write_synthetic_note", {
   description: "Write one synthetic test note under the test-owned temporary root.",
@@ -26,6 +29,37 @@ mcpServer.registerTool("write_synthetic_note", {
     content: [{ type: "text", text: "synthetic write completed" }],
     structuredContent: { note_bytes: Buffer.byteLength(note, "utf8") },
   };
+});
+
+mcpServer.registerResource("guide", "blue://guide", {
+  title: "Synthetic guide",
+  description: "Read one synthetic local fixture resource.",
+  mimeType: "text/plain",
+}, async (uri) => {
+  resourceReads += 1;
+  await writeFile(join(root, "mcp-resource-read-count.txt"), String(resourceReads), "utf8");
+  return { contents: [{ uri: uri.href, mimeType: "text/plain", text: "synthetic resource body" }] };
+});
+
+mcpServer.registerResource("profile", new ResourceTemplate("blue://people/{id}", { list: undefined }), {
+  title: "Synthetic profile template",
+  description: "Read one synthetic profile using an explicit scalar identifier.",
+  mimeType: "text/plain",
+}, async (uri) => {
+  resourceTemplateReads += 1;
+  await writeFile(join(root, "mcp-resource-template-read-count.txt"), String(resourceTemplateReads), "utf8");
+  await writeFile(join(root, "mcp-resource-template-uri.txt"), uri.href, "utf8");
+  return { contents: [{ uri: uri.href, mimeType: "text/plain", text: "synthetic profile body" }] };
+});
+
+mcpServer.registerPrompt("summarize", {
+  title: "Synthetic summary prompt",
+  description: "Return a synthetic prompt message for one explicitly supplied topic.",
+  argsSchema: z.object({ topic: z.string().min(1).max(80) }),
+}, async ({ topic }) => {
+  promptGets += 1;
+  await writeFile(join(root, "mcp-prompt-get-count.txt"), String(promptGets), "utf8");
+  return { messages: [{ role: "user", content: { type: "text", text: `Synthetic prompt topic: ${topic}` } }] };
 });
 
 const handler = createMcpHandler(() => mcpServer);

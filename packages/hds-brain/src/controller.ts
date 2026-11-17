@@ -4011,11 +4011,15 @@ ${planControl.question}`,
       }
       const observation = McpCallTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
       const args = command.payload.arguments;
+      const resourceTemplateRead = args.request_kind === "resource_read" &&
+        typeof args.resource_template_sha256 === "string";
       if (args.profile !== "native-live" || args.connection_digest !== observation.connection_digest ||
           args.catalog_digest !== observation.catalog_digest || args.tool_name !== observation.tool_name ||
           args.input_schema_sha256 !== observation.input_schema_sha256 ||
           (args.request_kind ?? "tool_call") !== (observation.request_kind ?? "tool_call") ||
-          args.resource_uri_sha256 !== observation.resource_uri_sha256 ||
+          (!resourceTemplateRead && args.resource_uri_sha256 !== observation.resource_uri_sha256) ||
+          args.resource_template_name !== observation.resource_template_name ||
+          args.resource_template_sha256 !== observation.resource_template_sha256 ||
           observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
         throw new Error("HDS mcp.call target version does not match the issued command or Operation Plan source");

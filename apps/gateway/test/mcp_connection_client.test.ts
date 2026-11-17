@@ -8,16 +8,98 @@ import { fileURLToPath } from "node:url";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, inspectOperationCorePlannerOutput,
   ToolRegistry } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, prepareOperationPlan } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, OperationPlanSchema, prepareOperationPlan } from "@blue-tanuki/protocol";
 import { createMcpHandler, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { executionAdmissionForCommand } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { mcpRuntimeObservationStore } from "../src/mcp_connection_observation.js";
 import { BLUE_TANUKI_MCP_PROTOCOL_VERSION, createMcpToolCallProposal, inspectMcpCatalog,
   inspectMcpToolPlanningCatalog, registerMcpCallToolFromEnvironment } from "../src/mcp_connection_client.js";
 
 const MCP_LIVE_FIXTURE_PATH = fileURLToPath(new URL("./fixtures/mcp_live_process_server.mjs", import.meta.url));
+
+type McpCatalog = Awaited<ReturnType<typeof inspectMcpCatalog>>;
+
+function createNativeMcpRequestPlan(input: {
+  readonly plan_id: string;
+  readonly request_id: string;
+  readonly catalog: McpCatalog;
+  readonly request_kind: "resource_read" | "prompt_get";
+  readonly tool_name: string;
+  readonly input_schema_sha256: string;
+  readonly arguments: Record<string, unknown>;
+  readonly resource_uri_sha256?: string;
+  readonly resource_template_name?: string;
+  readonly resource_template_sha256?: string;
+}): ReturnType<typeof OperationPlanSchema.parse> {
+  const target = {
+    kind: "external_service",
+    id: `mcp:${input.catalog.connection_digest}`,
+    display_name: "MCP server (identity withheld)",
+  };
+  const validation = {
+    schema_version: "blue-tanuki.mcp-call-result-validation.v1",
+    connection_digest: input.catalog.connection_digest,
+    catalog_digest: input.catalog.catalog_digest,
+    request_kind: input.request_kind,
+    tool_name: input.tool_name,
+    input_schema_sha256: input.input_schema_sha256,
+    ...(input.resource_uri_sha256 ? { resource_uri_sha256: input.resource_uri_sha256 } : {}),
+    ...(input.resource_template_name ? { resource_template_name: input.resource_template_name } : {}),
+    ...(input.resource_template_sha256 ? { resource_template_sha256: input.resource_template_sha256 } : {}),
+    arguments_sha256: operationPlanDigest(input.arguments),
+  };
+  return OperationPlanSchema.parse({
+    version: "operation-core.v1",
+    plan_id: input.plan_id,
+    request_id: input.request_id,
+    state: "planned",
+    steps: [{
+      step_id: "mcp-live-action",
+      operation: "mcp.call",
+      target,
+      state: "planned",
+      effects: ["browser_action", "credential_access", "delete", "external_send", "process_spawn", "read",
+        "schedule_change", "settings_change", "write"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        hds_brain_authority_required: true,
+        approval_gate_required: true,
+      },
+      parameters: {
+        profile: "native-live",
+        connection_digest: input.catalog.connection_digest,
+        catalog_digest: input.catalog.catalog_digest,
+        request_kind: input.request_kind,
+        tool_name: input.tool_name,
+        input_schema_sha256: input.input_schema_sha256,
+        arguments: input.arguments,
+        ...(input.resource_uri_sha256 ? { resource_uri_sha256: input.resource_uri_sha256 } : {}),
+        ...(input.resource_template_name ? { resource_template_name: input.resource_template_name } : {}),
+        ...(input.resource_template_sha256 ? { resource_template_sha256: input.resource_template_sha256 } : {}),
+      },
+      preparation: {
+        depends_on: [],
+        bindings: [],
+        preconditions: [],
+        validation: [{ check_id: "mcp-call-result-bound", method: "mcp_call_result_matches", target, expected: validation }],
+        compensation: { available: false, reason: "MCP server effects are not assumed reversible" },
+      },
+      adapter: "external_api",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: false,
+    }],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false,
+    hds_brain_authority_required: true,
+  });
+}
 
 async function startMcpLiveFixture(root: string, port = 0): Promise<{
   readonly child: ChildProcessWithoutNullStreams;
@@ -342,23 +424,25 @@ describe("MCP catalog adapter", () => {
     await mkdir(outputRoot);
     let live = await startMcpLiveFixture(outputRoot);
 
-    const executeOne = async (endpoint: string, note: string, beforeDispatch?: () => Promise<void>) => {
+    const executeOne = async (endpoint: string, request: {
+      readonly task: string;
+      readonly count_file: string;
+      readonly build: (catalog: McpCatalog, requestId: string) => {
+        readonly plan: unknown;
+        readonly review: Record<string, unknown>;
+      };
+    }, beforeDispatch?: () => Promise<void>) => {
       const requestId = randomUUID();
       const catalog = await inspectMcpCatalog({ endpoint, fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
-      const proposal = createMcpToolCallProposal({
-        plan_id: `mcp-live-${requestId}`,
-        request_id: requestId,
-        step_id: "mcp-live-action",
-        catalog,
-        tool_name: "write_synthetic_note",
-        arguments: { note },
-        profile: "native-live",
-      });
+      const candidate = request.build(catalog, requestId);
       const state = new OperationPlanStateStore(join(root, `plan-${requestId}.sqlite`));
       const hds = new HDSUpperController({ operation_plan_state: state });
       const tools = new ToolRegistry();
       registerMcpCallToolFromEnvironment(tools, { BLUE_TANUKI_MCP_ENDPOINT: endpoint });
-      const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+      const executionEpoch = randomUUID();
+      const executionStore = new GatewayExecutionIntentStore(join(root, `execution-${requestId}.sqlite`), executionEpoch);
+      const authority = createExecutorApprovalAuthority({ execution_store: executionStore,
+        execution_epoch: executionEpoch, require_hds_execution_binding: true });
       const executor = new Executor({
         approval_authority: authority,
         llm: { name: "mcp-test-only", call: async () => ({ content: "", model: "mcp-test-only", tokens_used: 0 }) },
@@ -369,7 +453,7 @@ describe("MCP catalog adapter", () => {
           id: requestId,
           channel: "webchat",
           user: "fixture-owner",
-          content: `Write one synthetic MCP note: ${note}`,
+          content: request.task,
           timestamp: Date.now(),
           goal_criteria: {
             schema_version: "blue-tanuki.goal-criteria.v1",
@@ -389,7 +473,7 @@ describe("MCP catalog adapter", () => {
         const compute = hds.decide(computeRequest);
         if (compute.command?.type !== "llm_call") throw new Error("HDS did not issue the plan candidate request");
         hds.onFeedback({ command_id: compute.command.id, status: "success",
-          result: { content: "Synthetic local MCP candidate.", operation_core: { status: "valid_plan", plan: proposal.plan } },
+          result: { content: "Synthetic local MCP candidate.", operation_core: { status: "valid_plan", plan: candidate.plan } },
           metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
         const stored = hds.getRuntimeSnapshot().operation_plans.plans[0];
         if (!stored) throw new Error("HDS did not retain the MCP plan candidate");
@@ -410,7 +494,7 @@ describe("MCP catalog adapter", () => {
         expect(approval.context.risk).toBe("high");
         const planBinding = hds.getExecutionOperationPlanBindingDigest(command);
         if (!planBinding) throw new Error("HDS did not provide the selected Operation Plan binding");
-        const callsBeforeReview = await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8").catch(() => "0");
+        const callsBeforeReview = await readFile(join(outputRoot, request.count_file), "utf8").catch(() => "0");
         const contentReview = await executor.inspectCommandContentReview(command, undefined, planBinding);
         if (!contentReview || !("kind" in contentReview) || contentReview.kind !== "mcp_call") {
           throw new Error("Executor did not provide the plan-bound MCP L3 content review");
@@ -420,9 +504,7 @@ describe("MCP catalog adapter", () => {
           profile: "native-live",
           server_name: "BLUE-TANUKI local fixture",
           server_version: "1.0.0",
-          tool_name: "write_synthetic_note",
-          tool_description: "Write one synthetic test note under the test-owned temporary root.",
-          arguments: { note },
+          ...candidate.review,
           endpoint_origin: new URL(endpoint).origin,
           potential_effects: ["browser_action", "credential_access", "delete", "external_send", "process_spawn",
             "read", "schedule_change", "settings_change", "write"],
@@ -433,16 +515,26 @@ describe("MCP catalog adapter", () => {
         const { review_digest, ...reviewBase } = contentReview;
         expect(review_digest).toBe(operationPlanDigest(reviewBase));
         expect(contentReview.target_version_digest).toBe(operationPlanDigest(contentReview.target_version_observation));
-        expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8").catch(() => "0")).toBe(callsBeforeReview);
+        expect(await readFile(join(outputRoot, request.count_file), "utf8").catch(() => "0")).toBe(callsBeforeReview);
         const targetVersion = await executor.inspectCommandTargetVersion(command, undefined, planBinding);
         if (!targetVersion) throw new Error("Executor did not observe the configured MCP target");
+        if (typeof candidate.review.resource_template_sha256 === "string") {
+          const templateObservation = targetVersion as Record<string, unknown>;
+          expect(command.payload.arguments.resource_uri_sha256).toBeUndefined();
+          expect(templateObservation.resource_uri_sha256).toMatch(/^[a-f0-9]{64}$/);
+          for (const mismatch of [{ resource_template_name: "other-template" }]) {
+            expect(() => hds.createExecutionAuthorityBinding(command, { ...templateObservation, ...mismatch }))
+              .toThrow("HDS mcp.call target version does not match the issued command or Operation Plan source");
+          }
+        }
         const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);
         const approved = authority.approve(command, {
           source: "human_final_review", decision: "approve", approved_by: "fixture-owner", approved_at_ms: Date.now(),
           upstream_commit_hash: command.upstream_decision.commit_hash, operation: approval.context.operation,
           risk: approval.risk, final_review_required: true, reason: "synthetic local MCP test approval",
         }, executorCommandDigest(command), hdsBinding, targetVersion);
-        expect(hds.beginOperationPlanAttempt(command)).toBe(true);
+        const admission = executionAdmissionForCommand(command, authority.receipt(approved));
+        expect(hds.beginOperationPlanAttempt(command, admission)).toBe(true);
         await beforeDispatch?.();
         const feedback = await executor.execute(approved);
         finalizeCommandOutput({ hds, command, feedback, target_surface: "channel",
@@ -451,12 +543,34 @@ describe("MCP catalog adapter", () => {
       } finally {
         hds.closeOperationPlanMemory();
         hds.close();
+        executionStore.close();
         state.close();
       }
     };
 
     try {
-      const success = await executeOne(live.endpoint, "synthetic-success");
+      const toolRequest = (note: string) => ({
+        task: `Write one synthetic MCP note: ${note}`,
+        count_file: "mcp-call-count.txt",
+        build: (catalog: McpCatalog, requestId: string) => {
+          const proposal = createMcpToolCallProposal({
+            plan_id: `mcp-live-${requestId}`,
+            request_id: requestId,
+            step_id: "mcp-live-action",
+            catalog,
+            tool_name: "write_synthetic_note",
+            arguments: { note },
+            profile: "native-live",
+          });
+          return { plan: proposal.plan, review: {
+            request_kind: "tool_call",
+            tool_name: "write_synthetic_note",
+            tool_description: "Write one synthetic test note under the test-owned temporary root.",
+            arguments: { note },
+          } };
+        },
+      });
+      const success = await executeOne(live.endpoint, toolRequest("synthetic-success"));
       expect(success.status, success.error).toBe("success");
       expect(success.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
         tool_name: "write_synthetic_note", source_is_untrusted: true, used_for_authority: false, may_execute: false });
@@ -469,14 +583,104 @@ describe("MCP catalog adapter", () => {
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("1");
 
-      const failed = await executeOne(live.endpoint, "fail");
+      const catalog = await inspectMcpCatalog({ endpoint: live.endpoint, fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
+      const guide = catalog.resources.find((resource) => resource.name === "guide");
+      if (!guide?.read_request_sha256) throw new Error("Fixture resource was not projected as readable");
+      const resourceRead = await executeOne(live.endpoint, {
+        task: "Read the synthetic local guide resource once.",
+        count_file: "mcp-resource-read-count.txt",
+        build: (currentCatalog, requestId) => {
+          const current = currentCatalog.resources.find((resource) => resource.name === "guide");
+          if (!current?.read_request_sha256) throw new Error("Fixture resource disappeared from the current catalog");
+          const toolName = `resource:${current.uri_sha256}`;
+          return {
+            plan: createNativeMcpRequestPlan({ plan_id: `mcp-resource-${requestId}`, request_id: requestId,
+              catalog: currentCatalog, request_kind: "resource_read", tool_name: toolName,
+              input_schema_sha256: current.read_request_sha256, arguments: {}, resource_uri_sha256: current.uri_sha256 }),
+            review: { request_kind: "resource_read", resource_uri_sha256: current.uri_sha256, tool_name: toolName,
+              tool_title: current.title, tool_description: "Read one synthetic local fixture resource.",
+              description_sha256: current.description_sha256, arguments: {} },
+          };
+        },
+      });
+      expect(resourceRead.status, resourceRead.error).toBe("success");
+      expect(resourceRead.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
+        request_kind: "resource_read", source_is_untrusted: true, used_for_authority: false, may_execute: false,
+        result: { contents: [{ mimeType: "text/plain", text: "synthetic resource body" }] } });
+      expect(JSON.stringify(resourceRead.result)).not.toContain("blue://guide");
+      expect(await readFile(join(outputRoot, "mcp-resource-read-count.txt"), "utf8")).toBe("1");
+
+      const resourceTemplate = catalog.resource_templates.find((template) => template.name === "profile");
+      if (!resourceTemplate?.read_request_sha256 || !resourceTemplate.variable_names?.includes("id")) {
+        throw new Error("Fixture resource template was not projected as a supported scalar template");
+      }
+      const templateRead = await executeOne(live.endpoint, {
+        task: "Read the synthetic profile for id fixture-person.",
+        count_file: "mcp-resource-template-read-count.txt",
+        build: (currentCatalog, requestId) => {
+          const current = currentCatalog.resource_templates.find((template) => template.name === "profile");
+          if (!current?.read_request_sha256 || !current.variable_names?.includes("id")) {
+            throw new Error("Fixture resource template disappeared from the current catalog");
+          }
+          const toolName = `resource-template:${current.uri_template_sha256}`;
+          return {
+            plan: createNativeMcpRequestPlan({ plan_id: `mcp-template-${requestId}`, request_id: requestId,
+              catalog: currentCatalog, request_kind: "resource_read", tool_name: toolName,
+              input_schema_sha256: current.read_request_sha256, arguments: { id: "fixture-person" },
+              resource_template_name: current.name, resource_template_sha256: current.uri_template_sha256 }),
+            review: { request_kind: "resource_read", resource_template_name: current.name,
+              resource_template_sha256: current.uri_template_sha256, tool_name: toolName,
+              tool_title: current.title, tool_description: "Read one synthetic profile using an explicit scalar identifier.",
+              description_sha256: current.description_sha256, arguments: { id: "fixture-person" } },
+          };
+        },
+      });
+      expect(templateRead.status, templateRead.error).toBe("success");
+      expect(templateRead.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
+        request_kind: "resource_read", source_is_untrusted: true, used_for_authority: false, may_execute: false,
+        result: { contents: [{ mimeType: "text/plain", text: "synthetic profile body" }] } });
+      expect(JSON.stringify(templateRead.result)).not.toContain("blue://people/");
+      expect(await readFile(join(outputRoot, "mcp-resource-template-read-count.txt"), "utf8")).toBe("1");
+      expect(await readFile(join(outputRoot, "mcp-resource-template-uri.txt"), "utf8")).toBe("blue://people/fixture-person");
+
+      const planningCatalog = await inspectMcpToolPlanningCatalog({ endpoint: live.endpoint,
+        fetch: globalThis.fetch.bind(globalThis) as typeof fetch });
+      const prompt = planningCatalog.prompts.find((entry) => entry.name === "summarize");
+      if (!prompt?.arguments_sha256 || !prompt.arguments.some((argument) => argument.name === "topic" && argument.required)) {
+        throw new Error("Fixture prompt was not projected with its required argument");
+      }
+      const promptGet = await executeOne(live.endpoint, {
+        task: "Get the synthetic summarize prompt for the explicitly named topic fixture-topic.",
+        count_file: "mcp-prompt-get-count.txt",
+        build: (currentCatalog, requestId) => {
+          const current = currentCatalog.prompts.find((entry) => entry.name === "summarize");
+          if (!current?.arguments_sha256) {
+            throw new Error("Fixture prompt disappeared from the current catalog");
+          }
+          return {
+            plan: createNativeMcpRequestPlan({ plan_id: `mcp-prompt-${requestId}`, request_id: requestId,
+              catalog: currentCatalog, request_kind: "prompt_get", tool_name: current.name,
+              input_schema_sha256: current.arguments_sha256, arguments: { topic: "fixture-topic" } }),
+            review: { request_kind: "prompt_get", tool_name: current.name, tool_title: current.title,
+              tool_description: "Return a synthetic prompt message for one explicitly supplied topic.",
+              description_sha256: current.description_sha256, arguments: { topic: "fixture-topic" } },
+          };
+        },
+      });
+      expect(promptGet.status, promptGet.error).toBe("success");
+      expect(promptGet.result).toMatchObject({ schema_version: "blue-tanuki.mcp-call-result.v1",
+        request_kind: "prompt_get", source_is_untrusted: true, used_for_authority: false, may_execute: false,
+        result: { messages: [{ role: "user", content: { type: "text", text: "Synthetic prompt topic: fixture-topic" } }] } });
+      expect(await readFile(join(outputRoot, "mcp-prompt-get-count.txt"), "utf8")).toBe("1");
+
+      const failed = await executeOne(live.endpoint, toolRequest("fail"));
       expect(failed.status).toBe("failed");
       expect(failed.error).toBe("mcp_call_outcome_unknown");
       expect(mcpRuntimeObservationStore.snapshot(live.endpoint).last_call.state).toBe("outcome_unknown");
       expect(await readFile(join(outputRoot, "mcp-call-count.txt"), "utf8")).toBe("2");
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
 
-      const disconnected = await executeOne(live.endpoint, "synthetic-disconnected",
+      const disconnected = await executeOne(live.endpoint, toolRequest("synthetic-disconnected"),
         async () => stopMcpLiveFixture(live.child));
       expect(disconnected.status).toBe("failed");
       expect(disconnected.error).toBe("mcp_call_preflight_failed");
@@ -488,7 +692,7 @@ describe("MCP catalog adapter", () => {
       expect(await readFile(join(outputRoot, "mcp-note.txt"), "utf8")).toBe("synthetic-success");
 
       live = await startMcpLiveFixture(outputRoot);
-      const restarted = await executeOne(live.endpoint, "synthetic-after-restart");
+      const restarted = await executeOne(live.endpoint, toolRequest("synthetic-after-restart"));
       expect(restarted.status).toBe("success");
       expect(mcpRuntimeObservationStore.snapshot(live.endpoint)).toMatchObject({
         connection: { state: "catalog_reachable" },
