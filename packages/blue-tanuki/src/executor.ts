@@ -108,7 +108,7 @@ import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.
 import { isSettingsWriteTool } from "./tools/settings_write.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
-  composioExecuteTool } from "./tools/composio.js";
+  resolveComposioActionEffectRegistryBinding, composioExecuteTool } from "./tools/composio.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -1095,7 +1095,16 @@ function assertComposioTargetVersionBinding(
   }
   const requestPayloadDigest = composioRequestPayloadDigest({ toolkit, tool, connectedAccountId, userId,
     arguments: argumentsBody });
+  const expectedEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
+    toolkit,
+    tool: observation.tool,
+    inputSchemaSha256: observation.input_schema_sha256,
+    outputSchemaSha256: observation.output_schema_sha256,
+    actionDefinitionSha256: observation.action_definition_sha256,
+  });
   if (observation.toolkit !== toolkit || observation.tool !== tool ||
+      !expectedEffectRegistryBinding ||
+      operationPlanDigest(expectedEffectRegistryBinding) !== operationPlanDigest(observation.action_effect_registry) ||
       observation.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
       observation.user_id_sha256 !== composioIdentityDigest(userId) ||
       observation.input_schema_sha256 !== inputSchemaSha256 ||
@@ -1619,6 +1628,13 @@ export class Executor {
         input_parameters: review.input_parameters,
         output_parameters: review.output_parameters,
       });
+      const expectedActionEffectRegistry = resolveComposioActionEffectRegistryBinding({
+        toolkit: review.toolkit,
+        tool: review.tool,
+        inputSchemaSha256: review.input_schema_sha256,
+        outputSchemaSha256: review.output_schema_sha256,
+        actionDefinitionSha256: review.action_definition_sha256,
+      });
       const descriptorEffects = getToolOperationDescriptor("composio.execute")?.effects ?? [];
       const { review_digest, ...reviewBase } = review;
       if (!toolkit || !action || !accountId || !userId || review.kind !== "composio_execute" ||
@@ -1638,6 +1654,9 @@ export class Executor {
           review.action_definition_sha256 !== actionDefinitionDigest ||
           review.input_schema_sha256 !== composioSchemaDigest(review.input_parameters) ||
           review.output_schema_sha256 !== composioSchemaDigest(review.output_parameters) ||
+          !expectedActionEffectRegistry ||
+          operationPlanDigest(expectedActionEffectRegistry) !== operationPlanDigest(review.action_effect_registry) ||
+          operationPlanDigest(review.action_effect_registry) !== operationPlanDigest(observation.action_effect_registry) ||
           review.account_type !== "PRIVATE" || review.account_status !== "ACTIVE" || review.account_disabled !== false ||
           review.intent !== classifyComposioAction(action) ||
           JSON.stringify(review.potential_effects) !== JSON.stringify(descriptorEffects) ||

@@ -1,6 +1,26 @@
 import { z } from "zod";
+import { OperationEffectSchema } from "./operation_core.js";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+/** Reviewed, non-authoritative mapping from one action/schema version to effects. */
+export const ComposioActionEffectRegistryBindingSchema = z.object({
+  schema_version: z.literal("blue-tanuki.composio-action-effect-registry-binding.v1"),
+  status: z.literal("reviewed"),
+  registry_version: z.string().min(1).max(80),
+  registry_entry_id: z.string().min(1).max(160),
+  registry_entry_sha256: DigestSchema,
+  binding_sha256: DigestSchema,
+  toolkit: z.string().min(1).max(120),
+  tool: z.string().min(1).max(160),
+  input_schema_sha256: DigestSchema,
+  output_schema_sha256: DigestSchema,
+  action_definition_sha256: DigestSchema,
+  effects: z.array(OperationEffectSchema).min(1).max(20),
+}).strict();
+
+export type ComposioActionEffectRegistryBinding =
+  z.infer<typeof ComposioActionEffectRegistryBindingSchema>;
 
 /** Non-authority binding for the current Composio action, account identity, schema and HDS plan. */
 export const ComposioActionTargetVersionObservationSchema = z.object({
@@ -13,6 +33,7 @@ export const ComposioActionTargetVersionObservationSchema = z.object({
   input_schema_sha256: DigestSchema,
   output_schema_sha256: DigestSchema,
   action_definition_sha256: DigestSchema,
+  action_effect_registry: ComposioActionEffectRegistryBindingSchema,
   request_payload_digest: DigestSchema,
   command_digest: DigestSchema,
   operation_plan_binding_digest: DigestSchema,
@@ -48,6 +69,7 @@ export const ComposioActionContentReviewSchema = z.object({
   input_schema_sha256: DigestSchema,
   output_schema_sha256: DigestSchema,
   action_definition_sha256: DigestSchema,
+  action_effect_registry: ComposioActionEffectRegistryBindingSchema,
   connected_account_id: z.string().min(1).max(200),
   connected_account_id_sha256: DigestSchema,
   user_id_sha256: DigestSchema,

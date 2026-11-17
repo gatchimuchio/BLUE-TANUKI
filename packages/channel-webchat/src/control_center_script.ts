@@ -6360,6 +6360,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const inputSchemaText = inputSchemaObject ? JSON.stringify(review.input_parameters, null, 2) : "";
           const outputSchemaText = outputSchemaObject ? JSON.stringify(review.output_parameters, null, 2) : "";
           const exactEffects = ["external_send", "read", "write", "delete", "credential_access"];
+          const actionEffectRegistry = isObject(review.action_effect_registry) ? review.action_effect_registry : {};
+          const targetEffectRegistry = isObject(observedTarget.action_effect_registry) ? observedTarget.action_effect_registry : {};
+          const registeredActionEffects = ["observe", "read", "write", "delete", "external_send", "process_spawn",
+            "browser_action", "settings_change", "credential_access", "schedule_change", "rollback"];
+          const actionEffectRegistryValid = actionEffectRegistry.schema_version ===
+              "blue-tanuki.composio-action-effect-registry-binding.v1" && actionEffectRegistry.status === "reviewed" &&
+            typeof actionEffectRegistry.registry_version === "string" && actionEffectRegistry.registry_version.length <= 80 &&
+            typeof actionEffectRegistry.registry_entry_id === "string" && actionEffectRegistry.registry_entry_id.length <= 160 &&
+            isDigest(actionEffectRegistry.registry_entry_sha256) && isDigest(actionEffectRegistry.binding_sha256) &&
+            actionEffectRegistry.toolkit === review.toolkit && actionEffectRegistry.tool === review.tool &&
+            actionEffectRegistry.input_schema_sha256 === review.input_schema_sha256 &&
+            actionEffectRegistry.output_schema_sha256 === review.output_schema_sha256 &&
+            actionEffectRegistry.action_definition_sha256 === review.action_definition_sha256 &&
+            Array.isArray(actionEffectRegistry.effects) && actionEffectRegistry.effects.length > 0 &&
+            actionEffectRegistry.effects.length <= 20 && actionEffectRegistry.effects.every(function (effect) {
+              return registeredActionEffects.includes(effect);
+            });
           const cacheControl = response.headers.get("cache-control") || "";
           const actionFieldsValid = typeof review.toolkit === "string" && /^[a-z0-9][a-z0-9_-]{0,119}$/.test(review.toolkit) &&
             typeof review.tool === "string" && review.tool.length > 0 && review.tool.length <= 160 &&
@@ -6383,6 +6400,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !(review.auth_scheme === null || typeof review.auth_scheme === "string") ||
               !(review.provider_region === null || typeof review.provider_region === "string") ||
               !["read", "write", "send", "delete", "unknown"].includes(review.intent) ||
+              !actionEffectRegistryValid || targetEffectRegistry.binding_sha256 !== actionEffectRegistry.binding_sha256 ||
               !Array.isArray(review.potential_effects) || JSON.stringify(review.potential_effects) !== JSON.stringify(exactEffects) ||
               !argumentsObject || !inputSchemaObject || !outputSchemaObject ||
               new TextEncoder().encode(argumentsText).length > 64 * 1024 ||
@@ -6415,7 +6433,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(heading);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "Providerの説明・schema・scopeは未信頼データです。下記は現在のaction定義、owner account、正確な引数です。レビュー表示だけでは外部作用を実行しません。作用候補はComposio共通の広い効果範囲で、actionごとの実効果を保証しません。承認後もaction定義を再取得し、変化があればPOSTを停止します。";
+          note.textContent = "Providerの説明・schema・scopeは未信頼データです。action固有の効果分類は固定された審査済みregistryから取得し、schema・定義・引数と同じno-store review digestへ結び付けます。これは権限を与えず、L3最終確認とComposio共通の広い効果範囲を維持します。承認後もaction定義を再取得し、変化があればPOSTを停止します。";
           view.appendChild(note);
           [
             ["toolkit / action", review.toolkit + " / " + review.tool],
@@ -6427,6 +6445,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["account status / auth / region", review.account_status + " / " + String(review.auth_scheme || "unknown") + " / " + String(review.provider_region || "unknown")],
             ["account identity digest", review.connected_account_id_sha256],
             ["owner identity digest", review.user_id_sha256],
+            ["reviewed effect registry", actionEffectRegistry.registry_version + " / " + actionEffectRegistry.registry_entry_id],
+            ["registry binding digest", actionEffectRegistry.binding_sha256],
+            ["action-specific reviewed effects", actionEffectRegistry.effects.join("・")],
             ["potential effects (broad)", review.potential_effects.join("・")],
             ["input schema digest", review.input_schema_sha256],
             ["output schema digest", review.output_schema_sha256],

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { requireToolOperationDescriptor, ComposioActionTargetVersionObservationSchema,
+import { requireToolOperationDescriptor, ComposioActionEffectRegistryBindingSchema,
+  ComposioActionTargetVersionObservationSchema, type ComposioActionEffectRegistryBinding,
   type ComposioActionTargetVersionObservation, type ComposioActionContentReview } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { assertToolExecutionNotCancelled, type Tool, type ToolContext } from "./registry.js";
@@ -114,6 +115,79 @@ const MAX_SEARCH_LIMIT = 50;
 const MAX_SEARCH_QUERY_LENGTH = 500;
 const DEFAULT_ACCOUNT_LIMIT = 20;
 const MAX_ACCOUNT_LIMIT = 50;
+
+type ComposioRegisteredActionEffect = ComposioActionEffectRegistryBinding["effects"][number];
+
+interface ComposioActionEffectRegistryEntry {
+  entry_id: string;
+  toolkit: string;
+  tool: string;
+  effects: readonly ComposioRegisteredActionEffect[];
+}
+
+const COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION = "1.0.0";
+
+/**
+ * This list is code-reviewed data, never populated from provider metadata or environment settings.
+ * Keep it narrow: actions absent from the list remain discoverable but cannot be used live.
+ */
+const COMPOSIO_ACTION_EFFECT_REGISTRY: readonly ComposioActionEffectRegistryEntry[] = Object.freeze([
+  Object.freeze({
+    entry_id: "github.issue.create.v1",
+    toolkit: "github",
+    tool: "GITHUB_CREATE_AN_ISSUE",
+    effects: Object.freeze(["external_send", "write"] as const),
+  }),
+]);
+
+export function isComposioActionEffectRegistered(toolkit: string, tool: string): boolean {
+  const normalizedToolkit = toolkit.trim().toLowerCase();
+  const normalizedTool = tool.trim().toLowerCase();
+  return COMPOSIO_ACTION_EFFECT_REGISTRY.some((entry) =>
+    entry.toolkit === normalizedToolkit && entry.tool.toLowerCase() === normalizedTool);
+}
+
+export function resolveComposioActionEffectRegistryBinding(params: {
+  toolkit: string;
+  tool: string;
+  inputSchemaSha256: string;
+  outputSchemaSha256: string;
+  actionDefinitionSha256: string;
+}): ComposioActionEffectRegistryBinding | undefined {
+  const toolkit = params.toolkit.trim().toLowerCase();
+  const tool = params.tool.trim();
+  const entry = COMPOSIO_ACTION_EFFECT_REGISTRY.find((candidate) =>
+    candidate.toolkit === toolkit && candidate.tool.toLowerCase() === tool.toLowerCase());
+  if (!entry || ![params.inputSchemaSha256, params.outputSchemaSha256, params.actionDefinitionSha256]
+    .every((digest) => /^[a-f0-9]{64}$/.test(digest))) return undefined;
+
+  const entryBase = {
+    schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1" as const,
+    registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+    registry_entry_id: entry.entry_id,
+    toolkit: entry.toolkit,
+    tool: entry.tool,
+    effects: [...entry.effects],
+  };
+  const entrySha256 = operationPlanDigest(entryBase);
+  const bindingBase = {
+    schema_version: "blue-tanuki.composio-action-effect-registry-binding.v1" as const,
+    status: "reviewed" as const,
+    registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+    registry_entry_id: entry.entry_id,
+    registry_entry_sha256: entrySha256,
+    toolkit,
+    tool,
+    input_schema_sha256: params.inputSchemaSha256,
+    output_schema_sha256: params.outputSchemaSha256,
+    action_definition_sha256: params.actionDefinitionSha256,
+    effects: [...entry.effects],
+  };
+  return ComposioActionEffectRegistryBindingSchema.parse({
+    ...bindingBase,
+    binding_sha256: operationPlanDigest(bindingBase),
+  });
+}
 
 function envValue(env: Env, name: string): string | undefined {
   const value = env[name];
@@ -971,11 +1045,26 @@ function catalogToolProjection(value: unknown, expectedToolkit: string): Record<
     output_parameters: outputParameters,
   };
   const actionDefinitionSha256 = composioSchemaDigest(projection);
+  const inputSchemaSha256 = composioSchemaDigest(inputParameters);
+  const outputSchemaSha256 = composioSchemaDigest(outputParameters);
+  const actionEffectRegistry = resolveComposioActionEffectRegistryBinding({
+    toolkit,
+    tool: slug,
+    inputSchemaSha256,
+    outputSchemaSha256,
+    actionDefinitionSha256,
+  });
   return {
     ...projection,
-    input_schema_sha256: composioSchemaDigest(inputParameters),
-    output_schema_sha256: composioSchemaDigest(outputParameters),
+    input_schema_sha256: inputSchemaSha256,
+    output_schema_sha256: outputSchemaSha256,
     action_definition_sha256: actionDefinitionSha256,
+    action_effect_registry: actionEffectRegistry ?? {
+      status: "unreviewed",
+      registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+      effects: [],
+      reason_code: "action_or_schema_not_in_reviewed_registry",
+    },
   };
 }
 
@@ -1050,6 +1139,7 @@ async function assertComposioInputSchemaUnchanged(params: {
 
 interface ComposioLiveActionInspection {
   projection: Record<string, unknown>;
+  actionEffectRegistryBinding: ComposioActionEffectRegistryBinding;
   account: ComposioConnectedAccountProjection;
   toolkit: string;
   tool: string;
@@ -1072,7 +1162,6 @@ async function inspectComposioLiveAction(
       !opts.operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(opts.operationPlanBindingDigest)) {
     throw new Error("Composio review requires an exact HDS command and Operation Plan binding");
   }
-  const apiKey = assertConfigured(env);
   const allowedToolkits = composioAllowedToolkits(env);
   const allowedActions = composioAllowedActions(env);
   const revokedActions = composioRevokedActions(env);
@@ -1081,6 +1170,10 @@ async function inspectComposioLiveAction(
   if (tool === "unknown") throw new Error("tool/action must be supplied for composio.execute review");
   assertToolkitAllowed(toolkit, allowedToolkits);
   assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
+  if (!isComposioActionEffectRegistered(toolkit, tool)) {
+    throw new Error("Composio action is not registered with reviewed effects; live review is unavailable and no action may execute");
+  }
+  const apiKey = assertConfigured(env);
   const connectedAccountId = stringArg(args, "connected_account_id", false);
   const userId = envValue(env, "COMPOSIO_USER_ID");
   if (!connectedAccountId || connectedAccountId.toLowerCase() === "instant_account" || !userId) {
@@ -1134,6 +1227,16 @@ async function inspectComposioLiveAction(
   if (projection.input_schema_sha256 !== inputSchemaSha256) {
     throw new Error("Composio action schema differs from the selected input schema; owner review must restart");
   }
+  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
+    toolkit,
+    tool: String(projection.slug),
+    inputSchemaSha256: String(projection.input_schema_sha256),
+    outputSchemaSha256: String(projection.output_schema_sha256),
+    actionDefinitionSha256: String(projection.action_definition_sha256),
+  });
+  if (!actionEffectRegistryBinding) {
+    throw new Error("Composio action definition or dynamic schema is not registered with reviewed effects; live review is unavailable");
+  }
   const payload = args.payload ?? args.arguments ?? {};
   const argumentsBody = parseComposioArguments(payload);
   const requestPayloadDigest = composioRequestPayloadDigest({ toolkit, tool, connectedAccountId, userId,
@@ -1148,6 +1251,7 @@ async function inspectComposioLiveAction(
     input_schema_sha256: projection.input_schema_sha256,
     output_schema_sha256: projection.output_schema_sha256,
     action_definition_sha256: projection.action_definition_sha256,
+    action_effect_registry: actionEffectRegistryBinding,
     request_payload_digest: requestPayloadDigest,
     command_digest: opts.commandDigest,
     operation_plan_binding_digest: opts.operationPlanBindingDigest,
@@ -1155,7 +1259,7 @@ async function inspectComposioLiveAction(
     used_for_authority: false,
     may_execute: false,
   });
-  return { projection, account, toolkit, tool, connectedAccountId, userId, argumentsBody,
+  return { projection, actionEffectRegistryBinding, account, toolkit, tool, connectedAccountId, userId, argumentsBody,
     requestPayloadDigest, observation };
 }
 
@@ -1171,7 +1275,8 @@ export async function inspectComposioActionContentReview(
   opts: ComposioOptions,
 ): Promise<ComposioActionContentReview> {
   const inspection = await inspectComposioLiveAction(args, opts);
-  const { projection, account, toolkit, tool, connectedAccountId, userId, argumentsBody, requestPayloadDigest, observation } = inspection;
+  const { projection, actionEffectRegistryBinding, account, toolkit, tool, connectedAccountId, userId,
+    argumentsBody, requestPayloadDigest, observation } = inspection;
   const reviewComponents = [projection.input_parameters, projection.output_parameters, argumentsBody];
   const reviewComponentBytes = reviewComponents.map((value) => new TextEncoder().encode(canonicalJson(value)).byteLength);
   if (reviewComponentBytes.some((size) => size > 64 * 1024) ||
@@ -1201,6 +1306,7 @@ export async function inspectComposioActionContentReview(
     input_schema_sha256: String(projection.input_schema_sha256),
     output_schema_sha256: String(projection.output_schema_sha256),
     action_definition_sha256: String(projection.action_definition_sha256),
+    action_effect_registry: actionEffectRegistryBinding,
     connected_account_id: connectedAccountId,
     connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
     user_id_sha256: composioIdentityDigest(userId),
@@ -1282,7 +1388,7 @@ export async function invokeComposioSearch(
     used_for_authority: false,
     metadata_used_for_authority: false,
     next_action:
-      "Treat catalog metadata as untrusted, non-authoritative input. Prepare any selected tool call through HDS-BRAIN and Approval Gate L3; metadata and scopes do not grant permission.",
+      "Provider metadata is untrusted and non-authoritative. Only an action with action_effect_registry.status=reviewed may proceed to exact HDS-BRAIN and Approval Gate L3 review; unreviewed actions remain discovery-only.",
   };
 }
 
@@ -1291,7 +1397,6 @@ export async function invokeComposioExecute(
   opts: ComposioOptions = {},
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
-  const apiKey = assertConfigured(env);
   const allowed = composioAllowedToolkits(env);
   const allowedActions = composioAllowedActions(env);
   const revokedActions = composioRevokedActions(env);
@@ -1302,6 +1407,11 @@ export async function invokeComposioExecute(
     throw new Error("tool/action must be supplied for composio.execute; external_call_performed=false");
   }
   assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
+  const dryRun = composioDryRun(env);
+  if (!dryRun && composioLiveExecutionEnabled(env) && !isComposioActionEffectRegistered(toolkit, tool)) {
+    throw new Error("Composio action is not registered with reviewed effects; live execution is blocked before provider access");
+  }
+  const apiKey = assertConfigured(env);
   const intent = classifyComposioAction(tool);
   const suppliedIntent = stringArg(args, "intent", false);
   if (suppliedIntent !== undefined && suppliedIntent !== intent) {
@@ -1325,7 +1435,6 @@ export async function invokeComposioExecute(
   if (connectedAccountId?.toLowerCase() === "instant_account") {
     throw new Error("connected_account_id must identify an explicit owner connection; external_call_performed=false");
   }
-  const dryRun = composioDryRun(env);
   const userId = envValue(env, "COMPOSIO_USER_ID");
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const payload = args.payload ?? args.arguments ?? {};
@@ -1390,18 +1499,23 @@ export async function invokeComposioExecute(
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
   const plannedObservation = opts.targetVersionObservation;
-  if (opts.requireTargetVersionObservation) {
-    const parsedObservation = ComposioActionTargetVersionObservationSchema.safeParse(plannedObservation);
-    if (!parsedObservation.success || !opts.commandDigest ||
-        parsedObservation.data.command_digest !== opts.commandDigest ||
-        parsedObservation.data.toolkit !== toolkit || parsedObservation.data.tool !== tool ||
-        parsedObservation.data.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
-        parsedObservation.data.user_id_sha256 !== composioIdentityDigest(userId) ||
-        parsedObservation.data.input_schema_sha256 !== inputSchemaSha256 ||
-        parsedObservation.data.request_payload_digest !== composioRequestPayloadDigest({ toolkit, tool,
-          connectedAccountId, userId, arguments: argumentsBody })) {
-      throw new Error("Composio live execution requires target evidence bound to this exact HDS request and owner account; mutation_sent=false");
-    }
+  if (!opts.requireTargetVersionObservation || !plannedObservation) {
+    throw new Error("Composio live execution requires a target observation from the registered HDS Executor; mutation_sent=false");
+  }
+  const plannedEffectRegistryBindingSha256 = plannedObservation?.action_effect_registry.binding_sha256;
+  const parsedObservation = ComposioActionTargetVersionObservationSchema.safeParse(plannedObservation);
+  if (!parsedObservation.success || !opts.commandDigest ||
+      parsedObservation.data.command_digest !== opts.commandDigest ||
+      parsedObservation.data.toolkit !== toolkit || parsedObservation.data.tool !== tool ||
+      parsedObservation.data.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+      parsedObservation.data.user_id_sha256 !== composioIdentityDigest(userId) ||
+      parsedObservation.data.input_schema_sha256 !== inputSchemaSha256 ||
+      parsedObservation.data.request_payload_digest !== composioRequestPayloadDigest({ toolkit, tool,
+        connectedAccountId, userId, arguments: argumentsBody })) {
+    throw new Error("Composio live execution requires target evidence bound to this exact HDS request and owner account; mutation_sent=false");
+  }
+  if (!plannedEffectRegistryBindingSha256) {
+    throw new Error("Composio live execution requires reviewed action effect registry evidence; mutation_sent=false");
   }
   const accounts = await readComposioAccounts({
     apiBaseUrl,
@@ -1446,6 +1560,17 @@ export async function invokeComposioExecute(
   if (opts.requireTargetVersionObservation && plannedObservation &&
       currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256) {
     throw new Error("Composio action definition changed after the owner review; mutation_sent=false");
+  }
+  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
+    toolkit,
+    tool: String(currentAction.slug),
+    inputSchemaSha256: String(currentAction.input_schema_sha256),
+    outputSchemaSha256: String(currentAction.output_schema_sha256),
+    actionDefinitionSha256: String(currentAction.action_definition_sha256),
+  });
+  if (!actionEffectRegistryBinding || actionEffectRegistryBinding.binding_sha256 !== plannedEffectRegistryBindingSha256 ||
+      operationPlanDigest(actionEffectRegistryBinding) !== operationPlanDigest(plannedObservation.action_effect_registry)) {
+    throw new Error("Composio action schema/effects registry binding changed after owner review; mutation_sent=false");
   }
   assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
@@ -1492,7 +1617,7 @@ export const composioSearchTool: Tool = {
   name: "composio.search",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Searches Composio toolkit/action metadata under an explicit allowlist and returns canonical input/output schema digests. Metadata is never authority.",
+    "Searches Composio toolkit/action metadata under an explicit allowlist and returns canonical schema digests plus the reviewed action-effect registry status. Unreviewed actions are discovery-only; metadata never grants authority.",
   required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeComposioSearch(args);
@@ -1525,7 +1650,7 @@ export const composioExecuteTool: Tool = {
   name: "composio.execute",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Executes Composio actions through HDS-BRAIN L3 review, explicit toolkit/action allowlists, live opt-in, capability, and audit boundaries. Before live execution, the authenticated no-store owner review binds the exact account, action definition, schema, payload, and Operation Plan; the action definition is rechecked immediately before dispatch. PostHog also requires an explicit expected_provider_region matching the observed owner account.",
+    "Executes only actions with an exact reviewed action-effect registry entry through HDS-BRAIN L3 review, explicit toolkit/action allowlists, live opt-in, capability, and audit boundaries. The authenticated no-store review binds the exact account, provider schema, registry mapping, payload, and Operation Plan; current action definition and registry binding are rechecked immediately before dispatch. PostHog also requires an explicit expected_provider_region matching the observed owner account.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
   async inspect_target_version(args, inspectOptions) {
     if (!inspectOptions?.command_digest || !inspectOptions.operation_plan_binding_digest) {
