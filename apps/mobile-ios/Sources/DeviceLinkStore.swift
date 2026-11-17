@@ -251,7 +251,9 @@ final class DeviceLinkStore {
     guard var data = try readData() else { return nil }
     defer { data.resetBytes(in: 0..<data.count) }
     let object = try DeviceLinkJSON.object(data, maximumBytes: 16 * 1024)
-    let version = DeviceLinkJSON.integer(object["version"])
+    guard let version = DeviceLinkJSON.integer(object["version"]) else {
+      throw DeviceLinkFailure.storage
+    }
     let versionOneKeys: Set<String> = ["version", "device_id", "credential", "local_recovery_audit"]
     let versionTwoKeys = versionOneKeys.union(["pending_task_session_id"])
     let versionThreeKeys = versionTwoKeys.union(["install_scope_id"])
