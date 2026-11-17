@@ -64,24 +64,33 @@ jobs:
           for controller in cpu memory pids; do grep -qw "$controller" <<< "$controllers"; done
           test -x /usr/bin/bwrap
 
-      - name: Probe Bubblewrap user namespaces without changing runner policy
+      - name: Probe Linux isolation prerequisites without changing runner policy
         id: bwrap
         shell: bash
         run: |
           set -euo pipefail
           restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          available=false
+          reason=memory_swap_controller_unavailable
           if [[ -r "$restriction" && "$(cat "$restriction")" = 1 ]]; then
             printf 'apparmor_restrict_unprivileged_userns=%s\n' "$(cat "$restriction")"
           else
             echo "apparmor_restrict_unprivileged_userns=unavailable"
           fi
-          if /usr/bin/bwrap --unshare-user --ro-bind / / -- /usr/bin/true; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            echo "Bubblewrap user namespaces are available under the existing runner policy"
+          if [[ -f /sys/fs/cgroup/memory.swap.max ]]; then
+            if /usr/bin/bwrap --unshare-user --ro-bind / / -- /usr/bin/true; then
+              available=true
+              reason=none
+              echo "Bubblewrap user namespaces and memory.swap.max are available under the existing runner policy"
+            else
+              reason=user_namespace_mapping_unavailable
+              echo "Bubblewrap user namespace mapping is unavailable; runner policy is unchanged"
+            fi
           else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Bubblewrap user namespace mapping is unavailable; runner policy is unchanged"
+            echo "memory.swap.max is unavailable; Linux runtime tests will be NOT_RUN"
           fi
+          printf 'available=%s\n' "$available" >> "$GITHUB_OUTPUT"
+          printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust toolchain
         run: |
@@ -109,11 +118,13 @@ jobs:
       - name: Record unavailable Linux runtime smoke
         if: steps.bwrap.outputs.available != 'true'
         shell: bash
+        env:
+          RUNTIME_UNAVAILABLE_REASON: ${{ steps.bwrap.outputs.reason }}
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
           ## Linux shell runtime smoke
 
-          **NOT_RUN** — the hosted runner denied Bubblewrap user namespace mapping. The integration test remained unexecuted. The workflow did not install, load, or remove a runner security profile.
+          **NOT_RUN** — hosted runner prerequisite unavailable: `${RUNTIME_UNAVAILABLE_REASON}`. Linux runtime integration tests were not executed. The workflow did not modify runner security policy.
           SUMMARY
 
       - name: Capture transient user-service diagnostics after test failure
