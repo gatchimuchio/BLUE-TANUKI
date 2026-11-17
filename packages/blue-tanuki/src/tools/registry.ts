@@ -426,6 +426,39 @@ export interface GitHubReleaseDraftCreateContentReview {
   may_execute: false;
 }
 
+/** No-store review of the exact, asset-free draft release being made public. */
+export interface GitHubReleasePublishContentReview {
+  kind: "github_release_publish";
+  operation: "github.write.release.publish";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  release_id: number;
+  tag_name: string;
+  tag_ref_sha: string;
+  tag_ref_type: "commit" | "tag";
+  target_commit_sha: string;
+  release_name: string;
+  body: string;
+  release_body_sha256: string;
+  draft: true;
+  prerelease: false;
+  release_asset_count: 0;
+  release_published: true;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  command_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "release_becomes_published";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {
   account_email: string;
@@ -924,6 +957,7 @@ export type ToolContentReview = GmailDraftContentReview | GmailWriteContentRevie
   GitHubPullRequestReviewSubmitContentReview |
   GitHubCodePushContentReview |
   GitHubReleaseDraftCreateContentReview |
+  GitHubReleasePublishContentReview |
   GoogleDrivePermissionCreateContentReview | GoogleDrivePublicLinkCreateContentReview | GoogleDriveFileTrashContentReview;
 
 /** Non-authority observations for an existing tool worker and its local stop result. */

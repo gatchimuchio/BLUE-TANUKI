@@ -27,6 +27,7 @@ import {
   GitHubPullRequestReviewSubmitTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
   GitHubReleaseDraftCreateTargetVersionObservationSchema,
+  GitHubReleasePublishTargetVersionObservationSchema,
   GitHubWriteTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
@@ -59,6 +60,8 @@ import {
   githubCodePushTargetIdentityDigest,
   githubReleaseDraftCreateRequestPayloadDigest,
   githubReleaseDraftCreateTargetIdentityDigest,
+  githubReleasePublishRequestPayloadDigest,
+  githubReleasePublishTargetIdentityDigest,
   canonicalGitHubWriteTargetVersionObservation,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
@@ -78,6 +81,7 @@ import {
   type GitHubPullRequestReviewSubmitTargetVersionObservation,
   type GitHubCodePushTargetVersionObservation,
   type GitHubReleaseDraftCreateTargetVersionObservation,
+  type GitHubReleasePublishTargetVersionObservation,
   type GitHubWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContentReview,
@@ -90,7 +94,7 @@ import { assertToolExecutionNotCancelled, echoTool, type FileDeleteTargetContent
   type GitHubPullRequestCreateContentReview, type GitHubCodePushContentReview,
   type GitHubPullRequestMergeContentReview,
   type GitHubPullRequestReviewSubmitContentReview,
-  type GitHubReleaseDraftCreateContentReview, type Tool } from "./registry.js";
+  type GitHubReleaseDraftCreateContentReview, type GitHubReleasePublishContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -1248,8 +1252,22 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
     };
   }
 
+  if (operation === "release.publish") {
+    const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
+    if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key))) {
+      throw new Error("github.write release.publish accepts only one exact draft release ID; mutation_sent=false");
+    }
+    return {
+      operation,
+      method: "PATCH",
+      path: `/repos/${ownerPath}/${repoPath}/releases/${releaseId}`,
+      body: { draft: false },
+      repo,
+    };
+  }
+
   throw new Error(
-    "operation must be issue.create, issue.update, pr.update, issue.close, issue.reopen, issue.label, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, or release.draft.create",
+    "operation must be issue.create, issue.update, pr.update, issue.close, issue.reopen, issue.label, issue.comment.create, pr.create, pr.merge, pr.review.submit, pr.comment.create, code.push, release.draft.create, or release.publish",
   );
 }
 
@@ -1838,6 +1856,7 @@ export async function invokeGitHubWrite(
   if (route.operation === "pr.review.submit") return await invokeGitHubPullRequestReviewSubmit(args, opts);
   if (route.operation === "code.push") return await invokeGitHubCodePush(args, opts);
   if (route.operation === "release.draft.create") return await invokeGitHubReleaseDraftCreate(args, opts);
+  if (route.operation === "release.publish") return await invokeGitHubReleasePublish(args, opts);
   if (route.operation !== "issue.create") {
     throw new Error(`github.write ${route.operation} is not connected to a plan-bound review path; mutation_sent=false; status=BUILD_GAP`);
   }
@@ -2891,6 +2910,212 @@ export async function inspectGitHubReleaseDraftCreateContentReview(args: Record<
   return { ...base, review_digest: sha256Hex(base) };
 }
 
+async function inspectGitHubReleasePublishSnapshot(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<{ observation: GitHubReleasePublishTargetVersionObservation; releaseBody: string; releaseName: string }> {
+  const route = githubWriteRoute(args);
+  if (route.operation !== "release.publish") {
+    throw new Error(`github.write ${route.operation} release target observation is not implemented; status=BUILD_GAP`);
+  }
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key))) {
+    throw new Error("github.write release.publish contains unsupported arguments; mutation_sent=false");
+  }
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("github.write release.publish target observation requires a command and Operation Plan binding");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
+  const maxBytes = positiveIntArg(args, "max_bytes", 512_000, 512_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.publish repository inspection");
+  const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
+  const repository = requireGitHubJsonRecord(repositoryResponse, "release publication repository");
+  const repositoryId = repository.id;
+  const canonicalFullName = typeof repository.full_name === "string" ? repository.full_name : "";
+  const repositoryName = typeof repository.name === "string" ? repository.name : "";
+  const ownerLogin = isRecord(repository.owner) && typeof repository.owner.login === "string" ? repository.owner.login : "";
+  const isPrivate = repository.private;
+  if (typeof repositoryId !== "number" || !Number.isSafeInteger(repositoryId) || repositoryId <= 0 ||
+      canonicalFullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      repositoryName.toLowerCase() !== repo.toLowerCase() || ownerLogin.toLowerCase() !== owner.toLowerCase() ||
+      typeof isPrivate !== "boolean") {
+    throw new Error("github.write release.publish repository identity or visibility is incomplete or mismatched");
+  }
+
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.publish draft inspection");
+  const releaseResponse = await readRequest({ path: `${repositoryPath}/releases/${releaseId}`, maxBytes, token }, opts.signal);
+  const release = requireGitHubJsonRecord(releaseResponse, "release publication draft");
+  const releaseBody = typeof release.body === "string" ? release.body : release.body === null ? "" : undefined;
+  const releaseName = typeof release.name === "string" ? release.name : "";
+  const tagName = typeof release.tag_name === "string" ? release.tag_name : "";
+  if (release.id !== releaseId || release.draft !== true || release.prerelease !== false ||
+      !releaseName || releaseName.length > 256 || releaseName !== releaseName.trim() ||
+      /[\u0000-\u001f\u007f]/.test(releaseName) || releaseBody === undefined ||
+      releaseBody.length > 500_000 || Buffer.byteLength(releaseBody, "utf8") > 500_000 ||
+      Buffer.from(releaseBody, "utf8").toString("utf8") !== releaseBody || releaseBody.includes("\u0000") ||
+      !Array.isArray(release.assets) || release.assets.length !== 0) {
+    throw new Error("github.write release.publish requires one exact asset-free draft with bounded UTF-8 content; mutation_sent=false");
+  }
+  githubBranchRefArg(tagName, "release tag_name");
+  const encodedTag = encodeURIComponent(tagName);
+
+  assertToolExecutionNotCancelled(opts.signal, "github.write release.publish tag inspection");
+  const tagResponse = await readRequest({ path: `${repositoryPath}/git/ref/tags/${encodedTag}`, maxBytes, token }, opts.signal);
+  const tagRecord = requireGitHubJsonRecord(tagResponse, "release publication tag");
+  const tagObject = isRecord(tagRecord.object) ? tagRecord.object : null;
+  const tagRefSha = tagObject?.sha;
+  const tagRefType = tagObject?.type;
+  if (typeof tagRefSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tagRefSha) ||
+      (tagRefType !== "commit" && tagRefType !== "tag")) {
+    throw new Error("github.write release.publish tag target is incomplete or unsupported; mutation_sent=false");
+  }
+  const targetCommitSha = await resolveGitHubTagTargetCommit({
+    repository_path: repositoryPath,
+    target_sha: tagRefSha,
+    target_type: tagRefType,
+    read_request: readRequest,
+    max_bytes: maxBytes,
+    token,
+    signal: opts.signal,
+    context: "github.write release.publish",
+  });
+  const repositoryVisibility = isPrivate ? "private" : "public";
+  const releaseBodySha256 = createHash("sha256").update(releaseBody, "utf8").digest("hex");
+  const targetIdentityDigest = githubReleasePublishTargetIdentityDigest({
+    repository_id: repositoryId,
+    canonical_full_name: canonicalFullName,
+    repository_visibility: repositoryVisibility,
+    release_id: releaseId,
+    tag_name: tagName,
+    tag_ref_sha: tagRefSha,
+    tag_ref_type: tagRefType,
+    target_commit_sha: targetCommitSha,
+    release_name: releaseName,
+    release_body_sha256: releaseBodySha256,
+  });
+  const requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+  const observation = GitHubReleasePublishTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.github-write-target-version.v1",
+    operation: "release.publish",
+    requested_owner: owner,
+    requested_repo: repo,
+    canonical_full_name: canonicalFullName,
+    repository_id: repositoryId,
+    repository_visibility: repositoryVisibility,
+    release_id: releaseId,
+    tag_name: tagName,
+    tag_ref_sha: tagRefSha,
+    tag_ref_type: tagRefType,
+    target_commit_sha: targetCommitSha,
+    release_name: releaseName,
+    release_body_sha256: releaseBodySha256,
+    release_draft: true,
+    release_prerelease: false,
+    release_asset_count: 0,
+    target_identity_digest: targetIdentityDigest,
+    request_payload_digest: requestPayloadDigest,
+    command_digest: commandDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest,
+    mutation_sent: false,
+    provider_data_is_untrusted: true,
+    provider_observation_is_atomic: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { observation, releaseBody, releaseName };
+}
+
+export async function inspectGitHubReleasePublishTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubReleasePublishTargetVersionObservation> {
+  return (await inspectGitHubReleasePublishSnapshot(args, opts)).observation;
+}
+
+export function assertGitHubReleasePublishTargetVersion(args: Record<string, unknown>, value: unknown,
+  commandDigest: string, operationPlanBindingDigest: string): GitHubReleasePublishTargetVersionObservation {
+  const observation = GitHubWriteTargetVersionObservationSchema.parse(value);
+  if (observation.operation !== "release.publish") {
+    throw new Error("github.write release.publish target observation has another operation");
+  }
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
+  const targetDigest = githubReleasePublishTargetIdentityDigest({
+    repository_id: observation.repository_id,
+    canonical_full_name: observation.canonical_full_name,
+    repository_visibility: observation.repository_visibility,
+    release_id: observation.release_id,
+    tag_name: observation.tag_name,
+    tag_ref_sha: observation.tag_ref_sha,
+    tag_ref_type: observation.tag_ref_type,
+    target_commit_sha: observation.target_commit_sha,
+    release_name: observation.release_name,
+    release_body_sha256: observation.release_body_sha256,
+  });
+  const payloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key)) ||
+      route.operation !== "release.publish" || observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
+      observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
+      observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      observation.release_id !== releaseId || observation.release_draft !== true ||
+      observation.release_prerelease !== false || observation.release_asset_count !== 0 ||
+      observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.request_payload_digest !== payloadDigest || observation.target_identity_digest !== targetDigest ||
+      observation.mutation_sent || observation.used_for_authority || observation.may_execute ||
+      observation.provider_observation_is_atomic || !observation.provider_data_is_untrusted) {
+    throw new Error("github.write release.publish target observation does not match the approved command and plan");
+  }
+  return observation;
+}
+
+export async function inspectGitHubReleasePublishContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
+  : Promise<GitHubReleasePublishContentReview> {
+  const snapshot = await inspectGitHubReleasePublishSnapshot(args, opts);
+  const observation = snapshot.observation;
+  const base = {
+    kind: "github_release_publish" as const,
+    operation: "github.write.release.publish" as const,
+    requested_owner: observation.requested_owner,
+    requested_repo: observation.requested_repo,
+    canonical_full_name: observation.canonical_full_name,
+    repository_id: observation.repository_id,
+    repository_visibility: observation.repository_visibility,
+    release_id: observation.release_id,
+    tag_name: observation.tag_name,
+    tag_ref_sha: observation.tag_ref_sha,
+    tag_ref_type: observation.tag_ref_type,
+    target_commit_sha: observation.target_commit_sha,
+    release_name: snapshot.releaseName,
+    body: snapshot.releaseBody,
+    release_body_sha256: observation.release_body_sha256,
+    draft: true as const,
+    prerelease: false as const,
+    release_asset_count: 0 as const,
+    release_published: true as const,
+    request_payload_digest: observation.request_payload_digest,
+    target_version_digest: createHash("sha256").update(canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
+    operation_plan_binding_digest: observation.operation_plan_binding_digest,
+    command_digest: observation.command_digest,
+    notification_effect: "github_api_may_trigger_notifications" as const,
+    publication_effect: "release_becomes_published" as const,
+    provider_observation_is_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return { ...base, review_digest: sha256Hex(base) };
+}
+
 async function invokeGitHubReleaseDraftCreate(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
   const route = githubWriteRoute(args);
   if (route.operation !== "release.draft.create" || route.method !== "POST" ||
@@ -3002,6 +3227,131 @@ async function invokeGitHubReleaseDraftCreate(args: Record<string, unknown>, opt
     name: String(route.body.name), draft: true, prerelease: false };
   return {
     schema_version: "blue-tanuki.github-write-result.v1", operation: "release.draft.create", api_host: "api.github.com",
+    repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+    request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+    operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
+    status: response.status, mutation_status: "provider_accepted", content_type: response.content_type,
+    truncated: response.truncated, rate_limit_remaining: response.rate_limit_remaining,
+    github_request_id: response.request_id, result_digest: sha256Hex(result), result,
+    provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+  };
+}
+
+async function invokeGitHubReleasePublish(args: Record<string, unknown>, opts: GitHubWriteOptions): Promise<unknown> {
+  const route = githubWriteRoute(args);
+  const owner = githubNameArg(args, "owner");
+  const repo = githubNameArg(args, "repo");
+  const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
+  const expectedPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/${releaseId}`;
+  if (route.operation !== "release.publish" || route.method !== "PATCH" || route.path !== expectedPath ||
+      JSON.stringify(route.body) !== JSON.stringify({ draft: false })) {
+    throw new Error("github.write release.publish route mismatch; mutation_sent=false");
+  }
+  const env = opts.env ?? process.env;
+  assertGitHubRepoAllowed(env, route.repo);
+  const token = githubWriteToken(env);
+  const commandDigest = opts.command_digest;
+  const operationPlanBindingDigest = opts.operation_plan_binding_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest) ||
+      !opts.expected_target_version_observation) {
+    throw new Error("github.write release.publish requires a command, Operation Plan binding, and reviewed target; mutation_sent=false");
+  }
+  const expected = assertGitHubReleasePublishTargetVersion(args, opts.expected_target_version_observation,
+    commandDigest, operationPlanBindingDigest);
+  const maxBytes = positiveIntArg(args, "max_bytes", 512_000, 512_000);
+  const readRequest = opts.read_request ?? defaultGitHubReadRequest;
+  const before = await inspectGitHubReleasePublishSnapshot(args, { env, signal: opts.signal,
+    command_digest: commandDigest, operation_plan_binding_digest: operationPlanBindingDigest, read_request: readRequest });
+  if (canonicalGitHubWriteTargetVersionObservation(before.observation) !== canonicalGitHubWriteTargetVersionObservation(expected)) {
+    throw new Error("github.write release.publish repository, release content, tag, or commit changed after review; mutation_sent=false; outcome=stale");
+  }
+
+  const request = opts.request ?? defaultGitHubWriteRequest;
+  let response: GitHubWriteResponse;
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write release.publish existing draft");
+    response = await request({ method: "PATCH", path: route.path, body: { draft: false }, maxBytes, token }, opts.signal);
+  } catch {
+    throw new Error("github.write release.publish outcome_unknown; request may have reached GitHub; do not retry automatically");
+  }
+
+  const responseData = parseJsonOrText(response.body);
+  const explicitRejection = !response.ok && !response.truncated &&
+    [400, 401, 403, 404, 405, 410, 415, 422].includes(response.status);
+  if (explicitRejection) {
+    return {
+      schema_version: "blue-tanuki.github-write-result.v1", operation: "release.publish", api_host: "api.github.com",
+      repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
+      request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
+      operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
+      status: response.status, mutation_status: "provider_rejected", result_digest: sha256Hex(responseData),
+      retry_permitted: false,
+      next_action: "Do not retry automatically. Preserve the rejection receipt and make a new Owner decision.",
+      provider_data_is_untrusted: true, used_for_authority: false, may_execute: false,
+    };
+  }
+  const responseBody = isRecord(responseData)
+    ? typeof responseData.body === "string" ? responseData.body : responseData.body === null ? "" : undefined
+    : undefined;
+  if (!response.ok || response.status !== 200 || response.truncated ||
+      !response.content_type?.toLowerCase().includes("json")) {
+    throw new Error(`github.write release.publish outcome_unknown; HTTP ${response.status}; do not retry automatically`);
+  }
+  if (!isRecord(responseData) || responseData.id !== expected.release_id || responseData.tag_name !== expected.tag_name ||
+      responseData.name !== expected.release_name || responseBody !== before.releaseBody ||
+      responseData.draft !== false || responseData.prerelease !== false ||
+      !Array.isArray(responseData.assets) || responseData.assets.length !== 0) {
+    throw new Error("github.write release.publish response did not confirm the exact published release; outcome_unknown; do not retry automatically");
+  }
+
+  try {
+    assertToolExecutionNotCancelled(opts.signal, "github.write release.publish readback");
+    const repositoryPath = `/repos/${encodeURIComponent(expected.requested_owner)}/${encodeURIComponent(expected.requested_repo)}`;
+    const repositoryResponse = await readRequest({ path: repositoryPath, maxBytes, token }, opts.signal);
+    const repository = requireGitHubJsonRecord(repositoryResponse, "release publication repository readback");
+    if (repository.id !== expected.repository_id || repository.full_name !== expected.canonical_full_name ||
+        repository.private !== (expected.repository_visibility === "private")) {
+      throw new Error("repository identity or visibility changed");
+    }
+
+    const tagPath = `${repositoryPath}/git/ref/tags/${encodeURIComponent(expected.tag_name)}`;
+    const tagResponse = await readRequest({ path: tagPath, maxBytes, token }, opts.signal);
+    const tagRecord = requireGitHubJsonRecord(tagResponse, "release publication tag readback");
+    const tagObject = isRecord(tagRecord.object) ? tagRecord.object : null;
+    if (tagObject?.sha !== expected.tag_ref_sha || tagObject?.type !== expected.tag_ref_type) {
+      throw new Error("tag reference changed");
+    }
+    const targetCommitSha = await resolveGitHubTagTargetCommit({
+      repository_path: repositoryPath,
+      target_sha: expected.tag_ref_sha,
+      target_type: expected.tag_ref_type,
+      read_request: readRequest,
+      max_bytes: maxBytes,
+      token,
+      signal: opts.signal,
+      context: "release publication readback",
+    });
+    if (targetCommitSha !== expected.target_commit_sha) throw new Error("tag target commit changed");
+
+    const releaseResponse = await readRequest({ path: `${repositoryPath}/releases/${releaseId}`, maxBytes, token }, opts.signal);
+    const release = requireGitHubJsonRecord(releaseResponse, "published release readback");
+    const readbackBody = typeof release.body === "string" ? release.body : release.body === null ? "" : undefined;
+    if (release.id !== expected.release_id || release.tag_name !== expected.tag_name ||
+        release.name !== expected.release_name || readbackBody !== before.releaseBody ||
+        release.draft !== false || release.prerelease !== false ||
+        !Array.isArray(release.assets) || release.assets.length !== 0) {
+      throw new Error("release readback differs from the reviewed published release");
+    }
+  } catch {
+    throw new Error("github.write release.publish readback could not confirm publication and the exact draft contents; outcome_unknown; do not retry automatically");
+  }
+
+  const result = { id: expected.release_id, tag_name: expected.tag_name, target_commit_sha: expected.target_commit_sha,
+    name: expected.release_name, release_body_sha256: expected.release_body_sha256,
+    draft: false, prerelease: false, release_published: true };
+  return {
+    schema_version: "blue-tanuki.github-write-result.v1", operation: "release.publish", api_host: "api.github.com",
     repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
     request_payload_digest: expected.request_payload_digest, command_digest: expected.command_digest,
     operation_plan_binding_digest: expected.operation_plan_binding_digest, method: route.method, path: route.path,
@@ -7507,11 +7857,19 @@ export const githubReadTool: Tool = {
 export const githubWriteTool: Tool = {
   name: "github.write",
   adapter_version: "1.0.0-rc.1",
-  description: "Create plan-bound GitHub issues, comments, pull requests, submit pull request reviews to an exact expected HEAD, push one new file to an existing non-default branch, and create unpublished draft releases on exact existing tags. Issue close and reopen are separate, each limited to one exact unlocked issue. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
+  description: "Create plan-bound GitHub issues, comments, pull requests, submit pull request reviews to an exact expected HEAD, push one new file to an existing non-default branch, create unpublished draft releases on exact existing tags, and publish an exact asset-free draft release as a separate effect. Issue close and reopen are separate, each limited to one exact unlocked issue. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateTargetVersion(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "release.publish") {
+      return await inspectGitHubReleasePublishTargetVersion(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),
@@ -7618,9 +7976,18 @@ export const githubWriteTool: Tool = {
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubPullRequestUpdateContentReview |
     GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
-    GitHubPullRequestMergeContentReview | GitHubPullRequestReviewSubmitContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview> {
+    GitHubPullRequestMergeContentReview | GitHubPullRequestReviewSubmitContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview |
+    GitHubReleasePublishContentReview> {
     if (githubOperation(args) === "release.draft.create") {
       return await inspectGitHubReleaseDraftCreateContentReview(args, {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
+        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+      });
+    }
+    if (githubOperation(args) === "release.publish") {
+      return await inspectGitHubReleasePublishContentReview(args, {
         ...(options.env ? { env: options.env } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.command_digest ? { command_digest: options.command_digest } : {}),

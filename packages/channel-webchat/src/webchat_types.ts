@@ -1327,6 +1327,39 @@ export interface WebChatGitHubReleaseDraftCreateContentReview {
   may_execute: false;
 }
 
+export interface WebChatGitHubReleasePublishContentReview {
+  kind: "github_release_publish";
+  command_id: string;
+  command_digest: string;
+  operation: "github.write.release.publish";
+  requested_owner: string;
+  requested_repo: string;
+  canonical_full_name: string;
+  repository_id: number;
+  repository_visibility: "public" | "private";
+  release_id: number;
+  tag_name: string;
+  tag_ref_sha: string;
+  tag_ref_type: "commit" | "tag";
+  target_commit_sha: string;
+  release_name: string;
+  body: string;
+  release_body_sha256: string;
+  draft: true;
+  prerelease: false;
+  release_asset_count: 0;
+  release_published: true;
+  request_payload_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  review_digest: string;
+  notification_effect: "github_api_may_trigger_notifications";
+  publication_effect: "release_becomes_published";
+  provider_observation_is_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatMcpCallContentReview {
   kind: "mcp_call";
   command_id: string;
@@ -1389,7 +1422,7 @@ export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | W
   WebChatGitHubPullRequestCreateContentReview | WebChatGitHubCodePushContentReview |
   WebChatGitHubPullRequestMergeContentReview |
   WebChatGitHubPullRequestReviewSubmitContentReview |
-  WebChatGitHubReleaseDraftCreateContentReview;
+  WebChatGitHubReleaseDraftCreateContentReview | WebChatGitHubReleasePublishContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

@@ -39,6 +39,8 @@ import {
   inspectGitHubCodePushContentReview,
   inspectGitHubReleaseDraftCreateTargetVersion,
   inspectGitHubReleaseDraftCreateContentReview,
+  inspectGitHubReleasePublishTargetVersion,
+  inspectGitHubReleasePublishContentReview,
   invokeGmailRead,
   invokeGoogleCalendarRead,
   invokeGoogleDriveRead,
@@ -3939,6 +3941,127 @@ describe("built-in tools", () => {
     await expect(invokeGitHubWrite(args, { ...options, command_digest: "c".repeat(64),
       operation_plan_binding_digest: "d".repeat(64), expected_target_version_observation: target }))
       .rejects.toThrow(/readback could not confirm.*outcome_unknown.*do not retry automatically/);
+    expect(writes).toBe(1);
+  });
+
+  it("github.write release.publish reviews and publishes one exact asset-free draft", async () => {
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const body = "# Reviewed release\n\nOnly this exact draft may be published.";
+    const targetCommitSha = "a".repeat(40);
+    const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
+    let currentRelease: Record<string, unknown> = { id: 987, tag_name: "v1.0", name: "Reviewed release",
+      body, draft: true, prerelease: false, assets: [] };
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+        full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+      if (target.path === releasePath) return githubReadJson(currentRelease);
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+        return githubReadJson({ object: { sha: targetCommitSha, type: "commit" } });
+      }
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const request: NonNullable<GitHubWriteOptions["request"]> = async (target) => {
+      writes += 1;
+      expect(target.method).toBe("PATCH");
+      expect(target.path).toBe(releasePath);
+      expect(target.body).toEqual({ draft: false });
+      currentRelease = { ...currentRelease, draft: false };
+      return { ...githubReadJson(currentRelease), request_id: "RELEASE-PUBLISH-REQ" };
+    };
+    const options = fakeGitHubWrite(request, undefined, read_request);
+    const commandDigest = "c".repeat(64);
+    const planDigest = "d".repeat(64);
+    const target = await inspectGitHubReleasePublishTargetVersion(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest });
+    expect(target).toMatchObject({ operation: "release.publish", release_id: 987, tag_name: "v1.0",
+      target_commit_sha: targetCommitSha, release_name: "Reviewed release", release_draft: true,
+      release_prerelease: false, release_asset_count: 0, mutation_sent: false, used_for_authority: false,
+      may_execute: false });
+    const review = await inspectGitHubReleasePublishContentReview(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest });
+    expect(review).toMatchObject({ kind: "github_release_publish", operation: "github.write.release.publish",
+      release_id: 987, body, release_body_sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+      draft: true, prerelease: false, release_asset_count: 0, release_published: true,
+      publication_effect: "release_becomes_published", provider_observation_is_atomic: false,
+      used_for_authority: false, may_execute: false });
+    const result = await invokeGitHubWrite(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest, expected_target_version_observation: target }) as Record<string, unknown>;
+    expect(result).toMatchObject({ operation: "release.publish", method: "PATCH", path: releasePath, status: 200,
+      mutation_status: "provider_accepted", result: { id: 987, tag_name: "v1.0", target_commit_sha: targetCommitSha,
+        name: "Reviewed release", draft: false, prerelease: false, release_published: true } });
+    expect(writes).toBe(1);
+    expect(JSON.stringify(result)).not.toContain(body);
+    expect(JSON.stringify(result)).not.toContain("ghp_dummy");
+  });
+
+  it("github.write release.publish blocks changed draft content and drafts with assets before mutation", async () => {
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const targetCommitSha = "a".repeat(40);
+    const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
+    let currentRelease: Record<string, unknown> = { id: 987, tag_name: "v1.0", name: "Reviewed release",
+      body: "Reviewed body", draft: true, prerelease: false, assets: [] };
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+        full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+      if (target.path === releasePath) return githubReadJson(currentRelease);
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+        return githubReadJson({ object: { sha: targetCommitSha, type: "commit" } });
+      }
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const options = fakeGitHubWrite(async () => {
+      writes += 1;
+      throw new Error("publication must not be sent");
+    }, undefined, read_request);
+    const commandDigest = "c".repeat(64);
+    const planDigest = "d".repeat(64);
+    const target = await inspectGitHubReleasePublishTargetVersion(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest });
+    currentRelease = { ...currentRelease, body: "Changed after L3 review" };
+    await expect(invokeGitHubWrite(args, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest, expected_target_version_observation: target }))
+      .rejects.toThrow(/changed after review.*mutation_sent=false.*outcome=stale/);
+    expect(writes).toBe(0);
+
+    currentRelease = { ...currentRelease, assets: [{ id: 55, name: "unreviewed.zip" }] };
+    await expect(inspectGitHubReleasePublishTargetVersion(args, { ...options,
+      command_digest: commandDigest, operation_plan_binding_digest: planDigest }))
+      .rejects.toThrow(/requires one exact asset-free draft/);
+    expect(writes).toBe(0);
+  });
+
+  it("github.write release.publish records uncertain readback and never retries the public effect", async () => {
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
+    const release: Record<string, unknown> = { id: 987, tag_name: "v1.0", name: "Reviewed release",
+      body: "Reviewed body", draft: true, prerelease: false, assets: [] };
+    let published = false;
+    let writes = 0;
+    const read_request: NonNullable<GitHubWriteOptions["read_request"]> = async (target) => {
+      if (target.path === "/repos/gatchimuchio/blue-tanuki") return githubReadJson({ id: 123, name: "blue-tanuki",
+        full_name: "gatchimuchio/blue-tanuki", owner: { login: "gatchimuchio" }, private: false });
+      if (target.path === releasePath) {
+        if (published) throw new Error("synthetic readback unavailable");
+        return githubReadJson(release);
+      }
+      if (target.path === "/repos/gatchimuchio/blue-tanuki/git/ref/tags/v1.0") {
+        return githubReadJson({ object: { sha: "a".repeat(40), type: "commit" } });
+      }
+      throw new Error("unexpected synthetic GitHub read " + target.path);
+    };
+    const options = fakeGitHubWrite(async (target) => {
+      writes += 1;
+      published = true;
+      expect(target.method).toBe("PATCH");
+      return { ...githubReadJson({ ...release, draft: false }), request_id: "RELEASE-PUBLISH-UNCERTAIN" };
+    }, undefined, read_request);
+    const target = await inspectGitHubReleasePublishTargetVersion(args, { ...options,
+      command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64) });
+    await expect(invokeGitHubWrite(args, { ...options, command_digest: "c".repeat(64),
+      operation_plan_binding_digest: "d".repeat(64), expected_target_version_observation: target }))
+      .rejects.toThrow(/readback could not confirm publication.*outcome_unknown.*do not retry automatically/);
     expect(writes).toBe(1);
   });
 

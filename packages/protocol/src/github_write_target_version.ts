@@ -192,6 +192,21 @@ export const GitHubReleaseDraftCreateTargetVersionObservationSchema = GitHubWrit
   release_absent: z.literal(true),
 }).strict();
 
+/** An exact, asset-free draft release and its current tag target, reviewed before publication. */
+export const GitHubReleasePublishTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
+  operation: z.literal("release.publish"),
+  release_id: z.number().int().positive().safe(),
+  tag_name: z.string().min(1).max(255),
+  tag_ref_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  tag_ref_type: z.enum(["commit", "tag"]),
+  target_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  release_name: z.string().min(1).max(256),
+  release_body_sha256: DigestSchema,
+  release_draft: z.literal(true),
+  release_prerelease: z.literal(false),
+  release_asset_count: z.literal(0),
+}).strict();
+
 export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("operation", [
   GitHubIssueCreateTargetVersionObservationSchema,
   GitHubIssueUpdateTargetVersionObservationSchema,
@@ -206,6 +221,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   GitHubPullRequestReviewSubmitTargetVersionObservationSchema,
   GitHubCodePushTargetVersionObservationSchema,
   GitHubReleaseDraftCreateTargetVersionObservationSchema,
+  GitHubReleasePublishTargetVersionObservationSchema,
 ]).superRefine((value, context) => {
   if (value.operation === "pr.create") {
     const sameRepository = value.head_repository_id === value.repository_id &&
@@ -297,6 +313,7 @@ export type GitHubPullRequestMergeTargetVersionObservation = z.infer<typeof GitH
 export type GitHubPullRequestReviewSubmitTargetVersionObservation = z.infer<typeof GitHubPullRequestReviewSubmitTargetVersionObservationSchema>;
 export type GitHubCodePushTargetVersionObservation = z.infer<typeof GitHubCodePushTargetVersionObservationSchema>;
 export type GitHubReleaseDraftCreateTargetVersionObservation = z.infer<typeof GitHubReleaseDraftCreateTargetVersionObservationSchema>;
+export type GitHubReleasePublishTargetVersionObservation = z.infer<typeof GitHubReleasePublishTargetVersionObservationSchema>;
 
 export function githubIssueCreateTargetIdentityDigest(input: {
   repository_id: number;
@@ -854,6 +871,62 @@ export function githubReleaseDraftCreateRequestPayloadDigest(input: {
     input.body ?? null,
     true,
     false,
+    false,
+  ]), "utf8").digest("hex");
+}
+
+export function githubReleasePublishTargetIdentityDigest(input: {
+  repository_id: number;
+  canonical_full_name: string;
+  repository_visibility: "public" | "private";
+  release_id: number;
+  tag_name: string;
+  tag_ref_sha: string;
+  tag_ref_type: "commit" | "tag";
+  target_commit_sha: string;
+  release_name: string;
+  release_body_sha256: string;
+}): string {
+  if (!Number.isSafeInteger(input.repository_id) || input.repository_id <= 0 ||
+      !Number.isSafeInteger(input.release_id) || input.release_id <= 0 ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.tag_ref_sha) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.target_commit_sha) ||
+      !/^[a-f0-9]{64}$/.test(input.release_body_sha256) || !isSafeGitHubRef(input.tag_name) ||
+      !input.release_name || input.release_name.length > 256 || input.release_name !== input.release_name.trim() ||
+      /[\u0000-\u001f\u007f]/.test(input.release_name)) {
+    throw new Error("invalid GitHub release publication target identity");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-release-publish-target-identity.v1",
+    input.repository_id,
+    input.canonical_full_name,
+    input.repository_visibility,
+    input.release_id,
+    input.tag_name,
+    input.tag_ref_sha,
+    input.tag_ref_type,
+    input.target_commit_sha,
+    input.release_name,
+    input.release_body_sha256,
+    true,
+    false,
+    0,
+  ]), "utf8").digest("hex");
+}
+
+export function githubReleasePublishRequestPayloadDigest(input: {
+  owner: string;
+  repo: string;
+  release_id: number;
+}): string {
+  if (!Number.isSafeInteger(input.release_id) || input.release_id <= 0) {
+    throw new Error("invalid GitHub release publication request");
+  }
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-release-publish-request-payload.v1",
+    input.owner,
+    input.repo,
+    input.release_id,
     false,
   ]), "utf8").digest("hex");
 }

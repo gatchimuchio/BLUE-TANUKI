@@ -45,6 +45,7 @@ import {
   githubPullRequestReviewSubmitRequestPayloadDigest,
   githubCodePushRequestPayloadDigest,
   githubReleaseDraftCreateRequestPayloadDigest,
+  githubReleasePublishRequestPayloadDigest,
   normalizeGmailAddressList,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
@@ -261,7 +262,7 @@ export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v6";
     readonly operation: "github.write";
-    readonly operation_name: "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create";
+    readonly operation_name: "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create" | "release.publish";
     readonly status: "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed";
     readonly mutation_status: "provider_accepted" | "provider_rejected" | null;
     readonly http_status: number | null;
@@ -1337,6 +1338,12 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     return githubReleaseDraftCreateRequestPayloadDigest({ owner, repo, tag_name: tagName,
       target_commit_sha: targetCommitSha, name, ...(body === undefined ? {} : { body }) });
   }
+  if (operation === "release.publish") {
+    const releaseId = parameters.release_id;
+    if (typeof releaseId !== "number" || !Number.isSafeInteger(releaseId) || releaseId < 1 ||
+        !allowedKeys(["operation", "owner", "repo", "release_id"])) return undefined;
+    return githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+  }
   return undefined;
 }
 
@@ -1395,7 +1402,9 @@ function githubWriteResultMatches(
           : parameters.operation === "code.push"
             ? { method: "POST", path: "/graphql", status: 200 }
             : parameters.operation === "release.draft.create"
-              ? { method: "POST", path: `/repos/${owner}/${repo}/releases`, status: 201 } : undefined;
+              ? { method: "POST", path: `/repos/${owner}/${repo}/releases`, status: 201 }
+              : parameters.operation === "release.publish" && typeof parameters.release_id === "number"
+                ? { method: "PATCH", path: `/repos/${owner}/${repo}/releases/${parameters.release_id}`, status: 200 } : undefined;
   if (!route || output.method !== route.method || output.path !== route.path ||
       output.mutation_status !== "provider_accepted" && output.mutation_status !== "provider_rejected") return false;
   if (output.mutation_status === "provider_rejected") {
@@ -1479,6 +1488,15 @@ function githubWriteResultMatches(
       Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.name === parameters.name &&
       result.tag_name === parameters.tag_name && result.target_commit_sha === parameters.target_commit_sha &&
       result.draft === true && result.prerelease === false;
+  }
+  if (parameters.operation === "release.publish") {
+    return Object.keys(result).sort().join(",") === "draft,id,name,prerelease,release_body_sha256,release_published,tag_name,target_commit_sha" &&
+      Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.id === parameters.release_id &&
+      typeof result.name === "string" && result.name.length > 0 && result.name.length <= 256 &&
+      typeof result.tag_name === "string" && result.tag_name.length > 0 && result.tag_name.length <= 255 &&
+      typeof result.target_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.target_commit_sha) &&
+      typeof result.release_body_sha256 === "string" && /^[a-f0-9]{64}$/.test(result.release_body_sha256) &&
+      result.draft === false && result.prerelease === false && result.release_published === true;
   }
   if (parameters.operation === "pr.merge") {
     return Object.keys(result).sort().join(",") === "base_ref,head_canonical_full_name,head_ref,head_repository_id,head_sha,id,merge_commit_sha,merge_method,number" &&
@@ -5768,7 +5786,7 @@ export class OperationPlanLedger {
         : binding.status === "provider_rejected" ? "provider_rejected" : null;
       if (!hasConnectedPlanTarget(step) || !binding.operation_plan_binding_digest ||
           !binding.execution_admission?.task_identity_digest || binding.result_observed_at_ms === undefined ||
-        !["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.create", "pr.merge", "pr.review.submit", "pr.comment.create", "code.push", "release.draft.create"].includes(String(operationName)) ||
+        !["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.create", "pr.merge", "pr.review.submit", "pr.comment.create", "code.push", "release.draft.create", "release.publish"].includes(String(operationName)) ||
           committedObservation.schema_version !== "github-write-outcome-observation.v1" ||
           committedObservation.record_type !== "github_write_outcome_observation" ||
           committedObservation.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
@@ -5812,7 +5830,7 @@ export class OperationPlanLedger {
         memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
         observed_at_ms: binding.result_observed_at_ms,
         operation: "github.write",
-        operation_name: operationName as "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create",
+        operation_name: operationName as "issue.create" | "issue.update" | "pr.update" | "issue.close" | "issue.reopen" | "issue.label" | "issue.comment.create" | "pr.create" | "pr.merge" | "pr.review.submit" | "pr.comment.create" | "code.push" | "release.draft.create" | "release.publish",
         status: binding.status as "verified" | "provider_rejected" | "outcome_unknown" | "verification_failed",
         mutation_status: summary?.mutation_status ?? null, http_status: summary?.http_status ?? null,
         provider_result_digest: summary?.provider_result_digest ?? null,

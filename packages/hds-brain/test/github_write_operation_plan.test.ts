@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { githubCodePushRequestPayloadDigest, githubPullRequestReviewSubmitRequestPayloadDigest,
-  githubReleaseDraftCreateRequestPayloadDigest, type OperationStep } from "@blue-tanuki/protocol";
+  githubReleaseDraftCreateRequestPayloadDigest, githubReleasePublishRequestPayloadDigest, type OperationStep } from "@blue-tanuki/protocol";
 import { operationPlanResultValidationMatches } from "../src/operation_plan.js";
 
 describe("github.write code.push Operation Plan result contract", () => {
@@ -115,6 +115,54 @@ describe("github.write release.draft.create Operation Plan result contract", () 
     expect(matches({ ...result, result: { ...result.result, tag_name: "v2.0" } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, target_commit_sha: "f".repeat(40) } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, draft: false } })).toBe(false);
+  });
+});
+
+describe("github.write release.publish Operation Plan result contract", () => {
+  it("accepts only a published release result bound to the requested draft ID", () => {
+    const parameters = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const target = { kind: "external_service" as const, id: "github" };
+    const step = { operation: "github.write", adapter: "external_api", target, parameters } as OperationStep;
+    const validation = { method: "github_write_result_matches", target,
+      expected: { schema_version: "blue-tanuki.github-write-result-validation.v1", operation: "release.publish" } };
+    const binding = { command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
+      executor_command_digest: "e".repeat(64) };
+    const requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner: parameters.owner,
+      repo: parameters.repo, release_id: parameters.release_id });
+    const result = {
+      schema_version: "blue-tanuki.github-write-result.v1",
+      operation: "release.publish",
+      api_host: "api.github.com",
+      repo: "gatchimuchio/blue-tanuki",
+      repository_id: 123,
+      target_identity_digest: "1".repeat(64),
+      request_payload_digest: requestPayloadDigest,
+      command_digest: binding.command_digest,
+      operation_plan_binding_digest: binding.operation_plan_binding_digest,
+      method: "PATCH",
+      path: "/repos/gatchimuchio/blue-tanuki/releases/987",
+      status: 200,
+      mutation_status: "provider_accepted",
+      content_type: "application/json",
+      truncated: false,
+      rate_limit_remaining: "59",
+      github_request_id: "RELEASE-PUBLISH-REQ",
+      result_digest: "3".repeat(64),
+      result: { id: 987, tag_name: "v1.0", target_commit_sha: "a".repeat(40), name: "Reviewed release",
+        release_body_sha256: "b".repeat(64), draft: false, prerelease: false, release_published: true },
+      provider_data_is_untrusted: true,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const matches = (output: unknown) => operationPlanResultValidationMatches(
+      validation as Parameters<typeof operationPlanResultValidationMatches>[0], step, output,
+      binding as Parameters<typeof operationPlanResultValidationMatches>[3]);
+
+    expect(matches(result)).toBe(true);
+    expect(matches({ ...result, path: "/repos/gatchimuchio/blue-tanuki/releases/988" })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, id: 988 } })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, draft: true } })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, release_published: false } })).toBe(false);
   });
 });
 

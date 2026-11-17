@@ -86,6 +86,8 @@ import {
   githubCodePushRequestPayloadDigest,
   githubReleaseDraftCreateTargetIdentityDigest,
   githubReleaseDraftCreateRequestPayloadDigest,
+  githubReleasePublishTargetIdentityDigest,
+  githubReleasePublishRequestPayloadDigest,
   googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest,
   googleDriveUpdateRequestPayloadDigest,
@@ -4140,7 +4142,7 @@ ${planControl.question}`,
           typeof owner !== "string" || typeof repo !== "string" ||
           (operation !== "issue.create" && operation !== "issue.update" && operation !== "pr.update" && operation !== "issue.close" && operation !== "issue.reopen" && operation !== "issue.label" && operation !== "issue.comment.create" &&
             operation !== "pr.create" && operation !== "pr.merge" && operation !== "pr.review.submit" && operation !== "pr.comment.create" && operation !== "code.push" &&
-            operation !== "release.draft.create")) {
+            operation !== "release.draft.create" && operation !== "release.publish")) {
         throw new Error("HDS github.write requires a supported plan-bound target version observation");
       }
       const observation = GitHubWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
@@ -4355,6 +4357,28 @@ ${planControl.question}`,
         targetIdentityDigest = githubReleaseDraftCreateTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, tag_name: tagName!, tag_ref_sha: observation.tag_ref_sha,
           tag_ref_type: observation.tag_ref_type, target_commit_sha: targetCommitSha });
+      } else if (operation === "release.publish") {
+        const releaseId = args.release_id;
+        if (typeof releaseId !== "number" || !Number.isSafeInteger(releaseId) || releaseId < 1) {
+          throw new Error("HDS github.write release.publish release_id is invalid");
+        }
+        if (!Object.keys(args).every((key) => ["operation", "owner", "repo", "release_id", "max_bytes"].includes(key)) ||
+            observation.operation !== "release.publish" || observation.release_id !== releaseId ||
+            observation.release_draft !== true || observation.release_prerelease !== false ||
+            observation.release_asset_count !== 0) {
+          throw new Error("HDS github.write release.publish parameters or observed draft are invalid");
+        }
+        requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+        targetIdentityDigest = githubReleasePublishTargetIdentityDigest({ repository_id: observation.repository_id,
+          canonical_full_name: observation.canonical_full_name,
+          repository_visibility: observation.repository_visibility,
+          release_id: observation.release_id,
+          tag_name: observation.tag_name,
+          tag_ref_sha: observation.tag_ref_sha,
+          tag_ref_type: observation.tag_ref_type,
+          target_commit_sha: observation.target_commit_sha,
+          release_name: observation.release_name,
+          release_body_sha256: observation.release_body_sha256 });
       } else if (operation === "pr.merge") {
         const pullRequestNumber = positiveNumber("number");
         const expectedHeadSha = optionalText("expected_head_sha");
