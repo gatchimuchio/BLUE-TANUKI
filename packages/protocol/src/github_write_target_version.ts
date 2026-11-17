@@ -202,6 +202,7 @@ export const GitHubReleasePublishTargetVersionObservationSchema = GitHubWriteTar
   target_commit_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   release_name: z.string().min(1).max(256),
   release_body_sha256: DigestSchema,
+  make_latest: z.enum(["true", "false", "legacy"]),
   release_draft: z.literal(true),
   release_prerelease: z.literal(false),
   release_asset_count: z.literal(0),
@@ -918,8 +919,10 @@ export function githubReleasePublishRequestPayloadDigest(input: {
   owner: string;
   repo: string;
   release_id: number;
+  make_latest: "true" | "false" | "legacy";
 }): string {
-  if (!Number.isSafeInteger(input.release_id) || input.release_id <= 0) {
+  if (!Number.isSafeInteger(input.release_id) || input.release_id <= 0 ||
+      !["true", "false", "legacy"].includes(input.make_latest)) {
     throw new Error("invalid GitHub release publication request");
   }
   return createHash("sha256").update(JSON.stringify([
@@ -928,6 +931,7 @@ export function githubReleasePublishRequestPayloadDigest(input: {
     input.repo,
     input.release_id,
     false,
+    input.make_latest,
   ]), "utf8").digest("hex");
 }
 

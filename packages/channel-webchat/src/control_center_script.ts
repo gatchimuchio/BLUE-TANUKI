@@ -8489,6 +8489,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               review.provider_observation_is_atomic !== false ||
               review.notification_effect !== "github_api_may_trigger_notifications" ||
               review.publication_effect !== "release_becomes_published" ||
+              (review.make_latest !== "true" && review.make_latest !== "false" && review.make_latest !== "legacy") ||
               review.draft !== true || review.prerelease !== false || review.release_asset_count !== 0 ||
               review.release_published !== true || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
@@ -8519,8 +8520,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["既存tag", review.tag_name + "（" + review.tag_ref_type + " object " + review.tag_ref_sha + "）"],
             ["tagが指すcommit", review.target_commit_sha],
             ["公開状態", "Draftから公開済みreleaseへ変更します。GitHubはtagのソースアーカイブを公開し、他の利用者が閲覧できるようになります。release assetはありません。"],
+            ["最新releaseの指定", review.make_latest === "true" ? "このreleaseを最新releaseに指定します。" :
+              review.make_latest === "false" ? "このreleaseを最新releaseに指定しません。" :
+                "GitHubのlegacy規則（作成日時とsemantic version）で最新releaseを選ばせます。"],
             ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
-            ["作用", "承認直前にrepository・release本文・tag・commitを再照合し、draft=falseだけを送信後、GitHubからreadbackします。照合とPATCHは非原子的です。結果不明時は自動再送しません。"],
+            ["作用", "承認直前にrepository・release本文・tag・commitを再照合し、draft=falseと審査済みmake_latest方針を一回送信後、GitHubからreadbackします。照合とPATCHは非原子的です。結果不明時は自動再送しません。"],
           ].forEach(function (field) {
             const row = document.createElement("p");
             const label = document.createElement("strong");

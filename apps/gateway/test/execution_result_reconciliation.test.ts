@@ -457,20 +457,21 @@ function githubWriteScenario(operation: GitHubWriteOperation, commentKind?: "pul
     const releaseBody = "Synthetic existing draft release body never retained in M";
     const releaseBodySha256 = createHash("sha256").update(releaseBody, "utf8").digest("hex");
     return { operation, step_id: "write-release-publish",
-      parameters: { operation, owner, repo, release_id: releaseId },
+      parameters: { operation, owner, repo, release_id: releaseId, make_latest: "false" },
       target_identity_digest: githubReleasePublishTargetIdentityDigest({ repository_id: repositoryId,
         canonical_full_name: canonicalFullName, repository_visibility: "public", release_id: releaseId,
         tag_name: tagName, tag_ref_sha: tagRefSha, tag_ref_type: "commit", target_commit_sha: targetCommitSha,
         release_name: name, release_body_sha256: releaseBodySha256 }),
-      request_payload_digest: githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId }),
+      request_payload_digest: githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId, make_latest: "false" }),
       target_fields: { release_id: releaseId, tag_name: tagName, tag_ref_sha: tagRefSha, tag_ref_type: "commit",
         target_commit_sha: targetCommitSha, release_name: name, release_body_sha256: releaseBodySha256,
+        make_latest: "false",
         release_draft: true, release_prerelease: false, release_asset_count: 0 },
       method: "PATCH", path: `/repos/${owner}/${repo}/releases/${releaseId}`, accepted_status: 200,
       accepted_provider_response: { id: releaseId, tag_name: tagName, target_commitish: targetCommitSha, name,
         body: releaseBody, draft: false, prerelease: false, assets: [] },
       accepted_result: { id: releaseId, tag_name: tagName, target_commit_sha: targetCommitSha, name,
-        release_body_sha256: releaseBodySha256, draft: false, prerelease: false, release_published: true },
+        release_body_sha256: releaseBodySha256, make_latest_policy: "false", draft: false, prerelease: false, release_published: true },
       private_values: [name, releaseBody] };
   }
   const prTitle = "synthetic pull request title";
@@ -3488,7 +3489,8 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
                     tag_ref_sha: scenario.target_fields.tag_ref_sha, tag_ref_type: scenario.target_fields.tag_ref_type,
                     target_commit_sha: scenario.target_fields.target_commit_sha,
                     release_name: scenario.target_fields.release_name, body,
-                    release_body_sha256: scenario.target_fields.release_body_sha256, draft: true, prerelease: false,
+                    release_body_sha256: scenario.target_fields.release_body_sha256,
+                    make_latest: scenario.target_fields.make_latest, draft: true, prerelease: false,
                     release_asset_count: 0, release_published: true, publication_effect: "release_becomes_published" }
               : inlineReview
                 ? { kind: "github_pull_request_comment_create", operation: "github.write.pr.comment.create",
@@ -3563,7 +3565,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
           : operation === "release.draft.create"
             ? { tag_name: releaseTagName, target_commitish: scenario.target_fields.target_commit_sha,
               name: scenario.parameters.name, body, draft: true, prerelease: false, generate_release_notes: false }
-            : operation === "release.publish" ? { draft: false }
+            : operation === "release.publish" ? { draft: false, make_latest: scenario.parameters.make_latest }
           : { title, body };
       if (expectedMutationBody === undefined) expect(writes[0]!.body).toBe("");
       else expect(JSON.parse(writes[0]!.body)).toEqual(expectedMutationBody);

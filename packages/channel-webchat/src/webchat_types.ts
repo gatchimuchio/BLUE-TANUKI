@@ -1345,6 +1345,7 @@ export interface WebChatGitHubReleasePublishContentReview {
   release_name: string;
   body: string;
   release_body_sha256: string;
+  make_latest: "true" | "false" | "legacy";
   draft: true;
   prerelease: false;
   release_asset_count: 0;

@@ -1340,9 +1340,11 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
   }
   if (operation === "release.publish") {
     const releaseId = parameters.release_id;
+    const makeLatest = parameters.make_latest;
     if (typeof releaseId !== "number" || !Number.isSafeInteger(releaseId) || releaseId < 1 ||
-        !allowedKeys(["operation", "owner", "repo", "release_id"])) return undefined;
-    return githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+        (makeLatest !== "true" && makeLatest !== "false" && makeLatest !== "legacy") ||
+        !allowedKeys(["operation", "owner", "repo", "release_id", "make_latest"])) return undefined;
+    return githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId, make_latest: makeLatest });
   }
   return undefined;
 }
@@ -1490,12 +1492,13 @@ function githubWriteResultMatches(
       result.draft === true && result.prerelease === false;
   }
   if (parameters.operation === "release.publish") {
-    return Object.keys(result).sort().join(",") === "draft,id,name,prerelease,release_body_sha256,release_published,tag_name,target_commit_sha" &&
+    return Object.keys(result).sort().join(",") === "draft,id,make_latest_policy,name,prerelease,release_body_sha256,release_published,tag_name,target_commit_sha" &&
       Number.isSafeInteger(result.id) && (result.id as number) > 0 && result.id === parameters.release_id &&
       typeof result.name === "string" && result.name.length > 0 && result.name.length <= 256 &&
       typeof result.tag_name === "string" && result.tag_name.length > 0 && result.tag_name.length <= 255 &&
       typeof result.target_commit_sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.target_commit_sha) &&
       typeof result.release_body_sha256 === "string" && /^[a-f0-9]{64}$/.test(result.release_body_sha256) &&
+      result.make_latest_policy === parameters.make_latest &&
       result.draft === false && result.prerelease === false && result.release_published === true;
   }
   if (parameters.operation === "pr.merge") {

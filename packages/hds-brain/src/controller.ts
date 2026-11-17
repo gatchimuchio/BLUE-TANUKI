@@ -4359,16 +4359,19 @@ ${planControl.question}`,
           tag_ref_type: observation.tag_ref_type, target_commit_sha: targetCommitSha });
       } else if (operation === "release.publish") {
         const releaseId = args.release_id;
+        const makeLatest = args.make_latest;
         if (typeof releaseId !== "number" || !Number.isSafeInteger(releaseId) || releaseId < 1) {
           throw new Error("HDS github.write release.publish release_id is invalid");
         }
-        if (!Object.keys(args).every((key) => ["operation", "owner", "repo", "release_id", "max_bytes"].includes(key)) ||
+        if ((makeLatest !== "true" && makeLatest !== "false" && makeLatest !== "legacy") ||
+            !Object.keys(args).every((key) => ["operation", "owner", "repo", "release_id", "make_latest", "max_bytes"].includes(key)) ||
             observation.operation !== "release.publish" || observation.release_id !== releaseId ||
+            observation.make_latest !== makeLatest ||
             observation.release_draft !== true || observation.release_prerelease !== false ||
             observation.release_asset_count !== 0) {
-          throw new Error("HDS github.write release.publish parameters or observed draft are invalid");
+          throw new Error("HDS github.write release.publish parameters, latest policy, or observed draft are invalid");
         }
-        requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+        requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId, make_latest: makeLatest });
         targetIdentityDigest = githubReleasePublishTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name,
           repository_visibility: observation.repository_visibility,

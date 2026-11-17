@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { githubReleasePublishRequestPayloadDigest } from "@blue-tanuki/protocol";
 import {
   invokeFileSearch,
   inspectFileSearchTargetVersion,
@@ -3944,8 +3945,9 @@ describe("built-in tools", () => {
     expect(writes).toBe(1);
   });
 
-  it("github.write release.publish reviews and publishes one exact asset-free draft", async () => {
-    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+  it.each(["true", "false", "legacy"] as const)(
+    "github.write release.publish reviews and publishes one exact asset-free draft with make_latest=%s", async (make_latest) => {
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987, make_latest };
     const body = "# Reviewed release\n\nOnly this exact draft may be published.";
     const targetCommitSha = "a".repeat(40);
     const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
@@ -3965,23 +3967,30 @@ describe("built-in tools", () => {
       writes += 1;
       expect(target.method).toBe("PATCH");
       expect(target.path).toBe(releasePath);
-      expect(target.body).toEqual({ draft: false });
+      expect(target.body).toEqual({ draft: false, make_latest });
       currentRelease = { ...currentRelease, draft: false };
       return { ...githubReadJson(currentRelease), request_id: "RELEASE-PUBLISH-REQ" };
     };
     const options = fakeGitHubWrite(request, undefined, read_request);
     const commandDigest = "c".repeat(64);
     const planDigest = "d".repeat(64);
+    await expect(inspectGitHubReleasePublishTargetVersion({ operation: "release.publish", owner: "gatchimuchio",
+      repo: "blue-tanuki", release_id: 987 }, { ...options, command_digest: commandDigest,
+      operation_plan_binding_digest: planDigest })).rejects.toThrow(/explicit make_latest policy/);
+    expect(writes).toBe(0);
     const target = await inspectGitHubReleasePublishTargetVersion(args, { ...options,
       command_digest: commandDigest, operation_plan_binding_digest: planDigest });
     expect(target).toMatchObject({ operation: "release.publish", release_id: 987, tag_name: "v1.0",
       target_commit_sha: targetCommitSha, release_name: "Reviewed release", release_draft: true,
-      release_prerelease: false, release_asset_count: 0, mutation_sent: false, used_for_authority: false,
+      release_prerelease: false, release_asset_count: 0, make_latest, mutation_sent: false, used_for_authority: false,
       may_execute: false });
+    expect(target.request_payload_digest).toBe(githubReleasePublishRequestPayloadDigest({ owner: args.owner,
+      repo: args.repo, release_id: args.release_id, make_latest }));
     const review = await inspectGitHubReleasePublishContentReview(args, { ...options,
       command_digest: commandDigest, operation_plan_binding_digest: planDigest });
     expect(review).toMatchObject({ kind: "github_release_publish", operation: "github.write.release.publish",
       release_id: 987, body, release_body_sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+      make_latest,
       draft: true, prerelease: false, release_asset_count: 0, release_published: true,
       publication_effect: "release_becomes_published", provider_observation_is_atomic: false,
       used_for_authority: false, may_execute: false });
@@ -3989,14 +3998,14 @@ describe("built-in tools", () => {
       operation_plan_binding_digest: planDigest, expected_target_version_observation: target }) as Record<string, unknown>;
     expect(result).toMatchObject({ operation: "release.publish", method: "PATCH", path: releasePath, status: 200,
       mutation_status: "provider_accepted", result: { id: 987, tag_name: "v1.0", target_commit_sha: targetCommitSha,
-        name: "Reviewed release", draft: false, prerelease: false, release_published: true } });
+        name: "Reviewed release", make_latest_policy: make_latest, draft: false, prerelease: false, release_published: true } });
     expect(writes).toBe(1);
     expect(JSON.stringify(result)).not.toContain(body);
     expect(JSON.stringify(result)).not.toContain("ghp_dummy");
   });
 
   it("github.write release.publish blocks changed draft content and drafts with assets before mutation", async () => {
-    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987, make_latest: "false" };
     const targetCommitSha = "a".repeat(40);
     const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
     let currentRelease: Record<string, unknown> = { id: 987, tag_name: "v1.0", name: "Reviewed release",
@@ -4033,7 +4042,7 @@ describe("built-in tools", () => {
   });
 
   it("github.write release.publish records uncertain readback and never retries the public effect", async () => {
-    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const args = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987, make_latest: "false" };
     const releasePath = "/repos/gatchimuchio/blue-tanuki/releases/987";
     const release: Record<string, unknown> = { id: 987, tag_name: "v1.0", name: "Reviewed release",
       body: "Reviewed body", draft: true, prerelease: false, assets: [] };
@@ -4055,6 +4064,7 @@ describe("built-in tools", () => {
       writes += 1;
       published = true;
       expect(target.method).toBe("PATCH");
+      expect(target.body).toEqual({ draft: false, make_latest: "false" });
       return { ...githubReadJson({ ...release, draft: false }), request_id: "RELEASE-PUBLISH-UNCERTAIN" };
     }, undefined, read_request);
     const target = await inspectGitHubReleasePublishTargetVersion(args, { ...options,

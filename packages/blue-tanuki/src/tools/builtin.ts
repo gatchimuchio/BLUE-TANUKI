@@ -1254,14 +1254,16 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
 
   if (operation === "release.publish") {
     const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
-    if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key))) {
-      throw new Error("github.write release.publish accepts only one exact draft release ID; mutation_sent=false");
+    const makeLatest = args.make_latest;
+    if ((makeLatest !== "true" && makeLatest !== "false" && makeLatest !== "legacy") ||
+        Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "make_latest", "max_bytes"].includes(key))) {
+      throw new Error("github.write release.publish requires one exact draft ID and explicit make_latest policy; mutation_sent=false");
     }
     return {
       operation,
       method: "PATCH",
       path: `/repos/${ownerPath}/${repoPath}/releases/${releaseId}`,
-      body: { draft: false },
+      body: { draft: false, make_latest: makeLatest },
       repo,
     };
   }
@@ -2916,7 +2918,7 @@ async function inspectGitHubReleasePublishSnapshot(args: Record<string, unknown>
   if (route.operation !== "release.publish") {
     throw new Error(`github.write ${route.operation} release target observation is not implemented; status=BUILD_GAP`);
   }
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key))) {
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "make_latest", "max_bytes"].includes(key))) {
     throw new Error("github.write release.publish contains unsupported arguments; mutation_sent=false");
   }
   const commandDigest = opts.command_digest;
@@ -2931,6 +2933,10 @@ async function inspectGitHubReleasePublishSnapshot(args: Record<string, unknown>
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
   const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
+  const makeLatest = route.body.make_latest;
+  if (makeLatest !== "true" && makeLatest !== "false" && makeLatest !== "legacy") {
+    throw new Error("github.write release.publish requires an explicit make_latest policy; mutation_sent=false");
+  }
   const maxBytes = positiveIntArg(args, "max_bytes", 512_000, 512_000);
   const readRequest = opts.read_request ?? defaultGitHubReadRequest;
   const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
@@ -3001,7 +3007,7 @@ async function inspectGitHubReleasePublishSnapshot(args: Record<string, unknown>
     release_name: releaseName,
     release_body_sha256: releaseBodySha256,
   });
-  const requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
+  const requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId, make_latest: makeLatest });
   const observation = GitHubReleasePublishTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.github-write-target-version.v1",
     operation: "release.publish",
@@ -3017,6 +3023,7 @@ async function inspectGitHubReleasePublishSnapshot(args: Record<string, unknown>
     target_commit_sha: targetCommitSha,
     release_name: releaseName,
     release_body_sha256: releaseBodySha256,
+    make_latest: makeLatest,
     release_draft: true,
     release_prerelease: false,
     release_asset_count: 0,
@@ -3062,12 +3069,16 @@ export function assertGitHubReleasePublishTargetVersion(args: Record<string, unk
     release_name: observation.release_name,
     release_body_sha256: observation.release_body_sha256,
   });
-  const payloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId });
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "max_bytes"].includes(key)) ||
+  const makeLatest = route.body.make_latest;
+  if (makeLatest !== "true" && makeLatest !== "false" && makeLatest !== "legacy") {
+    throw new Error("github.write release.publish requires an explicit make_latest policy");
+  }
+  const payloadDigest = githubReleasePublishRequestPayloadDigest({ owner, repo, release_id: releaseId, make_latest: makeLatest });
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "release_id", "make_latest", "max_bytes"].includes(key)) ||
       route.operation !== "release.publish" || observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
       observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
-      observation.release_id !== releaseId || observation.release_draft !== true ||
+      observation.release_id !== releaseId || observation.make_latest !== makeLatest || observation.release_draft !== true ||
       observation.release_prerelease !== false || observation.release_asset_count !== 0 ||
       observation.command_digest !== commandDigest ||
       observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
@@ -3099,6 +3110,7 @@ export async function inspectGitHubReleasePublishContentReview(args: Record<stri
     release_name: snapshot.releaseName,
     body: snapshot.releaseBody,
     release_body_sha256: observation.release_body_sha256,
+    make_latest: observation.make_latest,
     draft: true as const,
     prerelease: false as const,
     release_asset_count: 0 as const,
@@ -3244,7 +3256,7 @@ async function invokeGitHubReleasePublish(args: Record<string, unknown>, opts: G
   const releaseId = positiveIntArg(args, "release_id", 1, Number.MAX_SAFE_INTEGER);
   const expectedPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/${releaseId}`;
   if (route.operation !== "release.publish" || route.method !== "PATCH" || route.path !== expectedPath ||
-      JSON.stringify(route.body) !== JSON.stringify({ draft: false })) {
+      JSON.stringify(route.body) !== JSON.stringify({ draft: false, make_latest: route.body.make_latest })) {
     throw new Error("github.write release.publish route mismatch; mutation_sent=false");
   }
   const env = opts.env ?? process.env;
@@ -3271,7 +3283,8 @@ async function invokeGitHubReleasePublish(args: Record<string, unknown>, opts: G
   let response: GitHubWriteResponse;
   try {
     assertToolExecutionNotCancelled(opts.signal, "github.write release.publish existing draft");
-    response = await request({ method: "PATCH", path: route.path, body: { draft: false }, maxBytes, token }, opts.signal);
+    response = await request({ method: "PATCH", path: route.path,
+      body: { draft: false, make_latest: expected.make_latest }, maxBytes, token }, opts.signal);
   } catch {
     throw new Error("github.write release.publish outcome_unknown; request may have reached GitHub; do not retry automatically");
   }
@@ -3349,7 +3362,7 @@ async function invokeGitHubReleasePublish(args: Record<string, unknown>, opts: G
 
   const result = { id: expected.release_id, tag_name: expected.tag_name, target_commit_sha: expected.target_commit_sha,
     name: expected.release_name, release_body_sha256: expected.release_body_sha256,
-    draft: false, prerelease: false, release_published: true };
+    make_latest_policy: expected.make_latest, draft: false, prerelease: false, release_published: true };
   return {
     schema_version: "blue-tanuki.github-write-result.v1", operation: "release.publish", api_host: "api.github.com",
     repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,
@@ -7857,7 +7870,7 @@ export const githubReadTool: Tool = {
 export const githubWriteTool: Tool = {
   name: "github.write",
   adapter_version: "1.0.0-rc.1",
-  description: "Create plan-bound GitHub issues, comments, pull requests, submit pull request reviews to an exact expected HEAD, push one new file to an existing non-default branch, create unpublished draft releases on exact existing tags, and publish an exact asset-free draft release as a separate effect. Issue close and reopen are separate, each limited to one exact unlocked issue. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
+  description: "Create plan-bound GitHub issues, comments, pull requests, submit pull request reviews to an exact expected HEAD, push one new file to an existing non-default branch, create unpublished draft releases on exact existing tags, and publish an exact asset-free draft release as a separate effect. release.publish requires an explicit make_latest policy of true, false, or legacy, which is shown in the L3 review. Issue close and reopen are separate, each limited to one exact unlocked issue. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
     if (githubOperation(args) === "release.draft.create") {

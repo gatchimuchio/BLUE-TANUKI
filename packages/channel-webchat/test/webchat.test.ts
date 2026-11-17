@@ -2300,6 +2300,7 @@ describe("WebChatChannel — Control Center shell", () => {
       release_name: "Reviewed release",
       body: bodyText,
       release_body_sha256: "2".repeat(64),
+      make_latest: "false",
       draft: true,
       prerelease: false,
       release_asset_count: 0,
@@ -2359,6 +2360,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(preformatted).toContain("Reviewed release");
     expect(preformatted).toContain(bodyText);
     expect(collectText(view)).toContain("Draftから公開済みreleaseへ変更します");
+    expect(collectText(view)).toContain("このreleaseを最新releaseに指定しません。");
     expect(collectText(view)).toContain("通知を発生させる場合があります");
     expect(collectText(view)).toContain("PATCHは非原子的");
     expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);

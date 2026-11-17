@@ -120,7 +120,7 @@ describe("github.write release.draft.create Operation Plan result contract", () 
 
 describe("github.write release.publish Operation Plan result contract", () => {
   it("accepts only a published release result bound to the requested draft ID", () => {
-    const parameters = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987 };
+    const parameters = { operation: "release.publish", owner: "gatchimuchio", repo: "blue-tanuki", release_id: 987, make_latest: "false" as const };
     const target = { kind: "external_service" as const, id: "github" };
     const step = { operation: "github.write", adapter: "external_api", target, parameters } as OperationStep;
     const validation = { method: "github_write_result_matches", target,
@@ -128,7 +128,7 @@ describe("github.write release.publish Operation Plan result contract", () => {
     const binding = { command_digest: "c".repeat(64), operation_plan_binding_digest: "d".repeat(64),
       executor_command_digest: "e".repeat(64) };
     const requestPayloadDigest = githubReleasePublishRequestPayloadDigest({ owner: parameters.owner,
-      repo: parameters.repo, release_id: parameters.release_id });
+      repo: parameters.repo, release_id: parameters.release_id, make_latest: parameters.make_latest });
     const result = {
       schema_version: "blue-tanuki.github-write-result.v1",
       operation: "release.publish",
@@ -149,7 +149,7 @@ describe("github.write release.publish Operation Plan result contract", () => {
       github_request_id: "RELEASE-PUBLISH-REQ",
       result_digest: "3".repeat(64),
       result: { id: 987, tag_name: "v1.0", target_commit_sha: "a".repeat(40), name: "Reviewed release",
-        release_body_sha256: "b".repeat(64), draft: false, prerelease: false, release_published: true },
+        release_body_sha256: "b".repeat(64), make_latest_policy: "false", draft: false, prerelease: false, release_published: true },
       provider_data_is_untrusted: true,
       used_for_authority: false,
       may_execute: false,
@@ -163,6 +163,7 @@ describe("github.write release.publish Operation Plan result contract", () => {
     expect(matches({ ...result, result: { ...result.result, id: 988 } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, draft: true } })).toBe(false);
     expect(matches({ ...result, result: { ...result.result, release_published: false } })).toBe(false);
+    expect(matches({ ...result, result: { ...result.result, make_latest_policy: "true" } })).toBe(false);
   });
 });
 

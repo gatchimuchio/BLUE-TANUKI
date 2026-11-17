@@ -521,10 +521,11 @@ function isGitHubWriteProviderAcceptance(command: ExecuteCommand, value: unknown
       summary.draft === true && summary.prerelease === false;
   }
   if (operation === "release.publish" && target.operation === "release.publish") {
-    return Object.keys(summary).sort().join(",") === "draft,id,name,prerelease,release_body_sha256,release_published,tag_name,target_commit_sha" &&
+    return Object.keys(summary).sort().join(",") === "draft,id,make_latest_policy,name,prerelease,release_body_sha256,release_published,tag_name,target_commit_sha" &&
       summary.id === target.release_id && summary.id === args.release_id &&
       summary.tag_name === target.tag_name && summary.target_commit_sha === target.target_commit_sha &&
       summary.name === target.release_name && summary.release_body_sha256 === target.release_body_sha256 &&
+      summary.make_latest_policy === target.make_latest && summary.make_latest_policy === args.make_latest &&
       summary.draft === false && summary.prerelease === false && summary.release_published === true;
   }
   if (operation === "pr.merge" && target.operation === "pr.merge") {
@@ -2093,6 +2094,7 @@ export class Executor {
             githubReview.release_name !== releaseObservation.release_name ||
             githubReview.release_body_sha256 !== releaseObservation.release_body_sha256 ||
             githubReview.release_body_sha256 !== bodyDigest || githubReview.draft !== true ||
+            githubReview.make_latest !== releaseObservation.make_latest || githubReview.make_latest !== args.make_latest ||
             githubReview.prerelease !== false || githubReview.release_asset_count !== 0 ||
             githubReview.release_published !== true || githubReview.publication_effect !== "release_becomes_published") {
           throw new Error("github.write release.publish content review returned evidence for another command, target, or plan source");
