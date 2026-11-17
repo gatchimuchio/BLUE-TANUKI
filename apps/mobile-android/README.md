@@ -2,6 +2,15 @@
 
 BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link broker contractを使う。Android clientは下流のoperator surfaceであり、ownerの判断を代行せず、承認を付与せず、BLUE-TANUKI Gatewayを直接呼び出さない。
 
+## ワークスペースのpackage入口
+
+リポジトリのルートから次を実行すると、Android release variantのAPKとAABを生成し、ZIP構造・source SHA-256・artifact SHA-256を検証する。
+
+    corepack pnpm package:android
+    corepack pnpm package:android:verify
+
+生成物とsource-bound manifestはrelease/androidへ保存する。APK/AABは署名設定なしのsource buildで、install、実行、実Broker接続、Store提出、配布準備を証明しない。署名資格は使用せず、署名設定がGradleへ追加された場合はこのbuilderを停止する。manifestのsecrets_reviewはnot_performedであり、秘密を含まないという監査結果ではない。
+
 ## 現在の実装
 
 - ownerがDesktopで一回限りの招待を発行するときに使う128-bit device IDを生成・保存する。起動時に保存値を再読込し、旧形式の資格情報を移行するときはそのdevice IDを引き継ぐ。資格情報が保存されている間はdevice IDを変更できない。

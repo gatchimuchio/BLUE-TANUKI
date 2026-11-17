@@ -269,10 +269,14 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Autostart: not enabled by installer");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "post-install doctor");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Expand-Archive");
-  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "BLUE-TANUKI Safe Mode");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "This setup script must be run from the packaged Windows installer zip.");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "INSTALL_WINDOWS.cmd -BuildFromSource");
   requireNotIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "required package directory missing");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "safe-target.ps1");
+
+  const winSafeTarget = read("install/windows/safe-target.ps1");
+  requireIncludes("install/windows/safe-target.ps1", winSafeTarget, "BLUE-TANUKI Safe Mode.lnk");
+  requireIncludes("install/windows/safe-target.ps1", winSafeTarget, "external providers and connectors disabled");
 
   const winProductLauncher = read("install/windows/product/BlueTanukiLauncher.ps1");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Get-ControlCenterUrl");
@@ -563,16 +567,15 @@ function main(): void {
     'assert_no_symlinks_in_tree "$target" "$2"',
     'rm -rf -- "$target"',
   ]);
-  requireIncludes(
-    "install/unix/product/BlueTanukiUninstall.sh",
-    unixProductUninstall,
-    'if [ "$PURGE" = "1" ]; then\n  remove_target "$DATA_ROOT" data_root',
-  );
-  requireIncludes(
-    "install/unix/product/BlueTanukiUninstall.sh",
-    unixProductUninstall,
-    'if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then remove_target "$CONFIG_ROOT" config_root; fi',
-  );
+  requireOrderedIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, [
+    'if [ "$PURGE" = "1" ]; then',
+    'assert_product_data_root_markers "$INSTALL_ROOT"',
+    'if [ "$CONFIG_ROOT" != "$DATA_ROOT" ]; then',
+    'remove_target "$CONFIG_ROOT" config_root',
+    'assert_product_owner_marker "$DATA_ROOT/.blue-tanuki-owner"',
+    'remove_target "$DATA_ROOT" data_root',
+    'Data retained at: $DATA_ROOT',
+  ]);
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Data retained");
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Config retained");
   requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "uninstall_result=pass");
@@ -762,7 +765,7 @@ function main(): void {
   requireIncludes(
     "docs/UPDATE_ROLLBACK_RUNBOOK.md",
     runbook,
-    "does not currently implement an automatic updater",
+    "does not implement an automatic updater",
   );
   requireIncludes(
     "docs/UPDATE_ROLLBACK_RUNBOOK.md",
@@ -818,6 +821,16 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
   requireIncludes("package.json", packageJson, "\"package:windows\"");
   requireIncludes("package.json", packageJson, "\"package:windows:verify\"");
+  requireIncludes("package.json", packageJson, "\"package:android\"");
+  requireIncludes("package.json", packageJson, "\"package:android:verify\"");
+  const androidPackager = read("scripts/package_android.ts");
+  requireIncludes("scripts/package_android.ts", androidPackager, ":app:assembleRelease");
+  requireIncludes("scripts/package_android.ts", androidPackager, ":app:bundleRelease");
+  const androidPackageCommon = read("scripts/android_package_common.ts");
+  requireIncludes("scripts/android_package_common.ts", androidPackageCommon, 'path.join(workspaceRoot, "release", "android")');
+  const androidVerifier = read("scripts/verify_android_package.ts");
+  requireIncludes("scripts/verify_android_package.ts", androidVerifier, "source-bound manifest");
+  requireIncludes("scripts/verify_android_package.ts", androidVerifier, "base/manifest/AndroidManifest.xml");
   requireIncludes("package.json", packageJson, "scripts/package_windows_iexpress.ts");
   requireIncludes("package.json", packageJson, "scripts/verify_windows_iexpress.ts");
   requireIncludes("package.json", packageJson, "\"package:linux\"");
