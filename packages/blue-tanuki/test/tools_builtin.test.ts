@@ -3580,12 +3580,13 @@ describe("built-in tools", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
-    "shell.exec uses Linux namespaces and writes only inside its dedicated root",
+    "shell.exec isolates Linux workspace writes and discards them on completion",
     async () => {
       const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-root-"));
       const root = path.join(parent, "root");
       const outside = path.join(parent, "outside.txt");
       await fs.mkdir(root);
+      await fs.writeFile(path.join(root, "preserve.txt"), "baseline");
       const providerPath = fileURLToPath(
         new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
       );
@@ -3593,13 +3594,19 @@ describe("built-in tools", () => {
         const result = await invokeShellExec(
           {
             cmd: "sh",
-            args: ["-c", `printf inside > inside.txt; printf outside > '${outside}' || true`],
+            args: ["-c", [
+              "printf inside > inside.txt",
+              "test \"$(cat inside.txt)\" = inside",
+              "printf changed > preserve.txt",
+              `printf outside > '${outside}' || true`,
+            ].join("; ")],
           },
           { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
         ) as Record<string, unknown>;
         expect(result.exit_code).toBe(0);
         expect(result.process_tree_empty).toBe(true);
-        expect(await fs.readFile(path.join(root, "inside.txt"), "utf8")).toBe("inside");
+        expect(await fs.readFile(path.join(root, "preserve.txt"), "utf8")).toBe("baseline");
+        await expect(fs.access(path.join(root, "inside.txt"))).rejects.toThrow();
         await expect(fs.access(outside)).rejects.toThrow();
       } finally {
         await fs.rm(parent, { recursive: true, force: true });

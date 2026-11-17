@@ -1,5 +1,5 @@
-name: Temporary Linux workspace quota verification
-run-name: Linux workspace quota on ${{ github.ref_name }}
+name: Temporary Linux shell workspace verification
+run-name: Linux shell workspace on ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -8,13 +8,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: temporary-linux-workspace-quota
+  group: temporary-linux-shell-workspace
   cancel-in-progress: false
 
 jobs:
-  linux-workspace-quota:
+  linux-shell-workspace:
     name: Native Linux build and focused shell tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - name: Check out selected commit
@@ -32,6 +32,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes apparmor bubblewrap
+          package_version="$(dpkg-query -W -f='${Version}' bubblewrap)"
+          printf 'bubblewrap_package_version=%s\n' "$package_version"
+          dpkg --compare-versions "$package_version" ge '0.11.1-1ubuntu0.2'
+          if [[ -u /usr/bin/bwrap ]]; then
+            echo "refusing to test with a setuid Bubblewrap binary" >&2
+            exit 1
+          fi
+          /usr/bin/bwrap --version
+          /usr/bin/bwrap --help | grep -F -- '--tmp-overlay'
 
       - name: Start and verify the systemd user manager
         shell: bash
@@ -104,8 +113,8 @@ jobs:
       - name: Verify Linux isolation diagnostic filtering
         run: cargo test --locked --offline --manifest-path packages/blue-tanuki/native/linux-isolation/Cargo.toml
 
-      - name: Verify Linux shell workspace and aggregate quotas
-        run: pnpm exec vitest run packages/blue-tanuki/test/tools_builtin.test.ts --testNamePattern='shell\.exec (uses Linux namespaces and writes only inside its dedicated root|enforces the per-file size limit|bounds aggregate workspace writes and commits only the sandbox view)'
+      - name: Verify temporary Linux workspace isolation and file limit
+        run: pnpm exec vitest run packages/blue-tanuki/test/tools_builtin.test.ts --testNamePattern='shell\.exec (isolates Linux workspace writes and discards them on completion|enforces the per-file size limit)'
 
       - name: Capture transient user-service diagnostics after test failure
         if: failure()

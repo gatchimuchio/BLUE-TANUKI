@@ -17,6 +17,7 @@ const MAX_ROOT_ENTRIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TASKS: &str = "64";
 const MEMORY_MAX: &str = "512M";
+const MEMORY_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CPU_QUOTA: &str = "100%";
 const TREE_SHUTDOWN_LIMIT: Duration = Duration::from_secs(5);
 const RESULT_MAGIC: &[u8] = b"BT-LINUX-ISOLATION/1\n";
@@ -74,6 +75,13 @@ fn main() {
 
 fn run() -> Result<Option<String>, String> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "--probe" {
+        ensure_runtime_prerequisites()?;
+        ensure_workspace_overlay_supported()?;
+        return Ok(Some(format!(
+            "{{\"workspace_overlay_available\":true,\"workspace_writes_persist\":false,\"memory_limit_bytes\":{MEMORY_MAX_BYTES}}}"
+        )));
+    }
     if args.first().map(|arg| arg == "--inner").unwrap_or(false) {
         let request = parse_inner(args.into_iter().skip(1).collect())?;
         let result = run_inner(request)?;
@@ -213,6 +221,7 @@ struct InnerRequest {
 
 fn run_outer(request: Request) -> Result<String, String> {
     ensure_runtime_prerequisites()?;
+    ensure_workspace_overlay_supported()?;
     let helper = std::env::current_exe()
         .and_then(fs::canonicalize)
         .map_err(|_| "provider_path_unavailable".to_string())?;
@@ -277,8 +286,10 @@ fn run_outer(request: Request) -> Result<String, String> {
         "/tmp".into(),
         "--dir".into(),
         "/workspace".into(),
-        "--bind".into(),
+        "--ro-bind".into(),
         request.root.as_os_str().to_owned(),
+        "/workspace".into(),
+        "--tmp-overlay".into(),
         "/workspace".into(),
         "--ro-bind".into(),
         helper.as_os_str().to_owned(),
@@ -329,6 +340,7 @@ fn run_outer(request: Request) -> Result<String, String> {
             "--property=LimitNOFILE=128",
             &format!("--property=LimitFSIZE={MAX_FILE_BYTES}"),
             &format!("--property=MemoryMax={MEMORY_MAX}"),
+            "--property=MemorySwapMax=0",
             &format!("--property=TasksMax={MAX_TASKS}"),
             &format!("--property=CPUQuota={CPU_QUOTA}"),
             &format!("--property=RuntimeMaxSec={runtime}"),
@@ -416,6 +428,12 @@ fn run_outer(request: Request) -> Result<String, String> {
         || unit_state.exec_main_status != "0"
         || !status.success()
     {
+        let diagnostic_text = String::from_utf8_lossy(&captured.stderr);
+        if diagnostic_text.contains("sandbox_workspace_overlay_unverified")
+            || diagnostic_text.contains("sandbox_mountinfo_unavailable")
+        {
+            return Err("linux_workspace_overlay_unavailable".to_string());
+        }
         let diagnostic = safe_diagnostic(&captured.stderr);
         return Err(if diagnostic.is_empty() {
             "linux_sandbox_start_or_shutdown_failed".to_string()
@@ -520,6 +538,9 @@ fn verify_inner_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String
     if !cwd.starts_with("/workspace") {
         return Err("sandbox_cwd_invalid".to_string());
     }
+    if !workspace_mount_is_writable_overlay()? {
+        return Err("sandbox_workspace_overlay_unverified".to_string());
+    }
     for (key, _) in std::env::vars_os() {
         let key = key.to_string_lossy();
         if !matches!(
@@ -530,6 +551,24 @@ fn verify_inner_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String
         }
     }
     Ok(())
+}
+
+fn workspace_mount_is_writable_overlay() -> Result<bool, String> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|_| "sandbox_mountinfo_unavailable".to_string())?;
+    for line in mountinfo.lines() {
+        let Some((mount, superblock)) = line.split_once(" - ") else {
+            continue;
+        };
+        let fields: Vec<&str> = mount.split_whitespace().collect();
+        if fields.get(4).copied() != Some("/workspace") {
+            continue;
+        }
+        let mount_options = fields.get(5).copied().unwrap_or_default();
+        let filesystem = superblock.split_whitespace().next().unwrap_or_default();
+        return Ok(filesystem == "overlay" && mount_options.split(',').any(|option| option == "rw"));
+    }
+    Ok(false)
 }
 
 fn kill_sandbox_descendants() -> Result<(bool, bool), String> {
@@ -767,7 +806,134 @@ fn ensure_runtime_prerequisites() -> Result<(), String> {
     {
         return Err("linux_resource_controllers_unavailable".to_string());
     }
+    if !Path::new("/sys/fs/cgroup/memory.swap.max").is_file() {
+        return Err("linux_swap_controller_unavailable".to_string());
+    }
     Ok(())
+}
+
+fn ensure_workspace_overlay_supported() -> Result<(), String> {
+    let bwrap_metadata = fs::metadata("/usr/bin/bwrap")
+        .map_err(|_| "linux_workspace_overlay_unavailable".to_string())?;
+    if bwrap_metadata.mode() & 0o4000 != 0 || !bubblewrap_security_fix_available() {
+        return Err("linux_workspace_overlay_unavailable".to_string());
+    }
+
+    let help = Command::new("/usr/bin/bwrap")
+        .arg("--help")
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .map_err(|_| "linux_workspace_overlay_unavailable".to_string())?;
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    if !help.status.success() || !help_text.contains("--tmp-overlay") {
+        return Err("linux_workspace_overlay_unavailable".to_string());
+    }
+
+    let probe = Command::new("/usr/bin/bwrap")
+        .args([
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--new-session",
+            "--die-with-parent",
+            "--disable-userns",
+            "--assert-userns-disabled",
+            "--cap-drop",
+            "ALL",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--dir",
+            "/workspace",
+            "--tmp-overlay",
+            "/workspace",
+            "--chdir",
+            "/workspace",
+            "--",
+            "/usr/bin/true",
+        ])
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .map_err(|_| "linux_workspace_overlay_unavailable".to_string())?;
+    if !probe.status.success() {
+        return Err("linux_workspace_overlay_unavailable".to_string());
+    }
+    Ok(())
+}
+
+fn bubblewrap_security_fix_available() -> bool {
+    let output = Command::new("/usr/bin/bwrap")
+        .arg("--version")
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout);
+    let Some(version) = parse_bubblewrap_version(&version) else {
+        return false;
+    };
+    if version >= (0, 12, 0) {
+        return true;
+    }
+    version == (0, 11, 1) && ubuntu_bubblewrap_backport_is_fixed()
+}
+
+fn parse_bubblewrap_version(output: &str) -> Option<(u64, u64, u64)> {
+    output.split_whitespace().find_map(|part| {
+        let mut numbers = part.trim_start_matches('v').split('.');
+        Some((
+            numbers.next()?.parse().ok()?,
+            numbers.next()?.parse().ok()?,
+            numbers.next()?.parse().ok()?,
+        ))
+    })
+}
+
+fn ubuntu_bubblewrap_backport_is_fixed() -> bool {
+    let output = Command::new("/usr/bin/dpkg-query")
+        .args(["-W", "-f=${Version}", "bubblewrap"])
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let package_version = String::from_utf8_lossy(&output.stdout);
+    let package_version = package_version.trim();
+    let package_version = package_version
+        .rsplit_once(':')
+        .map(|(_, version)| version)
+        .unwrap_or(package_version);
+    package_version
+        .strip_prefix("0.11.1-1ubuntu0.")
+        .and_then(|revision| revision.parse::<u64>().ok())
+        .is_some_and(|revision| revision >= 2)
 }
 
 fn namespace_ids() -> Result<BTreeMap<String, u64>, String> {

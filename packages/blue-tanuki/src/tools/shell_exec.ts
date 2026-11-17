@@ -50,6 +50,7 @@ const LINUX_ISOLATOR_FILENAME = "blue-tanuki-linux-isolation";
 const MAX_NATIVE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_NATIVE_ERROR_BYTES = 16 * 1024;
 const PROCESS_TREE_SHUTDOWN_GRACE_MS = 5_000;
+const LINUX_ISOLATION_PROBE_TIMEOUT_MS = 5_000;
 
 export function shellExecIsolationUnavailableReason(platform: NodeJS.Platform = process.platform): string {
   if (platform === "darwin") {
@@ -57,7 +58,7 @@ export function shellExecIsolationUnavailableReason(platform: NodeJS.Platform = 
   }
   if (platform === "win32") return "Windows AppContainer isolation provider is not installed";
   if (platform === "linux") {
-    return "Linux provider, bubblewrap, systemd user manager, or cgroup limits are unavailable";
+    return "Linux provider, temporary workspace overlay, systemd user manager, or memory/swap cgroup limits are unavailable";
   }
   return `${platform} does not have a verified OS-level process isolation provider`;
 }
@@ -170,14 +171,19 @@ export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
   }));
   if (available.some((value) => !value)) return false;
   const controllers = await fs.readFile("/sys/fs/cgroup/cgroup.controllers", "utf8").catch(() => "");
-  return ["cpu", "memory", "pids"].every((controller) => controllers.split(/\s+/u).includes(controller));
+  if (!["cpu", "memory", "pids"].every((controller) => controllers.split(/\s+/u).includes(controller))) {
+    return false;
+  }
+  const swapLimit = await fs.stat("/sys/fs/cgroup/memory.swap.max").catch(() => null);
+  if (!swapLimit?.isFile()) return false;
+  return await probeLinuxIsolationProvider(packagedLinuxProviderPath());
 }
 
 export const shellExecTool: Tool = {
   name: "shell.exec",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Run a bounded command only inside a verified Windows or Linux isolation provider; macOS and other unsupported operating systems fail closed before process creation. Native isolation must be installed. For an explicitly requested test after an owner-reviewed file.edit, set same_workspace_as_file_root=true and summary_only=true; this returns exit status, text byte counts and digests without captured output. Then reread the same relative file with file.search. Nonzero exit or timeout is a failed test; never restore automatically. If recovery is requested, inspect current state and propose a fresh owner-reviewed inverse file.edit.",
+    "WindowsまたはLinuxの確認済みOS隔離provider内で上限付きcommandを実行する。未対応OSではprocess開始前にfail closedする。Linuxでは承認workspaceを読み取り専用基底＋一時overlayで扱い、overlayへの書込みは実行後に破棄する。永続変更にはfile.write/file.editを使う。owner-reviewed file.edit後に同じworkspaceで明示されたtestを行う場合はsame_workspace_as_file_root=trueとsummary_only=trueを指定し、exit status・出力byte数・digestだけを返す。Nonzero exitまたはtimeoutは失敗とし、自動復元しない。復旧依頼時は現状を確認し、新しいowner-reviewed inverse file.editを提案する。",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async inspect_target_version(args, options = {}) {
     return await inspectShellExecTargetVersion(args, options);
@@ -292,6 +298,68 @@ function safeLinuxHelperEnvironment(): NodeJS.ProcessEnv {
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtimeDirectory}/bus`,
     LANG: "C.UTF-8",
   };
+}
+
+async function probeLinuxIsolationProvider(providerPath: string): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const stdout: Buffer[] = [];
+    let outputBytes = 0;
+    let timedOut = false;
+    let settled = false;
+    let child: ReturnType<typeof spawn> | undefined;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (available: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(available);
+    };
+    timer = setTimeout(() => {
+      timedOut = true;
+      child?.kill("SIGKILL");
+    }, LINUX_ISOLATION_PROBE_TIMEOUT_MS);
+    try {
+      child = spawn(providerPath, ["--probe"], {
+        cwd: "/",
+        env: safeLinuxHelperEnvironment(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      finish(false);
+      return;
+    }
+    if (!child) {
+      finish(false);
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 4_096) {
+        child.kill("SIGKILL");
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 4_096) child.kill("SIGKILL");
+    });
+    child.once("error", () => finish(false));
+    child.once("close", (code) => {
+      if (code !== 0 || timedOut || outputBytes > 4_096) {
+        finish(false);
+        return;
+      }
+      try {
+        const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as Record<string, unknown>;
+        finish(result.workspace_overlay_available === true
+          && result.workspace_writes_persist === false
+          && result.memory_limit_bytes === 512 * 1024 * 1024);
+      } catch {
+        finish(false);
+      }
+    });
+  });
 }
 
 function safeHelperEnvironment(env: Env, shellRoot: string): NodeJS.ProcessEnv {
@@ -520,6 +588,10 @@ function linuxIsolationFailureMessage(platform: NodeJS.Platform, diagnostic: str
       "Linux cgroup v2を利用できません。コマンドは起動していません。cgroup v2を提供する対応Linux環境で実行してください。",
     linux_resource_controllers_unavailable:
       "LinuxのCPU・メモリ・プロセス数制限を確認できません。コマンドは起動していません。必要なcgroup controllerを提供する対応環境で再試行してください。",
+    linux_swap_controller_unavailable:
+      "Linuxのswap上限を確認できません。workspace書込みをhostのswapへ流さないため、コマンドは起動していません。memory.swap.maxを利用できるcgroup v2環境で再試行してください。",
+    linux_workspace_overlay_unavailable:
+      "Linuxの一時workspace overlayを起動できません。対象commandは起動していません。Bubblewrap 0.12以降または修正済みディストリビューション版と、kernel側overlay mountを利用できる非setuid profileが必要です。",
     systemd_run_unavailable:
       "systemd-runを起動できませんでした。コマンドは起動していません。systemdユーザーサービスの状態を確認してから再試行してください。",
   };
