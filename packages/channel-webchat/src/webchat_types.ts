@@ -1,5 +1,5 @@
 import type { Clock } from "@blue-tanuki/channel-base";
-import type { OperationCoreApprovalTrace, OperationPlan } from "@blue-tanuki/protocol";
+import type { ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
 
@@ -1367,11 +1367,14 @@ export interface WebChatMcpCallContentReview {
   may_execute: false;
 }
 
+export type WebChatComposioExecuteContentReview = ComposioActionContentReview & { command_id: string };
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview | WebChatSettingsWriteContentReview | WebChatMcpCallContentReview |
+  WebChatComposioExecuteContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
   WebChatBrowserFormInputContentReview |
   WebChatBrowserLinkNavigationContentReview |

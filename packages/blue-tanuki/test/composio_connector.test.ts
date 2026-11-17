@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   composioStatus,
   composioSchemaDigest,
+  inspectComposioActionTargetVersion,
+  inspectComposioActionContentReview,
   invokeComposioAccounts,
   invokeComposioExecute,
   invokeComposioScopes,
@@ -81,6 +83,82 @@ describe("Composio connector", () => {
   it("hashes schema objects independently of JSON key order", () => {
     expect(composioSchemaDigest({ type: "object", properties: { title: { type: "string" } } }))
       .toBe(composioSchemaDigest({ properties: { title: { type: "string" } }, type: "object" }));
+  });
+
+  it("binds the exact live action, owner account, schema, payload and Operation Plan into a no-store review", async () => {
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+    const args = {
+      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+      input_schema_sha256: issueInputSchemaSha256, payload: { title: "review fixture" },
+    };
+    const commandDigest = "a".repeat(64);
+    const operationPlanBindingDigest = "b".repeat(64);
+    let accountRequests = 0;
+    let actionRequests = 0;
+    const options = {
+      env,
+      commandDigest,
+      operationPlanBindingDigest,
+      accountsRequest: async () => { accountRequests += 1; return accountResponse(); },
+      searchRequest: async () => { actionRequests += 1; return actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"); },
+    };
+    const observation = await inspectComposioActionTargetVersion(args, options);
+    const review = await inspectComposioActionContentReview(args, options);
+    expect(observation).toMatchObject({
+      schema_version: "blue-tanuki.composio-action-target-version.v1",
+      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", command_digest: commandDigest,
+      operation_plan_binding_digest: operationPlanBindingDigest,
+      target_state: "available", used_for_authority: false, may_execute: false,
+    });
+    expect(review).toMatchObject({
+      kind: "composio_execute", operation: "composio.execute", toolkit: "github",
+      connected_account_id: "conn_owner_github_1", account_type: "PRIVATE", account_status: "ACTIVE",
+      arguments: { title: "review fixture" }, input_parameters: issueInputSchema,
+      no_store: true, used_for_authority: false, may_execute: false,
+      provider_metadata_used_for_authority: false,
+    });
+    expect(review.target_version_observation).toEqual(observation);
+    expect(accountRequests).toBe(2);
+    expect(actionRequests).toBe(2);
+    expect(JSON.stringify(review)).not.toContain("composio-secret-value");
+    expect(JSON.stringify(review)).not.toContain("must-not-escape");
+    expect(JSON.stringify(review)).not.toContain("owner-local");
+  });
+
+  it("does not query Composio when a live target review is disabled by dry-run", async () => {
+    let providerCalls = 0;
+    await expect(inspectComposioActionTargetVersion({ toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE" }, {
+      env: { COMPOSIO_DRY_RUN: "true", COMPOSIO_LIVE_EXECUTION: "true" },
+      commandDigest: "a".repeat(64), operationPlanBindingDigest: "b".repeat(64),
+      accountsRequest: async () => { providerCalls += 1; return accountResponse(); },
+      searchRequest: async () => { providerCalls += 1; return actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"); },
+    })).rejects.toThrow(/dry-run is disabled and live execution is enabled/);
+    expect(providerCalls).toBe(0);
+  });
+
+  it("requires target evidence before a live adapter invocation can reach account or action endpoints", async () => {
+    let providerCalls = 0;
+    await expect(invokeComposioExecute({
+      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+      input_schema_sha256: issueInputSchemaSha256,
+    }, {
+      env: {
+        COMPOSIO_API_KEY: "composio-secret-value", COMPOSIO_ALLOWED_TOOLKITS: "github",
+        COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE", COMPOSIO_USER_ID: "owner-local",
+        COMPOSIO_DRY_RUN: "false", COMPOSIO_LIVE_EXECUTION: "true",
+      },
+      requireTargetVersionObservation: true,
+      accountsRequest: async () => { providerCalls += 1; return accountResponse(); },
+      searchRequest: async () => { providerCalls += 1; return actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"); },
+    })).rejects.toThrow(/requires target evidence bound to this exact HDS request/);
+    expect(providerCalls).toBe(0);
   });
 
   it("is disabled by default and reports non-authority status", () => {
@@ -975,6 +1053,49 @@ describe("Composio connector", () => {
     )).rejects.toThrow(/input schema changed since selection/);
     expect(accountLookupDispatched).toBe(true);
     expect(executeDispatched).toBe(false);
+  });
+
+  it("rejects a changed action definition after no-store review even when input schema is unchanged", async () => {
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+    const args = {
+      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+      input_schema_sha256: issueInputSchemaSha256, payload: { title: "reviewed" },
+    };
+    const commandDigest = "c".repeat(64);
+    const targetVersionObservation = await inspectComposioActionTargetVersion(args, {
+      env, commandDigest, operationPlanBindingDigest: "d".repeat(64),
+      accountsRequest: async () => accountResponse(),
+      searchRequest: async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"),
+    });
+    let executionDispatched = false;
+    await expect(invokeComposioExecute(args, {
+      env,
+      commandDigest,
+      targetVersionObservation,
+      requireTargetVersionObservation: true,
+      accountsRequest: async () => accountResponse(),
+      searchRequest: async () => ({
+        ...actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"),
+        body: JSON.stringify({ items: [{
+          slug: "GITHUB_CREATE_AN_ISSUE", name: "GITHUB_CREATE_AN_ISSUE", toolkit: { slug: "github" },
+          description: "Changed after review", version: "fixture-1", no_auth: false, is_deprecated: false,
+          scopes: ["repo"], input_parameters: issueInputSchema, output_parameters: { type: "object" },
+        }] }),
+      }),
+      request: async () => {
+        executionDispatched = true;
+        return { status: 200, ok: true, content_type: "application/json", body: "{}", truncated: false,
+          request_id: "req_should_not_execute" };
+      },
+    })).rejects.toThrow(/action definition changed since owner review/);
+    expect(executionDispatched).toBe(false);
   });
 
   it("passes cancellation to the Composio request and never returns a success after abort", async () => {

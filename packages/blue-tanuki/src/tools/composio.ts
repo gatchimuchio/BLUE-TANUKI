@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
-import { assertToolExecutionNotCancelled, type Tool } from "./registry.js";
+import { requireToolOperationDescriptor, ComposioActionTargetVersionObservationSchema,
+  type ComposioActionTargetVersionObservation, type ComposioActionContentReview } from "@blue-tanuki/protocol";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { assertToolExecutionNotCancelled, type Tool, type ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -91,6 +93,10 @@ export interface ComposioExecuteResponse {
 export interface ComposioOptions {
   env?: Env;
   signal?: AbortSignal;
+  commandDigest?: string;
+  operationPlanBindingDigest?: string;
+  targetVersionObservation?: ComposioActionTargetVersionObservation;
+  requireTargetVersionObservation?: boolean;
   request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   searchRequest?: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   accountsRequest?: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
@@ -180,6 +186,27 @@ function canonicalJson(value: unknown): string {
 /** Stable digest used to bind a selected Composio JSON schema across catalog observations. */
 export function composioSchemaDigest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+export function composioIdentityDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function composioRequestPayloadDigest(params: {
+  toolkit: string;
+  tool: string;
+  connectedAccountId: string;
+  userId: string;
+  arguments: Record<string, unknown>;
+}): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.composio-execute-request.v1",
+    toolkit: params.toolkit.toLowerCase(),
+    tool: params.tool,
+    connected_account_id_sha256: composioIdentityDigest(params.connectedAccountId),
+    user_id_sha256: composioIdentityDigest(params.userId),
+    arguments: params.arguments,
+  });
 }
 
 function assertConfigured(env: Env): string {
@@ -314,7 +341,7 @@ export function classifyComposioAction(value: string | undefined): ComposioActio
   return "unknown";
 }
 
-function parseComposioArguments(value: unknown): Record<string, unknown> {
+export function parseComposioArguments(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null || value === "") return {};
   if (isRecord(value)) return { ...value };
   if (typeof value === "string") {
@@ -943,26 +970,24 @@ function catalogToolProjection(value: unknown, expectedToolkit: string): Record<
     input_parameters: inputParameters,
     output_parameters: outputParameters,
   };
+  const actionDefinitionSha256 = composioSchemaDigest(projection);
   return {
     ...projection,
     input_schema_sha256: composioSchemaDigest(inputParameters),
     output_schema_sha256: composioSchemaDigest(outputParameters),
+    action_definition_sha256: actionDefinitionSha256,
   };
 }
 
-async function assertComposioInputSchemaUnchanged(params: {
+async function readCurrentComposioAction(params: {
   toolkit: string;
   tool: string;
-  expectedInputSchemaSha256: string;
   apiBaseUrl: string;
   apiKey: string;
   maxBytes: number;
   request: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   signal?: AbortSignal;
-}): Promise<void> {
-  if (!/^[a-f0-9]{64}$/.test(params.expectedInputSchemaSha256)) {
-    throw new Error("input_schema_sha256 must be a SHA-256 digest; mutation_sent=false");
-  }
+}): Promise<Record<string, unknown>> {
   const path = new URL("/api/v3.1/tools", `${params.apiBaseUrl}/`);
   path.searchParams.set("toolkit_slug", params.toolkit.toLowerCase());
   path.searchParams.set("query", params.tool);
@@ -992,12 +1017,207 @@ async function assertComposioInputSchemaUnchanged(params: {
     typeof item.slug === "string" && item.slug.toLowerCase() === params.tool.toLowerCase() &&
     typeof item.toolkit.slug === "string" && item.toolkit.slug.toLowerCase() === params.toolkit.toLowerCase());
   if (exactItems.length !== 1 || !isRecord(exactItems[0]) || !isRecord(exactItems[0].input_parameters) ||
-      exactItems[0].is_deprecated !== false) {
+      !isRecord(exactItems[0].output_parameters) || exactItems[0].is_deprecated !== false) {
     throw new Error("Composio action schema was missing, ambiguous, incomplete, or deprecated; mutation_sent=false");
   }
-  if (composioSchemaDigest(exactItems[0].input_parameters) !== params.expectedInputSchemaSha256) {
+  return catalogToolProjection(exactItems[0], params.toolkit);
+}
+
+async function assertComposioInputSchemaUnchanged(params: {
+  toolkit: string;
+  tool: string;
+  expectedInputSchemaSha256: string;
+  expectedActionDefinitionSha256?: string;
+  apiBaseUrl: string;
+  apiKey: string;
+  maxBytes: number;
+  request: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  if (!/^[a-f0-9]{64}$/.test(params.expectedInputSchemaSha256)) {
+    throw new Error("input_schema_sha256 must be a SHA-256 digest; mutation_sent=false");
+  }
+  const projection = await readCurrentComposioAction(params);
+  if (projection.input_schema_sha256 !== params.expectedInputSchemaSha256) {
     throw new Error("Composio action input schema changed since selection; owner must review the current schema; mutation_sent=false");
   }
+  if (params.expectedActionDefinitionSha256 &&
+      projection.action_definition_sha256 !== params.expectedActionDefinitionSha256) {
+    throw new Error("Composio action definition changed since owner review; mutation_sent=false");
+  }
+  return projection;
+}
+
+interface ComposioLiveActionInspection {
+  projection: Record<string, unknown>;
+  account: ComposioConnectedAccountProjection;
+  toolkit: string;
+  tool: string;
+  connectedAccountId: string;
+  userId: string;
+  argumentsBody: Record<string, unknown>;
+  requestPayloadDigest: string;
+  observation: ComposioActionTargetVersionObservation;
+}
+
+async function inspectComposioLiveAction(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioLiveActionInspection> {
+  const env = opts.env ?? process.env;
+  if (composioDryRun(env) || !composioLiveExecutionEnabled(env)) {
+    throw new Error("Composio live target review is unavailable unless dry-run is disabled and live execution is enabled");
+  }
+  if (!opts.commandDigest || !/^[a-f0-9]{64}$/.test(opts.commandDigest) ||
+      !opts.operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(opts.operationPlanBindingDigest)) {
+    throw new Error("Composio review requires an exact HDS command and Operation Plan binding");
+  }
+  const apiKey = assertConfigured(env);
+  const allowedToolkits = composioAllowedToolkits(env);
+  const allowedActions = composioAllowedActions(env);
+  const revokedActions = composioRevokedActions(env);
+  const toolkit = stringArg(args, "toolkit")!.toLowerCase();
+  const tool = stringArg(args, "tool", false) ?? stringArg(args, "action", false) ?? "unknown";
+  if (tool === "unknown") throw new Error("tool/action must be supplied for composio.execute review");
+  assertToolkitAllowed(toolkit, allowedToolkits);
+  assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
+  const connectedAccountId = stringArg(args, "connected_account_id", false);
+  const userId = envValue(env, "COMPOSIO_USER_ID");
+  if (!connectedAccountId || connectedAccountId.toLowerCase() === "instant_account" || !userId) {
+    throw new Error("Composio review requires an explicit owner account and configured owner identity");
+  }
+  if (args.connected_account_id !== undefined && !connectedAccountId) {
+    throw new Error("connected_account_id must be a non-empty string");
+  }
+  const inputSchemaSha256 = stringArg(args, "input_schema_sha256", false);
+  if (!inputSchemaSha256 || !/^[a-f0-9]{64}$/.test(inputSchemaSha256)) {
+    throw new Error("input_schema_sha256 is required for Composio owner review");
+  }
+  const expectedRegion = stringArg(args, "expected_provider_region", false)?.toLowerCase();
+  if (expectedRegion !== undefined && expectedRegion !== "us" && expectedRegion !== "eu") {
+    throw new Error("expected_provider_region must be us or eu");
+  }
+  if (toolkit !== "posthog" && expectedRegion !== undefined) {
+    throw new Error("expected_provider_region is only valid for the PostHog toolkit");
+  }
+  if (toolkit === "posthog" && expectedRegion === undefined) {
+    throw new Error("expected_provider_region=us|eu is required for PostHog owner review");
+  }
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const accounts = await readComposioAccounts({
+    apiBaseUrl,
+    apiKey,
+    toolkit,
+    userId,
+    connectedAccountId,
+    limit: 2,
+    maxBytes,
+    request: opts.accountsRequest ?? defaultComposioAccountsRequest,
+    signal: opts.signal,
+  });
+  const account = accounts.accounts[0];
+  if (accounts.accounts.length !== 1 || !account || account.connected_account_id !== connectedAccountId ||
+      account.status !== "ACTIVE" || account.is_disabled !== false || account.account_type !== "PRIVATE" ||
+      (toolkit === "posthog" && (account.auth_scheme !== "API_KEY" || account.provider_region !== expectedRegion))) {
+    throw new Error("Composio account is not the selected active private owner account; review unavailable");
+  }
+  const projection = await readCurrentComposioAction({
+    toolkit,
+    tool,
+    apiBaseUrl,
+    apiKey,
+    maxBytes,
+    request: opts.searchRequest ?? defaultComposioSearchRequest,
+    signal: opts.signal,
+  });
+  if (projection.input_schema_sha256 !== inputSchemaSha256) {
+    throw new Error("Composio action schema differs from the selected input schema; owner review must restart");
+  }
+  const payload = args.payload ?? args.arguments ?? {};
+  const argumentsBody = parseComposioArguments(payload);
+  const requestPayloadDigest = composioRequestPayloadDigest({ toolkit, tool, connectedAccountId, userId,
+    arguments: argumentsBody });
+  const observation = ComposioActionTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.composio-action-target-version.v1",
+    toolkit,
+    tool,
+    connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
+    user_id_sha256: composioIdentityDigest(userId),
+    account_state_sha256: composioSchemaDigest(account),
+    input_schema_sha256: projection.input_schema_sha256,
+    output_schema_sha256: projection.output_schema_sha256,
+    action_definition_sha256: projection.action_definition_sha256,
+    request_payload_digest: requestPayloadDigest,
+    command_digest: opts.commandDigest,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest,
+    target_state: "available",
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { projection, account, toolkit, tool, connectedAccountId, userId, argumentsBody,
+    requestPayloadDigest, observation };
+}
+
+export async function inspectComposioActionTargetVersion(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioActionTargetVersionObservation> {
+  return (await inspectComposioLiveAction(args, opts)).observation;
+}
+
+export async function inspectComposioActionContentReview(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioActionContentReview> {
+  const inspection = await inspectComposioLiveAction(args, opts);
+  const { projection, account, toolkit, tool, connectedAccountId, userId, argumentsBody, requestPayloadDigest, observation } = inspection;
+  const reviewComponents = [projection.input_parameters, projection.output_parameters, argumentsBody];
+  const reviewComponentBytes = reviewComponents.map((value) => new TextEncoder().encode(canonicalJson(value)).byteLength);
+  if (reviewComponentBytes.some((size) => size > 64 * 1024) ||
+      reviewComponentBytes.reduce((sum, size) => sum + size, 0) > 160 * 1024) {
+    throw new Error("Composio owner review exceeds the bounded no-store projection size");
+  }
+  const descriptor = requireToolOperationDescriptor("composio.execute");
+  const base: Omit<ComposioActionContentReview, "review_digest"> = {
+    kind: "composio_execute",
+    operation: "composio.execute",
+    command_digest: opts.commandDigest!,
+    request_payload_digest: requestPayloadDigest,
+    target_version_digest: operationPlanDigest(observation),
+    target_version_observation: observation,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest!,
+    toolkit,
+    tool,
+    action_name: String(projection.name),
+    description: String(projection.description ?? ""),
+    version: typeof projection.version === "string" ? projection.version : null,
+    no_auth: typeof projection.no_auth === "boolean" ? projection.no_auth : null,
+    is_deprecated: false,
+    scopes: Array.isArray(projection.scopes) ? projection.scopes as string[] : [],
+    input_parameters: projection.input_parameters as Record<string, unknown>,
+    output_parameters: projection.output_parameters as Record<string, unknown>,
+    arguments: argumentsBody,
+    input_schema_sha256: String(projection.input_schema_sha256),
+    output_schema_sha256: String(projection.output_schema_sha256),
+    action_definition_sha256: String(projection.action_definition_sha256),
+    connected_account_id: connectedAccountId,
+    connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
+    user_id_sha256: composioIdentityDigest(userId),
+    account_type: "PRIVATE",
+    account_status: "ACTIVE",
+    account_disabled: false,
+    auth_scheme: account.auth_scheme,
+    provider_region: account.provider_region,
+    intent: classifyComposioAction(tool),
+    potential_effects: [...descriptor.effects],
+    no_store: true,
+    used_for_authority: false,
+    may_execute: false,
+    provider_metadata_used_for_authority: false,
+  };
+  // The exact argument payload is digest-bound; the owner sees it in the authenticated no-store panel.
+  return Object.freeze({ ...base, review_digest: operationPlanDigest({ ...base, arguments: argumentsBody }) });
 }
 
 export async function invokeComposioSearch(
@@ -1169,6 +1389,20 @@ export async function invokeComposioExecute(
   }
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
+  const plannedObservation = opts.targetVersionObservation;
+  if (opts.requireTargetVersionObservation) {
+    const parsedObservation = ComposioActionTargetVersionObservationSchema.safeParse(plannedObservation);
+    if (!parsedObservation.success || !opts.commandDigest ||
+        parsedObservation.data.command_digest !== opts.commandDigest ||
+        parsedObservation.data.toolkit !== toolkit || parsedObservation.data.tool !== tool ||
+        parsedObservation.data.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+        parsedObservation.data.user_id_sha256 !== composioIdentityDigest(userId) ||
+        parsedObservation.data.input_schema_sha256 !== inputSchemaSha256 ||
+        parsedObservation.data.request_payload_digest !== composioRequestPayloadDigest({ toolkit, tool,
+          connectedAccountId, userId, arguments: argumentsBody })) {
+      throw new Error("Composio live execution requires target evidence bound to this exact HDS request and owner account; mutation_sent=false");
+    }
+  }
   const accounts = await readComposioAccounts({
     apiBaseUrl,
     apiKey,
@@ -1197,16 +1431,22 @@ export async function invokeComposioExecute(
       "Composio connected account is missing, not PRIVATE ACTIVE, disabled, outside the configured owner/toolkit, or has unknown/mismatched PostHog auth scheme or region; mutation_sent=false",
     );
   }
-  await assertComposioInputSchemaUnchanged({
+  const currentAction = await assertComposioInputSchemaUnchanged({
     toolkit,
     tool,
     expectedInputSchemaSha256: inputSchemaSha256,
+    ...(opts.requireTargetVersionObservation && plannedObservation
+      ? { expectedActionDefinitionSha256: plannedObservation.action_definition_sha256 } : {}),
     apiBaseUrl,
     apiKey,
     maxBytes,
     request: opts.searchRequest ?? defaultComposioSearchRequest,
     signal: opts.signal,
   });
+  if (opts.requireTargetVersionObservation && plannedObservation &&
+      currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256) {
+    throw new Error("Composio action definition changed after the owner review; mutation_sent=false");
+  }
   assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
     api_base_url: apiBaseUrl,
@@ -1285,9 +1525,38 @@ export const composioExecuteTool: Tool = {
   name: "composio.execute",
   adapter_version: "1.0.0-rc.1",
   description:
-    "Executes Composio actions only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries. Live execution requires input_schema_sha256 from action inspection and rechecks the provider schema immediately before dispatch. PostHog live execution also requires an explicit expected_provider_region matching the connected account's observed us/eu region and API_KEY auth scheme.",
+    "Executes Composio actions through HDS-BRAIN L3 review, explicit toolkit/action allowlists, live opt-in, capability, and audit boundaries. Before live execution, the authenticated no-store owner review binds the exact account, action definition, schema, payload, and Operation Plan; the action definition is rechecked immediately before dispatch. PostHog also requires an explicit expected_provider_region matching the observed owner account.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
+  async inspect_target_version(args, inspectOptions) {
+    if (!inspectOptions?.command_digest || !inspectOptions.operation_plan_binding_digest) {
+      throw new Error("Composio live action inspection requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioActionTargetVersion(args, {
+      env: inspectOptions.env ?? process.env,
+      ...(inspectOptions.signal ? { signal: inspectOptions.signal } : {}),
+      commandDigest: inspectOptions.command_digest,
+      operationPlanBindingDigest: inspectOptions.operation_plan_binding_digest,
+    });
+  },
+  async inspect_content_review(args, reviewOptions) {
+    if (!reviewOptions?.command_digest || !reviewOptions.operation_plan_binding_digest) {
+      throw new Error("Composio owner review requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioActionContentReview(args, {
+      env: reviewOptions.env ?? process.env,
+      ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
+      commandDigest: reviewOptions.command_digest,
+      operationPlanBindingDigest: reviewOptions.operation_plan_binding_digest,
+    });
+  },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    return await invokeComposioExecute(args, { signal: context.signal });
+    const observation = context.target_version_observation === undefined
+      ? undefined : ComposioActionTargetVersionObservationSchema.parse(context.target_version_observation);
+    return await invokeComposioExecute(args, {
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
+      ...(observation ? { targetVersionObservation: observation } : {}),
+      requireTargetVersionObservation: true,
+    });
   },
 };

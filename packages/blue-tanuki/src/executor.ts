@@ -29,6 +29,8 @@ import {
   SettingsWriteTargetVersionObservationSchema,
   settingsWriteTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
+  ComposioActionTargetVersionObservationSchema,
+  ComposioActionContentReviewSchema,
   MCP_CALL_POTENTIAL_EFFECTS,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
@@ -104,6 +106,9 @@ import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
 import { isSettingsWriteTool } from "./tools/settings_write.js";
+import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
+  composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
+  composioExecuteTool } from "./tools/composio.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -796,6 +801,22 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: mcp.call target version does not match command or plan source");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "composio.execute") {
+      const bindingDigest = hds_binding?.operation_plan_binding_digest;
+      const observation = ComposioActionTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      const toolkit = typeof args.toolkit === "string" ? args.toolkit.toLowerCase() : "";
+      const tool = typeof args.tool === "string" ? args.tool : typeof args.action === "string" ? args.action : "";
+      const connectedAccountId = typeof args.connected_account_id === "string" ? args.connected_account_id.trim() : "";
+      if (!bindingDigest || !toolkit || !tool || !connectedAccountId ||
+          observation.toolkit !== toolkit || observation.tool !== tool ||
+          observation.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+          observation.input_schema_sha256 !== args.input_schema_sha256 ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== bindingDigest) {
+        throw new Error("Executor approval rejected: composio.execute target version does not match the selected command, plan, or live configuration");
+      }
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "memory.personalization.stop") {
       const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const args = snapshot.payload.arguments;
@@ -1050,6 +1071,41 @@ function readFileSearchWorkerResult(value: unknown, expected: FileSearchTargetVe
   return (value as Record<string, unknown>).result;
 }
 
+function assertComposioTargetVersionBinding(
+  args: Record<string, unknown>,
+  rawObservation: unknown,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+  env: Readonly<Record<string, string | undefined>>,
+): ReturnType<typeof ComposioActionTargetVersionObservationSchema.parse> {
+  const observation = ComposioActionTargetVersionObservationSchema.parse(rawObservation);
+  const toolkit = typeof args.toolkit === "string" ? args.toolkit.toLowerCase() : "";
+  const tool = typeof args.tool === "string" ? args.tool : typeof args.action === "string" ? args.action : "";
+  const connectedAccountId = typeof args.connected_account_id === "string" ? args.connected_account_id.trim() : "";
+  const userId = env.COMPOSIO_USER_ID?.trim() ?? "";
+  const inputSchemaSha256 = typeof args.input_schema_sha256 === "string" ? args.input_schema_sha256 : "";
+  if (!toolkit || !tool || !connectedAccountId || !userId || !/^[a-f0-9]{64}$/.test(inputSchemaSha256)) {
+    throw new Error("Composio target version cannot bind an incomplete action, account, owner, or schema");
+  }
+  let argumentsBody: Record<string, unknown>;
+  try {
+    argumentsBody = parseComposioArguments(args.payload ?? args.arguments ?? {});
+  } catch {
+    throw new Error("Composio target version cannot bind an invalid action payload");
+  }
+  const requestPayloadDigest = composioRequestPayloadDigest({ toolkit, tool, connectedAccountId, userId,
+    arguments: argumentsBody });
+  if (observation.toolkit !== toolkit || observation.tool !== tool ||
+      observation.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+      observation.user_id_sha256 !== composioIdentityDigest(userId) ||
+      observation.input_schema_sha256 !== inputSchemaSha256 ||
+      observation.request_payload_digest !== requestPayloadDigest || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+    throw new Error("Composio target version does not match the selected command, owner, account, or Operation Plan");
+  }
+  return observation;
+}
+
 /**
  * Executor: the top-level dispatcher for BLUE-TANUKI.
  *
@@ -1112,6 +1168,21 @@ export class Executor {
         throw new Error("mcp.call target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
+    }
+    if (command.payload.tool_name === "composio.execute") {
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) return undefined;
+      if (!operationPlanBindingDigest) throw new Error("composio.execute requires a selected Operation Plan binding for live execution");
+      const tool = this.deps.tools.get("composio.execute");
+      if (tool !== composioExecuteTool || !tool.inspect_target_version) {
+        throw new Error("composio.execute target inspection requires the registered built-in adapter");
+      }
+      const observation = await inspectTargetVersion(tool, command.payload.arguments, {
+        ...(env ? { env } : {}), operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      return Object.freeze(assertComposioTargetVersionBinding(command.payload.arguments, observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
     }
     if (command.payload.tool_name === "github.write") {
       const operation = command.payload.arguments.operation;
@@ -1508,6 +1579,74 @@ export class Executor {
         throw new Error("mcp.call content review returned evidence for another command, catalog, or plan source");
       }
       return review;
+    }
+    if (command.payload.tool_name === "composio.execute") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("composio.execute content review requires a selected Operation Plan binding");
+      }
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) {
+        throw new Error("composio.execute content review is available only for an explicitly enabled live action");
+      }
+      const tool = this.deps.tools.get("composio.execute");
+      if (tool !== composioExecuteTool || !tool.inspect_content_review) {
+        throw new Error("composio.execute content review requires the registered built-in adapter");
+      }
+      const review = ComposioActionContentReviewSchema.parse(await tool.inspect_content_review(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        ...(signal ? { signal } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      }));
+      assertNotCancelled();
+      const args = command.payload.arguments;
+      const toolkit = typeof args.toolkit === "string" ? args.toolkit.toLowerCase() : "";
+      const action = typeof args.tool === "string" ? args.tool : typeof args.action === "string" ? args.action : "";
+      const accountId = typeof args.connected_account_id === "string" ? args.connected_account_id.trim() : "";
+      const userId = effectiveEnv.COMPOSIO_USER_ID?.trim() ?? "";
+      const argumentsBody = parseComposioArguments(args.payload ?? args.arguments ?? {});
+      const observation = assertComposioTargetVersionBinding(args, review.target_version_observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv);
+      const actionDefinitionDigest = composioSchemaDigest({
+        slug: review.tool,
+        name: review.action_name,
+        toolkit: review.toolkit,
+        description: review.description,
+        version: review.version,
+        no_auth: review.no_auth,
+        is_deprecated: review.is_deprecated,
+        scopes: review.scopes,
+        input_parameters: review.input_parameters,
+        output_parameters: review.output_parameters,
+      });
+      const descriptorEffects = getToolOperationDescriptor("composio.execute")?.effects ?? [];
+      const { review_digest, ...reviewBase } = review;
+      if (!toolkit || !action || !accountId || !userId || review.kind !== "composio_execute" ||
+          review.operation !== "composio.execute" || review.toolkit !== toolkit || review.tool !== action ||
+          review.connected_account_id !== accountId || review.connected_account_id_sha256 !== composioIdentityDigest(accountId) ||
+          review.user_id_sha256 !== composioIdentityDigest(userId) ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.target_version_digest !== operationPlanDigest(observation) ||
+          review.request_payload_digest !== observation.request_payload_digest ||
+          review.request_payload_digest !== composioRequestPayloadDigest({ toolkit, tool: action,
+            connectedAccountId: accountId, userId, arguments: argumentsBody }) ||
+          operationPlanDigest(review.arguments) !== operationPlanDigest(argumentsBody) ||
+          review.input_schema_sha256 !== observation.input_schema_sha256 ||
+          review.output_schema_sha256 !== observation.output_schema_sha256 ||
+          review.action_definition_sha256 !== observation.action_definition_sha256 ||
+          review.action_definition_sha256 !== actionDefinitionDigest ||
+          review.input_schema_sha256 !== composioSchemaDigest(review.input_parameters) ||
+          review.output_schema_sha256 !== composioSchemaDigest(review.output_parameters) ||
+          review.account_type !== "PRIVATE" || review.account_status !== "ACTIVE" || review.account_disabled !== false ||
+          review.intent !== classifyComposioAction(action) ||
+          JSON.stringify(review.potential_effects) !== JSON.stringify(descriptorEffects) ||
+          review.no_store !== true || review.used_for_authority !== false || review.may_execute !== false ||
+          review.provider_metadata_used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review_digest) ||
+          operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("composio.execute content review returned evidence for another action, account, payload, or plan source");
+      }
+      return Object.freeze(review);
     }
     if (command.payload.tool_name === "memory.personalization.stop") {
       if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {

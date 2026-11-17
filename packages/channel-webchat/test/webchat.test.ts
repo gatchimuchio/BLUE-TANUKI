@@ -6037,6 +6037,8 @@ describe("WebChatChannel — approval API", () => {
         arguments: { note: argument }, no_store: true, used_for_authority: false, may_execute: false,
       });
       expect(CONTROL_CENTER_SCRIPT).toContain('if (review.kind === "mcp_call")');
+      expect(CONTROL_CENTER_SCRIPT).toContain('if (review.kind === "composio_execute")');
+      expect(CONTROL_CENTER_SCRIPT).toContain('review.provider_metadata_used_for_authority !== false');
       expect(CONTROL_CENTER_SCRIPT).toContain("argsPre.textContent = argsText");
       expect(reviewCalls).toBe(1);
     } finally {

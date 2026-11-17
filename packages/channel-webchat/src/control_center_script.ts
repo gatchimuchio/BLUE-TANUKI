@@ -6338,6 +6338,126 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "MCP作用を再確認";
           return;
         }
+        if (review.kind === "composio_execute") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const canonicalJson = function (value) {
+            if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+            if (isObject(value)) return "{" + Object.keys(value).sort(function (a, b) { return a.localeCompare(b); }).map(function (key) {
+              return JSON.stringify(key) + ":" + canonicalJson(value[key]);
+            }).join(",") + "}";
+            return JSON.stringify(value);
+          };
+          const digestObject = async function (value) {
+            const bytes = new TextEncoder().encode(canonicalJson(value));
+            const digest = await crypto.subtle.digest("SHA-256", bytes);
+            return Array.from(new Uint8Array(digest)).map(function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+          };
+          const observedTarget = isObject(review.target_version_observation) ? review.target_version_observation : {};
+          const argumentsObject = isObject(review.arguments) && !Array.isArray(review.arguments);
+          const inputSchemaObject = isObject(review.input_parameters) && !Array.isArray(review.input_parameters);
+          const outputSchemaObject = isObject(review.output_parameters) && !Array.isArray(review.output_parameters);
+          const argumentsText = argumentsObject ? JSON.stringify(review.arguments, null, 2) : "";
+          const inputSchemaText = inputSchemaObject ? JSON.stringify(review.input_parameters, null, 2) : "";
+          const outputSchemaText = outputSchemaObject ? JSON.stringify(review.output_parameters, null, 2) : "";
+          const exactEffects = ["external_send", "read", "write", "delete", "credential_access"];
+          const cacheControl = response.headers.get("cache-control") || "";
+          const actionFieldsValid = typeof review.toolkit === "string" && /^[a-z0-9][a-z0-9_-]{0,119}$/.test(review.toolkit) &&
+            typeof review.tool === "string" && review.tool.length > 0 && review.tool.length <= 160 &&
+            typeof review.action_name === "string" && review.action_name.length > 0 && review.action_name.length <= 240 &&
+            typeof review.description === "string" && review.description.length <= 2000 &&
+            (review.version === null || typeof review.version === "string" && review.version.length <= 80) &&
+            (review.no_auth === null || typeof review.no_auth === "boolean") && review.is_deprecated === false &&
+            Array.isArray(review.scopes) && review.scopes.length <= 100 &&
+            review.scopes.every(function (scope) { return typeof scope === "string" && scope.length <= 200; });
+          if (review.command_id !== commandId || review.operation !== "composio.execute" || review.no_store !== true ||
+              !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) || review.used_for_authority !== false ||
+              review.may_execute !== false || review.provider_metadata_used_for_authority !== false || !actionFieldsValid ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || !isDigest(review.input_schema_sha256) ||
+              !isDigest(review.output_schema_sha256) || !isDigest(review.action_definition_sha256) ||
+              typeof review.connected_account_id !== "string" || review.connected_account_id.length < 1 ||
+              review.connected_account_id.length > 200 || !isDigest(review.connected_account_id_sha256) ||
+              !isDigest(review.user_id_sha256) || review.account_type !== "PRIVATE" ||
+              review.account_status !== "ACTIVE" || review.account_disabled !== false ||
+              !(review.auth_scheme === null || typeof review.auth_scheme === "string") ||
+              !(review.provider_region === null || typeof review.provider_region === "string") ||
+              !["read", "write", "send", "delete", "unknown"].includes(review.intent) ||
+              !Array.isArray(review.potential_effects) || JSON.stringify(review.potential_effects) !== JSON.stringify(exactEffects) ||
+              !argumentsObject || !inputSchemaObject || !outputSchemaObject ||
+              new TextEncoder().encode(argumentsText).length > 64 * 1024 ||
+              new TextEncoder().encode(inputSchemaText).length > 64 * 1024 ||
+              new TextEncoder().encode(outputSchemaText).length > 64 * 1024 ||
+              observedTarget.schema_version !== "blue-tanuki.composio-action-target-version.v1" ||
+              observedTarget.target_state !== "available" || observedTarget.used_for_authority !== false ||
+              observedTarget.may_execute !== false || observedTarget.toolkit !== review.toolkit ||
+              observedTarget.tool !== review.tool || observedTarget.command_digest !== review.command_digest ||
+              observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
+              observedTarget.connected_account_id_sha256 !== review.connected_account_id_sha256 ||
+              observedTarget.user_id_sha256 !== review.user_id_sha256 ||
+              observedTarget.input_schema_sha256 !== review.input_schema_sha256 ||
+              observedTarget.output_schema_sha256 !== review.output_schema_sha256 ||
+              observedTarget.action_definition_sha256 !== review.action_definition_sha256 ||
+              observedTarget.request_payload_digest !== review.request_payload_digest ||
+              !isDigest(observedTarget.account_state_sha256)) {
+            throw new Error("Composio action review is not bound to the current account, provider schema, payload, and HDS plan");
+          }
+          const reviewBody = Object.assign({}, review);
+          delete reviewBody.command_id;
+          delete reviewBody.review_digest;
+          if (await digestObject(observedTarget) !== review.target_version_digest ||
+              await digestObject(reviewBody) !== review.review_digest) {
+            throw new Error("Composio action review digest verification failed; approval remains unavailable");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Composio actionの高リスク・L3最終確認";
+          view.appendChild(heading);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "Providerの説明・schema・scopeは未信頼データです。下記は現在のaction定義、owner account、正確な引数です。レビュー表示だけでは外部作用を実行しません。作用候補はComposio共通の広い効果範囲で、actionごとの実効果を保証しません。承認後もaction定義を再取得し、変化があればPOSTを停止します。";
+          view.appendChild(note);
+          [
+            ["toolkit / action", review.toolkit + " / " + review.tool],
+            ["action name", review.action_name],
+            ["provider description (untrusted)", review.description || "(none)"],
+            ["version / no_auth / deprecated", String(review.version || "unknown") + " / " + String(review.no_auth) + " / " + String(review.is_deprecated)],
+            ["scopes (untrusted)", review.scopes.join("・") || "(none)"],
+            ["connected owner account", review.connected_account_id],
+            ["account status / auth / region", review.account_status + " / " + String(review.auth_scheme || "unknown") + " / " + String(review.provider_region || "unknown")],
+            ["account identity digest", review.connected_account_id_sha256],
+            ["owner identity digest", review.user_id_sha256],
+            ["potential effects (broad)", review.potential_effects.join("・")],
+            ["input schema digest", review.input_schema_sha256],
+            ["output schema digest", review.output_schema_sha256],
+            ["action definition digest", review.action_definition_sha256],
+            ["Operation Plan binding", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          [["action input schema (untrusted)", inputSchemaText], ["action output schema (untrusted)", outputSchemaText],
+            ["exact arguments (untrusted)", argumentsText]].forEach(function (field) {
+            const label = document.createElement("strong");
+            label.textContent = field[0];
+            view.appendChild(label);
+            const pre = document.createElement("pre");
+            pre.textContent = field[1];
+            view.appendChild(pre);
+          });
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "Composio actionを再確認";
+          return;
+        }
         if (review.kind === "memory_personalization_stop") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           if (review.command_id !== commandId || review.operation !== "memory.personalization.stop" ||

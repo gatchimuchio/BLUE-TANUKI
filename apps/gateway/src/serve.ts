@@ -46,6 +46,8 @@ import {
   executorCommandDigest,
   createLogger,
   browserFormInputRequestDigest,
+  composioDryRun,
+  composioLiveExecutionEnabled,
   inspectBrowserFormInputStageReceipt,
   consumeBrowserFormInputStageReceipt,
   recordBrowserFormInputStageReceipt,
@@ -323,6 +325,7 @@ interface PendingApproval {
   content_review_memory_personalization_target_version_digest?: string;
   content_review_settings_write_target_version_digest?: string;
   content_review_mcp_target_version_digest?: string;
+  content_review_composio_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
@@ -2069,6 +2072,7 @@ async function serveWithOwnerLease(
     expected_google_drive_target_version_digest?: string;
     expected_github_write_target_version_digest?: string;
     expected_mcp_call_target_version_digest?: string;
+    expected_composio_action_target_version_digest?: string;
     browser_form_input_review_digest?: string;
     browser_form_input_operation_plan_binding_digest?: string;
     browser_form_submit_receipt_pending?: PendingApproval;
@@ -2559,6 +2563,8 @@ async function serveWithOwnerLease(
       }
       const reason = cmd.type === "tool_call" && cmd.payload.tool_name === "google.calendar.write"
         ? "google_calendar_write_target_version_unavailable"
+        : cmd.type === "tool_call" && cmd.payload.tool_name === "composio.execute"
+        ? "composio_action_target_version_unavailable"
         : cmd.type === "tool_call" && cmd.payload.tool_name === "github.write"
         ? "github_write_target_version_unavailable"
         : cmd.type === "tool_call" && cmd.payload.tool_name === "gmail.write"
@@ -2740,6 +2746,19 @@ async function serveWithOwnerLease(
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedMcpTargetVersionDigest !== opts.expected_mcp_call_target_version_digest) {
         const reason = "mcp_call_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_composio_action_target_version_digest) {
+      const observedComposioTargetVersionDigest = cmd.type === "tool_call" && cmd.payload.tool_name === "composio.execute" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.composio-action-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation) : undefined;
+      if (observedComposioTargetVersionDigest !== opts.expected_composio_action_target_version_digest) {
+        const reason = "composio_action_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -3661,6 +3680,8 @@ async function serveWithOwnerLease(
       command.payload.tool_name === "file.edit" || command.payload.tool_name === "file.delete" ||
       command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "settings.write" ||
       command.payload.tool_name === "mcp.call" ||
+      (command.payload.tool_name === "composio.execute" && !composioDryRun(process.env) &&
+        composioLiveExecutionEnabled(process.env)) ||
       (command.payload.tool_name === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(command.payload.arguments.operation))) ||
       (command.payload.tool_name === "google.drive.write" &&
@@ -4282,6 +4303,8 @@ async function serveWithOwnerLease(
           ? { expected_github_write_target_version_digest: pending.content_review_github_target_version_digest } : {}),
         ...(pending.content_review_mcp_target_version_digest
           ? { expected_mcp_call_target_version_digest: pending.content_review_mcp_target_version_digest } : {}),
+        ...(pending.content_review_composio_target_version_digest
+          ? { expected_composio_action_target_version_digest: pending.content_review_composio_target_version_digest } : {}),
       });
       if (r.status === "failure_memory_gate_changed") {
         completeApprovalResolution(command_id);
@@ -5690,6 +5713,23 @@ async function serveWithOwnerLease(
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "composio.execute" &&
+        !composioDryRun(process.env) && composioLiveExecutionEnabled(process.env) &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "composio_execute" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: snapshot.review_digest,
+          content_review_composio_target_version_digest: snapshot.target_version_digest });
+        return { ...snapshot, command_id };
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -6059,6 +6099,29 @@ async function serveWithOwnerLease(
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
           current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_mcp_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return signal?.aborted ? "cancelled" : "unavailable";
+      }
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "composio.execute") {
+      if (composioDryRun(process.env) || !composioLiveExecutionEnabled(process.env)) return "not_required";
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_composio_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = await executor.inspectCommandContentReview(pending.command, undefined,
+          operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
+        return current && "kind" in current && current.kind === "composio_execute" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_composio_target_version_digest
           ? "valid" : "stale";
       } catch {
         return signal?.aborted ? "cancelled" : "unavailable";
