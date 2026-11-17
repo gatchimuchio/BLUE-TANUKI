@@ -139,15 +139,17 @@ final class AndroidCredentialStore {
     }
 
     synchronized void saveAndVerify(DeviceCredential credential) throws CredentialStoreException {
+        if (credential == null || credential.deviceId == null ||
+                !credential.deviceId.equals(loadOrCreateDeviceId()) || contains()) {
+            throw new CredentialStoreException();
+        }
+
         byte[] plaintext = null;
         byte[] envelope = null;
+        String encoded = null;
+        String encodedDigest = null;
+        boolean writeAttempted = false;
         try {
-            if (!credential.deviceId.equals(loadOrCreateDeviceId())) {
-                throw new CredentialStoreException();
-            }
-            if (preferences.contains(VALUE_KEY) || preferences.contains(ACTIVE_DIGEST_KEY)) {
-                throw new CredentialStoreException();
-            }
             plaintext = credential.encodeForStorage().getBytes(StandardCharsets.UTF_8);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key());
@@ -157,7 +159,9 @@ final class AndroidCredentialStore {
             envelope = new byte[iv.length + ciphertext.length];
             System.arraycopy(iv, 0, envelope, 0, iv.length);
             System.arraycopy(ciphertext, 0, envelope, iv.length, ciphertext.length);
-            String encoded = Base64.encodeToString(envelope, Base64.NO_WRAP);
+            encoded = Base64.encodeToString(envelope, Base64.NO_WRAP);
+            encodedDigest = digest(encoded);
+            writeAttempted = true;
             if (!preferences.edit().putString(VALUE_KEY, encoded)
                     .remove(ACTIVE_DIGEST_KEY).commit()) {
                 throw new CredentialStoreException();
@@ -166,7 +170,7 @@ final class AndroidCredentialStore {
             if (!credential.sameValue(readBack)) {
                 throw new CredentialStoreException();
             }
-            if (!preferences.edit().putString(ACTIVE_DIGEST_KEY, digest(encoded)).commit()) {
+            if (!preferences.edit().putString(ACTIVE_DIGEST_KEY, encodedDigest).commit()) {
                 throw new CredentialStoreException();
             }
             readBack = read();
@@ -174,7 +178,22 @@ final class AndroidCredentialStore {
                 throw new CredentialStoreException();
             }
         } catch (Exception exception) {
-            preferences.edit().remove(VALUE_KEY).remove(ACTIVE_DIGEST_KEY).commit();
+            if (writeAttempted) {
+                try {
+                    String storedEncoded = preferences.getString(VALUE_KEY, null);
+                    String storedDigest = preferences.getString(ACTIVE_DIGEST_KEY, null);
+                    boolean belongsToThisAttempt = encoded.equals(storedEncoded) &&
+                            (storedDigest == null || encodedDigest.equals(storedDigest));
+                    if (belongsToThisAttempt &&
+                            (!preferences.edit().remove(VALUE_KEY).remove(ACTIVE_DIGEST_KEY).commit() ||
+                                    preferences.contains(VALUE_KEY) ||
+                                    preferences.contains(ACTIVE_DIGEST_KEY))) {
+                        throw new CredentialStoreException();
+                    }
+                } catch (Exception cleanupException) {
+                    throw new CredentialStoreException();
+                }
+            }
             throw new CredentialStoreException();
         } finally {
             if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
