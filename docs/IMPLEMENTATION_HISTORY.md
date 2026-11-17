@@ -2,6 +2,22 @@
 
 この文書は完了・終了したBUILD_BATCHの保存ログであり、現行の仕様・工程・施工指示やactive taskの正本ではない。必要な依存、変更系譜、矛盾、回帰原因を調べる場合だけ該当箇所を参照する。履歴の状態・SHA・完了主張は現行HEADや現行正本を置き換えない。2026-11-14に削除した旧第四施工指示書への記述は当時の文書変更履歴であり、復活や参照を要求しない。技術原典・QE三点の旧非公開制約も失効済みである。
 
+## 2026-11-17 — rev6.0 QE_BUILD / Windows shell isolation readiness probe
+
+**対象・目的:** Windows `shell.exec`のdoctor判定がhelper exeの存在だけで利用可能と誤認しないようにし、実providerを起動せずにAppContainer profile作成・削除とJob Object制限設定の可否を診断する。
+
+Windows native helperへ`--probe`を追加した。一時AppContainer profileの作成・明示削除、Job Object制限設定、空のJob確認だけを行い、workspace ACLやユーザー指定commandには触れない。Node側は5秒timeout、最小環境、4 KiB出力上限でhelperを呼び、正確な成功JSON以外を利用不可として扱う。doctorは従来のconsumerからこの結果を使う。READMEのprofile寿命記述も現行実装に合わせた。
+
+| QE_BUILD必要最小確認 | 結果 |
+|---|---|
+| Windows native release build、helper `--probe`、Node/TypeScript availability経路 | PASS。probe=`appcontainer_profile_available:true`、`job_object_limits_available:true`、Node結果=`available:true`。 |
+| workspace `pnpm typecheck`、`pnpm build`（15 workspace projects） | PASS。 |
+| `pnpm exec vitest run apps/gateway/test/doctor.test.ts -t "shell isolation state"` | PASS 2件。その他47件は対象外でskip。 |
+| `pnpm docs:check`、`git diff --check` | PASS。日本語基底移行負債73件は継続。 |
+| shell.exec command実行・取消・timeout、Linux/macOS/Android/iOS、full suite、全体SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QA | NOT_RUN。 |
+
+**状態・限界:** Windowsのhelperが作る隔離primitiveとdoctorの利用可否経路までの局所証拠。特定commandの実行成功・停止・ACL復元、製品全体の成立、OS別QAを証明しない。macOS shell隔離は依然fail-closed。C08.03 live provider、実資格・実データ、外部作用、別repo、公開／出荷GOは変更なし。protected attachments、既存Linux isolation `target/`、build `dist/`は保持し、distは直後の開発・検査用として一時保有する。implementation commit=`f02af55fc49190d7192020b5d770c5bca1b78a46`をGitHub `main`へpushし、local／origin／remote `main`一致をreadback済み。closeout後のlocal recovery branch／remote backup tagはcurrent=closeout commit、previous=`f02af55fc49190d7192020b5d770c5bca1b78a46`へ更新する。Gitが古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除をPermission deniedで拒否したが、ACL／metadataの迂回・変更は行わず、他の保護資産も保持した。
+
 ## 2026-11-15 — rev5.3 QE_BUILD / native shell取消時のOS cleanup所有
 
 **対象・目的:** `shell.exec`の取消・timeout時にWindows native helperが所有するJob Object停止、一時root ACL復元、AppContainer profile cleanupをJavaScript親から中断しない。
