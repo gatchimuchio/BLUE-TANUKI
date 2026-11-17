@@ -247,7 +247,7 @@ struct ContentView: View {
           .accessibilityIdentifier("mobile-task-instruction")
         Text(taskInstructionCountLabel)
           .font(.caption)
-          .foregroundStyle(taskInstructionWithinLimit ? .secondary : .red)
+          .foregroundStyle(taskInstructionWithinLimit ? Color.secondary : Color.red)
           .accessibilityIdentifier("mobile-task-instruction-count")
         Text("依頼はDesktop owner確認待ちとして送信されます。開始候補の実行時もBrokerが現在の権限と承認を再検査します。")
           .font(.footnote)
