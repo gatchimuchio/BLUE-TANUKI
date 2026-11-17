@@ -21,8 +21,8 @@ mod windows_provider {
         INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
-        GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+        GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, GRANT_ACCESS,
+        REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::Isolation::{
         CreateAppContainerProfile, DeleteAppContainerProfile,
@@ -33,9 +33,11 @@ mod windows_provider {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, GetFileAttributesW, GetFileInformationByHandle, ReadFile,
-        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+        WRITE_DAC,
     };
     use windows_sys::Win32::System::Environment::{
         FreeEnvironmentStringsW, GetEnvironmentStringsW,
@@ -268,15 +270,15 @@ mod windows_provider {
     }
 
     struct TemporaryRootGrant {
-        root: Vec<u16>,
+        root: Handle,
         sid: *mut core::ffi::c_void,
         active: bool,
     }
 
     impl TemporaryRootGrant {
-        fn apply(root: &Path, sid: &AppContainerSid) -> Result<Self, String> {
+        fn apply(root: Handle, sid: &AppContainerSid) -> Result<Self, String> {
             let mut grant = Self {
-                root: wide(root.as_os_str()),
+                root,
                 sid: sid.0,
                 active: true,
             };
@@ -304,8 +306,8 @@ mod windows_provider {
             let mut old_acl = null_mut();
             let mut security_descriptor = null_mut();
             let error = unsafe {
-                GetNamedSecurityInfoW(
-                    self.root.as_ptr(),
+                GetSecurityInfo(
+                    self.root.raw(),
                     SE_FILE_OBJECT,
                     DACL_SECURITY_INFORMATION,
                     null_mut(),
@@ -350,8 +352,8 @@ mod windows_provider {
             }
 
             let error = unsafe {
-                SetNamedSecurityInfoW(
-                    self.root.as_ptr(),
+                SetSecurityInfo(
+                    self.root.raw(),
                     SE_FILE_OBJECT,
                     DACL_SECURITY_INFORMATION,
                     null_mut(),
@@ -481,14 +483,14 @@ mod windows_provider {
     }
 
     fn run(request: Request) -> Result<String, String> {
-        let root = validate_root(&request.root)?;
+        let (root, root_handle) = validate_root(&request.root)?;
         let cwd = validate_cwd(&request.cwd, &root)?;
         scan_root(&root)?;
         let command = resolve_command(&request.command)?;
         let mut profile = AppContainerProfile::create()?;
         let run_result = {
             let sid = &profile.sid;
-            match TemporaryRootGrant::apply(&root, sid) {
+            match TemporaryRootGrant::apply(root_handle, sid) {
                 Ok(mut root_grant) => {
                     let run_result = run_in_job(&request, &root, &cwd, &command, sid);
                     let cleanup_result = root_grant.revoke();
@@ -515,13 +517,11 @@ mod windows_provider {
         }
     }
 
-    fn validate_root(root: &Path) -> Result<PathBuf, String> {
+    fn validate_root(root: &Path) -> Result<(PathBuf, Handle), String> {
         let root = root
             .canonicalize()
             .map_err(|_| "windows_isolation_root_unavailable".to_string())?;
-        let metadata = std::fs::metadata(&root)
-            .map_err(|_| "windows_isolation_root_unavailable".to_string())?;
-        if !metadata.is_dir() || is_reparse_point(&root)? || root.parent().is_none() {
+        if root.parent().is_none() {
             return Err("windows_isolation_root_invalid".to_string());
         }
         if root
@@ -530,7 +530,31 @@ mod windows_provider {
         {
             return Err("windows_isolation_root_contains_private_path".to_string());
         }
-        Ok(root)
+        let root_name = wide(root.as_os_str());
+        let root_handle = Handle::new(
+            unsafe {
+                CreateFileW(
+                    root_name.as_ptr(),
+                    FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                    null_mut(),
+                )
+            },
+            "root_directory",
+        )?;
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(root_handle.raw(), &mut information) } == 0 {
+            return Err(last_error("root_directory_metadata_read"));
+        }
+        if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            || information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err("windows_isolation_root_invalid".to_string());
+        }
+        Ok((root, root_handle))
     }
 
     fn validate_cwd(cwd: &Path, root: &Path) -> Result<PathBuf, String> {
