@@ -116,10 +116,16 @@ export function createRecoveryMutationTools(
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
     adapter_version: "1.0.0-rc.1",
-    description: "Restore one explicitly selected local recovery backup after HDS L3 owner final review.",
+    description: "Restore one explicitly selected canonical state store from a local recovery backup after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
     async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
+      // A package restore rewrites persistent audit and runtime files whose
+      // consumers remain loaded in this Gateway process. Keep it unavailable
+      // until an offline, whole-runtime restore boundary is connected.
+      if (!args.store_key) {
+        throw new Error("generic_recovery_restore_requires_offline_runtime");
+      }
       if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }

@@ -42,14 +42,25 @@ Backup / Restore screen:
 - `Backup Now` calls `POST /recovery/backup` and creates a recovery pack under
   `BLUE_TANUKI_RECOVERY_DIR`, or under `BLUE_TANUKI_FILE_ROOT/recovery` when the
   recovery dir is unset.
-- `Restore` calls `POST /recovery/restore` with explicit confirmation and creates
-  a pre-restore backup before overwriting current files.
+- `Restore` calls `POST /recovery/restore` with explicit confirmation and a
+  selected canonical store, then creates a pre-restore backup before changing
+  that store. Package-level restore without `store_key` is currently blocked;
+  see the status note below.
 - `Reset Provider` clears LLM provider key/config material and writes
   `LLM_BACKEND=stub`.
 - `Reset Connector` clears Composio key/allowlist/user config and writes
   `COMPOSIO_DRY_RUN=true` plus `COMPOSIO_LIVE_EXECUTION=false`.
 - `Factory Reset` clears local session, memory, failure-memory, schedules, and
   logs, while preserving `BLUE_TANUKI_AUDIT_DIR` and the recovery backup root.
+
+2026-11-18 status: package-level `Restore` with no `store_key` is blocked by the
+running Gateway. It would replace the persistent audit hash-chain and runtime
+files while their consumers remain loaded; the live restore path has no complete
+consumer quiescence and reload boundary. The endpoint returns a blocked result
+before creating an L3 request or changing restore targets. Do not treat the
+Control Center button as a successful restore. Individual canonical-store
+restores remain available only through their existing store-specific gates. A
+stopped-Gateway package restore path is not yet connected.
 
 Recovery metadata, backup manifests, and action results are evidence only:
 `used_for_authority=false`. They cannot approve commands, resume suspended HDS
@@ -274,15 +285,18 @@ available:
 2. Go to Backup / Restore.
 3. Enter the maintenance token and load recovery state.
 4. Run `Backup Now` before any reset.
-5. Use `Restore` with the selected recovery pack id for accidental config/data
-   corruption.
+5. Do not use package-level `Restore` (`store_key` omitted) while Gateway is
+   running; it returns a blocked result and makes no restore request. The
+   stopped-Gateway package restore path is not yet connected. Individual
+   canonical-store restores use their store-specific controls and gates.
 6. Use `Reset Provider` when provider credentials, endpoint, or model config
    prevents normal operation.
 7. Use `Reset Connector` when Composio credentials/allowlists/live execution
    settings are broken or should be disconnected.
 8. Use `Factory Reset` only when local runtime state should be cleared. Audit and
    recovery roots are preserved; this is not an audit purge.
-9. Restart the gateway, run `doctor`, and run audit verification.
+9. After an available reset or an approved individual-store restore, restart the
+   gateway, run `doctor`, and run audit verification.
 
 ## 7. Recovery: Audit Chain Broken
 

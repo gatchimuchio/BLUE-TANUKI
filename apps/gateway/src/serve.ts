@@ -4352,6 +4352,18 @@ async function serveWithOwnerLease(
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    if (toolName === "recovery.restore" && arguments_.store_key === undefined) {
+      return {
+        status: "blocked_runtime_restore_requires_offline_gateway",
+        executed: false,
+        operation: toolName,
+        reason: "recovery_restore_live_consumers_not_quiesced",
+        l3_request_created: false,
+        used_for_authority: false,
+        may_execute: false,
+        next_action: "包括復元は稼働中Gatewayから実行できません。対象には監査hash-chain、session・memory・schedule・承認関連の稼働中ファイルが含まれますが、全consumerの静止と復元後の再読込み経路が未接続です。復元もL3要求も開始していません。Gateway停止中の安全な復元経路が接続されるまで保留してください。個別storeの復元はstore_keyを指定し、既存の対象別quiesce条件を満たしてください。",
+      };
+    }
     const restoreEffectScope = toolName === "recovery.restore" &&
       arguments_.store_key === "operation_plans" && arguments_.scope_kind === "operation_plan"
       ? "selected_operation_plan"
