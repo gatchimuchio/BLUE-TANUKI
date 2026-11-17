@@ -3111,6 +3111,13 @@ describe("built-in tools", () => {
     ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
   });
 
+  it("shell.exec does not issue target review evidence for an unsupported OS", async () => {
+    await expect(inspectShellExecTargetVersion({ cmd: "node", args: [] }, {
+      command_digest: "a".repeat(64),
+      platform: "darwin",
+    })).rejects.toThrow(/macOS has no verified native process isolation provider.*no process was started/);
+  });
+
   it("shell.exec resolves only the fixed development-only synthetic test profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-synthetic-profile-"));
     const env = shellTestEnv(root, {

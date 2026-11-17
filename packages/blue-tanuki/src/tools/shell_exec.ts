@@ -65,11 +65,20 @@ export function shellExecIsolationUnavailableReason(platform: NodeJS.Platform = 
   return `${platform} does not have a verified OS-level process isolation provider`;
 }
 
+function assertShellExecPlatformSupported(platform: NodeJS.Platform): void {
+  if (platform !== "win32" && platform !== "linux") {
+    throw new Error(
+      `shell.exec is disabled because ${shellExecIsolationUnavailableReason(platform)}; no process was started`,
+    );
+  }
+}
+
 export async function invokeShellExec(
   args: Record<string, unknown>,
   opts: ShellExecOptions = {},
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
+  assertShellExecPlatformSupported(process.platform);
   const sameWorkspace = booleanArg(args, "same_workspace_as_file_root", false);
   const summaryOnly = booleanArg(args, "summary_only", false);
   if (sameWorkspace && !summaryOnly) {
@@ -83,9 +92,6 @@ export async function invokeShellExec(
   const timeoutMs = positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
 
-  if (process.platform !== "win32" && process.platform !== "linux") {
-    throw new Error(`shell.exec is disabled because ${shellExecIsolationUnavailableReason()}; no process was started`);
-  }
   if (opts.signal?.aborted) {
     throw new Error("shell.exec aborted before isolated process creation");
   }
@@ -200,8 +206,14 @@ export const shellExecTool: Tool = {
 
 export async function inspectShellExecTargetVersion(
   args: Record<string, unknown>,
-  options: { env?: Readonly<Env>; operation_plan_binding_digest?: string; command_digest?: string } = {},
+  options: {
+    env?: Readonly<Env>;
+    operation_plan_binding_digest?: string;
+    command_digest?: string;
+    platform?: NodeJS.Platform;
+  } = {},
 ): Promise<ShellExecTargetVersionObservation> {
+  assertShellExecPlatformSupported(options.platform ?? process.platform);
   const commandDigest = options.command_digest;
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
     throw new Error("shell.exec target resolver requires the exact command digest");
