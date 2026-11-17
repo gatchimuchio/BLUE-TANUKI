@@ -18,6 +18,8 @@ private struct MobileTaskListResult {
   let entries: [MobileTaskDraft]
   let pendingSessionID: String?
   let didReconcilePendingRequest: Bool
+  let statuses: [String: MobileTaskStatus]
+  let allStatusesObserved: Bool
 }
 
 private struct MobileTaskCancellationResult {
@@ -134,6 +136,7 @@ final class DeviceLinkViewModel: ObservableObject {
       taskInstruction = ""
       mcpSnapshot = nil
       includeMcpCapability = false
+      taskStatuses = [:]
       transport.cancelActive()
     }
   }
@@ -195,6 +198,7 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func refreshOwnedTasks() {
     guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    taskStatuses = [:]
     let epoch = lifecycle.capture()
     runTaskOperation(
       progressMessage: "この端末のTask申請をDesktop Brokerへ照会しています。",
@@ -214,22 +218,41 @@ final class DeviceLinkViewModel: ObservableObject {
         if didReconcile, let pendingSessionID {
           _ = try self.store.clearTaskSubmissionPending(sessionID: pendingSessionID)
         }
+        var statuses: [String: MobileTaskStatus] = [:]
+        var allStatusesObserved = true
+        for draft in entries {
+          do {
+            let statusBody = try self.mobileTaskBody(
+              credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
+              allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
+            )
+            statuses[draft.id] = try MobileTaskContract.status(statusBody, draft: draft)
+          } catch {
+            allStatusesObserved = false
+            break
+          }
+        }
         return MobileTaskListResult(
           entries: entries,
           pendingSessionID: didReconcile ? nil : pendingSessionID,
-          didReconcilePendingRequest: didReconcile
+          didReconcilePendingRequest: didReconcile,
+          statuses: statuses,
+          allStatusesObserved: allStatusesObserved
         )
       },
       onSuccess: { result in
         self.tasks = result.entries
+        self.taskStatuses = result.statuses
         self.pendingTaskSessionID = result.pendingSessionID
         self.taskSubmissionNeedsReconciliation = result.pendingSessionID != nil
+        let statusSuffix = result.allStatusesObserved ? ""
+          : " Task状態は\(result.statuses.count)/\(result.entries.count)件を照会できました。残りは未照会で、不明のままです。"
         if result.didReconcilePendingRequest {
-          self.taskMessage = "保留中の申請をDesktop一覧で照合しました。新規申請ができます。"
+          self.taskMessage = "保留中の申請をDesktop一覧で照合しました。新規申請ができます。" + statusSuffix
         } else if result.pendingSessionID != nil {
-          self.taskMessage = "申請を一覧で照合できません。Desktop ownerがAgent Centerで確認するまで新規申請を停止しています。"
+          self.taskMessage = "申請を一覧で照合できません。Desktop ownerがAgent Centerで確認するまで新規申請を停止しています。" + statusSuffix
         } else {
-          self.taskMessage = "この端末に紐づく申請を読み込みました。本文や権限情報は取得していません。"
+          self.taskMessage = "この端末に紐づく申請を読み込みました。本文や権限情報は取得していません。" + statusSuffix
         }
       }
     )

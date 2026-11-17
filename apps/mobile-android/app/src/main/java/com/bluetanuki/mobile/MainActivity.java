@@ -129,6 +129,8 @@ public final class MainActivity extends Activity {
     protected void onStop() {
         foreground = false;
         generation.incrementAndGet();
+        taskStatuses.clear();
+        refreshTaskList();
         if (pairingInFlight && statusView != null) {
             setStatus("結合中にアプリがbackgroundへ移りました。Desktop結果を確認するまで不明状態とし、招待を再利用しないでください。");
         }
@@ -884,6 +886,8 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshOwnedTaskRequests() {
+        taskStatuses.clear();
+        refreshTaskList();
         runMobileTaskOperation("この端末に紐づくTask申請をDesktop Brokerへ照会しています。", false,
                 epoch -> taskClient.refreshOwnedRequests(() -> canSend(epoch)), (result, error) -> {
                     if (error != null) {
@@ -894,12 +898,17 @@ public final class MainActivity extends Activity {
                     MobileTaskClient.OwnedRequests requests = (MobileTaskClient.OwnedRequests) result;
                     ownedTaskRequests.clear();
                     ownedTaskRequests.addAll(requests.entries);
+                    taskStatuses.clear();
+                    taskStatuses.putAll(requests.statuses);
                     taskSubmissionNeedsReconciliation = requests.pendingSessionID != null;
+                    String statusSuffix = requests.allStatusesObserved ? ""
+                            : " Task状態は" + requests.statuses.size() + "/" + requests.entries.size() +
+                                    "件を照会できました。残りは未照会で、不明のままです。";
                     taskMessage = requests.didReconcilePendingRequest
-                            ? "保留中の申請をDesktop一覧で照合しました。新規申請ができます。"
+                            ? "保留中の申請をDesktop一覧で照合しました。新規申請ができます。" + statusSuffix
                             : taskSubmissionNeedsReconciliation
-                                ? "申請を一覧で照合できません。Desktop ownerが申請一覧を確認するまで新規申請を停止しています。"
-                                : "この端末に紐づく申請を読み込みました。本文や権限情報は取得していません。";
+                                ? "申請を一覧で照合できません。Desktop ownerが申請一覧を確認するまで新規申請を停止しています。" + statusSuffix
+                                : "この端末に紐づく申請を読み込みました。本文や権限情報は取得していません。" + statusSuffix;
                     refreshTaskList();
                 });
     }

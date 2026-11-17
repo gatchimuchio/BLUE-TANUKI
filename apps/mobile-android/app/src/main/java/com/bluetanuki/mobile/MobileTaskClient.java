@@ -50,7 +50,22 @@ final class MobileTaskClient {
             }
         }
         if (reconciled) store.clearTaskSubmissionPending(pendingSessionID);
-        return new OwnedRequests(entries, reconciled ? null : pendingSessionID, reconciled);
+        Map<String, MobileTaskContract.TaskStatus> statuses = new LinkedHashMap<>();
+        boolean allStatusesObserved = true;
+        for (MobileTaskContract.Draft entry : entries) {
+            try {
+                statuses.put(entry.id, refreshStatus(entry, canSend));
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                allStatusesObserved = false;
+                break;
+            } catch (Exception exception) {
+                allStatusesObserved = false;
+                break;
+            }
+        }
+        return new OwnedRequests(entries, reconciled ? null : pendingSessionID, reconciled,
+                statuses, allStatusesObserved);
     }
 
     MobileTaskContract.McpSnapshot refreshMcpSnapshot(DeviceLinkTransport.SendGuard canSend)
@@ -204,9 +219,13 @@ final class MobileTaskClient {
         final List<MobileTaskContract.Draft> entries;
         final String pendingSessionID;
         final boolean didReconcilePendingRequest;
-        OwnedRequests(List<MobileTaskContract.Draft> entries, String pendingSessionID, boolean reconciled) {
+        final Map<String, MobileTaskContract.TaskStatus> statuses;
+        final boolean allStatusesObserved;
+        OwnedRequests(List<MobileTaskContract.Draft> entries, String pendingSessionID, boolean reconciled,
+                      Map<String, MobileTaskContract.TaskStatus> statuses, boolean allStatusesObserved) {
             this.entries = entries; this.pendingSessionID = pendingSessionID;
             this.didReconcilePendingRequest = reconciled;
+            this.statuses = statuses; this.allStatusesObserved = allStatusesObserved;
         }
     }
 
