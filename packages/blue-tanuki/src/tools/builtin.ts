@@ -1198,26 +1198,29 @@ function githubWriteRoute(args: Record<string, unknown>, inlineCommitSha?: strin
   if (operation === "code.push") {
     const branch = stringArg(args, "branch")!;
     githubBranchRefArg(branch, "branch");
+    const fileAction = args.file_action === undefined ? "create" : args.file_action;
     const expectedHeadSha = stringArg(args, "expected_head_sha")!;
     const filePath = stringArg(args, "path")!;
     const content = stringArg(args, "content")!;
     const commitMessage = stringArg(args, "commit_message")!;
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+    if ((fileAction !== "create" && fileAction !== "update") ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
         filePath.length > 4_096 || filePath.startsWith("/") || filePath.includes("\\") ||
         /[\u0000-\u001f\u007f]/.test(filePath) ||
         filePath.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git") ||
         content.includes("\u0000") || Buffer.from(content, "utf8").toString("utf8") !== content ||
         Buffer.byteLength(content, "utf8") > 65_536 || commitMessage.length > 256 || commitMessage.trim() !== commitMessage ||
         /[\u0000-\u001f\u007f]/.test(commitMessage) ||
-        Object.keys(args).some((key) => !["operation", "owner", "repo", "branch", "expected_head_sha",
+        Object.keys(args).some((key) => !["operation", "owner", "repo", "branch", "expected_head_sha", "file_action",
           "path", "content", "commit_message", "max_bytes"].includes(key))) {
-      throw new Error("github.write code.push requires one bounded new UTF-8 file and exact expected branch head; mutation_sent=false");
+      throw new Error("github.write code.push requires one bounded UTF-8 file create/update and exact expected branch head; mutation_sent=false");
     }
     return {
       operation,
       method: "POST",
       path: "/graphql",
-      body: { branch, expected_head_sha: expectedHeadSha, path: filePath, content, commit_message: commitMessage },
+      body: { branch, expected_head_sha: expectedHeadSha, file_action: fileAction, path: filePath, content,
+        commit_message: commitMessage },
       repo,
     };
   }
@@ -1963,13 +1966,63 @@ export async function invokeGitHubWrite(
   };
 }
 
-export async function inspectGitHubCodePushTargetVersion(
+interface GitHubCodePushTargetSnapshot {
+  observation: GitHubCodePushTargetVersionObservation;
+  existing_content?: string;
+}
+
+function parseGitHubCodePushExistingFile(response: GitHubReadResponse, expectedPath: string): { sha: string; content: string } {
+  const value = requireGitHubJsonRecord(response, "code push file");
+  const encodedContent = typeof value.content === "string" ? value.content.replace(/[\r\n]/g, "") : undefined;
+  if (value.type !== "file" || value.path !== expectedPath || value.encoding !== "base64" || typeof value.sha !== "string" ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.sha) || encodedContent === undefined ||
+      !/^(?:[A-Za-z0-9+/]*={0,2})$/.test(encodedContent)) {
+    throw new Error("github.write code.push update target is not one readable regular UTF-8 file; mutation_sent=false");
+  }
+  const bytes = Buffer.from(encodedContent, "base64");
+  if (bytes.toString("base64") !== encodedContent || bytes.byteLength > 65_536) {
+    throw new Error("github.write code.push update target has invalid or oversized base64 content; mutation_sent=false");
+  }
+  const content = bytes.toString("utf8");
+  if (!Buffer.from(content, "utf8").equals(bytes) || content.includes("\u0000")) {
+    throw new Error("github.write code.push update target is binary or invalid UTF-8; mutation_sent=false");
+  }
+  return { sha: value.sha, content };
+}
+
+const MAX_GITHUB_CODE_PUSH_REVIEW_DIFF_BYTES = 300_000;
+
+function githubCodePushDiffLines(prefix: "-" | "+", value: string): string {
+  if (value.length === 0) return "";
+  const lines = value.split("\n");
+  if (value.endsWith("\n")) lines.pop();
+  return lines.map((line) => `${prefix}${line.replace(/\r/g, "\\r").replace(/\u001b/g, "\\x1b")}`).join("\n") + "\n";
+}
+
+function githubCodePushReviewDiff(path: string, fileAction: "create" | "update", before: string | undefined,
+  after: string): string {
+  const displayPath = JSON.stringify(path);
+  const beforeLineCount = before === undefined || before.length === 0 ? 0 :
+    (before.endsWith("\n") ? before.slice(0, -1) : before).split("\n").length;
+  const afterLineCount = after.length === 0 ? 0 : (after.endsWith("\n") ? after.slice(0, -1) : after).split("\n").length;
+  let diff = fileAction === "create"
+    ? `--- /dev/null\n+++ b/${displayPath}\n@@ -0,0 +1,${afterLineCount} @@\n`
+    : `--- a/${displayPath}\n+++ b/${displayPath}\n@@ -1,${beforeLineCount} +1,${afterLineCount} @@\n`;
+  if (before !== undefined) diff += githubCodePushDiffLines("-", before);
+  diff += githubCodePushDiffLines("+", after);
+  if (Buffer.byteLength(diff, "utf8") > MAX_GITHUB_CODE_PUSH_REVIEW_DIFF_BYTES) {
+    throw new Error("github.write code.push full-file review diff exceeds the owner-review size limit; mutation_sent=false");
+  }
+  return diff;
+}
+
+async function inspectGitHubCodePushTargetSnapshot(
   args: Record<string, unknown>,
   opts: GitHubWriteOptions = {},
-): Promise<GitHubCodePushTargetVersionObservation> {
+): Promise<GitHubCodePushTargetSnapshot> {
   const route = githubWriteRoute(args);
   if (route.operation !== "code.push") throw new Error("github.write code.push target operation mismatch");
-  const allowedKeys = ["operation", "owner", "repo", "branch", "expected_head_sha", "path", "content",
+  const allowedKeys = ["operation", "owner", "repo", "branch", "expected_head_sha", "file_action", "path", "content",
     "commit_message", "max_bytes"];
   if (Object.keys(args).some((key) => !allowedKeys.includes(key))) {
     throw new Error("github.write code.push contains unsupported arguments; mutation_sent=false");
@@ -1986,18 +2039,20 @@ export async function inspectGitHubCodePushTargetVersion(
   const owner = githubNameArg(args, "owner");
   const repo = githubNameArg(args, "repo");
   const branch = stringArg(args, "branch")!;
+  const fileAction = args.file_action === undefined ? "create" : args.file_action;
   const expectedHeadSha = stringArg(args, "expected_head_sha")!;
   const pathValue = stringArg(args, "path")!;
   const content = stringArg(args, "content")!;
   const commitMessage = stringArg(args, "commit_message")!;
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
+  if ((fileAction !== "create" && fileAction !== "update") ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
       pathValue.length > 4_096 || pathValue.startsWith("/") || pathValue.includes("\\") ||
       /[\u0000-\u001f\u007f]/.test(pathValue) ||
       pathValue.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git") ||
       content.includes("\u0000") || Buffer.from(content, "utf8").toString("utf8") !== content ||
       Buffer.byteLength(content, "utf8") > 65_536 || commitMessage.length > 256 || commitMessage.trim() !== commitMessage ||
       /[\u0000-\u001f\u007f]/.test(commitMessage)) {
-    throw new Error("github.write code.push parameters are invalid or exceed the bounded create-only contract; mutation_sent=false");
+    throw new Error("github.write code.push parameters are invalid or exceed the bounded create/update contract; mutation_sent=false");
   }
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const readRequest = opts.read_request ?? defaultGitHubReadRequest;
@@ -2025,11 +2080,22 @@ export async function inspectGitHubCodePushTargetVersion(
   const encodedPath = pathValue.split("/").map((segment) => encodeURIComponent(segment)).join("/");
   const fileObservation = await readRequest({ path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}` +
     `/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`, maxBytes, token }, opts.signal);
-  if (fileObservation.status !== 404 || fileObservation.ok || fileObservation.truncated) {
-    throw new Error("github.write code.push only creates a file that is absent at the reviewed branch head; mutation_sent=false");
+  let existingFileSha: string | undefined;
+  let existingContent: string | undefined;
+  if (fileAction === "create") {
+    if (fileObservation.status !== 404 || fileObservation.ok || fileObservation.truncated) {
+      throw new Error("github.write code.push create requires a file absent at the reviewed branch head; mutation_sent=false");
+    }
+  } else {
+    const existing = parseGitHubCodePushExistingFile(fileObservation, pathValue);
+    existingFileSha = existing.sha;
+    existingContent = existing.content;
+    if (existingContent === content) {
+      throw new Error("github.write code.push update has no content change; mutation_sent=false");
+    }
   }
   const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
-  return GitHubCodePushTargetVersionObservationSchema.parse({
+  const observation = GitHubCodePushTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.github-write-target-version.v1",
     operation: "code.push",
     repository_id: repository.id,
@@ -2041,11 +2107,13 @@ export async function inspectGitHubCodePushTargetVersion(
     branch,
     expected_head_sha: expectedHeadSha,
     path: pathValue,
+    file_action: fileAction,
+    ...(existingFileSha ? { existing_file_sha: existingFileSha } : {}),
     target_identity_digest: githubCodePushTargetIdentityDigest({ repository_id: repository.id,
       canonical_full_name: fullName, default_branch: defaultBranch, branch, expected_head_sha: expectedHeadSha,
-      path: pathValue }),
+      path: pathValue, file_action: fileAction, ...(existingFileSha ? { existing_file_sha: existingFileSha } : {}) }),
     request_payload_digest: githubCodePushRequestPayloadDigest({ owner, repo, branch, expected_head_sha: expectedHeadSha,
-      path: pathValue, content, commit_message: commitMessage }),
+      path: pathValue, file_action: fileAction, content, commit_message: commitMessage }),
     command_digest: commandDigest,
     operation_plan_binding_digest: operationPlanBindingDigest,
     provider_observation_is_atomic: false,
@@ -2054,6 +2122,14 @@ export async function inspectGitHubCodePushTargetVersion(
     used_for_authority: false,
     may_execute: false,
   });
+  return { observation, ...(existingContent === undefined ? {} : { existing_content: existingContent }) };
+}
+
+export async function inspectGitHubCodePushTargetVersion(
+  args: Record<string, unknown>,
+  opts: GitHubWriteOptions = {},
+): Promise<GitHubCodePushTargetVersionObservation> {
+  return (await inspectGitHubCodePushTargetSnapshot(args, opts)).observation;
 }
 
 export function assertGitHubCodePushTargetVersion(args: Record<string, unknown>, value: unknown,
@@ -2065,22 +2141,26 @@ export function assertGitHubCodePushTargetVersion(args: Record<string, unknown>,
   const repo = githubNameArg(args, "repo");
   const branch = stringArg(args, "branch")!;
   const expectedHeadSha = stringArg(args, "expected_head_sha")!;
+  const fileAction = args.file_action === undefined ? "create" : args.file_action;
   const pathValue = stringArg(args, "path")!;
   const content = stringArg(args, "content")!;
   const commitMessage = stringArg(args, "commit_message")!;
-  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "branch", "expected_head_sha", "path",
+  if (Object.keys(args).some((key) => !["operation", "owner", "repo", "branch", "expected_head_sha", "file_action", "path",
         "content", "commit_message", "max_bytes"].includes(key)) || route.operation !== "code.push" ||
+      (fileAction !== "create" && fileAction !== "update") ||
       observation.requested_owner.toLowerCase() !== owner.toLowerCase() ||
       observation.requested_repo.toLowerCase() !== repo.toLowerCase() ||
       observation.canonical_full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
       observation.branch !== branch || observation.expected_head_sha !== expectedHeadSha || observation.path !== pathValue ||
+      (observation.file_action ?? "create") !== fileAction ||
       observation.branch === observation.default_branch || observation.command_digest !== commandDigest ||
       observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
       observation.request_payload_digest !== githubCodePushRequestPayloadDigest({ owner, repo, branch,
-        expected_head_sha: expectedHeadSha, path: pathValue, content, commit_message: commitMessage }) ||
+        expected_head_sha: expectedHeadSha, path: pathValue, file_action: fileAction, content, commit_message: commitMessage }) ||
       observation.target_identity_digest !== githubCodePushTargetIdentityDigest({ repository_id: observation.repository_id,
         canonical_full_name: observation.canonical_full_name, default_branch: observation.default_branch, branch,
-        expected_head_sha: expectedHeadSha, path: pathValue }) || observation.mutation_sent ||
+        expected_head_sha: expectedHeadSha, path: pathValue, file_action: fileAction,
+        ...(observation.existing_file_sha ? { existing_file_sha: observation.existing_file_sha } : {}) }) || observation.mutation_sent ||
       observation.used_for_authority || observation.may_execute || observation.provider_observation_is_atomic ||
       !observation.provider_data_is_untrusted) {
     throw new Error("github.write code.push target observation does not match the reviewed command and plan");
@@ -2090,9 +2170,12 @@ export function assertGitHubCodePushTargetVersion(args: Record<string, unknown>,
 
 export async function inspectGitHubCodePushContentReview(args: Record<string, unknown>, opts: GitHubWriteOptions = {})
   : Promise<GitHubCodePushContentReview> {
-  const observation = await inspectGitHubCodePushTargetVersion(args, opts);
+  const snapshot = await inspectGitHubCodePushTargetSnapshot(args, opts);
+  const observation = snapshot.observation;
   const route = githubWriteRoute(args);
   const content = String(route.body.content);
+  const fileAction = observation.file_action ?? "create";
+  const diff = githubCodePushReviewDiff(observation.path, fileAction, snapshot.existing_content, content);
   const base = {
     kind: "github_code_push" as const,
     operation: "github.write.code.push" as const,
@@ -2105,8 +2188,11 @@ export async function inspectGitHubCodePushContentReview(args: Record<string, un
     branch: observation.branch,
     expected_head_sha: observation.expected_head_sha,
     path: observation.path,
+    file_action: fileAction,
+    ...(observation.existing_file_sha ? { existing_file_sha: observation.existing_file_sha } : {}),
     content,
     content_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    diff,
     commit_message: String(route.body.commit_message),
     request_payload_digest: observation.request_payload_digest,
     target_version_digest: createHash("sha256").update(canonicalGitHubWriteTargetVersionObservation(observation), "utf8").digest("hex"),
@@ -2203,16 +2289,35 @@ async function invokeGitHubCodePush(args: Record<string, unknown>, opts: GitHubW
       (updatedRef?.name !== expected.branch && updatedRef?.name !== `refs/heads/${expected.branch}`)) {
     throw new Error("github.write code.push conditional commit response did not confirm the reviewed parent and ref; outcome_unknown; do not retry automatically");
   }
-  const afterSnapshot = await readGitHubBaseIdentity({ owner: args.owner, repo: args.repo, base_ref: args.branch },
-    readRequest, maxBytes, opts.signal, token);
+  let committedFile: { sha: string; content: string };
+  try {
+    const committedFileResponse = await readRequest({ path: `/repos/${encodeURIComponent(String(args.owner))}/${encodeURIComponent(String(args.repo))}` +
+      `/contents/${expected.path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}?ref=${encodeURIComponent(commitOid)}`,
+      maxBytes, token }, opts.signal);
+    committedFile = parseGitHubCodePushExistingFile(committedFileResponse, expected.path);
+  } catch {
+    throw new Error("github.write code.push commit readback is unavailable; branch_update_sent=true; outcome_unknown; do not retry automatically");
+  }
+  const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
+  if (createHash("sha256").update(committedFile.content, "utf8").digest("hex") !== contentDigest) {
+    throw new Error("github.write code.push commit readback did not match the approved file content; outcome_unknown; do not retry automatically");
+  }
+  let afterSnapshot: unknown;
+  try {
+    afterSnapshot = await readGitHubBaseIdentity({ owner: args.owner, repo: args.repo, base_ref: args.branch },
+      readRequest, maxBytes, opts.signal, token);
+  } catch {
+    throw new Error("github.write code.push branch readback is unavailable; branch_update_sent=true; outcome_unknown; do not retry automatically");
+  }
   const after = isRecord(afterSnapshot) && isRecord(afterSnapshot.data) ? afterSnapshot.data : null;
   if (!after || after.base_commit_sha !== commitOid || after.repository_id !== expected.repository_id ||
       after.full_name !== expected.canonical_full_name || after.default_branch !== expected.default_branch) {
     throw new Error("github.write code.push result could not be independently confirmed; outcome_unknown; do not retry automatically");
   }
-  const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
+  const fileAction = expected.file_action ?? "create";
   const result = { branch: args.branch, commit_sha: commitOid, parent_sha: expected.expected_head_sha,
-    path: expected.path, content_sha256: contentDigest };
+    path: expected.path, file_action: fileAction, ...(expected.existing_file_sha ? { existing_file_sha: expected.existing_file_sha } : {}),
+    content_sha256: contentDigest };
   return {
     schema_version: "blue-tanuki.github-write-result.v1", operation: "code.push", api_host: "api.github.com",
     repo: route.repo, repository_id: expected.repository_id, target_identity_digest: expected.target_identity_digest,

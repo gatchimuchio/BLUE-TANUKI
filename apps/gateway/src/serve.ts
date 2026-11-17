@@ -5962,7 +5962,8 @@ async function serveWithOwnerLease(
       try {
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
-        if (!snapshot || !("diff" in snapshot) || snapshot.command_digest !== operationPlanDigest(pending.command) ||
+        if (!snapshot || !("diff" in snapshot) || "kind" in snapshot ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
         const review: WebChatApprovalContentReview = {
           kind: "file_edit_diff",
@@ -6328,7 +6329,7 @@ async function serveWithOwnerLease(
         const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
         const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest, signal);
         if (signal?.aborted) return "cancelled";
-        return current && "diff" in current && current.review_digest === pending.content_review_digest &&
+        return current && "diff" in current && !("kind" in current) && current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_file_edit_target_version_digest
           ? "valid" : "stale";
       } catch {

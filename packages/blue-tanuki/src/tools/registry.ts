@@ -367,7 +367,7 @@ export interface GitHubPullRequestReviewSubmitContentReview {
   may_execute: false;
 }
 
-/** No-store review of one exact new file pushed to an existing non-default branch. */
+/** No-store review diff for one file create or replacement on an existing non-default branch. */
 export interface GitHubCodePushContentReview {
   kind: "github_code_push";
   operation: "github.write.code.push";
@@ -380,8 +380,11 @@ export interface GitHubCodePushContentReview {
   branch: string;
   expected_head_sha: string;
   path: string;
+  file_action: "create" | "update";
+  existing_file_sha?: string;
   content: string;
   content_sha256: string;
+  diff: string;
   commit_message: string;
   request_payload_digest: string;
   target_version_digest: string;

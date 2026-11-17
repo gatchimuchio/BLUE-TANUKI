@@ -173,13 +173,15 @@ export const GitHubPullRequestReviewSubmitTargetVersionObservationSchema = GitHu
   review_body_digest: DigestSchema.optional(),
 }).strict();
 
-/** One reviewed, create-only file commit to an existing non-default branch. */
+/** One reviewed file creation or replacement on an existing non-default branch. */
 export const GitHubCodePushTargetVersionObservationSchema = GitHubWriteTargetVersionCommonSchema.extend({
   operation: z.literal("code.push"),
   default_branch: z.string().min(1).max(255),
   branch: z.string().min(1).max(255),
   expected_head_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   path: z.string().min(1).max(4096),
+  file_action: z.enum(["create", "update"]).optional(),
+  existing_file_sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).optional(),
 }).strict();
 
 /** A draft release bound to an existing tag and its observed commit. */
@@ -264,6 +266,7 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
   }
   if (value.operation === "code.push") {
     const branchSegments = value.branch.split("/");
+    const fileAction = value.file_action ?? "create";
     if (value.branch === value.default_branch || value.branch !== value.branch.trim() || value.branch === "@" ||
         value.branch.startsWith("/") || value.branch.endsWith("/") || value.branch.includes("//") ||
         value.branch.includes("..") || value.branch.includes("@{") || /[\u0000-\u0020\u007f~^:?*\\\[]/.test(value.branch) ||
@@ -272,7 +275,12 @@ export const GitHubWriteTargetVersionObservationSchema = z.discriminatedUnion("o
         /[\u0000-\u001f\u007f]/.test(value.path) ||
         value.path.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) {
       context.addIssue({ code: z.ZodIssueCode.custom,
-        message: "code push must create one safe file on an existing non-default branch" });
+        message: "code push must target one safe file on an existing non-default branch" });
+    }
+    if ((fileAction === "create" && value.existing_file_sha !== undefined) ||
+        (fileAction === "update" && value.existing_file_sha === undefined)) {
+      context.addIssue({ code: z.ZodIssueCode.custom,
+        message: "code push existing file SHA must match the explicit create or update action" });
     }
     return;
   }
@@ -787,15 +795,26 @@ export function githubCodePushTargetIdentityDigest(input: {
   branch: string;
   expected_head_sha: string;
   path: string;
+  file_action?: "create" | "update";
+  existing_file_sha?: string;
 }): string {
+  const fileAction = input.file_action ?? "create";
+  if ((fileAction !== "create" && fileAction !== "update") ||
+      (fileAction === "create" && input.existing_file_sha !== undefined) ||
+      (fileAction === "update" && (typeof input.existing_file_sha !== "string" ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.existing_file_sha)))) {
+    throw new Error("code push target identity requires an existing file SHA only for update actions");
+  }
   return createHash("sha256").update(JSON.stringify([
-    "blue-tanuki.github-code-push-target-identity.v1",
+    "blue-tanuki.github-code-push-target-identity.v2",
     input.repository_id,
     input.canonical_full_name,
     input.default_branch,
     input.branch,
     input.expected_head_sha,
     input.path,
+    fileAction,
+    input.existing_file_sha ?? null,
   ]), "utf8").digest("hex");
 }
 
@@ -805,17 +824,23 @@ export function githubCodePushRequestPayloadDigest(input: {
   branch: string;
   expected_head_sha: string;
   path: string;
+  file_action?: "create" | "update";
   content: string;
   commit_message: string;
 }): string {
+  const fileAction = input.file_action ?? "create";
+  if (fileAction !== "create" && fileAction !== "update") {
+    throw new Error("code push request payload requires an explicit create or update action");
+  }
   const contentDigest = createHash("sha256").update(input.content, "utf8").digest("hex");
   return createHash("sha256").update(JSON.stringify([
-    "blue-tanuki.github-code-push-request-payload.v1",
+    "blue-tanuki.github-code-push-request-payload.v2",
     input.owner,
     input.repo,
     input.branch,
     input.expected_head_sha,
     input.path,
+    fileAction,
     contentDigest,
     input.commit_message,
   ]), "utf8").digest("hex");

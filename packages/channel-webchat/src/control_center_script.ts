@@ -8401,6 +8401,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               return segment.length > 0 && segment !== "." && segment !== ".." && segment.toLowerCase() !== ".git";
             });
           const contentBytes = typeof review.content === "string" ? new TextEncoder().encode(review.content).byteLength : -1;
+          const diffBytes = typeof review.diff === "string" ? new TextEncoder().encode(review.diff).byteLength : -1;
           if (review.command_id !== commandId || review.operation !== "github.write.code.push" ||
               review.used_for_authority !== false || review.may_execute !== false ||
               review.provider_observation_is_atomic !== false || review.branch_update_is_conditional !== true ||
@@ -8417,6 +8418,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (review.repository_visibility !== "public" && review.repository_visibility !== "private") ||
               !validRef(review.default_branch) || !validRef(review.branch) || review.branch === review.default_branch ||
               !isCommitSha(review.expected_head_sha) || !validPath || contentBytes < 1 || contentBytes > 65536 ||
+              (review.file_action !== "create" && review.file_action !== "update") ||
+              (review.file_action === "create" && review.existing_file_sha !== undefined) ||
+              (review.file_action === "update" && !isCommitSha(review.existing_file_sha)) ||
+              typeof review.diff !== "string" || diffBytes < 1 || diffBytes > 300000 ||
               review.content.indexOf("\\u0000") >= 0 || typeof review.commit_message !== "string" ||
               review.commit_message.length < 1 || review.commit_message.length > 256 ||
               review.commit_message !== review.commit_message.trim() || /[\\u0000-\\u001f\\u007f]/.test(review.commit_message)) {
@@ -8424,7 +8429,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "GitHub branchへの新規ファイル追加（外部公開作用）";
+          heading.textContent = (review.file_action === "create" ? "GitHub branchへの新規ファイル追加" :
+            "GitHub branch上の既存ファイル更新") + "（外部公開作用）";
           view.appendChild(heading);
           [
             ["操作", review.operation],
@@ -8433,7 +8439,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["対象branch", review.branch],
             ["承認時HEAD", review.expected_head_sha],
             ["default branch", review.default_branch],
-            ["追加先", review.path],
+            ["対象path", review.path],
+            ["file action", review.file_action],
+            ...(review.file_action === "update" ? [["更新前blob SHA", review.existing_file_sha]] : []),
             ["内容サイズ", String(contentBytes) + " UTF-8 bytes"],
             ["内容SHA-256", review.content_sha256],
             ["GitHub通知", "APIが通知を発生させる場合があります。通知先・抑止は指定しません。"],
@@ -8453,13 +8461,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           message.textContent = review.commit_message;
           view.append(messageHeading, message);
           const contentHeading = document.createElement("strong");
-          contentHeading.textContent = "追加するファイル内容（未信頼テキスト）";
+          contentHeading.textContent = "owner承認対象の完全ファイル差分（未信頼テキスト）";
           const content = document.createElement("pre");
-          content.textContent = review.content;
+          content.textContent = review.diff;
           view.append(contentHeading, content);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "追加のみの単一ファイル操作です。既存ファイル、default branch、HEADが観測と異なる場合は作用しません。承認後のrepository設定再読取は非原子的です。結果不明の場合は自動再送せず、GitHub上のbranchを確認してOwnerが次の判断を行います。";
+          note.textContent = "単一ファイルの作成または置換です。承認後にrepository設定、branch HEAD、更新対象blob SHAを再読取します。GitHubのexpectedHeadOid一致条件でのみbranchを更新します。観測は非原子的です。結果不明の場合は自動再送せず、GitHub上のbranchを確認してOwnerが次の判断を行います。";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "payload digest: " + review.request_payload_digest + " | target version digest: " +

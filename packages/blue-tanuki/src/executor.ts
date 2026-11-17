@@ -2048,16 +2048,22 @@ export class Executor {
       }
       if (githubReview.kind === "github_code_push") {
         const codePushObservation = observation.operation === "code.push" ? observation : undefined;
+        const fileAction = args.file_action === undefined ? "create" : args.file_action;
         const content = typeof args.content === "string" ? args.content : "";
         const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
         if (!codePushObservation || command.payload.arguments.operation !== "code.push" ||
             githubReview.operation !== "github.write.code.push" || commonMismatch ||
+            (fileAction !== "create" && fileAction !== "update") || githubReview.file_action !== fileAction ||
             githubReview.default_branch !== codePushObservation.default_branch ||
             githubReview.branch !== codePushObservation.branch || githubReview.branch !== args.branch ||
             githubReview.branch === githubReview.default_branch ||
             githubReview.expected_head_sha !== codePushObservation.expected_head_sha ||
             githubReview.path !== codePushObservation.path || githubReview.path !== args.path ||
+            (fileAction === "create" ? (codePushObservation.existing_file_sha !== undefined ||
+              githubReview.existing_file_sha !== undefined) :
+              codePushObservation.existing_file_sha !== githubReview.existing_file_sha) ||
             githubReview.content !== content || githubReview.content_sha256 !== contentDigest ||
+            typeof githubReview.diff !== "string" || githubReview.diff.length === 0 ||
             githubReview.commit_message !== args.commit_message ||
             githubReview.branch_update_is_conditional !== true ||
             githubReview.publication_effect !== "visible_to_repository_audience") {

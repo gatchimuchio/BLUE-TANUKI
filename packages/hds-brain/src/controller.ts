@@ -4303,6 +4303,7 @@ ${planControl.question}`,
         const branch = optionalText("branch");
         const expectedHeadSha = optionalText("expected_head_sha");
         const path = optionalText("path");
+        const fileAction = args.file_action === undefined ? "create" : args.file_action;
         const commitMessage = optionalText("commit_message");
         const content = args.content;
         const branchSegments = branch?.split("/") ?? [];
@@ -4318,20 +4319,25 @@ ${planControl.question}`,
           Buffer.byteLength(content, "utf8") <= 65_536 && Buffer.from(content, "utf8").toString("utf8") === content;
         const safeMessage = Boolean(commitMessage && commitMessage.length <= 256 && commitMessage === commitMessage.trim() &&
           !/[\u0000-\u001f\u007f]/.test(commitMessage));
-        if (!safeBranch || !safePath || !safeContent || !safeMessage || !expectedHeadSha ||
+        if ((fileAction !== "create" && fileAction !== "update") || !safeBranch || !safePath || !safeContent || !safeMessage || !expectedHeadSha ||
             !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) ||
             !Object.keys(args).every((key) => ["operation", "owner", "repo", "branch", "expected_head_sha",
-              "path", "content", "commit_message", "max_bytes"].includes(key)) ||
+              "file_action", "path", "content", "commit_message", "max_bytes"].includes(key)) ||
             observation.operation !== "code.push" || observation.branch !== branch ||
             observation.branch === observation.default_branch || observation.expected_head_sha !== expectedHeadSha ||
-            observation.path !== path) {
+            observation.path !== path || (observation.file_action ?? "create") !== fileAction ||
+            (fileAction === "create" ? observation.existing_file_sha !== undefined :
+              typeof observation.existing_file_sha !== "string" ||
+              !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(observation.existing_file_sha))) {
           throw new Error("HDS github.write code.push parameters or observed non-default branch are invalid");
         }
         requestPayloadDigest = githubCodePushRequestPayloadDigest({ owner, repo, branch: branch!,
-          expected_head_sha: expectedHeadSha, path: path!, content: content as string, commit_message: commitMessage! });
+          expected_head_sha: expectedHeadSha, path: path!, file_action: fileAction, content: content as string,
+          commit_message: commitMessage! });
         targetIdentityDigest = githubCodePushTargetIdentityDigest({ repository_id: observation.repository_id,
           canonical_full_name: observation.canonical_full_name, default_branch: observation.default_branch,
-          branch: branch!, expected_head_sha: expectedHeadSha, path: path! });
+          branch: branch!, expected_head_sha: expectedHeadSha, path: path!, file_action: fileAction,
+          ...(observation.existing_file_sha ? { existing_file_sha: observation.existing_file_sha } : {}) });
       } else if (operation === "release.draft.create") {
         const tagName = optionalText("tag_name");
         const targetCommitSha = optionalText("target_commit_sha");

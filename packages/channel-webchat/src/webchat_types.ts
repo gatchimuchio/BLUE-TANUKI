@@ -1285,8 +1285,11 @@ export interface WebChatGitHubCodePushContentReview {
   branch: string;
   expected_head_sha: string;
   path: string;
+  file_action: "create" | "update";
+  existing_file_sha?: string;
   content: string;
   content_sha256: string;
+  diff: string;
   commit_message: string;
   request_payload_digest: string;
   target_version_digest: string;

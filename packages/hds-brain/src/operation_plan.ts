@@ -1313,19 +1313,20 @@ function githubWriteRequestPayloadDigestForStep(step: OperationStep): string | u
     const branch = parameters.branch;
     const expectedHeadSha = parameters.expected_head_sha;
     const path = parameters.path;
+    const fileAction = parameters.file_action === undefined ? "create" : parameters.file_action;
     const content = parameters.content;
     const commitMessage = githubWriteText(parameters, "commit_message", 256, true);
-    if (!validGitHubBranchRef(branch) || typeof expectedHeadSha !== "string" ||
+    if ((fileAction !== "create" && fileAction !== "update") || !validGitHubBranchRef(branch) || typeof expectedHeadSha !== "string" ||
         !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(expectedHeadSha) || !validGitHubCodePushPath(path) ||
         typeof content !== "string" || content.length === 0 || content.length > 65_536 ||
         Buffer.byteLength(content, "utf8") > 65_536 ||
         Buffer.from(content, "utf8").toString("utf8") !== content || content.includes("\u0000") ||
         !commitMessage || commitMessage.trim() !== commitMessage || /[\u0000-\u001f\u007f]/.test(commitMessage) ||
-        !allowedKeys(["operation", "owner", "repo", "branch", "expected_head_sha", "path", "content", "commit_message"])) {
+        !allowedKeys(["operation", "owner", "repo", "branch", "expected_head_sha", "file_action", "path", "content", "commit_message"])) {
       return undefined;
     }
     return githubCodePushRequestPayloadDigest({ owner, repo, branch, expected_head_sha: expectedHeadSha,
-      path, content, commit_message: commitMessage });
+      path, file_action: fileAction, content, commit_message: commitMessage });
   }
   if (operation === "release.draft.create") {
     const tagName = parameters.tag_name;
@@ -1480,10 +1481,17 @@ function githubWriteResultMatches(
   if (parameters.operation === "code.push") {
     const content = parameters.content;
     const contentDigest = typeof content === "string" ? createHash("sha256").update(content, "utf8").digest("hex") : null;
-    return Object.keys(result).sort().join(",") === "branch,commit_sha,content_sha256,parent_sha,path" &&
+    const fileAction = parameters.file_action === undefined ? "create" : parameters.file_action;
+    const expectedKeys = fileAction === "update"
+      ? "branch,commit_sha,content_sha256,existing_file_sha,file_action,parent_sha,path"
+      : "branch,commit_sha,content_sha256,file_action,parent_sha,path";
+    return (fileAction === "create" || fileAction === "update") &&
+      Object.keys(result).sort().join(",") === expectedKeys && result.file_action === fileAction &&
       result.branch === parameters.branch && result.parent_sha === parameters.expected_head_sha &&
       result.path === parameters.path && typeof result.commit_sha === "string" &&
-      /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.commit_sha) && result.content_sha256 === contentDigest;
+      /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.commit_sha) && result.content_sha256 === contentDigest &&
+      (fileAction === "create" || (typeof result.existing_file_sha === "string" &&
+        /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.existing_file_sha)));
   }
   if (parameters.operation === "release.draft.create") {
     return Object.keys(result).sort().join(",") === "draft,id,name,prerelease,tag_name,target_commit_sha" &&
