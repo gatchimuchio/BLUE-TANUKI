@@ -933,38 +933,26 @@ export function renderSettingsHtml(): string {
         <section id="tab-connections">
           <h2>Connections</h2>
           <div class="grid">
-            <label>Composio API key
-              <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="unchanged">
+            <label>Composio API key status
+              <input id="composio-api-key-status" readonly>
             </label>
-            <label>Composio user id
-              <input id="composio-user-id" autocomplete="off" placeholder="unchanged">
+            <label>Composio user identity
+              <input id="composio-user-id-status" readonly>
             </label>
             <label>Composio allowed toolkits
-              <input id="composio-allowed-toolkits" autocomplete="off" placeholder="github,gmail,calendar">
+              <input id="composio-allowed-toolkits-status" readonly>
             </label>
             <label>Composio allowed actions
-              <input id="composio-allowed-actions" autocomplete="off" placeholder="github:GITHUB_CREATE_AN_ISSUE">
+              <input id="composio-allowed-actions-status" readonly>
             </label>
             <label>Composio revoked actions
-              <input id="composio-revoked-actions" autocomplete="off" placeholder="github:GITHUB_DELETE_REPO">
+              <input id="composio-revoked-actions-status" readonly>
             </label>
             <label>Composio API base URL
-              <input id="composio-api-base-url" autocomplete="off" placeholder="https://backend.composio.dev">
+              <input id="composio-api-base-url-status" readonly>
             </label>
-            <label>Composio dry-run
-              <select id="composio-dry-run">
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            </label>
-            <label>Composio live execution
-              <select id="composio-live-execution">
-                <option value="false">false</option>
-                <option value="true">true</option>
-              </select>
-            </label>
-            <label>Composio disconnect
-              <input id="composio-clear-api-key" type="checkbox">
+            <label>Composio dry-run / live execution
+              <input id="composio-execution-status" readonly>
             </label>
             <label>MCP loopback Streamable HTTP endpoint
               <input id="mcp-endpoint" autocomplete="off" placeholder="http://127.0.0.1:3000/mcp">
@@ -1010,6 +998,7 @@ export function renderSettingsHtml(): string {
           <p id="slack-next-action" role="status"></p>
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
+          <p id="composio-next-action" class="muted" role="status">Composio settings are read-only here. Prepare changes through Owner Task settings.write and review the no-store L3 change list; provision or replace keys through OS-protected setup.</p>
           <p id="d4-runtime-next-action" role="status"></p>
           <p id="mcp-runtime-next-action" role="status"></p>
           <p id="mcp-inspection-result" role="status"></p>
@@ -1074,15 +1063,13 @@ export function renderSettingsHtml(): string {
       siteUrl: document.querySelector("#llm-site-url"),
       appTitle: document.querySelector("#llm-app-title"),
       approvalMode: document.querySelector("#approval-mode"),
-      composioApiKey: document.querySelector("#composio-api-key"),
-      composioUserId: document.querySelector("#composio-user-id"),
-      composioAllowedToolkits: document.querySelector("#composio-allowed-toolkits"),
-      composioAllowedActions: document.querySelector("#composio-allowed-actions"),
-      composioRevokedActions: document.querySelector("#composio-revoked-actions"),
-      composioApiBaseUrl: document.querySelector("#composio-api-base-url"),
-      composioDryRun: document.querySelector("#composio-dry-run"),
-      composioLiveExecution: document.querySelector("#composio-live-execution"),
-      composioClearApiKey: document.querySelector("#composio-clear-api-key"),
+      composioApiKeyStatus: document.querySelector("#composio-api-key-status"),
+      composioUserIdStatus: document.querySelector("#composio-user-id-status"),
+      composioAllowedToolkitsStatus: document.querySelector("#composio-allowed-toolkits-status"),
+      composioAllowedActionsStatus: document.querySelector("#composio-allowed-actions-status"),
+      composioRevokedActionsStatus: document.querySelector("#composio-revoked-actions-status"),
+      composioApiBaseUrlStatus: document.querySelector("#composio-api-base-url-status"),
+      composioExecutionStatus: document.querySelector("#composio-execution-status"),
       composioStatus: document.querySelector("#composio-status"),
       d4RuntimeStatus: document.querySelector("#d4-runtime-status"),
       d4RuntimeSecretStorage: document.querySelector("#d4-runtime-secret-storage"),
@@ -1162,17 +1149,14 @@ export function renderSettingsHtml(): string {
       fields.siteUrl.value = snapshot.llm.site_url || "";
       fields.appTitle.value = snapshot.llm.app_title || "";
       fields.approvalMode.value = snapshot.approval?.mode || "full_access";
-      fields.composioApiKey.value = "";
-      fields.composioApiKey.placeholder = snapshot.integrations.composio.configured ? "configured" : "not set";
-      fields.composioUserId.value = "";
-      fields.composioUserId.placeholder = snapshot.integrations.composio.user_id_set ? "configured" : "not set";
-      fields.composioAllowedToolkits.value = snapshot.integrations.composio.allowed_toolkits.join(",");
-      fields.composioAllowedActions.value = snapshot.integrations.composio.allowed_actions.join(",");
-      fields.composioRevokedActions.value = snapshot.integrations.composio.revoked_actions.join(",");
-      fields.composioApiBaseUrl.value = snapshot.integrations.composio.api_base_url || "";
-      fields.composioDryRun.value = String(snapshot.integrations.composio.dry_run);
-      fields.composioLiveExecution.value = String(snapshot.integrations.composio.live_execution_enabled);
-      fields.composioClearApiKey.checked = false;
+      fields.composioApiKeyStatus.value = snapshot.integrations.composio.configured ? "configured; value hidden" : "not set";
+      fields.composioUserIdStatus.value = snapshot.integrations.composio.user_id_set ? "configured; value hidden" : "not set";
+      fields.composioAllowedToolkitsStatus.value = snapshot.integrations.composio.allowed_toolkits.join(", ") || "(none)";
+      fields.composioAllowedActionsStatus.value = snapshot.integrations.composio.allowed_actions.join(", ") || "(none)";
+      fields.composioRevokedActionsStatus.value = snapshot.integrations.composio.revoked_actions.join(", ") || "(none)";
+      fields.composioApiBaseUrlStatus.value = snapshot.integrations.composio.api_base_url || "(default)";
+      fields.composioExecutionStatus.value = "dry_run=" + snapshot.integrations.composio.dry_run +
+        "; live_execution_enabled=" + snapshot.integrations.composio.live_execution_enabled;
       fields.composioStatus.value =
         (snapshot.integrations.composio.configured ? "configured" : "missing") +
         "; dry_run=" + snapshot.integrations.composio.dry_run +
@@ -1237,21 +1221,9 @@ export function renderSettingsHtml(): string {
       if (fields.apiKey.value.trim()) llm.api_key = fields.apiKey.value.trim();
       if (fields.siteUrl.value.trim()) llm.site_url = fields.siteUrl.value.trim();
       if (fields.appTitle.value.trim()) llm.app_title = fields.appTitle.value.trim();
-      const composio = {
-        user_id: fields.composioUserId.value,
-        allowed_toolkits: fields.composioAllowedToolkits.value,
-        allowed_actions: fields.composioAllowedActions.value,
-        revoked_actions: fields.composioRevokedActions.value,
-        api_base_url: fields.composioApiBaseUrl.value,
-        dry_run: fields.composioDryRun.value,
-        live_execution: fields.composioLiveExecution.value
-      };
-      if (fields.composioApiKey.value.trim()) composio.api_key = fields.composioApiKey.value.trim();
-      if (fields.composioClearApiKey.checked) composio.clear_api_key = true;
       return {
         llm,
         approval: { mode: fields.approvalMode.value },
-        composio,
         integrations: { mcp: { endpoint: fields.mcpEndpoint.value } },
         webchat: { host: fields.host.value, port: fields.port.value },
         paths: {
