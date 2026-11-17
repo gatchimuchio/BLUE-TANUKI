@@ -201,6 +201,13 @@ struct ContentView: View {
             .disabled(model.busy || model.credentialExpired)
         }
 
+        Button(model.taskNotificationsEnabled ? "Task状態通知を無効化" : "Task状態通知を有効化") {
+          model.toggleTaskNotifications()
+        }
+        .disabled(model.busy)
+        Text("有効時は、照会で前回観測済みTaskの状態変化を確認した場合だけ、本文を含まない端末通知を表示します。初回観測・未照会状態は通知せず、background通信やpush受信は行いません。")
+          .font(.caption)
+
         if !model.runtimes.isEmpty {
           Picker("実行系", selection: runtimeSelection) {
             ForEach(model.runtimes, id: \.self) { runtime in

@@ -23,7 +23,7 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 
 Mobile側にはDevice Link契約に沿ったTask申請・状態照会・開始要求・取消要求のsourceを追加した。D4 BrokerとBLUE Runtime Adapterを通る一仕事が、BLUE Gateway／C/J/Mへ実際に届き、承認・作用・結果・M・復帰まで一気通貫に動いたことは未確認である。公開repoではD4のDevice Link／AgentTask契約を確認できるが、D4側の`blue_tanuki_adapter`は参照READMEのみで、実装sourceは見つかっていない。Gatewayの既存runtime-intent経路とこのBroker操作を結ぶ実consumerも未確認である。
 
-通知と更新・rollbackは未実装である。package削除後の初回起動では旧資格を使わず、Desktop側の旧端末・Task状態をownerが確認するまで招待検証を止める。結果不明Taskのsession checkpointは保持し、再結合後にDesktop申請一覧と一致するまで新規申請を止める。このsource変更だけではD4 BrokerとBLUE Gateway／C/J/Mを通る実経路、G10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
+Task状態通知は使用者がiOS通知許可を明示した場合に限り、同一プロセス内で前回確認済みTaskの状態変化を再照会で観測したとき、Task本文・IDを含まない端末内通知を出す。初回観測・未照会状態では通知せず、background通信やpush受信はしない。更新・rollbackは未実装である。package削除後の初回起動では旧資格を使わず、Desktop側の旧端末・Task状態をownerが確認するまで招待検証を止める。結果不明Taskのsession checkpointは保持し、再結合後にDesktop申請一覧と一致するまで新規申請を止める。このsource変更だけではD4 BrokerとBLUE Gateway／C/J/Mを通る実経路、G10、`SYSTEM_SHAPED`、`BUILD_COVERED`、installed product、iOS QA、署名やApp Store準備の成立を示さない。
 
 iOS targetはunsigned source段階であり、Simulatorまたは実機へのinstall・起動は未実施。local-network permission、Keychainの実動、実Desktop Brokerとのpairing、Task操作およびBLUEのC/J/Mを通る仕事は未確認である。
 

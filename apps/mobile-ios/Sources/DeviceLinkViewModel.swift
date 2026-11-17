@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UserNotifications
 
 struct DeviceLinkHostPreview: Equatable {
   let hostID: String
@@ -71,6 +72,18 @@ private final class DeviceLinkAttemptEvidence {
   var taskSessionCloseConfirmed = false
 }
 
+private final class LocalTaskNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+  static let shared = LocalTaskNotificationDelegate()
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([.banner, .sound])
+  }
+}
+
 final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var deviceID = ""
   @Published private(set) var paired = false
@@ -84,6 +97,7 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var workspaces: [MobileTaskWorkspace] = []
   @Published private(set) var tasks: [MobileTaskDraft] = []
   @Published private(set) var taskStatuses: [String: MobileTaskStatus] = [:]
+  @Published private(set) var taskNotificationsEnabled = false
   @Published private(set) var mcpSnapshot: MobileMCPCapabilitySnapshot?
   @Published private(set) var taskSubmissionNeedsReconciliation = false
   @Published private(set) var reinstallReviewRequired = false
@@ -95,9 +109,38 @@ final class DeviceLinkViewModel: ObservableObject {
   private let store = DeviceLinkStore()
   private let transport = DeviceLinkTransport()
   private let lifecycle = DeviceLinkLifecycleGate()
+  private static let taskNotificationsPreferenceKey = "blue-tanuki.task-status-notifications-enabled"
+  private static let taskStatusNotificationID = "blue-tanuki-task-status-changed"
+  private var lastObservedTaskStates: [String: String] = [:]
   private var pendingInvitation: DeviceLinkCredential?
   private var pendingTaskSessionID: String?
   private var refreshOwnedTasksAfterForeground = false
+
+  init() {
+    taskNotificationsEnabled = UserDefaults.standard.bool(forKey: Self.taskNotificationsPreferenceKey)
+    UNUserNotificationCenter.current().delegate = LocalTaskNotificationDelegate.shared
+  }
+
+  func toggleTaskNotifications() {
+    let center = UNUserNotificationCenter.current()
+    if taskNotificationsEnabled {
+      taskNotificationsEnabled = false
+      UserDefaults.standard.set(false, forKey: Self.taskNotificationsPreferenceKey)
+      center.removePendingNotificationRequests(withIdentifiers: [Self.taskStatusNotificationID])
+      center.removeDeliveredNotifications(withIdentifiers: [Self.taskStatusNotificationID])
+      taskMessage = "Task状態通知を無効にしました。画面での状態確認は引き続き利用できます。"
+      return
+    }
+    center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+      DispatchQueue.main.async {
+        self.taskNotificationsEnabled = granted
+        UserDefaults.standard.set(granted, forKey: Self.taskNotificationsPreferenceKey)
+        self.taskMessage = granted
+          ? "Task状態通知を有効にしました。照会済みTaskの状態変化だけを端末通知します。"
+          : "iOS通知は許可されませんでした。画面でのTask状態確認は引き続き利用できます。"
+      }
+    }
+  }
 
   func loadLocalState() {
     guard !busy else { return }
@@ -241,6 +284,7 @@ final class DeviceLinkViewModel: ObservableObject {
         )
       },
       onSuccess: { result in
+        self.observeTaskStatuses(result.statuses, allStatusesObserved: result.allStatusesObserved)
         self.tasks = result.entries
         self.taskStatuses = result.statuses
         self.pendingTaskSessionID = result.pendingSessionID
@@ -414,6 +458,7 @@ final class DeviceLinkViewModel: ObservableObject {
         self.taskInstruction = ""
         self.tasks = [draft] + self.tasks.filter { $0.id != draft.id }
         self.taskStatuses[draft.id] = .ownerReviewPending
+        _ = self.observeTaskStatus(draft.id, status: .ownerReviewPending, notifyOnChange: false)
         self.taskSubmissionNeedsReconciliation = true
         self.pendingTaskSessionID = draft.sessionID
         self.taskMessage = "申請をDesktopへ渡しました。端末申請一覧との照合まで次の申請を停止します。Desktop ownerが内容を確認してPermission／Approvalを別途判断し、Brokerが開始直前に再検査します。"
@@ -438,6 +483,7 @@ final class DeviceLinkViewModel: ObservableObject {
       },
       onSuccess: { status in
         self.taskStatuses[draft.id] = status
+        _ = self.observeTaskStatus(draft.id, status: status)
         self.taskMessage = "Task状態を更新しました。結果本文はMobileへ返していません。"
       }
     )
@@ -467,6 +513,7 @@ final class DeviceLinkViewModel: ObservableObject {
       onSuccess: { result in
         let status = result.0
         self.taskStatuses[draft.id] = status
+        _ = self.observeTaskStatus(draft.id, status: status)
         self.taskMessage = result.1
           ? "Brokerが開始要求を処理しました。権限はBrokerで再検査され、Task本文は表示しません。"
           : "開始候補ではなくなりました。開始要求は送信せず、最新状態を表示しています。"
@@ -503,6 +550,7 @@ final class DeviceLinkViewModel: ObservableObject {
       },
       onSuccess: { result in
         self.taskStatuses[draft.id] = result.status
+        _ = self.observeTaskStatus(draft.id, status: result.status)
         self.taskMessage = result.requestSent
           ? "取消要求の記録を照会しました。workerまたは外部処理の停止は別途確認されるまで不明です。"
           : "最新状態は取消対象外です。取消要求は送信していません。"
@@ -602,6 +650,69 @@ final class DeviceLinkViewModel: ObservableObject {
     refreshOwnedTasksAfterForeground = false
     DispatchQueue.main.async { [weak self] in
       self?.refreshOwnedTasks()
+    }
+  }
+
+  private func observeTaskStatuses(_ statuses: [String: MobileTaskStatus], allStatusesObserved: Bool) {
+    var changed = false
+    for (taskID, status) in statuses {
+      changed = observeTaskStatus(taskID, status: status) || changed
+    }
+    if allStatusesObserved {
+      for taskID in Array(lastObservedTaskStates.keys) where statuses[taskID] == nil {
+        lastObservedTaskStates.removeValue(forKey: taskID)
+      }
+    }
+    if changed { showTaskStatusNotification() }
+  }
+
+  @discardableResult
+  private func observeTaskStatus(
+    _ taskID: String,
+    status: MobileTaskStatus,
+    notifyOnChange: Bool = true
+  ) -> Bool {
+    let next: String
+    switch status {
+    case .ownerReviewPending:
+      next = "owner_review_pending"
+    case .startCandidate:
+      next = "start_candidate"
+    case .task(let record):
+      next = "task:\(record.state)"
+    }
+    let previous = lastObservedTaskStates.updateValue(next, forKey: taskID)
+    return notifyOnChange && previous != nil && previous != next
+  }
+
+  private func showTaskStatusNotification() {
+    guard taskNotificationsEnabled else { return }
+    let center = UNUserNotificationCenter.current()
+    center.getNotificationSettings { settings in
+      guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
+            UserDefaults.standard.bool(forKey: Self.taskNotificationsPreferenceKey) else {
+        DispatchQueue.main.async {
+          self.taskNotificationsEnabled = false
+          UserDefaults.standard.set(false, forKey: Self.taskNotificationsPreferenceKey)
+          self.taskMessage = "Task状態は更新されましたが、iOS通知許可を確認できません。画面で状態を確認してください。"
+        }
+        return
+      }
+      let content = UNMutableNotificationContent()
+      content.title = "BLUE-TANUKI"
+      content.body = "Taskの状態が更新されました。アプリで確認してください。"
+      content.sound = .default
+      let request = UNNotificationRequest(
+        identifier: Self.taskStatusNotificationID,
+        content: content,
+        trigger: nil
+      )
+      center.add(request) { error in
+        guard error != nil else { return }
+        DispatchQueue.main.async {
+          self.taskMessage = "Task状態は更新されましたが、端末通知を登録できません。画面で状態を確認してください。"
+        }
+      }
     }
   }
 

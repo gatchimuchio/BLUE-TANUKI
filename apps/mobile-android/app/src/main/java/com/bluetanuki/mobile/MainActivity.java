@@ -3,6 +3,11 @@ package com.bluetanuki.mobile;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -33,6 +38,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_LOCAL_NETWORK_PERMISSION = 3701;
+    private static final int REQUEST_TASK_NOTIFICATION_PERMISSION = 3702;
+    private static final int TASK_STATUS_NOTIFICATION_ID = 3703;
+    private static final String TASK_STATUS_NOTIFICATION_CHANNEL = "task-status";
+    private static final String TASK_NOTIFICATION_PREFERENCE = "task_status_notifications_enabled";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -65,6 +74,7 @@ public final class MainActivity extends Activity {
     private CheckBox includeMcpCapability;
     private Button refreshCatalogButton;
     private Button refreshRequestsButton;
+    private Button taskNotificationsButton;
     private Button refreshMcpButton;
     private Button submitTaskButton;
     private LinearLayout taskListContainer;
@@ -72,6 +82,7 @@ public final class MainActivity extends Activity {
     private final List<MobileTaskContract.Workspace> taskWorkspaces = new ArrayList<>();
     private final List<MobileTaskContract.Draft> ownedTaskRequests = new ArrayList<>();
     private final Map<String, MobileTaskContract.TaskStatus> taskStatuses = new HashMap<>();
+    private final Map<String, String> lastObservedTaskStates = new HashMap<>();
     private boolean taskSubmissionNeedsReconciliation;
     private boolean taskStateUncertain;
     private boolean refreshOwnedTaskRequestsAfterForeground;
@@ -95,6 +106,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        ensureTaskNotificationChannel();
         credentialStore = new AndroidCredentialStore(getApplicationContext());
         taskClient = new MobileTaskClient(credentialStore, transport);
         try {
@@ -368,6 +380,14 @@ public final class MainActivity extends Activity {
         refreshRequestsButton.setText("この端末の申請一覧を更新");
         refreshRequestsButton.setOnClickListener(view -> refreshOwnedTaskRequests());
         content.addView(refreshRequestsButton, matchWrap());
+
+        taskNotificationsButton = new Button(this);
+        taskNotificationsButton.setOnClickListener(view -> toggleTaskNotifications());
+        content.addView(taskNotificationsButton, matchWrap());
+        TextView notificationHelp = new TextView(this);
+        notificationHelp.setText("有効時は、照会で前回観測済みTaskの状態変化を確認した場合だけ、本文を含まない端末通知を表示します。初回観測・未照会状態は通知せず、backgroundでの通信やpush受信は行いません。");
+        notificationHelp.setTextSize(12);
+        content.addView(notificationHelp, matchWrap());
 
         taskListContainer = new LinearLayout(this);
         taskListContainer.setOrientation(LinearLayout.VERTICAL);
@@ -800,6 +820,20 @@ public final class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
                                           int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_TASK_NOTIFICATION_PERMISSION) {
+            boolean granted = Build.VERSION.SDK_INT < 33 ||
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                            PackageManager.PERMISSION_GRANTED;
+            if (granted) {
+                setTaskNotificationsEnabled(true);
+                taskMessage = "Task状態通知を有効にしました。今後は照会済みTaskの状態変化だけを端末通知します。";
+            } else {
+                getPreferences(MODE_PRIVATE).edit().putBoolean(TASK_NOTIFICATION_PREFERENCE, false).apply();
+                taskMessage = "端末通知は許可されませんでした。画面でのTask状態確認は引き続き利用できます。";
+            }
+            refreshTaskControls();
+            return;
+        }
         if (requestCode != REQUEST_LOCAL_NETWORK_PERMISSION) {
             return;
         }
@@ -855,6 +889,10 @@ public final class MainActivity extends Activity {
         taskStatusView.setText(display);
         refreshCatalogButton.setEnabled(ready);
         refreshRequestsButton.setEnabled(ready);
+        if (taskNotificationsButton != null) {
+            taskNotificationsButton.setText(taskNotificationsPreferenceEnabled()
+                    ? "Task状態通知を無効化" : "Task状態通知を有効化");
+        }
         refreshMcpButton.setEnabled(ready);
         runtimeSpinner.setEnabled(ready && !taskRuntimeIDs.isEmpty());
         workspaceSpinner.setEnabled(ready && workspaceSpinner.getAdapter() != null &&
@@ -864,6 +902,121 @@ public final class MainActivity extends Activity {
         submitTaskButton.setEnabled(ready && !taskSubmissionNeedsReconciliation &&
                 !taskStateUncertain && workspaceSpinner.getSelectedItem() != null);
         refreshTaskList();
+    }
+
+    private boolean taskNotificationsEnabled() {
+        if (!taskNotificationsPreferenceEnabled() || (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                        PackageManager.PERMISSION_GRANTED)) {
+            return false;
+        }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null || (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled())) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(TASK_STATUS_NOTIFICATION_CHANNEL);
+            if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean taskNotificationsPreferenceEnabled() {
+        return getPreferences(MODE_PRIVATE).getBoolean(TASK_NOTIFICATION_PREFERENCE, false);
+    }
+
+    private void toggleTaskNotifications() {
+        if (taskNotificationsPreferenceEnabled()) {
+            setTaskNotificationsEnabled(false);
+            taskMessage = "Task状態通知を無効にしました。画面での状態確認は引き続き利用できます。";
+            refreshTaskControls();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                        PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS },
+                    REQUEST_TASK_NOTIFICATION_PERMISSION);
+            return;
+        }
+        setTaskNotificationsEnabled(true);
+        taskMessage = "Task状態通知を有効にしました。今後は照会済みTaskの状態変化だけを端末通知します。";
+        refreshTaskControls();
+    }
+
+    private void setTaskNotificationsEnabled(boolean enabled) {
+        getPreferences(MODE_PRIVATE).edit().putBoolean(TASK_NOTIFICATION_PREFERENCE, enabled).apply();
+        if (!enabled) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.cancel(TASK_STATUS_NOTIFICATION_ID);
+        }
+    }
+
+    private void ensureTaskNotificationChannel() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        NotificationChannel channel = new NotificationChannel(TASK_STATUS_NOTIFICATION_CHANNEL,
+                "Task状態の更新", NotificationManager.IMPORTANCE_DEFAULT);
+        channel.setDescription("明示照会で観測したTask状態変化だけを通知します。");
+        manager.createNotificationChannel(channel);
+    }
+
+    private void observeTaskStatuses(Map<String, MobileTaskContract.TaskStatus> statuses,
+                                     boolean allStatusesObserved) {
+        boolean changed = false;
+        for (Map.Entry<String, MobileTaskContract.TaskStatus> entry : statuses.entrySet()) {
+            changed |= observeTaskStatus(entry.getKey(), entry.getValue(), true);
+        }
+        if (allStatusesObserved) {
+            for (String previousID : new ArrayList<>(lastObservedTaskStates.keySet())) {
+                if (!statuses.containsKey(previousID)) lastObservedTaskStates.remove(previousID);
+            }
+        }
+        if (changed) showTaskStatusNotification();
+    }
+
+    private void observeTaskStatus(String taskID, MobileTaskContract.TaskStatus status) {
+        if (observeTaskStatus(taskID, status, true)) showTaskStatusNotification();
+    }
+
+    private boolean observeTaskStatus(String taskID, MobileTaskContract.TaskStatus status,
+                                      boolean notifyOnChange) {
+        String next = taskStatusFingerprint(status);
+        if (taskID == null || next == null) return false;
+        String previous = lastObservedTaskStates.put(taskID, next);
+        return notifyOnChange && previous != null && !previous.equals(next);
+    }
+
+    private static String taskStatusFingerprint(MobileTaskContract.TaskStatus status) {
+        if (status == null) return null;
+        if (MobileTaskContract.TaskStatus.OWNER_REVIEW_PENDING.equals(status.kind)) return "owner_review_pending";
+        if (MobileTaskContract.TaskStatus.START_CANDIDATE.equals(status.kind)) return "start_candidate";
+        if (MobileTaskContract.TaskStatus.TASK.equals(status.kind) && status.task != null && status.task.state != null) {
+            return "task:" + status.task.state;
+        }
+        return null;
+    }
+
+    private void showTaskStatusNotification() {
+        if (!foreground || !taskNotificationsEnabled()) return;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        Intent openApp = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, TASK_STATUS_NOTIFICATION_ID, openApp,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, TASK_STATUS_NOTIFICATION_CHANNEL)
+                : new Notification.Builder(this);
+        Notification notification = builder.setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("BLUE-TANUKI")
+                .setContentText("Taskの状態が更新されました。アプリで確認してください。")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build();
+        manager.notify(TASK_STATUS_NOTIFICATION_ID, notification);
     }
 
     private void refreshTaskCatalog() {
@@ -896,6 +1049,7 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     MobileTaskClient.OwnedRequests requests = (MobileTaskClient.OwnedRequests) result;
+                    observeTaskStatuses(requests.statuses, requests.allStatusesObserved);
                     ownedTaskRequests.clear();
                     ownedTaskRequests.addAll(requests.entries);
                     taskStatuses.clear();
@@ -978,7 +1132,9 @@ public final class MainActivity extends Activity {
                             }
                         }
                         ownedTaskRequests.add(0, submission.draft);
-                        taskStatuses.put(submission.draft.id, MobileTaskContract.TaskStatus.ownerReviewPending());
+                        MobileTaskContract.TaskStatus status = MobileTaskContract.TaskStatus.ownerReviewPending();
+                        taskStatuses.put(submission.draft.id, status);
+                        observeTaskStatus(submission.draft.id, status, false);
                         taskSubmissionNeedsReconciliation = true;
                         taskMessage = "申請をDesktopへ渡しました。申請一覧との照合まで次の申請を停止します。Desktop ownerが内容を確認し、Brokerが開始直前に現在の許可と承認を再検査します。";
                         return;
@@ -1012,6 +1168,7 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     taskStatuses.put(draft.id, (MobileTaskContract.TaskStatus) result);
+                    observeTaskStatus(draft.id, (MobileTaskContract.TaskStatus) result);
                     taskMessage = "Task状態を更新しました。結果本文はMobileへ返していません。";
                 });
     }
@@ -1026,6 +1183,7 @@ public final class MainActivity extends Activity {
                     MobileTaskClient.StartResult startResult = (MobileTaskClient.StartResult) result;
                     MobileTaskContract.TaskStatus status = startResult.status;
                     taskStatuses.put(draft.id, status);
+                    observeTaskStatus(draft.id, status);
                     taskMessage = startResult.requestSent
                             ? "Brokerが開始要求を処理しました。開始権限はBrokerで再検査され、Task本文は表示しません。"
                             : "最新状態は開始候補ではありません。開始要求は送信していません。";
@@ -1041,6 +1199,7 @@ public final class MainActivity extends Activity {
                     }
                     MobileTaskClient.Cancellation cancellation = (MobileTaskClient.Cancellation) result;
                     taskStatuses.put(draft.id, cancellation.status);
+                    observeTaskStatus(draft.id, cancellation.status);
                     taskMessage = cancellation.requestSent
                             ? "取消要求の記録を確認しました。workerまたは外部処理の停止は別途確認されるまで不明です。"
                             : "最新状態は取消対象外です。取消要求は送信していません。";
