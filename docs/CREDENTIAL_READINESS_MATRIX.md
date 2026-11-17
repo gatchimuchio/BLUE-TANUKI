@@ -9,6 +9,8 @@ startup and fails closed if a ref cannot be unprotected. Raw env values remain
 supported for compatibility, but refs are the preferred storage path for
 connector credentials on Windows.
 
+Windows・Linux・macOSでは、新規保存ごとに一意な保護済みファイルまたはkeyring entryを作り、参照を返す前に同一値のreadbackを検証する。新しいkeyring参照は`os-keyring:v2`、既存のv1およびWindows DPAPI file refは読込互換を保つ。Setupのenv file原子的書込みに失敗した場合は今回仮作成した値を除去する。保持中のenv backupが参照し得る旧値は維持し、credential名だけを根拠に自動削除しない。
+
 | Credential / env | Required for | Secret class | Setup source | Current doctor check | Safe missing behavior | Failure message / symptom | Rotation notes |
 |---|---|---|---|---|---|---|---|
 | `WEBCHAT_TOKEN` | WebChat inbound, `/ws-ticket`, read-only Control Center APIs | bearer secret | `pnpm setup` or manual env | required, length-only | no | `WEBCHAT_TOKEN is required for serve mode` | rotate with restart; must differ from resume token |

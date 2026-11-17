@@ -26,13 +26,22 @@ const fakeProtector: SecretProtector = {
 
 function createFakeKeyringFactory(): SecretKeyringFactory {
   const secrets = new Map<string, string>();
-  return (platform, key) => {
-    const id = `${platform}:${key}`;
+  return (platform, key, entryId) => {
+    const id = `${platform}:${key}:${entryId ?? "legacy"}`;
     return {
       setPassword: (plaintext) => { secrets.set(id, plaintext); },
       getPassword: () => secrets.get(id) ?? null,
+      deletePassword: () => secrets.delete(id),
     };
   };
+}
+
+function pathFromDpapiRef(ref: string): string {
+  const prefix = "win32-dpapi-current-user:file:";
+  if (!ref.startsWith(prefix)) throw new Error("not a Windows DPAPI file ref");
+  const secretPath = Buffer.from(ref.slice(prefix.length), "base64url").toString("utf8");
+  if (!path.isAbsolute(secretPath)) throw new Error("DPAPI ref path is not absolute");
+  return path.resolve(secretPath);
 }
 
 describe("LLM secret store", () => {
@@ -41,6 +50,7 @@ describe("LLM secret store", () => {
     try {
       const envFilePath = path.join(root, "blue-tanuki.env");
       const keyringFactory = createFakeKeyringFactory();
+      keyringFactory("linux", "TELEGRAM_BOT_TOKEN").setPassword("telegram-secret");
       const google = storeBlueTanukiSecret("GOOGLE_ACCESS_TOKEN", "google-secret", {
         envFilePath,
         platform: "linux",
@@ -58,6 +68,8 @@ describe("LLM secret store", () => {
 
       expect(resolveSecretMaterial(env, "GOOGLE_ACCESS_TOKEN", { platform: "linux", keyringFactory }))
         .toBe("google-secret");
+      expect(resolveSecretMaterial(env, "TELEGRAM_BOT_TOKEN", { platform: "linux", keyringFactory }))
+        .toBe("telegram-secret");
       expect(env).toEqual({
         [secretRefKey("GOOGLE_ACCESS_TOKEN")]: google.ref,
         [secretRefKey("TELEGRAM_BOT_TOKEN")]: "os-keyring:v1:linux:TELEGRAM_BOT_TOKEN",
@@ -87,7 +99,7 @@ describe("LLM secret store", () => {
         used_for_authority: false,
       });
       expect(stored.ref).not.toContain("openrouter-secret");
-      expect(stored.ref).toBe("os-keyring:v1:linux:OPENROUTER_API_KEY");
+      expect(stored.ref).toMatch(/^os-keyring:v2:linux:OPENROUTER_API_KEY:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
       expect(stored.storage).toBe("os_keyring_current_user");
 
       const resolved = resolveLLMSecretRefs(
@@ -116,20 +128,104 @@ describe("LLM secret store", () => {
   it("keeps Windows DPAPI refs working", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-secret-store-dpapi-"));
     try {
-      const stored = storeLlmApiKeySecret("OPENROUTER_API_KEY", "openrouter-secret", {
-        envFilePath: path.join(root, "blue-tanuki.env"),
+      const envFilePath = path.join(root, "blue-tanuki.env");
+      const first = storeLlmApiKeySecret("OPENROUTER_API_KEY", "openrouter-old-secret", {
+        envFilePath,
         platform: "win32",
         protector: fakeProtector,
       });
-      const resolved = resolveLLMSecretRefs(
-        { [secretRefKey("OPENROUTER_API_KEY")]: stored.ref },
+      const second = storeLlmApiKeySecret("OPENROUTER_API_KEY", "openrouter-new-secret", {
+        envFilePath,
+        platform: "win32",
+        protector: fakeProtector,
+      });
+      const oldResolved = resolveLLMSecretRefs(
+        { [secretRefKey("OPENROUTER_API_KEY")]: first.ref },
         { platform: "win32", protector: fakeProtector },
       );
-      expect(stored.storage).toBe("win32_dpapi_current_user");
-      expect(resolved.OPENROUTER_API_KEY).toBe("openrouter-secret");
+      const newResolved = resolveLLMSecretRefs(
+        { [secretRefKey("OPENROUTER_API_KEY")]: second.ref },
+        { platform: "win32", protector: fakeProtector },
+      );
+      expect(first.ref).not.toBe(second.ref);
+      expect(first.storage).toBe("win32_dpapi_current_user");
+      expect(oldResolved.OPENROUTER_API_KEY).toBe("openrouter-old-secret");
+      expect(newResolved.OPENROUTER_API_KEY).toBe("openrouter-new-secret");
+      expect(await fs.readFile(pathFromDpapiRef(first.ref), "utf8")).not.toContain("openrouter-old-secret");
+      expect(await fs.readFile(pathFromDpapiRef(second.ref), "utf8")).not.toContain("openrouter-new-secret");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("uses versioned refs so credential rotation preserves older backups", async () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), `btnk-secret-rotation-${platform}-`));
+      try {
+        const keyringFactory = createFakeKeyringFactory();
+        const first = storeLlmApiKeySecret("OPENROUTER_API_KEY", "old-secret", {
+          envFilePath: path.join(root, "blue-tanuki.env"),
+          platform,
+          keyringFactory,
+        });
+        const second = storeLlmApiKeySecret("OPENROUTER_API_KEY", "new-secret", {
+          envFilePath: path.join(root, "blue-tanuki.env"),
+          platform,
+          keyringFactory,
+        });
+
+        expect(second.ref).not.toBe(first.ref);
+        expect(resolveSecretMaterial(
+          { OPENROUTER_API_KEY_REF: first.ref },
+          "OPENROUTER_API_KEY",
+          { platform, keyringFactory },
+        )).toBe("old-secret");
+        expect(resolveSecretMaterial(
+          { OPENROUTER_API_KEY_REF: second.ref },
+          "OPENROUTER_API_KEY",
+          { platform, keyringFactory },
+        )).toBe("new-secret");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("removes a staged Windows secret when readback verification fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-secret-readback-"));
+    try {
+      const badProtector: SecretProtector = {
+        protect: fakeProtector.protect,
+        unprotect: () => "different-secret",
+      };
+      expect(() => storeLlmApiKeySecret("OPENROUTER_API_KEY", "openrouter-secret", {
+        envFilePath: path.join(root, "blue-tanuki.env"),
+        platform: "win32",
+        protector: badProtector,
+      })).toThrow(/readback did not match/);
+      await expect(fs.readdir(path.join(root, "secrets"))).resolves.toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes an OS keyring entry when readback verification fails", () => {
+    const entries = new Map<string, string>();
+    const keyringFactory: SecretKeyringFactory = (platform, key, entryId) => {
+      const id = `${platform}:${key}:${entryId}`;
+      return {
+        setPassword: (plaintext) => { entries.set(id, plaintext); },
+        getPassword: () => entries.has(id) ? "mismatched-readback" : null,
+        deletePassword: () => entries.delete(id),
+      };
+    };
+
+    expect(() => storeBlueTanukiSecret("GOOGLE_ACCESS_TOKEN", "google-secret", {
+      envFilePath: path.join(os.tmpdir(), "blue-tanuki.env"),
+      platform: "linux",
+      keyringFactory,
+    })).toThrow(/readback did not match/);
+    expect(entries.size).toBe(0);
   });
 
   it("fails closed when a DPAPI ref is used on an unsupported platform", () => {

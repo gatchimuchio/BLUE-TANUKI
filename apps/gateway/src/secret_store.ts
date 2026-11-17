@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { Entry } from "@napi-rs/keyring";
 import { windowsSystemChildEnvironment } from "./child_process_environment.js";
@@ -38,11 +49,13 @@ export interface SecretProtector {
 export interface SecretKeyringPort {
   setPassword(plaintext: string): void;
   getPassword(): string | null;
+  deletePassword(): boolean;
 }
 
 export type SecretKeyringFactory = (
   platform: NodeJS.Platform,
   key: BlueTanukiSecretKey,
+  entryId?: string,
 ) => SecretKeyringPort;
 
 export interface LlmSecretStorageStatus {
@@ -64,6 +77,8 @@ export interface LlmSecretStoreResult {
   os_protected: true;
   used_for_authority: false;
   evidence_source: readonly ["EXTERNAL_EVIDENCE"];
+  /** Remove only this newly created value if its reference was never committed. */
+  discard_uncommitted: () => boolean;
 }
 
 interface StoreOptions {
@@ -82,6 +97,7 @@ interface ResolveOptions {
 
 const SECRET_REF_PREFIX = "win32-dpapi-current-user:file:";
 const OS_KEYRING_REF_PREFIX = "os-keyring:v1:";
+const OS_KEYRING_REF_V2_PREFIX = "os-keyring:v2:";
 const OS_KEYRING_SERVICE = "blue-tanuki";
 
 export const LLM_SECRET_KEYS: readonly LlmSecretKey[] = [
@@ -148,8 +164,8 @@ function secretDirForEnvFile(envFilePath: string, env: Env): string {
   return path.join(path.dirname(path.resolve(envFilePath)), "secrets");
 }
 
-function secretPathForKey(envFilePath: string, key: BlueTanukiSecretKey, env: Env): string {
-  return path.join(secretDirForEnvFile(envFilePath, env), `${key.toLowerCase()}.dpapi`);
+function secretPathForKey(envFilePath: string, key: BlueTanukiSecretKey, env: Env, entryId: string): string {
+  return path.join(secretDirForEnvFile(envFilePath, env), `${key.toLowerCase()}.${entryId}.dpapi`);
 }
 
 function refForPath(secretPath: string): string {
@@ -243,24 +259,45 @@ function defaultProtector(): SecretProtector {
   };
 }
 
-function defaultKeyringFactory(platform: NodeJS.Platform, key: BlueTanukiSecretKey): SecretKeyringPort {
+function defaultKeyringFactory(
+  platform: NodeJS.Platform,
+  key: BlueTanukiSecretKey,
+  entryId?: string,
+): SecretKeyringPort {
   if (platform !== "linux" && platform !== "darwin") {
     throw new Error(`OS keyring secret storage is unsupported on ${platform}`);
   }
   if (platform !== process.platform) {
     throw new Error(`cannot access the ${platform} keyring from a ${process.platform} runtime`);
   }
+  const account = entryId ? `${key}:${entryId}` : key;
   const entry = platform === "linux"
-    ? new Entry(OS_KEYRING_SERVICE, key, { linux: { store: "secret-service" } })
-    : new Entry(OS_KEYRING_SERVICE, key);
+    ? new Entry(OS_KEYRING_SERVICE, account, { linux: { store: "secret-service" } })
+    : new Entry(OS_KEYRING_SERVICE, account);
   return {
     setPassword: (plaintext) => entry.setPassword(plaintext),
     getPassword: () => entry.getPassword(),
+    deletePassword: () => entry.deletePassword(),
   };
 }
 
-function osKeyringRef(platform: NodeJS.Platform, key: BlueTanukiSecretKey): string {
-  return `${OS_KEYRING_REF_PREFIX}${platform}:${key}`;
+function osKeyringRef(platform: NodeJS.Platform, key: BlueTanukiSecretKey, entryId: string): string {
+  return `os-keyring:v2:${platform}:${key}:${entryId}`;
+}
+
+function osKeyringEntryId(
+  ref: string,
+  platform: NodeJS.Platform,
+  key: BlueTanukiSecretKey,
+): string | undefined | null {
+  if (platform !== "linux" && platform !== "darwin") return null;
+  if (ref === `${OS_KEYRING_REF_PREFIX}${platform}:${key}`) return undefined;
+  const match = /^os-keyring:v2:(linux|darwin):([A-Z0-9_]+):([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/.exec(ref);
+  if (!match || match[1] !== platform || match[2] !== key ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(match[3]!)) {
+    return null;
+  }
+  return match[3];
 }
 
 function isMatchingOsKeyringRef(
@@ -268,7 +305,39 @@ function isMatchingOsKeyringRef(
   platform: NodeJS.Platform,
   key: BlueTanukiSecretKey,
 ): boolean {
-  return (platform === "linux" || platform === "darwin") && ref === osKeyringRef(platform, key);
+  return (platform === "linux" || platform === "darwin") && osKeyringEntryId(ref, platform, key) !== null;
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error as NodeJS.ErrnoException).code === code;
+}
+
+function fileIsAbsent(filePath: string): boolean {
+  try {
+    lstatSync(filePath);
+    return false;
+  } catch (error) {
+    return isNodeErrorCode(error, "ENOENT");
+  }
+}
+
+function discardStagedSecretFile(filePath: string): boolean {
+  try {
+    unlinkSync(filePath);
+  } catch {
+    // Verify absence below; a failed unlink is not treated as success.
+  }
+  return fileIsAbsent(filePath);
+}
+
+function discardStagedKeyringEntry(keyring: SecretKeyringPort): boolean {
+  try {
+    keyring.deletePassword();
+  } catch { /* Verify absence below; a failed delete is not treated as success. */ }
+  try {
+    return keyring.getPassword() === null;
+  } catch { return false; }
 }
 
 export function storeLlmApiKeySecret(
@@ -288,43 +357,79 @@ export function storeBlueTanukiSecret(
   if (!plaintext) throw new Error("refusing to store an empty secret");
   if (platform === "win32") {
     const protector = opts.protector ?? defaultProtector();
-    const secretPath = secretPathForKey(opts.envFilePath, key, opts.env ?? {});
+    const secretPath = secretPathForKey(opts.envFilePath, key, opts.env ?? {}, randomUUID());
     mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
-    writeFileSync(secretPath, `${protector.protect(plaintext)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    let fileDescriptor: number | undefined;
+    let ownsFile = false;
     try {
-      chmodSync(secretPath, 0o600);
-    } catch {
-      // Windows ACLs are enforced by DPAPI CurrentUser; chmod is best-effort.
+      const protectedValue = protector.protect(plaintext);
+      fileDescriptor = openSync(secretPath, "wx", 0o600);
+      ownsFile = true;
+      writeFileSync(fileDescriptor, `${protectedValue}\n`, "utf8");
+      fsyncSync(fileDescriptor);
+      closeSync(fileDescriptor);
+      fileDescriptor = undefined;
+      try {
+        chmodSync(secretPath, 0o600);
+      } catch {
+        // Windows ACLs are enforced by DPAPI CurrentUser; chmod is best-effort.
+      }
+      const readback = readFileSync(secretPath, "utf8").trim();
+      if (!readback || protector.unprotect(readback) !== plaintext) {
+        throw new Error("DPAPI secret readback did not match the supplied value");
+      }
+      return {
+        key,
+        ref_key: secretRefKey(key),
+        ref: refForPath(secretPath),
+        storage: "win32_dpapi_current_user",
+        os_protected: true,
+        used_for_authority: false,
+        evidence_source: ["EXTERNAL_EVIDENCE"],
+        discard_uncommitted: () => discardStagedSecretFile(secretPath),
+      };
+    } catch (error) {
+      if (fileDescriptor !== undefined) {
+        try { closeSync(fileDescriptor); } catch { /* The descriptor may already be closed. */ }
+      }
+      if (ownsFile && !discardStagedSecretFile(secretPath)) {
+        throw new Error("DPAPI secret storage failed and the staged secret file could not be removed", {
+          cause: error,
+        });
+      }
+      throw error;
     }
-    return {
-      key,
-      ref_key: secretRefKey(key),
-      ref: refForPath(secretPath),
-      storage: "win32_dpapi_current_user",
-      os_protected: true,
-      used_for_authority: false,
-      evidence_source: ["EXTERNAL_EVIDENCE"],
-    };
   }
 
   if (opts.protector) {
     throw new Error("Windows DPAPI protector cannot be used as an OS keyring on this platform");
   }
   if (platform === "linux" || platform === "darwin") {
-    const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key);
-    keyring.setPassword(plaintext);
-    return {
-      key,
-      ref_key: secretRefKey(key),
-      ref: osKeyringRef(platform, key),
-      storage: "os_keyring_current_user",
-      os_protected: true,
-      used_for_authority: false,
-      evidence_source: ["EXTERNAL_EVIDENCE"],
-    };
+    const entryId = randomUUID();
+    const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key, entryId);
+    try {
+      keyring.setPassword(plaintext);
+      if (keyring.getPassword() !== plaintext) {
+        throw new Error("OS keyring secret readback did not match the supplied value");
+      }
+      return {
+        key,
+        ref_key: secretRefKey(key),
+        ref: osKeyringRef(platform, key, entryId),
+        storage: "os_keyring_current_user",
+        os_protected: true,
+        used_for_authority: false,
+        evidence_source: ["EXTERNAL_EVIDENCE"],
+        discard_uncommitted: () => discardStagedKeyringEntry(keyring),
+      };
+    } catch (error) {
+      if (!discardStagedKeyringEntry(keyring)) {
+        throw new Error("OS keyring secret storage failed and the staged entry could not be removed", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 
   throw new Error(`OS-protected BLUE-TANUKI secret storage is unsupported on ${platform}`);
@@ -384,11 +489,12 @@ function resolveSecretRefs(
       continue;
     }
 
-    if (ref.startsWith(OS_KEYRING_REF_PREFIX)) {
-      if (!isMatchingOsKeyringRef(ref, platform, key)) {
+    if (ref.startsWith(OS_KEYRING_REF_PREFIX) || ref.startsWith(OS_KEYRING_REF_V2_PREFIX)) {
+      const entryId = osKeyringEntryId(ref, platform, key);
+      if (entryId === null) {
         throw new Error(`${secretRefKey(key)} does not match this platform or secret key`);
       }
-      const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key);
+      const keyring = (opts.keyringFactory ?? defaultKeyringFactory)(platform, key, entryId);
       const secret = keyring.getPassword();
       if (!secret) throw new Error(`${secretRefKey(key)} is not available in the OS keyring`);
       next[key] = secret;

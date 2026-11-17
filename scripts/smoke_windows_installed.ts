@@ -1584,7 +1584,16 @@ async function main(): Promise<void> {
       throw new Error("isolated uninstall secret was not stored with Windows DPAPI CurrentUser protection");
     }
     appendEnvFileValue(retainedEnvFile, storedSecret.ref_key, storedSecret.ref);
-    const secretFile = path.join(dataRoot, "secrets", "openrouter_api_key.dpapi");
+    const secretRefPrefix = "win32-dpapi-current-user:file:";
+    if (!storedSecret.ref.startsWith(secretRefPrefix)) {
+      throw new Error("isolated uninstall secret returned an unexpected DPAPI ref format");
+    }
+    const decodedSecretPath = Buffer.from(storedSecret.ref.slice(secretRefPrefix.length), "base64url").toString("utf8");
+    if (!path.isAbsolute(decodedSecretPath)) throw new Error("isolated DPAPI ref path is not absolute");
+    const secretFile = path.resolve(decodedSecretPath);
+    if (path.dirname(secretFile) !== path.resolve(dataRoot, "secrets")) {
+      throw new Error("isolated DPAPI secret path escaped the retained DataRoot");
+    }
     if (!existsSync(secretFile)) throw new Error("isolated DPAPI secret file was not created under the DataRoot");
     const secretBytesBeforeUninstall = readFileSync(secretFile);
     if (secretBytesBeforeUninstall.toString("utf8").includes(syntheticSecret) ||

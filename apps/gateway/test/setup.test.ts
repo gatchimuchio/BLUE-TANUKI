@@ -20,13 +20,22 @@ const fakeSecretProtector = {
 
 function fakeSecretKeyringFactory(): SecretKeyringFactory {
   const secrets = new Map<string, string>();
-  return (platform, key) => {
-    const id = `${platform}:${key}`;
+  return (platform, key, entryId) => {
+    const id = `${platform}:${key}:${entryId ?? "legacy"}`;
     return {
       setPassword: (plaintext) => { secrets.set(id, plaintext); },
       getPassword: () => secrets.get(id) ?? null,
+      deletePassword: () => secrets.delete(id),
     };
   };
+}
+
+function pathFromDpapiRef(ref: string): string {
+  const prefix = "win32-dpapi-current-user:file:";
+  if (!ref.startsWith(prefix)) throw new Error("not a Windows DPAPI file ref");
+  const secretPath = Buffer.from(ref.slice(prefix.length), "base64url").toString("utf8");
+  if (!path.isAbsolute(secretPath)) throw new Error("DPAPI ref path is not absolute");
+  return path.resolve(secretPath);
 }
 
 describe("setup CLI", () => {
@@ -153,7 +162,7 @@ describe("setup CLI", () => {
       expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
       expect(raw).not.toContain("openrouter-secret");
 
-      const secretRaw = await fs.readFile(path.join(dir, "secrets", "openrouter_api_key.dpapi"), "utf8");
+      const secretRaw = await fs.readFile(pathFromDpapiRef(result.config.llm.api_key_ref!), "utf8");
       expect(secretRaw).not.toContain("openrouter-secret");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -199,6 +208,46 @@ describe("setup CLI", () => {
     }
   });
 
+  it("removes staged OS secrets when the env file transaction fails", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-secret-rollback-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      const originalEnv = "EXISTING_SETTING=preserve\n";
+      await fs.writeFile(output, originalEnv, "utf8");
+      await expect(runSetupCommand(
+        [
+          "--yes",
+          "--force",
+          "--no-doctor",
+          "--output",
+          output,
+          "--base-dir",
+          path.join(dir, "data"),
+          "--provider",
+          "openrouter",
+          "--model",
+          "openrouter/auto",
+          "--api-key-env",
+          "TEST_OPENROUTER_KEY",
+        ],
+        {
+          cwd: dir,
+          env: {
+            TEST_OPENROUTER_KEY: "synthetic-openrouter-secret",
+            COMPOSIO_API_KEY: "synthetic-composio-secret",
+          },
+          secret_storage: { platform: "win32", protector: fakeSecretProtector },
+          write_env_file_atomic: async () => { throw new Error("injected env commit failure"); },
+        },
+      )).rejects.toThrow(/injected env commit failure/);
+
+      await expect(fs.readFile(output, "utf8")).resolves.toBe(originalEnv);
+      await expect(fs.readdir(path.join(dir, "secrets"))).resolves.toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("stores Linux setup keys as Secret Service refs without writing plaintext", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-linux-secret-"));
     try {
@@ -218,7 +267,7 @@ describe("setup CLI", () => {
         os_protected: true,
       });
       const raw = await fs.readFile(output, "utf8");
-      expect(raw).toContain("OPENROUTER_API_KEY_REF=os-keyring:v1:linux:OPENROUTER_API_KEY");
+      expect(raw).toMatch(/OPENROUTER_API_KEY_REF=os-keyring:v2:linux:OPENROUTER_API_KEY:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/);
       expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
       expect(raw).not.toContain("openrouter-secret");
     } finally {

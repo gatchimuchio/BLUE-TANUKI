@@ -2401,7 +2401,6 @@ async function runLLMFetchAbortTimeout(ctx: CheckContext): Promise<CheckResult> 
 async function runWindowsDpapiSecretRoundtrip(ctx: CheckContext): Promise<CheckResult> {
   const secretRoot = await mkdtemp(path.join(ctx.evidenceDir, "dpapi-"));
   const envFile = path.join(secretRoot, "blue-tanuki.env");
-  const secretPath = path.join(secretRoot, "secrets", "composio_api_key.dpapi");
   const plaintext = "product-dpapi-composio-roundtrip-value";
   const originalPowershell = process.env.BLUE_TANUKI_POWERSHELL;
   try {
@@ -2409,6 +2408,14 @@ async function runWindowsDpapiSecretRoundtrip(ctx: CheckContext): Promise<CheckR
       envFilePath: envFile,
       platform: "win32",
     });
+    const refPrefix = "win32-dpapi-current-user:file:";
+    if (!stored.ref.startsWith(refPrefix)) throw new Error("DPAPI store returned an unexpected ref format");
+    const decodedSecretPath = Buffer.from(stored.ref.slice(refPrefix.length), "base64url").toString("utf8");
+    if (!path.isAbsolute(decodedSecretPath)) throw new Error("DPAPI ref path is not absolute");
+    const secretPath = path.resolve(decodedSecretPath);
+    if (path.dirname(secretPath) !== path.resolve(secretRoot, "secrets")) {
+      throw new Error("DPAPI secret file escaped the isolated evidence root");
+    }
     await writeFile(envFile, `${stored.ref_key}=${stored.ref}\n`, "utf8");
 
     const envText = await readFile(envFile, "utf8");

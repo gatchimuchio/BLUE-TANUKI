@@ -53,6 +53,7 @@ export interface SetupCommandIO {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   secret_storage?: SetupSecretStorageOptions;
+  write_env_file_atomic?: typeof writeEnvFileAtomic;
 }
 
 export interface SetupSecretStorageOptions {
@@ -473,6 +474,7 @@ function protectSetupLlmApiKey(
   outputPath: string,
   env: NodeJS.ProcessEnv,
   opts: SetupSecretStorageOptions = {},
+  onStored?: (stored: LlmSecretStoreResult) => void,
 ): SetupSecretStorageResult {
   const key = llmApiKeyForProvider(config.llm.provider);
   const plaintext =
@@ -501,6 +503,7 @@ function protectSetupLlmApiKey(
       protector: opts.protector,
       keyringFactory: opts.keyringFactory,
     });
+    onStored?.(stored);
   } catch (error) {
     throw new Error(
       `OS-protected LLM secret storage failed; refusing to write plaintext ${key}: ${
@@ -528,6 +531,7 @@ function protectSetupComposioApiKey(
   outputPath: string,
   env: NodeJS.ProcessEnv,
   opts: SetupSecretStorageOptions = {},
+  onStored?: (stored: LlmSecretStoreResult) => void,
 ): SetupSecretStorageResult {
   const plaintext = config.composio.api_key;
   if (!plaintext) {
@@ -550,6 +554,7 @@ function protectSetupComposioApiKey(
       protector: opts.protector,
       keyringFactory: opts.keyringFactory,
     });
+    onStored?.(stored);
     delete config.composio.api_key;
     config.composio.api_key_ref = stored.ref;
     return {
@@ -575,6 +580,7 @@ function protectSetupD4RuntimeToken(
   outputPath: string,
   env: NodeJS.ProcessEnv,
   opts: SetupSecretStorageOptions = {},
+  onStored?: (stored: LlmSecretStoreResult) => void,
 ): SetupSecretStorageResult {
   const plaintext = config.d4_runtime?.token;
   const key = "BLUE_TANUKI_D4_RUNTIME_TOKEN" as const;
@@ -598,6 +604,7 @@ function protectSetupD4RuntimeToken(
       protector: opts.protector,
       keyringFactory: opts.keyringFactory,
     });
+    onStored?.(stored);
     config.d4_runtime ??= {};
     delete config.d4_runtime.token;
     config.d4_runtime.token_ref = stored.ref;
@@ -640,30 +647,59 @@ export async function runSetupCommand(
 
   await ensureWritableTarget(outputPath, opts.force === true);
   await ensureRuntimeDirs(config);
-  const secretStorage = protectSetupLlmApiKey(
-    config,
-    outputPath,
-    env,
-    io.secret_storage,
-  );
-  const composioSecretStorage = protectSetupComposioApiKey(
-    config,
-    outputPath,
-    env,
-    io.secret_storage,
-  );
-  const d4RuntimeSecretStorage = protectSetupD4RuntimeToken(
-    config,
-    outputPath,
-    env,
-    io.secret_storage,
-  );
-  const envFile = renderSetupEnvFile(config, { source_env: env });
-  const writeResult = await writeEnvFileAtomic(outputPath, envFile, {
-    mode: 0o600,
-    backup: opts.force === true,
-    backup_label: "setup",
-  });
+  const stagedSecrets: LlmSecretStoreResult[] = [];
+  let envCommitted = false;
+  let secretStorage: SetupSecretStorageResult;
+  let composioSecretStorage: SetupSecretStorageResult;
+  let d4RuntimeSecretStorage: SetupSecretStorageResult;
+  let writeResult: Awaited<ReturnType<typeof writeEnvFileAtomic>>;
+  try {
+    const trackStagedSecret = (stored: LlmSecretStoreResult): void => {
+      stagedSecrets.push(stored);
+    };
+    secretStorage = protectSetupLlmApiKey(
+      config,
+      outputPath,
+      env,
+      io.secret_storage,
+      trackStagedSecret,
+    );
+    composioSecretStorage = protectSetupComposioApiKey(
+      config,
+      outputPath,
+      env,
+      io.secret_storage,
+      trackStagedSecret,
+    );
+    d4RuntimeSecretStorage = protectSetupD4RuntimeToken(
+      config,
+      outputPath,
+      env,
+      io.secret_storage,
+      trackStagedSecret,
+    );
+    const envFile = renderSetupEnvFile(config, { source_env: env });
+    writeResult = await (io.write_env_file_atomic ?? writeEnvFileAtomic)(outputPath, envFile, {
+      mode: 0o600,
+      backup: opts.force === true,
+      backup_label: "setup",
+    });
+    envCommitted = true;
+  } catch (error) {
+    if (!envCommitted) {
+      const uncleared: string[] = [];
+      for (const stored of stagedSecrets.reverse()) {
+        if (!stored.discard_uncommitted()) uncleared.push(stored.ref_key);
+      }
+      if (uncleared.length > 0) {
+        throw new Error(
+          `setup failed before env commit and staged OS-protected secrets remain for: ${uncleared.join(", ")}`,
+          { cause: error },
+        );
+      }
+    }
+    throw error;
+  }
   const setupEnv = setupConfigToEnv(config, { source_env: env });
 
   const doctor = opts.no_doctor
