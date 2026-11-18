@@ -14,6 +14,7 @@ export interface EmergencyStopSnapshot {
   audit_recovery_status: EmergencyStopAuditRecoveryStatus;
   execution_blocked: boolean;
   clear_blocked_by_active_work: boolean;
+  clear_state_conflict: boolean;
   hds_brain_remains_authority: true;
   used_for_authority: false;
   evidence_source: readonly ("INTERNAL_STATE" | "LIVE_RUNTIME")[];
@@ -71,11 +72,18 @@ export class EmergencyStopControl {
   snapshot(): EmergencyStopSnapshot {
     const active = this.durable.active;
     const clearBlockedByActiveWork = active && (this.options.hasUnsettledWork?.() ?? false);
+    const clearStateConflict = active && this.durable.activation
+      ? emergencyStopAuditStateConflict(this.options.authority, this.durable.activation.control_event_id)
+      : false;
     return {
       active,
       activated_at: this.durable.activation?.occurred_at_ms ?? null,
       activated_by: this.durable.activation?.actor ?? null,
-      reason: active ? this.reasonText ?? "Emergency stop restored from durable state." : null,
+      reason: active
+        ? clearStateConflict
+          ? "Emergency stop remains latched, but the latest stop audit event does not match the durable active state."
+          : this.reasonText ?? "Emergency stop restored from durable state."
+        : null,
       cleared_at: this.durable.last_clear?.occurred_at_ms ?? null,
       cleared_by: this.durable.last_clear?.actor ?? null,
       clear_reason: this.clearReasonText,
@@ -84,6 +92,7 @@ export class EmergencyStopControl {
           : this.durable.activation?.audit_recorded ? "recorded" : "pending",
       execution_blocked: active,
       clear_blocked_by_active_work: clearBlockedByActiveWork,
+      clear_state_conflict: clearStateConflict,
       hds_brain_remains_authority: true,
       used_for_authority: false,
       evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
@@ -208,4 +217,21 @@ export class EmergencyStopControl {
 
 function isAuthorityEvent(value: unknown): value is AuthorityEventLike {
   return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "authority_event";
+}
+
+function emergencyStopAuditStateConflict(
+  authority: EmergencyStopAuthority,
+  activationId: string,
+): boolean {
+  try {
+    const controlEvents = authority.getAudit().list().flatMap((entry) => {
+      const log = entry.log;
+      return isAuthorityEvent(log) &&
+        (log.event === "emergency_stop_activated" || log.event === "emergency_stop_cleared") ? [log] : [];
+    });
+    const latest = controlEvents.at(-1);
+    return !latest || latest.event !== "emergency_stop_activated" || latest.control_event_id !== activationId;
+  } catch {
+    return true;
+  }
 }

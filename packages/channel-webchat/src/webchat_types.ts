@@ -1488,6 +1488,7 @@ export interface WebChatEmergencyStopSnapshot {
   audit_recovery_status: "not_required" | "recorded" | "pending" | "state_unavailable";
   execution_blocked: boolean;
   clear_blocked_by_active_work: boolean;
+  clear_state_conflict: boolean;
   hds_brain_remains_authority: true;
   used_for_authority: false;
   evidence_source: readonly ("INTERNAL_STATE" | "LIVE_RUNTIME")[];

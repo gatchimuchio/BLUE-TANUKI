@@ -3557,6 +3557,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (emergencyStopActive && emergencyStop.clear_blocked_by_active_work === true) {
           emergencyStopStatus += " · local command still settling";
         }
+        if (emergencyStopActive && emergencyStop.clear_state_conflict === true) {
+          emergencyStopStatus += " · audit/state conflict";
+        }
         setText("approval-emergency-status", emergencyStopStatus);
         byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
         byId("clear-emergency-stop").disabled = !emergencyStopActive ||
