@@ -6677,7 +6677,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["ページ", review.url],
             ["フォーム送信先（表示のみ）", review.action_url],
             ["origin", review.origin],
-            ["検索領域", review.form_name],
+            ["フォーム名", review.form_name],
             ["ページ取得", "GET。取得効果は未分類"],
             ["この承認の作用", "隔離ブラウザ内の一時DOM入力のみ。ページを閉じると破棄"],
             ["最終フォーム送信", "実行しない。ページGETの外部効果は未分類。後続GETには別L3承認が必要"],
@@ -6739,17 +6739,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               typeof review.origin !== "string" || !parsedUrl || parsedUrl.origin !== review.origin ||
               parsedUrl.search || parsedUrl.hash || !parsedActionUrl || parsedActionUrl.origin !== review.origin ||
               parsedActionUrl.search || parsedActionUrl.hash || !fieldsValid) {
-            throw new Error("検索フォームの確認内容がこのL3承認要求に結び付いていません");
+            throw new Error("フォーム送信の確認内容がこのL3承認要求に結び付いていません");
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "同一originの検索フォーム（GET）";
+          heading.textContent = "同一originの名前付きフォーム（GET）";
           view.appendChild(heading);
           [
             ["ページ", review.url],
             ["送信先", review.action_url],
             ["origin", review.origin],
-            ["検索領域", review.form_name],
+            ["フォーム名", review.form_name],
             ["送信方式", "GET。POST等は拒否"],
             ["外部作用分類", "外部フォーム送信（外部効果は未分類）"],
             ["前段入力receipt", review.input_receipt_digest],
@@ -6759,7 +6759,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ["ページJavaScript", "無効"],
             ["資格情報・Cookie", "再利用なし"],
             ["download", "無効"],
-            ["承認後の再確認", "同じoriginの検索領域、GET方式、入力名・制約を照合"],
+            ["承認後の再確認", "同じoriginの名前付きフォーム、GET方式、入力名・制約を照合"],
           ].forEach(function (field) {
             const row = document.createElement("p");
             const label = document.createElement("strong");
@@ -6783,7 +6783,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "前段の一時入力とは独立した、今回のGET送信L3確認です。検索フォームの形状だけでは送信先の実効果を分類できません。GETでも外部状態が変わることがあり、購入・確定等の作用を除外できません。送信先と値を再確認してください。receiptは入力段階との照合だけに使い権限を与えません。結果不明時は自動再送しません.";
+          note.textContent = "前段の一時入力とは独立した、今回のGET送信L3確認です。フォームの形状だけでは送信先の実効果を分類できません。GETでも外部状態が変わることがあり、購入・確定等の作用を除外できません。送信先と値を再確認してください。receiptは入力段階との照合だけに使い権限を与えません。結果不明時は自動再送しません.";
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;

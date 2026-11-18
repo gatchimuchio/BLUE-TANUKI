@@ -6217,7 +6217,7 @@ interface PageLike {
   title(): Promise<string>;
   evaluate(expression: string): Promise<unknown>;
   url(): string;
-  getByRole?(role: "link" | "search", options: { name: string; exact: true }): LocatorLike;
+  getByRole?(role: "form" | "link" | "search", options: { name: string; exact: true }): LocatorLike;
 }
 
 interface LocatorLike {
@@ -6521,10 +6521,17 @@ async function defaultBrowserAutomationRunner(
         throw new Error("browser_form_get_request_unavailable; form_submission_sent=false");
       }
       const searchRegion = page.getByRole("search", { name: request.form_name, exact: true });
-      if (await searchRegion.count() !== 1) {
-        throw new Error("browser_form_get_search_region_not_unique; form_submission_sent=false");
+      const searchRegionCount = await searchRegion.count();
+      let formRegion = searchRegion;
+      if (searchRegionCount === 0) {
+        formRegion = page.getByRole("form", { name: request.form_name, exact: true });
+        if (await formRegion.count() !== 1) {
+          throw new Error("browser_form_get_named_region_not_unique; form_submission_sent=false");
+        }
+      } else if (searchRegionCount !== 1) {
+        throw new Error("browser_form_get_named_region_not_unique; form_submission_sent=false");
       }
-      const form = await searchRegion.evaluate<BrowserSearchFormSnapshot>(`element => {
+      const form = await formRegion.evaluate<BrowserSearchFormSnapshot>(`element => {
         const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
         if (forms.length !== 1) return { form_count: forms.length, control_count: 0, controls: [], method: "", action: "", target: "", enctype: "", accept_charset: "", form_markup: "" };
         const current = forms[0];
@@ -6568,7 +6575,7 @@ async function defaultBrowserAutomationRunner(
       });
       formStateDigest = browserFormStateDigest(form);
       const fieldsBase64 = Buffer.from(JSON.stringify(request.fields), "utf8").toString("base64");
-      const fillResult = await searchRegion.evaluate<{ ok: boolean; filled_count: number; valid: boolean }>(`element => {
+      const fillResult = await formRegion.evaluate<{ ok: boolean; filled_count: number; valid: boolean }>(`element => {
         const bytes = Uint8Array.from(atob("${fieldsBase64}"), value => value.charCodeAt(0));
         const fields = JSON.parse(new TextDecoder().decode(bytes));
         const forms = element.matches("form") ? [element] : Array.from(element.querySelectorAll("form"));
