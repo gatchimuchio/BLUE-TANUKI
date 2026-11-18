@@ -60,6 +60,7 @@ export interface BrowserSearchFormControlSnapshot {
   multiple?: boolean;
   option_count?: number;
   options?: readonly { value: string; disabled: boolean }[];
+  radio_option_value?: string;
 }
 
 export interface BrowserSearchFormSnapshot {
@@ -416,6 +417,7 @@ export function buildBrowserSearchFormGetUrl(input: {
   const fieldLengths = new Map<string, { min: number; max: number }>();
   const fieldControls = new Map<string, { tag: string; type: string }>();
   const selectValues = new Map<string, Set<string>>();
+  const radioValues = new Map<string, Set<string>>();
   for (const control of form.controls) {
     if (!control || typeof control.tag !== "string" || typeof control.type !== "string" ||
         typeof control.name !== "string" || typeof control.disabled !== "boolean" ||
@@ -433,6 +435,25 @@ export function buildBrowserSearchFormGetUrl(input: {
     }
     const tag = control.tag.toLowerCase();
     const type = control.type.toLowerCase();
+    if (tag === "input" && type === "radio") {
+      const autocomplete = control.autocomplete.trim().toLowerCase();
+      const optionValue = control.radio_option_value;
+      const priorControl = fieldControls.get(control.name);
+      if (!validFieldName(control.name) || (priorControl && priorControl.type !== "radio") ||
+          typeof optionValue !== "string" || optionValue.length === 0 || optionValue.length > 1_024 ||
+          /[\u0000-\u001f\u007f]/.test(optionValue) || hasUnpairedSurrogate(optionValue) ||
+          /(?:password|one-time-code|current-password|new-password)/i.test(autocomplete)) {
+        throw new Error("browser_form_get_radio_control_denied");
+      }
+      const values = radioValues.get(control.name) ?? new Set<string>();
+      if (values.has(optionValue)) throw new Error("browser_form_get_radio_option_ambiguous");
+      values.add(optionValue);
+      inputNames.add(control.name);
+      fieldControls.set(control.name, { tag, type });
+      radioValues.set(control.name, values);
+      if (control.required) requiredNames.add(control.name);
+      continue;
+    }
     const editable = (tag === "input" && browserSearchFormEditableInputTypes.has(type)) ||
       (tag === "textarea" && type === "");
     if (tag === "select" && type === "select-one") {
@@ -492,7 +513,11 @@ export function buildBrowserSearchFormGetUrl(input: {
         hasUnpairedSurrogate(field.value)) {
       throw new Error("browser_form_get_field_binding_denied");
     }
-    if (fieldControl.tag === "select") {
+    if (fieldControl.type === "radio") {
+      if (!radioValues.get(field.name)?.has(field.value)) {
+        throw new Error("browser_form_get_radio_value_unavailable");
+      }
+    } else if (fieldControl.tag === "select") {
       if (!selectValues.get(field.name)?.has(field.value)) {
         throw new Error("browser_form_get_select_value_unavailable");
       }

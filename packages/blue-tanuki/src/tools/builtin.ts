@@ -6549,7 +6549,7 @@ async function defaultBrowserAutomationRunner(
             tag: control.tagName.toLowerCase(),
             type: "type" in control ? String(control.type || "").toLowerCase() : "",
             name: "name" in control ? String(control.name || "") : "",
-            disabled: "disabled" in control ? Boolean(control.disabled) : false,
+            disabled: "disabled" in control ? Boolean(control.disabled || control.matches(":disabled")) : false,
             required: "required" in control ? Boolean(control.required) : false,
             read_only: "readOnly" in control ? Boolean(control.readOnly) : false,
             min_length: "minLength" in control ? Number(control.minLength) : -1,
@@ -6570,7 +6570,9 @@ async function defaultBrowserAutomationRunner(
                 disabled: Boolean(option.disabled || (option.parentElement &&
                   option.parentElement.tagName.toLowerCase() === "optgroup" && option.parentElement.disabled))
               }))
-            } : {})
+            } : {}),
+            ...(control.tagName.toLowerCase() === "input" && String(control.type || "").toLowerCase() === "radio"
+              ? { radio_option_value: String(control.value || "") } : {})
           }))
         };
       }`);
@@ -6596,12 +6598,24 @@ async function defaultBrowserAutomationRunner(
           if (!field || typeof field.name !== "string" || typeof field.value !== "string") {
             return { ok: false, filled_count: filledCount, valid: false };
           }
-          const matches = Array.from(form.elements).filter(control => {
+          const namedControls = Array.from(form.elements).filter(control => String(control.name || "") === field.name);
+          const radioMatches = namedControls.filter(control => control.tagName.toLowerCase() === "input" &&
+            String(control.type || "").toLowerCase() === "radio");
+          if (radioMatches.length > 0) {
+            if (radioMatches.length !== namedControls.length) return { ok: false, filled_count: filledCount, valid: false };
+            const matchingOptions = radioMatches.filter(control => String(control.value || "") === field.value &&
+              !control.matches(":disabled"));
+            if (matchingOptions.length !== 1) return { ok: false, filled_count: filledCount, valid: false };
+            for (const option of radioMatches) option.checked = option === matchingOptions[0];
+            if (!matchingOptions[0].checked) return { ok: false, filled_count: filledCount, valid: false };
+            filledCount += 1;
+            continue;
+          }
+          const matches = namedControls.filter(control => {
             const tag = control.tagName.toLowerCase();
             const type = "type" in control ? String(control.type || "").toLowerCase() : "";
             return ((tag === "input" && editableInputTypes.has(type)) || (tag === "textarea" && type === "") ||
-              (tag === "select" && type === "select-one")) &&
-              String(control.name || "") === field.name;
+              (tag === "select" && type === "select-one"));
           });
           if (matches.length !== 1) return { ok: false, filled_count: filledCount, valid: false };
           const control = matches[0];
