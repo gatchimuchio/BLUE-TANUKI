@@ -6561,7 +6561,16 @@ async function defaultBrowserAutomationRunner(
             has_formenctype: control.hasAttribute("formenctype"),
             has_formtarget: control.hasAttribute("formtarget"),
             has_formnovalidate: control.hasAttribute("formnovalidate"),
-            dirname: "dirname" in control ? String(control.dirname || "") : ""
+            dirname: "dirname" in control ? String(control.dirname || "") : "",
+            ...(control.tagName.toLowerCase() === "select" ? {
+              multiple: Boolean(control.multiple),
+              option_count: control.options.length,
+              options: Array.from(control.options).slice(0, 65).map(option => ({
+                value: String(option.value || ""),
+                disabled: Boolean(option.disabled || (option.parentElement &&
+                  option.parentElement.tagName.toLowerCase() === "optgroup" && option.parentElement.disabled))
+              }))
+            } : {})
           }))
         };
       }`);
@@ -6590,15 +6599,24 @@ async function defaultBrowserAutomationRunner(
           const matches = Array.from(form.elements).filter(control => {
             const tag = control.tagName.toLowerCase();
             const type = "type" in control ? String(control.type || "").toLowerCase() : "";
-            return ((tag === "input" && editableInputTypes.has(type)) || (tag === "textarea" && type === "")) &&
+            return ((tag === "input" && editableInputTypes.has(type)) || (tag === "textarea" && type === "") ||
+              (tag === "select" && type === "select-one")) &&
               String(control.name || "") === field.name;
           });
           if (matches.length !== 1) return { ok: false, filled_count: filledCount, valid: false };
           const control = matches[0];
-          const value = control.tagName.toLowerCase() === "textarea"
-            ? field.value.replace(/\\r\\n?/g, "\\n") : field.value;
+          const tag = control.tagName.toLowerCase();
+          const value = tag === "textarea" ? field.value.replace(/\\r\\n?/g, "\\n") : field.value;
+          if (tag === "select") {
+            const options = Array.from(control.options).filter(option => option.value === value &&
+              !option.disabled && !(option.parentElement && option.parentElement.tagName.toLowerCase() === "optgroup" &&
+                option.parentElement.disabled));
+            if (options.length !== 1) return { ok: false, filled_count: filledCount, valid: false };
+          }
           control.value = value;
-          if (control.value !== value) return { ok: false, filled_count: filledCount, valid: false };
+          if (control.value !== value || (tag === "select" && !control.selectedOptions[0])) {
+            return { ok: false, filled_count: filledCount, valid: false };
+          }
           filledCount += 1;
         }
         return { ok: true, filled_count: filledCount, valid: form.checkValidity() };

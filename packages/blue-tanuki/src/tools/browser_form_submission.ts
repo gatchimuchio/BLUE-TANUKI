@@ -57,6 +57,9 @@ export interface BrowserSearchFormControlSnapshot {
   has_formtarget: boolean;
   has_formnovalidate: boolean;
   dirname: string;
+  multiple?: boolean;
+  option_count?: number;
+  options?: readonly { value: string; disabled: boolean }[];
 }
 
 export interface BrowserSearchFormSnapshot {
@@ -75,6 +78,7 @@ const MAX_BROWSER_FORM_FIELDS = 10;
 const MAX_BROWSER_FORM_VALUE_BYTES = 4_096;
 const MAX_BROWSER_FORM_URL_LENGTH = 4_096;
 const MAX_BROWSER_FORM_MARKUP_BYTES = 131_072;
+const MAX_BROWSER_FORM_SELECT_OPTIONS = 64;
 const BROWSER_FORM_INPUT_RECEIPT_TTL_MS = 10 * 60 * 1000;
 const MAX_BROWSER_FORM_INPUT_RECEIPTS = 256;
 const SECRET_LIKE_FIELD_NAME = /(password|passcode|token|secret|credential|cookie|session|auth|csrf|nonce|api[_-]?key|otp|one[_-]?time[_-]?code)/i;
@@ -411,6 +415,7 @@ export function buildBrowserSearchFormGetUrl(input: {
   const requiredNames = new Set<string>();
   const fieldLengths = new Map<string, { min: number; max: number }>();
   const fieldControls = new Map<string, { tag: string; type: string }>();
+  const selectValues = new Map<string, Set<string>>();
   for (const control of form.controls) {
     if (!control || typeof control.tag !== "string" || typeof control.type !== "string" ||
         typeof control.name !== "string" || typeof control.disabled !== "boolean" ||
@@ -430,6 +435,30 @@ export function buildBrowserSearchFormGetUrl(input: {
     const type = control.type.toLowerCase();
     const editable = (tag === "input" && browserSearchFormEditableInputTypes.has(type)) ||
       (tag === "textarea" && type === "");
+    if (tag === "select" && type === "select-one") {
+      const autocomplete = control.autocomplete.trim().toLowerCase();
+      if (!validFieldName(control.name) || inputNames.has(control.name) || control.read_only || control.has_pattern ||
+          control.multiple !== false || !Number.isSafeInteger(control.option_count) || control.option_count! < 1 ||
+          control.option_count! > MAX_BROWSER_FORM_SELECT_OPTIONS || !Array.isArray(control.options) ||
+          control.options.length !== control.option_count ||
+          /(?:password|one-time-code|current-password|new-password)/i.test(autocomplete)) {
+        throw new Error("browser_form_get_select_control_denied");
+      }
+      const values = new Set<string>();
+      for (const option of control.options) {
+        if (!option || typeof option.value !== "string" || typeof option.disabled !== "boolean" ||
+            option.value.length > 1_024 || /[\u0000-\u001f\u007f]/.test(option.value) ||
+            hasUnpairedSurrogate(option.value) || values.has(option.value)) {
+          throw new Error("browser_form_get_select_option_shape_unavailable");
+        }
+        if (!option.disabled) values.add(option.value);
+      }
+      inputNames.add(control.name);
+      fieldControls.set(control.name, { tag, type });
+      selectValues.set(control.name, values);
+      if (control.required) requiredNames.add(control.name);
+      continue;
+    }
     if (editable) {
       const autocomplete = control.autocomplete.trim().toLowerCase();
       const typeSpecificAutocomplete = (type === "email" && autocomplete === "email") ||
@@ -452,19 +481,27 @@ export function buildBrowserSearchFormGetUrl(input: {
 
   const requestedNames = new Set<string>();
   for (const field of input.fields) {
-    const lengthConstraints = fieldLengths.get(field.name);
     const fieldControl = fieldControls.get(field.name);
     const hasLineBreakOrTab = /[\t\r\n]/.test(field.value);
     const hasForbiddenControl = fieldControl?.tag === "textarea"
       ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(field.value)
       : /[\u0000-\u001f\u007f]/.test(field.value);
     if (!validFieldName(field.name) || requestedNames.has(field.name) || !inputNames.has(field.name) ||
-        !lengthConstraints || !fieldControl || (hasLineBreakOrTab && fieldControl.tag !== "textarea") ||
-        field.value.length === 0 || field.value.length > 1_024 ||
-        (lengthConstraints.min >= 0 && field.value.length < lengthConstraints.min) ||
-        (lengthConstraints.max >= 0 && field.value.length > lengthConstraints.max) ||
-        hasForbiddenControl || hasUnpairedSurrogate(field.value)) {
+        !fieldControl || (hasLineBreakOrTab && fieldControl.tag !== "textarea") ||
+        field.value.length === 0 || field.value.length > 1_024 || hasForbiddenControl ||
+        hasUnpairedSurrogate(field.value)) {
       throw new Error("browser_form_get_field_binding_denied");
+    }
+    if (fieldControl.tag === "select") {
+      if (!selectValues.get(field.name)?.has(field.value)) {
+        throw new Error("browser_form_get_select_value_unavailable");
+      }
+    } else {
+      const lengthConstraints = fieldLengths.get(field.name);
+      if (!lengthConstraints || (lengthConstraints.min >= 0 && field.value.length < lengthConstraints.min) ||
+          (lengthConstraints.max >= 0 && field.value.length > lengthConstraints.max)) {
+        throw new Error("browser_form_get_field_binding_denied");
+      }
     }
     requestedNames.add(field.name);
   }
