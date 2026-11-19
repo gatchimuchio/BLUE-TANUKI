@@ -10,6 +10,11 @@ struct DeviceLinkHostPreview: Equatable {
   let expiresAt: Int64
 }
 
+enum DesktopNotificationObservation {
+  case unobserved, reading, unavailable
+  case observed(DesktopNotificationSummary)
+}
+
 private struct MobileTaskCatalog {
   let runtimeIDs: [String]
   let workspaces: [MobileTaskWorkspace]
@@ -98,6 +103,7 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var tasks: [MobileTaskDraft] = []
   @Published private(set) var taskStatuses: [String: MobileTaskStatus] = [:]
   @Published private(set) var taskNotificationsEnabled = false
+  @Published private(set) var desktopNotifications: DesktopNotificationObservation = .unobserved
   @Published private(set) var mcpSnapshot: MobileMCPCapabilitySnapshot?
   @Published private(set) var taskSubmissionNeedsReconciliation = false
   @Published private(set) var taskMutationNeedsReconciliation = false
@@ -164,6 +170,7 @@ final class DeviceLinkViewModel: ObservableObject {
         taskMessage = "前回のTask申請をDesktop一覧と照合するまで新規申請を停止しています。"
       }
     } catch {
+      desktopNotifications = .unobserved
       taskMutationNeedsReconciliation = true
       message = "端末内の安全な状態を確認できません。ネットワーク操作を停止しています。"
     }
@@ -182,6 +189,7 @@ final class DeviceLinkViewModel: ObservableObject {
       mcpSnapshot = nil
       includeMcpCapability = false
       taskStatuses = [:]
+      desktopNotifications = .unobserved
       transport.cancelActive()
     }
   }
@@ -202,6 +210,36 @@ final class DeviceLinkViewModel: ObservableObject {
     selectedWorkspaceID = workspaces.first(where: { $0.runtimeID == runtimeID })?.id ?? ""
   }
 
+  func refreshDesktopNotifications() {
+    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    let epoch = lifecycle.capture()
+    desktopNotifications = .reading
+    busy = true
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self else { return }
+      let result = Result {
+        let state = try self.store.loadOrCreate()
+        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        let body = try self.deviceLinkBody(
+          credential, operation: DesktopNotificationSummary.operation,
+          payload: ["版": 1, "未読のみ": false, "上限": DesktopNotificationSummary.maximumEntries],
+          allowedEvidence: ["INTERNAL_STATE"], epoch: epoch, evidence: DeviceLinkAttemptEvidence()
+        )
+        guard !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        return try DesktopNotificationSummary.read(body)
+      }
+      DispatchQueue.main.async {
+        self.busy = false
+        defer { self.scheduleOwnedTaskRefreshAfterForeground() }
+        guard self.lifecycle.isCurrent(epoch) else { return }
+        switch result {
+        case .success(let summary): self.desktopNotifications = .observed(summary)
+        case .failure: self.desktopNotifications = .unavailable
+        }
+      }
+    }
+  }
+
   func refreshTaskCatalog() {
     guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
     let epoch = lifecycle.capture()
@@ -211,12 +249,12 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let runtimeBody = try self.mobileTaskBody(
+        let runtimeBody = try self.deviceLinkBody(
           credential, operation: "実行系列挙", payload: [:], allowedEvidence: ["INTERNAL_STATE", "LIVE_RUNTIME"],
           epoch: epoch, evidence: evidence
         )
         let runtimeIDs = try MobileTaskContract.runtimes(runtimeBody)
-        let workspaceBody = try self.mobileTaskBody(
+        let workspaceBody = try self.deviceLinkBody(
           credential, operation: "作業領域一覧", payload: [:], allowedEvidence: ["INTERNAL_STATE"],
           epoch: epoch, evidence: evidence
         )
@@ -251,7 +289,7 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let body = try self.mobileTaskBody(
+        let body = try self.deviceLinkBody(
           credential, operation: "AgentTask端末申請一覧", payload: [:], allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
           epoch: epoch, evidence: evidence
         )
@@ -307,7 +345,7 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let body = try self.mobileTaskBody(
+        let body = try self.deviceLinkBody(
           credential, operation: "AgentTask端末MCP能力取得", payload: [:], allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
           epoch: epoch, evidence: evidence
         )
@@ -372,12 +410,12 @@ final class DeviceLinkViewModel: ObservableObject {
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
         var sessionID: String?
         do {
-          let runtimeBody = try self.mobileTaskBody(
+          let runtimeBody = try self.deviceLinkBody(
             credential, operation: "実行系列挙", payload: [:], allowedEvidence: ["INTERNAL_STATE", "LIVE_RUNTIME"],
             epoch: epoch, evidence: evidence
           )
           let runtimeIDs = try MobileTaskContract.runtimes(runtimeBody)
-          let workspaceBody = try self.mobileTaskBody(
+          let workspaceBody = try self.deviceLinkBody(
             credential, operation: "作業領域一覧", payload: [:], allowedEvidence: ["INTERNAL_STATE"],
             epoch: epoch, evidence: evidence
           )
@@ -388,7 +426,7 @@ final class DeviceLinkViewModel: ObservableObject {
           }
           var currentMcpHash: String?
           if includeMcp {
-            let capabilityBody = try self.mobileTaskBody(
+            let capabilityBody = try self.deviceLinkBody(
               credential, operation: "AgentTask端末MCP能力取得", payload: [:],
               allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
             )
@@ -396,7 +434,7 @@ final class DeviceLinkViewModel: ObservableObject {
             guard snapshot.usable else { throw DeviceLinkFailure.rejected }
             currentMcpHash = snapshot.hash
           }
-          let sessionBody = try self.mobileTaskBody(
+          let sessionBody = try self.deviceLinkBody(
             credential, operation: "対話開始", payload: ["実行系ID": runtimeID],
             allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
           )
@@ -412,7 +450,7 @@ final class DeviceLinkViewModel: ObservableObject {
           )
           _ = try self.store.markTaskSubmissionPending(sessionID: createdSessionID)
           evidence.taskSubmissionPendingRecorded = true
-          let body = try self.mobileTaskBody(
+          let body = try self.deviceLinkBody(
             credential, operation: "AgentTask端末申請", payload: payload, allowedEvidence: ["LIVE_RUNTIME"],
             epoch: epoch, evidence: evidence
           )
@@ -424,7 +462,7 @@ final class DeviceLinkViewModel: ObservableObject {
              self.lifecycle.isCurrent(epoch),
              (!evidence.taskSubmissionMayHaveReachedDesktop || Self.isDefinitiveRejection(error)) {
             do {
-              let closeBody = try self.mobileTaskBody(
+              let closeBody = try self.deviceLinkBody(
                 credential, operation: "対話終了", payload: ["対話セッションID": sessionID],
                 allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
               )
@@ -520,7 +558,7 @@ final class DeviceLinkViewModel: ObservableObject {
         _ = try self.store.markTaskMutationPending(pending, credential: credential)
         let body: [String: Any]
         do {
-          body = try self.mobileTaskBody(
+          body = try self.deviceLinkBody(
             credential, operation: kind.operation, payload: ["申請ID": draft.id],
             allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
           )
@@ -562,7 +600,7 @@ final class DeviceLinkViewModel: ObservableObject {
     epoch: UInt64,
     evidence: DeviceLinkAttemptEvidence
   ) throws -> MobileTaskStatus {
-    let response = try mobileTaskResponse(
+    let response = try deviceLinkResponse(
       credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
       allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
     )
@@ -576,7 +614,7 @@ final class DeviceLinkViewModel: ObservableObject {
     return status
   }
 
-  private func mobileTaskBody(
+  private func deviceLinkBody(
     _ credential: DeviceLinkCredential,
     operation: String,
     payload: [String: Any],
@@ -584,12 +622,12 @@ final class DeviceLinkViewModel: ObservableObject {
     epoch: UInt64,
     evidence: DeviceLinkAttemptEvidence
   ) throws -> [String: Any] {
-    try mobileTaskResponse(
+    try deviceLinkResponse(
       credential, operation: operation, payload: payload, allowedEvidence: allowedEvidence, epoch: epoch, evidence: evidence
     ).body
   }
 
-  private func mobileTaskResponse(
+  private func deviceLinkResponse(
     _ credential: DeviceLinkCredential,
     operation: String,
     payload: [String: Any],
@@ -600,6 +638,7 @@ final class DeviceLinkViewModel: ObservableObject {
     let allowedOperations: Set<String> = [
       "実行系列挙", "作業領域一覧", "対話開始", "対話終了", "AgentTask端末申請", "AgentTask端末申請一覧",
       "AgentTask端末MCP能力取得", "AgentTask端末状態", "AgentTask端末実行", "AgentTask端末取消",
+      DesktopNotificationSummary.operation,
     ]
     guard allowedOperations.contains(operation) else { throw DeviceLinkFailure.invalid }
     let exchange = try self.exchange(
@@ -844,6 +883,7 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func checkConnection() {
     guard lifecycle.isForeground(), !busy else { return }
+    desktopNotifications = .unobserved
     let epoch = lifecycle.capture()
     run(
       epoch: epoch,
@@ -893,6 +933,7 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func disconnectFromDesktop() {
     guard lifecycle.isForeground(), !busy else { return }
+    desktopNotifications = .unobserved
     let epoch = lifecycle.capture()
     run(
       epoch: epoch,
@@ -945,6 +986,7 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func deleteCredentialLocally() {
     guard lifecycle.isForeground(), !busy else { return }
+    desktopNotifications = .unobserved
     run(
       epoch: lifecycle.capture(),
       successMessage: "端末内資格を削除し、非権威の回復記録を保存・再読込しました。Desktop失効は未確認です。",
@@ -1031,6 +1073,7 @@ final class DeviceLinkViewModel: ObservableObject {
     deviceID = state.deviceID
     paired = state.credential != nil
     credentialExpired = state.credential?.isExpired() ?? false
+    if !paired || credentialExpired { desktopNotifications = .unobserved }
     recoveryAuditCount = state.recoveryAudit.count
     pendingTaskSessionID = state.pendingTaskSessionID
     taskSubmissionNeedsReconciliation = state.pendingTaskSessionID != nil

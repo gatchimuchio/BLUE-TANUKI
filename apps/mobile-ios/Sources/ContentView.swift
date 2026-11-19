@@ -139,6 +139,7 @@ struct ContentView: View {
 
           if model.paired {
             mobileTaskSection
+            desktopNotificationSection
           }
 
           GroupBox("権限と通信") {
@@ -183,6 +184,35 @@ struct ContentView: View {
           Color.black.ignoresSafeArea()
         }
       }
+    }
+  }
+
+  private var desktopNotificationSection: some View {
+    GroupBox("Desktop通知") {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Desktop全体の直近最大\(DesktopNotificationSummary.maximumEntries)件の通知概要です。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+        Button("通知を更新") { model.refreshDesktopNotifications() }
+          .disabled(model.busy || model.credentialExpired || scenePhase != .active)
+          .accessibilityIdentifier("desktop-notification-refresh")
+        switch model.desktopNotifications {
+        case .unobserved:
+          Text("Desktop通知は未確認です。")
+        case .reading:
+          ProgressView("Desktop通知を確認しています。")
+        case .unavailable:
+          Text("Desktop通知を確認できません。")
+        case .observed(let summary):
+          Text("件数 \(summary.entries.count)／未読 \(summary.unreadCount)／重大 \(summary.criticalCount)")
+          ForEach(summary.entries.indices, id: \.self) { index in
+            let entry = summary.entries[index]
+            Text("\(entry.source.label)・\(entry.severity.label)・\(entry.unread ? "未読" : "既読")")
+              .font(.footnote)
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 

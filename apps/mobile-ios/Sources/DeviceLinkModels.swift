@@ -342,6 +342,110 @@ struct DeviceLinkCredential: Equatable {
   }
 }
 
+struct DesktopNotificationSummary: Equatable {
+  static let operation = "通知一覧"
+  static let maximumEntries = 16
+
+  enum Source: String {
+    case runtime = "Runtime", task = "Task", permission = "Permission", approval = "Approval"
+    case audit = "Audit", recovery = "Recovery", device = "Device", mcp = "MCP", a2a = "A2A"
+    case update = "Update", evaluation = "Evaluation"
+
+    var label: String {
+      switch self {
+      case .runtime: return "実行系"
+      case .task: return "仕事"
+      case .permission: return "許可"
+      case .approval: return "承認"
+      case .audit: return "監査"
+      case .recovery: return "復旧"
+      case .device: return "端末"
+      case .mcp: return "MCP"
+      case .a2a: return "A2A"
+      case .update: return "更新"
+      case .evaluation: return "評価"
+      }
+    }
+  }
+
+  enum Severity: String {
+    case info, warning, error, critical
+
+    var label: String {
+      switch self {
+      case .info: return "情報"
+      case .warning: return "注意"
+      case .error: return "エラー"
+      case .critical: return "重大"
+      }
+    }
+  }
+
+  struct Entry: Equatable {
+    let source: Source
+    let severity: Severity
+    let unread: Bool
+  }
+
+  let entries: [Entry]
+  let unreadCount: Int
+  let criticalCount: Int
+
+  static func read(_ body: [String: Any]) throws -> Self {
+    guard DeviceLinkJSON.exactKeys(body, [
+      "版", "通知一覧", "件数", "未読件数", "重大件数", "証拠種別", "表示範囲", "権限生成", "操作",
+    ]), DeviceLinkJSON.integer(body["版"]) == 1,
+      DeviceLinkJSON.string(body["証拠種別"]) == "INTERNAL_STATE",
+      DeviceLinkJSON.string(body["表示範囲"]) == "summary",
+      DeviceLinkJSON.string(body["権限生成"]) == "なし",
+      DeviceLinkJSON.string(body["操作"]) == "navigation_only",
+      let rows = body["通知一覧"] as? [[String: Any]], rows.count <= maximumEntries,
+      DeviceLinkJSON.integer(body["件数"]) == Int64(rows.count) else {
+      throw DeviceLinkFailure.invalid
+    }
+    var seen = Set<String>()
+    let entries: [Entry] = try rows.map { row in
+      guard DeviceLinkJSON.exactKeys(row, [
+        "版", "通知ID", "source", "severity", "タイトル", "概要", "作成順", "関連監査ID", "関連監査hash",
+        "遷移先", "状態", "通知hash", "表示範囲", "権限生成",
+      ]), DeviceLinkJSON.integer(row["版"]) == 1,
+        DeviceLinkJSON.string(row["表示範囲"]) == "summary",
+        DeviceLinkJSON.string(row["権限生成"]) == "なし",
+        let order = DeviceLinkJSON.integer(row["作成順"]), order > 0,
+        let id = DeviceLinkJSON.string(row["通知ID"]),
+        id.range(of: #"^notification-broker-audit-[1-9][0-9]*\z"#, options: .regularExpression) != nil,
+        seen.insert(id).inserted,
+        validText(row["タイトル"], maximumLength: 128), validText(row["概要"], maximumLength: 512),
+        validText(row["関連監査ID"], maximumLength: 128), validHash(row["関連監査hash"]), validHash(row["通知hash"]),
+        let destination = DeviceLinkJSON.string(row["遷移先"]),
+        ["dashboard", "approval", "permission", "runtime", "audit", "recovery", "device", "agent", "settings", "evaluation"].contains(destination),
+        let sourceName = DeviceLinkJSON.string(row["source"]), let source = Source(rawValue: sourceName),
+        let severityName = DeviceLinkJSON.string(row["severity"]), let severity = Severity(rawValue: severityName),
+        let state = DeviceLinkJSON.string(row["状態"]), ["unread", "read"].contains(state) else {
+        throw DeviceLinkFailure.invalid
+      }
+      return Entry(source: source, severity: severity, unread: state == "unread")
+    }
+    let unreadCount = entries.filter(\.unread).count
+    let criticalCount = entries.filter { $0.severity == .critical }.count
+    guard DeviceLinkJSON.integer(body["未読件数"]) == Int64(unreadCount),
+          DeviceLinkJSON.integer(body["重大件数"]) == Int64(criticalCount) else {
+      throw DeviceLinkFailure.invalid
+    }
+    return Self(entries: entries, unreadCount: unreadCount, criticalCount: criticalCount)
+  }
+
+  private static func validText(_ value: Any?, maximumLength: Int) -> Bool {
+    guard let text = DeviceLinkJSON.string(value) else { return false }
+    return !text.isEmpty && text.unicodeScalars.count <= maximumLength
+  }
+
+  private static func validHash(_ value: Any?) -> Bool {
+    guard let text = DeviceLinkJSON.string(value), text.hasPrefix("sha256:") else { return false }
+    return DeviceLinkJSON.isHex(String(text.dropFirst(7)), length: 64)
+  }
+}
+
 enum DeviceLinkProtocol {
   static let evidenceSources: Set<String> = [
     "LIVE_RUNTIME", "INTERNAL_STATE", "CONFIG", "EXTERNAL_EVIDENCE", "FIXTURE",

@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
 import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
@@ -48,6 +49,7 @@ public final class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicLong generation = new AtomicLong();
+    private final AtomicLong notificationForegroundEpoch = new AtomicLong();
     private final DeviceLinkTransport transport = new DeviceLinkTransport();
 
     private AndroidCredentialStore credentialStore;
@@ -78,6 +80,8 @@ public final class MainActivity extends Activity {
     private Button refreshCatalogButton;
     private Button refreshRequestsButton;
     private Button taskNotificationsButton;
+    private Button refreshDesktopNotificationsButton;
+    private TextView desktopNotificationsView;
     private Button refreshMcpButton;
     private Button submitTaskButton;
     private LinearLayout taskListContainer;
@@ -100,6 +104,8 @@ public final class MainActivity extends Activity {
     private volatile boolean credentialStateUncertain;
     private boolean recoveryAuditUnavailable;
     private volatile boolean foreground;
+    private volatile boolean notificationForeground;
+    private boolean desktopNotificationsInFlight;
     private volatile boolean busy;
     private volatile boolean pairingInFlight;
     private volatile boolean disconnectInFlight;
@@ -134,10 +140,21 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         foreground = true;
+        notificationForeground = true;
         refreshOwnedTaskRequestsAfterForeground = true;
         loadTaskCheckpoint();
         verifyStoredCredential();
         refreshTaskControls();
+    }
+
+    @Override
+    protected void onPause() {
+        notificationForeground = false;
+        notificationForegroundEpoch.incrementAndGet();
+        clearDesktopNotifications();
+        refreshDesktopNotificationsButton.setEnabled(false);
+        if (desktopNotificationsInFlight) transport.closeActive();
+        super.onPause();
     }
 
     @Override
@@ -303,6 +320,7 @@ public final class MainActivity extends Activity {
         content.addView(pairButton, matchWrap());
 
         addMobileTaskSection(content);
+        addDesktopNotificationsSection(content);
 
         TextView linkRecoveryHeading = section("端末連携の解除と回復");
         content.addView(linkRecoveryHeading, matchWrap());
@@ -333,6 +351,25 @@ public final class MainActivity extends Activity {
         content.addView(boundary, matchWrap());
 
         return scroll;
+    }
+
+    private void addDesktopNotificationsSection(LinearLayout content) {
+        content.addView(section("Desktop通知"), matchWrap());
+        TextView help = new TextView(this);
+        help.setText("Desktop全体の通知概要です。直近" + DesktopNotificationSummary.MAX_NOTIFICATIONS + "件までを表示します。");
+        help.setTextSize(14);
+        content.addView(help, matchWrap());
+
+        refreshDesktopNotificationsButton = new Button(this);
+        refreshDesktopNotificationsButton.setText("通知を更新");
+        refreshDesktopNotificationsButton.setOnClickListener(view -> refreshDesktopNotifications());
+        content.addView(refreshDesktopNotificationsButton, matchWrap());
+
+        desktopNotificationsView = new TextView(this);
+        desktopNotificationsView.setTextSize(14);
+        desktopNotificationsView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        clearDesktopNotifications();
+        content.addView(desktopNotificationsView, matchWrap());
     }
 
     private void addMobileTaskSection(LinearLayout content) {
@@ -526,6 +563,7 @@ public final class MainActivity extends Activity {
         if (!foreground || busy) {
             return;
         }
+        clearDesktopNotifications();
         if (credentialStateUncertain) {
             refreshOwnedTaskRequestsAfterForeground = false;
             refreshCredentialControls(credentialStore.contains());
@@ -650,6 +688,7 @@ public final class MainActivity extends Activity {
         }
         busy = true;
         disconnectInFlight = true;
+        clearDesktopNotifications();
         refreshCredentialControls(true);
         setStatus("Desktopへ端末離脱を送信しています。応答不明時は自動再送しません。");
         long operationGeneration = generation.get();
@@ -736,6 +775,7 @@ public final class MainActivity extends Activity {
         }
         busy = true;
         localDeleteInFlight = true;
+        clearDesktopNotifications();
         refreshCredentialControls(true);
         setStatus("端末内資格の削除と回復記録を同じ保護領域へ保存しています。");
         long operationGeneration = generation.get();
@@ -784,6 +824,11 @@ public final class MainActivity extends Activity {
         }
         if (localDeleteButton != null) {
             localDeleteButton.setEnabled(ready && credentialPresent && !recoveryAuditUnavailable);
+        }
+        if (refreshDesktopNotificationsButton != null) {
+            boolean available = usableCredential && !credentialStateUncertain && hasLocalNetworkPermission();
+            refreshDesktopNotificationsButton.setEnabled(ready && available && notificationForeground);
+            if (!available) clearDesktopNotifications();
         }
         refreshTaskControls();
         boolean pendingTaskState = taskSubmissionNeedsReconciliation || taskStateUncertain ||
@@ -1098,6 +1143,57 @@ public final class MainActivity extends Activity {
                             ? "登録Workspaceがありません。DesktopでWorkspaceを登録してください。"
                             : "Desktopの作業先を読み込みました。申請はDesktop ownerの確認待ちになります。";
                 });
+    }
+
+    private void refreshDesktopNotifications() {
+        if (!notificationForeground || busy || credentialStateUncertain || !hasLocalNetworkPermission()) return;
+        final DeviceCredential credential;
+        try {
+            credential = credentialStore.read();
+        } catch (AndroidCredentialStore.CredentialStoreException ignored) {
+            credentialStateUncertain = true;
+            refreshCredentialControls(credentialStore.contains());
+            return;
+        }
+        if (credential == null || credential.expiresAt <= System.currentTimeMillis() / 1000L) {
+            refreshCredentialControls(credential != null);
+            return;
+        }
+        long operationGeneration = generation.get();
+        long foregroundEpoch = notificationForegroundEpoch.get();
+        DeviceLinkTransport.SendGuard sendGuard = () -> notificationForeground && canSend(operationGeneration) &&
+                foregroundEpoch == notificationForegroundEpoch.get() &&
+                credential.expiresAt > System.currentTimeMillis() / 1000L;
+        busy = true;
+        desktopNotificationsInFlight = true;
+        refreshCredentialControls(true);
+        desktopNotificationsView.setText("Desktop通知を確認しています。");
+        worker.execute(() -> {
+            DesktopNotificationSummary summary = null;
+            try {
+                DesktopNotificationSummary observed = DesktopNotificationSummary.parse(transport.notifications(credential, sendGuard));
+                if (sendGuard.canSend() && credential.sameValue(credentialStore.read())) summary = observed;
+            } catch (Exception ignored) {
+                // Reject or lose the observation without displaying details or resending.
+            }
+            DesktopNotificationSummary result = summary;
+            mainHandler.post(() -> {
+                desktopNotificationsInFlight = false;
+                busy = false;
+                if (sendGuard.canSend() && hasLocalNetworkPermission()) {
+                    if (result == null) desktopNotificationsView.setText("Desktop通知を確認できません。");
+                    else desktopNotificationsView.setText(result.displayText());
+                } else {
+                    clearDesktopNotifications();
+                }
+                refreshCredentialControls(credentialStore.contains());
+                continueForegroundCredentialCheckAfterTaskOperation();
+            });
+        });
+    }
+
+    private void clearDesktopNotifications() {
+        if (desktopNotificationsView != null) desktopNotificationsView.setText("Desktop通知は未確認です。");
     }
 
     private void refreshOwnedTaskRequests() {

@@ -451,24 +451,36 @@ describe("runDoctor — happy paths", () => {
     });
   });
 
-  it("accepts configured read-only Google Daily Brief source", async () => {
-    const r = await runDoctor({
-      env: {
-        ...baseEnv(),
-        BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
-        BLUE_TANUKI_DAILY_BRIEF_TARGET: "local-user",
-        BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
-        BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: "gmail,calendar,drive",
-        GOOGLE_ACCESS_TOKEN: "google-read-token",
-      },
-      probe_port: false,
-      node_version: "22.14.0",
-    });
-    expect(r.ok).toBe(true);
-    expect(r.checks.find((c) => c.id === "google_daily_brief_source")).toMatchObject({
-      level: "ok",
-      detail: "enabled services=gmail,calendar,drive token_status=present read_only=true",
-    });
+  it("reports a configured Google Daily Brief source held until authorized acquisition is wired", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "blue-tanuki-doctor-daily-hold-"));
+    try {
+      await writeDistributionFixture(root);
+      const r = await runDoctor({
+        env: {
+          ...baseEnv(),
+          BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
+          BLUE_TANUKI_DAILY_BRIEF_TARGET: "local-user",
+          BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
+          BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: "gmail,calendar,drive",
+          GOOGLE_ACCESS_TOKEN: "google-read-token",
+          BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: "static-reminder", channel: "webchat",
+            target: "local-user", content: "synthetic static reminder" }]),
+        },
+        distribution_root: root,
+        probe_port: false,
+        node_version: "22.14.0",
+      });
+      expect(r.ok, JSON.stringify(r.checks.filter((check) => check.level === "error"))).toBe(true);
+      expect(r.checks.find((c) => c.id === "google_daily_brief_source")).toMatchObject({
+        level: "warn",
+        detail: "保留。JとBrokerを経由する定期取得は未接続です。設定済みサービス gmail,calendar,drive",
+      });
+      expect(r.checks.find((c) => c.id === "cron_schedules")).toMatchObject({
+        level: "ok", detail: "2 configured (1 enabled, 1 held)",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("accepts a custom LLM backend registered by LLM_PROVIDERS_JSON", async () => {

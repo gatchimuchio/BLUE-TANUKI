@@ -53,7 +53,60 @@ struct PendingTaskMutationTests {
       throw SmokeFailure(label: "cancellation accepted missing task ID")
     } catch DeviceLinkFailure.invalid {}
     try listRefresh(credential: desktop, pending: cancellation)
+    try desktopNotifications()
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func desktopNotifications() throws {
+    func row(_ order: Int, source: String, severity: String, state: String) -> [String: Any] {
+      [
+        "版": 1, "通知ID": "notification-broker-audit-\(order)", "source": source, "severity": severity,
+        "タイトル": "fixture title suppressed", "概要": "fixture body suppressed", "作成順": order,
+        "関連監査ID": "broker-audit-\(order)", "関連監査hash": instructionHash, "遷移先": "approval",
+        "状態": state, "通知hash": instructionHash, "表示範囲": "summary", "権限生成": "なし",
+      ]
+    }
+    let rows = [row(4, source: "Approval", severity: "critical", state: "unread"),
+                row(3, source: "Task", severity: "info", state: "read")]
+    let body: [String: Any] = [
+      "版": 1, "通知一覧": rows, "件数": 2, "未読件数": 1, "重大件数": 1,
+      "証拠種別": "INTERNAL_STATE", "表示範囲": "summary", "権限生成": "なし", "操作": "navigation_only",
+    ]
+    let summary = try DesktopNotificationSummary.read(body)
+    try check(summary.entries == [.init(source: .approval, severity: .critical, unread: true),
+                                  .init(source: .task, severity: .info, unread: false)] &&
+              summary.unreadCount == 1 && summary.criticalCount == 1,
+              "retain only bounded notification categories, severity, and read state")
+    var empty = body
+    empty["通知一覧"] = [[String: Any]]()
+    for key in ["件数", "未読件数", "重大件数"] { empty[key] = 0 }
+    let emptySummary = try DesktopNotificationSummary.read(empty)
+    try check(emptySummary.entries.isEmpty, "empty authenticated list is observed")
+
+    var oversized = empty
+    let tooMany = DesktopNotificationSummary.maximumEntries + 1
+    oversized["通知一覧"] = (1...tooMany).map { row($0, source: "Task", severity: "info", state: "read") }
+    oversized["件数"] = tooMany
+    do {
+      _ = try DesktopNotificationSummary.read(oversized)
+      throw SmokeFailure(label: "list exceeded requested entry limit")
+    } catch DeviceLinkFailure.invalid {}
+
+    var extra = rows[0]
+    extra["approval_token"] = "synthetic discarded token"
+    let mismatches: [(String, Any)] = [
+      ("証拠種別", "LIVE_RUNTIME"), ("権限生成", "付与"), ("操作", "execute"), ("未読件数", 0), ("件数", true),
+      ("通知一覧", [extra, rows[1]]), ("通知一覧", [rows[0], rows[0]]),
+      ("通知一覧", [row(4, source: "unknown", severity: "critical", state: "unread"), rows[1]]),
+    ]
+    for (key, value) in mismatches {
+      var altered = body
+      altered[key] = value
+      do {
+        _ = try DesktopNotificationSummary.read(altered)
+        throw SmokeFailure(label: "invalid notification response was accepted for \(key)")
+      } catch DeviceLinkFailure.invalid {}
+    }
   }
 
   private static func listRefresh(credential: DeviceLinkCredential, pending: PendingMobileTaskMutation) throws {

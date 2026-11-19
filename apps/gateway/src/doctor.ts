@@ -16,7 +16,7 @@ import {
   listConfiguredLLMProviders,
 } from "./llm_config.js";
 import { cronSchedulesFromEnv } from "./cron_channel.js";
-import { parseGoogleServices } from "./google_daily_brief.js";
+import { googleDailyBriefSourceConfigured, parseGoogleServices } from "./google_daily_brief.js";
 import { remediationFor } from "./doctor_remediation.js";
 import { BLUE_TANUKI_SECRET_KEYS, hasSecretMaterial, type BlueTanukiSecretKey } from "./secret_store.js";
 
@@ -917,14 +917,15 @@ async function checkAuditDir(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
 function checkCronSchedules(env: NodeJS.ProcessEnv): CheckDraft {
   try {
     const tasks = cronSchedulesFromEnv(env);
-    const enabled = tasks.filter((task) => task.enabled !== false).length;
+    const enabled = tasks.filter((task) => task.enabled !== false && !task.content_source_hold).length;
+    const held = tasks.filter((task) => task.enabled !== false && task.content_source_hold).length;
     return {
       id: "cron_schedules",
       level: "ok",
       label: "cron schedules",
       detail: tasks.length === 0
         ? "none configured"
-        : `${tasks.length} configured (${enabled} enabled)`,
+        : `${tasks.length} configured (${enabled} enabled${held ? `, ${held} held` : ""})`,
     };
   } catch (e) {
     return {
@@ -937,8 +938,7 @@ function checkCronSchedules(env: NodeJS.ProcessEnv): CheckDraft {
 }
 
 function checkGoogleDailyBriefSource(env: NodeJS.ProcessEnv): CheckDraft {
-  const sourceEnabled = truthyEnv(env.BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED);
-  if (!sourceEnabled) {
+  if (!googleDailyBriefSourceConfigured(env)) {
     return {
       id: "google_daily_brief_source",
       level: "ok",
@@ -981,9 +981,9 @@ function checkGoogleDailyBriefSource(env: NodeJS.ProcessEnv): CheckDraft {
   }
   return {
     id: "google_daily_brief_source",
-    level: "ok",
+    level: "warn",
     label: "Google Daily Brief source",
-    detail: `enabled services=${services.join(",")} token_status=present read_only=true`,
+    detail: `保留。JとBrokerを経由する定期取得は未接続です。設定済みサービス ${services.join(",")}`,
   };
 }
 

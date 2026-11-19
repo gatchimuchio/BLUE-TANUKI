@@ -2080,6 +2080,37 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
   });
 
+  it("shows the held Google Daily Brief beside independently running schedules", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function renderSchedules(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function operationCoreRiskTone(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const rendered: Record<string, string> = {};
+    const run = new Script(`
+      function byId() { return {}; }
+      function setText(id, value) { output[id] = String(value); }
+      function setHtml(id, value) { output[id] = value; }
+      function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+      function compactJson(value) { return JSON.stringify(value); }
+      function redactRuntimeValue(value) { return value; }
+      function badge(value) { return String(value); }
+      function formatDate() { return ""; }
+      function formatInterval() { return ""; }
+      function escapeHtml(value) { return String(value); }
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      renderSchedules(snapshot);
+    `);
+    run.runInNewContext({ output: rendered, snapshot: {
+      runtime_schedules: [{ id: "static-reminder", status: "active" }],
+      scheduled_tasks: [{ id: "daily_brief", enabled: true, running: false,
+        content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false }],
+    } });
+    expect(rendered["runtime-schedule-list"]).toContain("static-reminder");
+    expect(rendered["runtime-schedule-list"]).toContain("daily_brief");
+    expect(rendered["runtime-schedule-list"]).toContain("保留");
+    expect(rendered["runtime-schedule-list"]).toContain("Googleの定期取得は未接続です。");
+  });
+
   it("renders task-purpose relation review against its queued digests without treating it as execution authority", async () => {
     const commandId = "relation-command";
     const commandDigest = "c".repeat(64);

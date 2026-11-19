@@ -67,7 +67,18 @@ final class DeviceLinkTransport {
 
     Exchange taskOperation(DeviceCredential credential, String operation, Map<String, Object> content,
                            SendGuard canSend) throws TransportException {
-        if (credential == null || content == null || !TASK_OPERATIONS.contains(operation) ||
+        if (!TASK_OPERATIONS.contains(operation)) throw new TransportException(false);
+        return authenticatedOperation(credential, operation, content, canSend);
+    }
+
+    Exchange notifications(DeviceCredential credential, SendGuard canSend) throws TransportException {
+        return authenticatedOperation(credential, DesktopNotificationSummary.OPERATION,
+                DesktopNotificationSummary.request(), canSend);
+    }
+
+    private Exchange authenticatedOperation(DeviceCredential credential, String operation, Map<String, Object> content,
+                                               SendGuard canSend) throws TransportException {
+        if (credential == null || content == null ||
                 credential.expiresAt <= System.currentTimeMillis() / 1000L ||
                 canSend == null || !canSend.canSend()) {
             throw new TransportException(false);

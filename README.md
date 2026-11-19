@@ -216,7 +216,7 @@ Inbound channel / cron / webhook-like source
 - [CLAIM.md](CLAIM.md) — product claim / non-claim 境界
 - [SECURITY.md](SECURITY.md) — authority と memory の security model
 - [AUDIT.md](AUDIT.md) — hash-chain audit と runtime snapshot
-- [CONFIG.md](CONFIG.md) — environment variables
+- 環境変数の設定例。現行の開発版では、`BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED=1` にした定期ブリーフは保留になります。固定文の定期ブリーフを使う場合は、Google連携フラグを無効にしてGatewayを再起動してください。 [設定例](CONFIG.md) [現行の動作](docs/開発進捗.md)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 運用上の復旧
 - [docs/INDEX.md](docs/INDEX.md) — 文書索引
 - [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) — support / preview / reserved / not-shipped

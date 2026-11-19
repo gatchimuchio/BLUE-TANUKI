@@ -223,7 +223,6 @@ import { CronSchedulerChannel, cronRestoreObservationRequiresHold, cronSchedules
 import { GatewayCronEventStore } from "./cron_event_store.js";
 import { createCronEventResultReceipt } from "./cron_event_result_receipt.js";
 import { createCronEventResolutionTool } from "./cron_event_resolution_tool.js";
-import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
   RuntimeScheduleManager,
   runtimeScheduleMutationCommand,
@@ -1616,7 +1615,6 @@ async function serveWithOwnerLease(
   const cron = new CronSchedulerChannel({
     tasks: [...cronTasks, ...runtimeSchedules.activeCronTasks()],
     log: (line: string) => cronLog.info(line),
-    content_provider: googleDailyBriefProviderFromEnv(process.env),
     event_store: cronEventStore,
     onFire: (task, event, delegation) => {
       hds.onScheduleLifecycle("schedule.lifecycle.fired", {

@@ -2509,7 +2509,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("schedule-summary", String(displayActive) + " active / " + String(displayPending) + " pending");
         byId("schedule-summary").className = "badge " + (displayPending > 0 ? "review" : "good");
 
-        const rows = runtimeSchedules.length > 0 ? runtimeSchedules : configuredTasks;
+        const heldSources = configuredTasks.filter(function (item) {
+          return isObject(item) && item.content_source_hold === "google_authorized_acquisition_not_wired" &&
+            item.used_for_authority === false;
+        });
+        const rows = runtimeSchedules.length > 0 ? runtimeSchedules.concat(heldSources) : configuredTasks;
         if (rows.length === 0) {
           setHtml("runtime-schedule-list", '<div class="schedule-item muted">no runtime schedules</div>');
         } else {
@@ -2517,7 +2521,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "runtime-schedule-list",
             rows
               .map(function (item) {
-                const status = item.status || (item.enabled === false ? "disabled" : "active");
+                const sourceHeld = heldSources.includes(item);
+                const status = sourceHeld ? "保留" : item.status || (item.enabled === false ? "disabled" : "active");
                 const tone = status === "active" ? "good" : status === "pending" ? "review" : status === "rejected" ? "bad" : "warn";
                 const pending = item.pending_operation ? badge(item.pending_operation, "review") : badge("none", "good");
                 const fields = [
@@ -2533,6 +2538,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   ["expires", formatDate(item.approval_expires_at_ms), false],
                   ["payload", item.payload_hash || "not recorded", false]
                 ];
+                if (sourceHeld) fields.push(["取得元", "Googleの定期取得は未接続です。", false]);
                 return '<article class="schedule-item"><dl class="kv">' +
                   fields
                     .map(function (field) {

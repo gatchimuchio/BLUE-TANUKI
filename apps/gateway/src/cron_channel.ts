@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   createGatewayInternalInboundRequest,
-  metadataKeyReservedForInternalAuthority,
   type GatewayInternalAuthorityMetadata,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
@@ -13,6 +12,9 @@ import {
   type GatewayCronEventStore,
 } from "./cron_event_store.js";
 import type { CronEventResultReceipt } from "./cron_event_result_receipt.js";
+import { googleDailyBriefSourceConfigured } from "./google_daily_brief.js";
+
+type CronContentSourceHold = "google_authorized_acquisition_not_wired";
 
 export interface CronTaskOptions {
   id: string;
@@ -28,9 +30,10 @@ export interface CronTaskOptions {
   time_zone?: string;
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
-  /** Stable schedule-version digest; the durable event claim is recorded before dynamic content resolution. */
+  /** Stable schedule-version digest for the durable occurrence claim. */
   payload_hash?: string;
   delegation?: RuntimeScheduleDelegation;
+  content_source_hold?: CronContentSourceHold;
 }
 
 export interface CronSchedulerOptions {
@@ -39,7 +42,6 @@ export interface CronSchedulerOptions {
   now?: () => Date;
   onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
   onHandlerReturned?: (event: CronEventIdentity) => CronEventResultReceipt;
-  content_provider?: CronContentProvider;
   event_store?: GatewayCronEventStore;
 }
 
@@ -54,6 +56,7 @@ export interface DailyBriefCronOptions {
   time_zone?: string;
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
+  content_source_hold?: CronContentSourceHold;
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -73,6 +76,8 @@ export interface CronTaskSnapshot {
   next_fire_at_ms: number | null;
   last_fire_at_ms: number | null;
   recovery_hold: "restore_observation_unverified" | null;
+  content_source_hold?: CronContentSourceHold;
+  used_for_authority?: false;
 }
 
 export function cronRestoreObservationRequiresHold(observation: {
@@ -93,27 +98,6 @@ export function cronRestoreObservationRequiresHold(observation: {
 
 export type DailyBriefCronSnapshot = CronTaskSnapshot;
 
-export interface CronContentProviderTask {
-  id: string;
-  name: "daily_brief" | "scheduled_message";
-  origin: "boot" | "runtime";
-  channel: string;
-  target: string;
-  content: string;
-  time: string;
-  time_zone?: string;
-  interval_ms?: number;
-}
-
-export interface CronContentProviderResult {
-  content: string;
-  metadata?: Record<string, string>;
-}
-
-export type CronContentProvider = (
-  task: CronContentProviderTask,
-) => Promise<CronContentProviderResult | string | null | undefined>;
-
 interface NormalizedCronTask {
   id: string;
   name: "daily_brief" | "scheduled_message";
@@ -127,6 +111,7 @@ interface NormalizedCronTask {
   interval_ms?: number;
   payload_hash: string;
   delegation?: RuntimeScheduleDelegation;
+  content_source_hold?: CronContentSourceHold;
 }
 
 interface CronTaskRuntime {
@@ -160,7 +145,6 @@ export class CronSchedulerChannel implements InboundChannel {
   private handler: InboundHandler | null = null;
   private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
   private readonly onHandlerReturned?: (event: CronEventIdentity) => CronEventResultReceipt;
-  private readonly contentProvider?: CronContentProvider;
   private readonly eventStore?: GatewayCronEventStore;
   private recoveryHold: CronTaskSnapshot["recovery_hold"] = null;
   private recoveryRestorePause: { readonly handler: InboundHandler | null } | null = null;
@@ -171,7 +155,6 @@ export class CronSchedulerChannel implements InboundChannel {
     this.nowFn = opts.now;
     this.onFire = opts.onFire;
     this.onHandlerReturned = opts.onHandlerReturned;
-    this.contentProvider = opts.content_provider;
     this.eventStore = opts.event_store;
     for (const task of normalizeCronTasks(opts.tasks)) {
       this.runtimes.set(task.id, createRuntime(task));
@@ -192,6 +175,10 @@ export class CronSchedulerChannel implements InboundChannel {
     for (const runtime of this.runtimes.values()) {
       if (!runtime.task.enabled) {
         this.log(`[cron] task disabled id=${runtime.task.id}`);
+        continue;
+      }
+      if (runtime.task.content_source_hold) {
+        this.log(`[cron] task held id=${runtime.task.id} reason=${runtime.task.content_source_hold}`);
         continue;
       }
       active += 1;
@@ -242,22 +229,7 @@ export class CronSchedulerChannel implements InboundChannel {
   }
 
   snapshot(): CronTaskSnapshot[] {
-    return Array.from(this.runtimes.values()).map((runtime) => ({
-      id: runtime.task.id,
-      name: runtime.task.name,
-      origin: runtime.task.origin,
-      enabled: runtime.task.enabled,
-      running: runtime.running,
-      channel: runtime.task.channel,
-      target: runtime.task.target,
-      time: runtime.task.time,
-      time_zone: runtime.scheduledTimeZone ?? runtime.task.time_zone,
-      interval_ms: runtime.task.interval_ms,
-      payload_hash: runtime.task.payload_hash,
-      next_fire_at_ms: runtime.nextFireAtMs,
-      last_fire_at_ms: runtime.lastFireAtMs,
-      recovery_hold: this.recoveryHold,
-    }));
+    return Array.from(this.runtimes.values()).map((runtime) => this.snapshotForRuntime(runtime));
   }
 
   isEventInFlight(event_id: string): boolean {
@@ -271,7 +243,7 @@ export class CronSchedulerChannel implements InboundChannel {
     if (existing) this.stopRuntime(existing);
     const runtime = createRuntime(normalized);
     this.runtimes.set(normalized.id, runtime);
-    if (this.started && !this.recoveryHold && normalized.enabled && this.handler) {
+    if (this.started && !this.recoveryHold && normalized.enabled && !normalized.content_source_hold && this.handler) {
       this.scheduleTask(runtime, this.handler);
     }
     return this.snapshotForRuntime(runtime);
@@ -370,9 +342,7 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
-    // Persist the scheduled occurrence before invoking a dynamic content provider.
-    // The cursor binds the occurrence to this schedule version; resolved content
-    // remains separately hashed for the J/runtime request below.
+    // Bind the durable occurrence to its schedule version before handing the configured content to J.
     const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, task.payload_hash);
     const eventStore = this.eventStore;
     if (!eventStore) {
@@ -387,9 +357,7 @@ export class CronSchedulerChannel implements InboundChannel {
     runtime.lastFireAtMs = scheduledAtMs;
     this.inFlightEventIds.add(event.event_id);
     try {
-      const resolved = await this.resolveContent(task, runtime.scheduledTimeZone ?? task.time_zone);
-      const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
-      const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
+      const payloadHash = cronPayloadHash(task);
       try {
         this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event, task.delegation);
       } catch (error) {
@@ -397,7 +365,6 @@ export class CronSchedulerChannel implements InboundChannel {
         throw error;
       }
       const metadata: GatewayInternalAuthorityMetadata = {
-        ...resolvedMetadata,
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.actor_kind": "cron",
         "blue_tanuki.trust_level": "trusted",
@@ -414,16 +381,16 @@ export class CronSchedulerChannel implements InboundChannel {
         "blue_tanuki.cron.event_source": event.source,
         "blue_tanuki.cron.event_id": event.event_id,
         "blue_tanuki.cron.event_sequence": String(event.sequence),
-        "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
+        "blue_tanuki.cron.content_source": "static",
         "blue_tanuki.channel_send.channel": task.channel,
         "blue_tanuki.channel_send.target": task.target,
-        "blue_tanuki.channel_send.content": resolved.content,
+        "blue_tanuki.channel_send.content": task.content,
       };
       const inbound: InboundRequest = createGatewayInternalInboundRequest({
         id: event.event_id,
         channel: "cron",
         user: "blue-tanuki-cron",
-        content: resolved.content,
+        content: task.content,
         timestamp: runtime.lastFireAtMs,
         session_id: cronTaskSessionId(task),
         metadata,
@@ -454,51 +421,6 @@ export class CronSchedulerChannel implements InboundChannel {
     return this.now().getTime();
   }
 
-  private async resolveContent(task: NormalizedCronTask, timeZone?: string): Promise<CronContentProviderResult> {
-    if (!this.contentProvider) {
-      return { content: task.content, metadata: { "blue_tanuki.cron.content_source": "static" } };
-    }
-    try {
-      const resolved = await this.contentProvider({
-        id: task.id,
-        name: task.name,
-        origin: task.origin,
-        channel: task.channel,
-        target: task.target,
-        content: task.content,
-        time: task.time,
-        time_zone: timeZone,
-        interval_ms: task.interval_ms,
-      });
-      if (resolved === null || resolved === undefined) {
-        return { content: task.content, metadata: { "blue_tanuki.cron.content_source": "static" } };
-      }
-      if (typeof resolved === "string") {
-        return {
-          content: requireTrimmed(resolved, `cron task ${task.id} resolved content`),
-          metadata: { "blue_tanuki.cron.content_source": "dynamic" },
-        };
-      }
-      return {
-        content: requireTrimmed(resolved.content, `cron task ${task.id} resolved content`),
-        metadata: {
-          "blue_tanuki.cron.content_source": "dynamic",
-          ...(resolved.metadata ?? {}),
-        },
-      };
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      this.log(`[cron] content provider failed id=${task.id} reason=${truncateMetadata(message)}`);
-      const label = task.name === "daily_brief" ? "Daily Brief" : "Scheduled message";
-      return {
-        content: `${label}: source unavailable; reason=${truncateMetadata(message)}; mutation_sent=false; safe_to_ignore=false`,
-        metadata: {
-          "blue_tanuki.cron.content_source": "provider_error",
-        },
-      };
-    }
-  }
-
   private stopRuntime(runtime: CronTaskRuntime): void {
     if (runtime.timer) clearTimeout(runtime.timer);
     runtime.timer = null;
@@ -522,17 +444,12 @@ export class CronSchedulerChannel implements InboundChannel {
       next_fire_at_ms: runtime.nextFireAtMs,
       last_fire_at_ms: runtime.lastFireAtMs,
       recovery_hold: this.recoveryHold,
+      ...(runtime.task.content_source_hold ? {
+        content_source_hold: runtime.task.content_source_hold,
+        used_for_authority: false as const,
+      } : {}),
     };
   }
-}
-
-function safeCronProviderMetadata(metadata: Record<string, string>): Record<string, string> {
-  const safe: Record<string, string> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (metadataKeyReservedForInternalAuthority(key)) continue;
-    safe[key.normalize("NFKC").trim()] = value.normalize("NFKC");
-  }
-  return safe;
 }
 
 export class DailyBriefCronChannel implements InboundChannel {
@@ -576,6 +493,7 @@ export function dailyBriefCronFromEnv(env: Record<string, string | undefined> = 
     time: env.BLUE_TANUKI_DAILY_BRIEF_TIME ?? "07:00",
     time_zone: env.BLUE_TANUKI_DAILY_BRIEF_TIME_ZONE,
     interval_ms: parsePositiveInt(env.BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS),
+    ...(googleDailyBriefSourceConfigured(env) ? { content_source_hold: "google_authorized_acquisition_not_wired" } : {}),
   };
 }
 
@@ -604,6 +522,7 @@ function dailyBriefTaskFromOptions(opts: DailyBriefCronOptions): CronTaskOptions
     time: opts.time ?? "07:00",
     time_zone: opts.time_zone,
     interval_ms: opts.interval_ms,
+    content_source_hold: opts.content_source_hold,
   };
 }
 
@@ -665,6 +584,7 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
       interval_ms: task.interval_ms,
       payload_hash: task.payload_hash ?? cronPayloadHash(task),
       delegation: task.delegation,
+      content_source_hold: task.content_source_hold,
     };
   });
 }

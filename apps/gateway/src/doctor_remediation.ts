@@ -141,8 +141,8 @@ export function remediationFor(check: CheckDraft): Remediation {
   if (check.id === "google_daily_brief_source") {
     return {
       cause: check.detail,
-      impact: "Daily Brief Google summaries may be unavailable; no Google write operation is attempted.",
-      next_action: "Leave BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED unset if unused, or set read-only Google OAuth tokens and rerun pnpm run doctor.",
+      impact: "Google付きDaily Briefは定期取得が接続されるまで保留です。",
+      next_action: "固定文のDaily Briefを使用する場合は BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED を無効にしてGatewayを再起動してください。",
       doc_ref: "CONFIG.md#Google-read-tools-and-Daily-Brief-source",
       safe_to_ignore: check.level === "warn",
     };

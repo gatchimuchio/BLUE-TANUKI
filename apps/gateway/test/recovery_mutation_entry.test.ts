@@ -676,6 +676,74 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
+  it("holds an enabled Google Daily Brief without network requests while static cron keeps firing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-daily-brief-hold-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const preload = join(root, "google-loopback.cjs");
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const port = await reserveLoopbackPort();
+    let googleRequests = 0;
+    const googleFixture = createServer((_request, response) => {
+      googleRequests += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{\"messages\":[],\"items\":[],\"files\":[]}");
+    });
+    const listening = once(googleFixture, "listening");
+    googleFixture.listen(0, "127.0.0.1");
+    await listening;
+    try {
+      const address = googleFixture.address();
+      if (!address || typeof address === "string") throw new Error("Google fixture did not bind loopback");
+      writeFileSync(preload, `
+const https = require("node:https");
+const http = require("node:http");
+const originalRequest = https.request;
+https.request = function (target, ...args) {
+  if (target.hostname === "gmail.googleapis.com" || target.hostname === "www.googleapis.com") {
+    return http.request({ hostname: "127.0.0.1", port: ${address.port}, path: target.path, method: target.method }, ...args);
+  }
+  return originalRequest.call(this, target, ...args);
+};
+require("node:module").syncBuiltinESMExports();
+`, "utf8");
+      const env = {
+        ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+        BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
+        BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
+        BLUE_TANUKI_DAILY_BRIEF_TARGET: "synthetic-user",
+        BLUE_TANUKI_DAILY_BRIEF_CHANNEL: "webchat",
+        BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "100",
+        GOOGLE_ACCESS_TOKEN: "synthetic-local-google-token",
+        BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: "static-synthetic", channel: "webchat",
+          target: "synthetic-user", content: "synthetic static reminder", interval_ms: 250 }]),
+      };
+      const gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 20_000);
+      const deadline = Date.now() + 5_000;
+      let scheduledTasks: unknown = [];
+      let lastStaticFire: unknown;
+      while (Date.now() < deadline) {
+        const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+        expect(runtime.status).toBe(200);
+        scheduledTasks = runtime.body.scheduled_tasks;
+        lastStaticFire = (scheduledTasks as Array<Record<string, unknown>>)
+          .find((item) => item.id === "static-synthetic")?.last_fire_at_ms;
+        if (typeof lastStaticFire === "number") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(lastStaticFire).toBeTypeOf("number");
+      expect(scheduledTasks).toEqual(expect.arrayContaining([expect.objectContaining({
+        id: "daily_brief", enabled: true, running: false, next_fire_at_ms: null, last_fire_at_ms: null,
+        content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false,
+      })]));
+      expect(googleRequests).toBe(0);
+      await stopChild(gateway.child);
+    } finally {
+      await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
+    }
+  }, 30_000);
+
   it("quiesces J/M and meaning-update consumers for selected restore, verifies reopened stores, and keeps existing plans held", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-jm-restore-l3-"));
     temporaryRoots.push(root);
@@ -1948,8 +2016,9 @@ function isolatedRuntimeEnvironment(root: string, envFile: string, historyFile: 
   };
 }
 
-function spawnGateway(env: NodeJS.ProcessEnv): { child: ChildProcessWithoutNullStreams; output: string[] } {
-  const child = spawn(process.execPath, ["apps/gateway/dist/main.js", "--serve"], {
+function spawnGateway(env: NodeJS.ProcessEnv, preload?: string): { child: ChildProcessWithoutNullStreams; output: string[] } {
+  const args = preload ? ["--require", preload] : [];
+  const child = spawn(process.execPath, [...args, "apps/gateway/dist/main.js", "--serve"], {
     cwd: repositoryRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],

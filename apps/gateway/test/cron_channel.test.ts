@@ -598,12 +598,13 @@ describe("CronSchedulerChannel", () => {
     }
   });
 
-  it("uses a dynamic content provider without exposing content in snapshots", async () => {
+  it("binds the static Daily Brief payload and version without exposing its content in snapshots", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
-    const { root, store } = makeTestEventStore("blue-tanuki-cron-content-provider-");
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-private-payload-");
     const received: unknown[] = [];
-    const fired: unknown[] = [];
+    const fired: { snapshot: unknown; event: unknown }[] = [];
+    const configuredBrief = "synthetic daily brief content";
     const ch = new CronSchedulerChannel({
       tasks: [
         {
@@ -611,19 +612,12 @@ describe("CronSchedulerChannel", () => {
           name: "daily_brief",
           channel: "webchat",
           target: "local-user",
-          content: "static fallback",
+          content: configuredBrief,
           interval_ms: 1000,
         },
       ],
       log: () => undefined,
-      content_provider: async () => ({
-        content: "dynamic google brief",
-        metadata: {
-          "blue_tanuki.cron.content_source": "google_read",
-          "blue_tanuki.google.read_only": "true",
-        },
-      }),
-      onFire: (task) => fired.push(task),
+      onFire: (snapshot, event) => fired.push({ snapshot, event }),
       event_store: store,
     });
 
@@ -635,21 +629,20 @@ describe("CronSchedulerChannel", () => {
       const expectedHash = cronPayloadHash({
         channel: "webchat",
         target: "local-user",
-        content: "dynamic google brief",
+        content: configuredBrief,
         interval_ms: 1000,
       });
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
-        content: "dynamic google brief",
+        content: configuredBrief,
         metadata: {
           "blue_tanuki.cron.payload_hash": expectedHash,
-          "blue_tanuki.cron.content_source": "google_read",
-          "blue_tanuki.google.read_only": "true",
-          "blue_tanuki.channel_send.content": "dynamic google brief",
+          "blue_tanuki.cron.content_source": "static",
+          "blue_tanuki.channel_send.content": configuredBrief,
         },
       });
-      expect(fired[0]).toMatchObject({ payload_hash: expectedHash });
-      expect(JSON.stringify(ch.snapshot())).not.toContain("dynamic google brief");
+      expect(fired[0]).toMatchObject({ snapshot: { payload_hash: expectedHash }, event: { payload_digest: expectedHash } });
+      expect(JSON.stringify(ch.snapshot())).not.toContain(configuredBrief);
     } finally {
       await ch.stop();
       store.close();
