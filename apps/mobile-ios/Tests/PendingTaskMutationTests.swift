@@ -14,6 +14,7 @@ struct PendingTaskMutationTests {
     let request = draft()
     try sessionStartScope()
     try submissionReceiptScope(credential: desktop)
+    try deviceRevocation(credential: desktop)
     let start = try PendingMobileTaskMutation(kind: .start, credential: desktop, draft: request, taskID: nil)
     let restarted = try PendingMobileTaskMutation(stored: start.storageObject())
     try check(restarted == start, "restart round trip")
@@ -52,6 +53,7 @@ struct PendingTaskMutationTests {
                                        evidenceSource: "INTERNAL_STATE"), "matching terminal task resolves the hold")
     }
     try acceptedCancellation(credential: desktop, draft: draft(selectedTaskID: taskID), pending: cancellation)
+    try scopedMutationHolds(credential: desktop, start: start, cancellation: cancellation)
 
     do {
       _ = try PendingMobileTaskMutation(stored: ["kind": "start", "scope_digest": fingerprint, "extra": true])
@@ -64,6 +66,98 @@ struct PendingTaskMutationTests {
     try listRefresh(credential: desktop, pending: cancellation)
     try desktopNotifications()
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func scopedMutationHolds(credential desktop: DeviceLinkCredential,
+                                         start: PendingMobileTaskMutation,
+                                         cancellation: PendingMobileTaskMutation) throws {
+    let request = draft()
+    let otherRequest = draft(id: otherID)
+    let other = try PendingMobileTaskMutation(kind: .start, credential: desktop, draft: otherRequest, taskID: nil)
+    let requestDigest = PendingMobileTaskMutation.requestDigest(credential: desktop, draft: request)
+    let otherDigest = PendingMobileTaskMutation.requestDigest(credential: desktop, draft: otherRequest)
+    try check(start.requestDigest == cancellation.requestDigest && start.requestDigest == requestDigest,
+              "開始の結果不明は同じ申請の取消も保留する")
+    try check(PendingMobileTaskMutation.blocksRequest([start], digest: requestDigest), "同一申請を保留する")
+    try check(!PendingMobileTaskMutation.blocksRequest([start], digest: otherDigest), "別申請の操作を継続できる")
+
+    let alteredDraft = MobileTaskDraft(id: request.id, runtimeID: request.runtimeID, sessionID: request.sessionID,
+      workspaceID: "different-workspace", instructionHash: request.instructionHash, createdAt: request.createdAt,
+      expiresAt: request.expiresAt, taskID: otherID)
+    try check(PendingMobileTaskMutation.requestDigest(credential: desktop, draft: alteredDraft) == requestDigest,
+              "表示情報の変更で同じ申請の保留を回避できない")
+    let otherHostDigest = PendingMobileTaskMutation.requestDigest(credential: credential(hostID: otherID), draft: request)
+    try check(!PendingMobileTaskMutation.blocksRequest([start], digest: otherHostDigest), "別の結合先へ保留を広げない")
+
+    let restored = try PendingMobileTaskMutation.readCollection([start.storageObject(), other.storageObject()])
+    try check(restored == [start, other], "複数保留と順序を復元する")
+    let remaining = restored.filter {
+      !$0.isResolved(credential: desktop, draft: request, status: status("running"), evidenceSource: "INTERNAL_STATE")
+    }
+    try check(remaining == [other], "照合済みの申請だけを終結する")
+
+    var legacyObject = start.storageObject()
+    legacyObject.removeValue(forKey: "request_digest")
+    let legacy = try PendingMobileTaskMutation(stored: legacyObject, scoped: false)
+    try check(try PendingMobileTaskMutation.readCollection([legacyObject]) == [legacy], "旧形式を保持する")
+    try check(PendingMobileTaskMutation.blocksRequest([legacy], digest: otherDigest), "旧形式の保留を安全側で保持する")
+    try check(legacy.isResolved(credential: desktop, draft: request, status: status("running"), evidenceSource: "INTERNAL_STATE"),
+              "旧形式は従来の厳密照合で終結できる")
+    for invalid in [[start.storageObject(), cancellation.storageObject()], [start.storageObject(), legacyObject]] {
+      do {
+        _ = try PendingMobileTaskMutation.readCollection(invalid)
+        throw SmokeFailure(label: "重複または旧形式混在の保留を受理した")
+      } catch DeviceLinkFailure.storage {}
+    }
+    let full = try (0..<PendingMobileTaskMutation.maximumPendingCount).map { index in
+      try PendingMobileTaskMutation(kind: .start, credential: desktop,
+        draft: draft(id: String(format: "%032x", UInt32(index))), taskID: nil)
+    }
+    try check(PendingMobileTaskMutation.blocksRequest(full, digest: otherDigest), "保存上限で既存記録を破棄しない")
+  }
+
+  private static func deviceRevocation(credential desktop: DeviceLinkCredential) throws {
+    let before = try PendingDeviceLinkRevocation(credential: desktop)
+    let after = try PendingDeviceLinkRevocation(stored: before.credentialDigest)
+    try check(after == before, "離脱照合記録を復元できる")
+    try check(after.matches(desktop), "同じ資格だけを照合できる")
+    for other in [credential(hostID: otherID), credential(deviceID: otherID), credential(pin: instructionHash),
+                  credential(credentialID: taskID), credential(secret: "different fixture")] {
+      try check(!after.matches(other), "異なる接続先・端末・証明書・資格を照合しない")
+    }
+    do {
+      _ = try PendingDeviceLinkRevocation(stored: "invalid")
+      throw SmokeFailure(label: "破損した離脱照合記録を受理した")
+    } catch DeviceLinkFailure.storage {}
+
+    let accepted: [String: Any] = [
+      "request_id": requestID, "operation": "端末離脱", "status": "accepted",
+      "evidence_source": "INTERNAL_STATE", "audit_event_id": "synthetic-device-revocation",
+      "error": NSNull(), "health": NSNull(), "body": ["状態": "失効"], "shutdown_requested": false,
+    ]
+    try DeviceLinkProtocol.requireConfirmedRevocation(accepted, nonce: requestID)
+    let changedFields: [(String, Any)] = [
+      ("request_id", otherID), ("operation", "端末確認"), ("evidence_source", "FIXTURE"),
+      ("evidence_source", "LIVE_RUNTIME"), ("body", ["状態": "接続中"]),
+      ("body", ["状態": "失効", "未定義": "追加項目"]),
+    ]
+    for (field, value) in changedFields {
+      var other = accepted
+      other[field] = value
+      do {
+        try DeviceLinkProtocol.requireConfirmedRevocation(other, nonce: requestID)
+        throw SmokeFailure(label: "一致しない応答を失効済みと判定した: \(field)")
+      } catch DeviceLinkFailure.invalid {}
+    }
+    var rejected = accepted
+    rejected["status"] = "rejected"
+    rejected["body"] = NSNull()
+    rejected["error"] = ["code": "refused", "message": "synthetic", "recoverable": true,
+      "audit_event_required": true, "fail_closed": true]
+    do {
+      try DeviceLinkProtocol.requireConfirmedRevocation(rejected, nonce: requestID)
+      throw SmokeFailure(label: "一般拒否を失効済みと判定した")
+    } catch DeviceLinkFailure.rejected {}
   }
 
   private static func submissionReceiptScope(credential desktop: DeviceLinkCredential) throws {
@@ -242,7 +336,7 @@ struct PendingTaskMutationTests {
     let entries = [draft(id: otherID), draft(selectedTaskID: taskID), draft(id: laterID)]
     var queried: [String] = []
     var resolved: [String] = []
-    let observations = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: pending,
+    let observations = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: [pending],
                                                                canRead: { true }) { entry in
       queried.append(entry.id)
       if entry.id == otherID { throw DeviceLinkFailure.rejected }
@@ -259,15 +353,25 @@ struct PendingTaskMutationTests {
               "different task is not prioritized")
     try check(!pending.matchesListedRequest(credential: credential, draft: draft()), "missing task is not prioritized")
 
+    let later = try PendingMobileTaskMutation(kind: .start, credential: credential,
+      draft: draft(id: laterID), taskID: nil)
     queried.removeAll()
-    let stopped = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: nil,
+    _ = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: [pending, later],
+                                               canRead: { true }) { entry in
+      queried.append(entry.id)
+      return .startCandidate
+    }
+    try check(queried == [requestID, laterID, otherID], "複数の保留中の申請を先に照合する")
+
+    queried.removeAll()
+    let stopped = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: [],
                                                            canRead: { true }) { entry in
       queried.append(entry.id)
       throw DeviceLinkFailure.transport(mayHaveReachedDesktop: false)
     }
     try check(stopped.isEmpty && queried == [otherID], "transport failure stops other reads")
     queried.removeAll()
-    let background = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: nil,
+    let background = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: [],
                                                               canRead: { false }) { entry in
       queried.append(entry.id)
       return .startCandidate

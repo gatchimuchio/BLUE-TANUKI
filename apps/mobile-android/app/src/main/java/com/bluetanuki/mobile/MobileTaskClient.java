@@ -43,9 +43,9 @@ final class MobileTaskClient {
         PendingTaskSubmission submission = store.pendingTaskSubmission();
         boolean reconciled = submission != null && submission.matchesOwnedRequest(credential, entries);
         if (reconciled) store.clearTaskSubmissionPending(submission);
-        PendingTaskMutation pending = null;
+        List<PendingTaskMutation> pending = Collections.emptyList();
         try {
-            pending = store.pendingTaskMutation();
+            pending = store.pendingTaskMutations();
         } catch (AndroidCredentialStore.CredentialStoreException ignored) {
             // 状態照会は継続し、端末の記録に基づく照合は保留する。
         }
@@ -56,17 +56,21 @@ final class MobileTaskClient {
     }
 
     static Map<String, MobileTaskContract.TaskStatus> observeOwnedStatuses(List<MobileTaskContract.Draft> entries,
-            DeviceCredential credential, PendingTaskMutation pending, DeviceLinkTransport.SendGuard canSend,
+            DeviceCredential credential, List<PendingTaskMutation> pending, DeviceLinkTransport.SendGuard canSend,
             TaskStatusReader reader) {
-        List<MobileTaskContract.Draft> readOrder = new ArrayList<>(entries);
-        if (pending != null) {
-            for (int index = 0; index < readOrder.size(); index++) {
-                if (pending.matchesListedRequest(credential, readOrder.get(index))) {
-                    readOrder.add(0, readOrder.remove(index));
+        List<MobileTaskContract.Draft> readOrder = new ArrayList<>();
+        List<MobileTaskContract.Draft> otherEntries = new ArrayList<>();
+        for (MobileTaskContract.Draft entry : entries) {
+            boolean matchesPending = false;
+            for (PendingTaskMutation mutation : pending) {
+                if (mutation.matchesTarget(credential, entry)) {
+                    matchesPending = true;
                     break;
                 }
             }
+            (matchesPending ? readOrder : otherEntries).add(entry);
         }
+        readOrder.addAll(otherEntries);
         Map<String, MobileTaskContract.TaskStatus> statuses = new LinkedHashMap<>();
         for (MobileTaskContract.Draft entry : readOrder) {
             if (!canSend.canSend() || Thread.currentThread().isInterrupted()) break;
@@ -183,9 +187,11 @@ final class MobileTaskClient {
                 Collections.singletonMap("申請ID", draft.id), LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
         MobileTaskContract.TaskStatus status = MobileTaskContract.status(response.body, draft);
         try {
-            PendingTaskMutation pending = store.pendingTaskMutation();
-            if (pending != null && pending.resolvedBy(credential, draft, status, response.evidenceSource)) {
-                store.clearTaskMutationPending(pending);
+            for (PendingTaskMutation pending : store.pendingTaskMutations()) {
+                if (pending.resolvedBy(credential, draft, status, response.evidenceSource)) {
+                    store.clearTaskMutationPending(pending);
+                    break;
+                }
             }
         } catch (AndroidCredentialStore.CredentialStoreException ignored) {
             // Keep read-only status available when the local checkpoint cannot be resolved.
@@ -196,8 +202,10 @@ final class MobileTaskClient {
     TaskMutationResult mutate(PendingTaskMutation.Action action, MobileTaskContract.Draft draft,
                               DeviceLinkTransport.SendGuard canSend) throws Exception {
         synchronized (TASK_MUTATION_LOCK) {
-            if (store.hasPendingTaskMutation()) throw new TaskMutationHeld();
             DeviceCredential credential = requireCredential();
+            if (PendingTaskMutation.blocks(store.pendingTaskMutations(), credential, draft)) {
+                throw new TaskMutationHeld();
+            }
             MobileTaskContract.TaskStatus status = readTaskStatus(credential, draft, canSend);
             boolean eligible = action == PendingTaskMutation.Action.START
                     ? MobileTaskContract.TaskStatus.START_CANDIDATE.equals(status.kind)

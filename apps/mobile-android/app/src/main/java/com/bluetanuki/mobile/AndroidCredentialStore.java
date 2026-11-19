@@ -10,8 +10,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.Key;
 import java.security.KeyStore;
-import java.util.List;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -36,6 +38,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     private static final String RECOVERY_AUDIT_AAD = "com.bluetanuki.mobile/device-link/recovery-audit/v1";
     private static final String TASK_PENDING_AAD = "com.bluetanuki.mobile/device-link/task-pending/v1";
     private static final String TASK_MUTATION_AAD = "com.bluetanuki.mobile/device-link/task-mutation/v1";
+    private static final int TASK_MUTATION_MAX_ENVELOPE_BYTES = 8 * 1024;
     private static final String REVOCATION_AAD = "com.bluetanuki.mobile/device-link/desktop-revocation/v1";
 
     private static AndroidCredentialStore instance;
@@ -100,7 +103,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     synchronized boolean canUseCredentialForDeviceLink(DeviceCredential expected) {
         try {
-            return expected.sameValue(readForDeviceLink());
+            return expected.sameValue(readForDeviceLink()) && expected.expiresAt > System.currentTimeMillis() / 1000L;
         } catch (CredentialStoreException exception) {
             return false;
         }
@@ -356,36 +359,54 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized void markTaskMutationPending(PendingTaskMutation mutation) throws CredentialStoreException {
-        if (hasPendingTaskMutation()) throw new CredentialStoreException();
-        String value = mutation.encode();
-        String encrypted = encryptTaskCheckpoint(value, TASK_MUTATION_AAD);
-        if (!preferences.edit().putString(TASK_MUTATION_KEY, encrypted)
-                .putString(TASK_MUTATION_DIGEST_KEY, digest(encrypted)).commit()) {
-            throw new CredentialStoreException();
+        List<PendingTaskMutation> pending = new ArrayList<>(pendingTaskMutations());
+        if (pending.size() >= PendingTaskMutation.MAX_PENDING) throw new CredentialStoreException();
+        for (PendingTaskMutation current : pending) {
+            if (mutation.conflictsWith(current)) throw new CredentialStoreException();
         }
-        PendingTaskMutation readBack = pendingTaskMutation();
-        if (readBack == null || !value.equals(readBack.encode())) throw new CredentialStoreException();
+        pending.add(mutation);
+        writeTaskMutations(pending);
     }
 
-    synchronized PendingTaskMutation pendingTaskMutation() throws CredentialStoreException {
-        String encoded = preferences.getString(TASK_MUTATION_KEY, null);
-        String activeDigest = preferences.getString(TASK_MUTATION_DIGEST_KEY, null);
-        if (encoded == null && activeDigest == null) return null;
-        if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
-            throw new CredentialStoreException();
-        }
+    synchronized List<PendingTaskMutation> pendingTaskMutations() throws CredentialStoreException {
         try {
-            return PendingTaskMutation.decode(decryptTaskCheckpoint(encoded, TASK_MUTATION_AAD));
-        } catch (StrictJson.JsonException exception) {
+            String encoded = preferences.getString(TASK_MUTATION_KEY, null);
+            String activeDigest = preferences.getString(TASK_MUTATION_DIGEST_KEY, null);
+            if (encoded == null && activeDigest == null) return Collections.emptyList();
+            if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
+                throw new CredentialStoreException();
+            }
+            return PendingTaskMutation.decodeList(
+                    decryptTaskCheckpoint(encoded, TASK_MUTATION_AAD, TASK_MUTATION_MAX_ENVELOPE_BYTES));
+        } catch (StrictJson.JsonException | ClassCastException exception) {
             throw new CredentialStoreException();
         }
     }
 
     synchronized void clearTaskMutationPending(PendingTaskMutation expected) throws CredentialStoreException {
-        PendingTaskMutation current = pendingTaskMutation();
-        if (current == null || !expected.encode().equals(current.encode()) ||
-                !preferences.edit().remove(TASK_MUTATION_KEY).remove(TASK_MUTATION_DIGEST_KEY).commit() ||
-                hasPendingTaskMutation()) throw new CredentialStoreException();
+        List<PendingTaskMutation> pending = new ArrayList<>(pendingTaskMutations());
+        for (int index = 0; index < pending.size(); index++) {
+            if (expected.encode().equals(pending.get(index).encode())) {
+                pending.remove(index);
+                writeTaskMutations(pending);
+                return;
+            }
+        }
+        throw new CredentialStoreException();
+    }
+
+    private void writeTaskMutations(List<PendingTaskMutation> pending) throws CredentialStoreException {
+        SharedPreferences.Editor editor = preferences.edit();
+        String value = PendingTaskMutation.encodeList(pending);
+        if (pending.isEmpty()) {
+            editor.remove(TASK_MUTATION_KEY).remove(TASK_MUTATION_DIGEST_KEY);
+        } else {
+            String encrypted = encryptTaskCheckpoint(value, TASK_MUTATION_AAD);
+            editor.putString(TASK_MUTATION_KEY, encrypted).putString(TASK_MUTATION_DIGEST_KEY, digest(encrypted));
+        }
+        if (!editor.commit() || !value.equals(PendingTaskMutation.encodeList(pendingTaskMutations()))) {
+            throw new CredentialStoreException();
+        }
     }
 
     private String encryptRecoveryAudit(String value) throws CredentialStoreException {
@@ -461,13 +482,18 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     private String decryptTaskCheckpoint(String encoded, String aad) throws CredentialStoreException {
+        return decryptTaskCheckpoint(encoded, aad, 1024);
+    }
+
+    private String decryptTaskCheckpoint(String encoded, String aad, int maxEnvelopeBytes) throws CredentialStoreException {
         byte[] envelope = null;
         byte[] plaintext = null;
         byte[] iv = null;
         byte[] ciphertext = null;
         try {
+            if (encoded.length() > maxEnvelopeBytes * 2) throw new CredentialStoreException();
             envelope = Base64.decode(encoded, Base64.NO_WRAP);
-            if (envelope.length < 12 + 16 || envelope.length > 1024) throw new CredentialStoreException();
+            if (envelope.length < 12 + 16 || envelope.length > maxEnvelopeBytes) throw new CredentialStoreException();
             iv = Arrays.copyOfRange(envelope, 0, 12);
             ciphertext = Arrays.copyOfRange(envelope, 12, envelope.length);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
