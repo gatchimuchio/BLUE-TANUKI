@@ -182,6 +182,7 @@ interface TaskExecutionObservationInput {
   readonly pendingCommandIds: readonly string[];
   readonly activeCommandIds: readonly string[];
   readonly lookupCommand: (key: string) => ExecutionIntentReceipt | null;
+  readonly lookupApprovalState?: (commandId: string, requestId: string) => ApprovalRecoveryState | null;
 }
 
 /** 受付と同じ要求のJ判断・承認記録・Broker受領票を照合し、実行の事実だけを返す。 */
@@ -219,6 +220,30 @@ function projectTaskExecutionObservation(
 
   const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex");
   const receipt = input.lookupCommand(commandKey);
+  if (!ownerCompute && receipt === null && input.pendingCommandIds.length === 0 && input.activeCommandIds.length === 0 &&
+      input.lookupApprovalState) {
+    // 復旧台帳は、D4受付から到達した同一の承認だけの観測根拠とする。
+    const gates = logs.flatMap(log => "kind" in log && log.kind === "approval_gate" &&
+      log.upstream_commit_hash === decision.commit.hash ? [log] : []);
+    const [gate] = gates;
+    const phases = logs.flatMap(log => "kind" in log && log.kind === "command_lifecycle" && log.command_id === commandId &&
+      log.upstream_commit_hash === decision.commit.hash ? [log] : []);
+    const pending = phases.filter(log => log.phase === "approval_pending");
+    const [pendingApproval] = pending;
+    const gateDecision = gate?.evaluation.decision;
+    const validGate = gateDecision === "ask" || (gateDecision === "allow" && pendingApproval?.reason.startsWith("failure_memory:"));
+    if (gates.length !== 1 || gate?.command_id !== commandId || gate.evaluation.context.command_id !== commandId ||
+        gate.evaluation.context.upstream_commit_hash !== decision.commit.hash || gate.evaluation.context.actor !== decision.frame.actor.actor_id ||
+        pending.length !== 1 || pendingApproval?.upstream_decision !== "ASSERT" || pendingApproval.actor !== decision.frame.actor.actor_id || !validGate ||
+        phases.some(log => log.phase === "approval_rejected" || log.phase === "approval_cancelled") ||
+        logs.some(log => "kind" in log && log.kind === "executor_feedback" && log.command_id === commandId &&
+          log.upstream_commit_hash === decision.commit.hash)) return unknown;
+    const recovered = input.lookupApprovalState(commandId, input.requestId);
+    if (recovered === "interrupted" && !phases.some(log => log.phase === "approval_approved")) {
+      return { status: "not_attempted", ...noAuthority };
+    }
+    return recovered === "outcome_unknown" ? { status: "outcome_unknown", ...noAuthority } : unknown;
+  }
   if (!receipt || receipt.command_key !== commandKey || receipt.used_for_authority !== false ||
       !receipt.task_identity_digest || !receipt.hds_source_context_digest || !receipt.goal_version_binding) return unknown;
   if (ownerCompute) {
@@ -242,7 +267,8 @@ function projectTaskExecutionObservation(
 }
 
 export function projectD4RuntimeExecutionObservation(input: TaskExecutionObservationInput): WebChatTaskExecutionObservation {
-  return projectTaskExecutionObservation(input, "d4_runtime");
+  try { return projectTaskExecutionObservation(input, "d4_runtime"); }
+  catch { return { status: "unknown", used_for_authority: false, may_execute: false }; }
 }
 
 /** Workの初回計算が対象。後続の審査・計画step・目的達成は別の観測が必要。 */

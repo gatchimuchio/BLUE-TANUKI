@@ -151,7 +151,7 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 | `POST /ws-ticket` → `GET /ws?ticket=...` | inbound Bearer → 単回ticket | ticketに束縛されたuser単位でWS接続し、`OutboundChannel.send`を受信 |
 | `POST /runtime/ws-ticket` | 専用D4 Runtime Bearer | 登録済みruntimeとsessionを照合し、HMAC session scopeだけを受信する単回ticketを発行 |
 | `POST /runtime/intent` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id, intent}`に任意の`image_input`／`audio_input`を加えて受ける。画像はJPEG/PNG最大5 MiB、音声は既存形式判定で最大20 MiB。UUIDv4 submission IDをsession scopeへ束縛してprivate inboxへ先にclaimし、添付byte digestを含む同じID・同じ入力は再dispatchせず既存request ID／stateを返す。同じIDの異入力は`409` |
-| `POST /runtime/intent/status` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id}`で同sessionの`found`、request ID、dispatch state、J/Mの非権威task outcome、記録済み取消観測と、条件を満たす場合の短期memory-only結果を返す。intent、command IDは返さない |
+| `POST /runtime/intent/status` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id}`で同sessionの`found`、request ID、dispatch state、J/Mの非権威task outcome、承認中断を含む実行観測、記録済み取消観測と、条件を満たす場合の短期memory-only結果を返す。intent、command IDは返さない |
 | `POST /runtime/intent/cancel` | 専用D4 Runtime Bearer | `{runtime_id, session_id, submission_id}`だけを受け、private inboxで同じruntimeとsessionのrequest IDを引く。同じ受付に束縛された現在実行中commandを1件に特定してAbortSignalを要求する。command ID／intent／結果本文は返さない |
 | `POST /owner/task-submission-status` | 専用owner Bearer | `{submission_id}`から受付状態、同じHDS requestに束縛したJ/M outcome・取消観測・取得可能な場合の短期回答本文を返す。依頼本文とcommand IDは返さない |
 | `POST /owner/task-submission-cancel` | 専用owner Bearer | `{submission_id}`だけで受付記録を解決し、HDS planのowner/channel/request境界と一意なactive execution bindingを照合してAbortSignalを要求する。command ID／本文は受け取らず、応答にも返さない |

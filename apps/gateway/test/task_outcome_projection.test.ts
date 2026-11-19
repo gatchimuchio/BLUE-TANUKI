@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { operationPlanDigest, type AuditEntry } from "@blue-tanuki/hds-brain";
 import { getOperationDescriptor } from "@blue-tanuki/protocol";
@@ -8,6 +8,7 @@ import {
   countOwnerTasksWithSavedResults,
   projectD4RuntimeActiveCommand,
   projectD4RuntimeCancellationStatus,
+  projectD4RuntimeExecutionObservation,
   projectD4RuntimeTaskOutcome,
   projectOwnerTaskActiveCommand,
   projectOwnerTaskCancellationScope,
@@ -22,6 +23,93 @@ import {
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
 const rulesDigest = "a".repeat(64);
 const evidenceDigest = "b".repeat(64);
+
+describe("D4 runtime approval recovery observation", () => {
+  const actor = "d4-runtime-adapter-token-holder";
+  const commandId = "d4-runtime-fixture-approval";
+  const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex");
+  const commitHash = "3".repeat(64);
+  const decision = { request_id: requestId,
+    frame: { actor: { actor_id: actor, channel: "webchat", actor_kind: "user", trust_level: "limited" } },
+    commit: { hash: commitHash, decision: "ASSERT" } };
+  const gate = { kind: "approval_gate", request_id: requestId, command_id: commandId, upstream_commit_hash: commitHash,
+    evaluation: { decision: "ask", context: { command_id: commandId, actor, upstream_commit_hash: commitHash } } };
+  const pending = { kind: "command_lifecycle", phase: "approval_pending", request_id: requestId, command_id: commandId,
+    actor, upstream_commit_hash: commitHash, upstream_decision: "ASSERT", reason: "fixture review" };
+  const feedback = { kind: "executor_feedback", command_id: commandId, request_id: requestId,
+    upstream_commit_hash: commitHash, upstream_decision: "ASSERT", known_command: true, feedback: { status: "success" } };
+  const entries = (...logs: unknown[]) => logs.map(log => ({ log })) as AuditEntry[];
+  type Input = Parameters<typeof projectD4RuntimeExecutionObservation>[0];
+  const input: Input = { requestId, verifiedAudit: entries(decision, gate, pending), pendingCommandIds: [], activeCommandIds: [], lookupCommand: () => null };
+  const flags = { used_for_authority: false, may_execute: false };
+
+  it("projects only the exact durable approval interruption or ambiguous resolution", () => {
+    const lookup = vi.fn((id: string, request: string) => id === commandId && request === requestId ? "interrupted" as const : null);
+    expect(projectD4RuntimeExecutionObservation({ ...input, lookupApprovalState: lookup })).toEqual({ status: "not_attempted", ...flags });
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(lookup).toHaveBeenCalledWith(commandId, requestId);
+    expect(projectD4RuntimeExecutionObservation({ ...input, verifiedAudit: entries(decision, gate, pending,
+      { ...pending, phase: "approval_approved" }), lookupApprovalState: () => "outcome_unknown" }))
+      .toEqual({ status: "outcome_unknown", ...flags });
+
+    const allowed = { ...gate, evaluation: { ...gate.evaluation, decision: "allow" } };
+    const memoryPending = { ...pending, reason: "failure_memory:fixture requires approval" };
+    expect(projectD4RuntimeExecutionObservation({ ...input, verifiedAudit: entries(decision, allowed, memoryPending),
+      lookupApprovalState: lookup })).toEqual({ status: "not_attempted", ...flags });
+    expect(projectD4RuntimeExecutionObservation({ ...input, verifiedAudit: entries(decision, allowed, pending),
+      lookupApprovalState: lookup })).toEqual({ status: "unknown", ...flags });
+    expect(projectD4RuntimeExecutionObservation({ ...input, verifiedAudit: entries(decision,
+      { ...allowed, evaluation: { ...allowed.evaluation, decision: "deny" } }, memoryPending),
+      lookupApprovalState: lookup })).toEqual({ status: "unknown", ...flags });
+  });
+
+  it("keeps stale history, ambiguous or out-of-scope evidence, and unavailable readers unknown", () => {
+    const irrelevantRequest = "b4d61cc0-46c3-49dc-9826-0b8a9fe302da";
+    const otherCommandId = "different-command";
+    const interrupted = { ...input, lookupApprovalState: () => "interrupted" as const };
+    const unknown = { status: "unknown", ...flags };
+    expect(projectD4RuntimeExecutionObservation(input)).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...input, lookupApprovalState: () => null })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...input, lookupApprovalState: () => { throw new Error("fixture unreadable"); } })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, lookupCommand: () => { throw new Error("fixture unreadable"); } })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries(decision, gate,
+      { ...pending, request_id: irrelevantRequest }) })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries(decision, gate, pending,
+      { ...gate, command_id: otherCommandId, evaluation: { context: { ...gate.evaluation.context, command_id: otherCommandId } } }) })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries(decision, gate, gate, pending) })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries(decision, gate,
+      { ...pending, upstream_commit_hash: "4".repeat(64) }) })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries({ ...decision,
+      frame: { actor: { ...decision.frame.actor, actor_id: "fixture-unrelated-actor" } } }, gate, pending) })).toEqual(unknown);
+  });
+
+  it("does not overwrite terminal approval, feedback or stronger runtime evidence", () => {
+    const interrupted = { ...input, lookupApprovalState: () => "interrupted" as const };
+    const unknown = { status: "unknown", ...flags };
+    for (const terminal of [{ ...pending, phase: "approval_rejected" }, { ...pending, phase: "approval_cancelled" }, feedback]) {
+      const prefix = { ...input, verifiedAudit: entries(decision, gate, pending, terminal) };
+      expect(projectD4RuntimeExecutionObservation({ ...prefix, lookupApprovalState: () => "interrupted" })).toEqual(unknown);
+      expect(projectD4RuntimeExecutionObservation({ ...prefix, lookupApprovalState: () => "outcome_unknown" })).toEqual(unknown);
+    }
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, verifiedAudit: entries(decision, gate, pending,
+      { ...pending, phase: "approval_approved" }) })).toEqual(unknown);
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, pendingCommandIds: [commandId] })).toEqual({ status: "awaiting_approval", ...flags });
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, activeCommandIds: [commandId] })).toEqual({ status: "active", ...flags });
+
+    const receipt: ExecutionIntentReceipt = {
+      ticket_id: "fixture-ticket", command_key: commandKey, command_digest: "4".repeat(64), proof_digest: "5".repeat(64),
+      hds_source_context_digest: "6".repeat(64), task_identity_digest: "7".repeat(64),
+      goal_version_binding: { goal_id_digest: "8".repeat(64), purpose_version: 2, purpose_digest: "9".repeat(64) },
+      execution_epoch: "fixture-epoch", issued_at_ms: 1, expires_at_ms: 2, state: "adapter_returned",
+      invocation_boundary: "llm_adapter", feedback_status: "success", used_for_authority: false,
+    };
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted, lookupCommand: () => receipt,
+      verifiedAudit: entries(decision, gate, pending, feedback) }))
+      .toEqual({ status: "adapter_returned", feedback_status: "success", ...flags });
+    expect(projectD4RuntimeExecutionObservation({ ...interrupted,
+      lookupCommand: () => ({ ...receipt, command_key: "0".repeat(64) }) })).toEqual(unknown);
+  });
+});
 
 describe("owner task initial computation observation", () => {
   const commandId = "owner-task-compute-command";

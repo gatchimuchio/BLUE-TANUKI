@@ -1664,6 +1664,148 @@ Executor.prototype.execute = function (command, context) {
 });
 
 describe("served D4 Runtime work observation", () => {
+  it("recovers an interrupted D4 approval as not attempted without resuming the original request", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-d4-approval-recovery-"));
+    const runtimeToken = "synthetic-d4-approval-recovery-token";
+    const resumeToken = "synthetic-d4-approval-recovery-resume-token";
+    const input = { runtime_id: "blue_tanuki", session_id: "synthetic-d4-approval-recovery-session",
+      submission_id: "3cc2c294-7e75-472d-ae23-ce922ae9087f" };
+    const intent = "合成試験の青い花に付ける題名を一件提案してください。";
+    const capture = join(root, "network.jsonl");
+    const shutdownFile = join(root, "request-shutdown");
+    const executorCapture = join(root, "executor-starts.txt");
+    const networkPreload = join(root, "network-fixture.cjs");
+    const observerPreload = join(root, "observe-d4-approval-recovery.mjs");
+    const envFile = join(root, "fixture.env");
+    const frames: string[] = [];
+    const noAuthority = { used_for_authority: false, may_execute: false } as const;
+    let providerRequests = 0;
+    const provider = createServer((request, response) => {
+      providerRequests += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const baseEnv = isolatedEnvironment(providerPort, gatewayPort, join(root, "audit"), join(root, "state"),
+        join(root, "memory.jsonl"), join(root, "history.jsonl"), join(root, "sessions"), capture, "[]");
+      delete baseEnv.TELEGRAM_BOT_TOKEN;
+      delete baseEnv.TELEGRAM_INBOUND_GRANTS_JSON;
+      const env = {
+        ...baseEnv,
+        WEBCHAT_RESUME_TOKEN: resumeToken,
+        BLUE_TANUKI_D4_RUNTIME_ID: input.runtime_id,
+        BLUE_TANUKI_D4_RUNTIME_TOKEN: runtimeToken,
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"),
+        BT_F1003_TELEGRAM_SHUTDOWN_FILE: shutdownFile,
+      };
+      writeFileSync(envFile, "# isolated fixture\n");
+      writeFileSync(networkPreload, telegramFetchPreload(), "utf8");
+      const coreModule = pathToFileURL(join(ROOT, "packages/blue-tanuki/dist/index.js")).href;
+      writeFileSync(observerPreload, `
+import { appendFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { Executor } from ${JSON.stringify(coreModule)};
+createRequire(import.meta.url)(${JSON.stringify(networkPreload)});
+const execute = Executor.prototype.execute;
+Executor.prototype.execute = function (command, context) {
+  if (command.type === "llm_call") appendFileSync(${JSON.stringify(executorCapture)}, "llm_call\\n");
+  return execute.call(this, command, context);
+};
+`, "utf8");
+      seedD4ApprovalFixture(env, runtimeToken, input.runtime_id, input.session_id, intent);
+      const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+      const post = (route: string, body: object, authorization = runtimeToken) => fetch(baseUrl + route, {
+        method: "POST", headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+      });
+      const approvalQueue = async () => {
+        const response = await fetch(baseUrl + "/approval", {
+          headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(8_000),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json() as { pending_approvals: { request_id: string; command_id: string; approval_token?: string }[] })
+          .pending_approvals;
+      };
+      const status = () => post("/runtime/intent/status", input);
+      gateway = spawnGateway(env, observerPreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const issuedTicket = await post("/runtime/ws-ticket", { runtime_id: input.runtime_id, session_id: input.session_id });
+      expect(issuedTicket.status).toBe(200);
+      const { ticket } = await issuedTicket.json() as { ticket: string };
+      socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      socket.on("message", data => frames.push(String(data)));
+      await once(socket, "open");
+      const submitted = await post("/runtime/intent", { ...input, intent });
+      expect(submitted.status).toBe(202);
+      const { request_id } = await submitted.json() as { request_id: string };
+      const pending = await waitFor(async () => (await approvalQueue()).find(item => item.request_id === request_id) ?? null,
+        gateway, "the exact D4 request did not reach genuine approval wait");
+      const oldToken = requiredString(pending.approval_token, "approval token");
+      const before = await waitFor(async () => {
+        const response = await status();
+        expect(response.status).toBe(200);
+        const value = await response.json() as { state?: string; task_outcome?: unknown; cancellation?: unknown };
+        return value.state === "handler_returned" ? value : null;
+      }, gateway, "the submitted D4 request did not reach its durable handler-returned state");
+      expect(before).toMatchObject({ found: true, request_id, execution_observation: { status: "awaiting_approval", ...noAuthority },
+        task_outcome: { status: "unknown", ...noAuthority }, cancellation: { status: "unknown", ...noAuthority } });
+      await waitFor(() => frames.some(frame => frame.includes("承認待ちです。")) ? true : null,
+        gateway, "the authenticated D4 session did not receive the approval waiting notice");
+      expect(providerRequests).toBe(0);
+      expect(readCaptureText(executorCapture)).toBeUndefined();
+
+      socket.terminate();
+      socket = undefined;
+      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
+      writeFileSync(shutdownFile, "stop\n");
+      expect(await stopped).toEqual([0, null]);
+      gateway = spawnGateway({ ...env, BT_F1003_TELEGRAM_SHUTDOWN_FILE: undefined }, observerPreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const restored = await status();
+      expect(restored.status).toBe(200);
+      expect(restored.headers.get("cache-control")).toBe("no-store");
+      const restoredText = await restored.text();
+      const recovered = JSON.parse(restoredText) as { execution_observation?: unknown };
+      expect(recovered).toMatchObject({ found: true, request_id, state: "handler_returned",
+        task_outcome: before.task_outcome, cancellation: before.cancellation });
+      expect(recovered.execution_observation).toEqual({ status: "not_attempted", ...noAuthority });
+      for (const sensitive of [intent, input.session_id, input.submission_id, runtimeToken, resumeToken, ticket, oldToken, pending.command_id]) {
+        expect(restoredText).not.toContain(sensitive);
+        expect(frames.join("")).not.toContain(sensitive);
+      }
+      expect((await post("/runtime/intent/status", input, WEBCHAT_TOKEN)).status).toBe(401);
+      expect((await post("/runtime/intent/status", { ...input, runtime_id: "unrelated-runtime" })).status).toBe(403);
+      for (const probe of [{ ...input, session_id: "foreign-d4-session" },
+        { ...input, submission_id: "ff5c2390-60bc-4969-99af-8540d52b55f6" }]) {
+        const unrelated = await post("/runtime/intent/status", probe);
+        expect(unrelated.status).toBe(200);
+        expect(await unrelated.json()).toEqual({ found: false });
+      }
+      expect((await approvalQueue()).some(item => item.request_id === request_id)).toBe(false);
+      const old = await post(`/approval/${encodeURIComponent(pending.command_id)}`, {
+        verdict: "approve", approval_token: oldToken,
+      }, resumeToken);
+      expect(old.status).toBe(409);
+      expect(await old.json()).toEqual({ error: "approval_content_review_stale" });
+      const duplicate = await post("/runtime/intent", { ...input, intent });
+      expect(duplicate.status).toBe(202);
+      expect(await duplicate.json()).toMatchObject({ accepted: true, duplicate: true, request_id });
+      expect(await (await status()).json()).toEqual(recovered);
+      expect(readCaptureText(executorCapture)).toBeUndefined();
+      expect(providerRequests).toBe(0);
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 120_000);
+
   it("returns a scoped execution observation after restart without replay or retained reply content", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-observation-"));
     const runtime = "blue_tanuki";

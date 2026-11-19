@@ -5284,6 +5284,7 @@ async function serveWithOwnerLease(
                   .map(item => item.command.id),
                 activeCommandIds: activeTaskExecutions.d4RuntimeCommands(scope),
                 lookupCommand: key => executionStore.lookupCommand(key),
+                lookupApprovalState: (commandId, requestId) => approvalRecoveryStore.lookupState(commandId, requestId),
               });
             },
             onD4RuntimeIntentCancellationStatus: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeCancellationStatus> => {
