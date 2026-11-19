@@ -27,6 +27,8 @@ import {
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
   RuntimeIntentStatusQuerySchema,
+  RuntimeScheduleDeleteProposalSchema,
+  RuntimeScheduleDeleteReviewSchema,
   RuntimeSessionInputSchema,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
@@ -234,7 +236,7 @@ function isLocalControlCenterBrowserRequest(req: IncomingMessage): boolean {
     !Object.keys(req.headers).some(name => name === "forwarded" || name.startsWith("x-forwarded-"));
 }
 
-function hasDailyBriefOwnerToken(req: IncomingMessage, ownerToken: string | undefined): boolean {
+function hasAuxiliaryOwnerToken(req: IncomingMessage, ownerToken: string | undefined): boolean {
   const supplied = req.headers["x-blue-tanuki-owner-token"];
   return typeof supplied === "string" && bearerTokenMatches(supplied, ownerToken);
 }
@@ -945,6 +947,7 @@ function findAotanuAssetRoot(): string {
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
  *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
+ *   POST /owner/runtime-schedule-delete-proposal auth:local same-origin owner bearer, no-store
  *   POST /owner/google-read-credential-proposal body:{scope,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/github-write-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/telegram-bot-credential-proposal body:{initial_inbound_grant?,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
@@ -1527,6 +1530,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/owner/llm-settings-proposal") {
       await this.handleOwnerLlmSettingsProposal(req, res);
+      return;
+    }
+    if (url.pathname === "/owner/runtime-schedule-delete-proposal") {
+      await this.handleOwnerRuntimeScheduleDeleteProposal(req, res, url);
       return;
     }
     if (url.pathname === "/owner/google-read-credential-proposal" || url.pathname === "/owner/github-write-credential-proposal" ||
@@ -3411,12 +3418,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const dailyBriefReview = this.opts.approval.requiresLocalDailyBriefRead?.(command_id) === true;
-      if (dailyBriefReview && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+      const scheduleDeleteReview = this.opts.approval.requiresLocalRuntimeScheduleDelete?.(command_id) === true;
+      if ((dailyBriefReview || scheduleDeleteReview) && (url.search || !isLocalControlCenterBrowserRequest(req))) {
         res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
         return;
       }
-      if (dailyBriefReview && !hasDailyBriefOwnerToken(req, this.opts.owner_token)) {
+      if ((dailyBriefReview || scheduleDeleteReview) && !hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
         res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -3439,6 +3447,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
+      }
+      if (scheduleDeleteReview !== (content.kind === "schedule_delete")) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+      if (content.kind === "schedule_delete") {
+        const parsed = RuntimeScheduleDeleteReviewSchema.safeParse(content);
+        if (!parsed.success || parsed.data.command_id !== command_id) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+          return;
+        }
+        content = parsed.data;
       }
       if (content.kind === "settings_write" && (!validSettingsWriteReview(content, command_id) ||
           ((content.google_read_registration !== undefined || content.github_write_registration !== undefined ||
@@ -3733,8 +3755,32 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: requiresDailyBriefRead ? "daily_brief_approval_endpoint_required" : "daily_brief_approval_unavailable" }));
       return;
     }
+    const scheduleDeleteApproval = this.opts.approval?.requiresLocalRuntimeScheduleDelete?.(approval_id) === true;
+    if (scheduleDeleteApproval) {
+      res.setHeader("cache-control", "no-store");
+      if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+        return;
+      }
+      if (!hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "application_json_required" }));
+        return;
+      }
+      if (!this.resumeApprovalTokenStore || !this.opts.approval?.validateContentReview || !this.opts.approval.reviewContent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "schedule_delete_approval_unavailable" }));
+        return;
+      }
+    }
     if (dailyBriefMatch) {
-      if (!hasDailyBriefOwnerToken(req, this.opts.owner_token)) {
+      if (!hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -3753,9 +3799,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     let body: Record<string, unknown> | null;
     try {
-      body = nativeCredentialMatch || dailyBriefMatch ? await readJson(req, 1_024, true) : await readJson(req);
+      body = nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval ? await readJson(req, 1_024, true) : await readJson(req);
     } catch (error) {
-      if ((!nativeCredentialMatch && !dailyBriefMatch) || !(error instanceof Error) || error.message !== "body_too_large") throw error;
+      if ((!nativeCredentialMatch && !dailyBriefMatch && !scheduleDeleteApproval) || !(error instanceof Error) || error.message !== "body_too_large") throw error;
       res.writeHead(413, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "request_body_too_large" }));
       return;
@@ -3774,12 +3820,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "verdict (approve|reject|block) required" }));
       return;
     }
-    if (dailyBriefMatch && (!body ||
+    if ((dailyBriefMatch || scheduleDeleteApproval) && (!body ||
         !hasExactKeys(body, verdict === "approve" ? ["verdict", "approval_token", "content_review_digest"] : ["verdict", "approval_token"]) ||
         !/^[a-zA-Z0-9_-]{1,128}$/.test(approval_id) || typeof body.approval_token !== "string" || !body.approval_token ||
         (verdict === "approve" && (typeof body.content_review_digest !== "string" || !/^[a-f0-9]{64}$/.test(body.content_review_digest))))) {
       res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "invalid_daily_brief_approval" }));
+      res.end(JSON.stringify({ error: scheduleDeleteApproval ? "invalid_schedule_delete_approval" : "invalid_daily_brief_approval" }));
       return;
     }
     if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
@@ -3821,7 +3867,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (review !== "valid" && (nativeCredentialMatch || dailyBriefMatch || review !== "not_required")) {
+      if (review !== "valid" && (nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval || review !== "not_required")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
         return;
@@ -4875,6 +4921,55 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
   }
 
+  private async handleOwnerRuntimeScheduleDeleteProposal(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+      return;
+    }
+    if (!this.checkAuth(req, "owner")) {
+      res.writeHead(401);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const propose = this.opts.onOwnerRuntimeScheduleDeleteProposal;
+    if (!propose) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "schedule_delete_proposal_not_configured" }));
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      res.writeHead(415);
+      res.end(JSON.stringify({ error: "application_json_required" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+    let body: Record<string, unknown> | null;
+    try { body = await readJson(req, 1_024, true); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== "body_too_large") throw error;
+      res.writeHead(413);
+      res.end(JSON.stringify({ error: "request_body_too_large" }));
+      return;
+    }
+    const parsed = RuntimeScheduleDeleteProposalSchema.safeParse(body);
+    if (!parsed.success) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "invalid_schedule_delete_proposal" }));
+      return;
+    }
+    await this.respondToOwnerPlanProposal(res, true, () => propose({ ...parsed.data, actor: OWNER_TOKEN_ACTOR }),
+      "schedule_delete_proposal_unavailable");
+  }
+
   private async handleOwnerLlmSettingsProposal(req: IncomingMessage, res: ServerResponse): Promise<void> {
     res.setHeader("content-type", "application/json");
     res.setHeader("cache-control", "no-store");
@@ -4926,7 +5021,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
       return;
     }
-    await this.respondToOwnerSettingsProposal(res, Boolean(goal), () =>
+    await this.respondToOwnerPlanProposal(res, Boolean(goal), () =>
       propose({ expected_provider: provider.data, patch: { llm }, ...goal, actor: OWNER_TOKEN_ACTOR }));
   }
 
@@ -4995,24 +5090,25 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     const input = { ...goal, actor: OWNER_TOKEN_ACTOR };
     if (scope?.success && proposeGoogle) {
-      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGoogle({ scope: scope.data, ...input }));
+      await this.respondToOwnerPlanProposal(res, Boolean(goal), () => proposeGoogle({ scope: scope.data, ...input }));
     } else if (proposeGitHub) {
-      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGitHub(input));
+      await this.respondToOwnerPlanProposal(res, Boolean(goal), () => proposeGitHub(input));
     } else if (proposeTelegram) {
-      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeTelegram({ ...input,
+      await this.respondToOwnerPlanProposal(res, Boolean(goal), () => proposeTelegram({ ...input,
         ...(initialGrant?.success ? { initial_inbound_grant: initialGrant.data } : {}) }));
     }
   }
 
-  private async respondToOwnerSettingsProposal(
+  private async respondToOwnerPlanProposal(
     res: ServerResponse, hasGoal: boolean, propose: () => Promise<Record<string, unknown>>,
+    failureStatus = "settings_proposal_unavailable",
   ): Promise<void> {
     const projection = { used_for_authority: false, may_execute: false } as const;
     try {
       const result = await propose();
       if (result.accepted !== true) {
         res.writeHead(409);
-        res.end(JSON.stringify({ accepted: false, status: "settings_proposal_unavailable", ...projection }));
+        res.end(JSON.stringify({ accepted: false, status: failureStatus, ...projection }));
         return;
       }
       const { status, request_id, command_id, plan_id_digest } = result;
@@ -5030,7 +5126,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
     } catch {
       res.writeHead(503);
-      res.end(JSON.stringify({ accepted: false, status: "settings_proposal_unavailable", ...projection }));
+      res.end(JSON.stringify({ accepted: false, status: failureStatus, ...projection }));
     }
   }
 

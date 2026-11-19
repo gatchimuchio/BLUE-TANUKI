@@ -11,10 +11,10 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
-import { candidateFromCommand, CompleteHistoryStore, FailureMemoryStore, HDSUpperController,
+import { AuditLog, candidateFromCommand, CompleteHistoryStore, evaluateApproval, FailureMemoryStore, HDSUpperController,
   operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema,
-  type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
+  type ExecuteCommand, type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
 import { parseEnvFile } from "../src/env_file.js";
 import { buildLLMCommandRouteFromEnv } from "../src/llm_config.js";
 import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
@@ -23,6 +23,7 @@ import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_confi
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayTelegramUpdateStore } from "../src/telegram_update_store.js";
 import { GatewayWebChatOwnerTaskStore } from "../src/webchat_owner_task_store.js";
+import { RuntimeScheduleManager } from "../src/runtime_schedule.js";
 const ROOT = process.cwd();
 const WEBCHAT_TOKEN = "f1003-synthetic-inbound-token";
 const OWNER_TOKEN = "f1003-synthetic-owner-token";
@@ -1744,6 +1745,241 @@ Executor.prototype.execute = function (command, context) {
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
   }, 145_000);
+});
+
+describe("served owner runtime schedule deletion", () => {
+  it("deletes only the reviewed owner schedule through its goal and restores the deleted state after restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-owner-schedule-delete-"));
+    const runtimeSchedules = join(root, "schedules");
+    const scheduleFile = join(runtimeSchedules, "runtime-schedules.json");
+    const auditDirectory = join(root, "audit");
+    const auditFile = join(auditDirectory, "audit.jsonl");
+    const scheduleId = "owner-schedule-to-delete";
+    const foreignId = "foreign-runtime-schedule";
+    const bootId = "boot-configured-schedule";
+    const target = "synthetic-schedule-recipient";
+    const content = "synthetic private scheduled message";
+    const purpose = "合成試験で所有者の通知予定の一件だけを安全に削除する。";
+    const resumeToken = "synthetic-schedule-delete-resume";
+    const maintenanceToken = "synthetic-schedule-delete-maintenance";
+    const runtimeToken = "synthetic-schedule-delete-d4-runtime-token";
+    const ownerActor = "webchat-owner-token-holder";
+    const flags = { used_for_authority: false, may_execute: false };
+    let gateway: CapturedProcess | undefined;
+    try {
+      mkdirSync(auditDirectory);
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: auditFile }) });
+      const seedEnv = { BLUE_TANUKI_SCHEDULES_DIR: runtimeSchedules };
+      const seed = await RuntimeScheduleManager.open({ env: seedEnv,
+        onLifecycle: (event, lifecycle) => hds.onScheduleLifecycle(event, lifecycle) });
+      for (const [id, actor] of [[scheduleId, ownerActor], [foreignId, "another-schedule-actor"]] as const) {
+        const requestId = randomUUID();
+        const create: ExecuteCommand = { id: randomUUID(), type: "tool_call",
+          payload: { tool_name: "schedule.create", arguments: { id, channel: "webchat", target, content, interval_ms: 120_000 } },
+          constraints: { allowed_tools: ["schedule.create"], allowed_capabilities: ["tool:schedule.create", "schedule:create"] },
+          upstream_decision: { frame_goal: "synthetic schedule setup", model_abstraction: "fixture", commit_decision: "ASSERT",
+            commit_hash: createHash("sha256").update(requestId).digest("hex") },
+        };
+        const evaluation = evaluateApproval(create, [], { actor, default_mode: "full_access" });
+        expect(evaluation).toMatchObject({ decision: "ask", approval_level: "L3_final_review" });
+        hds.onApprovalEvaluation(evaluation, { request_id: requestId });
+        expect(seed.preparePending(create, evaluation, { request_id: requestId, actor }).ok).toBe(true);
+        hds.onCommandLifecycle(create.id, "approval_approved", { actor: "webchat-resume-token-holder",
+          reason: "human_approval:approve", request_id: requestId });
+        const createTool = seed.tools().find(tool => tool.name === "schedule.create")!;
+        expect(await createTool.invoke({}, { command_id: create.id, upstream_commit_hash: create.upstream_decision.commit_hash }))
+          .toMatchObject({ schedule_id: id, status: "active" });
+      }
+      await seed.drain();
+      expect(hds.getAudit().verify()).toBe(true);
+      const scheduleBefore = readFileSync(scheduleFile);
+      const foreignBefore = (JSON.parse(scheduleBefore.toString("utf8")) as Record<string, unknown>[]).find(row => row.id === foreignId);
+
+      const port = await reservePort();
+      const origin = `http://127.0.0.1:${port}`;
+      const config = { ...fixtureOsEnvironment(), ...seedEnv, WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(port), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: resumeToken, BLUE_TANUKI_OWNER_TOKEN: OWNER_TOKEN, BLUE_TANUKI_MAINTENANCE_TOKEN: maintenanceToken,
+        BLUE_TANUKI_D4_RUNTIME_TOKEN: runtimeToken, BLUE_TANUKI_D4_RUNTIME_ID: "blue_tanuki", BLUE_TANUKI_APPROVAL_MODE: "full_access",
+        BLUE_TANUKI_AUDIT_DIR: auditDirectory, BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_FILE_ROOT: root,
+        BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "complete-history.jsonl"), BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"), LLM_BACKEND: "stub",
+        BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: bootId, channel: "webchat", target, content, interval_ms: 120_000 }]) };
+      const request = async (route: string, bearer: string, body?: object, options: { origin?: string; owner?: boolean } = {}) => {
+        const send = () => fetch(`${origin}${route}`, { method: body ? "POST" : "GET", signal: AbortSignal.timeout(10_000),
+          headers: { ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...(body ? { "content-type": "application/json" } : {}),
+            ...(options.origin ? { origin: options.origin } : {}), ...(options.owner ? { "x-blue-tanuki-owner-token": OWNER_TOKEN } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}) });
+        const first = await send();
+        if (first.status !== 429 || bearer !== resumeToken) return first;
+        const limited = await first.clone().json() as { error?: string; retry_after_ms?: number };
+        if (limited.error !== "rate_limited" || typeof limited.retry_after_ms !== "number" ||
+            limited.retry_after_ms <= 0 || limited.retry_after_ms > 5_000) return first;
+        await delay(limited.retry_after_ms + 50);
+        return await send();
+      };
+      const getQueue = async () => {
+        const response = await request("/approval", resumeToken);
+        expect(response.status).toBe(200);
+        return (await response.json() as { pending_approvals: Record<string, unknown>[] }).pending_approvals;
+      };
+      const approvals = async (commandId: string) => {
+        const pending = (await getQueue()).find(item => item.command_id === commandId);
+        expect(pending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+          content_review_required: true, approval_token: expect.any(String) });
+        return { route: `/approval/${encodeURIComponent(commandId)}`, pending: pending! };
+      };
+      const finishOrdinaryReview = async (commandId: string, expectedKind: string) => {
+        const { route, pending } = await approvals(commandId);
+        const review = await request(`${route}/content`, resumeToken, {}, { origin });
+        expect(review.status).toBe(200);
+        expect(review.headers.get("cache-control")).toBe("no-store");
+        const reviewBody = await review.json() as { command_digest: string; review_digest?: string };
+        expect(reviewBody).toMatchObject({ kind: expectedKind, ...flags });
+        const result = await request(route, resumeToken, { verdict: "approve", approval_token: pending.approval_token,
+          content_review_digest: reviewBody.review_digest ?? reviewBody.command_digest }, { origin });
+        expect(result.status, await result.clone().text()).toBe(200);
+        return await result.json();
+      };
+      const schedules = async () => {
+        const snapshot = await request("/runtime/snapshot", WEBCHAT_TOKEN);
+        expect(snapshot.status).toBe(200);
+        const body = await snapshot.text();
+        expect(body).not.toContain(content);
+        return JSON.parse(body) as GatewaySnapshot & {
+          runtime_schedules: Record<string, unknown>[];
+          scheduled_tasks: { id: string; origin: string; enabled: boolean }[];
+        };
+      };
+
+      gateway = spawnGateway(config);
+      await waitForHealth(port, gateway, 60_000);
+      const adopted = await request("/owner/goal-purpose-adoption", OWNER_TOKEN, { purpose_text: purpose }, { origin });
+      expect(adopted.status).toBe(202);
+      const adoption = await adopted.json() as { command_id: string };
+      expect(await finishOrdinaryReview(adoption.command_id, "goal_purpose_adoption")).toMatchObject({ ok: true });
+      const goals = await request("/owner/task-goals", OWNER_TOKEN);
+      expect(goals.status).toBe(200);
+      const { goals: [goal] } = await goals.json() as { goals: { goal_ref: string; purpose_version: number }[] };
+      expect(goal).toMatchObject({ goal_ref: expect.any(String), purpose_version: 1 });
+      const goalSelection = { goal_ref: goal!.goal_ref, purpose_version: goal!.purpose_version };
+
+      const initialSnapshot = await schedules();
+      const before = initialSnapshot.runtime_schedules;
+      const selected = before.find(row => row.id === scheduleId);
+      const foreign = before.find(row => row.id === foreignId);
+      expect(selected).toMatchObject({ status: "active", delete_revision_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      expect(foreign).toMatchObject({ status: "active", delete_revision_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      expect(before.some(row => row.id === bootId)).toBe(false);
+      expect(initialSnapshot.scheduled_tasks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: scheduleId, origin: "runtime", enabled: true }),
+        expect.objectContaining({ id: foreignId, origin: "runtime", enabled: true }),
+        expect.objectContaining({ id: bootId, origin: "boot", enabled: true }),
+      ]));
+      const route = "/owner/runtime-schedule-delete-proposal";
+      const selection = { ...goalSelection, id: scheduleId, expected_revision_digest: selected!.delete_revision_digest };
+      for (const bearer of ["", WEBCHAT_TOKEN, resumeToken, maintenanceToken, runtimeToken]) {
+        expect((await request(route, bearer, selection, { origin })).status).toBe(401);
+      }
+      expect((await request(route, OWNER_TOKEN, selection)).status).toBe(403);
+      expect((await request(route, OWNER_TOKEN, selection, { origin: "https://other.invalid" })).status).toBe(403);
+      expect((await request(`${route}?ignored=1`, OWNER_TOKEN, selection, { origin })).status).toBe(403);
+      expect((await request(route, OWNER_TOKEN, { ...selection, actor: "forged" }, { origin })).status).toBe(400);
+      for (const invalid of [{ ...selection, expected_revision_digest: "0".repeat(64) }, { ...selection, purpose_version: 2 },
+        { ...selection, id: bootId }, { ...selection, id: foreignId, expected_revision_digest: foreign!.delete_revision_digest }]) {
+        expect((await request(route, OWNER_TOKEN, invalid, { origin })).status).toBe(409);
+      }
+      expect(await getQueue()).toEqual([]);
+      expect(readFileSync(scheduleFile)).toEqual(scheduleBefore);
+
+      const proposal = await request(route, OWNER_TOKEN, selection, { origin });
+      expect(proposal.status, await proposal.clone().text()).toBe(202);
+      expect(proposal.headers.get("cache-control")).toBe("no-store");
+      const receipt = await proposal.json() as { plan_id_digest: string; request_id: string };
+      expect(receipt).toEqual({ accepted: true, status: "candidate_ready", request_id: expect.any(String),
+        plan_id_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), ...flags });
+      const plan = (await schedules()).operation_plan_status?.plans?.find(row => row.plan_id === receipt.plan_id_digest);
+      expect(plan).toMatchObject({ revision_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), goal_purpose_binding: goalSelection,
+        steps: [{ operation: "schedule.delete", step_id: expect.any(String), status: "not_selected" }] });
+      expect(await getQueue()).toEqual([]);
+      expect(readFileSync(scheduleFile)).toEqual(scheduleBefore);
+
+      const relation = await request("/owner/goal-purpose-relation-review", OWNER_TOKEN, { plan_id_digest: receipt.plan_id_digest,
+        revision_digest: plan!.revision_digest, outcome: "supports" }, { origin });
+      expect(relation.status, await relation.clone().text()).toBe(202);
+      const relationReceipt = await relation.json() as { command_id: string };
+      expect(await finishOrdinaryReview(relationReceipt.command_id, "goal_purpose_relation")).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
+      } });
+
+      const [step] = plan!.steps as { step_id: string }[];
+      const selectionControl = await invokeOwnerControl(port, "synthetic-schedule-owner-review", OWNER_TOKEN, "review", {
+        plan_id: receipt.plan_id_digest, revision_digest: plan!.revision_digest, step_id: step!.step_id,
+        goal_purpose_binding: plan!.goal_purpose_binding,
+      });
+      expect(selectionControl.status).toBe(202);
+      const pending = await waitFor(async () => (await getQueue()).find(item => item.operation === "schedule.delete") ?? null,
+        gateway, "owner plan did not queue the exact schedule deletion review");
+      const approvalRoute = `/approval/${encodeURIComponent(String(pending.command_id))}`;
+      const sameOwner = { origin, owner: true };
+      expect((await request(`${approvalRoute}/content`, resumeToken, {}, { origin })).status).toBe(401);
+      expect((await request(`${approvalRoute}/content`, resumeToken, {}, { ...sameOwner, origin: "https://other.invalid" })).status).toBe(403);
+      const review = await request(`${approvalRoute}/content`, resumeToken, {}, sameOwner);
+      expect(review.status, await review.clone().text()).toBe(200);
+      expect(review.headers.get("cache-control")).toBe("no-store");
+      const reviewBody = await review.text();
+      const reviewed = JSON.parse(reviewBody) as { review_digest: string };
+      expect(reviewBody).not.toContain(content);
+      expect(reviewed).toMatchObject({ kind: "schedule_delete", operation: "schedule.delete", schedule_id: scheduleId,
+        command_id: pending.command_id, command_digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), revision_digest: selected!.delete_revision_digest, channel: "webchat",
+        target, interval_ms: 120_000, payload_hash: selected!.payload_hash, ...goalSelection,
+        operation_plan_binding_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), no_store: true, ...flags });
+      const verdict = { verdict: "approve", approval_token: pending.approval_token };
+      expect((await request(approvalRoute, resumeToken, verdict, { origin })).status).toBe(401);
+      expect((await request(approvalRoute, resumeToken, verdict, { ...sameOwner, origin: "https://other.invalid" })).status).toBe(403);
+      const missingDigest = await request(approvalRoute, resumeToken, verdict, sameOwner);
+      expect(missingDigest.status).toBe(400);
+      expect(await missingDigest.json()).toEqual({ error: "invalid_schedule_delete_approval" });
+      expect((await request(approvalRoute, resumeToken, { ...verdict, content_review_digest: "0".repeat(64) }, sameOwner)).status).toBe(409);
+      const shortcut = await request("/resume", resumeToken, { ...verdict, request_id: pending.command_id }, sameOwner);
+      expect(shortcut.status).toBe(409);
+      expect(await shortcut.json()).toEqual({ error: "approval_endpoint_required" });
+      expect(readFileSync(scheduleFile)).toEqual(scheduleBefore);
+      const approved = await request(approvalRoute, resumeToken, { ...verdict, content_review_digest: reviewed.review_digest }, sameOwner);
+      expect(approved.status, await approved.clone().text()).toBe(200);
+      expect(await approved.json()).toMatchObject({ ok: true, result: { approval: "approve", executed: true } });
+      const committedSnapshot = await schedules();
+      const after = committedSnapshot.runtime_schedules;
+      expect(after.find(row => row.id === scheduleId)).toMatchObject({ status: "deleted", enabled: false });
+      expect(after.find(row => row.id === scheduleId)).not.toHaveProperty("delete_revision_digest");
+      expect(after.find(row => row.id === foreignId)).toEqual(foreign);
+      expect(committedSnapshot.scheduled_tasks.some(row => row.id === scheduleId)).toBe(false);
+      expect(committedSnapshot.scheduled_tasks.map(row => row.id)).toEqual(
+        initialSnapshot.scheduled_tasks.map(row => row.id).filter(id => id !== scheduleId));
+      const persisted = JSON.parse(readFileSync(scheduleFile, "utf8")) as Record<string, unknown>[];
+      expect(persisted.find(row => row.id === foreignId)).toEqual(foreignBefore);
+      expect(persisted.find(row => row.id === scheduleId)).toMatchObject({ status: "deleted", enabled: false });
+      expect(persisted.some(row => row.id === bootId)).toBe(false);
+
+      await stopChild(gateway);
+      const audit = new AuditLog({ filepath: auditFile, read_only: true });
+      expect(audit.verify()).toBe(true);
+      const deletions = audit.list().flatMap(({ log }) => "kind" in log && log.kind === "schedule_lifecycle" &&
+        log.event === "schedule.lifecycle.deleted" ? [log] : []);
+      expect(deletions).toMatchObject([{ schedule_id: scheduleId, command_id: pending.command_id, operation: "delete" }]);
+      gateway = spawnGateway(config);
+      await waitForHealth(port, gateway, 60_000);
+      const restarted = await schedules();
+      expect(restarted.runtime_schedules).toEqual(after);
+      expect(restarted.scheduled_tasks.map(row => row.id)).toEqual(committedSnapshot.scheduled_tasks.map(row => row.id));
+      expect((await request(route, OWNER_TOKEN, selection, { origin })).status).toBe(409);
+      expect(await getQueue()).toEqual([]);
+    } finally {
+      if (gateway) await stopChild(gateway);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 170_000);
 });
 
 describe("served D4 Runtime work observation", () => {

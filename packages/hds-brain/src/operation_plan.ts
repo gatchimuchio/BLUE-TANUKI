@@ -14,6 +14,7 @@ import {
   type OperationPlanGatewayReceiptRecheckEvidence, OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   SettingsWriteArgumentsSchema,
+  RuntimeScheduleDeleteArgumentsSchema, runtimeScheduleDeleteResult,
   type OperationCommandExecutionResult,
   type GatewayInternalInboundRequestInput,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
@@ -2360,6 +2361,12 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
         throw new Error(`plan_settings_${registration}_requires_owner_input`);
       }
     }
+    if (p.owner_runtime_schedule_delete ?
+      (p.revisions.length !== 1 || first.steps.length !== 1 || first.steps[0]!.operation !== "schedule.delete" ||
+        p.owner !== "webchat-owner-token-holder" || p.channel !== "webchat" || !p.goal_purpose_binding ||
+        !hasConnectedPlanTarget(first.steps[0]!)) : p.bindings.some(binding => binding.operation === "schedule.delete")) {
+      throw new Error("plan_runtime_schedule_delete_requires_owner_input");
+    }
     if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
     ids.add(first.plan_id);
     if (p.request_goal_criteria && (p.request_goal_criteria.request_id !== first.request_id ||
@@ -2656,6 +2663,22 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  if (step.operation === "schedule.delete") {
+    const args = RuntimeScheduleDeleteArgumentsSchema.safeParse(parameters);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return args.success && step.adapter === "internal_runtime" && step.target.kind === "runtime" &&
+      step.target.id === "gateway.runtime-schedules" && step.target.scope === args.data.id &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.effects.length === 3 && step.effects[0] === "schedule_change" && step.effects[1] === "delete" && step.effects[2] === "write" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required && step.permission.hds_brain_authority_required &&
+      preparation !== undefined && preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false && preparation.validation.length === 1 &&
+      validation?.check_id === "runtime-schedule-deleted" && validation.method === "result_equals" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest(runtimeScheduleDeleteResult(args.data.id));
+  }
   if (step.operation === "mcp.call") {
     const requestKind = parameters?.request_kind ?? "tool_call";
     const templateRead = requestKind === "resource_read" && parameters?.resource_template_sha256 !== undefined;
@@ -4294,12 +4317,18 @@ export class OperationPlanLedger {
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
     computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
     memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[],
-    parentPlanReference?: OperationPlanComputeParent, fromOwnerSettingsInput = false): string {
+    parentPlanReference?: OperationPlanComputeParent, ownerInput?: "settings" | "runtime_schedule_delete"): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     let plan = candidatePlan(value);
     const ownerSettingsInput = plan.steps.map(stepOwnerSettingsInput).find(Boolean);
-    if (ownerSettingsInput && (!fromOwnerSettingsInput || plan.steps.length !== 1 || !hasConnectedPlanTarget(plan.steps[0]!))) {
+    if (ownerSettingsInput && (ownerInput !== "settings" || plan.steps.length !== 1 || !hasConnectedPlanTarget(plan.steps[0]!))) {
       throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
+    }
+    const scheduleDeletion = plan.steps.some(step => step.operation === "schedule.delete");
+    if (scheduleDeletion && (ownerInput !== "runtime_schedule_delete" || plan.steps.length !== 1 ||
+        origin.user !== "webchat-owner-token-holder" || origin.channel !== "webchat" ||
+        !isGatewayInternalInboundRequest(origin) || !hasConnectedPlanTarget(plan.steps[0]!))) {
+      throw new Error("plan_runtime_schedule_delete_requires_owner_input");
     }
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
@@ -4516,6 +4545,7 @@ export class OperationPlanLedger {
       ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
       ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
       ...(ownerSettingsInput === "telegram_bot_registration" ? { owner_settings_telegram_bot_registration: true } : {}),
+      ...(scheduleDeletion ? { owner_runtime_schedule_delete: true } : {}),
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
     return operationPlanDigest(plan.plan_id);
   }
@@ -4678,6 +4708,9 @@ export class OperationPlanLedger {
         (ownerSettingsInput === "github_write_registration" && !p.owner_settings_github_write_registration) ||
         (ownerSettingsInput === "telegram_bot_registration" && !p.owner_settings_telegram_bot_registration)) {
       throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
+    }
+    if (step.operation === "schedule.delete" && !p.owner_runtime_schedule_delete) {
+      throw new Error("plan_runtime_schedule_delete_requires_owner_input");
     }
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
@@ -5083,6 +5116,24 @@ export class OperationPlanLedger {
     }
     return digest;
   }
+  /** 予定削除の審査で現在の目的版を表示する。正本や承認状態は変更しない。 */
+  runtimeScheduleDeleteGoalBinding(command: ExecuteCommand): OperationPlanGoalPurposeBinding | undefined {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.delete" ||
+        this.issuedBindings.get(command) !== command.id || this.recoveryRefreshPending || this.memoryQuiesced) return undefined;
+    const match = this.binding(command.id);
+    if (!match || !match.p.owner_runtime_schedule_delete || match.b.status !== "selected") return undefined;
+    const { p, b } = match;
+    const purpose = p.goal_purpose_binding;
+    const current = p.revisions.at(-1);
+    if (!purpose || !current || current.digest !== b.revision_digest ||
+        this.recoveryHolds.has(operationPlanDigest(current.plan.plan_id)) || b.operation !== "schedule.delete" ||
+        command.upstream_decision.commit_decision !== "ASSERT" || command.upstream_decision.commit_hash !== b.commit_hash ||
+        command.upstream_decision.request_id !== b.request_id || commandPayloadDigest(command) !== b.payload_digest ||
+        operationPlanDigest(command) !== b.command_digest || !matchesCanonicalExecutorCommandDigest(command, b.executor_command_digest) ||
+        !this.goalPurposeBindingIsCurrent(purpose) || this.goalPurposeRelationIssue(p) !== undefined) return undefined;
+    return structuredClone(purpose);
+  }
+
   /** J所有計画のstep・改訂をまたぐ安定した非権威task identity。 */
   executionTaskIdentityDigest(command: ExecuteCommand): string | undefined {
     // Reuse the current-source checks so stale or unselected plans cannot mint
@@ -8523,6 +8574,9 @@ export class OperationPlanLedger {
     const next = candidatePlan(input);
     const old = p.revisions.at(-1)!.plan;
     if (next.plan_id !== old.plan_id || next.request_id !== old.request_id) throw new Error("plan_revision_identity_changed");
+    if (p.owner_runtime_schedule_delete || next.steps.some(step => step.operation === "schedule.delete")) {
+      throw new Error("plan_runtime_schedule_delete_requires_owner_input");
+    }
     const ownerSettingsInput = p.owner_settings_telegram_bot_registration ? "telegram_bot_registration"
       : p.owner_settings_github_write_registration ? "github_write_registration"
       : p.owner_settings_activation ? "activation" : p.owner_settings_credential_rotation

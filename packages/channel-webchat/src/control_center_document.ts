@@ -770,6 +770,8 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>History</span><span id="approval-history-count">not loaded</span></div>
           </div>
           <input id="approval-token" type="password" autocomplete="off" placeholder="resume token" />
+          <label id="runtime-schedule-delete-approval-owner" hidden>予定削除の審査用owner token<input id="runtime-schedule-delete-review-owner-token" type="password" autocomplete="off" /></label>
+          <p id="runtime-schedule-delete-approval-status" class="muted" role="status"></p>
           <input id="approval-emergency-reason" type="text" autocomplete="off" placeholder="emergency stop reason" />
           <div class="action-row">
             <button id="load-approvals" class="primary">Load</button>
@@ -832,6 +834,17 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="schedule-summary" class="badge warn">not loaded</span>
           </div>
           <div id="runtime-schedule-list" class="schedule-list"></div>
+          <section id="runtime-schedule-delete-request" hidden>
+            <div class="approval-content-review">
+              <label>削除案の対象<select id="runtime-schedule-delete-id"><option value="">運転中の予定を選択</option></select></label>
+              <label>申請用のowner token<input id="runtime-schedule-delete-owner-token" type="password" autocomplete="off" /></label>
+              <button id="load-runtime-schedule-delete-goals" type="button">委任目的を読み込む</button>
+              <label>削除の委任目的<select id="runtime-schedule-delete-goal"><option value="">委任目的を選択</option></select></label>
+              <button id="prepare-runtime-schedule-delete" class="primary" type="button" disabled>予定の削除案を作成</button>
+              <button id="open-runtime-schedule-delete-plan" type="button" hidden>計画を確認</button>
+              <p id="runtime-schedule-delete-status" role="status"></p>
+            </div>
+          </section>
           <section id="daily-brief-read-request" class="approval-content-review" hidden>
             <label>Daily Brief の取得元<select id="daily-brief-read-service"></select></label>
             <label>申請用のowner token<input id="daily-brief-owner-token" type="password" autocomplete="off" /></label>

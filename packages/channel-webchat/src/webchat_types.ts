@@ -1,6 +1,7 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
   ComposioActionContentReview, D4RuntimeIntentReplyObservation, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
+  RuntimeScheduleDeleteProposal, RuntimeScheduleDeleteReview,
   SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
   SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
   SettingsWriteLlmProvider, SettingsWritePatch, SettingsWriteTelegramBotCredentialReview, TelegramInboundGrant,
@@ -1550,6 +1551,7 @@ export interface WebChatMcpCallContentReview {
 export type WebChatComposioExecuteContentReview = ComposioActionContentReview & { command_id: string };
 
 export type WebChatApprovalContentReview = WebChatDailyBriefReadContentReview | WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
+  RuntimeScheduleDeleteReview |
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview | WebChatGoalPurposeRepairContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
@@ -1683,6 +1685,7 @@ export interface WebChatApprovalSurface {
   /** Credential registration approvals require the local browser route before any one-shot token is consumed. */
   requiresNativeCredentialApproval?: (approval_id: string) => boolean;
   requiresLocalDailyBriefRead?: (approval_id: string) => boolean;
+  requiresLocalRuntimeScheduleDelete?: (approval_id: string) => boolean;
   /** Return redacted metadata for currently executing commands. */
   activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
   /** Request cancellation by exact active command identity; null means no current match. */
@@ -2128,6 +2131,8 @@ export interface WebChatOptions {
   onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly WebChatTaskGoalOption[]>;
   /** Request preparation of an exact non-secret LLM settings change through J. */
   onOwnerLlmSettingsProposal?: (input: WebChatOwnerLlmSettingsProposal & { actor: string }) =>
+    Promise<Record<string, unknown>>;
+  onOwnerRuntimeScheduleDeleteProposal?: (input: RuntimeScheduleDeleteProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerGoogleReadCredentialProposal?: (input: WebChatOwnerGoogleReadCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;

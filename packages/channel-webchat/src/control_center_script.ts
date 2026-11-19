@@ -495,6 +495,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (state.activeScreen === "approvals" && selected !== "approvals") {
           clearDailyBriefResult();
           clearDailyBriefReviewOwnerToken();
+          clearRuntimeScheduleDeleteReviewOwnerToken();
         }
         state.activeScreen = selected;
         sessionStorage.setItem("bt.activeScreen", selected);
@@ -2983,6 +2984,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
 
         setText("schedule-json", compactJson(redactRuntimeValue({ runtime_schedules: runtimeSchedules, scheduled_tasks: configuredTasks })));
+        renderRuntimeScheduleDeleteOptions(runtimeSchedules);
         const nextRead = availableRead && isLocalCredentialControlCenter() ? availableRead : null;
         if (state.dailyBriefReadMarker?.occurrence_id_digest !== nextRead?.occurrence_id_digest ||
             JSON.stringify(state.dailyBriefReadMarker?.services) !== JSON.stringify(nextRead?.services)) {
@@ -2994,6 +2996,132 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         const requestPanel = byId("daily-brief-read-request");
         if (requestPanel) requestPanel.hidden = nextRead === null;
+      }
+
+      function isRuntimeScheduleDeleteDigest(value) {
+        return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+      }
+
+      function currentRuntimeScheduleDeleteRow() {
+        const id = byId("runtime-schedule-delete-id").value;
+        return state.runtimeScheduleDeleteRows?.find(function (row) { return row.id === id; });
+      }
+
+      function updateRuntimeScheduleDeleteButtons() {
+        const pending = Boolean(state.runtimeScheduleDeleteRequest);
+        byId("load-runtime-schedule-delete-goals").disabled = pending;
+        byId("prepare-runtime-schedule-delete").disabled = pending || !currentRuntimeScheduleDeleteRow() ||
+          !byId("runtime-schedule-delete-goal").value;
+      }
+
+      function clearRuntimeScheduleDeleteReceipt() {
+        byId("open-runtime-schedule-delete-plan").hidden = true;
+        setText("runtime-schedule-delete-status", "");
+      }
+
+      function retireRuntimeScheduleDeleteSelection() {
+        const request = state.runtimeScheduleDeleteRequest;
+        request?.controller.abort();
+        clearRuntimeScheduleDeleteReceipt();
+        if (request && !request.goalsOnly) {
+          setText("runtime-schedule-delete-status", "前の削除案の受付は未確認です。再申請の前に計画を確認してください。");
+        }
+        updateRuntimeScheduleDeleteButtons();
+      }
+
+      function renderRuntimeScheduleDeleteOptions(schedules) {
+        const panel = byId("runtime-schedule-delete-request");
+        const select = byId("runtime-schedule-delete-id");
+        const rows = isLocalCredentialControlCenter() ? schedules.filter(function (row) {
+          return isObject(row) && row.origin === "runtime" && row.status === "active" && row.enabled === true &&
+            !row.pending_operation && typeof row.id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(row.id) &&
+            isRuntimeScheduleDeleteDigest(row.delete_revision_digest);
+        }) : [];
+        const selected = currentRuntimeScheduleDeleteRow();
+        const previous = state.runtimeScheduleDeleteRows ?? [];
+        state.runtimeScheduleDeleteRows = rows;
+        panel.hidden = rows.length === 0;
+        if (!rows.length && !previous.length) return;
+        const keep = selected && rows.some(function (row) {
+          return row.id === selected.id && row.delete_revision_digest === selected.delete_revision_digest;
+        });
+        select.replaceChildren(new Option("運転中の予定を選択", ""));
+        for (const row of rows) {
+          const interval = Number.isSafeInteger(row.interval_ms) && row.interval_ms > 0;
+          const timing = interval ? formatInterval(row.interval_ms)
+            : String(row.time || "") + (typeof row.time_zone === "string" ? " · " + row.time_zone : "");
+          select.add(new Option(row.id + " · " + timing, row.id));
+        }
+        select.value = keep ? selected.id : "";
+        if (selected && !keep) retireRuntimeScheduleDeleteSelection();
+        if (!rows.length) byId("runtime-schedule-delete-owner-token").value = "";
+        updateRuntimeScheduleDeleteButtons();
+      }
+
+      async function submitRuntimeScheduleDeleteRequest(goalsOnly) {
+        const status = "runtime-schedule-delete-status";
+        const input = byId("runtime-schedule-delete-owner-token");
+        const goal = byId("runtime-schedule-delete-goal");
+        const token = input.value.trim();
+        const row = currentRuntimeScheduleDeleteRow();
+        const goalRef = goal.value;
+        const purposeVersion = Number(goal.selectedOptions[0]?.dataset.purposeVersion);
+        if (state.runtimeScheduleDeleteRequest || !isLocalCredentialControlCenter() || !state.runtimeScheduleDeleteRows?.length) return;
+        if (!token) {
+          setText(status, "owner tokenを入力してください。");
+          return;
+        }
+        if (!goalsOnly && (!row || !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
+            !Number.isSafeInteger(purposeVersion) || purposeVersion < 1)) {
+          setText(status, "運転中の予定と現在の委任目的を選択してください。");
+          return;
+        }
+        clearRuntimeScheduleDeleteReceipt();
+        if (goalsOnly) goal.replaceChildren(new Option("委任目的を選択", ""));
+        const request = { controller: new AbortController(), goalsOnly: goalsOnly };
+        state.runtimeScheduleDeleteRequest = request;
+        const isCurrent = function () {
+          const current = currentRuntimeScheduleDeleteRow();
+          return state.runtimeScheduleDeleteRequest === request && !request.controller.signal.aborted &&
+            (goalsOnly || (current?.id === row.id && current.delete_revision_digest === row.delete_revision_digest &&
+              goal.value === goalRef && Number(goal.selectedOptions[0]?.dataset.purposeVersion) === purposeVersion));
+        };
+        input.value = "";
+        updateRuntimeScheduleDeleteButtons();
+        setText(status, goalsOnly ? "委任目的を読み込んでいます。" : "予定の削除案を作成しています。");
+        try {
+          const path = goalsOnly ? "/owner/task-goals" : "/owner/runtime-schedule-delete-proposal";
+          const response = await fetch(path, {
+            method: goalsOnly ? "GET" : "POST", cache: "no-store", mode: "same-origin", redirect: "error",
+            referrerPolicy: "origin", signal: request.controller.signal,
+            headers: { ...authHeaders(token), ...(goalsOnly ? {} : { "content-type": "application/json" }) },
+            ...(goalsOnly ? {} : { body: JSON.stringify({ id: row.id, expected_revision_digest: row.delete_revision_digest,
+              goal_ref: goalRef, purpose_version: purposeVersion }) })
+          });
+          const result = response.status === (goalsOnly ? 200 : 202) && hasNoStore(response) ? await response.json() : null;
+          if (!isCurrent()) return;
+          if (goalsOnly) {
+            if (!isObject(result) || !Array.isArray(result.goals)) throw new Error("goals_unavailable");
+            const hasGoal = renderOwnerTaskGoalOptions(goal, result.goals, "委任目的を選択");
+            setText(status, hasGoal ? "現在の委任目的を選び、申請用のowner tokenを入力してください。"
+              : "利用できる委任目的がありません。");
+          } else {
+            if (!isObject(result) || Object.keys(result).length !== 6 || result.accepted !== true || result.status !== "candidate_ready" ||
+                result.used_for_authority !== false || result.may_execute !== false ||
+                typeof result.request_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(result.request_id) ||
+                !isRuntimeScheduleDeleteDigest(result.plan_id_digest)) throw new Error("candidate_unavailable");
+            setText(status, "削除案 " + result.plan_id_digest.slice(0, 12) + " を作成しました。計画画面で目的との関係と削除対象を確認してください。");
+            byId("open-runtime-schedule-delete-plan").hidden = false;
+          }
+        } catch {
+          if (isCurrent()) setText(status, goalsOnly ? "委任目的を確認できませんでした。"
+            : "削除案の受付を確認できませんでした。再申請の前に予定と計画の状態を確認してください。");
+        } finally {
+          if (state.runtimeScheduleDeleteRequest === request) {
+            state.runtimeScheduleDeleteRequest = null;
+            updateRuntimeScheduleDeleteButtons();
+          }
+        }
       }
 
       async function submitDailyBriefRead() {
@@ -4148,6 +4276,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           dailyBriefOwner.hidden = !pending.some(function (item) { return item.daily_brief_read === true; });
           if (dailyBriefOwner.hidden) clearDailyBriefReviewOwnerToken();
         }
+        const scheduleDeleteOwner = byId("runtime-schedule-delete-approval-owner");
+        if (scheduleDeleteOwner) {
+          const wasVisible = scheduleDeleteOwner.hidden === false;
+          scheduleDeleteOwner.hidden = !pending.some(function (item) {
+            return item.operation === "schedule.delete" && item.content_review_required === true;
+          }) || !isLocalCredentialControlCenter();
+          if (wasVisible && scheduleDeleteOwner.hidden) clearRuntimeScheduleDeleteReviewOwnerToken();
+        }
 
         if (pending.length === 0) {
           setHtml("approval-list", '<div class="queue-item muted">no pending approvals</div>');
@@ -4179,6 +4315,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const isGoalPurposeRepair = isRecoveryRestore && item.goal_purpose_repair === true;
               const isGoalPurposeAdoption = typeof item.target === "string" && item.target.startsWith("goal.governance.adopt:");
               const isDailyBriefRead = item.daily_brief_read === true;
+              const isScheduleDelete = item.operation === "schedule.delete" && item.content_review_required === true;
               const recoveryArchiveSha = isRecoveryRestore && typeof item.recovery_archive_sha256 === "string" &&
                 /^[a-f0-9]{64}$/.test(item.recovery_archive_sha256) ? item.recovery_archive_sha256 : null;
               const requiresContentReview = item.content_review_required === true || isGoalPurposeRepair || isDailyBriefRead;
@@ -4192,6 +4329,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                  (isGoalPurposeAdoption ? ' data-goal-purpose-adoption="' + escapeHtml(item.target) + '"' : '') +
                  (isGoalPurposeRepair ? ' data-goal-purpose-repair=""' : '') +
                  (isDailyBriefRead ? ' data-daily-brief-read=""' : '') +
+                 (isScheduleDelete ? ' data-runtime-schedule-delete=""' : '') +
                  (meaningUpdateReview ? ' data-proposal-digest="' + escapeHtml(meaningUpdateReview.proposal_digest) +
                    '" data-candidate-digest="' + escapeHtml(meaningUpdateReview.candidate_digest) +
                    '" data-target-record-id="' + escapeHtml(meaningUpdateReview.target_record_id) +
@@ -7500,6 +7638,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return true;
       }
 
+      function clearRuntimeScheduleDeleteReviews() {
+        state.runtimeScheduleDeleteReviewGeneration = (state.runtimeScheduleDeleteReviewGeneration ?? 0) + 1;
+        document.querySelectorAll(".queue-item[data-runtime-schedule-delete]").forEach(function (card) {
+          delete state.approvalContentDigests[card.getAttribute("data-command")];
+          const view = card.querySelector("[data-content-review-view]");
+          const approve = card.querySelector('[data-verdict="approve"]');
+          if (view) view.textContent = "";
+          if (approve) approve.disabled = true;
+        });
+      }
+
+      function clearRuntimeScheduleDeleteReviewOwnerToken() {
+        byId("runtime-schedule-delete-review-owner-token").value = "";
+        clearRuntimeScheduleDeleteReviews();
+      }
+
       async function submitApproval(commandId, verdict, approvalToken) {
         const token = byId("approval-token").value.trim();
         const card = Array.from(document.querySelectorAll(".queue-item[data-command]"))
@@ -7507,7 +7661,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const adoptionCard = card?.getAttribute("data-goal-purpose-adoption") != null;
         const repairCard = card?.getAttribute("data-goal-purpose-repair") != null;
         const dailyBriefCard = card?.getAttribute("data-daily-brief-read") != null;
+        const scheduleDeleteCard = card?.getAttribute("data-runtime-schedule-delete") != null;
         const dailyBriefOwner = dailyBriefCard ? byId("daily-brief-review-owner-token").value.trim() : "";
+        const scheduleDeleteOwner = scheduleDeleteCard ? byId("runtime-schedule-delete-review-owner-token").value.trim() : "";
+        const contentReviewDigest = state.approvalContentDigests[commandId];
         const dailyBriefService = dailyBriefCard ? card.getAttribute("data-daily-brief-service") : null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
         const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
@@ -7532,23 +7689,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           clearDailyBriefReviewOwnerToken();
         }
+        if (scheduleDeleteCard) {
+          if (!scheduleDeleteOwner || !isLocalCredentialControlCenter() ||
+              (verdict === "approve" && (!isRuntimeScheduleDeleteDigest(contentReviewDigest) || approve?.disabled !== false))) {
+            throw new Error("この端末で予定削除のowner tokenを入力し、削除対象を確認してください。");
+          }
+          clearRuntimeScheduleDeleteReviewOwnerToken();
+        }
         const handoffGeneration = state.goalPurposeRepairHandoffGeneration;
         const dailyResultGeneration = state.dailyBriefResultGeneration;
         const response = await fetch("/approval/" + encodeURIComponent(commandId) +
           (nativeCredential ? "/native-credential" : dailyBriefCard ? "/daily-brief-read" : ""), {
           method: "POST",
           cache: "no-store",
-          ...(nativeCredential || dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "origin" } : {}),
+          ...(nativeCredential || dailyBriefCard || scheduleDeleteCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "origin" } : {}),
           headers: {
             "content-type": "application/json",
             ...authHeaders(token),
-            ...(dailyBriefCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner } : {})
+            ...(dailyBriefCard || scheduleDeleteCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner || scheduleDeleteOwner } : {})
           },
           body: JSON.stringify({
             verdict: verdict,
             approval_token: approvalToken,
-            ...(state.approvalContentDigests[commandId] && (!dailyBriefCard || verdict === "approve")
-              ? { content_review_digest: state.approvalContentDigests[commandId] }
+            ...(contentReviewDigest && (!(dailyBriefCard || scheduleDeleteCard) || verdict === "approve")
+              ? { content_review_digest: contentReviewDigest }
               : {})
           })
         }).catch(function (error) {
@@ -7591,6 +7755,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await loadApprovals();
             throw new Error("取得は実行されました。結果を安全に表示できませんでした。");
           }
+          await loadApprovals();
+          return;
+        }
+        if (scheduleDeleteCard) {
+          const body = response.ok && hasNoStore(response) ? await response.json().catch(function () { return null; }) : null;
+          const confirmed = body?.ok === true && body.result?.approval === verdict &&
+            body.result.executed === (verdict === "approve");
+          setText("runtime-schedule-delete-approval-status", confirmed
+            ? "予定削除の処理応答を受け取りました。仕事画面の予定一覧を再読み込みして状態を確認してください。"
+            : "予定削除の処理結果は未確認です。再申請の前に予定と承認の状態を確認してください。");
           await loadApprovals();
           return;
         }
@@ -7637,6 +7811,60 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         await loadApprovals();
       }
 
+      async function renderRuntimeScheduleDeleteReview(review, commandId, card, view, approve, button, isCurrent) {
+        const interval = Object.hasOwn(review, "interval_ms");
+        const fields = ["kind", "operation", "command_id", "command_digest", "review_digest", "operation_plan_binding_digest",
+          "schedule_id", "revision_digest", "channel", "target", "payload_hash", "goal_ref", "purpose_version", "no_store",
+          "used_for_authority", "may_execute"].concat(interval ? ["interval_ms"] :
+            Object.hasOwn(review, "time_zone") ? ["time", "time_zone"] : ["time"]);
+        const elapsed = interval && Number.isSafeInteger(review.interval_ms) && review.interval_ms > 0;
+        const daily = !interval && typeof review.time === "string" && /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(review.time) &&
+          (!Object.hasOwn(review, "time_zone") || (typeof review.time_zone === "string" &&
+            /^[A-Za-z0-9_.+/-]{1,128}$/.test(review.time_zone)));
+        if (!isCurrent() || Object.keys(review).length !== fields.length ||
+            !fields.every(function (field) { return Object.hasOwn(review, field); }) ||
+            review.operation !== "schedule.delete" || review.command_id !== commandId || review.no_store !== true ||
+            review.used_for_authority !== false || review.may_execute !== false ||
+            ![review.command_digest, review.review_digest, review.operation_plan_binding_digest,
+              review.revision_digest, review.payload_hash].every(isRuntimeScheduleDeleteDigest) ||
+            typeof review.schedule_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(review.schedule_id) ||
+            typeof review.channel !== "string" || !review.channel.trim() || review.channel.length > 128 ||
+            typeof review.target !== "string" || !review.target.trim() || review.target.length > 1024 ||
+            typeof review.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(review.goal_ref) ||
+            !Number.isSafeInteger(review.purpose_version) || review.purpose_version < 1 || (!elapsed && !daily)) {
+          throw new Error("この承認の予定削除内容を確認できません。");
+        }
+        const reviewBody = { ...review };
+        delete reviewBody.command_id;
+        delete reviewBody.review_digest;
+        const keys = Object.keys(reviewBody).sort(function (a, b) { return a.localeCompare(b); });
+        const bytes = new TextEncoder().encode(JSON.stringify(reviewBody, keys));
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const actual = Array.from(new Uint8Array(digest), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+        if (!isCurrent() || !card.isConnected || actual !== review.review_digest) {
+          throw new Error("予定削除の審査内容が変わりました。内容を再確認してください。");
+        }
+        view.replaceChildren();
+        [
+          ["予定", review.schedule_id],
+          ["送信先", review.channel + " / " + review.target],
+          ["発火時刻", elapsed ? formatInterval(review.interval_ms) : review.time + " · " + (review.time_zone || "ホストの時刻帯")],
+          ["委任目的", review.goal_ref + " · v" + review.purpose_version],
+          ["予定の版", review.revision_digest],
+          ["予定範囲のSHA-256", review.payload_hash]
+        ].forEach(function (entry) {
+          const line = document.createElement("p");
+          line.textContent = entry[0] + "　" + entry[1];
+          view.appendChild(line);
+        });
+        const note = document.createElement("p");
+        note.textContent = "承認して削除すると、この予定から新たに処理を開始できなくなります。開始済みの処理や外部作用の状態は別途確認してください。";
+        view.appendChild(note);
+        state.approvalContentDigests[commandId] = review.review_digest;
+        approve.disabled = false;
+        button.textContent = "予定削除の対象を再確認";
+      }
+
       async function reviewApprovalContent(commandId, button) {
         const token = byId("approval-token").value.trim();
         delete state.approvalContentDigests[commandId];
@@ -7645,13 +7873,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!card) throw new Error("approval is no longer shown; reload pending approvals");
         const repairCard = card.getAttribute("data-goal-purpose-repair") != null;
         const dailyBriefCard = card.getAttribute("data-daily-brief-read") != null;
+        const scheduleDeleteCard = card.getAttribute("data-runtime-schedule-delete") != null;
         const dailyBriefOwner = dailyBriefCard ? byId("daily-brief-review-owner-token").value.trim() : "";
+        const scheduleDeleteInput = byId("runtime-schedule-delete-review-owner-token");
+        const scheduleDeleteOwner = scheduleDeleteCard ? scheduleDeleteInput.value.trim() : "";
+        const scheduleDeleteGeneration = state.runtimeScheduleDeleteReviewGeneration;
         if (repairCard) delete state.goalPurposeRepairReviews[commandId];
         if (dailyBriefCard) {
           card.removeAttribute("data-daily-brief-service");
           if (!dailyBriefOwner || !isLocalCredentialControlCenter()) {
             throw new Error("この端末でDaily Briefのowner tokenを入力し、取得範囲を確認してください。");
           }
+        }
+        if (scheduleDeleteCard && (!scheduleDeleteOwner || !isLocalCredentialControlCenter())) {
+          throw new Error("この端末で予定削除のowner tokenを入力してください。");
         }
         const view = card.querySelector("[data-content-review-view]");
         const approve = card.querySelector('[data-verdict="approve"]');
@@ -7664,14 +7899,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
           method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
-          headers: { ...authHeaders(token), ...(dailyBriefCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner } : {}) }
+          headers: { ...authHeaders(token),
+            ...(dailyBriefCard || scheduleDeleteCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner || scheduleDeleteOwner } : {}) }
         });
         if (!response.ok) {
           if (repairCard) throw new Error("復旧範囲を取得できません。");
+          if (scheduleDeleteCard) throw new Error("予定削除の審査内容を取得できません。");
           const text = await response.text();
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
-        const review = await response.json();
+        const review = scheduleDeleteCard ? await response.json().catch(function () { return null; }) : await response.json();
+        if (scheduleDeleteCard !== (review?.kind === "schedule_delete")) throw new Error("予定削除の審査対象が一致しません。");
+        if (scheduleDeleteCard) {
+          const isCurrent = function () {
+            return hasNoStore(response) && card.isConnected && token === byId("approval-token").value.trim() &&
+              scheduleDeleteOwner === scheduleDeleteInput.value.trim() && scheduleDeleteGeneration === state.runtimeScheduleDeleteReviewGeneration;
+          };
+          await renderRuntimeScheduleDeleteReview(review, commandId, card, view, approve, button, isCurrent);
+          return;
+        }
         if ((card.getAttribute("data-goal-purpose-adoption") !== null) !== (review.kind === "goal_purpose_adoption")) {
           throw new Error("委任目的の登録対象と審査内容が一致しません。");
         }
@@ -11416,6 +11662,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-approvals").addEventListener("click", loadApprovals);
       byId("approval-token").addEventListener("input", clearGoalPurposeRepairHandoff);
       byId("approval-token").addEventListener("input", clearDailyBriefResult);
+      byId("approval-token").addEventListener("input", clearRuntimeScheduleDeleteReviews);
+      byId("runtime-schedule-delete-review-owner-token").addEventListener("input", clearRuntimeScheduleDeleteReviews);
+      window.addEventListener("pagehide", clearRuntimeScheduleDeleteReviewOwnerToken);
       byId("daily-brief-review-owner-token").addEventListener("input", clearDailyBriefResult);
       byId("hide-daily-brief-result").addEventListener("click", clearDailyBriefResult);
       window.addEventListener("pagehide", clearDailyBriefResult);
@@ -11431,6 +11680,31 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } finally {
           button.disabled = false;
         }
+      });
+      byId("runtime-schedule-delete-id").addEventListener("change", retireRuntimeScheduleDeleteSelection);
+      byId("runtime-schedule-delete-goal").addEventListener("change", retireRuntimeScheduleDeleteSelection);
+      byId("runtime-schedule-delete-owner-token").addEventListener("input", function () {
+        if (state.runtimeScheduleDeleteRequest) retireRuntimeScheduleDeleteSelection();
+      });
+      byId("load-runtime-schedule-delete-goals").addEventListener("click", function () {
+        return submitRuntimeScheduleDeleteRequest(true);
+      });
+      byId("prepare-runtime-schedule-delete").addEventListener("click", function () {
+        return submitRuntimeScheduleDeleteRequest(false);
+      });
+      byId("open-runtime-schedule-delete-plan").addEventListener("click", async function () {
+        const next = byId("open-runtime-schedule-delete-plan");
+        if (next.hidden) return;
+        if (byId("runtime-token").value.trim()) await loadRuntime("runtime-schedule-delete-proposal");
+        byId("operation-plan-state-list").scrollIntoView({ block: "start" });
+      });
+      window.addEventListener("pagehide", function () {
+        state.runtimeScheduleDeleteRequest?.controller.abort();
+        state.runtimeScheduleDeleteRequest = null;
+        byId("runtime-schedule-delete-owner-token").value = "";
+        byId("runtime-schedule-delete-goal").replaceChildren(new Option("委任目的を選択", ""));
+        renderRuntimeScheduleDeleteOptions([]);
+        clearRuntimeScheduleDeleteReceipt();
       });
       byId("hide-goal-purpose-repair-handoff").addEventListener("click", clearGoalPurposeRepairHandoff);
       window.addEventListener("pagehide", clearGoalPurposeRepairHandoff);

@@ -3,7 +3,9 @@ import { promises as fs, renameSync } from "node:fs";
 import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import { runtimeScheduleScopeDigest, type ApprovalEvaluation, type RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
-import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
+import {
+  RuntimeScheduleDeleteArgumentsSchema, requireToolOperationDescriptor, runtimeScheduleDeleteResult, type ExecuteCommand,
+} from "@blue-tanuki/protocol";
 import {
   canonicalizeCronTimeZone,
   cronPayloadHash,
@@ -46,9 +48,22 @@ export interface RuntimeScheduleSnapshot {
   updated_at_ms: number;
   payload_hash: string;
   status: RuntimeSchedule["status"];
+  delete_revision_digest?: string;
   pending_operation?: RuntimeScheduleOperation;
   pending_command_id?: string;
   approval_expires_at_ms?: number;
+}
+
+export interface RuntimeScheduleDeleteTarget {
+  readonly id: string;
+  readonly revision_digest: string;
+  readonly channel: string;
+  readonly target: string;
+  readonly time?: string;
+  readonly time_zone?: string;
+  readonly interval_ms?: number;
+  readonly payload_hash: string;
+  readonly delegation: RuntimeScheduleDelegation;
 }
 
 export interface RuntimeScheduleLifecycle {
@@ -76,13 +91,14 @@ interface PendingRuntimeScheduleOperation {
   approval_level: ApprovalEvaluation["approval_level"];
   risk: ApprovalEvaluation["risk"];
   expires_at_ms: number;
+  expected_revision_digest?: string;
 }
 
 export interface RuntimeScheduleManagerOptions {
   env?: Env;
   safe_mode?: boolean;
   now?: () => number;
-  beforePersist?: (kind: "approve" | "reject") => void;
+  beforePersist?: (kind: "approve" | "reject", commandId: string, versionBound: boolean) => void;
   onLifecycle?: (
     event:
       | "schedule.lifecycle.requested"
@@ -202,6 +218,22 @@ export class RuntimeScheduleManager {
     return this.list().schedules;
   }
 
+  inspectDeleteTarget(id: string): RuntimeScheduleDeleteTarget | null {
+    const schedule = this.schedules.get(id);
+    if (!schedule || !schedule.enabled || schedule.status !== "active" || !schedule.delegation) return null;
+    return {
+      id: schedule.id,
+      revision_digest: runtimeScheduleRevisionDigest(schedule, schedule.delegation),
+      channel: schedule.channel,
+      target: schedule.target,
+      time: schedule.time,
+      time_zone: schedule.time_zone,
+      interval_ms: schedule.interval_ms,
+      payload_hash: schedule.payload_hash,
+      delegation: { ...schedule.delegation },
+    };
+  }
+
   activeCount(): number {
     return Array.from(this.schedules.values()).filter((schedule) =>
       schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined).length;
@@ -295,7 +327,7 @@ export class RuntimeScheduleManager {
     const rejected: RuntimeSchedule = { ...pending.proposed, enabled: false, status: "rejected", updated_at_ms: this.now() };
     void this.enqueueCommit(async () => {
       const check = () => {
-        this.beforePersist?.("reject");
+        this.beforePersist?.("reject", pending.command_id, false);
         this.assertPreviousSchedule(pending);
       };
       try {
@@ -321,7 +353,7 @@ export class RuntimeScheduleManager {
     return this.enqueueCommit(async () => {
       const check = () => {
         signal?.throwIfAborted();
-        this.beforePersist?.("approve");
+        this.beforePersist?.("approve", pending.command_id, pending.expected_revision_digest !== undefined);
         signal?.throwIfAborted();
         this.assertPreviousSchedule(pending);
         if (pending.expires_at_ms <= this.now()) {
@@ -356,13 +388,7 @@ export class RuntimeScheduleManager {
       await this.persistChange(deleted, recordApproval);
       this.scheduler?.removeTask(deleted.id);
       this.onLifecycle?.("schedule.lifecycle.deleted", lifecycleFromPending(pending));
-      return {
-        schedule_id: deleted.id,
-        status: "deleted",
-        active: false,
-        can_fire: false,
-        next_action: "No further action is needed. Recreate the schedule if it should run again.",
-      };
+      return runtimeScheduleDeleteResult(deleted.id);
     }
 
     const activated: RuntimeSchedule = {
@@ -420,13 +446,18 @@ export class RuntimeScheduleManager {
       throw new Error(`schedule ${id} is not active; nothing was changed`);
     }
     if (operation === "delete") {
+      const bound = Object.hasOwn(args, "expected_revision_digest") ? RuntimeScheduleDeleteArgumentsSchema.parse(args) : undefined;
+      if (bound && this.inspectDeleteTarget(bound.id)?.revision_digest !== bound.expected_revision_digest) {
+        throw new Error("schedule.delete target revision changed or is unavailable; nothing was deleted");
+      }
       const proposed: RuntimeSchedule = {
         ...previous,
         enabled: false,
         status: "pending",
         updated_at_ms: now,
       };
-      return this.pendingFromSchedule(command, evaluation, operation, proposed, previous, opts.request_id ?? null, actor);
+      const pending = this.pendingFromSchedule(command, evaluation, operation, proposed, previous, opts.request_id ?? null, actor);
+      return bound ? { ...pending, expected_revision_digest: bound.expected_revision_digest } : pending;
     }
     if (!previous.delegation) {
       const hasFullScope = ["channel", "target", "content"].every((key) =>
@@ -502,6 +533,7 @@ export class RuntimeScheduleManager {
   private scheduleSnapshot(schedule: RuntimeSchedule, pending?: PendingRuntimeScheduleOperation): RuntimeScheduleSnapshot {
     const op = pending ?? this.pending.get(this.pendingBySchedule.get(schedule.id) ?? "");
     const legacyUnbound = schedule.status === "active" && schedule.delegation === undefined;
+    const deletion = op ? null : this.inspectDeleteTarget(schedule.id);
     return {
       id: schedule.id,
       origin: "runtime",
@@ -515,6 +547,7 @@ export class RuntimeScheduleManager {
       updated_at_ms: schedule.updated_at_ms,
       payload_hash: schedule.payload_hash,
       status: op ? "pending" : legacyUnbound ? "disabled" : schedule.status,
+      ...(deletion ? { delete_revision_digest: deletion.revision_digest } : {}),
       pending_operation: op?.operation,
       pending_command_id: op?.command_id,
       approval_expires_at_ms: op?.expires_at_ms,
@@ -550,7 +583,9 @@ export class RuntimeScheduleManager {
   }
 
   private assertPreviousSchedule(pending: PendingRuntimeScheduleOperation): void {
-    if (this.schedules.get(pending.schedule_id) !== pending.previous) {
+    if (this.schedules.get(pending.schedule_id) !== pending.previous ||
+        (pending.expected_revision_digest !== undefined &&
+          this.inspectDeleteTarget(pending.schedule_id)?.revision_digest !== pending.expected_revision_digest)) {
       throw new Error("schedule target changed since review; the approved change was not committed");
     }
   }
@@ -588,6 +623,13 @@ export class RuntimeScheduleManager {
       throw error;
     }
   }
+}
+
+function runtimeScheduleRevisionDigest(schedule: RuntimeSchedule, delegation: RuntimeScheduleDelegation): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.runtime-schedule-revision.v1", schedule.id, schedule.payload_hash, schedule.created_at_ms,
+    schedule.updated_at_ms, delegation.command_id, delegation.request_id, delegation.scope_digest,
+  ]), "utf8").digest("hex");
 }
 
 function buildScheduleFromArgs(

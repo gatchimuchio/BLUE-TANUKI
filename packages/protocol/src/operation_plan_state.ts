@@ -851,6 +851,7 @@ export const OperationPlanCheckpointPlanSchema = z.object({
     owner_settings_activation: z.literal(true).optional(),
     /** Records that J received a credential rotation from the authenticated structured owner input. */
     owner_settings_credential_rotation: z.literal(true).optional(),
+    owner_runtime_schedule_delete: z.literal(true).optional(),
     /** Records that J received a Google read registration from the authenticated structured owner input. */
     owner_settings_google_read_registration: z.literal(true).optional(),
     /** Records that J received a GitHub write registration from the authenticated structured owner input. */
