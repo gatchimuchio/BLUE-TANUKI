@@ -4542,7 +4542,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
-  it("cancels only a same-session D4 Runtime submission and returns a non-authority request acknowledgement", async () => {
+  it("cancels only a same-session D4 Runtime submission and distinguishes an approval withdrawal", async () => {
     const cancellation: WebChatD4RuntimeIntentCancellation = {
       status: "cancel_requested",
       cancel_request_accepted: true,
@@ -4568,18 +4568,18 @@ describe("WebChatChannel — HTTP inbound", () => {
     };
     const cancelCalls: WebChatD4RuntimeCancellationScope[] = [];
     const statusCalls: WebChatD4RuntimeCancellationScope[] = [];
-    let cancellable = true;
+    let returnedCancellation: WebChatD4RuntimeIntentCancellation | null =
+      { ...cancellation, command_id: "private-command-id" } as WebChatD4RuntimeIntentCancellation;
+    let returnedStatus: WebChatD4RuntimeCancellationStatus = cancellationStatus;
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
       onD4RuntimeIntentCancellationStatus: async (scope) => {
         statusCalls.push(scope);
-        return cancellationStatus;
+        return returnedStatus;
       },
       onD4RuntimeIntentCancellation: async (scope) => {
         cancelCalls.push(scope);
-        return cancellable
-          ? { ...cancellation, command_id: "private-command-id" } as WebChatD4RuntimeIntentCancellation
-          : null;
+        return returnedCancellation;
       },
     });
     let ws: WebSocket | undefined;
@@ -4599,6 +4599,9 @@ describe("WebChatChannel — HTTP inbound", () => {
       const input = { runtime_id: "blue_tanuki", session_id: "cancel-session-1234", submission_id: D4_SUBMISSION_ID_1 };
       expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
         { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", {
+        ...input, runtime_id: "another_runtime",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).status).toBe(403);
       expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", {
         ...input, session_id: "another-session-1234",
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).body).toEqual({ found: false });
@@ -4650,11 +4653,42 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(statusBody).not.toContain(scope.scope_digest);
       expect(statusBody).not.toContain(scope.runtime_ref_digest);
       expect(statusBody).not.toContain(scope.session_ref_digest);
-      cancellable = false;
+      returnedCancellation = null;
       const inactive = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
         { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(inactive.status).toBe(409);
       expect(inactive.body).toEqual({ found: true, accepted: false, error: "execution_not_cancellable" });
+
+      const withdrawal = {
+        status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+        external_processing_stop: "unknown", cancel_requested_at_ms: 160,
+        used_for_authority: false, may_execute: false,
+      } as const;
+      returnedCancellation = withdrawal;
+      returnedStatus = withdrawal;
+      const withdrawn = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(withdrawn.status).toBe(202);
+      expect(withdrawn.body).toEqual({ found: true, accepted: true, cancellation: withdrawal });
+      const withdrawnStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(withdrawnStatus.status).toBe(200);
+      expect(withdrawnStatus.body).toMatchObject({ found: true, request_id: scope.request_id, cancellation: withdrawal });
+
+      const malformed = { ...withdrawal, command_id: "private-command-id" };
+      returnedCancellation = malformed;
+      returnedStatus = malformed;
+      const rejectedWithdrawal = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(rejectedWithdrawal.status).toBe(503);
+      expect(rejectedWithdrawal.body).toEqual({ error: "runtime_intent_cancellation_unavailable" });
+      const rejectedStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(rejectedStatus.status).toBe(200);
+      expect(rejectedStatus.body).toMatchObject({ found: true, cancellation: {
+        status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
+      } });
+      expect(JSON.stringify(rejectedStatus.body)).not.toContain("private-command-id");
     } finally {
       ws?.close();
       await runtimeCtx.teardown();

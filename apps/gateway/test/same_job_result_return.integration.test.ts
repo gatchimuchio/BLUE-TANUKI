@@ -5,12 +5,15 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
-import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
-import { OperationPlanCheckpointSchema, type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
+import { candidateFromCommand, CompleteHistoryStore, FailureMemoryStore, HDSUpperController,
+  operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
+import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema,
+  type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
+import { buildLLMCommandRouteFromEnv } from "../src/llm_config.js";
 import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_config.js";
 import { updateSettingsEnvFile } from "../src/settings_surface.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -493,12 +496,15 @@ describe("served Telegram result return and request-bound media ingress", () => 
 });
 
 describe("served D4 Runtime cancellation", () => {
-  it("interrupts its exact scoped compute and reopens the observation after restart without replay", async () => {
+  it("interrupts scoped compute and withdraws pending approval, retaining both observations after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));
     const token = "synthetic-d4-runtime-cancellation-token-only";
     const runtime = "blue_tanuki";
     const session = "synthetic-runtime-cancel-session";
     const submission = "e5348667-4150-49c6-b011-2b2942090f1a";
+    const pendingSubmission = "7daa81fa-c471-4d40-848e-0baa689272c7";
+    const pendingIntent = "合成試験で青と緑を使う題名を提案してください。";
+    const resumeToken = "synthetic-d4-runtime-tests-resume";
     let providerRequests = 0;
     let disconnected = false;
     const providerPaths: string[] = [];
@@ -510,8 +516,12 @@ describe("served D4 Runtime cancellation", () => {
         return;
       }
       request.resume();
-      providerRequests += 1;
       response.once("close", () => { disconnected = !response.writableFinished; });
+      request.once("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"choices":');
+        providerRequests += 1;
+      });
     });
     let gateway: CapturedProcess | undefined;
     let socket: WebSocket | undefined;
@@ -524,13 +534,14 @@ describe("served D4 Runtime cancellation", () => {
       const env = {
         ...fixtureOsEnvironment(),
         WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
-        WEBCHAT_RESUME_TOKEN: "synthetic-d4-runtime-tests-resume",
+        WEBCHAT_RESUME_TOKEN: resumeToken,
         BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-d4-runtime-tests-maintenance",
         BLUE_TANUKI_D4_RUNTIME_ID: runtime, BLUE_TANUKI_D4_RUNTIME_TOKEN: token,
         BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
         BLUE_TANUKI_FILE_ROOT: join(root, "files"), BLUE_TANUKI_LOG_DIR: join(root, "logs"),
         BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
         BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"),
         BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl"),
         BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
         BLUE_TANUKI_LLM_BACKEND_HINT: "d4-cancel-fixture",
@@ -542,6 +553,34 @@ describe("served D4 Runtime cancellation", () => {
           model: "d4-cancel-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
         }]),
       };
+      const actor = "d4-runtime-adapter-token-holder";
+      const ref = (kind: "runtime" | "session", value: string) =>
+        createHmac("sha256", token).update(`blue-tanuki.d4-runtime.${kind}.v1\0`).update(value).digest("hex");
+      const sessionRef = ref("session", session);
+      const sessionTarget = `d4-runtime:${sessionRef}`;
+      const seedRequest = createGatewayInternalInboundRequest({
+        id: "da37e92e-3358-4bdc-9a36-959263871b20", user: actor, channel: "webchat",
+        content: pendingIntent, timestamp: Date.now(), session_id: sessionTarget,
+        metadata: {
+          reply_to: sessionTarget, "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "user", "blue_tanuki.trust_level": "limited", "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+          "blue_tanuki.runtime_ingress.runtime_id_digest": ref("runtime", runtime),
+          "blue_tanuki.runtime_ingress.session_id_digest": sessionRef,
+          "blue_tanuki.runtime_ingress.used_for_authority": false,
+        },
+      });
+      const seedCommand = new HDSUpperController({ llm_route: buildLLMCommandRouteFromEnv(env) }).decide(seedRequest).command;
+      if (!seedCommand || seedCommand.type !== "llm_call") throw new Error("the pending fixture did not produce a compute decision");
+      const context = { actor, channel: "webchat", origin_user: actor };
+      const candidate = candidateFromCommand(seedCommand, context);
+      const failureMemory = new FailureMemoryStore({ filepath: env.BLUE_TANUKI_FAILURE_MEMORY_FILE });
+      failureMemory.addSignature({
+        scope: candidate.scope, failure_type: "logic_drift", input_pattern: candidate.input_pattern,
+        action_pattern: candidate.action_pattern, context_pattern: candidate.context_pattern,
+        state: "active", suppression_policy: "require_approval", match_level: 1,
+      });
+      expect(failureMemory.evaluateCommandGate(seedCommand, context).decision).toBe("require_approval");
       gateway = spawnGateway(env);
       await waitForHealth(gatewayPort, gateway, 40_000);
       const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
@@ -555,6 +594,43 @@ describe("served D4 Runtime cancellation", () => {
       socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticketValue)}`);
       socket.on("message", (data) => frames.push(String(data)));
       await once(socket, "open");
+      const pendingInput = { ...input, submission_id: pendingSubmission };
+      const pendingResponse = await post("/runtime/intent", { ...pendingInput, intent: pendingIntent });
+      expect(pendingResponse.status).toBe(202);
+      const pendingRequest = await pendingResponse.json() as { request_id: string };
+      const loadPending = async () => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+          headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(8_000),
+        });
+        expect(response.status).toBe(200);
+        const queue = await response.json() as { pending_approvals: {
+          request_id: string; command_id: string; approval_token?: string;
+        }[] };
+        return queue.pending_approvals.find(item => item.request_id === pendingRequest.request_id) ?? null;
+      };
+      const pending = await waitFor(loadPending, gateway, "the exact D4 request did not reach genuine approval wait");
+      expect(pending.approval_token).toEqual(expect.any(String));
+      await waitFor(() => frames.some(frame => frame.includes("承認待ちです。")) ? true : null, gateway,
+        "the D4 session did not receive the approval waiting notice");
+      expect(frames.join("")).not.toContain(pending.approval_token);
+      expect(frames.join("")).not.toContain(pending.command_id);
+      expect((await post("/runtime/intent/cancel", { ...pendingInput, session_id: "unrelated-d4-session" })).status).toBe(404);
+      expect((await loadPending())?.command_id).toBe(pending.command_id);
+      const pendingCancel = await post("/runtime/intent/cancel", pendingInput);
+      expect(pendingCancel.status).toBe(202);
+      const withdrawn = await pendingCancel.json() as { cancellation: Record<string, unknown> };
+      expect(withdrawn).toMatchObject({ found: true, accepted: true, cancellation: {
+        status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+        external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+      } });
+      expect(await loadPending()).toBeNull();
+      const staleApprove = await post(`/approval/${encodeURIComponent(pending.command_id)}`, {
+        verdict: "approve", approval_token: pending.approval_token,
+      }, resumeToken);
+      expect(staleApprove.status).toBe(409);
+      expect(await staleApprove.json()).toEqual({ error: "approval_content_review_stale" });
+      expect(providerRequests).toBe(0);
+
       const submitted = await post("/runtime/intent", { ...input, intent: "合成テストで短い文章を要約してください。" });
       expect(submitted.status, await submitted.text()).toBe(202);
       await waitFor(() => providerRequests === 1 ? true : null, gateway, () =>
@@ -586,6 +662,7 @@ describe("served D4 Runtime cancellation", () => {
         status: "execution_observed", cancel_request_accepted: true, executor_settled: true,
         external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
       } });
+
       socket.terminate();
       socket = undefined;
       await stopChild(gateway);
@@ -594,6 +671,12 @@ describe("served D4 Runtime cancellation", () => {
       const after = await post("/runtime/intent/status", input);
       expect(after.status).toBe(200);
       expect(await after.json()).toMatchObject({ found: true, cancellation: observed.cancellation });
+      expect(await (await post("/runtime/intent/status", pendingInput)).json()).toMatchObject({
+        found: true, cancellation: withdrawn.cancellation,
+      });
+      const repeatedWithdrawal = await post("/runtime/intent/cancel", pendingInput);
+      expect(repeatedWithdrawal.status).toBe(202);
+      expect(await repeatedWithdrawal.json()).toEqual(withdrawn);
       const otherAfter = await post("/runtime/intent/status", { ...input, session_id: "unrelated-d4-session" });
       expect(otherAfter.status).toBe(200);
       expect(await otherAfter.json()).toEqual({ found: false });

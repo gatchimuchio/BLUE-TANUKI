@@ -48,117 +48,186 @@ load_autostart_guard() {
   . "$SAFE_TARGET_LIB"
 }
 
-read_env_value() {
-  key="$1"
-  if [ ! -f "$ENV_FILE" ]; then
-    return
-  fi
-  sed -n "s/^${key}=//p" "$ENV_FILE" | sed -n '1p' | sed 's/^"//; s/"$//'
+# Use the bundled Gateway parser rather than interpreting the saved settings in sh.
+installed_webchat() (
+  cd "$INSTALL_ROOT"
+  "$NODE_EXE" --input-type=module - "$ENV_FILE" "$@" <<'NODE'
+import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { once } from "node:events";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import * as http from "node:http";
+import * as https from "node:https";
+import { connect, createServer, isIP } from "node:net";
+import { networkInterfaces } from "node:os";
+import { resolve } from "node:path";
+import { checkServerIdentity, connect as tlsConnect } from "node:tls";
+import { setTimeout as delay } from "node:timers/promises";
+import { loadEnvFile } from "./apps/gateway/dist/env_file.js";
+
+function normalizeHost(value) {
+  const host = value.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(host) === 6) return new URL("http://[" + host + "]/").hostname.slice(1, -1);
+  if (isIP(host) === 4 || /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.?$/i.test(host)) return host;
+  throw new Error("invalid_host");
 }
 
-webchat_port() {
-  port=$(read_env_value WEBCHAT_PORT)
-  if [ -n "$port" ]; then
-    printf '%s\n' "$port"
-  else
-    printf '8787\n'
-  fi
-}
+const isLoopback = (host) => host === "::1" || (isIP(host) === 4 && host.startsWith("127."));
+const wildcardTarget = (host) => host === "::" ? "::1" : host === "0.0.0.0" ? "127.0.0.1" : host;
+const urlHost = (host) => isIP(host) === 6 ? "[" + host + "]" : host;
+const formatAddress = (host, port) => urlHost(normalizeHost(host)) + ":" + port;
 
-webchat_host() {
-  host=$(read_env_value WEBCHAT_HOST)
-  if [ -n "$host" ]; then
-    printf '%s\n' "$host"
-  else
-    printf '127.0.0.1\n'
-  fi
-}
-
-control_center_loopback_host() {
-  case "$(webchat_host | tr '[:upper:]' '[:lower:]')" in
-    127.0.0.1|localhost|::1) webchat_host | tr '[:upper:]' '[:lower:]' ;;
-    0.0.0.0|::|'') printf '127.0.0.1\n' ;;
-    *) return 1 ;;
-  esac
-}
-
-control_center_open_url() {
-  local_host=$(control_center_loopback_host 2>/dev/null || true)
-  if [ -z "$local_host" ]; then
-    printf '%s\n' "$CONTROL_CENTER_URL"
-    return
-  fi
-  case "$local_host" in
-    ::1) url_host='[::1]' ;;
-    *) url_host=$local_host ;;
-  esac
-  printf 'http://%s:%s/app\n' "$url_host" "$(webchat_port)"
-}
-
-issue_control_center_launch_ticket() {
-  loopback_host=$1
-  webchat_token=$(read_env_value WEBCHAT_TOKEN)
-  [ -n "$webchat_token" ] || return 1
-  resume_token=$(read_env_value WEBCHAT_RESUME_TOKEN)
-  owner_token=$(read_env_value BLUE_TANUKI_OWNER_TOKEN)
-  settings_token=$(read_env_value BLUE_TANUKI_SETTINGS_TOKEN)
-  maintenance_token=$(read_env_value BLUE_TANUKI_MAINTENANCE_TOKEN)
-  ticket=$(BT_LAUNCH_HOST="$loopback_host" \
-    BT_LAUNCH_PORT="$(webchat_port)" \
-    BT_LAUNCH_WEBCHAT_TOKEN="$webchat_token" \
-    BT_LAUNCH_RESUME_TOKEN="$resume_token" \
-    BT_LAUNCH_OWNER_TOKEN="$owner_token" \
-    BT_LAUNCH_SETTINGS_TOKEN="$settings_token" \
-    BT_LAUNCH_MAINTENANCE_TOKEN="$maintenance_token" \
-    "$NODE_EXE" -e '
-const http = require("node:http");
-const headers = {
-  "content-type": "application/json",
-  "content-length": "2",
-  authorization: "Bearer " + process.env.BT_LAUNCH_WEBCHAT_TOKEN,
-};
-for (const [environmentName, headerName] of [
-  ["BT_LAUNCH_RESUME_TOKEN", "x-blue-tanuki-launch-resume"],
-  ["BT_LAUNCH_OWNER_TOKEN", "x-blue-tanuki-launch-owner"],
-  ["BT_LAUNCH_SETTINGS_TOKEN", "x-blue-tanuki-launch-settings"],
-  ["BT_LAUNCH_MAINTENANCE_TOKEN", "x-blue-tanuki-launch-maintenance"],
-]) {
-  const token = process.env[environmentName];
-  if (token) headers[headerName] = token;
-}
-const request = http.request({
-  hostname: process.env.BT_LAUNCH_HOST,
-  port: Number(process.env.BT_LAUNCH_PORT),
-  path: "/control-center/launch-handoff",
-  method: "POST",
-  agent: new http.Agent({ keepAlive: false }),
-  headers,
-  timeout: 4000,
-}, (response) => {
-  let text = "";
-  response.setEncoding("utf8");
-  response.on("data", (chunk) => { text += chunk; if (text.length > 4096) request.destroy(); });
-  response.on("end", () => {
-    try {
-      const body = JSON.parse(text);
-      if (response.statusCode === 200 && /^[A-Za-z0-9_-]{43}$/.test(body.ticket || "")) {
-        process.stdout.write(body.ticket);
-        return;
-      }
-    } catch {}
-    process.exitCode = 1;
+function verifyResidentSocket(socket, pid, start) {
+  const lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"].find(existsSync);
+  if (!lsof || !/^[1-9][0-9]{0,9}$/.test(pid) || !start ||
+      !socket.localAddress || !socket.remoteAddress) throw new Error("peer_unverified");
+  const reverseTuple = formatAddress(socket.remoteAddress, socket.remotePort) + "->" +
+    formatAddress(socket.localAddress, socket.localPort);
+  const records = execFileSync(lsof, ["-nP", "-a", "-p", pid, "-iTCP", "-sTCP:ESTABLISHED", "-Fn"], {
+    encoding: "utf8", timeout: 2500, maxBuffer: 65536, stdio: ["ignore", "pipe", "ignore"],
   });
-});
-request.on("timeout", () => request.destroy(new Error("launch_handoff_timeout")));
-request.on("error", () => { process.exitCode = 1; });
-request.end("{}");
-') || return 1
-  case "$ticket" in
-    ''|*[!A-Za-z0-9_-]*) return 1 ;;
-  esac
-  [ "${#ticket}" -eq 43 ] || return 1
-  printf '%s\n' "$ticket"
+  const residentStart = execFileSync("/bin/ps", ["-p", pid, "-o", "lstart="], {
+    encoding: "utf8", timeout: 1000, env: { LC_ALL: "C" },
+  }).trim();
+  if (residentStart !== start || records.split("\n").filter((line) => line === "n" + reverseTuple).length !== 1 ||
+      socket.destroyed || !socket.writable || socket.readableEnded) throw new Error("peer_unverified");
 }
+
+function listenAvailable(host, port) {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(port, host, () => server.close(resolve));
+  });
+}
+
+async function launchTicket(target, port, tls, pid, start) {
+  const socket = tls ? tlsConnect({ ...tls, host: target, port }) : connect(port, target);
+  socket.on("error", () => {});
+  const agent = tls ? new https.Agent({ keepAlive: false }) : new http.Agent({ keepAlive: false });
+  try {
+    await once(socket, tls ? "secureConnect" : "connect", { signal: AbortSignal.timeout(2500) });
+    verifyResidentSocket(socket, pid, start);
+
+    // Reuse exactly the connection verified above. Do not reconnect after inspection.
+    agent.createConnection = () => socket;
+    const headers = { "content-type": "application/json", "content-length": "2",
+      authorization: "Bearer " + process.env.WEBCHAT_TOKEN };
+    for (const [name, header] of [
+      ["WEBCHAT_RESUME_TOKEN", "x-blue-tanuki-launch-resume"],
+      ["BLUE_TANUKI_OWNER_TOKEN", "x-blue-tanuki-launch-owner"],
+      ["BLUE_TANUKI_SETTINGS_TOKEN", "x-blue-tanuki-launch-settings"],
+      ["BLUE_TANUKI_MAINTENANCE_TOKEN", "x-blue-tanuki-launch-maintenance"],
+    ]) {
+      if (process.env[name]) headers[header] = process.env[name];
+    }
+    const ticket = await new Promise((resolve, reject) => {
+      const transport = tls ? https : http;
+      const request = transport.request({ hostname: target, port, agent, headers,
+        method: "POST", path: "/control-center/launch-handoff", signal: AbortSignal.timeout(4000) }, (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("error", reject);
+        response.on("data", (chunk) => {
+          body += chunk;
+          if (body.length > 4096) response.destroy(new Error("handoff_too_large"));
+        });
+        response.on("end", () => {
+          if (response.statusCode !== 200) return resolve(null);
+          try { resolve(JSON.parse(body).ticket); } catch { resolve(null); }
+        });
+      });
+      request.on("error", reject);
+      request.end("{}");
+    });
+    if (typeof ticket !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(ticket)) throw new Error("handoff_invalid");
+    return ticket;
+  } finally {
+    agent.destroy();
+    socket.destroy();
+  }
+}
+
+try {
+  const [, , envFile, operation, first, second, expectedUrl] = process.argv;
+  await loadEnvFile(envFile);
+  const env = process.env;
+  const bind = normalizeHost(env.WEBCHAT_HOST?.trim() || "127.0.0.1");
+  const publicHost = normalizeHost(env.WEBCHAT_PUBLIC_HOST?.trim() || bind);
+  const browser = wildcardTarget(publicHost);
+  const port = Number.parseInt(env.WEBCHAT_PORT ?? "8787", 10);
+  const cert = env.WEBCHAT_TLS_CERT_FILE?.trim();
+  const key = env.WEBCHAT_TLS_KEY_FILE?.trim();
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || Boolean(cert) !== Boolean(key) ||
+      (!cert && !isLoopback(publicHost) && publicHost !== "localhost" && publicHost !== "localhost.")) {
+    throw new Error("invalid_transport");
+  }
+  const url = (cert ? "https://" : "http://") + urlHost(browser) + ":" + port + "/app";
+  if (operation === "url") {
+    process.stdout.write(url);
+  } else if (operation === "port-available") {
+    await listenAvailable(bind, port).catch(() => {
+      process.stderr.write("port_conflict=" + formatAddress(bind, port) + "\n");
+      throw new Error("port_unavailable");
+    });
+  } else {
+    const targetHost = wildcardTarget(bind);
+    const target = normalizeHost(isIP(targetHost) ? targetHost : (await lookup(targetHost)).address);
+    if (operation === "loopback-health" && !isLoopback(target)) process.exit(3);
+    const localAddresses = Object.values(networkInterfaces()).flatMap((entries) =>
+      (entries || []).map(({ address }) => normalizeHost(address.split("%", 1)[0])));
+    if (!isLoopback(target) && !localAddresses.includes(target)) throw new Error("nonlocal_health_target");
+    let tls;
+    if (cert) {
+      const info = lstatSync(cert);
+      if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > 1_048_576 || resolve(cert) === resolve(key)) {
+        throw new Error("invalid_certificate");
+      }
+      const configuredCertificate = readFileSync(cert);
+      const expectedFingerprint = new X509Certificate(configuredCertificate).fingerprint256;
+      tls = { ca: configuredCertificate, allowPartialTrustChain: true,
+        rejectUnauthorized: true, servername: isIP(browser) ? undefined : browser,
+        checkServerIdentity: (_host, certificate) => checkServerIdentity(browser, certificate) ??
+          (certificate.fingerprint256 === expectedFingerprint ? undefined : new Error("certificate_mismatch")) };
+    }
+    if (operation === "ticket") {
+      // A URL outside the native loopback binding must never receive a launch ticket.
+      const browserAddress = browser === "localhost" || browser === "localhost."
+        ? normalizeHost((await lookup(browser)).address) : browser;
+      if (url !== expectedUrl || browserAddress !== target || !isLoopback(target) || !env.WEBCHAT_TOKEN) {
+        throw new Error("handoff_not_local");
+      }
+      process.stdout.write(await launchTicket(target, port, tls, first, second));
+    } else if (operation === "health" || operation === "loopback-health") {
+      const timeoutSeconds = Number(first);
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > 15) throw new Error("invalid_timeout");
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      const transport = tls ? https : http;
+      let ready = false;
+      while (!ready && Date.now() < deadline) {
+        const signal = AbortSignal.timeout(Math.max(1, Math.min(1000, deadline - Date.now())));
+        ready = await new Promise((resolve) => {
+          const request = transport.get({ ...tls, hostname: target, port, path: "/healthz", signal, agent: false }, (response) => {
+            response.resume();
+            response.once("error", () => resolve(false));
+            response.once("end", () => resolve(response.statusCode === 200));
+          });
+          request.once("error", () => resolve(false));
+        });
+        if (!ready && Date.now() < deadline) await delay(250);
+      }
+      if (!ready) process.exitCode = 2;
+    } else {
+      throw new Error("invalid_operation");
+    }
+  }
+} catch {
+  process.stderr.write("installed_webchat_transport_unavailable\n");
+  process.exitCode = 2;
+}
+NODE
+)
 
 read_pid() {
   read_pid_record "$PID_FILE" resident
@@ -413,90 +482,14 @@ is_running() {
 }
 
 assert_port_available() {
-  port=$(webchat_port)
   if is_running; then
     return
   fi
-  if "$NODE_EXE" -e '
-const net = require("net");
-const port = Number(process.argv[1]);
-const server = net.createServer();
-server.once("error", () => process.exit(2));
-server.once("listening", () => server.close(() => process.exit(0)));
-server.listen(port, "127.0.0.1");
-' "$port"; then
-    return
-  fi
-  echo "port_conflict=127.0.0.1:$port" >&2
-  exit 2
+  installed_webchat port-available
 }
 
 wait_gateway_health() {
-  health_timeout_seconds=${1:-15}
-  health_host=${2:-$(webchat_host)}
-  health_port=$(webchat_port)
-  "$NODE_EXE" - "$health_host" "$health_port" "$health_timeout_seconds" <<'NODE'
-"use strict";
-const http = require("node:http");
-const net = require("node:net");
-const os = require("node:os");
-
-const rawHost = (process.argv[2] || "").trim().replace(/^\[|\]$/g, "");
-const port = Number(process.argv[3]);
-const timeoutSeconds = Number(process.argv[4]);
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  process.stderr.write("health_probe_invalid_port\n");
-  process.exit(2);
-}
-if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0 || timeoutSeconds > 15) {
-  process.stderr.write("health_probe_invalid_timeout\n");
-  process.exit(2);
-}
-
-const localAddresses = new Set(Object.values(os.networkInterfaces()).flatMap((entries) =>
-  (entries || []).map((entry) => entry.address.toLowerCase().split("%", 1)[0])));
-const host = rawHost.toLowerCase();
-let candidates;
-if (host === "0.0.0.0") candidates = ["127.0.0.1"];
-else if (host === "::") candidates = ["::1"];
-else if (host === "localhost") candidates = ["127.0.0.1", "::1"];
-else if (net.isIP(rawHost) === 4 && Number(rawHost.split(".", 1)[0]) === 127) candidates = [rawHost];
-else if (net.isIP(rawHost) === 6 && (host === "::1" || localAddresses.has(host))) candidates = [rawHost];
-else if (net.isIP(rawHost) === 4 && localAddresses.has(host)) candidates = [rawHost];
-else {
-  process.stderr.write("health_probe_refused_nonlocal_host\n");
-  process.exit(2);
-}
-
-const deadline = Date.now() + timeoutSeconds * 1000;
-let retryPending = false;
-let attempts = 0;
-function retry() {
-  if (retryPending) return;
-  if (Date.now() >= deadline) process.exit(2);
-  retryPending = true;
-  setTimeout(() => {
-    retryPending = false;
-    probe();
-  }, 250);
-}
-function probe() {
-  if (Date.now() >= deadline) process.exit(2);
-  const hostname = candidates[attempts % candidates.length];
-  attempts += 1;
-  const timeout = Math.max(1, Math.min(1000, deadline - Date.now()));
-  const request = http.get({ hostname, port, path: "/healthz", method: "GET", timeout, agent: false }, (response) => {
-    response.resume();
-    response.once("end", () => {
-      if (response.statusCode === 200 && Date.now() < deadline) process.exit(0);
-      retry();
-    });
-  });
-  request.once("timeout", () => request.destroy(new Error("health_timeout")));
-  request.once("error", retry);
-}
-probe();
-NODE
+  installed_webchat health "${1:-15}"
 }
 
 open_control_center() {
@@ -507,27 +500,26 @@ open_control_center() {
     echo "next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh doctor' and review the logs before retrying." >&2
     return 2
   fi
-  control_center_url=$(control_center_open_url)
-  launch_host=$(control_center_loopback_host 2>/dev/null || true)
-  if [ -n "$launch_host" ]; then
-    launch_ticket=$(issue_control_center_launch_ticket "$launch_host" 2>/dev/null || true)
-    if [ -n "$launch_ticket" ]; then
-      control_center_url="$control_center_url#bt-launch-handoff=$launch_ticket"
-    else
-      echo "launch_handoff=unavailable; no credential was added to the browser URL" >&2
-    fi
+  configured_url=$(installed_webchat url) || return 2
+  control_center_url=$configured_url
+  resident_start_time=$(LC_ALL=C /bin/ps -p "$managed_pid" -o lstart= | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  launch_ticket=$(installed_webchat ticket "$managed_pid" "$resident_start_time" "$configured_url" 2>/dev/null || true)
+  if [ -n "$launch_ticket" ]; then
+    control_center_url="$control_center_url#bt-launch-handoff=$launch_ticket"
+  else
+    echo "launch_handoff=unavailable; no credential was added to the browser URL" >&2
   fi
   if command -v open >/dev/null 2>&1; then
     (open "$control_center_url" >/dev/null 2>&1 || true) &
-    echo "open_requested=$(control_center_open_url)"
+    echo "open_requested=$configured_url"
     return
   fi
   if command -v xdg-open >/dev/null 2>&1; then
     (xdg-open "$control_center_url" >/dev/null 2>&1 || true) &
-    echo "open_requested=$(control_center_open_url)"
+    echo "open_requested=$configured_url"
     return
   fi
-  echo "open_manually=$(control_center_open_url)"
+  echo "open_manually=$configured_url"
 }
 
 resident_start() {
@@ -562,7 +554,7 @@ resident_start() {
   ready_pid=$(resolve_owned_pid resident "$PID_FILE") || return 2
   [ -n "$ready_pid" ] || fail "Gateway health responded but the managed process could not be verified; no process was changed"
   echo "resident_health=ready pid=$ready_pid"
-  echo "control_center=$CONTROL_CENTER_URL"
+  echo "control_center=$(installed_webchat url 2>/dev/null || printf unavailable)"
   echo "logs=$LOG_DIR"
 }
 
@@ -574,7 +566,7 @@ resident_watchdog() {
     fi
     (
       cd "$INSTALL_ROOT"
-      exec "$NODE_EXE" apps/gateway/dist/main.js --serve --env-file "$ENV_FILE" "$@"
+      exec "$NODE_EXE" -- apps/gateway/dist/main.js --serve --env-file "$ENV_FILE" "$@"
     ) >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
     gateway_pid=$!
     if ! write_pid_record "$PID_FILE" "$gateway_pid" resident; then
@@ -623,21 +615,23 @@ resident_status() {
   watchdog_pid=$(resolve_owned_pid watchdog "$WATCHDOG_PID_FILE") || return 2
   if [ -n "$pid" ]; then
     echo "resident_status=running pid=$pid"
-    local_health_host=$(control_center_loopback_host 2>/dev/null || true)
-    if [ -z "$local_health_host" ]; then
-      echo "resident_health=unobserved_non_loopback_binding"
-    elif wait_gateway_health 2 "$local_health_host"; then
+    if installed_webchat loopback-health 2; then
       echo "resident_health=ready"
     else
-      echo "resident_health=not_ready"
-      echo "resident_health_next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh' doctor and review the logs before retrying."
+      health_code=$?
+      if [ "$health_code" -eq 3 ]; then
+        echo "resident_health=unobserved_non_loopback_binding"
+      else
+        echo "resident_health=not_ready"
+        echo "resident_health_next_action=Run '$SCRIPT_DIR/BlueTanukiLauncher.sh' doctor and review the logs before retrying."
+      fi
     fi
   elif [ -n "$watchdog_pid" ]; then
     echo "resident_status=starting watchdog_pid=$watchdog_pid"
   else
     echo "resident_status=stopped"
   fi
-  echo "control_center=$CONTROL_CENTER_URL"
+  echo "control_center=$(installed_webchat url 2>/dev/null || printf unavailable)"
   echo "env_file=$ENV_FILE"
   echo "logs=$LOG_DIR"
 }
@@ -804,7 +798,7 @@ case "$COMMAND" in
   start|serve)
     assert_port_available
     cd "$INSTALL_ROOT"
-    exec "$NODE_EXE" apps/gateway/dist/main.js --serve --env-file "$ENV_FILE" "$@"
+    exec "$NODE_EXE" -- apps/gateway/dist/main.js --serve --env-file "$ENV_FILE" "$@"
     ;;
   resident-start)
     resident_start "$@"
@@ -845,7 +839,7 @@ case "$COMMAND" in
     ;;
   doctor)
     cd "$INSTALL_ROOT"
-    exec "$NODE_EXE" apps/gateway/dist/main.js --doctor --env-file "$ENV_FILE" --json "$@"
+    exec "$NODE_EXE" -- apps/gateway/dist/main.js --doctor --env-file "$ENV_FILE" --json "$@"
     ;;
   recovery-inspect)
     cd "$INSTALL_ROOT"

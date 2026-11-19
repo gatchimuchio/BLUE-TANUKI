@@ -1,4 +1,5 @@
-import type { WebChatD4RuntimeCancellationStatus, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
+import type { WebChatD4RuntimeCancellationStatus, WebChatOwnerTaskCancellationStatus,
+  WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 
@@ -180,8 +181,8 @@ export function projectOwnerTaskRequestCommandIds(operationPlans: unknown, reque
 }
 
 function unknownCancellationStatus(
-  reason_code: Extract<WebChatD4RuntimeCancellationStatus, { status: "unknown" }>["reason_code"],
-): WebChatD4RuntimeCancellationStatus {
+  reason_code: Extract<WebChatOwnerTaskCancellationStatus, { status: "unknown" }>["reason_code"],
+): WebChatOwnerTaskCancellationStatus {
   return { status: "unknown", reason_code, used_for_authority: false, may_execute: false };
 }
 
@@ -201,7 +202,7 @@ export function projectOwnerTaskCancellationStatus(
   operationPlans: unknown,
   requestId: string,
   observations: readonly TaskExecutionCancellationEvidence[],
-): WebChatD4RuntimeCancellationStatus {
+): WebChatOwnerTaskCancellationStatus {
   return projectTaskCancellationStatus(
     operationPlans, requestId, observations, WEBCHAT_OWNER_TASK_DIGEST, ["owner_task", "resume"],
   );
@@ -214,7 +215,7 @@ function projectTaskCancellationStatus(
   ownerIdentityDigest: string,
   tokenKinds: readonly TaskExecutionCancellationEvidence["token_kind"][],
   scopedCommandIds: readonly string[] = [],
-): WebChatD4RuntimeCancellationStatus {
+): WebChatOwnerTaskCancellationStatus {
   const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
   if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
   if (binding.status === "invalid" || scopedCommandIds.some((id) => typeof id !== "string" || !COMMAND_ID.test(id))) {

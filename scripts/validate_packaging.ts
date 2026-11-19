@@ -553,12 +553,13 @@ function main(): void {
   requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "assert_not_same_target");
 
   const unixProductLauncher = read("install/unix/product/BlueTanukiLauncher.sh");
-  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "port_conflict=127.0.0.1:");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, '"port_conflict=" + formatAddress(bind, port)');
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "verifyResidentSocket(socket, pid, start)");
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "watchdog_restarting_after_exit");
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "BLUE_TANUKI_SAFE_MODE");
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "resident-autostart-enable");
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "autostart_status=disabled");
-  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "exec \"$NODE_EXE\" apps/gateway/dist/main.js --serve");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "exec \"$NODE_EXE\" -- apps/gateway/dist/main.js --serve");
 
   const unixProductUninstall = read("install/unix/product/BlueTanukiUninstall.sh");
   requireOrderedIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, [

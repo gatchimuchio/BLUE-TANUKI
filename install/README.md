@@ -115,6 +115,8 @@ User flow:
 5. Use Conversation / WebChat in the Control Center.
 ```
 
+Linux／macOSのランチャーはGatewayと同じ設定の優先順位でControl Centerの接続先を決めます。HTTPSが設定されているときは構成された証明書とホスト名を照合します。自動接続の資格情報は、常駐Gatewayが所有するループバック接続を確認できた場合だけ渡します。
+
 The macOS BLUE-TANUKI app also provides Safe Mode, stop, and normal-mode
 restart actions. To leave Safe Mode, choose **通常モードで再起動** in the app;
 this uses the managed launcher to stop the Safe Mode process and start the
@@ -397,6 +399,7 @@ or live LLM credentials can remain unset during local setup.
 ## 復旧診断
 
 macOSの製品アプリでは「復旧診断」から、保存済みの台帳と復旧保留の状態を読み取れます。Gatewayの起動や復元の操作は発生しません。
+中断した初期化と有効な事前バックアップが見つかった場合は、「照合する」を選ぶと同じバックアップで初期化結果を照合します。照合できない状態では起動保留が続きます。
 
 インストール時の構成で現在の台帳を読み取るには `recovery-inspect` を使います。
 特定のバックアップを検査する場合は、Control Centerで確認した具体的なIDを指定します。

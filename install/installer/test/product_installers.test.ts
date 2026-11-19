@@ -104,7 +104,7 @@ describe("downloadable product installer packages", () => {
     const pack = read("scripts/package_macos_app.ts");
     const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
     const start = app.indexOf("@objc private func inspectRecovery()");
-    const end = app.indexOf("@objc private func restartNormally()", start);
+    const end = app.indexOf("private func confirmRecoveryReconciliation(", start);
     expect(pack).toContain('"install/macos/app/BlueTanukiApp.swift"');
     expect(app).toContain('makeButton("復旧診断", action: #selector(inspectRecovery))');
     expect(start).toBeGreaterThanOrEqual(0);
@@ -116,5 +116,36 @@ describe("downloadable product installer packages", () => {
     expect(action).toContain("exitCode == (report.status == .verified && report.runtime_recovery_fence.status == .clear ? 0 : 2)");
     expect(action).not.toMatch(/recovery-reconcile|resident-start|\.next_safe_action/);
     expect(launcher).toMatch(/recovery-inspect\)[\s\S]*?--recovery-inspect --env-file "\$ENV_FILE" "\$@"/);
+  });
+
+  it("binds macOS reset reconciliation to confirmed pending evidence and the offline CLI", () => {
+    const app = read("install/macos/app/BlueTanukiApp.swift");
+    const owner = read("apps/gateway/src/runtime_owner_lease.ts");
+    const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
+    const diagnostic = app.indexOf("@objc private func inspectRecovery()");
+    const reconciliation = app.indexOf("private func confirmRecoveryReconciliation(", diagnostic);
+    const next = app.indexOf("@objc private func restartNormally()", reconciliation);
+    expect(diagnostic).toBeGreaterThanOrEqual(0);
+    expect(reconciliation).toBeGreaterThan(diagnostic);
+    expect(next).toBeGreaterThan(reconciliation);
+    expect(app.slice(diagnostic, reconciliation)).toMatch(
+      /case \.pending:\s+guard let evidence = report\.runtime_recovery_fence\.pendingEvidence else \{[\s\S]+?return\s+\}[\s\S]+?confirmRecoveryReconciliation\(evidence\)/,
+    );
+    const action = app.slice(reconciliation, next);
+    expect(action).toMatch(
+      /guard alert\.runModal\(\) == \.alertSecondButtonReturn else \{ return \}[\s\S]+?validateInstalledProduct\(\)[\s\S]+?"recovery-reconcile", "--backup-id", evidence\.backupID,\s+"--manifest-sha256", evidence\.manifestSHA256, "--json"/,
+    );
+    expect(action).toContain("!report.used_for_authority, exitCode == report.status.expectedExitCode");
+    expect(action).toContain("case .success(.unresolved):");
+    expect(action).not.toMatch(/resident-start|resident-open|factory-reset/);
+    expect(app).toContain('guard status == .pending, operation == "recovery.factory_reset"');
+    for (const name of ["FACTORY_BACKUP_ID", "DIGEST"]) {
+      const pattern = new RegExp(`^const ${name} = /\\^(.+)\\$/;`, "m").exec(owner)?.[1];
+      expect(pattern).toBeTruthy();
+      expect(app).toContain(String.raw`#"\A${pattern}\z"#`);
+    }
+    expect(app).toContain("case .pre_action_state_matched, .postconditions_matched, .no_pending: return 0");
+    expect(app).toContain("case .unresolved, .invalid_arguments, .configuration_unavailable: return 2");
+    expect(launcher).toMatch(/recovery-reconcile\)[\s\S]*?--recovery-reconcile --env-file "\$ENV_FILE" "\$@"/);
   });
 });

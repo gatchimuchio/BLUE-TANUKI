@@ -157,6 +157,7 @@ import type {
   WebChatSettingsWriteContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
+  WebChatD4RuntimeApprovalWithdrawal,
   WebChatD4RuntimeCancellationScope,
   WebChatD4RuntimeCancellationStatus,
   WebChatD4RuntimeIntentCancellation,
@@ -940,6 +941,8 @@ function d4RuntimeExecutionBinding(
       origin.session_id !== `d4-runtime:${sessionRef}` || origin.metadata?.reply_to !== origin.session_id) return undefined;
   return { request_id: origin.id, runtime_ref_digest: runtimeRef, session_ref_digest: sessionRef };
 }
+
+const D4_PENDING_WITHDRAWAL_REASON = "d4_runtime_approval_withdrawn";
 
 export function selectGatewayInboundEphemeralContext(
   boundary: GatewayInboundBoundaryPlan,
@@ -2573,10 +2576,14 @@ async function serveWithOwnerLease(
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}${changedConditions.length > 0 ? ` failure_memory_changed_conditions=${changedConditions.join(",")}` : ""} approval_is_bound_to_this_command_and_current_gate_only=true`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
         if (!opts.quiet_approval_notice) {
-          auditGatewayStatusOutput(log, origin, actor, cmd.id, "approval_required", approvalContent);
+          const d4Notice = isGatewayInternalD4RuntimeIntentRequest(origin);
+          const notice = d4Notice
+            ? "承認待ちです。承認と実行の状態は認証済みの画面で確認してください。"
+            : approvalContent;
+          auditGatewayStatusOutput(log, origin, actor, cmd.id, "approval_required", notice);
           await dispatcher.dispatch(
-            replyPayload(origin, approvalContent),
-            { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
+            replyPayload(origin, notice),
+            { command_id: d4Notice ? randomUUID() : `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
           );
         }
         return { status: "approval_required" };
@@ -4810,6 +4817,10 @@ async function serveWithOwnerLease(
                 const commandIds = [...new Set([...scoped.matching, ...planCommands])]
                   .filter(commandId => !scoped.conflicting.includes(commandId));
                 const observations = executionStore.taskExecutionCancellationEvidenceForCommands(commandIds);
+                if (observations.length === 0) {
+                  const withdrawn = readD4PendingWithdrawal(scope, scoped.matching);
+                  if (withdrawn) return withdrawn;
+                }
                 return projectD4RuntimeCancellationStatus(operationPlans, scope.request_id, observations, scoped.matching);
               } catch {
                 return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
@@ -4818,12 +4829,21 @@ async function serveWithOwnerLease(
             onD4RuntimeIntentCancellation: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeIntentCancellation | null> => {
               ownerLease.assertActive();
               const commands = new Set(activeTaskExecutions.d4RuntimeCommands(scope));
+              for (const pending of pendingApprovals.values()) {
+                if (pendingD4ApprovalMatchesScope(pending, scope)) commands.add(pending.command.id);
+              }
               const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
               const binding = projectD4RuntimeActiveCommand(hds.getRuntimeSnapshot().operation_plans, scope.request_id, activeCommandIds);
               if (binding.status === "ambiguous") return null;
               if (binding.status === "matched") commands.add(binding.command_id);
+              if (commands.size === 0) {
+                const scoped = ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope);
+                return readD4PendingWithdrawal(scope, scoped.matching);
+              }
               const [commandId] = commands;
               if (commands.size !== 1 || !commandId) return null;
+              const pending = pendingApprovals.get(commandId);
+              if (pending && pendingD4ApprovalMatchesScope(pending, scope)) return withdrawD4PendingApproval(scope, pending);
               const cancellation = requestTaskExecutionCancellation(commandId, {
                 actor: "d4-runtime-adapter-token-holder",
                 token_kind: "d4_runtime",
@@ -7096,6 +7116,70 @@ async function serveWithOwnerLease(
     } catch {
       try { approvalRecoveryStore.markOutcomeUnknown(commandId); } catch { /* Keep the original safe failure record. */ }
       gatewayLog.error("approval recovery resolution record could not be cleared", { state: "resolving" });
+    }
+  }
+
+  function pendingD4ApprovalMatchesScope(pending: PendingApproval, scope: WebChatD4RuntimeCancellationScope): boolean {
+    const binding = d4RuntimeExecutionBinding(pending.command, pending.log, pending.origin);
+    return binding !== undefined && binding.request_id === scope.request_id &&
+      binding.runtime_ref_digest === scope.runtime_ref_digest && binding.session_ref_digest === scope.session_ref_digest;
+  }
+
+  function d4PendingWithdrawalEvidence(requestId: string, commandId: string): WebChatD4RuntimeApprovalWithdrawal | null {
+    const audit = hds.getAudit();
+    if (!audit.isPersistent() || !audit.verify()) return null;
+    const entries = audit.list().filter(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      log.request_id === requestId && log.command_id === commandId && log.phase === "approval_cancelled" &&
+      log.actor === "d4-runtime-adapter-token-holder" && log.reason === D4_PENDING_WITHDRAWAL_REASON);
+    if (entries.length !== 1) return null;
+    const timestamp = entries[0]!.log.timestamp;
+    if (!Number.isSafeInteger(timestamp) || timestamp <= 0) return null;
+    return {
+      status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+      external_processing_stop: "unknown", cancel_requested_at_ms: timestamp,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+
+  function readD4PendingWithdrawal(
+    scope: WebChatD4RuntimeCancellationScope, boundCommandIds: readonly string[],
+  ): WebChatD4RuntimeApprovalWithdrawal | null {
+    if (boundCommandIds.length !== 1 ||
+        [...pendingApprovals.values()].some(pending => pendingD4ApprovalMatchesScope(pending, scope)) ||
+        activeTaskExecutions.d4RuntimeCommands(scope).length > 0) return null;
+    const commandId = boundCommandIds[0]!;
+    if (approvalRecoveryStore.state(commandId) !== null) return null;
+    return d4PendingWithdrawalEvidence(scope.request_id, commandId);
+  }
+
+  function withdrawD4PendingApproval(
+    scope: WebChatD4RuntimeCancellationScope, pending: PendingApproval,
+  ): WebChatD4RuntimeApprovalWithdrawal | null {
+    const commandId = pending.command.id;
+    const actor = "d4-runtime-adapter-token-holder";
+    if (pendingApprovals.get(commandId) !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.operationPlanCommandIsCurrent(pending.command) || pending.cron_event ||
+        pending.goal_purpose_proposal || pending.goal_purpose_relation_review_proposal ||
+        pending.meaning_update_proposal || pending.memory_judgment_reassessment_proposal) return null;
+    // Race approval admission on the same durable journal transition before touching the pending entry.
+    if (!approvalRecoveryStore.beginResolution(commandId)) return null;
+    try {
+      discardPendingApproval(commandId);
+      runtimeSchedules.rejectPending(commandId, actor, D4_PENDING_WITHDRAWAL_REASON);
+      hds.onCommandLifecycle(commandId, "approval_cancelled", { actor, reason: D4_PENDING_WITHDRAWAL_REASON,
+        request_id: scope.request_id });
+      const evidence = d4PendingWithdrawalEvidence(scope.request_id, commandId);
+      if (!evidence) throw new Error("d4_approval_withdrawal_unverified");
+      ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, commandId);
+      if (!ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope).matching.includes(commandId)) {
+        throw new Error("d4_approval_withdrawal_binding_unavailable");
+      }
+      approvalRecoveryStore.completeResolution(commandId);
+      return evidence;
+    } catch {
+      try { approvalRecoveryStore.markOutcomeUnknown(commandId); } catch { /* Keep the resolving record closed. */ }
+      gatewayLog.error("D4 pending approval withdrawal evidence unavailable", { used_for_authority: false });
+      return null;
     }
   }
 

@@ -76,9 +76,10 @@ import {
 import type {
   WebChatAboutSurface,
   WebChatTaskOutcome,
+  WebChatD4RuntimeApprovalWithdrawal,
   WebChatD4RuntimeCancellationStatus,
-  WebChatD4RuntimeIntentCancellation,
   WebChatOwnerTaskCancellation,
+  WebChatOwnerTaskCancellationStatus,
   WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
@@ -481,8 +482,30 @@ function normalizeTaskOutcome(value: unknown): WebChatTaskOutcome {
   };
 }
 
+function normalizeD4RuntimeApprovalWithdrawal(value: unknown): WebChatD4RuntimeApprovalWithdrawal | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const withdrawal = value as Record<string, unknown>;
+  const allowed = ["status", "cancel_request_accepted", "executor_started", "external_processing_stop",
+    "cancel_requested_at_ms", "used_for_authority", "may_execute"];
+  if (Object.keys(withdrawal).length !== allowed.length || Object.keys(withdrawal).some((key) => !allowed.includes(key)) ||
+      withdrawal.status !== "approval_withdrawn" || withdrawal.cancel_request_accepted !== true ||
+      withdrawal.executor_started !== false || withdrawal.external_processing_stop !== "unknown" ||
+      typeof withdrawal.cancel_requested_at_ms !== "number" || !Number.isSafeInteger(withdrawal.cancel_requested_at_ms) ||
+      withdrawal.cancel_requested_at_ms < 0 || withdrawal.used_for_authority !== false ||
+      withdrawal.may_execute !== false) return null;
+  return {
+    status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+    external_processing_stop: "unknown", cancel_requested_at_ms: withdrawal.cancel_requested_at_ms,
+    used_for_authority: false, may_execute: false,
+  };
+}
+
 function normalizeD4RuntimeCancellationStatus(value: unknown): WebChatD4RuntimeCancellationStatus {
-  const unknown: WebChatD4RuntimeCancellationStatus = {
+  return normalizeD4RuntimeApprovalWithdrawal(value) ?? normalizeTaskCancellationStatus(value);
+}
+
+function normalizeTaskCancellationStatus(value: unknown): WebChatOwnerTaskCancellationStatus {
+  const unknown: WebChatOwnerTaskCancellationStatus = {
     status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
   };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return unknown;
@@ -493,7 +516,7 @@ function normalizeD4RuntimeCancellationStatus(value: unknown): WebChatD4RuntimeC
     if (Object.keys(status).some((key) => !allowed.includes(key)) ||
         !["projection_unavailable", "projection_ambiguous", "projection_invalid", "no_recorded_evidence"]
           .includes(String(status.reason_code))) return unknown;
-    return { status: "unknown", reason_code: status.reason_code as Extract<WebChatD4RuntimeCancellationStatus,
+    return { status: "unknown", reason_code: status.reason_code as Extract<WebChatOwnerTaskCancellationStatus,
       { status: "unknown" }>["reason_code"], used_for_authority: false, may_execute: false };
   }
   if (status.status === "request_recorded") {
@@ -524,24 +547,26 @@ function normalizeD4RuntimeCancellationStatus(value: unknown): WebChatD4RuntimeC
   return {
     status: "execution_observed", cancel_request_accepted: true, executor_settled: status.executor_settled,
     executor_status: status.executor_status as "success" | "failed" | "suspended" | "unknown",
-    local_worker_stop: status.local_worker_stop as Extract<WebChatD4RuntimeCancellationStatus,
+    local_worker_stop: status.local_worker_stop as Extract<WebChatOwnerTaskCancellationStatus,
       { status: "execution_observed" }>["local_worker_stop"],
     external_processing_stop: "unknown", cancel_requested_at_ms: status.cancel_requested_at_ms,
     observed_at_ms: status.observed_at_ms, used_for_authority: false, may_execute: false,
   };
 }
 
-function normalizeTaskCancellationAcknowledgement(value: unknown): WebChatD4RuntimeIntentCancellation | null {
+function normalizeTaskCancellationAcknowledgement(value: unknown, allowPrivateFields = false): WebChatOwnerTaskCancellation | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const cancellation = value as Record<string, unknown>;
   const allowed = ["status", "cancel_request_accepted", "executor_settled", "execution_signal_aborted",
     "executor_state", "local_worker_stop", "external_processing_stop", "used_for_authority", "may_execute"];
-  if (Object.keys(cancellation).length !== allowed.length || Object.keys(cancellation).some((key) => !allowed.includes(key)) ||
+  if ((!allowPrivateFields && (Object.keys(cancellation).length !== allowed.length ||
+      Object.keys(cancellation).some((key) => !allowed.includes(key)))) ||
       (cancellation.status !== "cancel_requested" && cancellation.status !== "already_requested") ||
       cancellation.cancel_request_accepted !== true || cancellation.executor_settled !== false ||
       cancellation.execution_signal_aborted !== true || cancellation.executor_state !== "cancel_requested" ||
+      typeof cancellation.local_worker_stop !== "string" ||
       !["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
-        .includes(String(cancellation.local_worker_stop)) || cancellation.external_processing_stop !== "unknown" ||
+        .includes(cancellation.local_worker_stop) || cancellation.external_processing_stop !== "unknown" ||
       cancellation.used_for_authority !== false || cancellation.may_execute !== false) return null;
   return {
     status: cancellation.status,
@@ -549,7 +574,7 @@ function normalizeTaskCancellationAcknowledgement(value: unknown): WebChatD4Runt
     executor_settled: false,
     execution_signal_aborted: true,
     executor_state: "cancel_requested",
-    local_worker_stop: cancellation.local_worker_stop as WebChatD4RuntimeIntentCancellation["local_worker_stop"],
+    local_worker_stop: cancellation.local_worker_stop as WebChatOwnerTaskCancellation["local_worker_stop"],
     external_processing_stop: "unknown",
     used_for_authority: false,
     may_execute: false,
@@ -1363,7 +1388,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             })))
           : undefined;
         const cancellation = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionCancellationStatus
-          ? normalizeD4RuntimeCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
+          ? normalizeTaskCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
                 used_for_authority: false as const, may_execute: false as const })))
           : undefined;
@@ -2136,14 +2161,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
           return;
         }
-        const localWorkerStops = new Set([
-          "not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown",
-        ]);
-        if ((cancellation.status !== "cancel_requested" && cancellation.status !== "already_requested") ||
-            cancellation.cancel_request_accepted !== true || cancellation.executor_settled !== false ||
-            cancellation.execution_signal_aborted !== true || cancellation.executor_state !== "cancel_requested" ||
-            !localWorkerStops.has(cancellation.local_worker_stop) || cancellation.external_processing_stop !== "unknown" ||
-            cancellation.used_for_authority !== false || cancellation.may_execute !== false) {
+        const acknowledgement = normalizeD4RuntimeApprovalWithdrawal(cancellation) ??
+          normalizeTaskCancellationAcknowledgement(cancellation, true);
+        if (!acknowledgement) {
           res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ error: "runtime_intent_cancellation_unavailable" }));
           return;
@@ -2153,17 +2173,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
-        res.end(JSON.stringify({ found: true, accepted: true, cancellation: {
-          status: cancellation.status,
-          cancel_request_accepted: true,
-          executor_settled: false,
-          execution_signal_aborted: true,
-          executor_state: "cancel_requested",
-          local_worker_stop: cancellation.local_worker_stop,
-          external_processing_stop: "unknown",
-          used_for_authority: false,
-          may_execute: false,
-        } }));
+        res.end(JSON.stringify({ found: true, accepted: true, cancellation: acknowledgement }));
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "runtime_intent_cancellation_unavailable" }));

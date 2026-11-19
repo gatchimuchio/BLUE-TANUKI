@@ -60,7 +60,17 @@ export interface WebChatD4RuntimeCancellationScope {
   readonly session_ref_digest: string;
 }
 
-export type WebChatD4RuntimeCancellationStatus =
+export interface WebChatD4RuntimeApprovalWithdrawal {
+  readonly status: "approval_withdrawn";
+  readonly cancel_request_accepted: true;
+  readonly executor_started: false;
+  readonly external_processing_stop: "unknown";
+  readonly cancel_requested_at_ms: number;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export type WebChatOwnerTaskCancellationStatus =
   | {
       readonly status: "request_recorded";
       readonly cancel_request_accepted: true;
@@ -91,8 +101,7 @@ export type WebChatD4RuntimeCancellationStatus =
       readonly may_execute: false;
     };
 
-/** The same content-free, non-authority cancellation projection used for an owner task submission. */
-export type WebChatOwnerTaskCancellationStatus = WebChatD4RuntimeCancellationStatus;
+export type WebChatD4RuntimeCancellationStatus = WebChatOwnerTaskCancellationStatus | WebChatD4RuntimeApprovalWithdrawal;
 
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
@@ -1509,8 +1518,8 @@ export interface WebChatApprovalControlContext {
   reason?: string;
 }
 
-/** Content-free cancellation acknowledgement for one D4 Runtime-owned active intent. */
-export interface WebChatD4RuntimeIntentCancellation {
+/** Content-free acknowledgement that a bounded AbortSignal was delivered to the active task. */
+export interface WebChatOwnerTaskCancellation {
   readonly status: "cancel_requested" | "already_requested";
   readonly cancel_request_accepted: true;
   readonly executor_settled: false;
@@ -1523,8 +1532,7 @@ export interface WebChatD4RuntimeIntentCancellation {
   readonly may_execute: false;
 }
 
-/** The same bounded AbortSignal acknowledgement for an owner-authenticated task submission. */
-export type WebChatOwnerTaskCancellation = WebChatD4RuntimeIntentCancellation;
+export type WebChatD4RuntimeIntentCancellation = WebChatOwnerTaskCancellation | WebChatD4RuntimeApprovalWithdrawal;
 
 export interface WebChatActiveExecutionSnapshot {
   command_id: string;

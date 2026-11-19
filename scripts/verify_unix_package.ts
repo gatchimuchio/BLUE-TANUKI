@@ -492,12 +492,13 @@ export function verifyUnixPackage(
     "install_result=pass",
   ]);
   requireSourceText("install/unix/product/BlueTanukiLauncher.sh", [
-    "port_conflict=127.0.0.1:",
+    '"port_conflict=" + formatAddress(bind, port)',
+    "verifyResidentSocket(socket, pid, start)",
     "BLUE_TANUKI_SAFE_MODE",
     "watchdog_restarting_after_exit",
     "resident-autostart-enable",
     "autostart_status=disabled",
-    "exec \"$NODE_EXE\" apps/gateway/dist/main.js --serve",
+    "exec \"$NODE_EXE\" -- apps/gateway/dist/main.js --serve",
   ]);
   requireSourceText("install/unix/product/BlueTanukiUninstall.sh", [
     "safe_destructive_target",

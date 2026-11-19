@@ -1043,6 +1043,10 @@ cp "$REPO_ROOT/install/unix/product/BlueTanukiLauncher.sh" "$LIFECYCLE_INSTALL/B
 cat > "$LIFECYCLE_NODE" <<'NODE'
 #!/usr/bin/env sh
 if [ "${1:-}" = "-e" ]; then exit 0; fi
+if [ "${1:-}" = "--input-type=module" ]; then
+  [ "${4:-}" != "url" ] || printf '%s\n' 'http://127.0.0.1:8787/app'
+  exit 0
+fi
 node_cleanup() {
   if [ -n "${node_sleep_pid:-}" ]; then
     kill -TERM "$node_sleep_pid" 2>/dev/null || true

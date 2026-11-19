@@ -210,7 +210,12 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             case .success(let report):
                 switch report.runtime_recovery_fence.status {
                 case .pending:
-                    self.setStatus("初期化結果の照合が保留中です。", detail: "復旧処理を再送せず、保存済みの復旧記録を確認してください。")
+                    guard let evidence = report.runtime_recovery_fence.pendingEvidence else {
+                        self.setStatus("初期化結果の照合が保留中です。", detail: "事前バックアップの識別情報を確認できません。現在のデータを保持してください。")
+                        return
+                    }
+                    self.setStatus("初期化結果の照合が保留中です。", detail: "事前バックアップの識別情報を確認しました。")
+                    self.confirmRecoveryReconciliation(evidence)
                 case .unavailable:
                     self.setStatus("復旧保護の状態を確認できません。", detail: "データを保持し、ログと復旧手順を確認してください。")
                 case .clear where report.status == .residuals_present:
@@ -220,6 +225,47 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                 }
             case .failure(let error):
                 self.showFailure("復旧診断", error: error)
+            }
+        }
+    }
+
+    private func confirmRecoveryReconciliation(_ evidence: RecoveryDiagnostic.PendingEvidence) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "中断した初期化の結果を照合しますか？"
+        alert.informativeText = "Gatewayが停止している場合に、診断で確認した事前バックアップと現在の状態を照合します。初期化前か予定どおりの初期化後に一致した場合のみ起動保留を解除します。運転再開は別の操作です。"
+        alert.addButton(withTitle: "閉じる")
+        alert.addButton(withTitle: "照合する")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        beginOperation("初期化結果を照合しています。", detail: "診断で確認した事前バックアップを使用します。") {
+            try self.validateInstalledProduct()
+            let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
+            let (data, exitCode) = try self.runShell(
+                launcher, arguments: [
+                    "recovery-reconcile", "--backup-id", evidence.backupID,
+                    "--manifest-sha256", evidence.manifestSHA256, "--json",
+                ], captureOutput: true, accepting: [0, 2]
+            )
+            guard let report = try? JSONDecoder().decode(RecoveryReconciliation.self, from: data),
+                  !report.used_for_authority, exitCode == report.status.expectedExitCode else {
+                throw AppError.invalidRecoveryReconciliation
+            }
+            return report.status
+        } completion: { result in
+            switch result {
+            case .success(.pre_action_state_matched):
+                self.setStatus("初期化前の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
+            case .success(.postconditions_matched):
+                self.setStatus("予定どおりの初期化後の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
+            case .success(.no_pending):
+                self.setStatus("現在、照合保留はありません。", detail: "復旧診断から最新の台帳と復旧保護の状態を確認できます。")
+            case .success(.unresolved):
+                self.setStatus("初期化結果を照合できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
+            case .success(.invalid_arguments), .success(.configuration_unavailable):
+                self.setStatus("初期化結果の照合を開始できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
+            case .failure(let error):
+                self.showFailure("初期化結果の照合", error: error)
             }
         }
     }
@@ -517,6 +563,7 @@ private enum AppError: Error, CustomStringConvertible {
     case invalidInstaller
     case invalidResidentStatus
     case invalidRecoveryDiagnostic
+    case invalidRecoveryReconciliation
     case commandOutputTooLarge
     case missingComponent
     case notInstalled
@@ -527,6 +574,7 @@ private enum AppError: Error, CustomStringConvertible {
         case .invalidInstaller: return "同梱インストーラーの完全性を確認できません"
         case .invalidResidentStatus: return "常駐プロセスの状態応答を確認できません"
         case .invalidRecoveryDiagnostic: return "復旧診断の応答を確認できません"
+        case .invalidRecoveryReconciliation: return "初期化結果の照合応答を確認できません"
         case .commandOutputTooLarge: return "診断出力が画面で確認できる上限を超えました"
         case .missingComponent: return "必要な製品ファイルが見つかりません"
         case .notInstalled: return "製品が未インストールか、管理ファイルがありません"
@@ -537,9 +585,26 @@ private enum AppError: Error, CustomStringConvertible {
 
 private struct RecoveryDiagnostic: Decodable {
     enum Status: String, Decodable { case verified, residuals_present }
+    struct PendingEvidence {
+        let backupID: String
+        let manifestSHA256: String
+    }
+
     struct Fence: Decodable {
         enum Status: String, Decodable { case clear, pending, unavailable }
         let status: Status
+        let operation: String?
+        let backup_id: String?
+        let manifest_sha256: String?
+
+        var pendingEvidence: PendingEvidence? {
+            guard status == .pending, operation == "recovery.factory_reset",
+                  let backupID = backup_id,
+                  backupID.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z\.pre_factory_reset\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"#, options: .regularExpression) != nil,
+                  let manifestSHA256 = manifest_sha256,
+                  manifestSHA256.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil else { return nil }
+            return PendingEvidence(backupID: backupID, manifestSHA256: manifestSHA256)
+        }
     }
 
     let schema_version: Int
@@ -549,6 +614,23 @@ private struct RecoveryDiagnostic: Decodable {
     let runtime_recovery_fence: Fence
     let used_for_authority: Bool
     let may_execute: Bool
+}
+
+private struct RecoveryReconciliation: Decodable {
+    enum Status: String, Decodable {
+        case pre_action_state_matched, postconditions_matched, no_pending
+        case unresolved, invalid_arguments, configuration_unavailable
+
+        var expectedExitCode: Int32 {
+            switch self {
+            case .pre_action_state_matched, .postconditions_matched, .no_pending: return 0
+            case .unresolved, .invalid_arguments, .configuration_unavailable: return 2
+            }
+        }
+    }
+
+    let status: Status
+    let used_for_authority: Bool
 }
 
 private enum ResidentProductStatus {
