@@ -98,6 +98,16 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   }
   if (backupArg !== -1) args.splice(backupArg, 2);
   const restorePlan = args.includes("--restore-plan");
+  const offlineIndex = args.indexOf("--verify-offline");
+  const verifyOffline = offlineIndex !== -1;
+  if (verifyOffline) {
+    if (!restorePlan || offlineIndex !== args.lastIndexOf("--verify-offline")) {
+      writeStdout(json ? JSON.stringify({ status: "invalid_arguments" }) : "停止確認は復元計画とともに一度だけ指定してください。");
+      process.exitCode = 2;
+      return;
+    }
+    args.splice(offlineIndex, 1);
+  }
   let manifestSha256: string | undefined;
   if (restorePlan) {
     const pinIndex = args.indexOf("--manifest-sha256");
@@ -132,15 +142,41 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   }
   if (backupId !== undefined && manifestSha256 !== undefined) {
     const { planOfflineRecoveryRestore } = await import("./recovery_surface.js");
-    const plan = await planOfflineRecoveryRestore(env, backupId, manifestSha256);
+    const pinnedManifest = manifestSha256;
+    const inspectPlan = () => planOfflineRecoveryRestore(env, backupId, pinnedManifest);
+    const isolation = verifyOffline
+      ? await (await import("./runtime_owner_lease.js")).observeUnderOfflineGatewayOwnerLock(env, inspectPlan)
+      : undefined;
+    if (isolation && isolation.status !== "verified") {
+      const reason = {
+        owner_lock_busy: "Gatewayまたは別の復旧診断が作業中です。",
+        owner_lock_sidecars_present: "Gatewayのロックに副ファイルがあり、停止状態を確認できません。",
+        recovery_pending: "中断した復旧処理の照合が必要です。",
+        owner_state_unavailable: "この設置先のGateway停止状態を確認できません。",
+      }[isolation.status];
+      writeStdout(json ? JSON.stringify({
+        surface: "offline_recovery_restore_plan", schema_version: 1, status: "offline_lease_unverified",
+        manifest_sha256: null, plan_sha256: null, items: [], canonical_stores: [],
+        offline_lease_status: isolation.status, offline_lease_verified: false,
+        cross_store_atomic: false, used_for_authority: false, may_execute: false,
+      }) : reason);
+      process.exitCode = 2;
+      return;
+    }
+    const plan = isolation?.observation ?? await inspectPlan();
+    const offlineVerified = isolation !== undefined && plan.status === "planned";
     if (json) {
-      writeStdout(JSON.stringify(plan, null, 2));
+      writeStdout(JSON.stringify(offlineVerified
+        ? { ...plan, offline_lease_status: "verified", offline_lease_verified: true }
+        : plan, null, 2));
     } else {
       writeStdout(`復元計画 ${plan.status}`);
       if (plan.plan_sha256) writeStdout(`計画SHA-256 ${plan.plan_sha256}`);
       for (const item of plan.items) writeStdout(`${item.role} ${item.disposition}`);
       for (const store of plan.canonical_stores) writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}`);
-      writeStdout("読み取り専用です。Gatewayの停止状態は別に確認してください。");
+      writeStdout(offlineVerified
+        ? "計画の観測中にGatewayの起動を排他しました。排他は解除済みです。復元・承認は実行していません。"
+        : "読み取り専用です。Gatewayの停止状態は別に確認してください。");
     }
     process.exitCode = plan.status === "planned" ? 0 : 2;
     return;

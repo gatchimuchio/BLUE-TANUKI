@@ -647,8 +647,15 @@ recover_interrupted_product_update() {
   fi
 }
 
+has_product_data_owner_markers() {
+  [ -e "$DATA_ROOT/.blue-tanuki-owner" ] || [ -L "$DATA_ROOT/.blue-tanuki-owner" ] ||
+    [ -e "$CONFIG_ROOT/.blue-tanuki-owner" ] || [ -L "$CONFIG_ROOT/.blue-tanuki-owner" ]
+}
+
+DATA_OWNER_MARKERS_REQUIRED=0
 recover_interrupted_product_update
 if [ -e "$INSTALL_ROOT" ] || [ -L "$INSTALL_ROOT" ]; then
+  DATA_OWNER_MARKERS_REQUIRED=1
   [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] || fail "Install target exists but is not a regular directory: $INSTALL_ROOT"
   if [ -e "$INSTALL_ROOT/.blue-tanuki-owner" ] || [ -L "$INSTALL_ROOT/.blue-tanuki-owner" ]; then
     assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
@@ -685,8 +692,9 @@ else
   if [ -e "$RUNTIME_ROOT" ] || [ -L "$RUNTIME_ROOT" ]; then
     fail "Runtime target exists without a verified product install and will not be replaced: $RUNTIME_ROOT"
   fi
-  if [ -e "$DATA_ROOT/.blue-tanuki-owner" ] || [ -L "$DATA_ROOT/.blue-tanuki-owner" ] || [ -e "$CONFIG_ROOT/.blue-tanuki-owner" ] || [ -L "$CONFIG_ROOT/.blue-tanuki-owner" ]; then
+  if has_product_data_owner_markers; then
     assert_product_data_root_markers "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+    DATA_OWNER_MARKERS_REQUIRED=1
   elif [ -e "$DATA_ROOT/blue-tanuki-product-data.json" ] || [ -L "$DATA_ROOT/blue-tanuki-product-data.json" ]; then
     [ -f "$DATA_ROOT/blue-tanuki-product-data.json" ] && [ ! -L "$DATA_ROOT/blue-tanuki-product-data.json" ] || fail "product data compatibility marker is not a regular file"
   else
@@ -1007,7 +1015,12 @@ mv -- "$RUNTIME_STAGE" "$RUNTIME_ROOT"
 NEW_RUNTIME_MOVED=1
 RUNTIME_STAGE_CREATED=0
 RUNTIME_STAGE_ID=
-assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+if [ "$DATA_OWNER_MARKERS_REQUIRED" = "1" ] || has_product_data_owner_markers; then
+  assert_managed_product_install "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+else
+  # 初回導入で所有マーカーを作る前に、配置したアプリと実行環境を検証する。
+  assert_managed_product_app_runtime "$INSTALL_ROOT" "$DATA_ROOT" "$CONFIG_ROOT" "$RUNTIME_ROOT" "$BIN_ROOT" "$PLATFORM" "$SURFACE_FILE"
+fi
 
 if [ -f "$ENV_FILE_STAGE" ]; then
   if [ -f "$ENV_FILE" ]; then

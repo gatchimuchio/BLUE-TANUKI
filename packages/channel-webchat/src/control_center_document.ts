@@ -512,10 +512,13 @@ ${CONTROL_CENTER_STYLE}    </style>
             <label>復元元バックアップID<input id="recovery-backup-id" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="空欄は読み込み済みの最新ID" /></label>
             <button id="create-recovery-backup" type="button">Backup Now</button>
             <button id="restore-recovery-backup" type="button" disabled>Full Restore Unavailable</button>
+            <button id="inspect-recovery-restore-plan" type="button">包括復元計画を確認</button>
             <button id="reset-recovery-provider" type="button" disabled>Request Provider Reset Review</button>
             <button id="reset-recovery-connector" type="button" disabled>Request Connector Reset Review</button>
             <button id="factory-reset-recovery" type="button" disabled>Request Factory Reset Review</button>
           </div>
+          <p id="recovery-restore-plan-status" role="status">包括復元計画の確認にはバックアップIDを入力してください。</p>
+          <pre id="recovery-restore-plan-details" hidden></pre>
           <div class="status-grid">
             <label>Restore exactly one canonical store<select id="recovery-restore-store">
               <option value="">Select a store</option>

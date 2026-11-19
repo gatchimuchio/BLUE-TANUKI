@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GatewayRuntimeOwnerLease,
   inspectRuntimeRecoveryFence,
+  observeUnderOfflineGatewayOwnerLock,
   reconcileRuntimeRecoveryFence,
   type RuntimeRecoveryFenceEvidence,
 } from "../src/runtime_owner_lease.js";
@@ -42,6 +43,91 @@ afterEach(() => {
 });
 
 describe("Gateway runtime owner lease", () => {
+  it("holds the existing owner lock across an asynchronous offline observation without advancing the generation", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
+    const directory = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime");
+    const files = [join(directory, "owner-lock.sqlite"), join(directory, "owner-state.sqlite")];
+    const unexpectedObservation = async () => { throw new Error("offline observation should not run"); };
+    expect(await observeUnderOfflineGatewayOwnerLock(env, unexpectedObservation)).toEqual({ status: "owner_state_unavailable" });
+    expect(existsSync(env.BLUE_TANUKI_STATE_ROOT)).toBe(false);
+
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      const blocked = await observeUnderOfflineGatewayOwnerLock(env, unexpectedObservation);
+      expect(["owner_lock_busy", "owner_lock_sidecars_present"]).toContain(blocked.status);
+    } finally {
+      lease.close();
+    }
+
+    const before = files.map(filepath => readFileSync(filepath));
+    let observations = 0;
+    const result = await observeUnderOfflineGatewayOwnerLock(env, async () => {
+      await Promise.resolve();
+      expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
+      observations += 1;
+      return "fixture observation";
+    });
+    expect(result).toEqual({ status: "verified", observation: "fixture observation" });
+    expect(observations).toBe(1);
+    expect(await observeUnderOfflineGatewayOwnerLock(env, unexpectedObservation)).toEqual({ status: "owner_state_unavailable" });
+    expect(files.map(filepath => readFileSync(filepath))).toEqual(before);
+    expect(readdirSync(directory).sort()).toEqual(files.map(filepath => basename(filepath)).sort());
+
+    const restarted = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(restarted.generation).toBe(lease.generation + 1);
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it("skips offline observation for a pending fence or a different host binding", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      lease.beginRecoveryMutation(verifiableEvidence);
+    } finally {
+      lease.close();
+    }
+    let observations = 0;
+    const observe = async () => { observations += 1; };
+    const owner = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const before = readFileSync(owner);
+    expect(await observeUnderOfflineGatewayOwnerLock(env, observe)).toEqual({ status: "recovery_pending" });
+    expect(readFileSync(owner)).toEqual(before);
+
+    const otherHost = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    GatewayRuntimeOwnerLease.fromEnvironment(otherHost, "f".repeat(64)).close();
+    expect(await observeUnderOfflineGatewayOwnerLock(otherHost, observe)).toEqual({ status: "owner_state_unavailable" });
+    expect(observations).toBe(0);
+  });
+
+  it.each(["owner-lock.sqlite", "owner-state.sqlite"])("leaves a sidecar-free WAL database untouched at %s", async (name) => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    GatewayRuntimeOwnerLease.fromEnvironment(env).close();
+    const directory = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime");
+    const filepath = join(directory, name);
+    const db = new DatabaseSync(filepath);
+    try {
+      db.exec("PRAGMA journal_mode=WAL; CREATE TABLE wal_fixture(value TEXT) STRICT;");
+    } finally {
+      db.close();
+    }
+    const before = readFileSync(filepath);
+    expect(before.subarray(18, 20)).toEqual(Buffer.from([2, 2]));
+    const names = readdirSync(directory).sort();
+    expect(names).toEqual(["owner-lock.sqlite", "owner-state.sqlite"]);
+
+    let observations = 0;
+    const observe = async () => { observations += 1; return null; };
+    expect(await observeUnderOfflineGatewayOwnerLock(env, observe)).toEqual({ status: "owner_state_unavailable" });
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, observe)).toEqual({ status: "unresolved" });
+    if (name === "owner-state.sqlite") expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "unavailable" });
+    expect(observations).toBe(0);
+    expect(readFileSync(filepath)).toEqual(before);
+    expect(readdirSync(directory).sort()).toEqual(names);
+  });
+
   it.each([
     [verification.before_sha256, "pre_action_state_matched"],
     [verification.after_sha256, "postconditions_matched"],

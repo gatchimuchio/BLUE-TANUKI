@@ -1829,6 +1829,20 @@ export interface WebChatUpdateSurface {
   prepareUpdate?: (body: Record<string, unknown>) => Promise<unknown>;
 }
 
+export interface WebChatRecoveryRestorePlan {
+  surface: "offline_recovery_restore_plan";
+  schema_version: 1;
+  status: "planned" | "manifest_changed" | "invalid";
+  manifest_sha256: string | null;
+  plan_sha256: string | null;
+  items: readonly { role: string; disposition: string }[];
+  canonical_stores: readonly { store_key: string; archive_status: string; disposition: string }[];
+  offline_lease_verified: false;
+  cross_store_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatRecoverySurface {
   /** Return recovery readiness and backup inventory metadata. */
   getSnapshot: () => Promise<unknown>;
@@ -1836,6 +1850,8 @@ export interface WebChatRecoverySurface {
   inspectLedgerState?: () => Promise<unknown>;
   /** Inspect the latest recovery pack without changing it or granting authority. */
   inspectBackup?: () => Promise<unknown>;
+  /** Plan from an explicit backup ID without changing state or granting authority. */
+  inspectRestorePlan?: (backupId: string) => Promise<WebChatRecoveryRestorePlan>;
   /** Correlate a caller-specified scope and canonical store candidates with one verified backup, read-only. */
   inspectScopeApplicability?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Create a local recovery backup pack. */

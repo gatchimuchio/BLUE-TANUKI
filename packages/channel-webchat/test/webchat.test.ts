@@ -3318,6 +3318,111 @@ describe("WebChatChannel — Control Center shell", () => {
     });
   });
 
+  it("shows only fixed recovery restore plan metadata and drops a stale result", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function clearRecoveryRestorePlan(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("async function loadRecovery(", start);
+    const source = CONTROL_CENTER_SCRIPT.slice(start, end);
+    const elements = {
+      "recovery-backup-id": { value: "backup-review", text: "", hidden: false },
+      "recovery-token": { value: MAINTENANCE_TOKEN, text: "", hidden: false },
+      "recovery-restore-plan-status": { value: "", text: "", hidden: false },
+      "recovery-restore-plan-details": { value: "", text: "", hidden: true },
+    };
+    const report = {
+      surface: "offline_recovery_restore_plan", schema_version: 1, status: "planned",
+      manifest_sha256: "a".repeat(64), plan_sha256: "b".repeat(64),
+      items: [{ role: "env_file", disposition: "preserve_current", path: "raw-path-sentinel" },
+        { role: "raw-role-sentinel", disposition: "__proto__" }],
+      canonical_stores: [{ store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" }],
+      offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
+    };
+    const context = {
+      state: { recoveryRestorePlanGeneration: 0 },
+      byId: (id: keyof typeof elements) => elements[id],
+      setText: (id: keyof typeof elements, value: string) => { elements[id].text = value; },
+      sessionStorage: { setItem() {} },
+      recoveryInspectionDigest(value: unknown) {
+        return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null;
+      },
+      postJson(path: string, token: string, body: unknown) {
+        expect([path, token, body]).toEqual(["/recovery/restore-plan", MAINTENANCE_TOKEN, { backup_id: "backup-review" }]);
+        return Promise.resolve(report);
+      },
+    };
+    const execute = (script: string) => new Script(source + "\n" + script).runInNewContext(context);
+    await execute("inspectRecoveryRestorePlan()");
+    const details = elements["recovery-restore-plan-details"];
+    expect(details.hidden).toBe(false);
+    expect(details.text).toContain("マニフェスト SHA-256 " + report.manifest_sha256);
+    expect(details.text).toContain("計画 SHA-256 " + report.plan_sha256);
+    expect(details.text).toContain("環境設定　現行を保持");
+    expect(details.text).toContain("J制御台帳　収録済み・整合確認済み／台帳の照合が必要");
+    expect(details.text).not.toMatch(/raw-.*-sentinel|__proto__|backup-review/);
+    await execute("const pending = inspectRecoveryRestorePlan(); clearRecoveryRestorePlan(); pending");
+    expect(details.hidden).toBe(true);
+    expect(details.text).toBe("");
+
+    const staleToken = execute("inspectRecoveryRestorePlan()");
+    elements["recovery-token"].value = "new-maintenance-token";
+    await staleToken;
+    expect(details.hidden).toBe(true);
+    expect(details.text).toBe("");
+    expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
+  });
+
+  it("exposes only an explicit read-only recovery restore plan behind maintenance authentication", async () => {
+    const report = {
+      surface: "offline_recovery_restore_plan", schema_version: 1, status: "planned",
+      manifest_sha256: "a".repeat(64), plan_sha256: "b".repeat(64),
+      items: [{ role: "env_file", disposition: "preserve_current", path: "private-file-sentinel" }],
+      canonical_stores: [{ store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" }],
+      offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
+      secret: "private-sentinel",
+    } as const;
+    const seen: string[] = [];
+    const ctx = await setup({
+      maintenance_token: MAINTENANCE_TOKEN,
+      recovery: {
+        getSnapshot: async () => ({}),
+        inspectRestorePlan: async backupId => {
+          seen.push(backupId);
+          if (backupId === "backup-throw") throw new Error("private-error-sentinel");
+          return report;
+        },
+      },
+    });
+    try {
+      await ctx.ch.start(async () => {});
+      const route = "/recovery/restore-plan";
+      const auth = { authorization: `Bearer ${MAINTENANCE_TOKEN}` };
+      expect((await postJson(ctx.port, route, { backup_id: "backup-review" })).status).toBe(401);
+      expect((await postJson(ctx.port, route, { backup_id: "backup-review" }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await getRaw(ctx.port, route, auth)).status).toBe(405);
+      for (const body of [{}, { backup_id: "" }, { backup_id: "latest" }, { backup_id: "../other" },
+        { backup_id: "backup-review", confirm: "RESTORE" }, { backup_id: "b".repeat(1025) }]) {
+        expect((await postJson(ctx.port, route, body, auth)).status).toBe(400);
+      }
+      expect(seen).toEqual([]);
+
+      const response = await postJson(ctx.port, route, { backup_id: "backup-review" }, auth);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.body).toMatchObject({
+        status: "planned", manifest_sha256: report.manifest_sha256, plan_sha256: report.plan_sha256,
+        items: [{ role: "env_file", disposition: "preserve_current" }],
+        canonical_stores: report.canonical_stores, offline_lease_verified: false, cross_store_atomic: false,
+        used_for_authority: false, may_execute: false,
+      });
+      expect(JSON.stringify(response.body)).not.toContain("private");
+      const error = await postJson(ctx.port, route, { backup_id: "backup-throw" }, auth);
+      expect(error.status).toBe(500);
+      expect(error.body).toEqual({ error: "recovery_restore_plan_failed" });
+      expect(seen).toEqual(["backup-review", "backup-throw"]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("routes Composio settings preparation through owner task planning without the settings write endpoint or API key input", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function saveConnectors()");
     const end = CONTROL_CENTER_SCRIPT.indexOf("async function verifyLlmSettings()", start + 1);

@@ -1211,9 +1211,9 @@ describe("buildRecoverySnapshot", () => {
       const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
       const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
         /^(Path|SystemRoot|windir|SystemDrive|ComSpec|Temp|Tmp|Home|USERPROFILE|APPDATA|LOCALAPPDATA)$/i.test(key)));
-      const run = (expectedDigest: string) => spawnSync(process.execPath, [
+      const run = (expectedDigest: string, ...extra: string[]) => spawnSync(process.execPath, [
         "--", main, "--recovery-inspect", "--restore-plan", "--backup-id", backup.backup_id!,
-        "--manifest-sha256", expectedDigest, "--env-file", envFile, "--json",
+        "--manifest-sha256", expectedDigest, "--env-file", envFile, "--json", ...extra,
       ], { cwd: root, encoding: "utf8", env: inherited, timeout: 15_000, windowsHide: true });
       const snapshot = async () => {
         const inventory = await readdir(root, { recursive: true, withFileTypes: true });
@@ -1248,6 +1248,34 @@ describe("buildRecoverySnapshot", () => {
       expect(result.stdout).not.toContain("before-backup");
       expect(result.stdout).not.toContain("product.env");
       expect(await snapshot()).toEqual(before);
+
+      const unavailable = run(pin, "--verify-offline");
+      expect(unavailable.status, unavailable.stderr).toBe(2);
+      expect(JSON.parse(unavailable.stdout)).toMatchObject({
+        status: "offline_lease_unverified", offline_lease_status: "owner_state_unavailable",
+        offline_lease_verified: false, plan_sha256: null, may_execute: false, used_for_authority: false,
+      });
+      expect(await snapshot()).toEqual(before);
+      const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+      try {
+        const blocked = run(pin, "--verify-offline");
+        expect(blocked.status, blocked.stderr).toBe(2);
+        const blockedPlan = JSON.parse(blocked.stdout);
+        expect(blockedPlan).toMatchObject({
+          status: "offline_lease_unverified",
+          offline_lease_verified: false, plan_sha256: null, may_execute: false, used_for_authority: false,
+        });
+        expect(["owner_lock_busy", "owner_lock_sidecars_present"]).toContain(blockedPlan.offline_lease_status);
+      } finally {
+        lease.close();
+      }
+      const stopped = await snapshot();
+      const verified = run(pin, "--verify-offline");
+      expect(verified.status, verified.stderr).toBe(0);
+      expect(JSON.parse(verified.stdout)).toEqual({ ...plan, offline_lease_verified: true, offline_lease_status: "verified" });
+      expect(await snapshot()).toEqual(stopped);
+      expect(JSON.parse(run(pin, "--verify-offline", "--verify-offline").stdout)).toEqual({ status: "invalid_arguments" });
+
       await writeFile(memoryFile, "new-current-value");
       const changed = JSON.parse(run(pin).stdout);
       expect(changed.status).toBe("planned");
@@ -1268,6 +1296,9 @@ describe("buildRecoverySnapshot", () => {
       const mismatch = run(pin);
       expect(mismatch.status, mismatch.stderr).toBe(2);
       expect(JSON.parse(mismatch.stdout)).toMatchObject({ status: "manifest_changed", plan_sha256: null, items: [] });
+      const verifiedMismatch = run(pin, "--verify-offline");
+      expect(verifiedMismatch.status, verifiedMismatch.stderr).toBe(2);
+      expect(JSON.parse(verifiedMismatch.stdout)).toEqual(JSON.parse(mismatch.stdout));
       expect(await readFile(manifestFile)).toEqual(replacement);
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -1579,11 +1579,11 @@ export async function inspectRecoveryBackupById(
   });
 }
 
-/** Plan against one pinned pack without claiming an offline lease or granting execution. */
+/** Plan against one exact pack. The installed CLI also requires the caller's previously observed manifest digest. */
 export async function planOfflineRecoveryRestore(
   env: NodeJS.ProcessEnv,
   backupId: string,
-  manifestSha256: string,
+  expectedManifestSha256?: string,
 ): Promise<OfflineRecoveryRestorePlan> {
   const base = {
     surface: "offline_recovery_restore_plan",
@@ -1600,12 +1600,15 @@ export async function planOfflineRecoveryRestore(
   } as const;
   try {
     assertBackupId(backupId);
-    if (!/^[a-f0-9]{64}$/.test(manifestSha256)) return base;
+    if (expectedManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(expectedManifestSha256)) return base;
     const manifestPath = path.join(recoveryRoot(env), backupId, "manifest.json");
     if (await recoveryPathKind(manifestPath) !== "file" ||
         await recoveryPathKind(`${manifestPath}.sha256`) !== "file") return base;
     const manifest = await readManifest(env, backupId);
-    if (manifest.manifest_sha256 !== manifestSha256) return { ...base, status: "manifest_changed" };
+    const manifestSha256 = manifest.manifest_sha256;
+    if (expectedManifestSha256 !== undefined && expectedManifestSha256 !== manifestSha256) {
+      return { ...base, status: "manifest_changed" };
+    }
     assertRecoveryManifestBoundary(manifest);
     const archiveProofs = new Map<string, NonNullable<RecoveryPathProof>>();
     await preflightRestoreManifest(env, manifest, archiveProofs);

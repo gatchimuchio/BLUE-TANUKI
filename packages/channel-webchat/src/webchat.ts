@@ -3681,6 +3681,55 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       return;
     }
+    if (route === "/recovery/restore-plan") {
+      const headers = { "content-type": "application/json", "cache-control": "no-store" };
+      if (req.method !== "POST") {
+        res.writeHead(405, headers);
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.recovery.inspectRestorePlan) {
+        res.writeHead(501, headers);
+        res.end(JSON.stringify({ error: "recovery_restore_plan_not_configured" }));
+        return;
+      }
+      const body = await readJson(req, 1024).catch(() => null);
+      const backupId = body?.backup_id;
+      if (typeof backupId !== "string" || backupId === "latest" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) || Object.keys(body ?? {}).length !== 1) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ error: "invalid_recovery_restore_plan_request" }));
+        return;
+      }
+      try {
+        const report = await this.opts.recovery.inspectRestorePlan(backupId);
+        if (report.offline_lease_verified !== false || report.cross_store_atomic !== false ||
+            report.used_for_authority !== false || report.may_execute !== false) {
+          throw new Error("invalid_recovery_restore_plan_boundary");
+        }
+        const response = JSON.stringify({
+          surface: report.surface,
+          schema_version: report.schema_version,
+          status: report.status,
+          manifest_sha256: report.manifest_sha256,
+          plan_sha256: report.plan_sha256,
+          items: report.items.map(({ role, disposition }) => ({ role, disposition })),
+          canonical_stores: report.canonical_stores.map(({ store_key, archive_status, disposition }) => ({
+            store_key, archive_status, disposition,
+          })),
+          offline_lease_verified: false,
+          cross_store_atomic: false,
+          used_for_authority: false,
+          may_execute: false,
+        });
+        res.writeHead(200, headers);
+        res.end(response);
+      } catch {
+        res.writeHead(500, headers);
+        res.end(JSON.stringify({ error: "recovery_restore_plan_failed" }));
+      }
+      return;
+    }
     if (route === "/recovery/scope-applicability") {
       if (req.method !== "POST") {
         res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });

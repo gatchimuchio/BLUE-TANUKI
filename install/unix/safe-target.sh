@@ -1079,7 +1079,7 @@ assert_managed_product_app_identity() {
   assert_managed_product_app_inventory "$bt_app_root"
 }
 
-assert_managed_product_install() {
+assert_managed_product_app_runtime() {
   bt_install_root=$1
   bt_data_root=$2
   bt_config_root=$3
@@ -1100,6 +1100,10 @@ assert_managed_product_install() {
   bt_metadata_node_path="$bt_metadata_runtime_root/$bt_node_relative"
   grep -Fqx "  \"node_exe\": \"$bt_metadata_node_path\"," "$bt_install_root/blue-tanuki-install.json" || safe_target_fail "managed install metadata does not identify its bundled Node runtime"
   assert_managed_product_runtime_inventory "$bt_install_root" "$bt_runtime_root"
+}
+
+assert_managed_product_install() {
+  assert_managed_product_app_runtime "$@"
   if [ "$bt_config_root" = "$bt_data_root" ]; then
     assert_product_owner_marker "$bt_data_root/.blue-tanuki-owner" shared-root "$bt_metadata_install_root" "$bt_data_root" "$bt_config_root" "$bt_metadata_runtime_root" "$bt_bin_root" "$bt_platform" "$bt_surface"
   else

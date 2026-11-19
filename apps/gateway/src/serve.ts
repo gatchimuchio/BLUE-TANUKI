@@ -185,6 +185,7 @@ import {
   createRecoveryBackup,
   inspectSelectedRecoveryArchiveDigest,
   inspectLatestRecoveryBackup,
+  planOfflineRecoveryRestore,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
   inspectRecoveryScopeApplicability,
@@ -5106,6 +5107,7 @@ async function serveWithOwnerLease(
           return buildRecoverySnapshot(process.env, postActionObservation);
         },
         inspectBackup: async () => inspectLatestRecoveryBackup(process.env),
+        inspectRestorePlan: async (backupId: string) => planOfflineRecoveryRestore(process.env, backupId),
         inspectScopeApplicability: async (body: Record<string, unknown>) =>
           inspectRecoveryScopeApplicability(process.env, body),
         inspectLedgerState: async () => {

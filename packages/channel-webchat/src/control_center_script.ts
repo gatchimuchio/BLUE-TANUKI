@@ -57,6 +57,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
         recoveryRestoreSource: null,
         recoveryLoadGeneration: 0,
+        recoveryRestorePlanGeneration: 0,
         recoveryRestorePending: false,
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
@@ -5820,7 +5821,107 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function invalidateRecoveryRestoreSource() {
         state.recoveryLoadGeneration += 1;
         state.recoveryRestoreSource = null;
+        clearRecoveryRestorePlan();
         selectedRecoveryRestore();
+      }
+
+      function clearRecoveryRestorePlan() {
+        state.recoveryRestorePlanGeneration += 1;
+        setText("recovery-restore-plan-status", "包括復元計画の確認にはバックアップIDを入力してください。");
+        setText("recovery-restore-plan-details", "");
+        byId("recovery-restore-plan-details").hidden = true;
+      }
+
+      function renderRecoveryRestorePlan(report) {
+        if (report?.surface !== "offline_recovery_restore_plan" || report.schema_version !== 1 ||
+            report.offline_lease_verified !== false || report.cross_store_atomic !== false ||
+            report.used_for_authority !== false || report.may_execute !== false) return false;
+        if (report.status === "manifest_changed") {
+          setText("recovery-restore-plan-status", "確認中にマニフェストが変わりました。再度確認してください。");
+          return true;
+        }
+        const manifest = recoveryInspectionDigest(report.manifest_sha256);
+        const plan = recoveryInspectionDigest(report.plan_sha256);
+        if (report.status !== "planned" || !manifest || !plan ||
+            !Array.isArray(report.items) || !Array.isArray(report.canonical_stores)) return false;
+
+        const roleLabels = {
+          env_file: "環境設定",
+          audit_dir: "監査記録",
+          session_dir: "セッション",
+          memory_file: "長期記憶ファイル",
+          memory_dir: "長期記憶フォルダー",
+          failure_memory_file: "失敗記憶ファイル",
+          failure_memory_dir: "失敗記憶フォルダー",
+          schedules_dir: "スケジュール",
+          log_dir: "ログ",
+          approval_grants_file: "承認記録"
+        };
+        const storeLabels = {
+          j_control: "J制御台帳",
+          m_state: "M状態台帳",
+          broker: "Broker実行台帳",
+          operation_plans: "実行計画台帳",
+          cron_events: "Cronイベント台帳",
+          meaning_update_j_control: "意味更新J制御台帳",
+          meaning_update_m_state: "意味更新M状態台帳"
+        };
+        const dispositionLabels = {
+          preserve_current: "現行を保持",
+          not_configured: "未設定",
+          not_captured: "未収録",
+          overlapping_targets: "対象が重複",
+          requires_domain_review: "対象別の確認が必要",
+          candidate_only: "復元候補",
+          unverified_target: "対象を確認できない",
+          requires_store_reconciliation: "台帳の照合が必要"
+        };
+        const archiveLabels = {
+          verified: "収録済み・整合確認済み",
+          captured_unverified: "収録済み・未確認",
+          snapshot_failed: "収録失敗",
+          not_present: "対象なし",
+          not_included: "未収録"
+        };
+        const label = (labels, key) => typeof key === "string" && Object.hasOwn(labels, key) ? labels[key] : "未確認";
+        const rows = ["マニフェスト SHA-256 " + manifest, "計画 SHA-256 " + plan, "", "対象"];
+        for (const item of report.items) {
+          rows.push(label(roleLabels, item?.role) + "　" + label(dispositionLabels, item?.disposition));
+        }
+        rows.push("", "正本台帳");
+        for (const store of report.canonical_stores) {
+          rows.push(label(storeLabels, store?.store_key) + "　" + label(archiveLabels, store?.archive_status) +
+            "／" + label(dispositionLabels, store?.disposition));
+        }
+        setText("recovery-restore-plan-status", "読み取り専用の計画です。Gateway停止状態と一括復元の整合性は未確認です。");
+        setText("recovery-restore-plan-details", rows.join("\\n"));
+        byId("recovery-restore-plan-details").hidden = false;
+        return true;
+      }
+
+      async function inspectRecoveryRestorePlan() {
+        clearRecoveryRestorePlan();
+        const generation = state.recoveryRestorePlanGeneration;
+        const backupId = byId("recovery-backup-id").value.trim();
+        const token = byId("recovery-token").value.trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) || backupId === "latest") return;
+        if (!token) {
+          setText("recovery-restore-plan-status", "保守用トークンを入力してください。");
+          return;
+        }
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        setText("recovery-restore-plan-status", "包括復元計画を確認中です。");
+        const current = () => generation === state.recoveryRestorePlanGeneration &&
+          backupId === byId("recovery-backup-id").value.trim() && token === byId("recovery-token").value.trim();
+        try {
+          const report = await postJson("/recovery/restore-plan", token, { backup_id: backupId });
+          if (current() && !renderRecoveryRestorePlan(report)) {
+            setText("recovery-restore-plan-status", "包括復元計画を確認できません。対象バックアップを確認してください。");
+          }
+        } catch {
+          if (current()) setText("recovery-restore-plan-status", "包括復元計画を取得できません。接続と保守用トークンを確認してください。");
+        }
       }
 
       async function loadRecovery() {
@@ -9995,6 +10096,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("load-recovery").addEventListener("click", loadRecovery);
+      byId("inspect-recovery-restore-plan").addEventListener("click", inspectRecoveryRestorePlan);
       byId("inspect-recovery-ledgers").addEventListener("click", function () {
         inspectRecoveryLedgers().catch(function () {
           setText("recovery-inspection-status", "取得失敗");
@@ -10034,7 +10136,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("recovery-restore-store").addEventListener("change", selectedRecoveryRestore);
       byId("recovery-restore-scope-kind").addEventListener("change", selectedRecoveryRestore);
       byId("recovery-restore-scope-digest").addEventListener("input", selectedRecoveryRestore);
-      byId("recovery-backup-id").addEventListener("input", selectedRecoveryRestore);
+      byId("recovery-backup-id").addEventListener("input", function () {
+        clearRecoveryRestorePlan();
+        selectedRecoveryRestore();
+      });
       byId("restore-recovery-store").addEventListener("click", function () {
         restoreRecoveryStore().catch(function (error) {
           setText("recovery-action-status", "error");

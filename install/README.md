@@ -416,9 +416,11 @@ powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLau
 終了コード2は未確認・欠落・不一致など確認が必要な状態です。診断は常駐プロセスの起動・停止、復元、承認要求を行いません。
 各台帳の取得時点は独立しているため、すべて揃っていても仕事全体を同じ時点へ復元できるとは限りません。
 
-包括復元の事前確認では、同じ `recovery-inspect` に `--restore-plan --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --json` を指定します。
-復元候補、保持する設定・監査・承認情報、重複する対象、未収録項目、個別照合が必要な正本台帳を表示します。
-計画は指定したマニフェストと検査時の対象に結び付きます。取得時点の揃っていない台帳や承認情報を再有効化せず、Gatewayの停止証明や復元の許可も発行しません。
+Control Centerの復旧画面で、保守用トークンと具体的なバックアップIDを入力し、「包括復元計画を確認」を選べます。復元候補、保持する設定・監査・承認情報、重複する対象、未収録項目、個別照合が必要な正本台帳を表示します。
+
+コマンドで同じバックアップを確認するには、`recovery-inspect` に `--restore-plan --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --json` を指定します。対象のGatewayを停止した状態で `--verify-offline` も指定すると、計画を調べている間に同じ状態領域の起動を排他できたか確認できます。稼働中、排他に必要な台帳を検証できない場合、中断した復旧が未照合の場合は終了コード2です。
+
+観測が終わると排他は解除されます。計画では指定マニフェストと観測時点の対象を照合します。複数の台帳を同一時点に戻せることの確認、復元の許可、データの書き込みは別の手続きです。
 
 通常起動が `gateway_runtime_recovery_pending` で止まった場合は、同じ設置先で
 `recovery-inspect --json` を実行します。`runtime_recovery_fence` の事前バックアップIDと

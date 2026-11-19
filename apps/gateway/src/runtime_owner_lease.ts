@@ -32,6 +32,10 @@ type RecoveryFenceTerminalStatus = "pre_action_state_matched" | "postconditions_
 export type RuntimeRecoveryFenceReconciliation =
   { readonly status: RecoveryFenceTerminalStatus | "unresolved" | "no_pending" };
 
+export type OfflineGatewayObservation<T> =
+  | { readonly status: "verified"; readonly observation: T }
+  | { readonly status: "owner_lock_busy" | "owner_lock_sidecars_present" | "recovery_pending" | "owner_state_unavailable" };
+
 /** Same-state-root Gateway processes are serialized by an OS-released SQLite transaction. */
 export class GatewayRuntimeOwnerLease {
   private closed = false;
@@ -162,8 +166,8 @@ export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env
     const files = existingRuntimeOwnerFiles(env);
     if (!files) return { status: "clear" };
     assertNoOwnerSidecars(files.statePath);
-    db = new DatabaseSync(files.statePath, { readOnly: true });
-    db.exec("PRAGMA busy_timeout=0; PRAGMA query_only=ON; BEGIN");
+    db = openOwnerDatabaseReadOnly(files.statePath);
+    db.exec("PRAGMA query_only=ON; BEGIN");
     assertOwnerDeleteJournal(db);
     assertIntegrity(db);
     const version = pragmaInteger(db, "user_version");
@@ -190,6 +194,49 @@ export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env
   }
 }
 
+/** Observe an existing stopped Gateway installation without opening or advancing a runtime lease. */
+export async function observeUnderOfflineGatewayOwnerLock<T>(
+  env: NodeJS.ProcessEnv,
+  observe: () => Promise<T>,
+): Promise<OfflineGatewayObservation<T>> {
+  let lockDb: DatabaseType | undefined;
+  let stateDb: DatabaseType | undefined;
+  try {
+    const files = existingRuntimeOwnerFiles(env);
+    if (!files?.lockPath) return { status: "owner_state_unavailable" };
+    lockDb = acquireExistingRuntimeOwnerLock(files.lockPath);
+
+    assertNoOwnerSidecars(files.statePath);
+    stateDb = openOwnerDatabaseReadOnly(files.statePath);
+    stateDb.exec("PRAGMA query_only=ON; BEGIN");
+    assertOwnerDeleteJournal(stateDb);
+    assertIntegrity(stateDb);
+    const version = pragmaInteger(stateDb, "user_version");
+    if (!hasOwnerStateSchema(stateDb)) return { status: "owner_state_unavailable" };
+    const owner = readOwnerState(stateDb);
+    if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== currentHostAudienceDigest()) {
+      return { status: "owner_state_unavailable" };
+    }
+    if (version === RECOVERY_FENCE_SCHEMA_VERSION) {
+      readRecoveryFence(stateDb, owner.generation, owner.execution_epoch, owner.host_audience_digest);
+      return { status: "recovery_pending" };
+    }
+    if (version !== OWNER_STATE_SCHEMA_VERSION || hasRecoveryFence(stateDb)) {
+      return { status: "owner_state_unavailable" };
+    }
+    return { status: "verified", observation: await observe() };
+  } catch (error) {
+    if (!lockDb && isSqliteBusy(error)) return { status: "owner_lock_busy" };
+    if (!lockDb && error instanceof Error && error.message === "gateway_runtime_owner_lock_sidecars_present") {
+      return { status: "owner_lock_sidecars_present" };
+    }
+    return { status: "owner_state_unavailable" };
+  } finally {
+    closeDatabase(stateDb);
+    closeDatabase(lockDb);
+  }
+}
+
 /** Settle existing evidence under the regular Gateway lock, without obtaining a runtime lease or replaying work. */
 export async function reconcileRuntimeRecoveryFence(
   env: NodeJS.ProcessEnv,
@@ -202,14 +249,11 @@ export async function reconcileRuntimeRecoveryFence(
     const files = existingRuntimeOwnerFiles(env);
     if (!files) return { status: "no_pending" };
     if (!files.lockPath) return { status: "unresolved" };
-    assertNoOwnerSidecars(files.lockPath);
-    lockDb = openExistingOwnerDatabase(files.lockPath);
-    lockDb.exec("PRAGMA busy_timeout=0");
-    assertOwnerDeleteJournal(lockDb);
-    lockDb.exec("BEGIN EXCLUSIVE");
-    assertIntegrity(lockDb);
+    lockDb = acquireExistingRuntimeOwnerLock(files.lockPath);
 
     assertNoOwnerSidecars(files.statePath);
+    const modeProbe = openOwnerDatabaseReadOnly(files.statePath);
+    try { assertOwnerDeleteJournal(modeProbe); } finally { closeDatabase(modeProbe); }
     stateDb = openExistingOwnerDatabase(files.statePath);
     stateDb.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE");
     assertOwnerDeleteJournal(stateDb);
@@ -249,6 +293,20 @@ export async function reconcileRuntimeRecoveryFence(
   }
 }
 
+function acquireExistingRuntimeOwnerLock(filepath: string): DatabaseType {
+  assertNoOwnerSidecars(filepath, "gateway_runtime_owner_lock_sidecars_present");
+  const db = openOwnerDatabaseReadOnly(filepath);
+  try {
+    assertOwnerDeleteJournal(db);
+    db.exec("BEGIN EXCLUSIVE");
+    assertIntegrity(db);
+    return db;
+  } catch (error) {
+    closeDatabase(db);
+    throw error;
+  }
+}
+
 function existingRuntimeOwnerFiles(env: NodeJS.ProcessEnv): { statePath: string; lockPath: string | null } | null {
   const configuredRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
   if (!statIfPresent(configuredRoot)) return null;
@@ -271,9 +329,22 @@ function existingRuntimeOwnerFiles(env: NodeJS.ProcessEnv): { statePath: string;
   return { statePath, lockPath: lock ? lockPath : null };
 }
 
-function assertNoOwnerSidecars(filepath: string): void {
+function assertNoOwnerSidecars(filepath: string, reason = "gateway_runtime_owner_state_unavailable"): void {
   if (["-journal", "-wal", "-shm"].some(suffix => statIfPresent(filepath + suffix))) {
-    throw new Error("gateway_runtime_owner_state_unavailable");
+    throw new Error(reason);
+  }
+}
+
+function openOwnerDatabaseReadOnly(filepath: string): DatabaseType {
+  const db = new DatabaseSync(filepath, { readOnly: true });
+  try {
+    // Before the first SQLite read, force the connection to use file locking.
+    // With a read-only handle this avoids creating WAL or SHM sidecars while checking journal mode.
+    db.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE");
+    return db;
+  } catch (error) {
+    closeDatabase(db);
+    throw error;
   }
 }
 

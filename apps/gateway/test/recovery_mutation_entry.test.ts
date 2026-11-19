@@ -835,6 +835,25 @@ describe("Recovery mutation HDS L3 entry", () => {
       await waitForHealth(port, gateway, 40_000);
       const backup = await requestJson(port, "/recovery/backup", { method: "POST", token: maintenanceToken, body: {} });
       const backupId = (backup.body.result as { backup_id: string }).backup_id;
+      const manifestFile = join(root, "recovery", backupId, "manifest.json");
+      const manifestBefore = readFileSync(manifestFile);
+      const envBefore = readFileSync(envFile);
+      const planRequest = { method: "POST", body: { backup_id: backupId } };
+      const disallowed = await requestJson(port, "/recovery/restore-plan", { ...planRequest, token: inboundToken });
+      expect(disallowed.status).toBe(401);
+      const plan = await requestJson(port, "/recovery/restore-plan", { ...planRequest, token: maintenanceToken });
+      expect(plan.status).toBe(200);
+      expect(plan.body).toMatchObject({
+        surface: "offline_recovery_restore_plan", status: "planned",
+        manifest_sha256: createHash("sha256").update(manifestBefore).digest("hex"),
+        plan_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        items: expect.arrayContaining([{ role: "env_file", disposition: "preserve_current" }]),
+        used_for_authority: false, may_execute: false, offline_lease_verified: false, cross_store_atomic: false,
+      });
+      expect(JSON.stringify(plan.body)).not.toContain("product.env");
+      expect(readFileSync(envFile)).toEqual(envBefore);
+      expect(readFileSync(manifestFile)).toEqual(manifestBefore);
+      expect(readdirSync(join(root, "recovery"))).toEqual([backupId]);
       const fullRestore = await requestJson(port, "/recovery/restore", {
         method: "POST", token: maintenanceToken, body: { backup_id: backupId, confirm: "RESTORE" },
       });
