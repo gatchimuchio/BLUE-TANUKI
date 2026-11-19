@@ -37,9 +37,13 @@ export const SettingsWritePatchSchema = z.object({
 }).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) === 1,
   "exactly one settings domain must be changed per request");
 
+export const SettingsWriteLlmProviderSchema = z.enum(["stub", "anthropic", "openai", "openai-compatible", "openrouter"]);
+
 export const SettingsWriteArgumentsSchema = z.object({
   patch: SettingsWritePatchSchema,
-}).strict();
+  expected_llm_provider: SettingsWriteLlmProviderSchema.optional(),
+}).strict().refine(({ patch, expected_llm_provider }) => expected_llm_provider === undefined || patch.llm !== undefined,
+  "a provider expectation applies only to the LLM domain");
 
 /** Non-authority target evidence for one explicitly selected Gateway settings patch. */
 export const SettingsWriteTargetVersionObservationSchema = z.object({
@@ -55,9 +59,37 @@ export const SettingsWriteTargetVersionObservationSchema = z.object({
 
 export type SettingsWritePatch = z.infer<typeof SettingsWritePatchSchema>;
 export type SettingsWriteArguments = z.infer<typeof SettingsWriteArgumentsSchema>;
+export type SettingsWriteLlmProvider = z.infer<typeof SettingsWriteLlmProviderSchema>;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
 
 export function settingsWriteTargetIdentityDigest(): string {
   return createHash("sha256").update("blue-tanuki.gateway-settings-target.v1", "utf8").digest("hex");
+}
+
+export function settingsWriteRequestBinding(args: SettingsWriteArguments) {
+  return { schema_version: "blue-tanuki.settings-write-request.v1", patch: args.patch,
+    ...(args.expected_llm_provider !== undefined ? { expected_llm_provider: args.expected_llm_provider } : {}) };
+}
+
+const providerModelKey: Record<SettingsWriteLlmProvider, string> = {
+  stub: "LLM_MODEL",
+  anthropic: "ANTHROPIC_MODEL",
+  openai: "OPENAI_MODEL",
+  "openai-compatible": "OPENAI_COMPAT_MODEL",
+  openrouter: "OPENROUTER_MODEL",
+};
+
+export function llmSettingsWriteEnvPatch(patch: NonNullable<SettingsWritePatch["llm"]>,
+  provider: SettingsWriteLlmProvider, bindCommandModel = true): Record<string, string> {
+  const updates: Record<string, string> = {};
+  if (patch.model !== undefined) {
+    updates.LLM_MODEL = patch.model;
+    updates[providerModelKey[provider]] = patch.model;
+    if (bindCommandModel) updates.BLUE_TANUKI_LLM_MODEL = patch.model;
+  }
+  if (patch.temperature !== undefined) updates.BLUE_TANUKI_LLM_TEMPERATURE = String(patch.temperature);
+  if (patch.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.max_tokens);
+  if (patch.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.timeout_ms);
+  return updates;
 }

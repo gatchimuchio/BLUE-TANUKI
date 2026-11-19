@@ -931,10 +931,14 @@ function main(): void {
   const settingsSurface = read("apps/gateway/src/settings_surface.ts");
   requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "writeEnvFileAtomic");
   requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "backup_label: \"settings-write\"");
-  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "verifyLlmProvisioning");
-  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "Verify LLM");
+  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "verifyLlmConfiguration(body, env, opts.plugins)");
+  requireNotIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "verifyLlmProvisioning");
+  requireIncludes("apps/gateway/src/settings_surface.ts", settingsSurface, "稼働中の計算構成を確認");
 
   const settingsApi = read("apps/gateway/src/control_center/setup/api_settings.ts");
+  requireIncludes("apps/gateway/src/control_center/setup/api_settings.ts", settingsApi, "verifyLlmConfiguration");
+  requireIncludes("apps/gateway/src/control_center/setup/api_settings.ts", settingsApi, "provider_connection_checked: false");
+  requireIncludes("apps/gateway/src/control_center/setup/api_settings.ts", settingsApi, "credential_access_checked: false");
   requireIncludes("apps/gateway/src/control_center/setup/api_settings.ts", settingsApi, "verifyLlmProvisioning");
   requireIncludes("apps/gateway/src/control_center/setup/api_settings.ts", settingsApi, "secret_exposed: false");
 

@@ -23,6 +23,8 @@ import {
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
   RuntimeSessionInputSchema,
+  SettingsWriteArgumentsSchema,
+  SettingsWriteLlmProviderSchema,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
   isCanonicalBase64,
@@ -630,6 +632,7 @@ function findAotanuAssetRoot(): string {
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
+ *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
@@ -1192,6 +1195,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/settings/mcp/inspect") {
       await this.handleSettingsMcpInspect(req, res);
+      return;
+    }
+
+    if (url.pathname === "/owner/llm-settings-proposal") {
+      await this.handleOwnerLlmSettingsProposal(req, res);
       return;
     }
 
@@ -2886,6 +2894,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
+      if (content.kind === "settings_write" && content.expected_llm_provider !== undefined &&
+          (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
+            !Array.isArray(content.changes) || content.changes.length === 0 ||
+            !content.changes.every(change => typeof change?.key === "string" && change.key.startsWith("llm.")))) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
       if (content.kind === "goal_purpose_repair") {
         const binding = goalPurposeRepairBinding({ ...content });
         const stores = goalPurposeRepairStores(content.stores);
@@ -3988,6 +4004,78 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     } catch (error) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : "recovery_action_failed" }));
+    }
+  }
+
+  private async handleOwnerLlmSettingsProposal(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    const propose = this.opts.onOwnerLlmSettingsProposal;
+    if (!this.opts.owner_token || !propose) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "owner_llm_settings_proposal_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "owner")) {
+      res.writeHead(401);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 4_096, true);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "body_too_large") throw error;
+      res.writeHead(413);
+      res.end(JSON.stringify({ error: "request_body_too_large" }));
+      return;
+    }
+    const hasGoal = Object.hasOwn(body ?? {}, "goal_ref") || Object.hasOwn(body ?? {}, "purpose_version");
+    const fields = hasGoal ? ["expected_provider", "patch", "goal_ref", "purpose_version"] : ["expected_provider", "patch"];
+    const parsed = SettingsWriteArgumentsSchema.safeParse({ patch: body?.patch });
+    const provider = SettingsWriteLlmProviderSchema.safeParse(body?.expected_provider);
+    const goal_ref = body?.goal_ref;
+    const purpose_version = body?.purpose_version;
+    const goal = typeof goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goal_ref) &&
+      typeof purpose_version === "number" && Number.isSafeInteger(purpose_version) && purpose_version > 0
+      ? { goal_ref, purpose_version } : undefined;
+    if (!body || !hasExactKeys(body, fields) || !provider.success || !parsed.success || !parsed.data.patch.llm || (hasGoal && !goal)) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "invalid_owner_llm_settings_proposal" }));
+      return;
+    }
+    const projection = { used_for_authority: false, may_execute: false } as const;
+    try {
+      const result = await propose({ expected_provider: provider.data, patch: { llm: parsed.data.patch.llm }, ...goal, actor: OWNER_TOKEN_ACTOR });
+      if (result.accepted !== true) {
+        res.writeHead(409);
+        res.end(JSON.stringify({ accepted: false, status: "settings_proposal_unavailable", ...projection }));
+        return;
+      }
+      const { status, request_id, command_id, plan_id_digest } = result;
+      if (typeof request_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(request_id)) {
+        throw new Error("invalid_settings_proposal_receipt");
+      }
+      if (!goal && status === "approval_required" && typeof command_id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(command_id)) {
+        res.writeHead(202);
+        res.end(JSON.stringify({ accepted: true, status, request_id, command_id, ...projection }));
+      } else if (goal && status === "candidate_ready" && typeof plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(plan_id_digest)) {
+        res.writeHead(202);
+        res.end(JSON.stringify({ accepted: true, status, request_id, plan_id_digest, ...projection }));
+      } else {
+        throw new Error("invalid_settings_proposal_receipt");
+      }
+    } catch {
+      res.writeHead(503);
+      res.end(JSON.stringify({ accepted: false, status: "settings_proposal_unavailable", ...projection }));
     }
   }
 

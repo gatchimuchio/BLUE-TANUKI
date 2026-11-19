@@ -886,6 +886,30 @@ describe("HDS goal governance consumer", () => {
         },
       });
       expect(controller.decide(stale).command).toBeNull();
+
+      const settingsOrigin = createGatewayInternalInboundRequest({
+        id: "goal-bound-settings-proposal", channel: "webchat", user: "webchat-owner-token-holder",
+        content: "明示した設定変更", timestamp: Date.now() + 2_100,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      });
+      const settingsArgs = { expected_llm_provider: "stub", patch: { llm: { model: "goal-bound-fixture-model" } } };
+      expect(() => controller.prepareSettingsWritePlan(settingsOrigin, settingsArgs)).toThrow("plan_goal_purpose_binding_required");
+      expect(() => controller.prepareSettingsWritePlan(settingsOrigin, settingsArgs, { ...binding, purpose_version: 2 }))
+        .toThrow("plan_goal_purpose_stale");
+      const settingsCandidate = controller.prepareSettingsWritePlan(settingsOrigin, settingsArgs, binding);
+      expect(controller.getRuntimeSnapshot().operation_plans.plans.find((item) => item.plan_id === settingsCandidate.plan_id_digest))
+        .toMatchObject({ goal_purpose_binding: binding, goal_purpose_relation: { status: "unverified" } });
+      const settingsSelection = controller.decide(createGatewayInternalInboundRequest({
+        ...settingsOrigin, id: "goal-bound-settings-selection",
+        content: `plan:review ${JSON.stringify({ plan_id: settingsCandidate.plan_id_digest,
+          revision_digest: settingsCandidate.revision_digest, step_id: settingsCandidate.step_id_digest,
+          goal_purpose_binding: binding })}`,
+        metadata: { ...settingsOrigin.metadata, "blue_tanuki.authority_context": "gateway_internal_v1" },
+      }));
+      expect(settingsSelection.command).toBeNull();
+      expect(settingsSelection.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_relation_unverified");
     } finally {
       controller?.close();
       rmSync(root, { recursive: true, force: true });

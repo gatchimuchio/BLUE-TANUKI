@@ -129,6 +129,7 @@ import {
   OperationPlanComputeInputSchema,
   OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
+  SettingsWriteArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
@@ -156,6 +157,7 @@ import type {
   WebChatGoalPurposeChangeCandidate,
   WebChatGoalPurposeAdoptionContentReview,
   WebChatGoalPurposeRepairRequest,
+  WebChatOwnerLlmSettingsProposal,
   WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
@@ -1192,7 +1194,7 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
   };
 }
 
-export async function serve(): Promise<ServeShutdown> {
+export async function serve(inheritedEnvKeys: readonly string[] = []): Promise<ServeShutdown> {
   const webchatTransport = webchatTransportFromEnvironment(process.env);
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
   let mcpRuntimeObservations: McpRuntimeObservationStore | undefined;
@@ -1200,7 +1202,7 @@ export async function serve(): Promise<ServeShutdown> {
   try {
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     approvalRecoveryStore = GatewayApprovalRecoveryStore.fromEnvironment(process.env);
-    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations, approvalRecoveryStore, webchatTransport);
+    return await serveWithOwnerLease(ownerLease, mcpRuntimeObservations, approvalRecoveryStore, webchatTransport, inheritedEnvKeys);
   } catch (error) {
     approvalRecoveryStore?.close();
     mcpRuntimeObservations?.close();
@@ -1234,6 +1236,7 @@ async function serveWithOwnerLease(
   mcpRuntimeObservations: McpRuntimeObservationStore,
   approvalRecoveryStore: GatewayApprovalRecoveryStore,
   webchatTransport: WebChatTransportConfig,
+  inheritedEnvKeys: readonly string[],
 ): Promise<ServeShutdown> {
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
@@ -1271,7 +1274,8 @@ async function serveWithOwnerLease(
   const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
-  tools.register(createSettingsWriteTool(createGatewaySettingsWritePort(process.env)));
+  const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys);
+  tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   const goalPurposeRepairAdmissions = new Map<string, {
@@ -5046,6 +5050,7 @@ async function serveWithOwnerLease(
             },
           }
         : {}),
+      onOwnerLlmSettingsProposal: submitOwnerLlmSettingsProposal,
       onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
         source_command_id?: string }) =>
@@ -5576,6 +5581,63 @@ async function serveWithOwnerLease(
       actor: "gateway", request_id: log.request_id, reason: "initial_goal_purpose_approval_expired",
     });
     return true;
+  }
+
+  async function submitOwnerLlmSettingsProposal(input: WebChatOwnerLlmSettingsProposal & { actor: string }) {
+    const unavailable = { accepted: false as const, status: "settings_proposal_unavailable" as const,
+      used_for_authority: false as const, may_execute: false as const };
+    const arguments_ = SettingsWriteArgumentsSchema.safeParse({ patch: input.patch, expected_llm_provider: input.expected_provider });
+    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR || !arguments_.success || !arguments_.data.patch.llm ||
+        !arguments_.data.expected_llm_provider || process.env.BLUE_TANUKI_SAFE_MODE === "1" ||
+        gatewayShuttingDown || emergencyStop.active || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return unavailable;
+    try {
+      ownerLease.assertActive();
+      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider);
+      if (target.llm_provider !== input.expected_provider || target.managed_llm_settings !== true ||
+          !Object.entries(arguments_.data.patch.llm).some(([key, value]) => target.values[key as "model" | "temperature" | "max_tokens" | "timeout_ms"] !== value) ||
+          emergencyStop.active || gatewayShuttingDown) return unavailable;
+      const projection = hds.getGoalGovernanceProjection();
+      const goal = projection?.goals.find((candidate) => candidate.goal_kind === "delegated" &&
+        candidate.goal_ref === input.goal_ref && candidate.current_version === input.purpose_version &&
+        candidate.parent_alignment_status !== "requires_review");
+      if (projection ? !goal : input.goal_ref !== undefined || input.purpose_version !== undefined) return unavailable;
+      const binding = goal && { goal_ref: goal.goal_ref, purpose_version: goal.current_version,
+        purpose_digest: goal.current_purpose_digest };
+      const metadata = { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.source_interface": "gui" } as const;
+      const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
+        content: "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
+      const plan = hds.prepareSettingsWritePlan(origin, arguments_.data, binding);
+      if (binding) return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
+        plan_id_digest: plan.plan_id_digest, used_for_authority: false as const, may_execute: false as const };
+
+      // First use has no delegated-goal relation to review. Select the single exact J-retained step.
+      const inbound = createGatewayInternalInboundRequest({ ...origin,
+        content: `plan:review ${JSON.stringify({ plan_id: plan.plan_id_digest, revision_digest: plan.revision_digest,
+          step_id: plan.step_id_digest })}`, metadata });
+      const boundary = planGatewayInboundBoundary(inbound);
+      if (!boundary.boundary_ok) return unavailable;
+      const { command, log } = hds.decide(boundary.hdsBoundaryInput);
+      if (command?.type !== "tool_call" || command.payload.tool_name !== "settings.write" ||
+          operationPlanDigest(command.payload.arguments) !== operationPlanDigest(arguments_.data)) return unavailable;
+      const evaluation = approval.evaluate(command, input.actor);
+      if (evaluation.decision !== "ask" || evaluation.context.operation !== "settings.write" ||
+          evaluation.risk !== "high" || evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
+        hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+        hds.onCommandLifecycle(command.id, "approval_rejected", { actor: input.actor,
+          request_id: log.request_id, reason: "settings_proposal_l3_unavailable" });
+        return unavailable;
+      }
+      recordCompleteHistory({ kind: "hds_decision", request_id: log.request_id, command_id: command.id, actor: input.actor,
+        source: "hds-brain", timestamp: log.timestamp, payload: hdsDecisionHistoryPayload(log, command) });
+      const result = await executeAndEcho(command, log, inbound, { actor: input.actor, approval_evaluation: evaluation,
+        quiet_approval_notice: true });
+      return result.status === "approval_required" ? { accepted: true as const, status: "approval_required" as const,
+        request_id: origin.id, command_id: command.id, used_for_authority: false as const, may_execute: false as const } : unavailable;
+    } catch {
+      return unavailable;
+    }
   }
 
   async function submitGoalPurposeAdoption(input: { purpose_text: string; actor: string }): Promise<Record<string, unknown>> {
@@ -6373,6 +6435,7 @@ async function serveWithOwnerLease(
           command_digest: pending.command_digest,
           review_digest: snapshot.review_digest,
           operation: "settings.write",
+          ...(snapshot.expected_llm_provider ? { expected_llm_provider: snapshot.expected_llm_provider } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,
@@ -8584,8 +8647,8 @@ function nonEmptyEnv(value: string | undefined): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-export async function runServe(): Promise<void> {
-  const handle = await serve();
+export async function runServe(inheritedEnvKeys: readonly string[] = []): Promise<void> {
+  const handle = await serve(inheritedEnvKeys);
   const onSignal = async (sig: string): Promise<void> => {
     gatewayLog.info("received signal", { signal: sig });
     await handle.shutdown();

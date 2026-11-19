@@ -372,41 +372,26 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div class="status-grid">
             <input id="settings-token" type="password" autocomplete="current-password" placeholder="settings token" />
-            <select id="settings-provider" aria-label="LLM provider">
-              <option value="stub">stub</option>
-              <option value="openai">openai</option>
-              <option value="anthropic">anthropic</option>
-              <option value="openai-compatible">openai-compatible</option>
-              <option value="openrouter">openrouter</option>
-            </select>
-            <input id="settings-model" type="text" autocomplete="off" placeholder="model" />
-            <input id="settings-endpoint" type="text" autocomplete="off" placeholder="endpoint" />
-            <input id="settings-api-key" type="password" autocomplete="new-password" placeholder="API key unchanged" />
-            <input id="settings-site-url" type="text" autocomplete="off" placeholder="OpenRouter site URL" />
-            <input id="settings-app-title" type="text" autocomplete="off" placeholder="OpenRouter app title" />
-            <input id="settings-max-tokens" type="number" min="1" step="1" placeholder="max tokens" />
-            <label>計算の制限時間（ms）<input id="settings-timeout-ms" type="number" min="1" step="1" /></label>
-            <select id="settings-approval-mode" aria-label="Approval mode">
-              <option value="ask_every_time">ask_every_time</option>
-              <option value="remember_this_decision">remember_this_decision</option>
-              <option value="full_access">full_access</option>
-            </select>
+            <label>モデル名<input id="settings-model" type="text" autocomplete="off" maxlength="128" /></label>
+            <label>温度<input id="settings-temperature" type="number" min="0" max="2" step="any" /></label>
+            <label>最大トークン数<input id="settings-max-tokens" type="number" min="1" max="1048576" step="1" /></label>
+            <label>計算の制限時間（ms）<input id="settings-timeout-ms" type="number" min="100" max="600000" step="1" /></label>
           </div>
-          <label>Providerごとの最大費用（JSON）
-            <textarea id="settings-provider-cost-profiles" spellcheck="false" maxlength="16384"></textarea>
-            <span class="muted">1試行の費用上限と通貨を設定します。実際の料金は自動取得しません。空欄にすると設定を解除します。</span>
-          </label>
-          <label>計算予算（JSON）
-            <textarea id="settings-compute-budget-policy" spellcheck="false" maxlength="16384"></textarea>
-            <span class="muted">system・parent・taskの各予算に通常の1要求が収まるよう設定します。空欄では金額上限0の既定値に戻ります。</span>
-          </label>
           <p id="settings-compute-readiness" class="badge warn" role="status">通常Computeの設定は未確認です。</p>
           <div class="action-row">
-            <button id="load-settings" class="primary" type="button">Load Settings</button>
-            <button id="verify-llm-settings" type="button">Verify LLM</button>
-            <button id="prepare-llm-settings-plan" class="primary" type="button">LLM運転設定の変更案を用意</button>
+            <button id="load-settings" class="primary" type="button">設定を読み込む</button>
+            <button id="verify-llm-settings" type="button">稼働中のLLM構成を確認</button>
           </div>
-          <p class="muted">現行Providerのモデル名、最大トークン数、計算の制限時間の差分をTasksの入力欄に用意します。Tasksで明示送信した後、承認画面で差分を確認してください。Provider、URL、APIキー、予算、承認モードはこの変更案の対象外です。</p>
+          <div class="status-grid">
+            <label>変更申請用のowner token<input id="settings-owner-token" type="password" autocomplete="off" /></label>
+            <label>変更を行う委任目的<select id="settings-goal-ref"><option value="">初回設定（委任目的が未登録の場合）</option></select></label>
+          </div>
+          <div class="action-row">
+            <button id="load-settings-goals" type="button">委任目的を読み込む</button>
+            <button id="prepare-llm-settings-plan" class="primary" type="button">LLM運転設定の変更を申請</button>
+            <button id="open-llm-settings-review" type="button" hidden>審査を開く</button>
+          </div>
+          <p class="muted">現行のProviderに対する変更です。差分を審査して承認すると設定に反映されます。反映後はGatewayを再起動してください。</p>
           <p id="settings-plan-status" class="muted" role="status"></p>
           <div class="status-grid">
             <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>
@@ -441,7 +426,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </section>
           <pre id="settings-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
+            <div class="screen-card"><h3>LLM構成</h3><p class="muted">稼働中の設定から計算条件を確認します。Provider通信や資格情報の読み出しは実行しません。</p></div>
             <div class="screen-card"><h3>OpenRouter</h3><p class="muted">Optional model provider adapter; native/direct providers remain canonical.</p></div>
             <div class="screen-card"><h3>Composio</h3><p class="muted">Optional external tool connector; live execution stays gated by opt-in, allowlists, and HDS approval.</p></div>
             <div class="screen-card"><h3>Approval Mode</h3><p class="muted">Full access may allow L1/L2, but never L3 final-review operations.</p></div>

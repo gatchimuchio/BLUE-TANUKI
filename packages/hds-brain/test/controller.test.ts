@@ -106,6 +106,62 @@ function inboundWithMetadata(
   };
 }
 
+describe("HDSUpperController.prepareSettingsWritePlan()", () => {
+  const ownerOrigin = (id: string, content: string) => createGatewayInternalInboundRequest({
+    id, channel: "webchat", user: "webchat-owner-token-holder", content, timestamp: Date.now(),
+    metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+      "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+      "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+  });
+  const args = { expected_llm_provider: "stub", patch: { llm: { model: "local-fixture-model", temperature: 0.25 } } };
+
+  it("retains a single exact settings candidate and uses existing L3 selection", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-settings-plan-"));
+    const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }) });
+    try {
+      const origin = ownerOrigin("settings-candidate", "prepare owner settings");
+      const candidate = controller.prepareSettingsWritePlan(origin, args);
+      expect(candidate).toMatchObject({ used_for_authority: false, may_execute: false });
+      expect(controller.getRuntimeSnapshot()).toMatchObject({ inflight: [], operation_plans: { plans: [{
+        plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, bindings: [],
+      }] } });
+      expect(() => controller.prepareSettingsWritePlan(origin, args)).toThrow("plan_source_binding_mismatch");
+
+      const review = ownerOrigin("settings-review", `plan:review ${JSON.stringify({
+        plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, step_id: candidate.step_id_digest,
+      })}`);
+      expect(controller.decide({ ...review }).command).toBeNull();
+      const reviewed = controller.decide(review);
+      expect(reviewed.command).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: args } });
+      expect(evaluateApproval(reviewed.command!, [], { actor: origin.user, default_mode: "full_access" }))
+        .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write" } });
+    } finally {
+      controller.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unbranded origins, missing provider expectations, and unrelated settings", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-settings-plan-"));
+    const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }) });
+    try {
+      const origin = ownerOrigin("settings-denied", "prepare owner settings");
+      expect(() => controller.prepareSettingsWritePlan({ ...origin }, args)).toThrow("settings_plan_owner_origin_required");
+      expect(() => controller.prepareSettingsWritePlan(origin, { patch: args.patch })).toThrow("settings_plan_arguments_invalid");
+      expect(() => controller.prepareSettingsWritePlan(origin, { ...args,
+        patch: { llm: { api_key: "fixture-secret" } } })).toThrow("settings_plan_arguments_invalid");
+      expect(() => controller.prepareSettingsWritePlan(origin, { patch: { composio: { live_execution: true } } }))
+        .toThrow("settings_plan_arguments_invalid");
+      expect(() => new HDSUpperController().prepareSettingsWritePlan(origin, args))
+        .toThrow("settings_plan_authority_unavailable");
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toEqual([]);
+    } finally {
+      controller.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("HDSUpperController.decide()", () => {
   it("passes a trusted Gateway event's explicit session scope only to C context", () => {
     const sessionId = `cron-task:${"a".repeat(64)}`;

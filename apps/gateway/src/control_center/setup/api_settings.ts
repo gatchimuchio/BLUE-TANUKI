@@ -1,6 +1,7 @@
 import {
   buildLLMBackendFromEnv,
   buildLLMCommandRouteFromEnv,
+  inspectLLMRegistryConfiguration,
 } from "../../llm_config.js";
 import {
   DEFAULT_COMPUTE_BUDGET_POLICY,
@@ -39,6 +40,15 @@ export interface LlmProvisioningVerifyResult {
   detail: string;
   compute_readiness: LlmComputeReadiness;
   next_action: string;
+}
+
+interface LlmConfigurationVerifyResult extends Omit<LlmProvisioningVerifyResult, "provider"> {
+  provider: string;
+  provider_connection_checked: false;
+  credential_access_checked: false;
+  evidence_source: readonly ["CONFIG"];
+  used_for_authority: false;
+  may_execute: false;
 }
 
 export interface LlmComputeReadiness {
@@ -525,69 +535,129 @@ export function assessLlmComputeReadiness(
 ): LlmComputeReadiness {
   try {
     const route = buildLLMCommandRouteFromEnv(env);
-    const registry = backend ?? buildLLMBackendFromEnv(env);
-    if (!(registry instanceof LLMRegistry)) {
+    if (backend && !(backend instanceof LLMRegistry)) {
       return blockedComputeReadiness("The selected provider does not use the budgeted LLM registry.");
     }
-
-    const maxTokens = route.max_tokens ?? 1024;
-    const maxComputeMs = route.timeout_ms ?? 30_000;
-    const input = {
-      backend_hint: route.backend_hint,
-      model: route.model,
-      max_tokens: maxTokens,
-      messages: [],
-    };
-    const maxCost = registry.maximumCostForCall(input, route.fallback_authorization);
-    if (!maxCost) {
-      return blockedComputeReadiness(
-        "No configured maximum cost profile covers the selected provider and authorized fallback route.",
-      );
-    }
-    const maximumProviderAttempts = registry.maximumCallsForRequest(input, route.fallback_authorization);
-    const reservedTokens = maxTokens * maximumProviderAttempts;
-    if (!Number.isSafeInteger(reservedTokens) || reservedTokens <= 0) {
-      return blockedComputeReadiness("The configured token reservation is outside the supported range.");
-    }
-
-    const policy = parseComputeBudgetPolicy(env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON);
-    const limits = [
-      ["system", policy.system],
-      ["parent", policy.parent],
-      ["task", policy.task],
-    ] as const;
-    const blockers: string[] = [];
-    if (maxCost.currency !== policy.currency) {
-      blockers.push("The provider cost profile currency does not match the compute budget currency.");
-    }
-    for (const [scope, limit] of limits) {
-      if (limit.max_tokens < reservedTokens) {
-        blockers.push(`The ${scope} token limit cannot admit one maximum-size Compute request.`);
-      }
-      if (limit.max_compute_ms < maxComputeMs) {
-        blockers.push(`The ${scope} compute-time limit cannot admit one normal timeout window.`);
-      }
-      if (limit.max_cost.currency !== maxCost.currency || limit.max_cost.amount < maxCost.amount) {
-        blockers.push(`The ${scope} cost limit cannot admit the configured provider reservation.`);
-      }
-    }
-
-    const detail = blockers.length > 0
-      ? blockers.join(" ")
-      : `Configured limits admit one request up to ${reservedTokens} tokens, ${maxComputeMs} ms, and ${maxCost.amount} ${maxCost.currency}; current window usage is checked by the runtime ledger.`;
-    return {
-      status: blockers.length > 0 ? "blocked" : "ready",
-      detail,
-      max_tokens: reservedTokens,
-      max_compute_ms: maxComputeMs,
-      max_cost_amount: maxCost.amount,
-      currency: maxCost.currency,
-      maximum_provider_attempts: maximumProviderAttempts,
-      current_window_usage_checked: false,
-      evidence_source: ["CONFIG"],
-    };
+    const registry = backend ?? inspectLLMRegistryConfiguration(env);
+    return compareLlmComputeLimits(env, route, registry);
   } catch {
     return blockedComputeReadiness("The provider cost profile or compute budget configuration is invalid or unavailable.");
+  }
+}
+
+function compareLlmComputeLimits(
+  env: Env,
+  route: ReturnType<typeof buildLLMCommandRouteFromEnv>,
+  registry: Pick<LLMRegistry, "maximumCostForCall" | "maximumCallsForRequest">,
+): LlmComputeReadiness {
+  const maxTokens = route.max_tokens ?? 1024;
+  const maxComputeMs = route.timeout_ms ?? 30_000;
+  const input = {
+    backend_hint: route.backend_hint,
+    model: route.model,
+    max_tokens: maxTokens,
+    messages: [],
+  };
+  const maxCost = registry.maximumCostForCall(input, route.fallback_authorization);
+  if (!maxCost) {
+    return blockedComputeReadiness(
+      "No configured maximum cost profile covers the selected provider and authorized fallback route.",
+    );
+  }
+  const maximumProviderAttempts = registry.maximumCallsForRequest(input, route.fallback_authorization);
+  const reservedTokens = maxTokens * maximumProviderAttempts;
+  if (!Number.isSafeInteger(reservedTokens) || reservedTokens <= 0) {
+    return blockedComputeReadiness("The configured token reservation is outside the supported range.");
+  }
+
+  const policy = parseComputeBudgetPolicy(env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON);
+  const limits = [
+    ["system", policy.system],
+    ["parent", policy.parent],
+    ["task", policy.task],
+  ] as const;
+  const blockers: string[] = [];
+  if (maxCost.currency !== policy.currency) {
+    blockers.push("The provider cost profile currency does not match the compute budget currency.");
+  }
+  for (const [scope, limit] of limits) {
+    if (limit.max_tokens < reservedTokens) {
+      blockers.push(`The ${scope} token limit cannot admit one maximum-size Compute request.`);
+    }
+    if (limit.max_compute_ms < maxComputeMs) {
+      blockers.push(`The ${scope} compute-time limit cannot admit one normal timeout window.`);
+    }
+    if (limit.max_cost.currency !== maxCost.currency || limit.max_cost.amount < maxCost.amount) {
+      blockers.push(`The ${scope} cost limit cannot admit the configured provider reservation.`);
+    }
+  }
+
+  const detail = blockers.length > 0
+    ? blockers.join(" ")
+    : `Configured limits admit one request up to ${reservedTokens} tokens, ${maxComputeMs} ms, and ${maxCost.amount} ${maxCost.currency}; current window usage is checked by the runtime ledger.`;
+  return {
+    status: blockers.length > 0 ? "blocked" : "ready",
+    detail,
+    max_tokens: reservedTokens,
+    max_compute_ms: maxComputeMs,
+    max_cost_amount: maxCost.amount,
+    currency: maxCost.currency,
+    maximum_provider_attempts: maximumProviderAttempts,
+    current_window_usage_checked: false,
+    evidence_source: ["CONFIG"],
+  };
+}
+
+/** Settings HTTP consumer. Assess the loaded configuration without a provider call. */
+export function verifyLlmConfiguration(
+  body: Record<string, unknown>,
+  env: Env,
+  plugins: PluginRuntime,
+): LlmConfigurationVerifyResult {
+  const started = performance.now();
+  const evidence = {
+    changed: false,
+    safe: true,
+    secret_exposed: false,
+    provider_connection_checked: false,
+    credential_access_checked: false,
+    evidence_source: ["CONFIG"],
+    used_for_authority: false,
+    may_execute: false,
+  } as const;
+  const refuse = (detail: string): LlmConfigurationVerifyResult => ({
+    ...evidence,
+    status: "fail",
+    provider: "(unverified)",
+    model: "(unverified)",
+    duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
+    detail,
+    compute_readiness: blockedComputeReadiness(detail),
+    next_action: "現在稼働中のGatewayの構成を再確認してください。",
+  });
+  if (!isRecord(body) || Object.keys(body).length !== 0) {
+    return refuse("構成の確認は空のJSONオブジェクトを受け付けます。入力された設定値は使用しません。");
+  }
+  try {
+    plugins.enforceLLMConfig(env);
+    const route = buildLLMCommandRouteFromEnv(env);
+    const registry = inspectLLMRegistryConfiguration(env);
+    const config = setupConfigFromEnv(env);
+    const computeReadiness = compareLlmComputeLimits(env, route, registry);
+    return {
+      ...evidence,
+      status: "pass",
+      provider: registry.provider,
+      model: route.model ?? config.llm.model ?? "(provider default)",
+      duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
+      detail: "稼働中の構成を確認しました。接続・資格・現在の予算使用量は未確認です。",
+      compute_readiness: computeReadiness,
+      next_action: computeReadiness.status === "ready"
+        ? "通常の仕事では、実行時に残り予算と現在の権限を確認します。"
+        : "計算プロバイダーの費用上限と各予算枠を確認してください。",
+    };
+  } catch {
+    return refuse("稼働中の計算構成を確認できません。モデル、費用上限または予算の設定を確認してください。");
   }
 }
 

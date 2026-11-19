@@ -4,7 +4,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { composioStatus, type SettingsWritePort } from "@blue-tanuki/core";
 import type { WebChatSettingsSurface } from "@blue-tanuki/channel-webchat";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
-import type { SettingsWritePatch } from "@blue-tanuki/protocol";
+import { llmSettingsWriteEnvPatch, type SettingsWriteLlmProvider, type SettingsWritePatch } from "@blue-tanuki/protocol";
 import {
   setupConfigFromEnv,
   type SetupProviderKind,
@@ -15,10 +15,9 @@ import {
 } from "./llm_config.js";
 import type { PluginRuntime } from "./plugin_loader.js";
 import {
-  applySettingsPatch,
   assessLlmComputeReadiness,
   type LlmComputeReadiness,
-  verifyLlmProvisioning,
+  verifyLlmConfiguration,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { connectorSecretStorageStatus, llmSecretStorageStatus } from "./secret_store.js";
@@ -196,7 +195,8 @@ function envFilePath(env: Env): string | undefined {
   return raw && raw.trim().length > 0 ? path.resolve(raw) : undefined;
 }
 
-export function createGatewaySettingsWritePort(env: Env = process.env): SettingsWritePort {
+export function createGatewaySettingsWritePort(env: Env = process.env,
+  inheritedEnvKeys: readonly string[] = []): SettingsWritePort {
   const bindingKey = randomBytes(32);
   let writeTail: Promise<void> = Promise.resolve();
   const serializeWrite = async <T>(write: () => Promise<T>): Promise<T> => {
@@ -210,7 +210,12 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
       release();
     }
   };
-  const inspectCurrent = async () => {
+  const managedLlmKeys = /^(?:LLM_(?:BACKEND|DEFAULT_BACKEND|MODEL)|ANTHROPIC_MODEL|OPENAI_MODEL|OPENAI_COMPAT_MODEL|OPENROUTER_MODEL|BLUE_TANUKI_LLM_(?:BACKEND_HINT|MODEL|TEMPERATURE|MAX_TOKENS|TIMEOUT_MS))$/i;
+  const hasInheritedLlmSettings = inheritedEnvKeys.some((key) => managedLlmKeys.test(key));
+  const defaultLlmProvider = (config: Env) => (envValue(config, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub").trim().toLowerCase();
+  const hasAlternateLlmRoute = (config: Env) => Boolean(envValue(config, "BLUE_TANUKI_LLM_BACKEND_HINT", "LLM_PROVIDERS_JSON",
+    "BLUE_TANUKI_LLM_FALLBACK_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"));
+  const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider) => {
     const target = envFilePath(env);
     if (!target) throw new Error("settings_write_env_file_unavailable");
     const before = await fs.lstat(target).catch(() => undefined);
@@ -228,7 +233,12 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
     if (!Buffer.from(raw, "utf8").equals(rawBytes)) throw new Error("settings_write_env_file_not_utf8");
     const parsed = parseEnvFile(raw);
     if (parsed.warnings.length > 0) throw new Error("settings_write_env_file_malformed");
-    const config = setupConfigFromEnv({ ...env, ...parsed.values });
+    const configuredEnv = { ...env, ...parsed.values };
+    const config = setupConfigFromEnv(configuredEnv);
+    const boundModel = expectedLlmProvider !== undefined
+      ? envValue(configuredEnv, "BLUE_TANUKI_LLM_MODEL") ?? config.llm.model ??
+        (config.llm.provider === "stub" ? envValue(configuredEnv, "LLM_MODEL") : undefined)
+      : config.llm.model;
     const targetStateDigest = createHmac("sha256", bindingKey)
       .update(JSON.stringify([path.resolve(target), String(after.dev), String(after.ino), after.size,
         after.mtimeMs, after.ctimeMs]), "utf8")
@@ -237,10 +247,13 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
     return {
       target,
       raw,
-      config,
       target_state_digest: targetStateDigest,
+      llm_provider: config.llm.provider,
+      managed_llm_settings: env.BLUE_TANUKI_SAFE_MODE !== "1" && !hasInheritedLlmSettings &&
+        !hasAlternateLlmRoute(env) && !hasAlternateLlmRoute(configuredEnv) &&
+        defaultLlmProvider(env) === config.llm.provider && defaultLlmProvider(configuredEnv) === config.llm.provider,
       values: {
-        model: config.llm.model ?? null,
+        model: boundModel ?? null,
         temperature: config.llm.temperature ?? null,
         max_tokens: config.llm.max_tokens ?? null,
         timeout_ms: config.llm.timeout_ms ?? null,
@@ -258,31 +271,21 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
     };
   };
   return {
-    inspect: async () => {
-      const state = await inspectCurrent();
-      return { target_state_digest: state.target_state_digest, values: state.values };
+    inspect: async (expectedLlmProvider) => {
+      const { target_state_digest, llm_provider, managed_llm_settings, values } = await inspectCurrent(expectedLlmProvider);
+      return { target_state_digest, llm_provider, managed_llm_settings, values };
     },
-    apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string) => serializeWrite(async () => {
-      const state = await inspectCurrent();
+    apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider) => serializeWrite(async () => {
+      const state = await inspectCurrent(expectedLlmProvider);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
           state.target_state_digest !== expectedTargetStateDigest) {
         throw new Error("settings_write_target_changed_before_invoke");
       }
-      const updates: Record<string, string> = {};
-      if (patch.llm?.model !== undefined) {
-        const providerModelKey: Record<SetupProviderKind, string> = {
-          stub: "LLM_MODEL",
-          anthropic: "ANTHROPIC_MODEL",
-          openai: "OPENAI_MODEL",
-          "openai-compatible": "OPENAI_COMPAT_MODEL",
-          openrouter: "OPENROUTER_MODEL",
-        };
-        updates[providerModelKey[state.config.llm.provider]] = patch.llm.model;
-        updates.LLM_MODEL = patch.llm.model;
+      if (expectedLlmProvider !== undefined &&
+          (!patch.llm || state.llm_provider !== expectedLlmProvider || !state.managed_llm_settings)) {
+        throw new Error("settings_write_bound_llm_target_unavailable");
       }
-      if (patch.llm?.temperature !== undefined) updates.BLUE_TANUKI_LLM_TEMPERATURE = String(patch.llm.temperature);
-      if (patch.llm?.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.llm.max_tokens);
-      if (patch.llm?.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.llm.timeout_ms);
+      const updates = patch.llm ? llmSettingsWriteEnvPatch(patch.llm, state.llm_provider, expectedLlmProvider !== undefined) : {};
       const composio = patch.composio;
       if (composio) {
         if (composio.user_id !== undefined) updates.COMPOSIO_USER_ID = composio.user_id ?? "";
@@ -302,12 +305,16 @@ export function createGatewaySettingsWritePort(env: Env = process.env): Settings
       }
       if (Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
       const content = patchEnvDocument(state.raw, updates);
-      const latest = await inspectCurrent();
+      const latest = await inspectCurrent(expectedLlmProvider);
       if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
         throw new Error("settings_write_target_changed_before_persist");
       }
+      if (expectedLlmProvider !== undefined &&
+          (latest.llm_provider !== expectedLlmProvider || !latest.managed_llm_settings)) {
+        throw new Error("settings_write_bound_llm_target_unavailable");
+      }
       await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write" });
-      const saved = await inspectCurrent();
+      const saved = await inspectCurrent(expectedLlmProvider);
       const expectedValues = {
         model: patch.llm?.model ?? state.values.model,
         temperature: patch.llm?.temperature ?? state.values.temperature,
@@ -578,7 +585,7 @@ export function createWebChatSettingsSurface(
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
       return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
     },
-    verifyLlm: async (body) => verifyLlmProvisioning(body, env, opts.plugins),
+    verifyLlm: async (body) => verifyLlmConfiguration(body, env, opts.plugins),
     inspectMcpEndpoint: async (endpointInput) => {
       const endpoint = parseLoopbackMcpEndpoint(endpointInput);
       let catalog: McpCatalogProjection;
@@ -880,7 +887,7 @@ export function renderSettingsHtml(): string {
           <h2>LLM</h2>
           <div class="grid">
             <label>Provider
-              <select id="llm-provider">
+              <select id="llm-provider" disabled>
                 <option value="stub">stub</option>
                 <option value="openai">openai</option>
                 <option value="anthropic">anthropic</option>
@@ -889,42 +896,42 @@ export function renderSettingsHtml(): string {
               </select>
             </label>
             <label>Model
-              <input id="llm-model" autocomplete="off">
+              <input id="llm-model" readonly>
             </label>
             <label>Endpoint
-              <input id="llm-endpoint" autocomplete="off">
+              <input id="llm-endpoint" readonly>
             </label>
-            <label>API key
-              <input id="llm-api-key" type="password" autocomplete="new-password" placeholder="unchanged">
+            <label>API key status
+              <input id="llm-api-key-status" readonly>
             </label>
             <label>Temperature
-              <input id="llm-temperature" type="number" min="0" max="2" step="0.1">
+              <input id="llm-temperature" type="number" min="0" max="2" step="0.1" readonly>
             </label>
             <label>Max tokens
-              <input id="llm-max-tokens" type="number" min="1" step="1">
+              <input id="llm-max-tokens" type="number" min="1" step="1" readonly>
             </label>
             <label>Timeout ms
-              <input id="llm-timeout-ms" type="number" min="1" step="1">
+              <input id="llm-timeout-ms" type="number" min="1" step="1" readonly>
             </label>
             <label>OpenRouter site URL
-              <input id="llm-site-url" autocomplete="off">
+              <input id="llm-site-url" readonly>
             </label>
             <label>OpenRouter app title
-              <input id="llm-app-title" autocomplete="off">
+              <input id="llm-app-title" readonly>
             </label>
             <label>Approval mode
-              <select id="approval-mode">
+              <select id="approval-mode" disabled>
                 <option value="ask_every_time">ask_every_time</option>
                 <option value="remember_this_decision">remember_this_decision</option>
                 <option value="full_access">full_access</option>
               </select>
             </label>
             <label class="wide">Provider maximum-cost profiles (JSON)
-              <textarea id="llm-provider-cost-profiles" spellcheck="false" maxlength="16384"></textarea>
+              <textarea id="llm-provider-cost-profiles" spellcheck="false" readonly></textarea>
               <span class="muted">Owner-configured upper bound per provider attempt, not a fetched price. Example: {"openai-compatible":{"capabilities":["llm.text.generate"],"max_cost_per_attempt":{"amount":0.02,"currency":"USD"}}}. Use the selected provider's exact maximum and currency; an empty value clears profiles.</span>
             </label>
             <label class="wide">Compute budget policy (JSON)
-              <textarea id="llm-compute-budget-policy" spellcheck="false" maxlength="16384"></textarea>
+              <textarea id="llm-compute-budget-policy" spellcheck="false" readonly></textarea>
               <span class="muted">The configured window must cover one normal request in system, parent, and task scopes. The runtime ledger still checks current usage. An empty value restores the offline default, which sets monetary limits to zero.</span>
             </label>
             <p id="llm-compute-readiness" class="notice warn wide" role="status"></p>
@@ -1039,7 +1046,7 @@ export function renderSettingsHtml(): string {
         </section>
         <div class="actions">
           <button class="secondary" id="load-btn" type="button">Load</button>
-          <button class="secondary" id="verify-llm-btn" type="button">Verify LLM</button>
+          <button class="secondary" id="verify-llm-btn" type="button">稼働中の計算構成を確認</button>
         </div>
         <div class="notice warn">This page does not save settings. Supported non-secret LLM values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. <a href="/" target="_blank" rel="noopener">Open WebChat to create a Developer task</a>. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</div>
         <div class="notice" id="notice"></div>
@@ -1053,7 +1060,7 @@ export function renderSettingsHtml(): string {
       provider: document.querySelector("#llm-provider"),
       model: document.querySelector("#llm-model"),
       endpoint: document.querySelector("#llm-endpoint"),
-      apiKey: document.querySelector("#llm-api-key"),
+      apiKeyStatus: document.querySelector("#llm-api-key-status"),
       temperature: document.querySelector("#llm-temperature"),
       maxTokens: document.querySelector("#llm-max-tokens"),
       timeoutMs: document.querySelector("#llm-timeout-ms"),
@@ -1138,8 +1145,7 @@ export function renderSettingsHtml(): string {
       fields.provider.value = snapshot.llm.provider;
       fields.model.value = snapshot.llm.model || "";
       fields.endpoint.value = snapshot.llm.endpoint || "";
-      fields.apiKey.value = "";
-      fields.apiKey.placeholder = snapshot.llm.api_key_set ? "configured" : "not set";
+      fields.apiKeyStatus.value = snapshot.llm.api_key_set ? "設定済み" : "未設定";
       fields.temperature.value = snapshot.llm.temperature ?? "";
       fields.maxTokens.value = snapshot.llm.max_tokens ?? "";
       fields.timeoutMs.value = snapshot.llm.timeout_ms ?? "";
@@ -1207,43 +1213,21 @@ export function renderSettingsHtml(): string {
         setNotice(e.message, "bad");
       }
     }
-    function buildPayload() {
-      const llm = {
-        provider: fields.provider.value,
-        model: fields.model.value,
-        endpoint: fields.endpoint.value,
-        temperature: fields.temperature.value,
-        max_tokens: fields.maxTokens.value,
-        timeout_ms: fields.timeoutMs.value,
-        provider_cost_profiles_json: fields.providerCostProfiles.value,
-        compute_budget_policy_json: fields.computeBudgetPolicy.value,
-      };
-      if (fields.apiKey.value.trim()) llm.api_key = fields.apiKey.value.trim();
-      if (fields.siteUrl.value.trim()) llm.site_url = fields.siteUrl.value.trim();
-      if (fields.appTitle.value.trim()) llm.app_title = fields.appTitle.value.trim();
-      return {
-        llm,
-        approval: { mode: fields.approvalMode.value },
-        integrations: { mcp: { endpoint: fields.mcpEndpoint.value } },
-        webchat: { host: fields.host.value, port: fields.port.value },
-        paths: {
-          file_root: fields.fileRoot.value,
-          shell_root: fields.shellRoot.value,
-          session_dir: fields.sessionDir.value,
-          audit_dir: fields.auditDir.value
-        }
-      };
-    }
     async function verifyLlm() {
       try {
         const body = await api("${LLM_VERIFY_ROUTE}", {
           method: "POST",
-          body: JSON.stringify(buildPayload())
+          body: JSON.stringify({})
         });
         const result = body.result;
+        if (!result || result.provider_connection_checked !== false || result.credential_access_checked !== false ||
+            result.changed !== false || result.used_for_authority !== false || result.may_execute !== false ||
+            !Array.isArray(result.evidence_source) || result.evidence_source.length !== 1 || result.evidence_source[0] !== "CONFIG") {
+          throw new Error("構成の確認結果を読み取れませんでした。");
+        }
         showComputeReadiness(result.compute_readiness);
         const kind = result.status === "fail" ? "bad" : result.compute_readiness.status === "blocked" ? "warn" : "ok";
-        setNotice("Provider connectivity " + result.status + "; normal Compute " + result.compute_readiness.status + ". " + result.detail + " " + result.compute_readiness.detail + " Next: " + result.next_action, kind);
+        setNotice(result.detail + " " + result.next_action, kind);
       } catch (e) {
         setNotice(e.message, "bad");
       }
@@ -1282,16 +1266,6 @@ export function renderSettingsHtml(): string {
     function showComputeReadiness(readiness) {
       fields.computeReadiness.textContent = "Normal Compute configuration: " + readiness.status + ". " + readiness.detail + " Current window usage is not checked here.";
       fields.computeReadiness.className = "notice wide " + (readiness.status === "ready" ? "ok" : "warn");
-    }
-    for (const field of [fields.provider, fields.model, fields.endpoint, fields.maxTokens, fields.timeoutMs, fields.providerCostProfiles, fields.computeBudgetPolicy]) {
-      field.addEventListener("input", () => {
-        fields.computeReadiness.textContent = "LLM or budget settings changed. Run Verify LLM to reassess normal Compute configuration.";
-        fields.computeReadiness.className = "notice wide warn";
-      });
-      field.addEventListener("change", () => {
-        fields.computeReadiness.textContent = "LLM or budget settings changed. Run Verify LLM to reassess normal Compute configuration.";
-        fields.computeReadiness.className = "notice wide warn";
-      });
     }
     document.querySelector("#load-btn").addEventListener("click", load);
     document.querySelector("#verify-llm-btn").addEventListener("click", verifyLlm);

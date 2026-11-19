@@ -2,7 +2,10 @@ import {
   SettingsWriteArgumentsSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
+  settingsWriteRequestBinding,
   settingsWriteTargetIdentityDigest,
+  type SettingsWriteArguments,
+  type SettingsWriteLlmProvider,
   type SettingsWritePatch,
   type SettingsWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
@@ -10,8 +13,10 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { SettingsWriteContentReview, Tool } from "./registry.js";
 
 export interface SettingsWritePort {
-  inspect(): Promise<{
+  inspect(expectedLlmProvider?: SettingsWriteLlmProvider): Promise<{
     target_state_digest: string;
+    llm_provider?: SettingsWriteLlmProvider;
+    managed_llm_settings?: boolean;
     values: {
       model: string | null;
       temperature: number | null;
@@ -29,7 +34,7 @@ export interface SettingsWritePort {
       };
     };
   }>;
-  apply(patch: SettingsWritePatch, expected_target_state_digest: string): Promise<{
+  apply(patch: SettingsWritePatch, expected_target_state_digest: string, expectedLlmProvider?: SettingsWriteLlmProvider): Promise<{
     changed_keys: readonly string[];
     restart_required: true;
   }>;
@@ -60,15 +65,19 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
     description: "Apply one explicit non-secret Gateway LLM or Composio settings patch through the HDS Operation Plan and L3 review. API key bytes are never accepted.",
     required_capabilities: requireToolOperationDescriptor("settings.write").required_capabilities,
     async inspect_target_version(rawArgs, options = {}): Promise<SettingsWriteTargetVersionObservation> {
-      const { patch } = parseArgs(rawArgs);
+      const args = parseArgs(rawArgs);
       const commandDigest = requireDigest(options.command_digest, "command");
       const planDigest = requireDigest(options.operation_plan_binding_digest, "operation plan");
-      const target = await port.inspect();
+      const target = await port.inspect(args.expected_llm_provider);
+      if (args.expected_llm_provider !== undefined &&
+          (target.llm_provider !== args.expected_llm_provider || target.managed_llm_settings !== true)) {
+        throw new Error("settings_write_bound_llm_target_unavailable");
+      }
       return SettingsWriteTargetVersionObservationSchema.parse({
         schema_version: "blue-tanuki.settings-write-target-version.v1",
         target_identity_digest: settingsWriteTargetIdentityDigest(),
         target_state_digest: requireDigest(target.target_state_digest, "target state"),
-        request_payload_digest: requestPayloadDigest(patch),
+        request_payload_digest: operationPlanDigest(settingsWriteRequestBinding(args)),
         command_digest: commandDigest,
         operation_plan_binding_digest: planDigest,
         used_for_authority: false,
@@ -76,13 +85,13 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       });
     },
     async inspect_content_review(rawArgs, options = {}): Promise<SettingsWriteContentReview> {
-      const { patch } = parseArgs(rawArgs);
+      const { patch, expected_llm_provider } = parseArgs(rawArgs);
       const observation = SettingsWriteTargetVersionObservationSchema.parse(
         await tool.inspect_target_version!(rawArgs, options),
       );
       const commandDigest = requireDigest(options.command_digest, "command");
       const planDigest = requireDigest(options.operation_plan_binding_digest, "operation plan");
-      const target = await port.inspect();
+      const target = await port.inspect(expected_llm_provider);
       if (target.target_state_digest !== observation.target_state_digest) {
         throw new Error("settings_write_target_changed_during_review");
       }
@@ -98,6 +107,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       const reviewBase = {
         kind: "settings_write" as const,
         operation: "settings.write" as const,
+        ...(expected_llm_provider !== undefined ? { expected_llm_provider } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -110,14 +120,14 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       return { ...reviewBase, review_digest: operationPlanDigest(reviewBase) };
     },
     async invoke(rawArgs, context): Promise<unknown> {
-      const { patch } = parseArgs(rawArgs);
+      const { patch, expected_llm_provider } = parseArgs(rawArgs);
       const observation = SettingsWriteTargetVersionObservationSchema.parse(context.target_version_observation);
       if (observation.target_identity_digest !== settingsWriteTargetIdentityDigest() ||
           observation.command_digest !== context.operation_plan_command_digest ||
           !context.operation_plan_command_digest || !context.upstream_commit_hash) {
         throw new Error("settings_write_approved_target_mismatch");
       }
-      return port.apply(patch, observation.target_state_digest);
+      return port.apply(patch, observation.target_state_digest, expected_llm_provider);
     },
   };
   BUILTIN_SETTINGS_WRITE_TOOLS.add(tool);
@@ -128,7 +138,7 @@ export function isSettingsWriteTool(tool: Tool | undefined): boolean {
   return !!tool && BUILTIN_SETTINGS_WRITE_TOOLS.has(tool);
 }
 
-function parseArgs(value: Record<string, unknown>): { patch: SettingsWritePatch } {
+function parseArgs(value: Record<string, unknown>): SettingsWriteArguments {
   const parsed = SettingsWriteArgumentsSchema.safeParse(value);
   if (!parsed.success) throw new Error("settings_write_arguments_invalid");
   return parsed.data;
@@ -157,10 +167,6 @@ function buildComposioChanges(
     });
   }
   return changes;
-}
-
-function requestPayloadDigest(patch: SettingsWritePatch): string {
-  return operationPlanDigest({ schema_version: "blue-tanuki.settings-write-request.v1", patch });
 }
 
 function requireDigest(value: string | undefined, field: string): string {

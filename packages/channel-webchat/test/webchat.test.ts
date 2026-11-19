@@ -6,7 +6,6 @@ import { WebSocket } from "ws";
 import {
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
-  SettingsWriteArgumentsSchema,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
@@ -34,6 +33,7 @@ import {
   type WebChatD4RuntimeIntentCancellation,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
+  type WebChatOptions,
   AOTANU_ASSET_ROUTE_PREFIX,
   AOTANU_SPRITE_SPECS,
   mapRuntimeSnapshotToAotanuMascotState,
@@ -149,6 +149,7 @@ async function setup(
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
       onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
+      onOwnerLlmSettingsProposal?: WebChatOptions["onOwnerLlmSettingsProposal"];
       onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }) => Promise<{
         accepted: boolean;
         status: string;
@@ -242,6 +243,7 @@ async function setup(
     host: "127.0.0.1",
     onResume: opts.onResume as never,
     onGoalPurposeAdoption: opts.onGoalPurposeAdoption,
+    onOwnerLlmSettingsProposal: opts.onOwnerLlmSettingsProposal,
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
@@ -918,8 +920,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages[0]?.[1]).toContain("計画作成は行っていません");
   });
 
-  it("checks LLM readiness and prepares an exact non-secret Owner Task settings draft", async () => {
-    expect(renderControlCenterHtml()).toContain('id="prepare-llm-settings-plan"');
+  it("checks only the running configuration and submits exact non-secret settings for owner review", async () => {
+    const html = renderControlCenterHtml();
+    expect(html).toContain('id="prepare-llm-settings-plan"');
+    expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
     const section = (startText: string, endText: string) => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(startText);
@@ -928,122 +932,113 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(end).toBeGreaterThan(start);
       return CONTROL_CENTER_SCRIPT.slice(start, end);
     };
-    const nodes = new Map<string, { value: string; checked: boolean; textContent: string; className: string;
-      placeholder: string; events: Map<string, () => void>; addEventListener: (name: string, handler: () => void) => void;
-      focus: () => void }>();
     const node = (id: string) => {
       if (!nodes.has(id)) {
-        const events = new Map<string, () => void>();
-        nodes.set(id, { value: "", checked: false, textContent: "", className: "", placeholder: "", events,
-          addEventListener: (name, handler) => events.set(name, handler), focus: () => {} });
+        const events = new Map<string, () => unknown>();
+        nodes.set(id, { value: "", textContent: "", className: "", placeholder: "", disabled: false, hidden: false,
+          selectedOptions: [], events, addEventListener: (name: string, handler: () => unknown) => events.set(name, handler) });
       }
       return nodes.get(id)!;
     };
-    const profiles = JSON.stringify({ "openai-compatible": { capabilities: ["llm.text.generate"],
-      max_cost_per_attempt: { amount: 0.02, currency: "USD" } } });
-    const budget = JSON.stringify({ window_ms: 86_400_000, currency: "USD",
-      system: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } },
-      parent: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } },
-      task: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } } });
-    const snapshot = { llm: { provider: "openai-compatible", model: "fixture-model", endpoint: "https://fixture.invalid/v1",
-      max_tokens: "128", timeout_ms: "5000", provider_cost_profiles_json: profiles, compute_budget_policy_json: budget,
-      api_key_set: true, compute_readiness: { status: "ready", detail: "configuration admits one request",
-        current_window_usage_checked: false, evidence_source: ["CONFIG"] } } };
-    let result: Record<string, unknown> = { status: "pass", detail: "provider responded",
-      compute_readiness: { ...snapshot.llm.compute_readiness, status: "blocked", detail: "task cost limit is too small" },
-      next_action: "Configure the task budget, then verify again." };
-    const calls: Array<{ path: string; body: unknown }> = [];
+    const nodes = new Map<string, {
+      value: string; textContent: string; className: string; placeholder: string; disabled: boolean; hidden: boolean;
+      selectedOptions: Array<{ dataset: { purposeVersion?: string } }>; events: Map<string, () => unknown>;
+      addEventListener: (name: string, handler: () => unknown) => void;
+    }>();
+    const computeReady = { status: "ready", detail: "state admits one request",
+      current_window_usage_checked: false, evidence_source: ["CONFIG"] };
+    const snapshot = { llm: { provider: "openai-compatible", model: "fixture-provider-model", max_tokens: 128, timeout_ms: 5000,
+      temperature: 0, command_route: { model: "fixture-running-model" }, api_key_set: true, compute_readiness: computeReady } };
+    let result: Record<string, unknown> = { status: "pass", detail: "configuration only",
+      evidence_source: ["CONFIG"], provider_connection_checked: false, credential_access_checked: false,
+      used_for_authority: false, may_execute: false, compute_readiness: computeReady };
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
     const screens: string[] = [];
-    let editDuringVerify = false;
+    const projection = { accepted: true, request_id: "settings-proposal-request", used_for_authority: false, may_execute: false };
+    let receipt: Record<string, unknown> = { ...projection, status: "approval_required", command_id: "test-command" };
+    let noStore = true;
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
-      section("function settingsPayload(", "function connectorsPayload("),
+      section("function resetSettingsProposalGoals(", "function connectorsPayload("),
       section("async function verifyLlmSettings(", "function setRuntimeSnapshotObservation("),
-      section('for (const id of ["settings-provider"', 'byId("settings-token").addEventListener'),
-      section('byId("settings-token").addEventListener', 'byId("connect-chat").addEventListener'),
-      "({ settingsPayload, renderSettingsSnapshot, verifyLlmSettings })",
+      section('byId("verify-llm-settings").addEventListener', 'byId("connect-chat").addEventListener'),
+      "({ renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
       byId: node, state: {}, sessionStorage: { setItem: () => {} },
       isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
       setText: (id: string, value: string) => { node(id).textContent = value; },
       setActiveScreen: (screen: string) => screens.push(screen),
       compactJson: JSON.stringify, redactRuntimeValue: (value: unknown) => value,
-      postJson: async (path: string, _token: string, body: unknown) => {
-        calls.push({ path, body });
-        if (path.endsWith("/verify") && editDuringVerify) node("settings-timeout-ms").value = "6000";
+      authHeaders: (token: string) => ({ authorization: token }),
+      hasNoStore: () => noStore,
+      postJson: async (path: string, token: string, body: unknown) => {
+        calls.push({ path, token, body });
         return { result };
+      },
+      fetch: async (path: string, init: { body: string; headers: { authorization: string } }) => {
+        calls.push({ path, token: init.headers.authorization, body: JSON.parse(init.body) as unknown });
+        return { status: 202, json: async () => receipt };
       },
     });
     const preparePlan = node("prepare-llm-settings-plan").events.get("click")!;
-    const task = node("owner-task-intent");
+    const openReview = node("open-llm-settings-review").events.get("click")!;
     const planStatus = node("settings-plan-status");
-    preparePlan();
+    await preparePlan();
     expect(planStatus.textContent).toContain("先に現行の設定");
     api.renderSettingsSnapshot(snapshot);
-    preparePlan();
+    expect(node("settings-model").value).toBe("fixture-running-model");
+    expect(node("settings-temperature").value).toBe("0");
+    await preparePlan();
     expect(planStatus.textContent).toContain("差分がありません");
-    expect(api.settingsPayload().llm).toMatchObject({ timeout_ms: "5000", provider_cost_profiles_json: profiles,
-      compute_budget_policy_json: budget });
-    expect(api.settingsPayload().llm).not.toHaveProperty("api_key");
-    expect(node("settings-compute-readiness").textContent).toContain("各仕事の実行時に照合");
+
+    node("settings-token").value = SETTINGS_TOKEN;
+    node("settings-model").value = "unsent-model";
     await api.verifyLlmSettings();
-    expect(node("settings-verify-status").className).toBe("badge warn");
-    expect(node("settings-verify-status").textContent).toContain(String(result.next_action));
-    expect(node("settings-compute-readiness").textContent).toContain("task cost limit is too small");
-    expect(calls[0]).toMatchObject({ path: "/settings/llm/verify", body: { llm: {
-      timeout_ms: "5000", provider_cost_profiles_json: profiles, compute_budget_policy_json: budget } } });
-    result = { ...result, compute_readiness: snapshot.llm.compute_readiness };
-    await api.verifyLlmSettings();
+    expect(calls).toEqual([{ path: "/settings/llm/verify", token: SETTINGS_TOKEN, body: {} }]);
     expect(node("settings-verify-status").className).toBe("badge good");
-    node("settings-timeout-ms").events.get("input")!();
-    expect(node("settings-verify-status").className).toBe("badge warn");
-    result = { ...result, compute_readiness: undefined };
+    expect(node("settings-verify-status").textContent).toContain("Provider疎通は未確認");
+    expect(node("settings-compute-readiness").textContent).toContain("各仕事の実行時に照合");
+    result = { ...result, provider_connection_checked: true };
     await api.verifyLlmSettings();
-    expect(node("settings-verify-status").className).toBe("badge warn");
-    result = { ...result, compute_readiness: snapshot.llm.compute_readiness };
-    editDuringVerify = true;
-    await api.verifyLlmSettings();
-    expect(node("settings-verify-status").className).toBe("badge warn");
-    expect(node("settings-verify-status").textContent).toContain("再確認");
-    editDuringVerify = false;
-    const verifyCallCount = calls.length;
-    node("settings-api-key").value = "private-api-key-sentinel";
-    node("settings-endpoint").value = "https://private-endpoint.invalid";
+    expect(node("settings-verify-status").className).toBe("badge bad");
+
+    node("settings-owner-token").value = OWNER_TOKEN;
     node("settings-model").value = "sk-proj-0123456789abcdefghijkl";
-    preparePlan();
+    await preparePlan();
     expect(planStatus.textContent).toContain("資格情報");
-    expect(task.value).toBe("");
     node("settings-model").value = "fixture-new-model";
-    node("settings-provider").value = "stub";
-    preparePlan();
-    expect(planStatus.textContent).toContain("現行Provider");
-    expect(task.value).toBe("");
-    node("settings-provider").value = snapshot.llm.provider;
     node("settings-timeout-ms").value = "600001";
-    preparePlan();
+    await preparePlan();
     expect(planStatus.textContent).toContain("600000");
-    expect(task.value).toBe("");
+    expect(calls).toHaveLength(2);
     node("settings-timeout-ms").value = "6000";
-    task.value = "unfinished owner task";
-    preparePlan();
-    expect(planStatus.textContent).toContain("既存の入力");
-    expect(task.value).toBe("unfinished owner task");
-    task.value = "";
-    node("owner-task-include-mcp-catalog").checked = true;
-    preparePlan();
-    expect(task.value).toBe("");
-    node("owner-task-include-mcp-catalog").checked = false;
-    preparePlan();
-    expect(screens).toEqual(["tasks"]);
-    expect(calls).toHaveLength(verifyCallCount);
-    const argsLine = task.value.split("\n").find((line) => line.startsWith("settings.writeの引数JSON "));
-    const args = SettingsWriteArgumentsSchema.parse(JSON.parse(argsLine!.slice("settings.writeの引数JSON ".length)));
-    expect(args).toEqual({ patch: { llm: { model: "fixture-new-model", timeout_ms: 6000 } } });
-    expect(task.value).not.toMatch(/private-|cost|budget|approval.mode/);
-    expect(planStatus.textContent).toContain("確認してから送信");
-    node("settings-provider-cost-profiles").value = "";
-    node("settings-compute-budget-policy").value = "";
-    expect(api.settingsPayload().llm).toMatchObject({ provider_cost_profiles_json: "", compute_budget_policy_json: "" });
+    node("settings-temperature").value = "0.25";
+    node("owner-task-intent").value = "unfinished task";
+    await preparePlan();
+    expect(calls[2]).toEqual({ path: "/owner/llm-settings-proposal", token: OWNER_TOKEN, body: {
+      expected_provider: "openai-compatible", patch: { llm: { model: "fixture-new-model", temperature: 0.25, timeout_ms: 6000 } },
+    } });
+    expect(node("owner-task-intent").value).toBe("unfinished task");
+    expect(node("settings-owner-token").value).toBe("");
+    expect(planStatus.textContent).toContain("承認待ち");
+    openReview();
+    expect(screens).toEqual(["approvals"]);
+
+    node("settings-owner-token").value = OWNER_TOKEN;
+    const goal = node("settings-goal-ref");
+    goal.value = "goal_0000000000000011";
+    goal.selectedOptions = [{ dataset: { purposeVersion: "2" } }];
+    receipt = { ...projection, status: "candidate_ready", plan_id_digest: "a".repeat(64) };
+    await preparePlan();
+    expect(calls[3]).toMatchObject({ body: { goal_ref: goal.value, purpose_version: 2 } });
+    openReview();
+    expect(screens).toEqual(["approvals", "tasks"]);
+
+    node("settings-owner-token").value = OWNER_TOKEN;
+    noStore = false;
+    await preparePlan();
+    expect(planStatus.textContent).toContain("受付を確認できませんでした");
+    expect(node("open-llm-settings-review").hidden).toBe(true);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2001,7 +1996,7 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("uses the same owner credential to submit and then load the first delegated purpose", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function loadOwnerTaskGoals(");
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function renderOwnerTaskGoalOptions(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("let ownerTaskSubmissionIdMemory", start);
     const purpose = "  委任目的の原文\n";
     const goal = { goal_ref: "goal_" + "a".repeat(32), purpose_version: 1, purpose_preview: purpose.trim() };
@@ -2076,6 +2071,54 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(approve.disabled).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
     await expect(evaluate(review, "private, max-age=60")).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+  });
+
+  it("shows the bound provider and exact settings change only in a no-store L3 review", async () => {
+    const commandId = "fixture-settings-review";
+    const review = {
+      kind: "settings_write", operation: "settings.write", command_id: commandId,
+      expected_llm_provider: "stub", changes: [{ key: "llm.model", before: "before-model", after: "after-model" }],
+      command_digest: "b".repeat(64), review_digest: "c".repeat(64), request_payload_digest: "d".repeat(64),
+      target_version_digest: "e".repeat(64), operation_plan_binding_digest: "f".repeat(64),
+      no_store: true, used_for_authority: false, may_execute: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName, textContent: "", children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      isConnected: true,
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    const render = new Script(`
+      function byId() { return { value: "resume-token" }; }
+      function authHeaders(value) { return { authorization: "Bearer " + value }; }
+      function hasNoStore(response) { return response.headers.get("cache-control") === "no-store"; }
+      const document = { querySelectorAll: () => [card], createElement: makeNode };
+      const fetch = async () => ({ ok: true, headers: { get: () => cacheControl }, json: async () => review });
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      reviewApprovalContent(commandId, { textContent: "設定差分を確認" });
+    `);
+    const evaluate = (reviewData: typeof review, cacheControl = "no-store") => render.runInNewContext({
+      state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub"],
+    });
+    await evaluate(review);
+    expect(view.children.some(child => child.textContent === "対象Provider stub")).toBe(true);
+    expect(JSON.stringify(view.children)).toContain("before-model → after-model");
+    expect(approve.disabled).toBe(false);
+    expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
+    await expect(evaluate(review, "private, max-age=60")).rejects.toThrow();
+    await expect(evaluate({ ...review, expected_llm_provider: "invalid-backend" })).rejects.toThrow();
     expect(approve.disabled).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
   });
@@ -3224,10 +3267,11 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("load-connectors");
       expect(html).toContain("save-connectors");
       expect(html).toContain("settings-token");
+      expect(html).toContain("settings-owner-token");
       expect(html).toContain("settings-provider");
+      expect(html).toContain("settings-temperature");
       expect(html).toContain("settings-timeout-ms");
-      expect(html).toContain("settings-provider-cost-profiles");
-      expect(html).toContain("settings-compute-budget-policy");
+      expect(html).not.toContain('id="settings-api-key"');
       expect(html).toContain("settings-compute-readiness");
       expect(html).toContain("load-settings");
       expect(html).toContain("verify-llm-settings");
@@ -5685,6 +5729,56 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(accepted.headers.get("cache-control")).toBe("no-store");
       expect(accepted.body).toEqual(receipt);
       expect(proposals).toEqual([{ purpose_text: purposeText, actor: "webchat-owner-token-holder" }]);
+      expect(context.received).toHaveLength(0);
+    } finally {
+      await context.teardown();
+    }
+  });
+
+  it("admits only exact non-secret owner LLM settings proposals and projects no authority", async () => {
+    const route = "/owner/llm-settings-proposal";
+    const owner = { authorization: `Bearer ${OWNER_TOKEN}` };
+    const proposal = { expected_provider: "stub", patch: { llm: { model: "fixture-model", max_tokens: 128 } } };
+    const goal = { goal_ref: "goal_0000000000000001", purpose_version: 2 };
+    const proposals: unknown[] = [];
+    const receipt = { accepted: true, request_id: "settings-fixture-request", used_for_authority: false, may_execute: false };
+    const context = await setup({ owner_token: OWNER_TOKEN, settings: {
+      token: SETTINGS_TOKEN, html: "", getSnapshot: async () => ({}),
+    }, onOwnerLlmSettingsProposal: async (input) => {
+      proposals.push(input);
+      return { accepted: true, request_id: receipt.request_id, used_for_authority: true, may_execute: true,
+        ...(input.goal_ref ? { status: "candidate_ready", plan_id_digest: "a".repeat(64) }
+          : { status: "approval_required", command_id: "settings-fixture-command" }),
+        settings_private_data: "never project this extra field" };
+    } });
+    try {
+      await context.ch.start(async (request) => { context.received.push(request); });
+      expect((await getRaw(context.port, route, owner)).status).toBe(405);
+      for (const token of [TOKEN, RESUME_TOKEN, SETTINGS_TOKEN]) {
+        const denied = await postJson(context.port, route, proposal, { authorization: `Bearer ${token}` });
+        expect(denied.status).toBe(401);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+      }
+      for (const invalid of [
+        { ...proposal, actor: "forged" }, { ...proposal, goal_ref: goal.goal_ref },
+        { ...proposal, ...goal, purpose_version: 0 }, { ...proposal, ...goal, purpose_version: "2" },
+        { ...proposal, patch: { llm: { model: "sk-proj-0123456789abcdefghijkl" } } },
+        { ...proposal, patch: { llm: { model: "fixture-model", api_key: "synthetic-invalid" } } },
+        { ...proposal, patch: { llm: { model: "fixture-model", provider: "openai" } } },
+        { ...proposal, patch: { composio: { dry_run: true } } },
+      ]) expect((await postJson(context.port, route, invalid, owner)).status).toBe(400);
+      expect((await postJson(context.port, route, { ...proposal, oversized: "x".repeat(4_097) }, owner)).status).toBe(413);
+      expect(proposals).toHaveLength(0);
+
+      const first = await postJson(context.port, route, proposal, owner);
+      expect(first.status).toBe(202);
+      expect(first.headers.get("cache-control")).toBe("no-store");
+      expect(first.body).toEqual({ ...receipt, status: "approval_required", command_id: "settings-fixture-command" });
+      const current = await postJson(context.port, route, { ...proposal, ...goal }, owner);
+      expect(current.status).toBe(202);
+      expect(current.body).toEqual({ ...receipt, status: "candidate_ready", plan_id_digest: "a".repeat(64) });
+      expect(proposals).toEqual([{ ...proposal, actor: "webchat-owner-token-holder" },
+        { ...proposal, ...goal, actor: "webchat-owner-token-holder" }]);
       expect(context.received).toHaveLength(0);
     } finally {
       await context.teardown();

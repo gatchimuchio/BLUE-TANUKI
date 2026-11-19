@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import { LLMComputeAdapter, LLM_COMPUTE_PROFILE, type ComputeRequest, type LLMRequest } from "@blue-tanuki/core";
+import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { PluginRuntime } from "../src/plugin_loader.js";
 import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
 import { parseEnvFile } from "../src/env_file.js";
@@ -33,6 +37,29 @@ const fakeSecretProtector = {
   },
 };
 
+it("rejects ambiguous LLM provider routing for a structured settings write", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bt-settings-provider-scope-"));
+  try {
+    const file = path.join(root, "product.env");
+    const values = { BLUE_TANUKI_ENV_FILE: file, LLM_BACKEND: "stub" };
+    await fs.writeFile(file, "LLM_BACKEND=stub\n");
+    expect(await createGatewaySettingsWritePort(values).inspect("stub"))
+      .toMatchObject({ llm_provider: "stub", managed_llm_settings: true });
+    expect(await createGatewaySettingsWritePort({ ...values, LLM_BACKEND: "claude" }).inspect("stub"))
+      .toMatchObject({ managed_llm_settings: false });
+    expect(await createGatewaySettingsWritePort(values, ["Blue_Tanuki_Llm_Model"]).inspect("stub"))
+      .toMatchObject({ managed_llm_settings: false });
+    await fs.writeFile(file, "LLM_BACKEND=stub\nLLM_PROVIDERS_JSON=[]\n");
+    expect(await createGatewaySettingsWritePort(values).inspect("stub"))
+      .toMatchObject({ managed_llm_settings: false });
+    await fs.writeFile(file, "LLM_BACKEND=stub\nBLUE_TANUKI_LLM_FALLBACK_BACKEND=anthropic\n");
+    expect(await createGatewaySettingsWritePort(values).inspect("stub"))
+      .toMatchObject({ managed_llm_settings: false });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 function fakeSecretKeyringFactory(): SecretKeyringFactory {
   const secrets = new Map<string, string>();
   return (platform, key) => {
@@ -43,6 +70,99 @@ function fakeSecretKeyringFactory(): SecretKeyringFactory {
     };
   };
 }
+
+it("keeps the HTTP configuration check local and rejects overrides without resolving credentials", async () => {
+  const requests: string[] = [];
+  const provider = createServer((request, response) => {
+    requests.push(request.url ?? "");
+    response.writeHead(401).end();
+  });
+  const listen = async (server: ReturnType<typeof createServer>): Promise<number> =>
+    new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port));
+    });
+  const close = async (server: ReturnType<typeof createServer>): Promise<void> =>
+    new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+
+  const providerPort = await listen(provider);
+  let channel: WebChatChannel | undefined;
+  try {
+    const reservation = createServer();
+    const port = await listen(reservation);
+    await close(reservation);
+    const settingsToken = "fixture-settings-token";
+    const inboundToken = "fixture-inbound-token";
+    const absentSecretPath = path.join(os.tmpdir(), `absent-fixture-secret-${randomUUID()}.dpapi`);
+    const absentEnvPath = path.join(os.tmpdir(), `absent-fixture-config-${randomUUID()}.env`);
+    const configuredRef = `win32-dpapi-current-user:file:${Buffer.from(absentSecretPath).toString("base64url")}`;
+    const env: NodeJS.ProcessEnv = {
+      BLUE_TANUKI_SETTINGS_TOKEN: settingsToken,
+      BLUE_TANUKI_ENV_FILE: absentEnvPath,
+      LLM_BACKEND: "openai-compatible",
+      OPENAI_COMPAT_ENDPOINT: `http://127.0.0.1:${providerPort}/configured`,
+      OPENAI_COMPAT_MODEL: "fixture-model",
+      OPENAI_COMPAT_API_KEY_REF: configuredRef,
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+        "openai-compatible": {
+          capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0, currency: "USD" },
+        },
+      }),
+    };
+    const settings = createWebChatSettingsSurface({ env, plugins: runtime() });
+    expect(settings).toBeDefined();
+    channel = new WebChatChannel({ host: "127.0.0.1", port, token: inboundToken, settings });
+    await channel.start(async () => {});
+    const verify = (body: unknown, token = settingsToken) =>
+      fetch(`http://127.0.0.1:${port}/settings/llm/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+
+    expect((await verify({}, inboundToken)).status).toBe(401);
+    const metadataOnly = {
+      provider_connection_checked: false, credential_access_checked: false, changed: false,
+      used_for_authority: false, may_execute: false, evidence_source: ["CONFIG"],
+    };
+    const checked = await verify({});
+    expect(checked.status).toBe(200);
+    expect(checked.headers.get("cache-control")).toBe("no-store");
+    const result = await checked.json();
+    expect(result).toMatchObject({ result: {
+      ...metadataOnly, status: "pass", provider: "openai-compatible", model: "fixture-model",
+      compute_readiness: { status: "ready", current_window_usage_checked: false },
+    } });
+    expect(JSON.stringify(result)).not.toContain(configuredRef);
+    expect(await settings!.getSnapshot()).toMatchObject({
+      llm: { compute_readiness: { status: "ready", evidence_source: ["CONFIG"] } },
+    });
+
+    env.OPENAI_COMPAT_API_KEY = "fixture-local-key-that-must-stay-local";
+    const before = { ...env };
+    const withConfiguredKey = await verify({});
+    expect(withConfiguredKey.status).toBe(200);
+    const keyedResult = await withConfiguredKey.json();
+    expect(keyedResult).toMatchObject({ result: { ...metadataOnly, status: "pass" } });
+    expect(JSON.stringify(keyedResult)).not.toContain("fixture-local-key");
+    const denied = await verify({ llm: {
+      endpoint: `http://127.0.0.1:${providerPort}/replacement`,
+      api_key: "fixture-body-key-that-must-not-appear",
+    } });
+    expect(denied.status).toBe(200);
+    const refusal = await denied.json();
+    expect(refusal).toMatchObject({ result: { ...metadataOnly, status: "fail", compute_readiness: { status: "blocked" } } });
+    expect(JSON.stringify(refusal)).not.toContain("fixture-body-key");
+    expect(JSON.stringify(refusal)).not.toContain("fixture-local-key");
+    expect(requests).toEqual([]);
+    expect(env).toEqual(before);
+    await expect(fs.stat(absentEnvPath)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await channel?.stop();
+    await close(provider);
+  }
+});
 
 function runtime(): PluginRuntime {
   return new PluginRuntime("/tmp/blue-tanuki", [

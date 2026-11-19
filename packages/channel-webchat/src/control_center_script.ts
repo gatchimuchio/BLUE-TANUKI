@@ -1,11 +1,13 @@
 import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
-import { OPERATION_ADAPTER_REGISTRY } from "@blue-tanuki/protocol";
+import { OPERATION_ADAPTER_REGISTRY, SettingsWriteLlmProviderSchema } from "@blue-tanuki/protocol";
 
 const AOTANU_SPRITE_SPECS_JSON = JSON.stringify(AOTANU_SPRITE_SPECS);
 const OPERATION_ADAPTER_REGISTRY_JSON = JSON.stringify(OPERATION_ADAPTER_REGISTRY);
+const SETTINGS_LLM_PROVIDERS_JSON = JSON.stringify(SettingsWriteLlmProviderSchema.options);
 
 export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
       const OPERATION_ADAPTER_REGISTRY = ${OPERATION_ADAPTER_REGISTRY_JSON};
+      const SETTINGS_LLM_PROVIDERS = ${SETTINGS_LLM_PROVIDERS_JSON};
       const controlCenterLaunchTicket = (() => {
         try {
           const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -1079,15 +1081,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "request accepted", result.request_id);
       }
 
-      async function loadOwnerTaskGoals() {
-        const ownerToken = byId("owner-task-token").value.trim();
-        const status = byId("owner-task-status");
-        if (!ownerToken) throw new Error("owner tokenを入力してください");
-        const response = await fetchJson("/owner/task-goals", ownerToken, { cache: "no-store" });
-        const goals = Array.isArray(response.goals) ? response.goals : [];
-        const select = byId("owner-task-goal-ref");
-        const placeholder = new Option("委任目的を選択", "");
-        select.replaceChildren(placeholder);
+      function renderOwnerTaskGoalOptions(select, goals, placeholderText) {
+        select.replaceChildren(new Option(placeholderText, ""));
         let hasGoal = false;
         goals.forEach(function (goal) {
           if (!isObject(goal) || typeof goal.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(goal.goal_ref) ||
@@ -1099,7 +1094,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           select.add(option);
           hasGoal = true;
         });
-        if (!hasGoal) placeholder.text = "利用できる委任目的がありません";
+        return hasGoal;
+      }
+
+      async function loadOwnerTaskGoals() {
+        const ownerToken = byId("owner-task-token").value.trim();
+        const status = byId("owner-task-status");
+        if (!ownerToken) throw new Error("owner tokenを入力してください");
+        const response = await fetchJson("/owner/task-goals", ownerToken, { cache: "no-store" });
+        const select = byId("owner-task-goal-ref");
+        const goals = Array.isArray(response.goals) ? response.goals : [];
+        const hasGoal = renderOwnerTaskGoalOptions(select, goals, "委任目的を選択");
+        if (!hasGoal) select.options[0].text = "利用できる委任目的がありません";
         status.textContent = hasGoal ? "現在の委任目的を読み込みました" : "委任目的が未登録です。初めての委任目的を登録してください。";
         status.className = hasGoal ? "badge good" : "badge warn";
       }
@@ -2439,7 +2445,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           syncInputs();
           const ownerToken = typeof tokens.owner === "string" ? tokens.owner : "";
-          for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token"]) {
+          for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token", "settings-owner-token"]) {
             const ownerTokenInput = byId(inputId);
             if (ownerTokenInput) ownerTokenInput.value = ownerToken;
           }
@@ -4109,25 +4115,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           readiness.current_window_usage_checked === false && Array.isArray(readiness.evidence_source) &&
           readiness.evidence_source.length === 1 && readiness.evidence_source[0] === "CONFIG";
         const status = known ? readiness.status : "unknown";
-        const detail = known && typeof readiness.detail === "string" ? readiness.detail : "設定の判定結果を確認できません。Verify LLMを実行してください。";
-        setText("settings-compute-readiness", "通常Computeの設定: " + status + ". " + detail +
+        const detail = known && typeof readiness.detail === "string" ? readiness.detail : "稼働中のLLM構成を確認してください。";
+        setText("settings-compute-readiness", "通常Computeの設定 " + status + "。" + detail +
           " 設定からの判定です。現在の予算消費は各仕事の実行時に照合します。");
         byId("settings-compute-readiness").className = "badge " + (status === "ready" ? "good" : "warn");
         return status;
       }
 
-      function invalidateSettingsComputeReadiness() {
-        setText("settings-compute-readiness", "LLMまたは予算設定が変わりました。Verify LLMで通常Computeの設定を再確認してください。");
-        byId("settings-compute-readiness").className = "badge warn";
-        setText("settings-verify-status", "設定変更・再確認が必要");
-        byId("settings-verify-status").className = "badge warn";
-      }
-
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
+        const routeModel = llm.command_route && llm.command_route.model;
+        const model = typeof routeModel === "string" && routeModel !== "(provider default)" ? routeModel : String(llm.model ?? "");
         state.settingsRuntimeSnapshot = llm.provider ? {
           provider: llm.provider,
-          model: String(llm.model ?? ""),
+          model,
+          temperature: String(llm.temperature ?? ""),
           max_tokens: String(llm.max_tokens ?? ""),
           timeout_ms: String(llm.timeout_ms ?? "")
         } : null;
@@ -4136,21 +4138,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
         const actions = Array.isArray(composio.allowed_actions) ? composio.allowed_actions : [];
         const revoked = Array.isArray(composio.revoked_actions) ? composio.revoked_actions : [];
-        byId("settings-provider").value = llm.provider || "stub";
-        byId("settings-model").value = llm.model || "";
-        byId("settings-endpoint").value = llm.endpoint || "";
-        byId("settings-api-key").value = "";
-        byId("settings-api-key").placeholder = llm.api_key_set ? "configured" : "not set";
-        byId("settings-site-url").value = llm.site_url || "";
-        byId("settings-app-title").value = llm.app_title || "";
-        byId("settings-max-tokens").value = llm.max_tokens || "";
-        byId("settings-timeout-ms").value = llm.timeout_ms ?? "";
-        byId("settings-provider-cost-profiles").value = llm.provider_cost_profiles_json || "";
-        byId("settings-compute-budget-policy").value = llm.compute_budget_policy_json || "";
+        byId("settings-model").value = model;
+        byId("settings-temperature").value = String(llm.temperature ?? "");
+        byId("settings-max-tokens").value = String(llm.max_tokens ?? "");
+        byId("settings-timeout-ms").value = String(llm.timeout_ms ?? "");
         renderSettingsComputeReadiness(llm.compute_readiness);
-        byId("settings-approval-mode").value = (snapshot.approval && snapshot.approval.mode) || "full_access";
         setText("settings-provider-status", llm.provider || "stub");
-        setText("settings-model-status", llm.model || "(provider default)");
+        setText("settings-model-status", model || "(provider default)");
         setText("settings-writable-status", snapshot.writable ? "writable" : "read only");
         setText("settings-key-status", llm.api_key_set ? "set" : "missing");
         setText("settings-approval-mode-status", (snapshot.approval && snapshot.approval.mode) || "full_access");
@@ -5774,70 +5768,125 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           (rowsText.length ? "\\n" + rowsText.join("\\n") : ""));
       }
 
-      function settingsPayload() {
-        const llm = {
-          provider: byId("settings-provider").value,
-          model: byId("settings-model").value,
-          endpoint: byId("settings-endpoint").value,
-          site_url: byId("settings-site-url").value,
-          app_title: byId("settings-app-title").value,
-          max_tokens: byId("settings-max-tokens").value,
-          timeout_ms: byId("settings-timeout-ms").value,
-          provider_cost_profiles_json: byId("settings-provider-cost-profiles").value,
-          compute_budget_policy_json: byId("settings-compute-budget-policy").value
-        };
-        const apiKey = byId("settings-api-key").value.trim();
-        if (apiKey) llm.api_key = apiKey;
-        return { llm, approval: { mode: byId("settings-approval-mode").value } };
+      function resetSettingsProposalGoals() {
+        byId("settings-goal-ref").replaceChildren(new Option("初回設定（委任目的が未登録の場合）", ""));
+        state.settingsProposalGoalRequired = false;
       }
 
-      function prepareLlmSettingsPlan() {
+      async function loadSettingsProposalGoals() {
+        const tokenInput = byId("settings-owner-token");
+        const token = tokenInput.value.trim();
+        if (!token) {
+          setText("settings-plan-status", "変更申請用のowner tokenを入力してください。");
+          return;
+        }
+        const button = byId("load-settings-goals");
+        button.disabled = true;
         try {
-          const current = state.settingsRuntimeSnapshot;
-          if (!current) throw new Error("先に現行の設定を読み込んでください。");
-          if (byId("settings-provider").value !== current.provider) {
-            throw new Error("現行Providerの運転設定のみ変更できます。現行の設定を読み込み直してください。");
+          const result = await fetchJson("/owner/task-goals", token, { cache: "no-store" });
+          if (tokenInput.value.trim() !== token) return;
+          if (!Array.isArray(result?.goals)) throw new Error("invalid_owner_goals");
+          const select = byId("settings-goal-ref");
+          const hasGoal = renderOwnerTaskGoalOptions(select, result.goals,
+            result.goals.length ? "委任目的を選択" : "初回設定（委任目的が未登録）");
+          state.settingsProposalGoalRequired = result.goals.length > 0;
+          setText("settings-plan-status", hasGoal ? "変更を行う委任目的を選択してください。"
+            : state.settingsProposalGoalRequired ? "有効な委任目的を確認できませんでした。" : "初回設定として申請できます。");
+        } catch {
+          if (tokenInput.value.trim() === token) {
+            resetSettingsProposalGoals();
+            state.settingsProposalGoalRequired = true;
+            setText("settings-plan-status", "委任目的を確認できませんでした。");
           }
-          const llm = {};
-          const model = byId("settings-model").value.trim();
-          if (model !== current.model) {
-            if (!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(model) ||
-                /^(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})$/iu.test(model)) {
-              throw new Error("モデル名を確認してください。資格情報は入力しないでください。");
-            }
-            llm.model = model;
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      function llmSettingsProposal() {
+        const current = state.settingsRuntimeSnapshot;
+        if (!current) throw new Error("先に現行の設定を読み込んでください。");
+        const llm = {};
+        const model = byId("settings-model").value.trim();
+        if (model !== current.model) {
+          if (!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(model) ||
+              /^(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})$/iu.test(model)) {
+            throw new Error("モデル名を確認してください。資格情報は入力しないでください。");
           }
-          for (const [key, id, min, max] of [
-            ["max_tokens", "settings-max-tokens", 1, 1048576],
-            ["timeout_ms", "settings-timeout-ms", 100, 600000]
-          ]) {
-            const text = String(byId(id).value).trim();
-            if (text === current[key]) continue;
-            const value = Number(text);
-            if (!/^[0-9]+$/.test(text) || !Number.isSafeInteger(value) || value < min || value > max) {
-              throw new Error("最大トークン数は1〜1048576、制限時間は100〜600000ミリ秒で指定してください。");
-            }
-            if (String(value) !== current[key]) llm[key] = value;
-          }
-          if (Object.keys(llm).length === 0) throw new Error("変更できる項目に差分がありません。");
-          const ownerTaskInput = byId("owner-task-intent");
-          if (ownerTaskInput.value.trim() || byId("owner-task-audio").files?.length || byId("owner-task-image").files?.length ||
-              byId("owner-task-completion-rules").value.trim() || byId("owner-task-include-mcp-catalog").checked) {
-            throw new Error("Tasksに別の入力があります。既存の入力を確認してください。");
-          }
-          ownerTaskInput.value = [
-            "現行Providerの運転設定について、未実行のOperation Plan候補を1件用意してください。",
-            "組み込みのsettings.writeを1回だけ候補化し、下記の値を変更や補完せず、他のtoolや外部作用を含めないでください。保存前には使用者が対象と差分を確認し、L3承認します。",
-            "settings.writeの引数JSON " + JSON.stringify({ patch: { llm } })
-          ].join("\\n");
-          const message = "LLM運転設定の変更案を準備しました。内容と現在の委任目的を確認してから送信してください。";
-          setText("settings-plan-status", message);
-          setText("owner-task-status", message);
-          byId("owner-task-status").className = "badge warn";
-          setActiveScreen("tasks");
-          ownerTaskInput.focus();
+          llm.model = model;
+        }
+        for (const [key, id, min, max, label] of [
+          ["temperature", "settings-temperature", 0, 2, "温度"],
+          ["max_tokens", "settings-max-tokens", 1, 1048576, "最大トークン数"],
+          ["timeout_ms", "settings-timeout-ms", 100, 600000, "制限時間"]
+        ]) {
+          const text = String(byId(id).value).trim();
+          if (text === current[key]) continue;
+          const value = Number(text);
+          const valid = key === "temperature" ? /^[0-9]+(?:\\.[0-9]+)?$/.test(text) && Number.isFinite(value)
+            : /^[0-9]+$/.test(text) && Number.isSafeInteger(value);
+          if (!valid || value < min || value > max) throw new Error(label + "は" + min + "〜" + max + "で指定してください。");
+          if (String(value) !== current[key]) llm[key] = value;
+        }
+        if (Object.keys(llm).length === 0) throw new Error("変更できる項目に差分がありません。");
+        const goal = byId("settings-goal-ref");
+        const goal_ref = goal.value;
+        const purpose_version = Number(goal.selectedOptions[0]?.dataset.purposeVersion);
+        if ((state.settingsProposalGoalRequired && !goal_ref) || (goal_ref &&
+            (!/^goal_[a-f0-9]{16,64}$/.test(goal_ref) || !Number.isSafeInteger(purpose_version) || purpose_version < 1))) {
+          throw new Error("現在の委任目的を読み込んで選択してください。");
+        }
+        return { expected_provider: current.provider, patch: { llm }, ...(goal_ref ? { goal_ref, purpose_version } : {}) };
+      }
+
+      async function prepareLlmSettingsPlan() {
+        const button = byId("prepare-llm-settings-plan");
+        if (button.disabled) return;
+        const next = byId("open-llm-settings-review");
+        next.hidden = true;
+        state.settingsProposalNextScreen = null;
+        const tokenInput = byId("settings-owner-token");
+        const token = tokenInput.value.trim();
+        let proposal;
+        try {
+          proposal = llmSettingsProposal();
+          if (!token) throw new Error("変更申請用のowner tokenを入力してください。");
         } catch (error) {
           setText("settings-plan-status", error.message);
+          return;
+        }
+        button.disabled = true;
+        try {
+          const response = await fetch("/owner/llm-settings-proposal", {
+            method: "POST", cache: "no-store",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+            body: JSON.stringify(proposal)
+          });
+          if (response.status !== 202 || !hasNoStore(response)) throw new Error("settings_proposal_unconfirmed");
+          const result = await response.json();
+          const isId = function (value) { return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value); };
+          if (result?.accepted !== true || result.used_for_authority !== false || result.may_execute !== false || !isId(result.request_id)) {
+            throw new Error("invalid_settings_proposal_receipt");
+          }
+          if (!proposal.goal_ref && result.status === "approval_required" && isId(result.command_id)) {
+            setText("settings-plan-status", "設定変更は承認待ちです。承認画面で対象と差分を確認してください。");
+            state.settingsProposalNextScreen = "approvals";
+            next.textContent = "承認を開く";
+          } else if (proposal.goal_ref && result.status === "candidate_ready" &&
+              typeof result.plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(result.plan_id_digest)) {
+            setText("settings-plan-status", "委任目的に結び付いた計画候補 " + result.plan_id_digest.slice(0, 12) +
+              " を作成しました。計画画面で目的との関係と変更対象を審査してください。");
+            state.settingsProposalNextScreen = "tasks";
+            next.textContent = "計画を開く";
+          } else {
+            throw new Error("invalid_settings_proposal_receipt");
+          }
+          next.hidden = false;
+        } catch {
+          setText("settings-plan-status", "変更申請の受付を確認できませんでした。再申請する前に計画と承認の状態を確認してください。");
+        } finally {
+          if (tokenInput.value.trim() === token) tokenInput.value = "";
+          button.disabled = false;
         }
       }
 
@@ -6368,25 +6417,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.settingsToken = token;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
-          const submitted = settingsPayload();
-          const body = await postJson("/settings/llm/verify", token, submitted);
-          if (JSON.stringify(submitted) !== JSON.stringify(settingsPayload())) {
-            invalidateSettingsComputeReadiness();
-            return;
-          }
-          const result = body.result || body;
-          const status = result.status || "unknown";
+          const body = await postJson("/settings/llm/verify", token, {});
+          if (byId("settings-token").value.trim() !== token) return;
+          const result = body?.result;
+          if (!isObject(result) || !["pass", "fail"].includes(result.status) ||
+              !Array.isArray(result.evidence_source) || result.evidence_source.length !== 1 || result.evidence_source[0] !== "CONFIG" ||
+              result.provider_connection_checked !== false || result.credential_access_checked !== false ||
+              result.used_for_authority !== false || result.may_execute !== false) throw new Error("settings_config_check_unconfirmed");
           const computeStatus = renderSettingsComputeReadiness(result.compute_readiness);
-          setText("settings-verify-status", "Provider疎通: " + status + "; 通常Computeの設定: " + computeStatus + ". " +
+          setText("settings-verify-status", "稼働中のLLM構成 " + result.status + "。Provider疎通は未確認。" +
             (result.detail || "") + (result.next_action ? " 次の操作: " + result.next_action : ""));
           byId("settings-verify-status").className = "badge " +
-            (status !== "pass" ? "bad" : computeStatus === "ready" ? "good" : "warn");
+            (result.status !== "pass" ? "bad" : computeStatus === "ready" ? "good" : "warn");
           setText("settings-json", compactJson(redactRuntimeValue(body)));
-        } catch (error) {
-          setText("settings-verify-status", "error");
+        } catch {
+          if (byId("settings-token").value.trim() !== token) return;
+          setText("settings-verify-status", "稼働中のLLM構成を確認できませんでした。");
           byId("settings-verify-status").className = "badge bad";
           renderSettingsComputeReadiness(undefined);
-          setText("settings-json", error.message);
         }
       }
 
@@ -7066,8 +7114,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 (change.after === null || typeof change.after === "string" || typeof change.after === "number" || typeof change.after === "boolean") &&
                 (change.key !== "composio.api_key" || ["設定済み", "未設定"].includes(change.before) && change.after === "未設定");
             });
-          if (review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
-              review.used_for_authority !== false || review.may_execute !== false || !changesValid ||
+          const composioChange = changesValid && review.changes.every(function (change) { return change.key.startsWith("composio."); });
+          const llmChange = changesValid && review.changes.every(function (change) { return change.key.startsWith("llm."); });
+          const provider = review.expected_llm_provider;
+          const providerValid = provider === undefined || (llmChange && SETTINGS_LLM_PROVIDERS.includes(provider));
+          if (!hasNoStore(response) || !card.isConnected || token !== byId("approval-token").value.trim() ||
+              review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false || !(llmChange || composioChange) || !providerValid ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
               !isDigest(review.operation_plan_binding_digest)) {
@@ -7075,8 +7128,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = "GatewayのLLM実行設定変更";
+          heading.textContent = llmChange ? "GatewayのLLM運転設定変更" : "GatewayのComposio設定変更";
           view.appendChild(heading);
+          if (provider !== undefined) {
+            const target = document.createElement("p");
+            target.textContent = "対象Provider " + provider;
+            view.appendChild(target);
+          }
           review.changes.forEach(function (change) {
             const row = document.createElement("p");
             const label = document.createElement("strong");
@@ -7089,7 +7147,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           });
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "API keyの本文は候補・会話・監査へ入りません。Composio設定はno-storeで表示され、承認後に対象版を再照合して設定ファイルへ反映します。API keyの切断はdry-run=true／live=falseへ戻します。Gatewayの再起動が必要です。";
+          note.textContent = "承認後に対象版を再照合して設定へ反映します。反映後はGatewayを再起動してください。" +
+            (composioChange ? " API keyの切断はdry-run=true／live=falseへ戻します。" : "");
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
@@ -10512,14 +10571,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
-      for (const id of ["settings-provider", "settings-model", "settings-endpoint", "settings-api-key",
-        "settings-site-url", "settings-app-title", "settings-max-tokens", "settings-timeout-ms",
-        "settings-provider-cost-profiles", "settings-compute-budget-policy"]) {
-        byId(id).addEventListener("input", invalidateSettingsComputeReadiness);
-        byId(id).addEventListener("change", invalidateSettingsComputeReadiness);
-      }
       byId("settings-token").addEventListener("input", function () { state.settingsRuntimeSnapshot = null; });
+      byId("settings-owner-token").addEventListener("input", resetSettingsProposalGoals);
+      byId("load-settings-goals").addEventListener("click", loadSettingsProposalGoals);
       byId("prepare-llm-settings-plan").addEventListener("click", prepareLlmSettingsPlan);
+      byId("open-llm-settings-review").addEventListener("click", function () {
+        const screen = state.settingsProposalNextScreen;
+        if (screen !== "approvals" && screen !== "tasks") return;
+        setActiveScreen(screen);
+        if (screen === "approvals" && byId("approval-token").value.trim()) void loadApprovals();
+        if (screen === "tasks" && byId("runtime-token").value.trim()) void loadRuntime("settings-proposal");
+      });
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {
           setChatStatus("WebChat error", "bad");

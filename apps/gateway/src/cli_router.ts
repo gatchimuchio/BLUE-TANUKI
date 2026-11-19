@@ -429,9 +429,9 @@ async function runSetupCliMode(): Promise<void> {
   await runSetupCli(process.argv.slice(2));
 }
 
-async function runServeCliMode(): Promise<void> {
+async function runServeCliMode(inheritedEnvKeys: readonly string[]): Promise<void> {
   const { runServe } = await import("./serve.js");
-  await runServe();
+  await runServe(inheritedEnvKeys);
 }
 
 async function runOneShotCliMode(argv: readonly string[]): Promise<void> {
@@ -453,6 +453,7 @@ export async function runGatewayCliRouter(): Promise<void> {
     await runRecoveryReconcileCli(argv);
     return;
   }
+  const inheritedEnvKeys = Object.keys(process.env);
   const envFile = await loadEnvFileFromArgv(argv);
   if (envFile) {
     gatewayLog.info("env file loaded", {
@@ -492,7 +493,7 @@ export async function runGatewayCliRouter(): Promise<void> {
         runtime_schedules: "paused",
       });
     }
-    await runServeCliMode();
+    await runServeCliMode(inheritedEnvKeys);
     return;
   }
   await runOneShotCliMode(process.argv.slice(2));

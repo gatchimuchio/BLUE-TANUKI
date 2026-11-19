@@ -13,6 +13,7 @@ import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
 import { LLMFallbackAuthorizationSchema } from "@blue-tanuki/protocol";
 import {
   hasLLMSecretMaterial,
+  LLM_SECRET_KEYS,
   resolveLLMSecretRefs,
   secretRefKey,
 } from "./secret_store.js";
@@ -178,7 +179,7 @@ function parseFallbackAuthorizationJson(raw: string | undefined): LLMCommandRout
   return result.data;
 }
 
-function parseProvidersJson(raw: string | undefined, env: Env): ProviderSpec[] {
+function parseProvidersJson(raw: string | undefined, env: Env, configurationOnly = false): ProviderSpec[] {
   if (!raw) return [];
   const parsed = JSON.parse(raw) as unknown;
   const rows =
@@ -216,9 +217,8 @@ function parseProvidersJson(raw: string | undefined, env: Env): ProviderSpec[] {
       throw new Error(`LLM_PROVIDERS_JSON[${index}].model is required`);
     }
     const apiKeyEnv = stringOrUndefined(obj.api_key_env);
-    const apiKey =
-      stringOrUndefined(obj.api_key) ??
-      (apiKeyEnv ? envValue(env, apiKeyEnv) : undefined);
+    const apiKey = configurationOnly ? undefined :
+      (stringOrUndefined(obj.api_key) ?? (apiKeyEnv ? envValue(env, apiKeyEnv) : undefined));
     const headersEnv = stringOrUndefined(obj.headers_env);
     const headersFromEnv = headersEnv
       ? parseHeadersJson(envValue(env, headersEnv))
@@ -236,7 +236,7 @@ function parseProvidersJson(raw: string | undefined, env: Env): ProviderSpec[] {
       endpoint,
       model,
       apiKey,
-      headers: { ...headersFromEnv, ...inlineHeaders },
+      headers: configurationOnly ? {} : { ...headersFromEnv, ...inlineHeaders },
       aliases: stringArray(obj.aliases, `LLM_PROVIDERS_JSON[${index}].aliases`),
     };
   });
@@ -283,7 +283,29 @@ function parseTemperatureEnv(env: Env): number | undefined {
 }
 
 export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
-  const resolvedEnv = resolveLLMSecretRefs(env);
+  return buildLLMRegistry(resolveLLMSecretRefs(env));
+}
+
+/** Non-callable cost and routing projection. OS secret references are never opened. */
+export function inspectLLMRegistryConfiguration(env: Env): {
+  provider: string;
+  maximumCostForCall: LLMRegistry["maximumCostForCall"];
+  maximumCallsForRequest: LLMRegistry["maximumCallsForRequest"];
+} {
+  const configEnv = { ...env };
+  for (const key of LLM_SECRET_KEYS) {
+    configEnv[key] = hasLLMSecretMaterial(env, key) ? "configured-credential-placeholder" : undefined;
+  }
+  const registry = buildLLMRegistry(configEnv, true);
+  const provider = registry.resolve(buildLLMCommandRouteFromEnv(env).backend_hint).name;
+  return {
+    provider,
+    maximumCostForCall: registry.maximumCostForCall.bind(registry),
+    maximumCallsForRequest: registry.maximumCallsForRequest.bind(registry),
+  };
+}
+
+function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegistry {
   const imageCapableModels = parseImageCapableModelsJson(
     envValue(resolvedEnv, "BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON"),
   );
@@ -371,19 +393,14 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
     const endpoint =
       openaiEndpoint ??
       (wantsNativeOpenAI ? "https://api.openai.com/v1/chat/completions" : "");
+    const headers = parseHeadersJson(envValue(resolvedEnv, "OPENAI_COMPAT_HEADERS_JSON", "LLM_HEADERS_JSON"));
     registry.register(
       new OpenAICompatibleBackend({
         name: "openai-compatible",
         endpoint,
         defaultModel: openaiModel ?? "",
         apiKey: openaiKey,
-        headers: parseHeadersJson(
-          envValue(
-            resolvedEnv,
-            "OPENAI_COMPAT_HEADERS_JSON",
-            "LLM_HEADERS_JSON",
-          ),
-        ),
+        headers: configurationOnly ? {} : headers,
         image_capable_models: imageModelsFor("openai-compatible"),
         audio_transcription_capable_models: audioModelsFor("openai-compatible"),
         audio_task_capable_models: audioTaskModelsFor("openai-compatible"),
@@ -427,6 +444,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   for (const provider of parseProvidersJson(
     envValue(resolvedEnv, "LLM_PROVIDERS_JSON"),
     resolvedEnv,
+    configurationOnly,
   )) {
     registry.register(
       new OpenAICompatibleBackend({

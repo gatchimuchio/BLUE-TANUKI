@@ -27,6 +27,7 @@ import {
   memoryPersonalizationTargetIdentityDigest,
   SettingsWriteArgumentsSchema,
   SettingsWriteTargetVersionObservationSchema,
+  settingsWriteRequestBinding,
   settingsWriteTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
   ComposioActionTargetVersionObservationSchema,
@@ -851,9 +852,8 @@ function approveCommandForExecution(
       if (!hds_binding?.operation_plan_binding_digest || !parsedArgs.success ||
           observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
-          observation.request_payload_digest !== operationPlanDigest({
-            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
-          }) || observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
+          observation.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
+          observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
         throw new Error("Executor approval rejected: settings.write target version does not match command or plan source");
       }
       target_version_observation = Object.freeze(observation);
@@ -1316,9 +1316,8 @@ export class Executor {
       );
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
-          observation.request_payload_digest !== operationPlanDigest({
-            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
-          }) || observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
+          observation.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
+          observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
         throw new Error("settings.write target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
@@ -1751,9 +1750,9 @@ export class Executor {
       const { review_digest, ...reviewBase } = review;
       const parsedArgs = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
       if (!parsedArgs.success || review.operation !== "settings.write" ||
-          review.request_payload_digest !== operationPlanDigest({
-            schema_version: "blue-tanuki.settings-write-request.v1", patch: parsedArgs.data.patch,
-          }) || review.target_version_digest !== operationPlanDigest(observation) ||
+          review.expected_llm_provider !== parsedArgs.data.expected_llm_provider ||
+          review.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
+          review.target_version_digest !== operationPlanDigest(observation) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
           review.command_digest !== operationPlanDigest(command) || review.no_store !== true ||
           review.used_for_authority !== false || review.may_execute !== false ||

@@ -19,6 +19,7 @@ import type {
   OperationPlanComputeParent,
   OperationPlanMemoryInterpretationDependency,
   OperationPlanWaitState,
+  OperationPlan,
   MeaningUpdateProposalV3,
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
@@ -44,6 +45,8 @@ import {
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
+  llmSettingsWriteEnvPatch,
+  settingsWriteRequestBinding,
   SettingsWriteTargetVersionObservationSchema,
   McpCallTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
@@ -110,6 +113,7 @@ import {
   OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
+  OperationPlanGoalPurposeBindingSchema,
   type OperationPlanControl,
   type OperationPlanGoalPurposeBinding,
   type OperationPlanSelectedResultReflection,
@@ -4269,9 +4273,8 @@ ${planControl.question}`,
       const observation = SettingsWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
       if (!args.success || observation.command_digest !== operationPlanDigest(command) ||
           observation.operation_plan_binding_digest !== operation_plan_binding_digest ||
-          observation.request_payload_digest !== operationPlanDigest({
-            schema_version: "blue-tanuki.settings-write-request.v1", patch: args.data.patch,
-          }) || observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
+          observation.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(args.data)) ||
+          observation.target_identity_digest !== settingsWriteTargetIdentityDigest()) {
         throw new Error("HDS settings.write target version does not match the issued command or Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
@@ -4999,6 +5002,104 @@ ${planControl.question}`,
     if (recorded !== null) this.planEvent("external_receipt_observed", recorded.command_id);
     return recorded !== null;
   }
+
+  /** 認証済みownerが入力した設定差分を候補として保持する。選択とL3承認は既存の計画経路で行う。 */
+  prepareSettingsWritePlan(rawOrigin: unknown, rawArguments: unknown, rawGoalPurposeBinding?: unknown): {
+    plan_id_digest: string;
+    revision_digest: string;
+    step_id_digest: string;
+    used_for_authority: false;
+    may_execute: false;
+  } {
+    const boundary = parseInboundRequestAtBoundary(rawOrigin);
+    if (!boundary.ok || !isGatewayInternalInboundRequest(boundary.request)) {
+      throw new Error("settings_plan_owner_origin_required");
+    }
+    const caller = boundary.request;
+    const metadata = caller.metadata;
+    if (caller.channel !== "webchat" || caller.user !== "webchat-owner-token-holder" ||
+        metadata?.["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+        metadata["blue_tanuki.actor_kind"] !== "owner" || metadata["blue_tanuki.trust_level"] !== "owner" ||
+        metadata["blue_tanuki.process_kind"] !== "chat" || metadata["blue_tanuki.operator_surface"] !== "developer" ||
+        metadata["blue_tanuki.operation_core.source_interface"] !== "gui") {
+      throw new Error("settings_plan_owner_origin_required");
+    }
+    const args = SettingsWriteArgumentsSchema.safeParse(rawArguments);
+    if (!args.success || !args.data.patch.llm || args.data.expected_llm_provider === undefined) {
+      throw new Error("settings_plan_arguments_invalid");
+    }
+    if (!this.audit.isPersistent() || !this.audit.verify() || !this.getSelfHealth().command_execution_allowed) {
+      throw new Error("settings_plan_authority_unavailable");
+    }
+    const governance = this.getGoalGovernanceProjection();
+    if (governance !== undefined && rawGoalPurposeBinding === undefined) {
+      throw new Error("plan_goal_purpose_binding_required");
+    }
+    const selection = rawGoalPurposeBinding === undefined ? undefined :
+      OperationPlanGoalPurposeBindingSchema.safeParse(rawGoalPurposeBinding);
+    if (selection && !selection.success) throw new Error("settings_plan_goal_binding_invalid");
+    const binding = selection?.data;
+    if (binding) {
+      const goal = governance?.goals.find((candidate) => candidate.goal_ref === binding.goal_ref);
+      if (!governance || governance.used_for_authority !== false || goal?.goal_kind !== "delegated") {
+        throw new Error("plan_goal_purpose_unknown");
+      }
+      if (goal.current_version !== binding.purpose_version || goal.current_purpose_digest !== binding.purpose_digest) {
+        throw new Error("plan_goal_purpose_stale");
+      }
+      const purpose = this.readGoalPurposeContent(binding.goal_ref, binding.purpose_version);
+      if (!purpose || purpose.used_for_authority !== false || purpose.purpose_digest !== binding.purpose_digest) {
+        throw new Error("plan_goal_purpose_relation_unavailable");
+      }
+    }
+    const target = { kind: "settings", id: "gateway.runtime-config", scope: "llm.runtime" } as const;
+    const stepId = "llm-runtime-settings";
+    const changedKeys = Object.keys(llmSettingsWriteEnvPatch(args.data.patch.llm, args.data.expected_llm_provider)).sort();
+    const plan: OperationPlan = {
+      version: "operation-core.v1",
+      plan_id: `owner-settings-${operationPlanDigest(caller.id)}`,
+      request_id: caller.id,
+      state: "planned",
+      steps: [{
+        step_id: stepId,
+        operation: "settings.write",
+        target,
+        state: "planned",
+        effects: ["settings_change", "write"],
+        permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+          hds_brain_authority_required: true, approval_gate_required: true },
+        parameters: args.data,
+        adapter: "internal_runtime",
+        adapter_is_authority: false,
+        command_generated_by_adapter_only: false,
+        preparation: {
+          depends_on: [], bindings: [], preconditions: [],
+          validation: [{ check_id: "llm-runtime-settings-saved", method: "result_equals", target,
+            expected: { changed_keys: changedKeys, restart_required: true } }],
+          compensation: { available: false, reason: "設定復元は別の操作として承認を受ける" },
+        },
+      }],
+      rollback: { available: false },
+      raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    };
+    const origin = createGatewayInternalInboundRequest({
+      id: caller.id,
+      channel: caller.channel,
+      user: caller.user,
+      content: "明示したLLM実行設定を更新する",
+      timestamp: caller.timestamp,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui",
+        ...(binding ? { "blue_tanuki.operation_core.goal_purpose_binding": binding } : {}) },
+    });
+    const plan_id_digest = this.operationPlans.retainCandidate(plan, origin);
+    return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
+      used_for_authority: false, may_execute: false };
+  }
+
   issueOwnerSelectedFileStateObservationAuthorizations(raw: unknown):
     readonly OperationPlanOwnerSelectedFileStateObservationAuthorization[] | null {
     const boundary = parseInboundRequestAtBoundary(raw);

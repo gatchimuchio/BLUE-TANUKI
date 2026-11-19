@@ -1,5 +1,7 @@
 import type { Clock } from "@blue-tanuki/channel-base";
-import type { ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan } from "@blue-tanuki/protocol";
+import type {
+  ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteLlmProvider, SettingsWritePatch,
+} from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
 
@@ -957,6 +959,7 @@ export interface WebChatSettingsWriteContentReview {
   command_digest: string;
   review_digest: string;
   operation: "settings.write";
+  expected_llm_provider?: SettingsWriteLlmProvider;
   changes: readonly {
     key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
@@ -1924,6 +1927,13 @@ export interface WebChatOperatorSurfaces {
   developer?: WebChatOperatorSurface;
 }
 
+export interface WebChatOwnerLlmSettingsProposal {
+  expected_provider: SettingsWriteLlmProvider;
+  patch: { llm: NonNullable<SettingsWritePatch["llm"]> };
+  goal_ref?: string;
+  purpose_version?: number;
+}
+
 export interface WebChatOptions {
   /** HTTP(S)/WS(S) port. Required. */
   port: number;
@@ -1985,6 +1995,9 @@ export interface WebChatOptions {
   onGoalPurposeChangeCandidates?: (input: { actor: string }) => Promise<readonly WebChatGoalPurposeChangeCandidate[]>;
   /** Read only current, materialized owner-delegated task purposes for explicit task submission. */
   onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly WebChatTaskGoalOption[]>;
+  /** Request preparation of an exact non-secret LLM settings change through J. */
+  onOwnerLlmSettingsProposal?: (input: WebChatOwnerLlmSettingsProposal & { actor: string }) =>
+    Promise<Record<string, unknown>>;
   /** Durable idempotency boundary for owner task submissions. Required when task submission is enabled. */
   owner_task_submission_store?: WebChatOwnerTaskSubmissionStore;
   /** Dedicated owner endpoint for an exact, one-plan task-purpose relation review. */

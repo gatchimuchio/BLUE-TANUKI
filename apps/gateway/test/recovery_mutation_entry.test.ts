@@ -33,6 +33,102 @@ afterEach(async () => {
   }
 });
 
+describe("First-use Gateway settings", () => {
+  it("applies exact owner-selected settings through L3 without a planning provider and uses them after restart", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-first-use-settings-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const port = await reserveLoopbackPort();
+    const ownerToken = "first-use-settings-owner-token";
+    const settingsToken = "first-use-settings-read-token";
+    const env = { ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+      BLUE_TANUKI_OWNER_TOKEN: ownerToken, BLUE_TANUKI_SETTINGS_TOKEN: settingsToken };
+    delete (env as NodeJS.ProcessEnv).LLM_BACKEND;
+    const configuredEnv = "LLM_BACKEND=stub\nBLUE_TANUKI_LLM_MAX_TOKENS=1024\nUNRELATED_SETTING=kept\n";
+    writeFileSync(envFile, configuredEnv);
+    let gateway = spawnGateway(env);
+    await waitForHealth(port, gateway, 40_000);
+
+    const route = "/owner/llm-settings-proposal";
+    const patch = { llm: { model: "fixture-model", max_tokens: 512 } };
+    const submit = (token: string, expected_provider = "stub") => requestJson(port, route, {
+      method: "POST", token, body: { expected_provider, patch }, signal: AbortSignal.timeout(10_000),
+    });
+    expect((await submit(settingsToken)).status).toBe(401);
+    expect((await submit(inboundToken)).status).toBe(401);
+    expect((await submit(ownerToken, "openai")).status).toBe(409);
+    const proposal = await submit(ownerToken);
+    expect(proposal.status, JSON.stringify(proposal.body)).toBe(202);
+    expect(proposal.body).toMatchObject({ accepted: true, status: "approval_required", command_id: expect.any(String),
+      used_for_authority: false, may_execute: false });
+    expect(readFileSync(envFile, "utf8")).toBe(configuredEnv);
+
+    const commandId = String(proposal.body.command_id);
+    const approvalRoute = `/approval/${encodeURIComponent(commandId)}`;
+    const queue = await requestJson(port, "/approval", { token: resumeToken, signal: AbortSignal.timeout(10_000) });
+    const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((entry) => entry.command_id === commandId);
+    expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review",
+      final_review_required: true, content_review_required: true, approval_token: expect.any(String) });
+    const approve = (digest?: string) => requestJson(port, approvalRoute, { method: "POST", token: resumeToken,
+      body: { verdict: "approve", approval_token: pending!.approval_token,
+        ...(digest ? { content_review_digest: digest } : {}) }, signal: AbortSignal.timeout(10_000) });
+    const review = async () => {
+      const result = await fetch(`http://127.0.0.1:${port}${approvalRoute}/content`, { method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(10_000) });
+      const body = await result.json() as Record<string, unknown>;
+      expect(result.status, JSON.stringify(body)).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(body).toMatchObject({ expected_llm_provider: "stub", no_store: true, review_digest: expect.any(String),
+        changes: expect.arrayContaining([
+          { key: "llm.model", before: null, after: "fixture-model" },
+          { key: "llm.max_tokens", before: 1024, after: 512 },
+        ]) });
+      return String(body.review_digest);
+    };
+    expect((await approve()).status).toBe(409);
+    const staleReview = await review();
+    const changedEnv = configuredEnv + "# exact target changed after review\n";
+    writeFileSync(envFile, changedEnv);
+    expect((await approve(staleReview)).status).toBe(409);
+    expect(readFileSync(envFile, "utf8")).toBe(changedEnv);
+    const freshReview = await review();
+    expect(freshReview).not.toBe(staleReview);
+    const accepted = await approve(freshReview);
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    expect(accepted.body).toMatchObject({ result: { approval: "approve", status: "success" } });
+    const saved = readFileSync(envFile, "utf8");
+    expect(saved).toContain('BLUE_TANUKI_LLM_MODEL="fixture-model"');
+    expect(saved).toContain('BLUE_TANUKI_LLM_MAX_TOKENS="512"');
+    expect(saved).toContain("UNRELATED_SETTING=kept\n# exact target changed after review");
+    let replay = await approve(freshReview);
+    if (replay.status === 429) {
+      const delayMs = Number(replay.body.retry_after_ms);
+      expect(delayMs).toBeGreaterThanOrEqual(0);
+      expect(delayMs).toBeLessThanOrEqual(2_000);
+      await new Promise((resolve) => setTimeout(resolve, delayMs + 50));
+      replay = await approve(freshReview);
+    }
+    expect(replay.status).toBe(409);
+    expect(readFileSync(envFile, "utf8")).toBe(saved);
+
+    await stopChild(gateway.child);
+    gateway = spawnGateway(env);
+    await waitForHealth(port, gateway, 40_000);
+    const active = await requestJson(port, "/settings/config", { token: settingsToken, signal: AbortSignal.timeout(10_000) });
+    expect(active.status).toBe(200);
+    expect(active.body).toMatchObject({ llm: { provider: "stub", command_route: { model: "fixture-model", max_tokens: "512" } } });
+    expect((await submit(ownerToken)).status).toBe(409);
+
+    await stopChild(gateway.child);
+    gateway = spawnGateway({ ...env, BLUE_TANUKI_LLM_MAX_TOKENS: "256" });
+    await waitForHealth(port, gateway, 40_000);
+    const overridden = await requestJson(port, route, { method: "POST", token: ownerToken,
+      body: { expected_provider: "stub", patch: { llm: { max_tokens: 768 } } }, signal: AbortSignal.timeout(10_000) });
+    expect(overridden.status).toBe(409);
+    expect(readFileSync(envFile, "utf8")).toBe(saved);
+  }, 150_000);
+});
+
 describe("Recovery mutation HDS L3 entry", () => {
   it("requires L3 and refuses a factory-reset target overlapping the active audit store", async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-factory-reset-l3-"));

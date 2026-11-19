@@ -37,6 +37,7 @@ export {
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatMemoryPersonalizationStopContentReview,
   type WebChatSettingsWriteContentReview,
+  type WebChatOwnerLlmSettingsProposal,
   type WebChatGoalPurposeRelationContentReview,
   type WebChatBrowserFormGetContentReview,
   type WebChatBrowserFormInputContentReview,

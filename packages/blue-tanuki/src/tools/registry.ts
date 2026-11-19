@@ -10,7 +10,7 @@ import { getToolOperationDescriptor, requireToolOperationDescriptor, type FileSe
 import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { McpCallTargetVersionObservation, McpRequestKind } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
-import type { SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ComposioActionTargetVersionObservation, ComposioActionContentReview } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
@@ -700,6 +700,7 @@ export interface MemoryPersonalizationStopContentReview {
 export interface SettingsWriteContentReview {
   kind: "settings_write";
   operation: "settings.write";
+  expected_llm_provider?: SettingsWriteLlmProvider;
   changes: readonly {
     key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
