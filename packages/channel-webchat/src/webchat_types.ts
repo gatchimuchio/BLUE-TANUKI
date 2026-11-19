@@ -1890,11 +1890,23 @@ export interface WebChatNotificationItem {
   next_action?: string;
 }
 
+export type WebChatTelegramDeliverySnapshot = {
+  status: "available";
+  unknown_count: number;
+  recent_unknown: readonly { delivery_digest: string; updated_at_ms: number }[];
+} | {
+  status: "unavailable";
+  unknown_count: null;
+  recent_unknown: readonly [];
+};
+
 export interface WebChatNotificationSurface {
   /** Return display-only resident notifications for the local console. */
   list: () => Promise<readonly WebChatNotificationItem[]>;
   /** 所有者の認証後に返す、本文を含まない保存結果の通知。 */
   listOwnerSavedResults?(): Promise<readonly WebChatNotificationItem[]>;
+  /** 所有者にだけ返す、Telegramの結果不明の送信記録。 */
+  telegramDelivery?: () => WebChatTelegramDeliverySnapshot | Promise<WebChatTelegramDeliverySnapshot>;
 }
 
 export interface WebChatHistoryReplayFilter {

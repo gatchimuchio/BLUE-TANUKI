@@ -34,6 +34,8 @@ export interface TelegramOptions {
   log?: (line: string) => void;
   /** Durable Gateway-owned dedupe cursor. Required when a live bot token is configured. */
   inbox?: TelegramUpdateInbox;
+  /** Durable Gateway-owned record of outbound delivery attempts. */
+  delivery_store?: TelegramOutboundDeliveryStore;
   /** Exact owner-configured inbound grants. Empty or absent rejects all inbound messages. */
   inbound_grants?: readonly TelegramInboundGrant[];
   /** Current Gateway outbound stop generation, when the channel is run by the Gateway. */
@@ -49,6 +51,20 @@ export interface TelegramUpdateInbox {
     | { readonly status: "blocked_unresolved"; readonly delivery_state: "dispatching" | "handler_returned" | "outcome_unknown" }
     | { readonly status: "identity_conflict" };
   settle(updateId: number, payloadDigest: string, state: "handler_returned" | "outcome_unknown"): void;
+}
+
+export type TelegramOutboundDeliveryState = "dispatching" | "delivered" | "not_delivered" | "outcome_unknown";
+
+export interface TelegramOutboundDeliveryStore {
+  beginDelivery(commandId: string):
+    | { readonly status: "accepted"; readonly delivery_digest: string }
+    | { readonly status: "duplicate"; readonly delivery_state: TelegramOutboundDeliveryState };
+  settleDelivery(deliveryDigest: string, state: Exclude<TelegramOutboundDeliveryState, "dispatching">): void;
+}
+
+interface TelegramTarget {
+  readonly chat_id: string;
+  readonly message_thread_id?: number;
 }
 
 interface TelegramUpdate {
@@ -194,6 +210,44 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       error_kind: "non_recoverable", error_code: "invalid_target" };
     if (payload.content.length === 0) return { delivered: false, delivery_status: "not_delivered",
       error: "telegram_empty_message_rejected", error_kind: "non_recoverable", error_code: "empty_message" };
+    const store = this.opts.delivery_store;
+    if (!store) {
+      if (this.opts.fetch) return this.sendChunks(payload, meta, target, signal, at);
+      return deliveryStoreUnavailable();
+    }
+    let delivery: ReturnType<TelegramOutboundDeliveryStore["beginDelivery"]>;
+    try {
+      delivery = store.beginDelivery(meta.command_id);
+    } catch {
+      return deliveryStoreUnavailable();
+    }
+    if (delivery.status === "duplicate") {
+      if (delivery.delivery_state === "dispatching" || delivery.delivery_state === "outcome_unknown") {
+        return unknownDelivery(false);
+      }
+      return { delivered: false, delivery_status: "not_delivered", error: "telegram_duplicate_delivery_suppressed",
+        error_kind: "non_recoverable", error_code: "duplicate_delivery" };
+    }
+
+    const result = await this.sendChunks(payload, meta, target, signal, at);
+    const state = result.delivered ? "delivered"
+      : result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown";
+    try {
+      store.settleDelivery(delivery.delivery_digest, state);
+    } catch {
+      this.log("[telegram] durable delivery outcome could not be recorded");
+      return unknownDelivery(false);
+    }
+    return result;
+  }
+
+  private async sendChunks(
+    payload: ChannelSendPayload,
+    meta: SendMeta,
+    target: TelegramTarget,
+    signal: AbortSignal,
+    at: number,
+  ): Promise<SendResult> {
     const chunks = splitTelegramText(payload.content);
     const sentIds: string[] = [];
     for (let index = 0; index < chunks.length; index += 1) {
@@ -711,6 +765,11 @@ function cancelledBeforeDispatch(): SendResult {
     error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
 }
 
+function deliveryStoreUnavailable(): SendResult {
+  return { delivered: false, delivery_status: "not_delivered", error: "telegram_delivery_store_unavailable",
+    error_kind: "non_recoverable", error_code: "delivery_store_unavailable" };
+}
+
 function unknownDelivery(partial: boolean): SendResult {
   return { delivered: false, delivery_status: "unknown",
     error: partial ? "telegram_partial_delivery_unknown" : "telegram_delivery_outcome_unknown",
@@ -846,7 +905,7 @@ function normalizeTelegramThreadId(value: number | undefined): number | null {
   return value === undefined ? null : Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-function parseTelegramTarget(value: string): { chat_id: string; message_thread_id?: number } | null {
+function parseTelegramTarget(value: string): TelegramTarget | null {
   const match = /^(-?[1-9][0-9]*)(?:\|([1-9][0-9]*))?$/u.exec(value);
   if (!match) return null;
   const chat_id = normalizeTelegramChatId(match[1]);

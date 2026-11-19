@@ -125,6 +125,7 @@ import type {
   WebChatNotificationKind,
   WebChatNotificationSeverity,
   WebChatNotificationSurface,
+  WebChatTelegramDeliverySnapshot,
   WebChatOperatorSurface,
   WebChatOperatorSurfaces,
   WebChatOwnerTaskSubmissionStore,
@@ -228,6 +229,24 @@ function isLocalControlCenterBrowserRequest(req: IncomingMessage): boolean {
 function hasDailyBriefOwnerToken(req: IncomingMessage, ownerToken: string | undefined): boolean {
   const supplied = req.headers["x-blue-tanuki-owner-token"];
   return typeof supplied === "string" && bearerTokenMatches(supplied, ownerToken);
+}
+
+async function readTelegramDeliverySnapshot(
+  read: NonNullable<WebChatNotificationSurface["telegramDelivery"]>,
+): Promise<WebChatTelegramDeliverySnapshot> {
+  const unavailable = { status: "unavailable", unknown_count: null, recent_unknown: [] } as const;
+  try {
+    const snapshot = await read();
+    if (snapshot.status !== "available" || !Number.isSafeInteger(snapshot.unknown_count) ||
+        !Array.isArray(snapshot.recent_unknown) || snapshot.recent_unknown.length > 20 ||
+        snapshot.unknown_count < snapshot.recent_unknown.length ||
+        snapshot.recent_unknown.some(row => typeof row?.delivery_digest !== "string" || !/^[a-f0-9]{64}$/u.test(row.delivery_digest) ||
+          !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms <= 0 || row.updated_at_ms > 8_640_000_000_000_000)) return unavailable;
+    return { status: "available", unknown_count: snapshot.unknown_count,
+      recent_unknown: snapshot.recent_unknown.map(row => ({ delivery_digest: row.delivery_digest, updated_at_ms: row.updated_at_ms })) };
+  } catch {
+    return unavailable;
+  }
 }
 
 function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
@@ -4017,16 +4036,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     const d4RuntimeProjection = this.checkAuth(req, "d4_runtime");
-    const ownerSavedResults = Boolean(this.opts.notifications.listOwnerSavedResults) && this.checkAuth(req, "owner");
-    if (!d4RuntimeProjection && !ownerSavedResults && !this.checkAuth(req, "inbound")) {
+    const telegramDeliverySource = this.opts.notifications.telegramDelivery;
+    const ownerScope = !d4RuntimeProjection && Boolean(this.opts.notifications.listOwnerSavedResults || telegramDeliverySource) && this.checkAuth(req, "owner");
+    if (!d4RuntimeProjection && !ownerScope && !this.checkAuth(req, "inbound")) {
       res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    if (ownerSavedResults && !this.rateLimitOr429(this.buckets.inbound, "owner-saved-result-notifications", res)) return;
+    if (ownerScope && !this.rateLimitOr429(this.buckets.inbound, "owner-saved-result-notifications", res)) return;
     let notifications: readonly WebChatNotificationItem[];
     try {
-      if (ownerSavedResults) {
+      if (ownerScope) {
         const savedResults = await this.opts.notifications.listOwnerSavedResults?.();
         notifications = (savedResults ?? []).filter(item => item.kind === "owner_saved_result_ready");
       } else {
@@ -4041,7 +4061,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       });
-      res.end(JSON.stringify({ error: ownerSavedResults ? "owner_saved_result_notifications_unavailable" : "notifications_unavailable" }));
+      res.end(JSON.stringify({ error: ownerScope ? "owner_saved_result_notifications_unavailable" : "notifications_unavailable" }));
       return;
     }
     if (d4RuntimeProjection) {
@@ -4063,12 +4083,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify(projection));
       return;
     }
+    const telegram_delivery = ownerScope && telegramDeliverySource ? await readTelegramDeliverySnapshot(telegramDeliverySource) : undefined;
     res.writeHead(200, {
       "content-type": "application/json",
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(JSON.stringify(ownerSavedResults ? { notifications, scope: "owner" } : { notifications }));
+    res.end(JSON.stringify(ownerScope ? { notifications, scope: "owner", telegram_delivery } : { notifications }));
   }
 
   private async handleHistory(

@@ -65,6 +65,7 @@ export {
   type WebChatAuthorityTraceItem,
   type WebChatAuthoritySurface,
   type WebChatNotificationItem,
+  type WebChatTelegramDeliverySnapshot,
   type WebChatNotificationKind,
   type WebChatNotificationSeverity,
   type WebChatCronResultCorrelationStatus,

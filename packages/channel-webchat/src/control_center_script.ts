@@ -4246,7 +4246,42 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         );
       }
 
+      function renderTelegramDeliveryNotification(body) {
+        const section = byId("telegram-delivery-notification");
+        const list = byId("telegram-delivery-notification-list");
+        section.hidden = body?.scope !== "owner";
+        list.hidden = true;
+        list.replaceChildren();
+        setText("telegram-delivery-notification-status", "");
+        if (section.hidden) return;
+        const delivery = body.telegram_delivery;
+        const rows = delivery?.recent_unknown;
+        const count = delivery?.unknown_count;
+        if (delivery?.status !== "available" || !Number.isSafeInteger(count) || !Array.isArray(rows) ||
+            rows.length > 20 || count < rows.length || rows.some(function (row) {
+              return typeof row?.delivery_digest !== "string" || !/^[a-f0-9]{64}$/u.test(row.delivery_digest) ||
+                !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms <= 0 || row.updated_at_ms > 8640000000000000;
+            })) {
+          setText("telegram-delivery-notification-status", "保存された送信結果を確認できません。");
+          return;
+        }
+        if (count === 0) {
+          setText("telegram-delivery-notification-status", "配信結果が不明と記録された送信はありません。");
+          return;
+        }
+        const displayed = count > rows.length ? "（直近 " + rows.length + " 件を表示）" : "";
+        setText("telegram-delivery-notification-status", "配信結果不明 " + count + " 件" + displayed +
+          "。自動再送は行いません。送信先のTelegramで配信状況を確認してください。");
+        for (const row of rows) {
+          const item = document.createElement("li");
+          item.textContent = formatDate(row.updated_at_ms) + "　照会 " + row.delivery_digest.slice(0, 12);
+          list.appendChild(item);
+        }
+        list.hidden = rows.length === 0;
+      }
+
       function renderNotifications(body) {
+        renderTelegramDeliveryNotification(body);
         const notifications = Array.isArray(body.notifications) ? body.notifications : [];
         setText("notification-summary", String(notifications.length) + " active");
         byId("notification-summary").className = "badge " + (notifications.length > 0 ? "review" : "good");
@@ -7221,6 +7256,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       let notificationLoadGeneration = 0;
       async function loadNotifications() {
         const generation = ++notificationLoadGeneration;
+        renderTelegramDeliveryNotification();
         const ownerTokenInput = byId("owner-notifications-token");
         const generalTokenInput = byId("notifications-token");
         const ownerToken = ownerTokenInput.value.trim();

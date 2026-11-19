@@ -3,7 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import type { TelegramUpdateInbox } from "@blue-tanuki/channel-telegram";
+import type { TelegramOutboundDeliveryState, TelegramOutboundDeliveryStore, TelegramUpdateInbox } from "@blue-tanuki/channel-telegram";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -16,11 +16,16 @@ export type TelegramUpdateClaim =
   | { readonly status: "blocked_unresolved"; readonly delivery_state: TelegramUpdateDeliveryState }
   | { readonly status: "identity_conflict" };
 
+export type TelegramDeliveryNotificationSnapshot =
+  | { readonly status: "available"; readonly unknown_count: number;
+      readonly recent_unknown: readonly { delivery_digest: string; updated_at_ms: number }[] }
+  | { readonly status: "unavailable"; readonly unknown_count: null; readonly recent_unknown: readonly [] };
+
 /**
- * Durable, content-free admission cursor for one Telegram bot. The update body
- * is never persisted; only its digest and delivery state survive a restart.
+ * Durable admission and outbound delivery evidence for one Telegram bot.
+ * Update and send bodies, target identifiers, and credentials are kept off disk.
  */
-export class GatewayTelegramUpdateStore implements TelegramUpdateInbox {
+export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, TelegramOutboundDeliveryStore {
   private db: DatabaseType;
   private closed = false;
   private readonly botScopeDigest: string;
@@ -66,14 +71,24 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox {
         payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
         delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS telegram_outbound_delivery (
+        bot_scope_digest TEXT NOT NULL CHECK(length(bot_scope_digest) = 64),
+        delivery_digest TEXT NOT NULL CHECK(length(delivery_digest) = 64),
+        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','delivered','not_delivered','outcome_unknown')),
+        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+        PRIMARY KEY(bot_scope_digest, delivery_digest)
       ) STRICT;`);
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") throw new Error("telegram_inbox_integrity_check_failed");
       this.transaction(() => {
+        const nowMs = Date.now();
         // A process interrupted after admission cannot prove whether Gateway
         // began acting. Keep the cursor and suppress replay as outcome-unknown.
         this.db.prepare(`UPDATE telegram_update_cursor SET delivery_state='outcome_unknown',updated_at_ms=?
-          WHERE bot_scope_digest=? AND delivery_state='dispatching'`).run(Date.now(), this.botScopeDigest);
+          WHERE bot_scope_digest=? AND delivery_state='dispatching'`).run(nowMs, this.botScopeDigest);
+        this.db.prepare(`UPDATE telegram_outbound_delivery SET delivery_state='outcome_unknown',updated_at_ms=MAX(updated_at_ms,?)
+          WHERE bot_scope_digest=? AND delivery_state='dispatching'`).run(nowMs, this.botScopeDigest);
       });
     } catch (error) {
       this.db.close();
@@ -134,6 +149,54 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox {
     });
   }
 
+  beginDelivery(commandId: string, nowMs = Date.now()): ReturnType<TelegramOutboundDeliveryStore["beginDelivery"]> {
+    if (typeof commandId !== "string" || commandId.trim().length === 0 || !validTimestamp(nowMs)) {
+      throw new Error("telegram_outbound_delivery_identity_invalid");
+    }
+    const deliveryDigest = sha256(JSON.stringify(["telegram-outbound-delivery.v1", this.botScopeDigest, commandId]));
+    return this.transaction(() => {
+      const current = this.readOutboundState(deliveryDigest);
+      if (current) return { status: "duplicate", delivery_state: current };
+      this.db.prepare(`INSERT INTO telegram_outbound_delivery (bot_scope_digest,delivery_digest,delivery_state,updated_at_ms)
+        VALUES (?,?,'dispatching',?)`).run(this.botScopeDigest, deliveryDigest, nowMs);
+      return { status: "accepted", delivery_digest: deliveryDigest };
+    });
+  }
+
+  settleDelivery(deliveryDigest: string, state: Exclude<TelegramOutboundDeliveryState, "dispatching">, nowMs = Date.now()): void {
+    if (!validDigest(deliveryDigest) || !validTimestamp(nowMs) ||
+        (state !== "delivered" && state !== "not_delivered" && state !== "outcome_unknown")) {
+      throw new Error("telegram_outbound_delivery_settlement_invalid");
+    }
+    this.transaction(() => {
+      const update = this.db.prepare(`UPDATE telegram_outbound_delivery SET delivery_state=?,updated_at_ms=MAX(updated_at_ms,?)
+        WHERE bot_scope_digest=? AND delivery_digest=? AND delivery_state='dispatching'`)
+        .run(state, nowMs, this.botScopeDigest, deliveryDigest);
+      if (Number(update.changes) !== 1 && this.readOutboundState(deliveryDigest) !== state) {
+        throw new Error("telegram_outbound_delivery_settlement_conflict");
+      }
+    });
+  }
+
+  unknownDeliverySnapshot(): TelegramDeliveryNotificationSnapshot {
+    try {
+      this.assertOpen();
+      const rows = this.db.prepare(`SELECT delivery_digest, updated_at_ms, COUNT(*) OVER () AS unknown_count
+        FROM telegram_outbound_delivery WHERE bot_scope_digest=? AND delivery_state='outcome_unknown'
+        ORDER BY updated_at_ms DESC, delivery_digest LIMIT 20`).all(this.botScopeDigest) as unknown as
+        { delivery_digest: string; updated_at_ms: number; unknown_count: number }[];
+      const unknownCount = rows[0]?.unknown_count ?? 0;
+      if (!validTimestamp(unknownCount) || rows.length !== Math.min(unknownCount, 20) || rows.some(row =>
+        !validDigest(row.delivery_digest) || !validTimestamp(row.updated_at_ms) || row.unknown_count !== unknownCount)) {
+        throw new Error("telegram_outbound_delivery_snapshot_invalid");
+      }
+      return { status: "available", unknown_count: unknownCount,
+        recent_unknown: rows.map(({ delivery_digest, updated_at_ms }) => ({ delivery_digest, updated_at_ms })) };
+    } catch {
+      return { status: "unavailable", unknown_count: null, recent_unknown: [] };
+    }
+  }
+
   close(): void {
     if (this.closed) return;
     this.db.close();
@@ -141,6 +204,17 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox {
   }
 
   isClosed(): boolean { return this.closed; }
+
+  private readOutboundState(deliveryDigest: string): TelegramOutboundDeliveryState | undefined {
+    const row = this.db.prepare(`SELECT delivery_state FROM telegram_outbound_delivery
+      WHERE bot_scope_digest=? AND delivery_digest=?`).get(this.botScopeDigest, deliveryDigest);
+    if (!row) return undefined;
+    const state = row.delivery_state;
+    if (state !== "dispatching" && state !== "delivered" && state !== "not_delivered" && state !== "outcome_unknown") {
+      throw new Error("telegram_outbound_delivery_state_invalid");
+    }
+    return state;
+  }
 
   private transaction<T>(fn: () => T): T {
     this.assertOpen();
@@ -180,6 +254,14 @@ function validateCursorRow(row: TelegramUpdateCursorRow): void {
       !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
     throw new Error("telegram_inbox_cursor_invalid");
   }
+}
+
+function validDigest(value: string): boolean {
+  return typeof value === "string" && value.length === 64 && DIGEST.test(value);
+}
+
+function validTimestamp(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function sha256(value: string): string {

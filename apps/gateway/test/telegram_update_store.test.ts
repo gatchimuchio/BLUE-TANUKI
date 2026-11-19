@@ -68,6 +68,65 @@ describe("GatewayTelegramUpdateStore", () => {
     }
   });
 
+  it("preserves outbound attempts and outcome evidence across restart without retaining their command IDs", () => {
+    const { filepath, store } = makeStore();
+    const interruptedCommandId = "synthetic private outbound command interrupted";
+    const completedCommandId = "synthetic private outbound command completed";
+    const rejectedCommandId = "synthetic private outbound command rejected";
+    const interrupted = store.beginDelivery(interruptedCommandId, 10);
+    const completed = store.beginDelivery(completedCommandId, 11);
+    const rejected = store.beginDelivery(rejectedCommandId, 12);
+    if (interrupted.status !== "accepted" || completed.status !== "accepted" || rejected.status !== "accepted") {
+      throw new Error("fixture outbound delivery was not admitted");
+    }
+    expect(store.beginDelivery(interruptedCommandId)).toEqual({ status: "duplicate", delivery_state: "dispatching" });
+    store.settleDelivery(completed.delivery_digest, "delivered", 20);
+    store.settleDelivery(rejected.delivery_digest, "not_delivered", 21);
+    expect(store.unknownDeliverySnapshot()).toEqual({ status: "available", unknown_count: 0, recent_unknown: [] });
+    store.close();
+
+    const reopened = new GatewayTelegramUpdateStore(filepath, "fixture-bot-token");
+    const anotherBot = new GatewayTelegramUpdateStore(filepath, "another-fixture-bot-token");
+    try {
+      expect(reopened.beginDelivery(interruptedCommandId)).toEqual({ status: "duplicate", delivery_state: "outcome_unknown" });
+      expect(reopened.beginDelivery(completedCommandId)).toEqual({ status: "duplicate", delivery_state: "delivered" });
+      expect(reopened.beginDelivery(rejectedCommandId)).toEqual({ status: "duplicate", delivery_state: "not_delivered" });
+      expect(() => reopened.settleDelivery(interrupted.delivery_digest, "delivered")).toThrow("telegram_outbound_delivery_settlement_conflict");
+      expect(() => reopened.beginDelivery(" \t")).toThrow("telegram_outbound_delivery_identity_invalid");
+      expect(reopened.unknownDeliverySnapshot()).toEqual({ status: "available", unknown_count: 1,
+        recent_unknown: [{ delivery_digest: interrupted.delivery_digest, updated_at_ms: expect.any(Number) }] });
+      expect(anotherBot.unknownDeliverySnapshot()).toEqual({ status: "available", unknown_count: 0, recent_unknown: [] });
+      expect(anotherBot.beginDelivery(interruptedCommandId)).toMatchObject({ status: "accepted" });
+
+      const persisted = readFileSync(filepath).toString("utf8");
+      for (const privateInput of [interruptedCommandId, completedCommandId, rejectedCommandId, "fixture-bot-token"]) {
+        expect(persisted).not.toContain(privateInput);
+      }
+    } finally {
+      reopened.close();
+      anotherBot.close();
+    }
+  });
+
+  it("projects the total unknown count and only the newest twenty scoped ledger entries", () => {
+    const { store } = makeStore();
+    const expected: Array<{ delivery_digest: string; updated_at_ms: number }> = [];
+    try {
+      for (let index = 0; index < 24; index += 1) {
+        const timestamp = 100 + Math.floor(index / 2);
+        const delivery = store.beginDelivery(`synthetic command ${index}`, timestamp);
+        if (delivery.status !== "accepted") throw new Error("fixture outbound delivery was not admitted");
+        store.settleDelivery(delivery.delivery_digest, "outcome_unknown", timestamp);
+        expected.push({ delivery_digest: delivery.delivery_digest, updated_at_ms: timestamp });
+      }
+      expected.sort((left, right) => right.updated_at_ms - left.updated_at_ms || left.delivery_digest.localeCompare(right.delivery_digest));
+      expect(store.unknownDeliverySnapshot()).toEqual({ status: "available", unknown_count: 24, recent_unknown: expected.slice(0, 20) });
+    } finally {
+      store.close();
+    }
+    expect(store.unknownDeliverySnapshot()).toEqual({ status: "unavailable", unknown_count: null, recent_unknown: [] });
+  });
+
   it("connects durable admission to the Telegram polling consumer across restarts", async () => {
     const { filepath, store } = makeStore();
     const update = { update_id: 77, message: { message_id: 6, text: "synthetic replay", chat: { id: 12345 }, from: { id: 54321 } } };

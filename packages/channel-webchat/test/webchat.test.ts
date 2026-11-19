@@ -9911,8 +9911,11 @@ describe("WebChatChannel - resident notifications API", () => {
       authority: "display_only",
     } as const;
     const general = { ...savedResult, id: "audit-fixture", kind: "audit_warning" } as const;
+    const telegramDelivery = { status: "available", unknown_count: 1,
+      recent_unknown: [{ delivery_digest: "a".repeat(64), updated_at_ms: 12347, raw_target: "synthetic-private-target" }] } as const;
     let ownerReads = 0;
     let generalReads = 0;
+    let telegramReads = 0;
     const ctx = await setup({
       owner_token: OWNER_TOKEN,
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
@@ -9920,6 +9923,10 @@ describe("WebChatChannel - resident notifications API", () => {
       notifications: {
         list: async () => { generalReads += 1; return [general, savedResult]; },
         listOwnerSavedResults: async () => { ownerReads += 1; return ownerReads === 1 ? [general, savedResult] : []; },
+        telegramDelivery: () => {
+          if (++telegramReads > 1) throw new Error("synthetic-private-store-path");
+          return telegramDelivery;
+        },
       },
     });
     await ctx.ch.start(async () => {});
@@ -9937,16 +9944,24 @@ describe("WebChatChannel - resident notifications API", () => {
         { category: "audit_integrity_issue", severity: "info", occurred_at_ms: 12346 },
       ]);
       expect(ownerReads).toBe(0);
+      expect(telegramReads).toBe(0);
 
       const owner = await read(OWNER_TOKEN);
       expect(owner.status).toBe(200);
       expect(owner.headers.get("cache-control")).toBe("no-store");
-      expect(JSON.parse(owner.text)).toEqual({ notifications: [savedResult], scope: "owner" });
-      expect(JSON.parse((await read(OWNER_TOKEN)).text)).toEqual({ notifications: [], scope: "owner" });
+      expect(JSON.parse(owner.text)).toEqual({ notifications: [savedResult], scope: "owner", telegram_delivery: {
+        status: "available", unknown_count: 1, recent_unknown: [{ delivery_digest: "a".repeat(64), updated_at_ms: 12347 }],
+      } });
+      const unavailable = await read(OWNER_TOKEN);
+      expect(JSON.parse(unavailable.text)).toEqual({ notifications: [], scope: "owner", telegram_delivery: {
+        status: "unavailable", unknown_count: null, recent_unknown: [],
+      } });
+      expect(unavailable.text).not.toContain("synthetic-private-store-path");
       expect((await read(OWNER_TOKEN)).status).toBe(429);
       expect(generalReads).toBe(2);
       expect(JSON.parse((await read(TOKEN)).text)).toEqual({ notifications: [general] });
       expect(ownerReads).toBe(2);
+      expect(telegramReads).toBe(2);
     } finally {
       await ctx.teardown();
     }
@@ -9955,9 +9970,12 @@ describe("WebChatChannel - resident notifications API", () => {
   it("clears the Owner notification credential before use and ignores a superseded response", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("let notificationLoadGeneration");
     const end = CONTROL_CENTER_SCRIPT.indexOf("function clearGoalPurposeRepairHandoff", start);
+    const telegramStart = CONTROL_CENTER_SCRIPT.indexOf("function renderTelegramDeliveryNotification(");
+    const telegramEnd = CONTROL_CENTER_SCRIPT.indexOf("function renderNotifications(", telegramStart);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(renderControlCenterHtml()).toContain('id="owner-notifications-token" type="password"');
+    expect(telegramEnd).toBeGreaterThan(telegramStart);
     const owner = { value: OWNER_TOKEN };
     const inbound = { value: TOKEN };
     const state = { notificationsToken: "prior-inbound-token" };
@@ -9967,20 +9985,38 @@ describe("WebChatChannel - resident notifications API", () => {
     const rendered: unknown[] = [];
     const credentialAtFetch: string[] = [];
     const requests: Array<{ path: string; token: string; cache: string }> = [];
-    const notice = { notifications: [{ kind: "owner_saved_result_ready" }], scope: "owner" };
+    const deliveryDigest = "abc012".repeat(10) + "d345";
+    const notice = { notifications: [{ kind: "owner_saved_result_ready" }], scope: "owner", telegram_delivery: {
+      status: "available", unknown_count: 21, recent_unknown: [{ delivery_digest: deliveryDigest, updated_at_ms: 12347 }],
+    } };
+    const telegramSection = { hidden: true };
+    const telegramStatus = { textContent: "" };
+    const telegramRows: Array<{ textContent: string }> = [];
+    const telegramList = { hidden: true, replaceChildren: () => { telegramRows.length = 0; },
+      appendChild: (row: { textContent: string }) => telegramRows.push(row) };
+    const nodes = new Map<string, unknown>([["owner-notifications-token", owner], ["notifications-token", inbound],
+      ["telegram-delivery-notification", telegramSection], ["telegram-delivery-notification-list", telegramList]]);
     let finishOwnerRead!: (result: unknown) => void;
     const ownerResponse = new Promise(resolve => { finishOwnerRead = resolve; });
     let ownerReads = 0;
-    const load = new Script(`${CONTROL_CENTER_SCRIPT.slice(start, end)}\nloadNotifications`).runInNewContext({
+    const load = new Script(`${CONTROL_CENTER_SCRIPT.slice(telegramStart, telegramEnd)}\n${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      function renderNotifications(body) { renderTelegramDeliveryNotification(body); noteRendered(body); }
+      loadNotifications
+    `).runInNewContext({
       state,
-      byId: (id: string) => id === "owner-notifications-token" ? owner : inbound,
+      byId: (id: string) => nodes.get(id) ?? {},
       sessionStorage: {
         getItem: (key: string) => stored.get(key) ?? null,
         setItem: (key: string, value: string) => { writes.push([key, value]); stored.set(key, value); },
         removeItem: (key: string) => { stored.delete(key); },
       },
-      renderNotifications: (body: unknown) => { rendered.push(body); },
-      setHtml: () => {}, setText: () => {}, escapeHtml: (value: string) => value,
+      noteRendered: (body: unknown) => { rendered.push(body); },
+      setHtml: () => {}, setText: (id: string, value: string) => {
+        if (id === "telegram-delivery-notification-status") telegramStatus.textContent = value;
+      },
+      escapeHtml: (value: string) => value,
+      document: { createElement: () => ({ textContent: "" }) },
+      formatDate: (value: number) => new Date(value).toISOString(),
       fetchJson: (path: string, token: string, options: RequestInit) => {
         credentialAtFetch.push(owner.value);
         requests.push({ path, token, cache: options.cache ?? "" });
@@ -10003,6 +10039,8 @@ describe("WebChatChannel - resident notifications API", () => {
     ]);
     expect(writes).toEqual([[storageKey, TOKEN]]);
     expect(rendered).toEqual([{ notifications: [] }]);
+    expect(telegramSection.hidden).toBe(true);
+    expect(telegramRows).toEqual([]);
 
     inbound.value = OWNER_TOKEN;
     await load();
@@ -10010,6 +10048,10 @@ describe("WebChatChannel - resident notifications API", () => {
     expect(state.notificationsToken).toBe(TOKEN);
     expect(stored.get(storageKey)).toBe(TOKEN);
     expect(rendered.at(-1)).toEqual(notice);
+    expect(telegramSection.hidden).toBe(false);
+    expect(telegramStatus.textContent).toContain("配信結果不明 21 件（直近 1 件を表示）");
+    expect(telegramStatus.textContent).toContain("自動再送は行いません");
+    expect(telegramRows.map(row => row.textContent)).toEqual(["1970-01-01T00:00:12.347Z　照会 " + deliveryDigest.slice(0, 12)]);
 
     inbound.value = OWNER_TOKEN;
     state.notificationsToken = OWNER_TOKEN;
@@ -10021,6 +10063,9 @@ describe("WebChatChannel - resident notifications API", () => {
 
     inbound.value = "unsupported-token-fixture";
     await load();
+    expect(telegramSection.hidden).toBe(true);
+    expect(telegramStatus.textContent).toBe("");
+    expect(telegramRows).toEqual([]);
     expect(stored.has(storageKey)).toBe(false);
     expect(writes).toEqual([[storageKey, TOKEN]]);
   });

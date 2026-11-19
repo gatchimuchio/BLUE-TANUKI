@@ -738,9 +738,14 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="notification-summary" class="badge warn">not loaded</span>
           </div>
           <input id="notifications-token" type="password" autocomplete="off" placeholder="webchat token" />
-          <input id="owner-notifications-token" type="password" autocomplete="off" placeholder="保存結果通知用のowner token（任意）" />
+          <input id="owner-notifications-token" type="password" autocomplete="off" placeholder="所有者向け通知のowner token（任意）" />
           <button id="load-notifications" class="primary">Load</button>
           <div id="notification-list" class="notification-list"></div>
+          <section id="telegram-delivery-notification" class="settings-subsection" aria-labelledby="telegram-delivery-notification-title" hidden>
+            <h3 id="telegram-delivery-notification-title">Telegramの送信結果</h3>
+            <p id="telegram-delivery-notification-status" role="status"></p>
+            <ul id="telegram-delivery-notification-list" hidden></ul>
+          </section>
         </section>
 
         <section class="card" data-screen-group="approvals">

@@ -6,6 +6,7 @@ import {
   splitTelegramText,
   type TelegramFetch,
   type TelegramInboundGrant,
+  type TelegramOutboundDeliveryStore,
   type TelegramUpdateInbox,
 } from "../src/telegram.js";
 
@@ -722,6 +723,66 @@ describe("Telegram outbound stop and acknowledgement", () => {
     expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
     expect(result.external_id).toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Telegram durable outbound delivery", () => {
+  const payload = { channel: "telegram" as const, target: "12345", content: "fixture reply" };
+  const meta = { command_id: "telegram-delivery-fixture", upstream_commit_hash: "a".repeat(64) };
+  const digest = "a".repeat(64);
+
+  it("refuses to dispatch when the delivery intent cannot be stored", async () => {
+    const fetch = vi.fn<TelegramFetch>();
+    const settleDelivery = vi.fn<TelegramOutboundDeliveryStore["settleDelivery"]>();
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, delivery_store: {
+      beginDelivery: () => { throw new Error("private storage error"); },
+      settleDelivery,
+    } });
+
+    expect(await channel.send(payload, meta)).toMatchObject({ delivered: false, delivery_status: "not_delivered",
+      error_code: "delivery_store_unavailable" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(settleDelivery).not.toHaveBeenCalled();
+  });
+
+  it("records the intent before transport and refuses to dispatch a duplicate with changed content", async () => {
+    const beginDelivery = vi.fn<TelegramOutboundDeliveryStore["beginDelivery"]>()
+      .mockReturnValueOnce({ status: "accepted", delivery_digest: digest })
+      .mockReturnValueOnce({ status: "duplicate", delivery_state: "dispatching" })
+      .mockReturnValueOnce({ status: "duplicate", delivery_state: "delivered" });
+    const settleDelivery = vi.fn<TelegramOutboundDeliveryStore["settleDelivery"]>();
+    const response = deferred<Response>();
+    const fetch = vi.fn<TelegramFetch>(() => response.promise);
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, delivery_store: { beginDelivery, settleDelivery } });
+
+    const first = channel.send(payload, meta);
+    expect(beginDelivery).toHaveBeenCalledWith(meta.command_id);
+    expect(beginDelivery.mock.invocationCallOrder[0]!).toBeLessThan(fetch.mock.invocationCallOrder[0]!);
+    expect(await channel.send({ ...payload, content: "changed fixture reply" }, meta)).toMatchObject({
+      delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown",
+    });
+    response.resolve(telegramResult({ message_id: 301 }));
+    expect(await first).toMatchObject({ delivered: true, external_id: "telegram-301" });
+    expect(settleDelivery).toHaveBeenCalledTimes(1);
+    expect(settleDelivery).toHaveBeenCalledWith(digest, "delivered");
+    expect(await channel.send(payload, meta)).toMatchObject({ delivered: false, delivery_status: "not_delivered",
+      error_code: "duplicate_delivery" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an unknown outcome if the native acknowledgement cannot be committed", async () => {
+    const fetch = vi.fn<TelegramFetch>(async () => telegramResult({ message_id: 301 }));
+    const logs: string[] = [];
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, log: line => logs.push(line), delivery_store: {
+      beginDelivery: () => ({ status: "accepted", delivery_digest: digest }),
+      settleDelivery: () => { throw new Error("private storage error"); },
+    } });
+
+    const result = await channel.send(payload, meta);
+    expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+    expect(result.external_id).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(logs).toEqual(["[telegram] durable delivery outcome could not be recorded"]);
   });
 });
 

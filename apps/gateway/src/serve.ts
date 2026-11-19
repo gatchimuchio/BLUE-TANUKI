@@ -5549,6 +5549,8 @@ async function serveWithOwnerLease(
       notifications: {
         list: async () => residentNotificationSnapshot(),
         listOwnerSavedResults: async () => ownerSavedResultNotificationSnapshot(),
+        telegramDelivery: () => telegramUpdateStore?.unknownDeliverySnapshot() ??
+          { status: "unavailable", unknown_count: null, recent_unknown: [] },
       },
       history: {
         replay: async (filter: WebChatHistoryReplayFilter) => completeHistorySnapshot(filter),
@@ -8452,7 +8454,7 @@ async function serveWithOwnerLease(
     constructor_args: [{
       bot_token: telegramBotToken,
       inbound_grants: telegramInboundGrants,
-      ...(telegramUpdateStore ? { inbox: telegramUpdateStore } : {}),
+      ...(telegramUpdateStore ? { inbox: telegramUpdateStore, delivery_store: telegramUpdateStore } : {}),
       poll_interval_ms: parsePositiveInt(process.env.TELEGRAM_POLL_INTERVAL_MS),
       poll_timeout_sec: parsePositiveInt(process.env.TELEGRAM_POLL_TIMEOUT_SEC),
       outbound_stop_signal: () => {
@@ -9343,9 +9345,9 @@ async function serveWithOwnerLease(
       await router.stop();
       await runtimeKernelShadowObserver?.shutdown();
       runtimeKernelShadowObserver = undefined;
-      telegramUpdateStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
+      telegramUpdateStore?.close();
       ownerTaskSubmissionStore.close();
       slackEventStore?.close();
       discordEventStore?.close();

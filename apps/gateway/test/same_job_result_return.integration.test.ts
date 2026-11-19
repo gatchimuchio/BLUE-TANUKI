@@ -863,7 +863,7 @@ require("node:module").syncBuiltinESMExports();
     }
   }, 120_000);
 
-  it.each(["shutdown", "andon"] as const)("closes Telegram reply admission and retains in-flight ambiguity during %s", async (stopMode) => {
+  it.each(["shutdown", "andon", "interrupted"] as const)("closes Telegram reply admission and retains in-flight ambiguity during %s", async (stopMode) => {
     const root = mkdtempSync(join(tmpdir(), "bt-telegram-reply-stop-"));
     const stateRoot = join(root, "state");
     const historyFile = join(root, "history.jsonl");
@@ -874,8 +874,10 @@ require("node:module").syncBuiltinESMExports();
     const shutdownFile = join(root, "request-shutdown");
     const probeFile = join(root, "attempt-late-send");
     const reopenedProbeFile = join(root, "attempt-send-after-clear");
+    const replayFixture = join(root, "synthetic-replay.json");
     const envFile = join(root, "fixture.env");
     const resumeToken = "synthetic-telegram-stop-resume-token";
+    const d4Token = "synthetic-telegram-stop-d4-token";
     const requestText = "合成試験用の青い花について一行で説明してください。";
     const replyText = "合成試験で青い花について回答します。";
     const update = { update_id: 774, message: { message_id: 774, message_thread_id: TELEGRAM_THREAD_ID, text: requestText,
@@ -905,13 +907,15 @@ require("node:module").syncBuiltinESMExports();
       const env = isolatedEnvironment(providerPort, gatewayPort, join(root, "audit"), stateRoot,
         join(root, "memory.jsonl"), historyFile, join(root, "sessions"), capture, JSON.stringify([update]));
       env.WEBCHAT_RESUME_TOKEN = resumeToken;
+      env.BLUE_TANUKI_D4_RUNTIME_ID = "blue_tanuki";
+      env.BLUE_TANUKI_D4_RUNTIME_TOKEN = d4Token;
       env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
       env.BT_F1003_TELEGRAM_HOLD_SEND = "1";
       writeFileSync(envFile, "# 隔離済みの合成試験\n", "utf8");
       writeFileSync(networkPreload, telegramFetchPreload(), "utf8");
       const adapter = pathToFileURL(join(ROOT, "packages/channel-telegram/dist/index.js")).href;
       writeFileSync(observerPreload, `
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { TelegramChannel } from ${JSON.stringify(adapter)};
 createRequire(import.meta.url)(${JSON.stringify(networkPreload)});
@@ -919,6 +923,7 @@ createRequire(import.meta.url)(${JSON.stringify(networkPreload)});
 const stopMode = ${JSON.stringify(stopMode)};
 const probeFile = ${JSON.stringify(probeFile)};
 const reopenedProbeFile = ${JSON.stringify(reopenedProbeFile)};
+const replayFixture = ${JSON.stringify(replayFixture)};
 const lateCommandId = "synthetic-telegram-after-stop-probe";
 const reopenedCommandId = "synthetic-telegram-after-clear-probe";
 const send = TelegramChannel.prototype.send;
@@ -932,6 +937,7 @@ TelegramChannel.prototype.send = async function (payload, meta, context) {
   if (!late && !reopened) {
     observedChannel = this;
     record({ method: "telegramReplyEntered", caller_signal: Boolean(context?.signal) });
+    if (stopMode === "interrupted") writeFileSync(replayFixture, JSON.stringify({ payload, meta }), { flag: "wx" });
   }
   const result = await send.call(this, payload, meta, context);
   record({ method: late ? "telegramLateSendResult" : reopened ? "telegramClearedSendResult" : "telegramReplyResult", delivered: result.delivered,
@@ -948,7 +954,7 @@ if (stopMode === "shutdown") {
     await stop.call(this);
     if (this === observedChannel) await attemptProbe(this, lateCommandId, "合成停止後送信");
   };
-} else {
+} else if (stopMode === "andon") {
   let lateAttempted = false;
   const timer = setInterval(() => {
     if (!observedChannel) return;
@@ -962,6 +968,14 @@ if (stopMode === "shutdown") {
     }
   }, 20);
   timer.unref();
+} else if (process.env.BT_F1003_TELEGRAM_REPLAY_PROBE === "1") {
+  const start = TelegramChannel.prototype.start;
+  TelegramChannel.prototype.start = async function (handler) {
+    await start.call(this, handler);
+    const fixture = JSON.parse(readFileSync(replayFixture, "utf8"));
+    const result = await send.call(this, fixture.payload, fixture.meta);
+    record({ method: "telegramSameDeliveryProbe", delivered: result.delivered, delivery_status: result.delivery_status });
+  };
 }
 `, "utf8");
 
@@ -973,6 +987,10 @@ if (stopMode === "shutdown") {
       expect(providerBodies[0]).toContain(requestText);
       expect(readCaptureEvents(capture)).toContainEqual({ method: "telegramReplyEntered", caller_signal: false });
       expect(readTelegramInboxCursor(stateRoot)).toEqual([{ ...eventIdentity, delivery_state: "dispatching" }]);
+      const issued = readTelegramOutboundDeliveries(stateRoot);
+      expect(issued).toEqual([{ delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        delivery_state: "dispatching", updated_at_ms: expect.any(Number) }]);
+      const deliveryDigest = requiredString(issued[0]?.delivery_digest, "Telegram delivery digest");
 
       if (stopMode === "andon") {
         const changeStop = (action: "activate" | "clear") => fetch(`http://127.0.0.1:${gatewayPort}/approval/emergency-stop`, {
@@ -998,8 +1016,15 @@ if (stopMode === "shutdown") {
         expect(fresh).toMatchObject({ delivered: true, delivery_status: "delivered" });
       }
       const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
-      writeFileSync(shutdownFile, "stop\n", "utf8");
-      expect(await stopped).toEqual([0, null]);
+      if (stopMode === "interrupted") {
+        expect(gateway.child.kill("SIGKILL")).toBe(true);
+        const [code, signal] = await stopped;
+        expect(code !== 0 || signal !== null).toBe(true);
+        expect(readTelegramOutboundDeliveries(stateRoot)).toEqual(issued);
+      } else {
+        writeFileSync(shutdownFile, "stop\n", "utf8");
+        expect(await stopped).toEqual([0, null]);
+      }
       gateway = undefined;
 
       const events = readCaptureEvents(capture);
@@ -1007,26 +1032,65 @@ if (stopMode === "shutdown") {
         { method: "sendMessage", chat_id: TELEGRAM_CHAT_ID, message_thread_id: TELEGRAM_THREAD_ID, text: expect.stringContaining(replyText) },
         ...(stopMode === "andon" ? [{ method: "sendMessage", chat_id: TELEGRAM_CHAT_ID, text: "合成解除後送信" }] : []),
       ]);
-      expect(events.filter(event => event.method === "sendMessageResponseAfterAbort")).toHaveLength(1);
-      expect(events).toContainEqual({ method: "telegramReplyResult", delivered: false,
-        delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
-      expect(events).toContainEqual(expect.objectContaining({ method: "telegramLateSendResult", delivered: false,
-        delivery_status: "not_delivered" }));
+      if (stopMode === "interrupted") {
+        expect(events.some(event => event.method === "sendMessageResponseAfterAbort" || event.method === "telegramReplyResult")).toBe(false);
+      } else {
+        expect(events.filter(event => event.method === "sendMessageResponseAfterAbort")).toHaveLength(1);
+        expect(events).toContainEqual({ method: "telegramReplyResult", delivered: false,
+          delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+        expect(events).toContainEqual(expect.objectContaining({ method: "telegramLateSendResult", delivered: false,
+          delivery_status: "not_delivered" }));
+        expect(readTelegramOutboundDeliveries(stateRoot)).toContainEqual(expect.objectContaining({
+          delivery_digest: deliveryDigest, delivery_state: "outcome_unknown",
+        }));
+      }
       expect(readCaptureText(capture) ?? "").not.toContain(TELEGRAM_TOKEN);
 
-      if (stopMode === "shutdown") {
+      if (stopMode !== "andon") {
         const interrupted = [{ ...eventIdentity, delivery_state: "outcome_unknown" }];
-        expect(readTelegramInboxCursor(stateRoot)).toEqual(interrupted);
+        if (stopMode === "shutdown") expect(readTelegramInboxCursor(stateRoot)).toEqual(interrupted);
         delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
         delete env.BT_F1003_TELEGRAM_HOLD_SEND;
         env.BT_F1003_TELEGRAM_CAPTURE = restartCapture;
-        gateway = spawnGateway(env, networkPreload, envFile);
+        if (stopMode === "interrupted") env.BT_F1003_TELEGRAM_REPLAY_PROBE = "1";
+        gateway = spawnGateway(env, stopMode === "interrupted" ? observerPreload : networkPreload, envFile);
         await waitForHealth(gatewayPort, gateway, 40_000);
         const firstPoll = await waitFor(() => readCaptureEvents(restartCapture)
           .find(event => event.method === "getUpdates") ?? null, gateway, "再起動後のTelegram照会を観測できなかった");
         expect(firstPoll).toMatchObject({ offset: update.update_id + 1, update_ids: [] });
         expect(readTelegramInboxCursor(stateRoot)).toEqual(interrupted);
-        expect(readCaptureEvents(restartCapture).every(event => event.method === "getUpdates")).toBe(true);
+        if (stopMode === "interrupted") {
+          const duplicate = await waitFor(() => readCaptureEvents(restartCapture)
+            .find(event => event.method === "telegramSameDeliveryProbe") ?? null, gateway, "同じ配送の再投入結果が観測されなかった");
+          expect(duplicate).toEqual({ method: "telegramSameDeliveryProbe", delivered: false, delivery_status: "unknown" });
+        }
+        const restored = readTelegramOutboundDeliveries(stateRoot);
+        expect(restored).toEqual([{ delivery_digest: deliveryDigest, delivery_state: "outcome_unknown", updated_at_ms: expect.any(Number) }]);
+        const inboxFile = join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite");
+        const persisted = readFileSync(inboxFile);
+        const sensitive = [TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, requestText, replyText, `telegram-${update.update_id}`];
+        for (const raw of sensitive) expect(persisted.includes(Buffer.from(raw))).toBe(false);
+
+        const notifications = async (token?: string) => fetch(`http://127.0.0.1:${gatewayPort}/notifications`, {
+          headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(8_000),
+        });
+        expect((await notifications()).status).toBe(401);
+        for (const token of [WEBCHAT_TOKEN, d4Token]) {
+          const response = await notifications(token);
+          expect(response.status).toBe(200);
+          expect(await response.json()).not.toHaveProperty("telegram_delivery");
+        }
+        const owner = await notifications(OWNER_TOKEN);
+        expect(owner.status).toBe(200);
+        expect(owner.headers.get("cache-control")).toBe("no-store");
+        const ownerView = await owner.json() as { scope?: string; telegram_delivery?: unknown };
+        expect(ownerView.scope).toBe("owner");
+        expect(ownerView.telegram_delivery).toEqual({ status: "available", unknown_count: 1,
+          recent_unknown: [{ delivery_digest: deliveryDigest, updated_at_ms: restored[0]?.updated_at_ms }] });
+        for (const raw of sensitive) expect(JSON.stringify(ownerView).includes(raw)).toBe(false);
+        expect(readCaptureEvents(restartCapture).every(event =>
+          event.method === "getUpdates" || event.method === "telegramSameDeliveryProbe")).toBe(true);
+        expect(readTelegramOutboundDeliveries(stateRoot)).toEqual(restored);
         expect(providerBodies).toHaveLength(1);
       }
     } finally {
@@ -2411,11 +2475,19 @@ function operationPlanCandidate(requestId: string, fileRoot: string): OperationP
 }
 
 function readTelegramInboxCursor(stateRoot: string) {
+  return readTelegramDatabaseRows(stateRoot, "SELECT update_id, payload_digest, delivery_state FROM telegram_update_cursor");
+}
+
+function readTelegramOutboundDeliveries(stateRoot: string) {
+  return readTelegramDatabaseRows(stateRoot, "SELECT delivery_digest, delivery_state, updated_at_ms FROM telegram_outbound_delivery");
+}
+
+function readTelegramDatabaseRows(stateRoot: string, query: string) {
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
   const database = new DatabaseSync(join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite"),
     { readOnly: true });
   try {
-    return database.prepare("SELECT update_id, payload_digest, delivery_state FROM telegram_update_cursor").all();
+    return database.prepare(query).all();
   } finally {
     database.close();
   }
