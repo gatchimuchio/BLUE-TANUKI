@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayWebChatOwnerTaskStore } from "../src/webchat_owner_task_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -218,6 +218,91 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
         .toEqual({ status: "accepted", request_id: ownerRequest });
     } finally {
       store.close();
+    }
+  });
+});
+
+describe("GatewayWebChatOwnerTaskStore owner receipt recovery", () => {
+  it("projects only the newest 20 owner receipts and accepts only an exact owner request locator", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-task-receipt-"));
+    roots.push(root);
+    const store = new GatewayWebChatOwnerTaskStore(join(root, "inbox.sqlite"));
+    const clock = vi.spyOn(Date, "now");
+    const payloadDigest = sha256("private work");
+    const owners = Array.from({ length: 22 }, (_, index) => ({
+      submission_id: randomUUID(),
+      request_id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      created_at_ms: index === 21 ? 1_000 : 2_000,
+    }));
+    try {
+      expect(store.listRecentOwnerTaskSubmissions()).toEqual([]);
+      for (const owner of [...owners].reverse()) {
+        clock.mockReturnValue(owner.created_at_ms);
+        expect(store.claim({ ...owner, payload_digest: payloadDigest }).status).toBe("accepted");
+        store.markHandlerReturned(owner.request_id);
+      }
+      clock.mockReturnValue(3_000);
+      const rejected = { submission_id: randomUUID(), request_id: randomUUID(), payload_digest: payloadDigest };
+      expect(store.claim(rejected).status).toBe("accepted");
+      store.markRejected(rejected.request_id);
+      const d4 = { ...rejected, submission_id: randomUUID(), request_id: randomUUID(),
+        scope_digest: sha256("separate owner session"), dispatch_available: true };
+      expect(store.claimD4RuntimeIntent(d4).status).toBe("accepted");
+      const webhook = { request_id: randomUUID(), source_digest: sha256("webhook"), event_digest: sha256("event"),
+        payload_digest: payloadDigest, sequence: 1, expires_at_ms: 4_000 };
+      expect(store.claimWebhookEvent(webhook).status).toBe("accepted");
+
+      const expected = owners.slice(1, 21).reverse().map(({ request_id, created_at_ms }) => ({
+        request_id, created_at_ms, state: "handler_returned",
+      }));
+      expect(store.listRecentOwnerTaskSubmissions()).toEqual(expected);
+      expect(store.recentOwnerTaskRequestIdsForNotification()).toEqual(expected.map(item => item.request_id));
+      expect(store.getOwnerTaskStatusByRequestId(rejected)).toEqual({ request_id: rejected.request_id, state: "rejected" });
+      expect(store.getOwnerTaskStatusByRequestId(d4)).toBeNull();
+      expect(store.getOwnerTaskStatusByRequestId(webhook)).toBeNull();
+      expect(store.getOwnerTaskStatusByRequestId({ request_id: rejected.submission_id })).toBeNull();
+      expect(() => store.getOwnerTaskStatusByRequestId({ request_id: "" })).toThrow("webchat_owner_task_request_id_invalid");
+      expect(() => store.getOwnerTaskStatusByRequestId({ request_id: `${rejected.request_id}\n` }))
+        .toThrow("webchat_owner_task_request_id_invalid");
+    } finally {
+      clock.mockRestore();
+      store.close();
+    }
+  });
+
+  it("reopens an existing owner receipt without recovering its submission identifier or replaying the interrupted handler", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-task-receipt-"));
+    roots.push(root);
+    const filepath = join(root, "inbox.sqlite");
+    const owner = { submission_id: randomUUID(), request_id: randomUUID(), payload_digest: sha256("private work") };
+    const before = new GatewayWebChatOwnerTaskStore(filepath);
+    let createdAtMs: number | undefined;
+    try {
+      expect(before.claim(owner).status).toBe("accepted");
+      before.recordOwnerTaskSubmissionResult({ request_id: owner.request_id, content: "bounded reply" });
+      expect(before.getOwnerTaskSubmissionResult(owner)).toMatchObject({ status: "available", content: "bounded reply" });
+      createdAtMs = before.listRecentOwnerTaskSubmissions()[0]?.created_at_ms;
+      expect(createdAtMs).toBeTypeOf("number");
+    } finally {
+      before.close();
+    }
+
+    const after = new GatewayWebChatOwnerTaskStore(filepath);
+    try {
+      expect(after.listRecentOwnerTaskSubmissions()).toEqual([
+        { request_id: owner.request_id, state: "outcome_unknown", created_at_ms: createdAtMs },
+      ]);
+      expect(after.getOwnerTaskStatusByRequestId({ request_id: owner.request_id })).toEqual({
+        request_id: owner.request_id, state: "outcome_unknown",
+      });
+      expect(after.getOwnerTaskSubmissionResult({ request_id: owner.request_id })).toMatchObject({
+        status: "unavailable", reason_code: "not_retained",
+      });
+      expect(after.claim({ ...owner, request_id: randomUUID() })).toEqual({
+        status: "duplicate", request_id: owner.request_id, state: "outcome_unknown",
+      });
+    } finally {
+      after.close();
     }
   });
 });

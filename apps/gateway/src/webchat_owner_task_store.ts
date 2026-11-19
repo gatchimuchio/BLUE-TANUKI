@@ -12,6 +12,7 @@ import type {
   WebChatOwnerTaskSubmissionState,
   WebChatOwnerTaskSubmissionStatus,
   WebChatOwnerTaskSubmissionStore,
+  WebChatRecentOwnerTaskSubmission,
   WebChatWebhookEventClaim,
   WebChatWebhookEventStore,
 } from "@blue-tanuki/channel-webchat";
@@ -28,17 +29,25 @@ const OWNER_TASK_RESULT_TTL_MS = 15 * 60 * 1000;
 const OWNER_TASK_RESULT_MAX_ENTRIES = 512;
 const OWNER_TASK_RESULT_MAX_BYTES = 64 * 1024;
 const OWNER_TASK_RESULT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
-const OWNER_NOTIFICATION_REQUEST_LIMIT = 20;
+const OWNER_RECENT_SUBMISSION_LIMIT = 20;
+const SUBMISSION_STATES = ["dispatching", "handler_returned", "outcome_unknown", "rejected"] as const;
 const RESULT_CACHE_CLEANUP_INTERVAL_MS = 10_000;
 const D4_RUNTIME_RESULT_TTL_MS = 15 * 60 * 1000;
 const D4_RUNTIME_RESULT_MAX_ENTRIES = 512;
 const D4_RUNTIME_RESULT_MAX_BYTES = 64 * 1024;
 const D4_RUNTIME_RESULT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 
-interface SubmissionRow {
-  readonly payload_digest: string;
+interface SubmissionStatusRow {
   readonly request_id: string;
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
+}
+
+interface SubmissionRow extends SubmissionStatusRow {
+  readonly payload_digest: string;
+}
+
+interface RecentOwnerTaskSubmissionRow extends SubmissionStatusRow {
+  readonly created_at_ms: number;
 }
 
 interface WebhookEventRow {
@@ -494,18 +503,31 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     return this.getStatusInScope(OWNER_TASK_SCOPE, eventDigest);
   }
 
-  /** 結果通知の照合候補。所有者の受付だけを返し、結果本文や申請IDは読み込まない。 */
-  recentOwnerTaskRequestIdsForNotification(): string[] {
+  getOwnerTaskStatusByRequestId(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionStatus | null {
     this.assertOpen();
-    const rows = this.db.prepare(`SELECT request_id FROM webchat_owner_task_inbox
+    if (!isReceiptRequestId(input.request_id)) throw new Error("webchat_owner_task_request_id_invalid");
+    const row = this.db.prepare(`SELECT request_id,delivery_state FROM webchat_owner_task_inbox
+      WHERE scope_digest=? AND request_id=?`).get(OWNER_TASK_SCOPE, input.request_id) as SubmissionStatusRow | undefined;
+    return row ? projectReceiptStatus(row) : null;
+  }
+
+  /** 所有者の直近受付。申請ID、指示本文、結果本文は取得しない。 */
+  listRecentOwnerTaskSubmissions(): WebChatRecentOwnerTaskSubmission[] {
+    this.assertOpen();
+    const rows = this.db.prepare(`SELECT request_id,delivery_state,created_at_ms FROM webchat_owner_task_inbox
       WHERE scope_digest=? AND delivery_state<>'rejected'
-      ORDER BY created_at_ms DESC, request_id DESC LIMIT ?`).all(OWNER_TASK_SCOPE, OWNER_NOTIFICATION_REQUEST_LIMIT);
+      ORDER BY created_at_ms DESC, request_id DESC LIMIT ?`).all(OWNER_TASK_SCOPE, OWNER_RECENT_SUBMISSION_LIMIT) as unknown as
+      RecentOwnerTaskSubmissionRow[];
     return rows.map(row => {
-      if (typeof row.request_id !== "string" || !REQUEST_ID.test(row.request_id)) {
-        throw new Error("webchat_owner_task_notification_request_id_invalid");
+      if (!Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0) {
+        throw new Error("webchat_owner_task_receipt_timestamp_invalid");
       }
-      return row.request_id;
+      return { ...projectReceiptStatus(row), created_at_ms: row.created_at_ms };
     });
+  }
+
+  recentOwnerTaskRequestIdsForNotification(): string[] {
+    return this.listRecentOwnerTaskSubmissions().map(row => row.request_id);
   }
 
   getOwnerTaskSubmissionResult(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionResult {
@@ -668,9 +690,20 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
 
 function validateSubmissionRow(row: SubmissionRow): void {
   if (!DIGEST.test(row.payload_digest) || !REQUEST_ID.test(row.request_id) ||
-      !["dispatching", "handler_returned", "outcome_unknown", "rejected"].includes(row.delivery_state)) {
+      !SUBMISSION_STATES.includes(row.delivery_state)) {
     throw new Error("webchat_owner_task_store_row_invalid");
   }
+}
+
+function isReceiptRequestId(value: unknown): value is string {
+  return typeof value === "string" && value.length === 36 && REQUEST_ID.test(value);
+}
+
+function projectReceiptStatus(row: SubmissionStatusRow): WebChatOwnerTaskSubmissionStatus {
+  if (!isReceiptRequestId(row.request_id) || !SUBMISSION_STATES.includes(row.delivery_state)) {
+    throw new Error("webchat_owner_task_store_row_invalid");
+  }
+  return { request_id: row.request_id, state: row.delivery_state };
 }
 
 function validateWebhookEventIdentity(input: { source_digest: string; event_digest: string; request_id: string }): void {

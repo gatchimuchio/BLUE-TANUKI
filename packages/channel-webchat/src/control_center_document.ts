@@ -213,6 +213,12 @@ ${CONTROL_CENTER_STYLE}    </style>
               <span id="owner-task-status" class="badge warn" aria-live="polite">未送信</span>
             </div>
             <p class="muted">選択した依頼の承認待ち・返信／期限待機の取り消し、または実行中の処理の中止を要求します。要求後は状態を再照会してください。</p>
+            <div class="row">
+              <button id="load-owner-task-recent" type="button">最近の依頼を読み込む</button>
+              <select id="owner-task-recent-request-id" aria-label="最近の依頼を選択" hidden></select>
+              <button id="check-owner-task-recent-status" type="button" hidden disabled>選択した受付を確認</button>
+              <span id="owner-task-recent-status" role="status" class="muted"></span>
+            </div>
             <p id="owner-task-result-status" class="muted" aria-live="polite" hidden></p>
             <pre id="owner-task-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
             <p class="muted">会話の回答はGatewayの揮発メモリに最大15分だけ保持され、再起動・期限切れ・容量超過時は取得できません。回答本文はSQLite、M、CompleteHistoryへ保存しません。表示は実行権限・目標達成・外部処理停止の証拠ではありません。</p>

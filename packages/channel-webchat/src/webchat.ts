@@ -169,12 +169,18 @@ const D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND: Record<
   audit_warning: "audit_integrity_issue",
 };
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
+const OWNER_TASK_RECEIPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAX_RECENT_OWNER_TASK_SUBMISSIONS = 20;
 const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
 const MAX_MULTIMODAL_TASK_JSON_BYTES = Math.ceil((TRANSIENT_IMAGE_MAX_BYTES + TRANSIENT_AUDIO_MAX_BYTES) / 3) * 4 + 256 * 1024;
 const MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES = Math.ceil(TRANSIENT_AUDIO_MAX_BYTES / 3) * 4 + 256 * 1024;
 const CONTROL_CENTER_LAUNCH_HANDOFF_TTL_MS = 30_000;
 const WEBSOCKET_SEND_CALLBACK_TIMEOUT_MS = 5_000;
 const CONTROL_CENTER_LAUNCH_HANDOFF_CAP = 32;
+
+function isOwnerTaskReceiptId(value: unknown): value is string {
+  return typeof value === "string" && value.length === 36 && OWNER_TASK_RECEIPT_ID.test(value);
+}
 
 interface ControlCenterLaunchHandoff {
   readonly expires_at: number;
@@ -943,7 +949,9 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
- *   POST /owner/task-submission-result body:{submission_id,step_index,result_ref} auth:local same-origin owner bearer, no-store
+ *   POST /owner/task-submissions/recent body:{} auth:local same-origin owner bearer, no-store
+ *   POST /owner/task-submission-status body:{request_id} auth:local same-origin owner bearer, no-store
+ *   POST /owner/task-submission-result body:{submission_id|request_id,step_index,result_ref} auth:local same-origin owner bearer, no-store
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
@@ -1533,6 +1541,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       await this.handleOwnerTaskSubmissionSavedResult(req, res, url);
       return;
     }
+    if (url.pathname === "/owner/task-submissions/recent") {
+      await this.handleRecentOwnerTaskSubmissions(req, res, url);
+      return;
+    }
 
     if (url.pathname === "/runtime/snapshot") {
       await this.handleRuntimeSnapshot(req, res);
@@ -1657,6 +1669,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-content-type-options", "nosniff");
     }
+    if (url.pathname === "/owner/task-submission-status") {
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+    }
     if (req.method !== "POST") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
@@ -1733,20 +1749,35 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const submissionStore = this.opts.owner_task_submission_store;
-      if (!submissionStore?.getStatus) {
+      const byRequestId = Object.hasOwn(body ?? {}, "request_id");
+      if (byRequestId && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+        return;
+      }
+      if (byRequestId && String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "application_json_required" }));
+        return;
+      }
+      if (!submissionStore || (byRequestId ? !submissionStore.getOwnerTaskStatusByRequestId : !submissionStore.getStatus)) {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "owner_task_submission_status_unavailable" }));
         return;
       }
-      const submissionId = typeof body?.submission_id === "string" ? body.submission_id : "";
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId)) {
+      const receiptId = byRequestId ? body?.request_id : body?.submission_id;
+      if (!isOwnerTaskReceiptId(receiptId) ||
+          (byRequestId && (!body || !hasExactKeys(body, ["request_id"])))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ error: "invalid_owner_task_submission_id" }));
+        res.end(JSON.stringify({ error: byRequestId ? "invalid_owner_task_request_id" : "invalid_owner_task_submission_id" }));
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
       try {
-        const status = submissionStore.getStatus({ submission_id: submissionId });
+        const status = byRequestId
+          ? submissionStore.getOwnerTaskStatusByRequestId?.({ request_id: receiptId })
+          : submissionStore.getStatus?.({ submission_id: receiptId });
+        if (byRequestId && status && status.request_id !== receiptId) throw new Error("owner_task_request_id_mismatch");
         const taskOutcome = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionOutcome
           ? normalizeTaskOutcome(await this.opts.onOwnerTaskSubmissionOutcome({ request_id: status.request_id }).catch(() => ({
               status: "unknown" as const,
@@ -4637,6 +4668,55 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
   }
 
+  private async handleRecentOwnerTaskSubmissions(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    const send = (status: number, body: Record<string, unknown>) => {
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    };
+    if (req.method !== "POST") {
+      res.setHeader("allow", "POST");
+      return send(405, { error: "method_not_allowed" });
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      return send(403, { error: "same_origin_local_control_center_required" });
+    }
+    if (!this.checkAuth(req, "owner")) return send(401, { error: "unauthorized" });
+    const store = this.opts.owner_task_submission_store;
+    const unavailable = { error: "recent_owner_task_submissions_unavailable" };
+    if (!store?.listRecentOwnerTaskSubmissions) return send(503, unavailable);
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      return send(415, { error: "application_json_required" });
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, OWNER_TOKEN_ACTOR, res)) return;
+    try {
+      const body = await readJson(req, 256, true);
+      if (!body || !hasExactKeys(body, [])) return send(400, { error: "invalid_recent_owner_task_submissions_request" });
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === "body_too_large";
+      return send(tooLarge ? 413 : 400, { error: tooLarge ? "request_body_too_large" : "invalid_recent_owner_task_submissions_request" });
+    }
+    try {
+      const rows = store.listRecentOwnerTaskSubmissions();
+      if (!Array.isArray(rows) || rows.length > MAX_RECENT_OWNER_TASK_SUBMISSIONS) return send(503, unavailable);
+      const seen = new Set<string>();
+      const submissions = rows.map(({ request_id, state, created_at_ms }) => {
+        if (!isOwnerTaskReceiptId(request_id) || seen.has(request_id.toLowerCase()) ||
+            (state !== "dispatching" && state !== "handler_returned" && state !== "outcome_unknown") ||
+            !Number.isSafeInteger(created_at_ms) || created_at_ms < 0 || created_at_ms > 8_640_000_000_000_000) {
+          throw new Error("recent_owner_task_submissions_invalid");
+        }
+        seen.add(request_id.toLowerCase());
+        return { request_id, state, created_at_ms };
+      });
+      return send(200, { submissions, used_for_authority: false, may_execute: false });
+    } catch {
+      return send(503, unavailable);
+    }
+  }
+
   private async handleOwnerTaskSubmissionSavedResult(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "no-store");
@@ -4655,7 +4735,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const store = this.opts.owner_task_submission_store;
     const readResult = this.opts.onOwnerTaskSubmissionSavedResult;
     const unavailable = { error: "owner_task_saved_result_unavailable" };
-    if (!this.opts.owner_token || !store?.getStatus || !readResult) return send(404, unavailable);
+    if (!this.opts.owner_token || !store || (!store.getStatus && !store.getOwnerTaskStatusByRequestId) || !readResult) {
+      return send(404, unavailable);
+    }
     if (!this.checkAuth(req, "owner")) return send(401, { error: "unauthorized" });
     if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
       return send(415, { error: "application_json_required" });
@@ -4669,19 +4751,21 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const tooLarge = error instanceof Error && error.message === "body_too_large";
       return send(tooLarge ? 413 : 400, { error: tooLarge ? "request_body_too_large" : "invalid_owner_task_saved_result" });
     }
-    if (!body || !hasExactKeys(body, ["submission_id", "step_index", "result_ref"])) {
+    const byRequestId = Object.hasOwn(body ?? {}, "request_id");
+    const locator = byRequestId ? "request_id" : "submission_id";
+    if (!body || !hasExactKeys(body, [locator, "step_index", "result_ref"])) {
       return send(400, { error: "invalid_owner_task_saved_result" });
     }
-    const { submission_id, step_index, result_ref } = body;
-    if (typeof submission_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submission_id) ||
+    const { [locator]: receiptId, step_index, result_ref } = body;
+    if (!isOwnerTaskReceiptId(receiptId) ||
         typeof step_index !== "number" || !Number.isSafeInteger(step_index) || step_index < 1 || step_index > MAX_OWNER_TASK_PLAN_STEPS ||
         typeof result_ref !== "string" || !/^[a-f0-9]{64}$/u.test(result_ref)) {
       return send(400, { error: "invalid_owner_task_saved_result" });
     }
     let content: string | null;
     try {
-      const status = store.getStatus({ submission_id });
-      if (!status || status.state === "rejected") return send(404, unavailable);
+      const status = byRequestId ? store.getOwnerTaskStatusByRequestId?.({ request_id: receiptId }) : store.getStatus?.({ submission_id: receiptId });
+      if (!status || status.state === "rejected" || (byRequestId && status.request_id !== receiptId)) return send(404, unavailable);
       content = await readResult({ request_id: status.request_id, step_index, result_ref });
     } catch {
       return send(404, unavailable);

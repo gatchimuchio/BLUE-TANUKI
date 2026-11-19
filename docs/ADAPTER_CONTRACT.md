@@ -104,6 +104,12 @@ Control Centerの通知欄から所有者資格で `GET /notifications` を照�
 
 応答は `Cache-Control: no-store` とし、通知に受付ID・結果参照・原文・本文を含めない。本文の照会は従来どおり、仕事受付を指定する所有者専用の経路で行う。通常WebChatとD4 Runtimeの資格にはこの通知を返さない。
 
+### 最近の依頼を開き直す
+
+Control Centerの仕事画面から `POST /owner/task-submissions/recent` に `{}` を送ると、所有者の受付を新しい順に最大20件取得する。各項目はGateway受付ID `request_id`、受付状態 `state`、受付時刻 `created_at_ms` のみ。応答は `no-store`、利用条件はローカルの同一オリジンと所有者専用認証。
+
+選択した `request_id` は、同じローカル認証の `POST /owner/task-submission-status` と `POST /owner/task-submission-result` で `submission_id` に代えて使える。保存結果には、既存の `step_index` と `result_ref` の照合と、J・実行結果・M記憶の検証が必要。画面は一覧をページ内で保持する。送信と取消は既存の依頼IDの経路に従う。
+
 ## 12. WebChat Webhookの永続受付
 
 専用の `WEBHOOK_TOKEN` で `POST /webhook` を呼び出す。永続受付を使う送信元は、既存の `content`・`text`・`event` の入力に `source`、`event_id`、`sequence`、`expires_at_ms` を加える。`source` と `event_id` はASCII英数字で始まる識別子で、続く文字に `.`・`_`・`:`・`-` も使える。上限はそれぞれ64文字と96文字。`sequence` は送信元ごとに増加する正の安全な整数、`expires_at_ms` はUTCのUnixミリ秒とする。新規受付の期限は受付から24時間以内とする。

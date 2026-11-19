@@ -345,7 +345,7 @@ describe("document organization ordinary entries", () => {
 });
 
 describe("delegated goal purpose owner review", () => {
-  it("adopts a first-use delegated purpose through exact L3 review and records a verified local result after restart", async () => {
+  it("adopts a first-use delegated purpose through exact L3 review and rediscovers the verified local result after restart", async () => {
     const gatewayPort = await reserveLoopbackPort();
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-first-delegated-purpose-"));
     const auditDir = join(tempRoot, "audit");
@@ -446,7 +446,7 @@ describe("delegated goal purpose owner review", () => {
         `Date.now = () => now() - (existsSync(${JSON.stringify(pastClock)}) ? 11 * 60_000 : 0);`,
       ].join("\n"));
       gateway = spawnCaptured(["--require", clockPreload, gatewayEntry, "--serve"], env);
-      await waitForHealth(gatewayPort, gateway);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       expect(await loadGoals()).toEqual([]);
       expect((await request(adoptionRoute, token, "POST", { purpose_text: purpose })).status).toBe(401);
       expect((await request(adoptionRoute, ownerToken, "POST", { purpose_text: "" })).status).toBe(400);
@@ -502,7 +502,7 @@ describe("delegated goal purpose owner review", () => {
       await stopChild(gateway.child);
       const firstProcessOutput = [...gateway.stdout, ...gateway.stderr];
       gateway = spawnGateway(env);
-      await waitForHealth(gatewayPort, gateway);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       expect(await loadGoals()).toEqual(goals);
       const goalRef = goals[0]!.goal_ref;
       const ticketResponse = await request("/ws-ticket", token, "POST", { user });
@@ -668,26 +668,116 @@ describe("delegated goal purpose owner review", () => {
       } finally {
         renameSync(hiddenMemory, currentMemory);
       }
+      // 別の受付スコープを同じ永続台帳に置き、所有者の読取経路から漏れないことを確かめる。
+      const foreignReceipt = {
+        requestId: "01a119c0-5b35-4491-ae00-000000000809",
+        scopeDigest: createHash("sha256").update("synthetic-foreign-d4-scope").digest("hex"),
+        eventDigest: createHash("sha256").update("synthetic-foreign-d4-event").digest("hex"),
+        payloadDigest: createHash("sha256").update("synthetic-foreign-d4-payload").digest("hex"),
+      };
+      const receiptDb = new DatabaseSync(join(stateRoot, "private-state", "webchat-owner-task-inbox", "owner-task-inbox.sqlite"));
+      try {
+        const now = Date.now();
+        receiptDb.prepare(`INSERT INTO webchat_owner_task_inbox
+          (scope_digest,event_digest,payload_digest,request_id,delivery_state,created_at_ms,updated_at_ms,d4_decision_state)
+          VALUES (?,?,?,?,'handler_returned',?,?,'started')`).run(
+          foreignReceipt.scopeDigest, foreignReceipt.eventDigest, foreignReceipt.payloadDigest, foreignReceipt.requestId, now, now);
+      } finally {
+        receiptDb.close();
+      }
       const changedFile = "保存後に入れ替えた合成データ\n";
       writeFileSync(join(fileRoot, relativePath), changedFile, "utf8");
       gateway = spawnGateway(env);
-      await waitForHealth(gatewayPort, gateway);
-      const restoredWorkStatus = await readWorkStatus();
-      expect(restoredWorkStatus.status).toBe(200);
-      expect(await restoredWorkStatus.json()).toMatchObject({ request_id: submission.request_id,
-        plan_steps: { steps: [{ index: 1, result_ref: resultRef }] } });
-      const restoredNotifications = await loadNotifications();
-      expect(restoredNotifications.readyNotices).toMatchObject([savedResultNotice]);
-      for (const value of privateNoticeValues) expect(restoredNotifications.body).not.toContain(value);
-      const restoredPrivateResult = await readSavedResult(resultRef);
+      await waitForHealth(gatewayPort, gateway, 60_000);
+      const readAuditLogs = () => readFileSync(join(auditDir, "audit.jsonl"), "utf8").split("\n").filter(Boolean)
+        .flatMap((line) => {
+          const { log } = JSON.parse(line) as { log?: Record<string, unknown> };
+          return log ? [log] : [];
+        });
+      const observedExecution = () => readAuditLogs().flatMap((log) => {
+        const input = log.input as { raw_content?: string } | undefined;
+        const kind = log.kind === "command_lifecycle" || log.kind === "executor_feedback" ? log.kind
+          : "frame" in log && "model" in log && "commit" in log
+            ? input?.raw_content === "plan:result" ? "saved_result_read" : "work_decision"
+            : undefined;
+        return kind ? [{ kind, digest: createHash("sha256").update(JSON.stringify(log)).digest("hex") }] : [];
+      });
+      const executionBeforeRecovery = observedExecution();
+      expect(executionBeforeRecovery.some((log) => log.kind === "executor_feedback")).toBe(true);
+      expect(executionBeforeRecovery.some((log) => log.kind === "work_decision")).toBe(true);
+
+      const recentWorkRoute = "/owner/task-submissions/recent";
+      const workStatusRoute = "/owner/task-submission-status";
+      const savedResultRoute = "/owner/task-submission-result";
+      const postWorkRead = (route: string, body: Record<string, unknown>, bearer = ownerToken, origin = baseUrl) =>
+        fetch(`${baseUrl}${route}`, {
+          method: "POST",
+          headers: { ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), "content-type": "application/json", origin },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+        });
+      // 再接続したクライアントは最初の読取に受付IDや結果参照を持ち込まない。
+      const discoveredWork = await postWorkRead(recentWorkRoute, {});
+      expect(discoveredWork.status).toBe(200);
+      expect(discoveredWork.headers.get("cache-control")).toBe("no-store");
+      const discoveryBody = await discoveredWork.text();
+      const discovery = JSON.parse(discoveryBody) as { submissions: { request_id: string }[] };
+      expect(discovery).toEqual({ submissions: [{ request_id: submission.request_id, state: "handler_returned",
+        created_at_ms: expect.any(Number) }], used_for_authority: false, may_execute: false });
+      for (const value of [...privateNoticeValues.filter((value) => value !== workState.request_id), ...Object.values(foreignReceipt)]) {
+        expect(discoveryBody).not.toContain(value);
+      }
+
+      const recoveredSelector = { request_id: discovery.submissions[0]!.request_id };
+      const recoveredWork = await postWorkRead(workStatusRoute, recoveredSelector);
+      expect(recoveredWork.status).toBe(200);
+      expect(recoveredWork.headers.get("cache-control")).toBe("no-store");
+      const recovery = await recoveredWork.json() as typeof workState;
+      expect(recovery).toMatchObject({ found: true, ...recoveredSelector, state: "handler_returned",
+        plan_steps: { used_for_authority: false, may_execute: false,
+          steps: [{ index: 1, verification: "result_and_memory_confirmed", result_ref: resultRef }] } });
+      expect(JSON.stringify(recovery)).not.toContain(fileContent.trim());
+      const recoveredResultSelector = { ...recoveredSelector, step_index: 1, result_ref: recovery.plan_steps!.steps[0]!.result_ref! };
+      const restoredPrivateResult = await postWorkRead(savedResultRoute, recoveredResultSelector);
       expect(restoredPrivateResult.status).toBe(200);
       expect(restoredPrivateResult.headers.get("cache-control")).toBe("no-store");
       expect(await restoredPrivateResult.json()).toEqual(expectedPrivateResult);
+
+      for (const [route, body] of [[recentWorkRoute, {}], [workStatusRoute, recoveredSelector],
+        [savedResultRoute, recoveredResultSelector]] as const) {
+        for (const bearer of ["", token, d4RuntimeToken, maintenanceToken]) {
+          const denied = await postWorkRead(route, body, bearer);
+          expect(denied.status).toBe(401);
+          expect(denied.headers.get("cache-control")).toBe("no-store");
+          expect(await denied.json()).toEqual({ error: "unauthorized" });
+        }
+        expect((await postWorkRead(route, body, ownerToken, "https://other.invalid")).status).toBe(403);
+      }
+      const foreignSelector = { request_id: foreignReceipt.requestId };
+      const foreignStatus = await postWorkRead(workStatusRoute, foreignSelector);
+      expect(foreignStatus.status).toBe(200);
+      expect(await foreignStatus.json()).toEqual({ found: false });
+      const foreignResult = await postWorkRead(savedResultRoute, { ...recoveredResultSelector, ...foreignSelector });
+      expect(foreignResult.status).toBe(404);
+      expect(await foreignResult.json()).toEqual({ error: "owner_task_saved_result_unavailable" });
+
+      const restoredWorkStatus = await readWorkStatus();
+      expect(restoredWorkStatus.status).toBe(200);
+      expect(await restoredWorkStatus.json()).toEqual(recovery);
+      const restoredNotifications = await loadNotifications();
+      expect(restoredNotifications.readyNotices).toMatchObject([savedResultNotice]);
+      for (const value of privateNoticeValues) expect(restoredNotifications.body).not.toContain(value);
+      const repeatedSubmission = await request("/owner/task-compute", ownerToken, "POST", {
+        user, task, goal_ref: goalRef, purpose_version: 1, submission_id: submissionId,
+      });
+      expect(repeatedSubmission.status).toBe(202);
+      expect(await repeatedSubmission.json()).toMatchObject({ accepted: true, status: "already_accepted", ...recoveredSelector });
+      // 保存結果の表示審査だけを許し、計算・承認・実行の再発行を検出する。
+      expect(observedExecution()).toEqual([...executionBeforeRecovery,
+        { kind: "saved_result_read", digest: expect.stringMatching(/^[a-f0-9]{64}$/u) }]);
       expect(readFileSync(join(fileRoot, relativePath), "utf8")).toBe(changedFile);
       const auditDigest = createHash("sha256").update(JSON.stringify(resultReply), "utf8").digest("hex");
-      const outputLogs = readFileSync(join(auditDir, "audit.jsonl"), "utf8").split("\n").filter(Boolean)
-        .map((line) => (JSON.parse(line) as { log?: Record<string, unknown> }).log)
-        .filter((log) => log?.kind === "output_audit" && log.target_surface === "control_center" &&
+      const outputLogs = readAuditLogs()
+        .filter((log) => log.kind === "output_audit" && log.target_surface === "control_center" &&
           log.rendered_output_digest === auditDigest);
       expect(outputLogs).toHaveLength(2);
       expect(JSON.stringify(outputLogs)).not.toContain(fileContent.trim());
@@ -731,7 +821,7 @@ describe("delegated goal purpose owner review", () => {
       if (gateway) await stopChild(gateway.child);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 90_000);
+  }, 210_000);
 
   it.each([
     { scenario: "apply succeeds", renameFailure: "none" },
@@ -4363,8 +4453,8 @@ function spawnCaptured(args: string[], env: NodeJS.ProcessEnv): CapturedProcess 
   return { child, stdout, stderr };
 }
 
-async function waitForHealth(port: number, gateway: CapturedProcess): Promise<void> {
-  const deadline = Date.now() + 45_000;
+async function waitForHealth(port: number, gateway: CapturedProcess, timeoutMs = 45_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) {
       throw new Error(`gateway exited ${gateway.child.exitCode}\n${gateway.stderr.join("")}`);

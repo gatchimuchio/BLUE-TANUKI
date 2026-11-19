@@ -2259,6 +2259,11 @@ export interface WebChatOwnerTaskSubmissionStatus {
   readonly state: WebChatOwnerTaskSubmissionState;
 }
 
+/** 受付を特定するための読取専用メタデータ。 */
+export interface WebChatRecentOwnerTaskSubmission extends WebChatOwnerTaskSubmissionStatus {
+  readonly created_at_ms: number;
+}
+
 export type WebChatOwnerTaskSubmissionResult =
   | {
       readonly status: "available";
@@ -2329,6 +2334,10 @@ export interface WebChatOwnerTaskSubmissionStore {
     WebChatOwnerTaskSubmissionClaim;
   /** Read only the content-free delivery state for an owner-provided submission id. */
   getStatus?(input: { readonly submission_id: string }): WebChatOwnerTaskSubmissionStatus | null;
+  /** 所有者の受付台帳を、Gatewayが発行したIDで照会する。 */
+  getOwnerTaskStatusByRequestId?(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionStatus | null;
+  /** 最近受け付けた所有者の依頼を新しい順に最大20件取得する。 */
+  listRecentOwnerTaskSubmissions?(): readonly WebChatRecentOwnerTaskSubmission[];
   /** Reacquire only a bounded, process-memory reply for this already-bound owner submission. */
   getOwnerTaskSubmissionResult?(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionResult;
   /** Capture a reply only when request_id belongs to the authenticated owner submission scope. */

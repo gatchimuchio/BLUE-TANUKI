@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as net from "node:net";
 import { createHash, createHmac, webcrypto } from "node:crypto";
 import { Script } from "node:vm";
@@ -7118,6 +7118,83 @@ describe("WebChatChannel — HTTP inbound", () => {
         used_for_authority: false, may_execute: false });
       const scoped = { request_id: requestId, step_index: input.step_index, result_ref: resultRef };
       expect(requests).toEqual([{ ...scoped, result_ref: staleRef }, ...invalidOutputs.map(() => scoped), scoped, scoped]);
+      expect(ownerCtx.received).toEqual([]);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("rediscovers owner work with read-only receipt locators and protects the local browser boundary", async () => {
+    const submissionId = "00000000-0000-4000-8000-000000000054";
+    const requestId = "00000000-0000-4000-8000-000000000055";
+    const unrelatedId = "00000000-0000-4000-8000-000000000056";
+    const resultRef = "b".repeat(64);
+    const row = { request_id: requestId, state: "handler_returned", created_at_ms: 1700000000000,
+      private_payload: "must-not-appear-in-receipt-list" } as const;
+    let listed = [row];
+    const lookup = vi.fn(({ request_id }: { request_id: string }) => request_id === requestId ? row : null);
+    const readResult = vi.fn(async () => "保存結果の合成本文");
+    const cancel = vi.fn(async () => null);
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      owner_task_submission_store: {
+        ...createTestOwnerTaskSubmissionStore(),
+        listRecentOwnerTaskSubmissions: () => listed,
+        getOwnerTaskStatusByRequestId: lookup,
+      },
+      onOwnerTaskSubmissionSavedResult: readResult,
+      onOwnerTaskSubmissionCancellation: cancel,
+    });
+    try {
+      await ownerCtx.ch.start(async () => {});
+      const origin = `http://127.0.0.1:${ownerCtx.port}`;
+      const owner = { authorization: `Bearer ${OWNER_TOKEN}`, origin, "sec-fetch-site": "same-origin" };
+      const post = (route: string, body: unknown, headers: Record<string, string> = owner) =>
+        postJson(ownerCtx.port, route, body, headers);
+      const recentRoute = "/owner/task-submissions/recent";
+      const statusRoute = "/owner/task-submission-status";
+      const savedRoute = "/owner/task-submission-result";
+
+      for (const token of [TOKEN, D4_RUNTIME_TOKEN, RESUME_TOKEN]) {
+        const denied = await post(recentRoute, {}, { ...owner, authorization: `Bearer ${token}` });
+        expect(denied.status).toBe(401);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+      }
+      expect((await post(recentRoute, {}, { ...owner, origin: "https://cross-origin.invalid" })).status).toBe(403);
+      expect((await post(recentRoute, { request_id: requestId })).status).toBe(400);
+
+      const recent = await post(recentRoute, {});
+      expect(recent.status).toBe(200);
+      expect(recent.headers.get("cache-control")).toBe("no-store");
+      expect(recent.body).toEqual({ submissions: [{ request_id: requestId, state: row.state, created_at_ms: row.created_at_ms }],
+        used_for_authority: false, may_execute: false });
+      listed = [row, row];
+      expect((await post(recentRoute, {})).status).toBe(503);
+
+      expect((await post(statusRoute, { request_id: requestId }, { authorization: owner.authorization })).status).toBe(403);
+      expect((await post(statusRoute, { request_id: requestId, submission_id: submissionId })).status).toBe(400);
+      expect((await post(statusRoute, { request_id: requestId + "\n" })).status).toBe(400);
+      expect((await post(statusRoute, { request_id: unrelatedId })).body).toEqual({ found: false });
+      const restored = await post(statusRoute, { request_id: requestId });
+      expect(restored.status).toBe(200);
+      expect(restored.headers.get("cache-control")).toBe("no-store");
+      expect(restored.body).toMatchObject({ found: true, request_id: requestId, state: row.state });
+      expect(JSON.stringify(restored.body)).not.toContain(row.private_payload);
+      expect(lookup).toHaveBeenCalledTimes(2);
+
+      const resultFields = { step_index: 2, result_ref: resultRef };
+      expect((await post(savedRoute, { request_id: unrelatedId, ...resultFields })).status).toBe(404);
+      expect((await post(savedRoute, { request_id: requestId, submission_id: submissionId, ...resultFields })).status).toBe(400);
+      const saved = await post(savedRoute, { request_id: requestId, ...resultFields });
+      expect(saved.status).toBe(200);
+      expect(saved.headers.get("cache-control")).toBe("no-store");
+      expect(saved.body).toMatchObject({ status: "available", content: "保存結果の合成本文", used_for_authority: false, may_execute: false });
+      expect(readResult).toHaveBeenCalledTimes(1);
+      expect(readResult).toHaveBeenCalledWith({ request_id: requestId, ...resultFields });
+
+      expect((await post("/owner/task-submission-cancel", { request_id: requestId })).status).toBe(400);
+      expect(cancel).not.toHaveBeenCalled();
       expect(ownerCtx.received).toEqual([]);
     } finally {
       await ownerCtx.teardown();
