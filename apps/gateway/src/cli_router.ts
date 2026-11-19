@@ -146,9 +146,10 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   if (backupId !== undefined && manifestSha256 !== undefined) {
     const { planOfflineRecoveryRestore } = await import("./recovery_surface.js");
     const pinnedManifest = manifestSha256;
-    const inspectPlan = () => planOfflineRecoveryRestore(env, backupId, pinnedManifest);
     const isolation = verifyOffline
-      ? await (await import("./runtime_owner_lease.js")).observeUnderOfflineGatewayOwnerLock(env, inspectPlan)
+      ? await (await import("./runtime_owner_lease.js")).observeUnderOfflineGatewayOwnerLock(env,
+        (ownerScopeSha256) => planOfflineRecoveryRestore(env, backupId, pinnedManifest,
+          { offline_owner_scope_sha256: ownerScopeSha256 }))
       : undefined;
     if (isolation && isolation.status !== "verified") {
       const reason = {
@@ -166,7 +167,7 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
       process.exitCode = 2;
       return;
     }
-    const plan = isolation?.observation ?? await inspectPlan();
+    const plan = isolation?.observation ?? await planOfflineRecoveryRestore(env, backupId, pinnedManifest);
     const offlineVerified = isolation !== undefined && plan.status === "planned";
     if (json) {
       writeStdout(JSON.stringify(offlineVerified
@@ -174,15 +175,22 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
         : plan, null, 2));
     } else {
       writeStdout(`復元計画 ${plan.status}`);
+      if (plan.status === "target_changed") writeStdout("観測中に復元先の状態が変わりました。再度照合してください。");
       if (plan.plan_sha256) writeStdout(`計画SHA-256 ${plan.plan_sha256}`);
-      for (const item of plan.items) writeStdout(`${item.role} ${item.disposition}`);
-      for (const store of plan.canonical_stores) writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}`);
+      if (plan.target_state_sha256) writeStdout(`復元先状態SHA-256 ${plan.target_state_sha256}`);
+      for (const item of plan.items) {
+        writeStdout(`${item.role} ${item.disposition}${item.target_status ? ` 現在=${item.target_status}` : ""}`);
+      }
+      for (const store of plan.canonical_stores) {
+        writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}${store.target_status ? ` 現在=${store.target_status}` : ""}`);
+      }
       if (plan.goal_purpose_replay) {
         writeStdout(`委任目的と現行監査の照合 ${plan.goal_purpose_replay.status} ${plan.goal_purpose_replay.verified_purpose_count}件`);
       }
       writeStdout(offlineVerified
         ? "計画の観測中にGatewayの起動を排他しました。排他は解除済みです。復元・承認は実行していません。"
         : "読み取り専用です。Gatewayの停止状態は別に確認してください。");
+      if (offlineVerified && !plan.target_state_sha256) writeStdout("復元先全体の照合値を確定できませんでした。");
     }
     process.exitCode = plan.status === "planned" ? 0 : 2;
     return;

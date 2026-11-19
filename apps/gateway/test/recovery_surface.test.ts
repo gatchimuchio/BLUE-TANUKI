@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -279,6 +279,30 @@ function recoveryUnboundShellObservation(suffix: string) {
 }
 
 describe("canonical state target inspection", () => {
+  it.each(["wal", "hardlink"])("leaves a %s canonical store unverified and untouched", async (kind) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-protected-canonical-store-"));
+    try {
+      const [key, relativePath] = CANONICAL_DATABASES[0]!;
+      const target = await createCanonicalDatabase(root, relativePath, "fixture");
+      if (kind === "wal") {
+        const database = new DatabaseSync(target);
+        try { database.exec("PRAGMA journal_mode=WAL"); }
+        finally { database.close(); }
+      } else {
+        await link(target, path.join(root, "alias.sqlite"));
+      }
+      const beforeNames = await readdir(path.dirname(target));
+      const before = await readFile(target);
+      expect(beforeNames).toEqual([path.basename(target)]);
+      if (kind === "wal") expect(before.subarray(18, 20)).toEqual(Buffer.from([2, 2]));
+      expect(await inspectCanonicalStateStoreTarget(root, key)).toEqual({ status: "unverified", bytes: null, sha256: null });
+      expect(await readdir(path.dirname(target))).toEqual(beforeNames);
+      expect(await readFile(target)).toEqual(before);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports a missing nested store directory as absent without creating it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-missing-canonical-store-"));
     try {
@@ -292,6 +316,19 @@ describe("canonical state target inspection", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("does not treat disappearance after canonical file identity capture as absent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-changed-canonical-store-"));
+    try {
+      const [key, relativePath] = CANONICAL_DATABASES[0]!;
+      const target = await realpath(await createCanonicalDatabase(root, relativePath, "fixture"));
+      const open = vi.spyOn(fs, "open").mockRejectedValueOnce(Object.assign(new Error("disappeared"), { code: "ENOENT" }));
+      try {
+        expect(await inspectCanonicalStateStoreTarget(root, key)).toEqual({ status: "unverified", bytes: null, sha256: null });
+        expect(open).toHaveBeenCalledWith(target, "r");
+      } finally { open.mockRestore(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it("keeps a symlinked store directory unverified", async () => {
@@ -1215,6 +1252,8 @@ describe("buildRecoverySnapshot", () => {
     try {
       const envFile = path.join(root, "product.env");
       const failureDir = path.join(root, "failure");
+      const sessionDir = path.join(root, "sessions");
+      const sessionFile = path.join(sessionDir, "current-session.jsonl");
       const memoryFile = path.join(root, "memory.json");
       const grants = path.join(root, "grants.json");
       const stateRoot = path.join(root, "state");
@@ -1225,17 +1264,23 @@ describe("buildRecoverySnapshot", () => {
         BLUE_TANUKI_MEMORY_FILE: memoryFile,
         BLUE_TANUKI_FAILURE_MEMORY_FILE: path.join(failureDir, "records.jsonl"),
         BLUE_TANUKI_FAILURE_MEMORY_DIR: failureDir,
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
         BLUE_TANUKI_SCHEDULES_DIR: path.join(root, "schedules-not-captured"),
         BLUE_TANUKI_APPROVALS_FILE: grants,
         OPENAI_API_KEY: "synthetic-private-plan-sentinel",
       };
-      const config = Object.entries(env).map(([key, value]) => key + "=" + JSON.stringify(value)).join("\n") + "\n";
+      const config = (variables: typeof env) => Object.entries(variables)
+        .map(([key, value]) => key + "=" + JSON.stringify(value)).join("\n") + "\n";
       await mkdir(failureDir);
-      await writeFile(envFile, config);
+      await mkdir(sessionDir);
+      await writeFile(envFile, config(env));
       await writeFile(grants, "synthetic grant");
       await writeFile(memoryFile, "before-backup");
       await writeFile(env.BLUE_TANUKI_FAILURE_MEMORY_FILE, "synthetic failure");
+      await writeFile(sessionFile, "synthetic session before backup");
       await createCanonicalDatabase(stateRoot, CANONICAL_DATABASES[0]![1], "synthetic canonical snapshot");
+      const brokerStore = CANONICAL_DATABASES.find(([key]) => key === "broker")!;
+      const brokerPath = await createCanonicalDatabase(stateRoot, brokerStore[1], "synthetic broker before backup");
       const backup = await createRecoveryBackup(env);
       const manifestFile = backup.backup_manifest_path!;
       const original = await readFile(manifestFile);
@@ -1243,10 +1288,11 @@ describe("buildRecoverySnapshot", () => {
       const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
       const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
         /^(Path|SystemRoot|windir|SystemDrive|ComSpec|Temp|Tmp|Home|USERPROFILE|APPDATA|LOCALAPPDATA)$/i.test(key)));
-      const run = (expectedDigest: string, ...extra: string[]) => spawnSync(process.execPath, [
-        "--", main, "--recovery-inspect", "--restore-plan", "--backup-id", backup.backup_id!,
-        "--manifest-sha256", expectedDigest, "--env-file", envFile, "--json", ...extra,
+      const inspect = (backupId: string, configFile: string, expectedDigest: string, ...extra: string[]) => spawnSync(process.execPath, [
+        "--", main, "--recovery-inspect", "--restore-plan", "--backup-id", backupId,
+        "--manifest-sha256", expectedDigest, "--env-file", configFile, "--json", ...extra,
       ], { cwd: root, encoding: "utf8", env: inherited, timeout: 15_000, windowsHide: true });
+      const run = (expectedDigest: string, ...extra: string[]) => inspect(backup.backup_id!, envFile, expectedDigest, ...extra);
       const snapshot = async () => {
         const inventory = await readdir(root, { recursive: true, withFileTypes: true });
         const files = await Promise.all(inventory.map(async entry => {
@@ -1304,12 +1350,133 @@ describe("buildRecoverySnapshot", () => {
       } finally {
         lease.close();
       }
+      const stoppedOverlapping = await snapshot();
+      const overlapping = run(pin, "--verify-offline");
+      expect(overlapping.status, overlapping.stderr).toBe(0);
+      const overlappingPlan = JSON.parse(overlapping.stdout);
+      expect(overlappingPlan).toMatchObject({ status: "planned", offline_lease_verified: true,
+        items: expect.arrayContaining([
+          { role: "failure_memory_file", disposition: "overlapping_targets" },
+          { role: "failure_memory_dir", disposition: "overlapping_targets" },
+        ]),
+      });
+      expect(overlappingPlan).not.toHaveProperty("target_state_sha256");
+      expect(await snapshot()).toEqual(stoppedOverlapping);
+
+      const completeEnv = { ...env, BLUE_TANUKI_ENV_FILE: path.join(root, "verified-product.env"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: path.join(root, "standalone-failure.jsonl") };
+      await writeFile(completeEnv.BLUE_TANUKI_ENV_FILE, config(completeEnv));
+      await writeFile(completeEnv.BLUE_TANUKI_FAILURE_MEMORY_FILE, "synthetic standalone failure");
+      const completeBackup = await createRecoveryBackup(completeEnv);
+      const completePin = createHash("sha256").update(await readFile(completeBackup.backup_manifest_path!)).digest("hex");
+      const advisory = inspect(completeBackup.backup_id!, completeEnv.BLUE_TANUKI_ENV_FILE, completePin);
+      expect(advisory.status, advisory.stderr).toBe(0);
+      const advisoryPlan = JSON.parse(advisory.stdout);
       const stopped = await snapshot();
-      const verified = run(pin, "--verify-offline");
-      expect(verified.status, verified.stderr).toBe(0);
-      expect(JSON.parse(verified.stdout)).toEqual({ ...plan, offline_lease_verified: true, offline_lease_status: "verified" });
+      const inspectStopped = () => {
+        const result = inspect(completeBackup.backup_id!, completeEnv.BLUE_TANUKI_ENV_FILE, completePin, "--verify-offline");
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).not.toContain("synthetic-private-plan-sentinel");
+        expect(result.stdout).not.toContain("synthetic broker");
+        expect(result.stdout).not.toContain("current-session.jsonl");
+        return JSON.parse(result.stdout);
+      };
+      const verified = inspectStopped();
+      expect(advisoryPlan).not.toHaveProperty("target_state_sha256");
+      expect(verified).toMatchObject({ status: "planned", manifest_sha256: completePin,
+        offline_lease_verified: true, offline_lease_status: "verified",
+        target_state_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        plan_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        cross_store_atomic: false, used_for_authority: false, may_execute: false,
+        items: expect.arrayContaining([
+          { role: "env_file", disposition: "preserve_current" },
+          { role: "session_dir", disposition: "requires_domain_review", target_status: "verified" },
+          { role: "schedules_dir", disposition: "not_captured", target_status: "not_present" },
+        ]),
+        canonical_stores: expect.arrayContaining([
+          { store_key: brokerStore[0], archive_status: "verified", target_status: "verified",
+            disposition: "requires_store_reconciliation" },
+          { store_key: "goal_purpose_j_control", archive_status: "not_present", target_status: "not_present",
+            disposition: "preserve_current" },
+        ]),
+      });
+      expect(verified.plan_sha256).not.toBe(advisoryPlan.plan_sha256);
+      expect(inspectStopped()).toEqual(verified);
       expect(await snapshot()).toEqual(stopped);
       expect(JSON.parse(run(pin, "--verify-offline", "--verify-offline").stdout)).toEqual({ status: "invalid_arguments" });
+
+      GatewayRuntimeOwnerLease.fromEnvironment(completeEnv).close();
+      const nextOwner = inspectStopped();
+      expect(nextOwner.target_state_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(nextOwner.target_state_sha256).not.toBe(verified.target_state_sha256);
+
+      const broker = new DatabaseSync(brokerPath);
+      try {
+        broker.prepare("INSERT INTO snapshot_fixture (value) VALUES (?)").run("synthetic broker drift");
+      } finally {
+        broker.close();
+      }
+      const changedBroker = inspectStopped();
+      expect(changedBroker.manifest_sha256).toBe(completePin);
+      expect(changedBroker.target_state_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(changedBroker.target_state_sha256).not.toBe(nextOwner.target_state_sha256);
+      expect(changedBroker.plan_sha256).not.toBe(nextOwner.plan_sha256);
+      expect(JSON.parse(run(pin).stdout)).toEqual(plan);
+
+      await writeFile(sessionFile, "synthetic current session drift");
+      const changedSession = inspectStopped();
+      expect(changedSession.target_state_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(changedSession.target_state_sha256).not.toBe(changedBroker.target_state_sha256);
+
+      await mkdir(env.BLUE_TANUKI_SCHEDULES_DIR);
+      await writeFile(path.join(env.BLUE_TANUKI_SCHEDULES_DIR, "current-schedules.json"), "[]\n");
+      const changedSchedule = inspectStopped();
+      expect(changedSchedule.items).toContainEqual({ role: "schedules_dir", disposition: "not_captured", target_status: "verified" });
+      expect(changedSchedule.target_state_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(changedSchedule.target_state_sha256).not.toBe(changedSession.target_state_sha256);
+
+      const brokerSidecar = `${brokerPath}-wal`;
+      await writeFile(brokerSidecar, "isolated unverified sidecar");
+      const beforeSidecarInspection = await snapshot();
+      const unverified = inspectStopped();
+      expect(unverified).toMatchObject({ status: "planned", manifest_sha256: completePin,
+        offline_lease_verified: true, may_execute: false, used_for_authority: false,
+        canonical_stores: expect.arrayContaining([
+          { store_key: brokerStore[0], archive_status: "verified", target_status: "unverified",
+            disposition: "requires_store_reconciliation" },
+        ]),
+      });
+      expect(unverified).not.toHaveProperty("target_state_sha256");
+      expect(await snapshot()).toEqual(beforeSidecarInspection);
+      await unlink(brokerSidecar);
+      expect(inspectStopped()).toEqual(changedSchedule);
+
+      const protectedAlias = path.join(sessionDir, "protected-alias");
+      await fs.link(completeEnv.BLUE_TANUKI_ENV_FILE, protectedAlias);
+      const aliased = inspectStopped();
+      expect(aliased.items).toContainEqual({ role: "session_dir", disposition: "unverified_target", target_status: "unverified" });
+      expect(aliased).not.toHaveProperty("target_state_sha256");
+      await unlink(protectedAlias);
+
+      let sessionSamples = 0;
+      const originalRead = fs.readFile.bind(fs);
+      const driftAfterSample = vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const data = await originalRead(...args);
+        if (args[0] === sessionFile && ++sessionSamples === 1) {
+          await writeFile(sessionFile, "synthetic drift during verification");
+        }
+        return data;
+      });
+      try {
+        const duringRead = await planOfflineRecoveryRestore(completeEnv, completeBackup.backup_id!, completePin,
+          { offline_owner_scope_sha256: "a".repeat(64) });
+        expect(sessionSamples).toBe(2);
+        expect(duringRead).toMatchObject({ status: "target_changed", plan_sha256: null,
+          may_execute: false, used_for_authority: false });
+        expect(duringRead).not.toHaveProperty("target_state_sha256");
+      } finally {
+        driftAfterSample.mockRestore();
+      }
 
       await writeFile(memoryFile, "new-current-value");
       const changed = JSON.parse(run(pin).stdout);

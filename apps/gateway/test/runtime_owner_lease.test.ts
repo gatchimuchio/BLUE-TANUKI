@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -223,13 +223,15 @@ describe("Gateway runtime owner lease", () => {
 
     const before = files.map(filepath => readFileSync(filepath));
     let observations = 0;
-    const result = await observeUnderOfflineGatewayOwnerLock(env, async () => {
+    const result = await observeUnderOfflineGatewayOwnerLock(env, async (ownerScopeSha256) => {
       await Promise.resolve();
       expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
       observations += 1;
-      return "fixture observation";
+      return ownerScopeSha256;
     });
-    expect(result).toEqual({ status: "verified", observation: "fixture observation" });
+    expect(result).toEqual({ status: "verified", observation: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    const scope = async (ownerScopeSha256: string) => ownerScopeSha256;
+    expect(await observeUnderOfflineGatewayOwnerLock(env, scope)).toEqual(result);
     expect(observations).toBe(1);
     expect(await observeUnderOfflineGatewayOwnerLock(env, unexpectedObservation)).toEqual({ status: "owner_state_unavailable" });
     expect(files.map(filepath => readFileSync(filepath))).toEqual(before);
@@ -241,7 +243,25 @@ describe("Gateway runtime owner lease", () => {
     } finally {
       restarted.close();
     }
+    const laterScope = await observeUnderOfflineGatewayOwnerLock(env, scope);
+    expect(laterScope.status).toBe("verified");
+    expect(laterScope).not.toEqual(result);
   });
+
+  it.each(["state_root", "owner-lock.sqlite-wal", "owner-state.sqlite-journal"])(
+    "rejects an installation scope or sidecar change during offline observation: %s", async (drift) => {
+      const originalRoot = temporaryStateRoot();
+      const env = { BLUE_TANUKI_STATE_ROOT: originalRoot };
+      GatewayRuntimeOwnerLease.fromEnvironment(env).close();
+      const directory = join(originalRoot, "private-state", "gateway-runtime");
+      const observation = vi.fn(async () => {
+        if (drift === "state_root") env.BLUE_TANUKI_STATE_ROOT = temporaryStateRoot();
+        else writeFileSync(join(directory, drift), "synthetic sidecar", { flag: "wx" });
+        return "stale observation";
+      });
+      expect(await observeUnderOfflineGatewayOwnerLock(env, observation)).toEqual({ status: "owner_state_unavailable" });
+      expect(observation).toHaveBeenCalledOnce();
+    });
 
   it("skips offline observation for a pending fence or a different host binding", async () => {
     const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };

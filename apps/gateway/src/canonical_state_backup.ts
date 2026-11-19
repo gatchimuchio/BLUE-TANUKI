@@ -108,9 +108,9 @@ function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && String(error.code) === "ENOENT";
 }
 
-function storeSourceIdentity(sourcePath: string): StoreSourceIdentity {
+function storeSourceIdentity(sourcePath: string, requireSingleLink = false): StoreSourceIdentity {
   const stat = lstatSync(sourcePath, { bigint: true });
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.ino <= 0n) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.ino <= 0n || (requireSingleLink && stat.nlink !== 1n)) {
     throw new Error("canonical_state_source_identity_unavailable");
   }
   return {
@@ -280,12 +280,27 @@ export async function inspectCanonicalStateStoreTarget(
   }
 
   let beforeIdentity: StoreSourceIdentity;
-  let beforeDigest: { bytes: number; sha256: string };
   try {
-    beforeIdentity = storeSourceIdentity(targetPath);
-    beforeDigest = await digestFile(targetPath);
+    beforeIdentity = storeSourceIdentity(targetPath, true);
   } catch (error) {
     if (isMissing(error)) return { status: "not_present", bytes: null, sha256: null };
+    return { status: "unverified", bytes: null, sha256: null };
+  }
+
+  let beforeDigest: { bytes: number; sha256: string };
+  try {
+    const file = await fs.open(targetPath, "r");
+    try {
+      const header = Buffer.alloc(20);
+      const { bytesRead } = await file.read(header, 0, header.length, 0);
+      // Immutable SQLite reads never create sidecars. Check the actual header because immutable mode ignores WAL.
+      if (bytesRead === header.length && header.subarray(0, 16).toString("ascii") === "SQLite format 3\0" &&
+          (header[18] === 2 || header[19] === 2)) return { status: "unverified", bytes: null, sha256: null };
+    } finally {
+      await file.close();
+    }
+    beforeDigest = await digestFile(targetPath);
+  } catch {
     return { status: "unverified", bytes: null, sha256: null };
   }
 
@@ -293,7 +308,9 @@ export async function inspectCanonicalStateStoreTarget(
   let journalMode: string | null = null;
   let integrityValid = false;
   try {
-    database = new DatabaseSync(targetPath, { readOnly: true });
+    const url = pathToFileURL(targetPath);
+    url.searchParams.set("immutable", "1");
+    database = new DatabaseSync(url.href, { readOnly: true });
     const journalModeRow = database.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
     journalMode = typeof journalModeRow?.journal_mode === "string" ? journalModeRow.journal_mode.toLowerCase() : null;
     integrityValid = integrityCheck(database);
@@ -305,26 +322,29 @@ export async function inspectCanonicalStateStoreTarget(
   if (!integrityValid) return { status: "mismatch", bytes: null, sha256: null };
   if (journalMode !== "delete") return { status: "unverified", bytes: null, sha256: null };
 
-  for (const suffix of ["-journal", "-wal", "-shm"]) {
-    try {
-      await fs.lstat(`${targetPath}${suffix}`);
-      return { status: "unverified", bytes: null, sha256: null };
-    } catch (error) {
-      if (!isMissing(error)) return { status: "unverified", bytes: null, sha256: null };
-    }
-  }
-
   let afterIdentity: StoreSourceIdentity;
   let afterDigest: { bytes: number; sha256: string };
   try {
-    afterIdentity = storeSourceIdentity(targetPath);
+    afterIdentity = storeSourceIdentity(targetPath, true);
     afterDigest = await digestFile(targetPath);
+    if (resolveCanonicalStateStoreInspectionPath(stateRootValue, storeKey) !== targetPath ||
+        !sameStoreSourceIdentity(afterIdentity, storeSourceIdentity(targetPath, true))) {
+      return { status: "unverified", bytes: null, sha256: null };
+    }
   } catch {
     return { status: "unverified", bytes: null, sha256: null };
   }
   if (!sameStoreSourceIdentity(beforeIdentity, afterIdentity) ||
       beforeDigest.bytes !== afterDigest.bytes || beforeDigest.sha256 !== afterDigest.sha256) {
     return { status: "unverified", bytes: null, sha256: null };
+  }
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    try {
+      lstatSync(`${targetPath}${suffix}`);
+      return { status: "unverified", bytes: null, sha256: null };
+    } catch (error) {
+      if (!isMissing(error)) return { status: "unverified", bytes: null, sha256: null };
+    }
   }
   return { status: "verified", bytes: afterDigest.bytes, sha256: afterDigest.sha256 };
 }

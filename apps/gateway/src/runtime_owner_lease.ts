@@ -263,24 +263,37 @@ export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env
 /** Observe an existing stopped Gateway installation without opening or advancing a runtime lease. */
 export async function observeUnderOfflineGatewayOwnerLock<T>(
   env: NodeJS.ProcessEnv,
-  observe: () => Promise<T>,
+  observe: (ownerScopeSha256: string) => Promise<T>,
 ): Promise<OfflineGatewayObservation<T>> {
   let lockDb: DatabaseType | undefined;
   let stateDb: DatabaseType | undefined;
   try {
     const files = existingRuntimeOwnerFiles(env);
     if (!files?.lockPath) return { status: "owner_state_unavailable" };
-    lockDb = acquireExistingRuntimeOwnerLock(files.lockPath);
+    const { lockPath, statePath } = files;
+    const lockIdentity = ownerFileIdentity(lockPath);
+    const stateIdentity = ownerFileIdentity(statePath);
+    const host = currentHostAudienceDigest();
+    lockDb = acquireExistingRuntimeOwnerLock(lockPath);
+    const lock = lockDb;
+    const assertContinuity = (): void => {
+      const current = existingRuntimeOwnerFiles(env);
+      if (current?.lockPath !== lockPath || current.statePath !== statePath || lock.isTransaction === false ||
+          ownerFileIdentity(lockPath) !== lockIdentity || ownerFileIdentity(statePath) !== stateIdentity ||
+          currentHostAudienceDigest() !== host) throw new Error("gateway_runtime_owner_state_unavailable");
+      assertNoOwnerSidecars(lockPath);
+      assertNoOwnerSidecars(statePath);
+    };
+    assertContinuity();
 
-    assertNoOwnerSidecars(files.statePath);
-    stateDb = openOwnerDatabaseReadOnly(files.statePath);
+    stateDb = openOwnerDatabaseReadOnly(statePath);
     stateDb.exec("PRAGMA query_only=ON; BEGIN");
     assertOwnerDeleteJournal(stateDb);
     assertIntegrity(stateDb);
     const version = pragmaInteger(stateDb, "user_version");
     if (!hasOwnerStateSchema(stateDb)) return { status: "owner_state_unavailable" };
     const owner = readOwnerState(stateDb);
-    if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== currentHostAudienceDigest()) {
+    if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== host) {
       return { status: "owner_state_unavailable" };
     }
     if (version === RECOVERY_FENCE_SCHEMA_VERSION) {
@@ -290,7 +303,27 @@ export async function observeUnderOfflineGatewayOwnerLock<T>(
     if (version !== OWNER_STATE_SCHEMA_VERSION || hasRecoveryFence(stateDb)) {
       return { status: "owner_state_unavailable" };
     }
-    return { status: "verified", observation: await observe() };
+    assertContinuity();
+    const ownerScopeSha256 = createHash("sha256").update(JSON.stringify([
+      "offline-gateway-owner-scope.v1", lockPath, lockIdentity, statePath, stateIdentity,
+      owner.host_audience_digest, owner.generation, owner.execution_epoch,
+    ])).digest("hex");
+    const observation = await observe(ownerScopeSha256);
+    if (stateDb.isTransaction === false) return { status: "owner_state_unavailable" };
+    assertContinuity();
+
+    // Reopen under the same exclusive lock to compare the current row, independent of the initial read transaction.
+    stateDb.close();
+    stateDb = openOwnerDatabaseReadOnly(statePath);
+    stateDb.exec("PRAGMA query_only=ON; BEGIN");
+    assertOwnerDeleteJournal(stateDb);
+    assertIntegrity(stateDb);
+    if (pragmaInteger(stateDb, "user_version") !== OWNER_STATE_SCHEMA_VERSION || !hasOwnerStateSchema(stateDb) ||
+        hasRecoveryFence(stateDb) || JSON.stringify(readOwnerState(stateDb)) !== JSON.stringify(owner)) {
+      return { status: "owner_state_unavailable" };
+    }
+    assertContinuity();
+    return { status: "verified", observation };
   } catch (error) {
     if (!lockDb && isSqliteBusy(error)) return { status: "owner_lock_busy" };
     if (!lockDb && error instanceof Error && error.message === "gateway_runtime_owner_lock_sidecars_present") {

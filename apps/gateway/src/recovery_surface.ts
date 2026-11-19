@@ -21,6 +21,7 @@ import {
   type CanonicalStateSnapshotInspection,
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
+  type CanonicalStateStoreTargetInspection,
   type RestorableCanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 import {
@@ -330,6 +331,7 @@ export interface PreUpdateRecoveryBackupInspection {
 
 type RecoveryPlanTargetDisposition = "not_configured" | "preserve_current" | "overlapping_targets" |
   "not_captured" | "requires_domain_review" | "candidate_only" | "unverified_target";
+type RecoveryPlanPathTargetStatus = "verified" | "not_present" | "unverified";
 
 interface GoalPurposeReplayObservation {
   status: "matched" | "no_current_purpose" | "not_included" | "unverified";
@@ -352,12 +354,14 @@ export interface OfflineGoalPurposeRepairPlan {
 export interface OfflineRecoveryRestorePlan {
   surface: "offline_recovery_restore_plan";
   schema_version: 1;
-  status: "planned" | "manifest_changed" | "invalid";
+  status: "planned" | "manifest_changed" | "target_changed" | "invalid";
   manifest_sha256: string | null;
   plan_sha256: string | null;
-  items: readonly { role: string; disposition: RecoveryPlanTargetDisposition }[];
+  target_state_sha256?: string;
+  items: readonly { role: string; disposition: RecoveryPlanTargetDisposition; target_status?: RecoveryPlanPathTargetStatus }[];
   canonical_stores: readonly { store_key: CanonicalStateStoreKey; archive_status: CanonicalStateSnapshotEntryStatus | "not_included";
-    disposition: "requires_store_reconciliation" | "preserve_current" }[];
+    disposition: "requires_store_reconciliation" | "preserve_current";
+    target_status?: CanonicalStateStoreTargetInspection["status"] }[];
   goal_purpose_replay?: GoalPurposeReplayObservation;
   goal_purpose_repair?: Pick<OfflineGoalPurposeRepairPlan, "repair_sha256" | "stores">;
   offline_lease_verified: false;
@@ -365,6 +369,10 @@ export interface OfflineRecoveryRestorePlan {
   used_for_authority: false;
   may_execute: false;
 }
+
+type RecoveryRestoreAdvisoryPlan = Omit<OfflineRecoveryRestorePlan, "status"> & {
+  status: Exclude<OfflineRecoveryRestorePlan["status"], "target_changed">;
+};
 
 export interface RecoveryScopeApplicabilityRequest {
   readonly backup_id_digest: string;
@@ -1171,11 +1179,13 @@ function isRecoveryBackupManifestItem(value: unknown): value is RecoveryBackupMa
   );
 }
 
-async function assertArchiveTreeHasNoSymlinks(archivePath: string, kind: "file" | "directory"): Promise<void> {
+async function assertArchiveTreeHasNoSymlinks(
+  archivePath: string, kind: "file" | "directory", rejectHardLinks = false,
+): Promise<void> {
   const rootStat = await fs.lstat(archivePath);
   if (rootStat.isSymbolicLink()) throw new Error("invalid_backup_manifest_archive_symlink");
   if (kind === "file") {
-    if (!rootStat.isFile()) throw new Error("invalid_backup_manifest_archive_kind");
+    if (!rootStat.isFile() || (rejectHardLinks && rootStat.nlink !== 1)) throw new Error("invalid_backup_manifest_archive_kind");
     return;
   }
   if (!rootStat.isDirectory()) throw new Error("invalid_backup_manifest_archive_kind");
@@ -1187,6 +1197,10 @@ async function assertArchiveTreeHasNoSymlinks(archivePath: string, kind: "file" 
       if (entry.isSymbolicLink()) throw new Error("invalid_backup_manifest_archive_symlink");
       if (entry.isDirectory()) await walk(child);
       else if (!entry.isFile()) throw new Error("invalid_backup_manifest_archive_kind");
+      else if (rejectHardLinks) {
+        const stat = await fs.lstat(child);
+        if (!stat.isFile() || stat.nlink !== 1) throw new Error("invalid_backup_manifest_archive_kind");
+      }
     }
   };
   await walk(archivePath);
@@ -1963,10 +1977,18 @@ export async function applyOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, plan
 }
 
 /** Plan against one exact pack. The installed CLI also requires the caller's previously observed manifest digest. */
+export function planOfflineRecoveryRestore(
+  env: NodeJS.ProcessEnv, backupId: string, expectedManifestSha256?: string,
+): Promise<RecoveryRestoreAdvisoryPlan>;
+export function planOfflineRecoveryRestore(
+  env: NodeJS.ProcessEnv, backupId: string, expectedManifestSha256: string | undefined,
+  options?: { readonly offline_owner_scope_sha256: string },
+): Promise<OfflineRecoveryRestorePlan>;
 export async function planOfflineRecoveryRestore(
   env: NodeJS.ProcessEnv,
   backupId: string,
   expectedManifestSha256?: string,
+  options?: { readonly offline_owner_scope_sha256: string },
 ): Promise<OfflineRecoveryRestorePlan> {
   const base = {
     surface: "offline_recovery_restore_plan",
@@ -1983,7 +2005,8 @@ export async function planOfflineRecoveryRestore(
   } as const;
   try {
     assertBackupId(backupId);
-    if (expectedManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(expectedManifestSha256)) return base;
+    if ((expectedManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(expectedManifestSha256)) ||
+        (options && !/^[a-f0-9]{64}$/.test(options.offline_owner_scope_sha256))) return base;
     const manifestPath = path.join(recoveryRoot(env), backupId, "manifest.json");
     if (await recoveryPathKind(manifestPath) !== "file" ||
         await recoveryPathKind(`${manifestPath}.sha256`) !== "file") return base;
@@ -2000,7 +2023,8 @@ export async function planOfflineRecoveryRestore(
       await inspectCanonicalStateSnapshots(packDir, manifest.canonical_state_snapshot);
     }
 
-    const privateRoot = path.resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki", "private-state");
+    const stateRoot = env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki";
+    const privateRoot = path.resolve(stateRoot, "private-state");
     const specs = sourceSpecs(env);
     const currentTargets = configuredRuntimeTargets(env);
     const protectedRoles = new Set(["env_file", "audit_dir", "log_dir", "approval_grants_file"]);
@@ -2013,38 +2037,63 @@ export async function planOfflineRecoveryRestore(
     const overlaps = (left: string, right: string): boolean =>
       isSameOrInside(left, right) || isSameOrInside(right, left);
 
-    const items = [];
-    const bindings = [];
-    for (const spec of specs) {
+    const roles = specs.map((spec) => {
       const identity = `${spec.key}:${spec.env_key}`;
       const target = currentTargets.get(identity);
       const archiveProof = archiveProofs.get(identity) ?? null;
+      const protectedTarget = protectedRoles.has(spec.key) || !!target && protectedPaths.some(protectedPath => overlaps(target, protectedPath));
+      const overlappingTarget = !!target && [...currentTargets].some(([other, otherTarget]) => other !== identity && overlaps(target, otherTarget));
+      return { spec, identity, target, archiveProof, protectedTarget, overlappingTarget };
+    });
+    const observeRole = async ({ spec, identity, target, archiveProof, protectedTarget, overlappingTarget }: typeof roles[number]) => {
       let disposition: RecoveryPlanTargetDisposition;
       let observedTarget: RecoveryPathProof = null;
+      let targetStatus: RecoveryPlanPathTargetStatus | undefined;
       if (!target) disposition = "not_configured";
-      else if (protectedRoles.has(spec.key) || protectedPaths.some(protectedPath => overlaps(target, protectedPath))) {
-        disposition = "preserve_current";
-      } else if (!archiveProof) disposition = "not_captured";
-      else if ([...currentTargets].some(([other, otherTarget]) => other !== identity && overlaps(target, otherTarget))) {
-        disposition = "overlapping_targets";
-      } else if (spec.key === "session_dir" || spec.key === "schedules_dir") disposition = "requires_domain_review";
-      else {
-        try {
-          observedTarget = await readRecoveryPathProof(target);
-          // File integrity cannot establish that memory, exclusion, or failure rules remain current.
-          disposition = !observedTarget || observedTarget.kind === archiveProof.kind ? "requires_domain_review" : "unverified_target";
-        } catch {
-          disposition = "unverified_target";
-        }
-      }
-      items.push({ role: spec.key, disposition });
-      bindings.push([identity, target ?? null, disposition, archiveProof, observedTarget]);
-    }
+      else if (protectedTarget) disposition = "preserve_current";
+      else if (!archiveProof) disposition = "not_captured";
+      else if (overlappingTarget) disposition = "overlapping_targets";
+      else disposition = "requires_domain_review";
 
-    const canonical_stores = CANONICAL_STATE_STORE_PATHS.map(({ key }) => {
+      const offlineEligible = !!options && !protectedTarget && !overlappingTarget;
+      const advisoryRead = disposition === "requires_domain_review" && spec.key !== "session_dir" && spec.key !== "schedules_dir";
+      if (target && (offlineEligible || advisoryRead)) {
+        const expectedKind = archiveProof?.kind ?? (spec.key.endsWith("_dir") ? "directory" : "file");
+        try {
+          if (offlineEligible) await runtimeSafeTarget(env, target, "restore_plan_target", { allow_exact: [target] });
+          observedTarget = await readRecoveryPathProof(target, offlineEligible);
+        } catch { targetStatus = "unverified"; }
+        if (observedTarget && observedTarget.kind !== expectedKind) targetStatus = "unverified";
+        if (targetStatus === "unverified" && archiveProof) disposition = "unverified_target";
+        if (offlineEligible && targetStatus === undefined) targetStatus = observedTarget ? "verified" : "not_present";
+      }
+      const item = { role: spec.key, disposition, ...(options && targetStatus ? { target_status: targetStatus } : {}) };
+      return {
+        item,
+        planBinding: [identity, target ?? null, disposition, archiveProof, observedTarget],
+        targetBinding: [identity, target ?? null, disposition, protectedTarget, overlappingTarget, targetStatus ?? null, observedTarget],
+        complete: targetStatus !== "unverified" && !(archiveProof && disposition === "overlapping_targets"),
+      };
+    };
+    const observeRoles = async () => {
+      const observations = [];
+      for (const role of roles) observations.push(await observeRole(role));
+      return observations;
+    };
+    const observeOfflineTargets = async () => ({
+      roles: await observeRoles(),
+      stores: await Promise.all(CANONICAL_STATE_STORE_PATHS.map(async ({ key }) =>
+        [key, await inspectCanonicalStateStoreTarget(stateRoot, key)] as const)),
+    });
+    const offlineTargets = options ? await observeOfflineTargets() : undefined;
+    const observedRoles = offlineTargets?.roles ?? await observeRoles();
+
+    const canonical_stores = CANONICAL_STATE_STORE_PATHS.map(({ key }, index) => {
       const entry = manifest.canonical_state_snapshot?.entries.find(({ store_key }) => store_key === key);
+      const target = offlineTargets?.stores[index]?.[1];
       return { store_key: key, archive_status: entry?.status ?? "not_included",
-        disposition: entry?.status === "verified" ? "requires_store_reconciliation" : "preserve_current" } as const;
+        disposition: entry?.status === "verified" ? "requires_store_reconciliation" : "preserve_current",
+        ...(target ? { target_status: target.status } : {}) } as const;
     });
     const goalPurpose = await observeArchivedGoalPurpose(env, packDir, manifest.canonical_state_snapshot);
     let goalPurposeRepair: OfflineRecoveryRestorePlan["goal_purpose_repair"];
@@ -2057,14 +2106,36 @@ export async function planOfflineRecoveryRestore(
         }
       } catch { /* Keep pack observations usable when the local pair is unavailable for repair. */ }
     }
-    if ((await readManifest(env, backupId)).manifest_sha256 !== manifestSha256) {
+    const latestManifest = await readManifest(env, backupId);
+    if (latestManifest.manifest_sha256 !== manifestSha256) {
       return { ...base, status: "manifest_changed" };
     }
-    const planSha256 = createHash("sha256").update(JSON.stringify([
-      "offline-recovery-restore-plan.v3", manifestSha256, privateRoot, bindings, canonical_stores,
+    const targetBinding = options && offlineTargets
+      ? [options.offline_owner_scope_sha256, observedRoles.map(role => role.targetBinding), offlineTargets.stores] : undefined;
+    let targetStateSha256: string | undefined;
+    if (targetBinding && offlineTargets) {
+      const repeatedArchiveProofs = new Map<string, NonNullable<RecoveryPathProof>>();
+      await preflightRestoreManifest(env, latestManifest, repeatedArchiveProofs);
+      if (latestManifest.canonical_state_snapshot) await inspectCanonicalStateSnapshots(packDir, latestManifest.canonical_state_snapshot);
+      if (JSON.stringify([...repeatedArchiveProofs]) !== JSON.stringify([...archiveProofs])) return base;
+      if (JSON.stringify(await observeOfflineTargets()) !== JSON.stringify(offlineTargets)) {
+        return { ...base, status: "target_changed" };
+      }
+      if ((await readManifest(env, backupId)).manifest_sha256 !== manifestSha256) return { ...base, status: "manifest_changed" };
+      if (observedRoles.every(role => role.complete) && offlineTargets.stores.every(([, target]) =>
+        target.status === "verified" || target.status === "not_present")) {
+        targetStateSha256 = recoveryDigest(["offline-recovery-target-state.v1", manifestSha256, privateRoot, targetBinding]);
+      }
+    }
+    const planSha256 = recoveryDigest([
+      targetBinding ? "offline-recovery-restore-plan.v4" : "offline-recovery-restore-plan.v3",
+      manifestSha256, privateRoot, observedRoles.map(role => role.planBinding), canonical_stores,
       goalPurpose.observation, goalPurpose.binding, goalPurposeRepair ?? null,
-    ])).digest("hex");
-    return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256, items, canonical_stores,
+      ...(targetBinding ? [targetBinding] : []),
+    ]);
+    return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256,
+      items: observedRoles.map(role => role.item), canonical_stores,
+      ...(targetStateSha256 ? { target_state_sha256: targetStateSha256 } : {}),
       goal_purpose_replay: goalPurpose.observation, ...(goalPurposeRepair && { goal_purpose_repair: goalPurposeRepair }) };
   } catch {
     return base;
@@ -3632,10 +3703,10 @@ async function verifyFactoryResetTarget(
 
 type RecoveryPathProof = { kind: "file" | "directory"; sha256: string; bytes: number } | null;
 
-async function readRecoveryPathProof(filepath: string): Promise<RecoveryPathProof> {
+async function readRecoveryPathProof(filepath: string, rejectHardLinks = false): Promise<RecoveryPathProof> {
   const kind = await recoveryPathKind(filepath);
   if (!kind) return null;
-  await assertArchiveTreeHasNoSymlinks(filepath, kind);
+  await assertArchiveTreeHasNoSymlinks(filepath, kind, rejectHardLinks);
   return { kind, ...await sha256Path(filepath, kind, "state") };
 }
 
