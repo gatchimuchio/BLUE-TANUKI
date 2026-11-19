@@ -1,5 +1,8 @@
 package com.bluetanuki.mobile;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -91,8 +94,22 @@ final class MobileTaskContract {
 
     static void validateInstruction(String instruction) throws StrictJson.JsonException {
         if (instruction == null || instruction.trim().isEmpty() ||
-                instructionUnicodeScalarCount(instruction) > MAX_INSTRUCTION_UNICODE_SCALARS) {
+                instructionUnicodeScalarCount(instruction) > MAX_INSTRUCTION_UNICODE_SCALARS ||
+                !StandardCharsets.UTF_8.newEncoder().canEncode(instruction)) {
             throw new StrictJson.JsonException();
+        }
+    }
+
+    static String instructionHash(String instruction) throws StrictJson.JsonException {
+        validateInstruction(instruction);
+        return "sha256:" + sha256(instruction);
+    }
+
+    static String sha256(String value) {
+        try {
+            return DeviceInvitation.hex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
         }
     }
 
@@ -101,7 +118,7 @@ final class MobileTaskContract {
     }
 
     static Draft submission(Map<String, Object> body, String runtimeID, String sessionID,
-                            String workspaceID) throws StrictJson.JsonException {
+                            String workspaceID, String expectedInstructionHash) throws StrictJson.JsonException {
         if (!StrictJson.hasExactKeys(body, "版", "申請ID", "状態", "実行系ID", "対話セッションID",
                 "作業領域ID", "指示hash", "期限") ||
                 StrictJson.integer(body, "版") != 1 ||
@@ -114,7 +131,7 @@ final class MobileTaskContract {
         String id = StrictJson.string(body, "申請ID");
         String hash = StrictJson.string(body, "指示hash");
         long expiresAt = StrictJson.integer(body, "期限");
-        if (!validRequestID(id) || !hash.matches(HASH_PATTERN) || expiresAt <= 900) {
+        if (!validRequestID(id) || !hash.matches(HASH_PATTERN) || !hash.equals(expectedInstructionHash) || expiresAt <= 900) {
             throw new StrictJson.JsonException();
         }
         return new Draft(id, runtimeID, sessionID, workspaceID, hash, expiresAt - 900,

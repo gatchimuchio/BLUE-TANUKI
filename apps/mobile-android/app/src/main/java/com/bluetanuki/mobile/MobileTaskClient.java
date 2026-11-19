@@ -40,17 +40,9 @@ final class MobileTaskClient {
         Map<String, Object> response = body(credential, "AgentTask端末申請一覧", Collections.emptyMap(),
                 LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
         List<MobileTaskContract.Draft> entries = MobileTaskContract.ownRequests(response);
-        String pendingSessionID = store.pendingTaskSessionID();
-        boolean reconciled = false;
-        if (pendingSessionID != null) {
-            for (MobileTaskContract.Draft entry : entries) {
-                if (pendingSessionID.equals(entry.sessionID)) {
-                    reconciled = true;
-                    break;
-                }
-            }
-        }
-        if (reconciled) store.clearTaskSubmissionPending(pendingSessionID);
+        PendingTaskSubmission submission = store.pendingTaskSubmission();
+        boolean reconciled = submission != null && submission.matchesOwnedRequest(credential, entries);
+        if (reconciled) store.clearTaskSubmissionPending(submission);
         PendingTaskMutation pending = null;
         try {
             pending = store.pendingTaskMutation();
@@ -59,7 +51,7 @@ final class MobileTaskClient {
         }
         Map<String, MobileTaskContract.TaskStatus> statuses = observeOwnedStatuses(entries, credential, pending,
                 canSend, entry -> refreshStatus(entry, canSend));
-        return new OwnedRequests(entries, reconciled ? null : pendingSessionID, reconciled,
+        return new OwnedRequests(entries, reconciled || submission == null ? null : submission.sessionID, reconciled,
                 statuses, statuses.size() == entries.size());
     }
 
@@ -109,10 +101,11 @@ final class MobileTaskClient {
                       DeviceLinkTransport.SendGuard canSend) throws TaskSubmissionFailure {
         Attempt attempt = new Attempt();
         String sessionID = null;
+        PendingTaskSubmission checkpoint = null;
         boolean checkpointRecorded = false;
         try {
-            MobileTaskContract.validateInstruction(instruction);
-            if (store.pendingTaskSessionID() != null) throw new StrictJson.JsonException();
+            String instructionHash = MobileTaskContract.instructionHash(instruction);
+            if (store.pendingTaskSubmission() != null) throw new StrictJson.JsonException();
             DeviceCredential credential = requireCredential();
             Catalog catalog = refreshCatalog(canSend);
             boolean workspaceStillRegistered = false;
@@ -138,12 +131,13 @@ final class MobileTaskClient {
             sessionID = MobileTaskContract.sessionID(sessionBody, runtimeID);
             Map<String, Object> request = MobileTaskContract.requestPayload(
                     runtimeID, sessionID, workspaceID, instruction, mcpHash);
-            store.markTaskSubmissionPending(sessionID);
+            checkpoint = PendingTaskSubmission.forRequest(credential, runtimeID, sessionID, workspaceID, instructionHash);
+            store.markTaskSubmissionPending(checkpoint);
             checkpointRecorded = true;
             Map<String, Object> response = body(credential, "AgentTask端末申請", request,
                     LIVE_OR_INTERNAL_EVIDENCE, canSend, attempt);
             MobileTaskContract.Draft draft = MobileTaskContract.submission(
-                    response, runtimeID, sessionID, workspaceID);
+                    response, runtimeID, sessionID, workspaceID, instructionHash);
             return new Submission(draft, sessionID);
         } catch (Exception error) {
             boolean rejected = error instanceof PairingResponseParser.PairingRejectedException;
@@ -162,9 +156,9 @@ final class MobileTaskClient {
                     sessionCloseConfirmed = false;
                 }
             }
-            if (checkpointRecorded && sessionID != null && (!mayHaveReached || rejected)) {
+            if (checkpointRecorded && (!mayHaveReached || rejected)) {
                 try {
-                    store.clearTaskSubmissionPending(sessionID);
+                    store.clearTaskSubmissionPending(checkpoint);
                     checkpointCleared = true;
                 } catch (Exception ignored) {
                     checkpointCleared = false;

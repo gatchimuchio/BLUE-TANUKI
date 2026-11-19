@@ -13,6 +13,7 @@ struct PendingTaskMutationTests {
     let desktop = credential()
     let request = draft()
     try sessionStartScope()
+    try submissionReceiptScope(credential: desktop)
     let start = try PendingMobileTaskMutation(kind: .start, credential: desktop, draft: request, taskID: nil)
     let restarted = try PendingMobileTaskMutation(stored: start.storageObject())
     try check(restarted == start, "restart round trip")
@@ -63,6 +64,66 @@ struct PendingTaskMutationTests {
     try listRefresh(credential: desktop, pending: cancellation)
     try desktopNotifications()
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func submissionReceiptScope(credential desktop: DeviceLinkCredential) throws {
+    let instruction = "  依頼\ne\u{301}🤝  "
+    let hash = MobileTaskContract.instructionHash(instruction)
+    try check(hash == "sha256:20ca4e5469701d1c66bce473616e93ae8e536fc2243f35dc6ab48e18d892a4dd",
+              "hash exact UTF-8 including whitespace and decomposed Unicode")
+    try check(MobileTaskContract.instructionHash("  依頼\né🤝  ") != hash,
+              "canonical-equivalent text must keep distinct input bytes")
+    let payload = try MobileTaskContract.requestPayload(runtimeID: "runtime", sessionID: sessionID,
+      workspaceID: "workspace", instruction: instruction, mcpCapabilityHash: nil)
+    try check((payload["instruction"] as? String).map { Data($0.utf8) } == Data(instruction.utf8),
+              "the payload retains the bytes used for the expected hash")
+
+    let pending = try PendingMobileTaskSubmission(credential: desktop, runtimeID: "runtime",
+      sessionID: sessionID, workspaceID: "workspace", instructionHash: hash)
+    guard let stored = pending.storageObject() else { throw SmokeFailure(label: "missing checkpoint encoding") }
+    try check(DeviceLinkJSON.exactKeys(stored, ["session_id", "scope_digest"]), "encoded checkpoint contains no input or credentials")
+    let reloaded = try PendingMobileTaskSubmission(stored: stored)
+    try check(reloaded == pending, "submission checkpoint round trip")
+
+    let body: [String: Any] = ["版": 1, "申請ID": requestID, "状態": "Owner確認待ち",
+      "実行系ID": "runtime", "対話セッションID": sessionID, "作業領域ID": "workspace", "指示hash": hash, "期限": 1_000]
+    let receipt = try MobileTaskContract.submission(body, runtimeID: "runtime", sessionID: sessionID,
+      workspaceID: "workspace", expectedInstructionHash: hash)
+    try check(receipt.instructionHash == hash, "matched submission acknowledgement")
+    for (key, mismatch) in [("実行系ID", "other-runtime"), ("対話セッションID", otherID),
+                            ("作業領域ID", "other-workspace"), ("指示hash", instructionHash)] {
+      var badBody = body
+      badBody[key] = mismatch
+      do {
+        _ = try MobileTaskContract.submission(badBody, runtimeID: "runtime", sessionID: sessionID,
+          workspaceID: "workspace", expectedInstructionHash: hash)
+        throw SmokeFailure(label: "wrong acknowledgement scope: \(key)")
+      } catch DeviceLinkFailure.invalid {}
+    }
+
+    let wrongHash = draft(id: otherID)
+    let unrelated = MobileTaskDraft(id: taskID, runtimeID: "runtime", sessionID: otherID,
+      workspaceID: "workspace", instructionHash: hash, createdAt: 10, expiresAt: 20, taskID: nil)
+    try check(!reloaded.hasUniqueReceipt(in: [], credential: desktop), "missing receipt keeps an uncertain submission held")
+    try check(!reloaded.hasUniqueReceipt(in: [wrongHash], credential: desktop), "same session is insufficient")
+    try check(!reloaded.hasUniqueReceipt(in: [receipt, wrongHash], credential: desktop), "two receipts for the session are ambiguous")
+    try check(reloaded.hasUniqueReceipt(in: [unrelated, receipt], credential: desktop), "one exact receipt reconciles the submission")
+    for otherIssuer in [credential(hostID: otherID), credential(pin: String(repeating: "d", count: 64)),
+                        credential(deviceID: otherID)] {
+      try check(!reloaded.hasUniqueReceipt(in: [receipt], credential: otherIssuer), "another pairing scope cannot reconcile")
+    }
+    let renewed = credential(credentialID: requestID, secret: "new fixture")
+    try check(reloaded.hasUniqueReceipt(in: [receipt], credential: renewed), "renamed credential token leaves issuer scope intact")
+
+    let legacy = try PendingMobileTaskSubmission(legacySessionID: sessionID)
+    try check(legacy.isLegacy && legacy.sessionID == sessionID && legacy.storageObject() == nil &&
+              !legacy.hasUniqueReceipt(in: [receipt], credential: desktop), "legacy checkpoint remains readable and held")
+    var malformed = stored
+    malformed["scope_digest"] = "malformed"
+    do {
+      _ = try PendingMobileTaskSubmission(stored: malformed)
+      throw SmokeFailure(label: "malformed checkpoint accepted")
+    } catch DeviceLinkFailure.storage {}
   }
 
   private static func sessionStartScope() throws {
@@ -223,10 +284,11 @@ struct PendingTaskMutationTests {
   }
 
   private static func credential(hostID: String = requestID, deviceID: String = requestID,
-                                 pin: String = fingerprint) -> DeviceLinkCredential {
+                                 pin: String = fingerprint, credentialID: String = otherID,
+                                 secret: String = "fixture") -> DeviceLinkCredential {
     DeviceLinkCredential(
       hostID: hostID, host: "127.0.0.1", port: 443, certificateHash: pin,
-      deviceID: deviceID, expiresAt: 999, credentialID: otherID, secret: "fixture"
+      deviceID: deviceID, expiresAt: 999, credentialID: credentialID, secret: secret
     )
   }
 

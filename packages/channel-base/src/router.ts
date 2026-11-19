@@ -6,6 +6,8 @@ export interface InboundRouterOptions {
   readonly propagateHandlerErrorsForChannels?: readonly string[];
   /** Channels whose handler error details may contain external provider or user data. */
   readonly redactHandlerErrorsForChannels?: readonly string[];
+  /** Requests whose authenticated ingress must observe a failure without the original exception. */
+  readonly propagateRedactedHandlerErrorsForRequest?: (request: InboundRequest) => boolean;
 }
 
 /**
@@ -21,12 +23,14 @@ export class InboundRouter {
   private readonly channels = new Map<string, InboundChannel>();
   private readonly propagateHandlerErrorsForChannels: ReadonlySet<string>;
   private readonly redactHandlerErrorsForChannels: ReadonlySet<string>;
+  private readonly propagateRedactedHandlerErrorsForRequest: InboundRouterOptions["propagateRedactedHandlerErrorsForRequest"];
   private started = false;
   private handler: InboundHandler | null = null;
 
   constructor(options: InboundRouterOptions = {}) {
     this.propagateHandlerErrorsForChannels = new Set(options.propagateHandlerErrorsForChannels ?? []);
     this.redactHandlerErrorsForChannels = new Set(options.redactHandlerErrorsForChannels ?? []);
+    this.propagateRedactedHandlerErrorsForRequest = options.propagateRedactedHandlerErrorsForRequest;
   }
 
   register(channel: InboundChannel): void {
@@ -55,12 +59,13 @@ export class InboundRouter {
       try {
         await handler(req, context);
       } catch (e) {
-        const msg = this.redactHandlerErrorsForChannels.has(req.channel)
+        const propagateRedacted = this.propagateRedactedHandlerErrorsForRequest?.(req) === true;
+        const msg = propagateRedacted || this.redactHandlerErrorsForChannels.has(req.channel)
           ? "details redacted"
           : e instanceof Error ? e.message : String(e);
         // eslint-disable-next-line no-console
         console.error(`[inbound-router] handler threw on ${req.channel}/${req.id}: ${msg}`);
-        if (this.propagateHandlerErrorsForChannels.has(req.channel)) {
+        if (propagateRedacted || this.propagateHandlerErrorsForChannels.has(req.channel)) {
           // Keep the router's existing exception detail out of scheduler logs/cursors.
           throw new Error("inbound_handler_failed");
         }

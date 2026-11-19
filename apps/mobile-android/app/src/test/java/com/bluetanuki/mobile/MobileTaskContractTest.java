@@ -6,6 +6,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.Test;
@@ -35,6 +36,59 @@ public final class MobileTaskContractTest {
         assertEquals("資料を整理して😀", StrictJson.string(request, "instruction"));
         assertThrows(StrictJson.JsonException.class,
                 () -> MobileTaskContract.validateInstruction(" \n\t "));
+    }
+
+    @Test
+    public void submissionReceiptBindsTheExactInstructionBytesAndScope() throws Exception {
+        String submitted = "  資料😀e\u0301\r\n";
+        String instructionHash = MobileTaskContract.instructionHash(submitted);
+        assertEquals("sha256:d46f34ba58c50cc80fd267ad86e436c9092eb19c135036d83fdceeaa19c3ec93", instructionHash);
+        assertFalse(instructionHash.equals(MobileTaskContract.instructionHash(submitted.trim())));
+        assertThrows(StrictJson.JsonException.class, () -> MobileTaskContract.instructionHash("依頼\uD800"));
+
+        String receipt = "{\"版\":1,\"申請ID\":\"" + REQUEST + "\",\"状態\":\"Owner確認待ち\",\"実行系ID\":\"runtime\"," +
+                "\"対話セッションID\":\"" + SESSION + "\",\"作業領域ID\":\"workspace\",\"指示hash\":\"" +
+                instructionHash + "\",\"期限\":2000}";
+        MobileTaskContract.Draft accepted = MobileTaskContract.submission(StrictJson.object(StrictJson.parse(receipt)),
+                "runtime", SESSION, "workspace", instructionHash);
+        assertEquals(instructionHash, accepted.instructionHash);
+        for (String mismatch : List.of(receipt.replace(instructionHash, HASH), receipt.replace(SESSION, REQUEST),
+                receipt.replace("\"runtime\"", "\"other-runtime\""), receipt.replace("\"workspace\"", "\"other-workspace\""))) {
+            assertThrows(StrictJson.JsonException.class, () -> MobileTaskContract.submission(
+                    StrictJson.object(StrictJson.parse(mismatch)), "runtime", SESSION, "workspace", instructionHash));
+        }
+    }
+
+    @Test
+    public void pendingSubmissionRequiresAUniqueMatchFromTheSameDesktopAndScope() throws Exception {
+        DeviceCredential desktop = new DeviceCredential("127.0.0.1", 8443, SESSION, "a".repeat(64),
+                REQUEST, 2000, REQUEST, "b".repeat(64));
+        PendingTaskSubmission checkpoint = PendingTaskSubmission.forRequest(desktop, "runtime", SESSION, "workspace", HASH);
+        PendingTaskSubmission restored = PendingTaskSubmission.decode(checkpoint.encode());
+        assertEquals(checkpoint.encode(), restored.encode());
+        MobileTaskContract.Draft matching = new MobileTaskContract.Draft(
+                REQUEST, "runtime", SESSION, "workspace", HASH, 1000, 2000, null);
+        MobileTaskContract.Draft unrelated = new MobileTaskContract.Draft(
+                SESSION, "runtime", REQUEST, "workspace", HASH, 1000, 2000, null);
+        assertTrue(restored.matchesOwnedRequest(desktop, List.of(unrelated, matching)));
+        assertFalse(restored.matchesOwnedRequest(desktop, List.of(unrelated)));
+        MobileTaskContract.Draft secondMatch = new MobileTaskContract.Draft(
+                SESSION, "runtime", SESSION, "workspace", HASH, 1000, 2000, null);
+        assertFalse(restored.matchesOwnedRequest(desktop, List.of(matching, secondMatch)));
+        for (MobileTaskContract.Draft mismatch : List.of(
+                new MobileTaskContract.Draft(SESSION, "other-runtime", SESSION, "workspace", HASH, 1000, 2000, null),
+                new MobileTaskContract.Draft(SESSION, "runtime", SESSION, "different", HASH, 1000, 2000, null),
+                new MobileTaskContract.Draft(SESSION, "runtime", SESSION, "workspace", "sha256:" + "c".repeat(64), 1000, 2000, null))) {
+            assertFalse(restored.matchesOwnedRequest(desktop, List.of(mismatch)));
+            assertFalse(restored.matchesOwnedRequest(desktop, List.of(matching, mismatch)));
+        }
+        DeviceCredential differentPin = new DeviceCredential("127.0.0.1", 8443, SESSION, "c".repeat(64),
+                REQUEST, 2000, REQUEST, "b".repeat(64));
+        assertFalse(restored.matchesOwnedRequest(differentPin, List.of(matching)));
+        PendingTaskSubmission legacy = PendingTaskSubmission.decode(SESSION);
+        assertEquals(SESSION, legacy.encode());
+        assertFalse(legacy.matchesOwnedRequest(desktop, List.of(matching)));
+        assertThrows(StrictJson.JsonException.class, () -> PendingTaskSubmission.decode("v2:" + SESSION + ":unexpected"));
     }
 
     @Test

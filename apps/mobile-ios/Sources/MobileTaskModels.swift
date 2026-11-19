@@ -17,6 +17,58 @@ struct MobileTaskDraft: Identifiable, Equatable {
   let taskID: String?
 }
 
+/// 照合に使う端末内記録。依頼本文、資格、承認は保存しない。
+struct PendingMobileTaskSubmission: Equatable {
+  let sessionID: String
+  private let scopeDigest: String?
+
+  var isLegacy: Bool { scopeDigest == nil }
+
+  init(credential: DeviceLinkCredential, runtimeID: String, sessionID: String,
+       workspaceID: String, instructionHash: String) throws {
+    guard MobileTaskContract.validRegisteredIdentifier(runtimeID),
+          MobileTaskContract.validSessionIdentifier(sessionID),
+          MobileTaskContract.validRegisteredIdentifier(workspaceID),
+          MobileTaskContract.validInstructionHash(instructionHash) else {
+      throw DeviceLinkFailure.invalid
+    }
+    let fields = ["blue-tanuki.mobile-task-submission.v1", credential.hostID,
+      credential.certificateHash, credential.deviceID, runtimeID, sessionID, workspaceID, instructionHash]
+    self.sessionID = sessionID
+    self.scopeDigest = SHA256.hash(data: Data(fields.joined(separator: "|").utf8))
+      .map { String(format: "%02x", $0) }.joined()
+  }
+
+  init(legacySessionID: String) throws {
+    guard MobileTaskContract.validSessionIdentifier(legacySessionID) else { throw DeviceLinkFailure.storage }
+    sessionID = legacySessionID
+    scopeDigest = nil
+  }
+
+  init(stored object: [String: Any]) throws {
+    guard DeviceLinkJSON.exactKeys(object, ["session_id", "scope_digest"]),
+          let session = DeviceLinkJSON.string(object["session_id"]), MobileTaskContract.validSessionIdentifier(session),
+          let digest = DeviceLinkJSON.string(object["scope_digest"]), DeviceLinkJSON.isHex(digest, length: 64) else {
+      throw DeviceLinkFailure.storage
+    }
+    sessionID = session
+    scopeDigest = digest
+  }
+
+  func storageObject() -> [String: Any]? {
+    guard let scopeDigest else { return nil }
+    return ["session_id": sessionID, "scope_digest": scopeDigest]
+  }
+
+  func hasUniqueReceipt(in entries: [MobileTaskDraft], credential: DeviceLinkCredential) -> Bool {
+    let sameSession = entries.filter { $0.sessionID == sessionID }
+    guard !isLegacy, sameSession.count == 1, let receipt = sameSession.first,
+          let observed = try? Self(credential: credential, runtimeID: receipt.runtimeID, sessionID: receipt.sessionID,
+                                   workspaceID: receipt.workspaceID, instructionHash: receipt.instructionHash) else { return false }
+    return self == observed
+  }
+}
+
 struct MobileTaskRecord: Equatable {
   let taskID: String
   let runtimeID: String
@@ -123,6 +175,14 @@ enum MobileTaskContract {
   private static let hashPattern = #"^sha256:[a-f0-9]{64}$"#
   static let maximumInstructionUnicodeScalars = 32_768
 
+  static func instructionHash(_ instruction: String) -> String {
+    "sha256:" + SHA256.hash(data: Data(instruction.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
+  fileprivate static func validInstructionHash(_ value: String) -> Bool {
+    matches(value, pattern: hashPattern)
+  }
+
   static func sessionStartPayload(runtimeID: String, workspaceID: String) throws -> [String: Any] {
     guard validRegisteredIdentifier(runtimeID), validRegisteredIdentifier(workspaceID) else {
       throw DeviceLinkFailure.invalid
@@ -200,7 +260,8 @@ enum MobileTaskContract {
     _ body: [String: Any],
     runtimeID: String,
     sessionID: String,
-    workspaceID: String
+    workspaceID: String,
+    expectedInstructionHash: String
   ) throws -> MobileTaskDraft {
     let keys: Set<String> = [
       "版", "申請ID", "状態", "実行系ID", "対話セッションID", "作業領域ID", "指示hash", "期限",
@@ -212,7 +273,8 @@ enum MobileTaskContract {
           DeviceLinkJSON.string(body["対話セッションID"]) == sessionID,
           DeviceLinkJSON.string(body["作業領域ID"]) == workspaceID,
           let requestID = DeviceLinkJSON.string(body["申請ID"]), validRequestID(requestID),
-          let instructionHash = DeviceLinkJSON.string(body["指示hash"]), matches(instructionHash, pattern: hashPattern),
+          let instructionHash = DeviceLinkJSON.string(body["指示hash"]),
+          validInstructionHash(instructionHash), instructionHash == expectedInstructionHash,
           let expiresAt = DeviceLinkJSON.integer(body["期限"]), expiresAt > 900 else {
       throw DeviceLinkFailure.invalid
     }
@@ -352,7 +414,7 @@ enum MobileTaskContract {
     validRequestID(value)
   }
 
-  private static func validRegisteredIdentifier(_ value: String) -> Bool {
+  fileprivate static func validRegisteredIdentifier(_ value: String) -> Bool {
     let scalars = Array(value.unicodeScalars)
     guard (1...128).contains(scalars.count), let first = scalars.first,
           isAsciiAlphaNumeric(first.value) else { return false }

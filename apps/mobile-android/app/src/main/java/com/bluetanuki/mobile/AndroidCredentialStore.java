@@ -258,39 +258,43 @@ final class AndroidCredentialStore {
         return decryptRecoveryAudit(encoded);
     }
 
-    /** Store only the session ID before one Task submission; it is not authority or a task result. */
-    synchronized void markTaskSubmissionPending(String sessionID) throws CredentialStoreException {
-        if (!MobileTaskContract.validRequestID(sessionID)) throw new CredentialStoreException();
-        String existing = pendingTaskSessionID();
-        if (existing != null) {
-            if (existing.equals(sessionID)) return;
-            throw new CredentialStoreException();
-        }
-        String encrypted = encryptTaskCheckpoint(sessionID, TASK_PENDING_AAD);
+    /** 一度の送信前に依頼の照合記録を暗号化して保存する。 */
+    synchronized void markTaskSubmissionPending(PendingTaskSubmission pending) throws CredentialStoreException {
+        if (pendingTaskSubmission() != null) throw new CredentialStoreException();
+        String value = pending.encode();
+        String encrypted = encryptTaskCheckpoint(value, TASK_PENDING_AAD);
         if (!preferences.edit().putString(TASK_PENDING_KEY, encrypted)
                 .putString(TASK_PENDING_DIGEST_KEY, digest(encrypted)).commit()) {
             throw new CredentialStoreException();
         }
-        if (!sessionID.equals(pendingTaskSessionID())) throw new CredentialStoreException();
+        PendingTaskSubmission saved = pendingTaskSubmission();
+        if (saved == null || !value.equals(saved.encode())) throw new CredentialStoreException();
     }
 
     synchronized String pendingTaskSessionID() throws CredentialStoreException {
+        PendingTaskSubmission pending = pendingTaskSubmission();
+        return pending == null ? null : pending.sessionID;
+    }
+
+    synchronized PendingTaskSubmission pendingTaskSubmission() throws CredentialStoreException {
         String encoded = preferences.getString(TASK_PENDING_KEY, null);
         String activeDigest = preferences.getString(TASK_PENDING_DIGEST_KEY, null);
         if (encoded == null && activeDigest == null) return null;
         if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
             throw new CredentialStoreException();
         }
-        String sessionID = decryptTaskCheckpoint(encoded, TASK_PENDING_AAD);
-        if (!MobileTaskContract.validRequestID(sessionID)) throw new CredentialStoreException();
-        return sessionID;
+        try {
+            return PendingTaskSubmission.decode(decryptTaskCheckpoint(encoded, TASK_PENDING_AAD));
+        } catch (StrictJson.JsonException exception) {
+            throw new CredentialStoreException();
+        }
     }
 
-    synchronized void clearTaskSubmissionPending(String expectedSessionID) throws CredentialStoreException {
-        if (!MobileTaskContract.validRequestID(expectedSessionID) ||
-                !expectedSessionID.equals(pendingTaskSessionID())) throw new CredentialStoreException();
+    synchronized void clearTaskSubmissionPending(PendingTaskSubmission expected) throws CredentialStoreException {
+        PendingTaskSubmission current = pendingTaskSubmission();
+        if (current == null || !expected.encode().equals(current.encode())) throw new CredentialStoreException();
         if (!preferences.edit().remove(TASK_PENDING_KEY).remove(TASK_PENDING_DIGEST_KEY).commit() ||
-                pendingTaskSessionID() != null) throw new CredentialStoreException();
+                pendingTaskSubmission() != null) throw new CredentialStoreException();
     }
 
     synchronized void markTaskMutationPending(PendingTaskMutation mutation) throws CredentialStoreException {

@@ -5,15 +5,15 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 ## 現在のsource
 
 - Device IDをランダム生成し、Device Link資格とともにiOS Keychainの`WhenUnlockedThisDeviceOnly`へ保存する。iCloud Keychain同期は無効にする。
-- Keychain状態はversion 3でApplication Support内のinstallation scope IDに束縛する。scope markerはアプリのcontainer内に置き、backup除外属性をreadback確認する。旧version 1/2状態は初回upgrade時に資格・Device ID・保留sessionを維持したまま移行する。
+- Keychain状態はversion 3以降でApplication Support内のinstallation scope IDに束縛する。scope markerはアプリのcontainer内に置き、backup除外属性を読戻しで確認する。version 4は開始・取消の保留、version 5は申請の照合記録を保持する。旧version 1/2状態は初回upgrade時に資格・Device ID・保留sessionを維持したまま移行する。
 - アプリを削除した瞬間のKeychain消去処理はiOSアプリから実行できないため、marker導入後の再インストールでは、初回起動時にcontainer marker欠落と旧Keychain scopeの不一致を検出する。旧資格だけを同じアプリ固有Keychain itemから除去し、Device ID・非権威回復記録・Task申請session checkpointはreadback確認後も保持する。Desktop Agent Centerで旧端末・Task状態を確認したというownerの明示操作まで招待検証を止め、結果不明Taskは申請一覧と一致するまで再送しない。状態不正や保存未確認では通信を開始しない。marker導入前に削除された旧version 1/2状態は、初回upgradeと区別できないため自動検出できない。これは削除時点での即時消去やiOS package deletionの完了証明ではない。
 - この端末IDに一致する、上限付き・厳密形式のDesktop招待だけを受け付ける。送信前にHost ID、private IPv4、port、証明書SHA-256指紋を表示し、使用者が照合する。
 - TLS 1.2／1.3で招待されたleaf証明書をpinし、有効性を確認する。接続ごとにnewline-framed requestを一度だけ送り、5秒の期限を設け、不正形式や余分な応答データを拒否する。
 - 明示的なpairing、接続確認、Desktop側の資格失効、および分離された端末内だけの資格削除を提供する。端末内削除では、上限付き・非権威の回復記録を保存し、readbackを確認する。
-- アプリがforegroundを離れるとactive transportをcancelする。申請送信前にKeychainへsession IDだけを`WhenUnlockedThisDeviceOnly`で記録し、結果不明時はアプリ再起動後も端末申請一覧との照合まで新規申請を止める。依頼本文やTask本文は端末へ永続保存しない。
+- アプリがforegroundを離れるとactive transportをcancelする。申請送信前に、同じDesktop・端末、選択した実行系・作業領域、セッションID、送信するUTF-8のSHA-256に結び付いた照合記録をKeychainへ`WhenUnlockedThisDeviceOnly`で保存し、読戻す。受付の指示hashも送信した値に照合する。依頼本文やTask本文は永続保存しない。
 - Desktop Brokerから実行系と登録Workspaceを読み、Workspaceに束縛した新しい対話sessionからTask申請を一度だけ送る。申請はDesktop owner確認待ちとして扱う。
 - この端末のTask申請一覧とrequest-bound状態を明示照会できる。開始候補の場合だけ直前に状態を再照会して開始要求を出し、Broker側のApproval／Permission再検査に委ねる。
-- アプリ起動時とbackgroundからforegroundへ戻ったときにTask申請一覧をread-onlyで取得し、Keychainの保留中session IDと一致する申請が見つかった場合だけ申請checkpointを解除する。既存Taskの状態は開始・取消の保留記録と一致する申請から先に照会する。確認できない個別応答は不明と表示し、他の申請は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。
+- アプリ起動時とbackgroundからforegroundへ戻ったときにTask申請一覧をread-onlyで取得する。同じセッションに一件だけ申請があり、照合記録と一致した場合に新規申請の保留を解除する。不一致、複数、照合に必要な情報がない旧形式の記録では保留を維持する。既存Taskの状態は開始・取消の保留記録と一致する申請から先に照会する。確認できない個別応答は不明と表示し、他の申請は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。
 - 取消はTaskの現在状態を照会してから一度だけ要求する。D4 Brokerの認証済み `INTERNAL_STATE` は対応するTaskの台帳状態を表す。開始・取消への応答を受けたあとも保留を維持し、同じTaskを別の状態照会で確認する。取消は終端状態を再確認するまで保留し、外部処理が停止したかは未確認とする。
 - Task投影は識別子・状態・hash・結果本文の有無に限り、依頼本文・結果本文・Tool名・schema・credential・Approval情報・監査識別子を表示しない。
 - MCPを使う申請は明示取得した`metadata_only`能力snapshot hashを任意で添付する。能力名・接続先・schema・credential・結果はMobileへ返さず、hashは権限にならない。

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import type { InboundRequest, ChannelSendPayload } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, isGatewayInternalD4RuntimeIntentRequest,
+  type InboundRequest, type ChannelSendPayload } from "@blue-tanuki/protocol";
 import {
   InboundRouter,
   OutboundDispatcher,
@@ -144,6 +145,35 @@ describe("InboundRouter", () => {
       expect(errorSpy).toHaveBeenCalledTimes(3);
       expect(errorSpy.mock.calls[2]?.join(" ")).not.toContain("private synthetic failure detail");
       expect(errorSpy.mock.calls[2]?.join(" ")).toContain("details redacted");
+    } finally {
+      await router.stop();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("propagates a redacted failure for branded Runtime requests on a shared WebChat channel", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const router = new InboundRouter({ propagateRedactedHandlerErrorsForRequest: isGatewayInternalD4RuntimeIntentRequest });
+    const webchat = new FakeInbound("webchat");
+    router.register(webchat);
+    const unbranded: InboundRequest = {
+      ...inbound("webchat", "合成依頼"), user: "d4-runtime-adapter-token-holder",
+      metadata: {
+        "blue_tanuki.actor_kind": "user", "blue_tanuki.trust_level": "limited", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+        "blue_tanuki.runtime_ingress.runtime_id_digest": "a".repeat(64),
+        "blue_tanuki.runtime_ingress.session_id_digest": "b".repeat(64),
+        "blue_tanuki.runtime_ingress.used_for_authority": false,
+      },
+    };
+    const exception = "private synthetic handler exception";
+    try {
+      await router.start(async () => { throw new Error(exception); });
+      await expect(webchat.push(unbranded)).resolves.toBeUndefined();
+      await expect(webchat.push(createGatewayInternalInboundRequest(unbranded))).rejects.toThrow("inbound_handler_failed");
+      expect(errorSpy.mock.calls[0]?.join(" ")).toContain(exception);
+      expect(errorSpy.mock.calls[1]?.join(" ")).toContain("details redacted");
+      expect(errorSpy.mock.calls[1]?.join(" ")).not.toContain(exception);
     } finally {
       await router.stop();
       errorSpy.mockRestore();

@@ -505,6 +505,9 @@ describe("served D4 Runtime work observation", () => {
       submission_id: "f4510a36-9f40-4dc7-a002-32bf5001197e" };
     const otherInput = { ...input, session_id: "synthetic-runtime-second-session" };
     const intent = "合成テストで短い文章を要約してください。";
+    const failedIntent = "合成試験でGatewayの受付後に処理を中断してください。";
+    const failedInput = { ...input, submission_id: "4bc6054f-54bd-48e5-a664-e609f94b91a1" };
+    const privateException = "synthetic private exception must not reach the D4 audience";
     const privateResult = "合成の応答本文。この結果は揮発の同一セッションだけで表示する。";
     const flags = { used_for_authority: false, may_execute: false };
     const execution = { status: "adapter_returned", feedback_status: "success", ...flags };
@@ -540,6 +543,18 @@ describe("served D4 Runtime work observation", () => {
       const gatewayPort = await reservePort();
       const envFile = join(root, "fixture.env");
       writeFileSync(envFile, "# isolated test configuration\n", "utf8");
+      const handlerFailurePreload = join(root, "runtime-handler-failure.mjs");
+      const hdsModule = pathToFileURL(join(ROOT, "packages/hds-brain/dist/index.js")).href;
+      writeFileSync(handlerFailurePreload, `
+import { HDSUpperController } from ${JSON.stringify(hdsModule)};
+const decide = HDSUpperController.prototype.decide;
+HDSUpperController.prototype.decide = function (request, options) {
+  if (request.user === "d4-runtime-adapter-token-holder" && request.content === ${JSON.stringify(failedIntent)}) {
+    throw new Error(${JSON.stringify(privateException)});
+  }
+  return decide.call(this, request, options);
+};
+`, "utf8");
       mkdirSync(join(root, "files"));
       const env = {
         ...fixtureOsEnvironment(),
@@ -577,7 +592,7 @@ describe("served D4 Runtime work observation", () => {
         for (const sessionSocket of sockets) sessionSocket.terminate();
         sockets.clear();
       };
-      gateway = spawnGateway(env);
+      gateway = spawnGateway(env, handlerFailurePreload);
       await waitForHealth(gatewayPort, gateway, 40_000);
       await connectSession(input.session_id, frames);
       await connectSession(otherInput.session_id, otherFrames);
@@ -617,6 +632,22 @@ describe("served D4 Runtime work observation", () => {
       await waitFor(() => frames.some(frame => frame.includes(privateResult)) ? true : null, gateway,
         "the owning D4 response session did not receive the reply");
       expect(otherFrames.join("")).not.toContain(privateResult);
+      const failed = await post("/runtime/intent", { ...failedInput, intent: failedIntent });
+      expect(failed.status).toBe(202);
+      const { request_id: failedRequestId } = await failed.json() as { request_id: string };
+      await waitFor(() => frames.some(frame => {
+        const event = JSON.parse(frame) as WebSocketFrame;
+        return event.kind === "error" && event.request_id === failedRequestId;
+      }) ? true : null, gateway, "the D4 submission did not receive a scoped failure notice");
+      const failedStatus = await post("/runtime/intent/status", failedInput);
+      expect(failedStatus.status).toBe(200);
+      expect(await failedStatus.json()).toMatchObject({ found: true, request_id: failedRequestId, state: "outcome_unknown",
+        execution_observation: { status: "unknown", ...flags }, result: { status: "unavailable", ...flags } });
+      expect(frames.concat(otherFrames).join("")).not.toContain(privateException);
+      expect(otherFrames.join("")).not.toContain(failedRequestId);
+      await waitFor(() => gateway?.stderr.join("").includes("details redacted") ? true : null, gateway,
+        "the D4 handler failure diagnostic was not redacted");
+      expect(gateway.stdout.concat(gateway.stderr).join("")).not.toContain(privateException);
       disconnectSessions();
       await stopChild(gateway);
       frames.length = 0;
@@ -632,10 +663,15 @@ describe("served D4 Runtime work observation", () => {
         task_outcome: { status: "unknown", ...flags }, result: { status: "unavailable", reason_code: "not_retained", ...flags } });
       expect(restoredStatus.execution_observation).toEqual(execution);
       expect(JSON.stringify(restoredStatus)).not.toContain(privateResult);
+      expect(await (await post("/runtime/intent/status", failedInput)).json()).toMatchObject({ found: true,
+        request_id: failedRequestId, state: "outcome_unknown", result: { status: "unavailable", ...flags } });
       await connectSession(input.session_id, frames);
       await connectSession(otherInput.session_id, otherFrames);
       const sameScope = await post("/runtime/intent", { ...input, intent });
       expect(await sameScope.json()).toMatchObject({ accepted: true, duplicate: true, request_id });
+      const failedDuplicate = await post("/runtime/intent", { ...failedInput, intent: failedIntent });
+      expect(failedDuplicate.status).toBe(202);
+      expect(await failedDuplicate.json()).toMatchObject({ accepted: true, duplicate: true, request_id: failedRequestId, state: "outcome_unknown" });
       const otherScope = await post("/runtime/intent", { ...otherInput, intent });
       expect(otherScope.status).toBe(409);
       expect(JSON.stringify(await otherScope.json())).not.toContain(request_id);

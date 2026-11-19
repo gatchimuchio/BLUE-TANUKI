@@ -22,7 +22,7 @@ private struct MobileTaskCatalog {
 
 private struct MobileTaskListResult {
   let entries: [MobileTaskDraft]
-  let pendingSessionID: String?
+  let pendingSubmission: PendingMobileTaskSubmission?
   let didReconcilePendingRequest: Bool
   let statuses: [String: MobileTaskStatus]
   let allStatusesObserved: Bool
@@ -120,7 +120,6 @@ final class DeviceLinkViewModel: ObservableObject {
   private static let taskStatusNotificationID = "blue-tanuki-task-status-changed"
   private var lastObservedTaskStates: [String: String] = [:]
   private var pendingInvitation: DeviceLinkCredential?
-  private var pendingTaskSessionID: String?
   private var refreshOwnedTasksAfterForeground = false
 
   init() {
@@ -294,12 +293,12 @@ final class DeviceLinkViewModel: ObservableObject {
           epoch: epoch, evidence: evidence
         )
         let entries = try MobileTaskContract.ownRequests(body)
-        let pendingSessionID = state.pendingTaskSessionID
-        let didReconcile = pendingSessionID.map { sessionID in
-          entries.contains(where: { $0.sessionID == sessionID })
-        } ?? false
-        if didReconcile, let pendingSessionID {
-          _ = try self.store.clearTaskSubmissionPending(sessionID: pendingSessionID)
+        let pendingSubmission = state.pendingTaskSubmission
+        var didReconcile = false
+        if let pendingSubmission, self.lifecycle.isCurrent(epoch),
+           pendingSubmission.hasUniqueReceipt(in: entries, credential: credential) {
+          _ = try self.store.clearTaskSubmissionPending(pendingSubmission, credential: credential)
+          didReconcile = true
         }
         let statuses = MobileTaskContract.observeOwnedStatuses(
           entries, credential: credential, pending: state.pendingTaskMutation,
@@ -311,7 +310,7 @@ final class DeviceLinkViewModel: ObservableObject {
         }
         return MobileTaskListResult(
           entries: entries,
-          pendingSessionID: didReconcile ? nil : pendingSessionID,
+          pendingSubmission: didReconcile ? nil : pendingSubmission,
           didReconcilePendingRequest: didReconcile,
           statuses: statuses,
           allStatusesObserved: statuses.count == entries.count
@@ -321,13 +320,14 @@ final class DeviceLinkViewModel: ObservableObject {
         self.observeTaskStatuses(result.statuses, allStatusesObserved: result.allStatusesObserved)
         self.tasks = result.entries
         self.taskStatuses = result.statuses
-        self.pendingTaskSessionID = result.pendingSessionID
-        self.taskSubmissionNeedsReconciliation = result.pendingSessionID != nil
+        self.taskSubmissionNeedsReconciliation = result.pendingSubmission != nil
         let statusSuffix = result.allStatusesObserved ? ""
           : " Task状態は\(result.statuses.count)/\(result.entries.count)件を確認できました。残りの状態は不明です。"
         if result.didReconcilePendingRequest {
           self.taskMessage = "保留中の申請をDesktop一覧で照合しました。新規申請ができます。" + statusSuffix
-        } else if result.pendingSessionID != nil {
+        } else if result.pendingSubmission?.isLegacy == true {
+          self.taskMessage = "旧版の保留記録には依頼の照合情報がありません。新規申請は保留中です。Desktop Agent Centerで状態を確認してください。" + statusSuffix
+        } else if result.pendingSubmission != nil {
           self.taskMessage = "申請を一覧で照合できません。Desktop ownerがAgent Centerで確認するまで新規申請を停止しています。" + statusSuffix
         } else {
           self.taskMessage = "この端末に紐づく申請を読み込みました。本文や権限情報は取得していません。" + statusSuffix
@@ -376,6 +376,7 @@ final class DeviceLinkViewModel: ObservableObject {
       taskMessage = "依頼本文は空でない32,768文字以内にしてください。"
       return
     }
+    let instructionHash = MobileTaskContract.instructionHash(instruction)
     let runtimeID = selectedRuntimeID
     let workspaceID = workspace.id
     let includeMcp = includeMcpCapability
@@ -407,8 +408,10 @@ final class DeviceLinkViewModel: ObservableObject {
       },
       action: { evidence in
         let state = try self.store.loadOrCreate()
+        guard state.pendingTaskSubmission == nil else { throw DeviceLinkFailure.storage }
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
         var sessionID: String?
+        var pendingSubmission: PendingMobileTaskSubmission?
         do {
           let runtimeBody = try self.deviceLinkBody(
             credential, operation: "実行系列挙", payload: [:], allowedEvidence: ["INTERNAL_STATE", "LIVE_RUNTIME"],
@@ -449,14 +452,18 @@ final class DeviceLinkViewModel: ObservableObject {
             instruction: instruction,
             mcpCapabilityHash: currentMcpHash
           )
-          _ = try self.store.markTaskSubmissionPending(sessionID: createdSessionID)
+          let checkpoint = try PendingMobileTaskSubmission(credential: credential, runtimeID: runtimeID,
+            sessionID: createdSessionID, workspaceID: workspaceID, instructionHash: instructionHash)
+          pendingSubmission = checkpoint
           evidence.taskSubmissionPendingRecorded = true
+          _ = try self.store.markTaskSubmissionPending(checkpoint, credential: credential)
           let body = try self.deviceLinkBody(
             credential, operation: "AgentTask端末申請", payload: payload, allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
             epoch: epoch, evidence: evidence
           )
           return try MobileTaskContract.submission(
-            body, runtimeID: runtimeID, sessionID: createdSessionID, workspaceID: workspaceID
+            body, runtimeID: runtimeID, sessionID: createdSessionID, workspaceID: workspaceID,
+            expectedInstructionHash: instructionHash
           )
         } catch {
           if let sessionID,
@@ -477,10 +484,10 @@ final class DeviceLinkViewModel: ObservableObject {
               evidence.taskSessionCloseConfirmed = false
             }
           }
-          if evidence.taskSubmissionPendingRecorded, let sessionID,
+          if let pendingSubmission,
              (!evidence.taskSubmissionMayHaveReachedDesktop || Self.isDefinitiveRejection(error)) {
             do {
-              _ = try self.store.clearTaskSubmissionPending(sessionID: sessionID)
+              _ = try self.store.clearTaskSubmissionPending(pendingSubmission, credential: credential)
               evidence.taskSubmissionPendingCleared = true
             } catch {
               evidence.taskSubmissionPendingCleared = false
@@ -495,7 +502,6 @@ final class DeviceLinkViewModel: ObservableObject {
         self.taskStatuses[draft.id] = .ownerReviewPending
         _ = self.observeTaskStatus(draft.id, status: .ownerReviewPending, notifyOnChange: false)
         self.taskSubmissionNeedsReconciliation = true
-        self.pendingTaskSessionID = draft.sessionID
         self.taskMessage = "申請をDesktopへ渡しました。端末申請一覧との照合まで次の申請を停止します。Desktop ownerが内容を確認してPermission／Approvalを別途判断し、Brokerが開始直前に再検査します。"
       }
     )
@@ -682,14 +688,11 @@ final class DeviceLinkViewModel: ObservableObject {
           if evidence.taskSubmissionMayHaveReachedDesktop {
             self.taskInstruction = ""
             self.taskSubmissionNeedsReconciliation = true
-            self.pendingTaskSessionID = evidence.taskSessionID
             self.taskMessage = "Task申請中に画面が非表示になりました。再送せず、Desktop側の申請一覧を照合してください。"
           } else if evidence.taskSubmissionPendingCleared {
             self.taskSubmissionNeedsReconciliation = false
-            self.pendingTaskSessionID = nil
           } else if evidence.taskSubmissionPendingRecorded {
             self.taskSubmissionNeedsReconciliation = true
-            self.pendingTaskSessionID = evidence.taskSessionID
           } else {
             self.taskMessage = evidence.requestMayHaveReachedDesktop
               ? "要求がDesktopへ届いた可能性があります。自動再送せず、必要なら状態を照会してください。"
@@ -704,13 +707,10 @@ final class DeviceLinkViewModel: ObservableObject {
           if evidence.taskSubmissionMayHaveReachedDesktop && !Self.isDefinitiveRejection(error) {
             self.taskInstruction = ""
             self.taskSubmissionNeedsReconciliation = true
-            self.pendingTaskSessionID = evidence.taskSessionID
           } else if evidence.taskSubmissionPendingCleared {
             self.taskSubmissionNeedsReconciliation = false
-            self.pendingTaskSessionID = nil
           } else if evidence.taskSubmissionPendingRecorded {
             self.taskSubmissionNeedsReconciliation = true
-            self.pendingTaskSessionID = evidence.taskSessionID
           }
           self.taskMessage = failureMessage(error, evidence)
         }
@@ -1076,8 +1076,7 @@ final class DeviceLinkViewModel: ObservableObject {
     credentialExpired = state.credential?.isExpired() ?? false
     if !paired || credentialExpired { desktopNotifications = .unobserved }
     recoveryAuditCount = state.recoveryAudit.count
-    pendingTaskSessionID = state.pendingTaskSessionID
-    taskSubmissionNeedsReconciliation = state.pendingTaskSessionID != nil
+    taskSubmissionNeedsReconciliation = state.pendingTaskSubmission != nil
     taskMutationNeedsReconciliation = state.pendingTaskMutation != nil
     reinstallReviewRequired = store.reinstallReviewRequired
   }

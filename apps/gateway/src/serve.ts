@@ -1599,6 +1599,7 @@ async function serveWithOwnerLease(
   const router = new InboundRouter({
     propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams", "line"],
     redactHandlerErrorsForChannels: ["telegram", "slack", "teams", "line"],
+    propagateRedactedHandlerErrorsForRequest: isGatewayInternalD4RuntimeIntentRequest,
   });
   const dispatcher = new OutboundDispatcher();
 
