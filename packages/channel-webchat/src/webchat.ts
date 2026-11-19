@@ -237,6 +237,10 @@ async function readTelegramDeliverySnapshot(
   const unavailable = { status: "unavailable", unknown_count: null, recent_unknown: [] } as const;
   try {
     const snapshot = await read();
+    if (snapshot.status === "unavailable" && snapshot.reason === "state_store_unavailable" &&
+        snapshot.unknown_count === null && Array.isArray(snapshot.recent_unknown) && snapshot.recent_unknown.length === 0) {
+      return { ...unavailable, reason: "state_store_unavailable" };
+    }
     if (snapshot.status !== "available" || !Number.isSafeInteger(snapshot.unknown_count) ||
         !Array.isArray(snapshot.recent_unknown) || snapshot.recent_unknown.length > 20 ||
         snapshot.unknown_count < snapshot.recent_unknown.length ||

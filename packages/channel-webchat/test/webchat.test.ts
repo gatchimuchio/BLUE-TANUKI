@@ -7885,9 +7885,11 @@ describe("WebChatChannel — runtime snapshot API", () => {
         },
         getSnapshot: async () => ({
           gateway_status: "running",
+          safe_mode: false,
           hds_invariants_ok: true,
           webchat_ready: true,
-          telegram_configured: false,
+          telegram_configured: true,
+          telegram_state_unavailable: true,
           pending_approvals_count: 1,
           runtime_schedules_count: 2,
           pending_schedule_approvals_count: 1,
@@ -7929,7 +7931,8 @@ describe("WebChatChannel — runtime snapshot API", () => {
         gateway_status: "running",
         hds_invariants_ok: true,
         webchat_ready: true,
-        telegram_configured: false,
+        telegram_configured: true,
+        telegram_state_unavailable: true,
         pending_approvals_count: 1,
         runtime_schedules_count: 2,
         pending_schedule_approvals_count: 1,
@@ -7945,7 +7948,9 @@ describe("WebChatChannel — runtime snapshot API", () => {
         authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
       });
       expect(d4Reader.status).toBe(200);
-      expect(JSON.parse(d4Reader.text)).toMatchObject({ gateway_status: "running", hds_invariants_ok: true });
+      const d4Snapshot = JSON.parse(d4Reader.text);
+      expect(d4Snapshot).toMatchObject({ gateway_status: "running", hds_invariants_ok: true, telegram_configured: true });
+      expect(d4Snapshot).not.toHaveProperty("telegram_state_unavailable");
       expect(d4Reader.text).not.toContain(D4_RUNTIME_TOKEN);
 
       const d4ApprovalList = await getRaw(ctx.port, "/approval", {
@@ -7964,6 +7969,26 @@ describe("WebChatChannel — runtime snapshot API", () => {
     } finally {
       await ctx.teardown();
     }
+  });
+
+  it("shows a Telegram state-store hold in the Control Center status row", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function updatePermanentUseStatus(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("function dailyBriefServiceLabel(", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    let statusHtml = "";
+    const render = new Script(`${CONTROL_CENTER_SCRIPT.slice(start, end)}\nupdatePermanentUseStatus`).runInNewContext({
+      runtimeGatewayTone: () => "good",
+      labelForBoolean: String,
+      toneForBoolean: () => "good",
+      escapeHtml: String,
+      badge: (label: string, tone: string) => `<b class="${tone}">${label}</b>`,
+      setHtml: (id: string, value: string) => { if (id === "permanent-use-status") statusHtml = value; },
+    }) as (body: unknown) => void;
+    render({ telegram_configured: true, telegram_state_unavailable: true });
+    expect(statusHtml).toContain('<span>Telegram</span><span><b class="bad">送受信を停止中</b></span>');
+    render({ telegram_configured: true });
+    expect(statusHtml).toContain('<span>Telegram</span><span><b class="good">configured</b></span>');
   });
 
   it("does not accept POST /runtime/snapshot", async () => {
@@ -9913,18 +9938,22 @@ describe("WebChatChannel - resident notifications API", () => {
     const general = { ...savedResult, id: "audit-fixture", kind: "audit_warning" } as const;
     const telegramDelivery = { status: "available", unknown_count: 1,
       recent_unknown: [{ delivery_digest: "a".repeat(64), updated_at_ms: 12347, raw_target: "synthetic-private-target" }] } as const;
+    const telegramHeld = { status: "unavailable", unknown_count: null, recent_unknown: [],
+      reason: "state_store_unavailable", raw_path: "synthetic-private-store-path" } as const;
     let ownerReads = 0;
     let generalReads = 0;
     let telegramReads = 0;
     const ctx = await setup({
       owner_token: OWNER_TOKEN,
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
-      rate_limits: { inbound: { capacity: 2, refill_per_sec: 0.001 } },
+      rate_limits: { inbound: { capacity: 3, refill_per_sec: 0.001 } },
       notifications: {
         list: async () => { generalReads += 1; return [general, savedResult]; },
         listOwnerSavedResults: async () => { ownerReads += 1; return ownerReads === 1 ? [general, savedResult] : []; },
         telegramDelivery: () => {
-          if (++telegramReads > 1) throw new Error("synthetic-private-store-path");
+          telegramReads += 1;
+          if (telegramReads === 2) return telegramHeld;
+          if (telegramReads === 3) throw new Error("synthetic-private-store-path");
           return telegramDelivery;
         },
       },
@@ -9952,6 +9981,11 @@ describe("WebChatChannel - resident notifications API", () => {
       expect(JSON.parse(owner.text)).toEqual({ notifications: [savedResult], scope: "owner", telegram_delivery: {
         status: "available", unknown_count: 1, recent_unknown: [{ delivery_digest: "a".repeat(64), updated_at_ms: 12347 }],
       } });
+      const held = await read(OWNER_TOKEN);
+      expect(JSON.parse(held.text)).toEqual({ notifications: [], scope: "owner", telegram_delivery: {
+        status: "unavailable", unknown_count: null, recent_unknown: [], reason: "state_store_unavailable",
+      } });
+      expect(held.text).not.toContain(telegramHeld.raw_path);
       const unavailable = await read(OWNER_TOKEN);
       expect(JSON.parse(unavailable.text)).toEqual({ notifications: [], scope: "owner", telegram_delivery: {
         status: "unavailable", unknown_count: null, recent_unknown: [],
@@ -9960,8 +9994,8 @@ describe("WebChatChannel - resident notifications API", () => {
       expect((await read(OWNER_TOKEN)).status).toBe(429);
       expect(generalReads).toBe(2);
       expect(JSON.parse((await read(TOKEN)).text)).toEqual({ notifications: [general] });
-      expect(ownerReads).toBe(2);
-      expect(telegramReads).toBe(2);
+      expect(ownerReads).toBe(3);
+      expect(telegramReads).toBe(3);
     } finally {
       await ctx.teardown();
     }
@@ -10020,7 +10054,14 @@ describe("WebChatChannel - resident notifications API", () => {
       fetchJson: (path: string, token: string, options: RequestInit) => {
         credentialAtFetch.push(owner.value);
         requests.push({ path, token, cache: options.cache ?? "" });
-        if (token === OWNER_TOKEN) return ++ownerReads === 1 ? ownerResponse : Promise.resolve(notice);
+        if (token === OWNER_TOKEN) {
+          ownerReads += 1;
+          if (ownerReads === 1) return ownerResponse;
+          if (ownerReads === 2) return Promise.resolve(notice);
+          return Promise.resolve({ scope: "owner", notifications: [], telegram_delivery: {
+            status: "unavailable", unknown_count: null, recent_unknown: [], reason: "state_store_unavailable",
+          } });
+        }
         if (token === TOKEN) return Promise.resolve({ notifications: [] });
         return Promise.reject(new Error("unauthorized"));
       },
@@ -10060,6 +10101,10 @@ describe("WebChatChannel - resident notifications API", () => {
     expect(inbound.value).toBe("");
     expect(state.notificationsToken).toBe("");
     expect(stored.has(storageKey)).toBe(false);
+    expect(telegramSection.hidden).toBe(false);
+    expect(telegramStatus.textContent).toBe("Telegramの送信と受信を停止しています。Gatewayを再起動する前に、Telegramの保存状態を確認してください。");
+    expect(telegramList.hidden).toBe(true);
+    expect(telegramRows).toEqual([]);
 
     inbound.value = "unsupported-token-fixture";
     await load();

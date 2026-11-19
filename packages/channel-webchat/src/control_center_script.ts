@@ -2723,6 +2723,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const pendingApprovals = Number(body.pending_approvals_count ?? 0);
         const pendingSchedules = Number(body.pending_schedule_approvals_count ?? 0);
         const safeMode = body.safe_mode === true;
+        const telegramHeld = body.telegram_state_unavailable === true;
         const modeLabel = typeof body.safe_mode === "boolean" ? (safeMode ? "Safe Mode" : "通常モード") : "未確認";
         const items = [
           ["Gateway", body.gateway_status || "unknown", runtimeGatewayTone(body)],
@@ -2732,7 +2733,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ["WebChat", labelForBoolean(body.webchat_ready), toneForBoolean(body.webchat_ready)],
           ["Approvals", String(pendingApprovals), pendingApprovals === 0 ? "good" : "review"],
           ["Schedules", String(pendingSchedules), pendingSchedules === 0 ? "good" : "review"],
-          ["Telegram", body.telegram_configured ? "configured" : "optional", body.telegram_configured ? "good" : "warn"],
+          ["Telegram", telegramHeld ? "送受信を停止中" : body.telegram_configured ? "configured" : "optional",
+            telegramHeld ? "bad" : body.telegram_configured ? "good" : "warn"],
           ["Runtime", body.runtime_schedules_count ?? "0", "good"]
         ];
         setHtml(
@@ -4257,6 +4259,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const delivery = body.telegram_delivery;
         const rows = delivery?.recent_unknown;
         const count = delivery?.unknown_count;
+        if (delivery?.status === "unavailable" && delivery.reason === "state_store_unavailable" &&
+            count === null && Array.isArray(rows) && rows.length === 0) {
+          setText("telegram-delivery-notification-status", "Telegramの送信と受信を停止しています。Gatewayを再起動する前に、Telegramの保存状態を確認してください。");
+          return;
+        }
         if (delivery?.status !== "available" || !Number.isSafeInteger(count) || !Array.isArray(rows) ||
             rows.length > 20 || count < rows.length || rows.some(function (row) {
               return typeof row?.delivery_digest !== "string" || !/^[a-f0-9]{64}$/u.test(row.delivery_digest) ||

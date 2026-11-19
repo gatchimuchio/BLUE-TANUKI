@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
@@ -7,6 +7,20 @@ import type { TelegramOutboundDeliveryState, TelegramOutboundDeliveryStore, Tele
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
+const CREATE_CURSOR = `CREATE TABLE telegram_update_cursor (
+  bot_scope_digest TEXT PRIMARY KEY CHECK(length(bot_scope_digest) = 64),
+  update_id INTEGER NOT NULL CHECK(update_id >= 0),
+  payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+  delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+  updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+) STRICT`;
+const CREATE_OUTBOUND = `CREATE TABLE telegram_outbound_delivery (
+  bot_scope_digest TEXT NOT NULL CHECK(length(bot_scope_digest) = 64),
+  delivery_digest TEXT NOT NULL CHECK(length(delivery_digest) = 64),
+  delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','delivered','not_delivered','outcome_unknown')),
+  updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+  PRIMARY KEY(bot_scope_digest, delivery_digest)
+) STRICT`;
 
 export type TelegramUpdateDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
 export type TelegramUpdateClaim =
@@ -29,17 +43,17 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, Telegram
   private db: DatabaseType;
   private closed = false;
   private readonly botScopeDigest: string;
-  private readonly filepath: string;
 
   constructor(filepath: string, botToken: string) {
     if (typeof botToken !== "string" || botToken.trim().length === 0) {
       throw new Error("telegram_inbox_bot_token_required");
     }
-    this.filepath = filepath;
+    const databasePath = resolve(filepath);
     this.botScopeDigest = sha256(`telegram-bot-scope.v1\0${botToken}`);
-    mkdirSync(dirname(resolve(filepath)), { recursive: true });
-    this.db = new DatabaseSync(filepath);
-    this.initializeDatabase();
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const existing = prepareDatabaseFile(databasePath);
+    this.db = new DatabaseSync(databasePath);
+    this.initializeDatabase(databasePath, existing);
   }
 
   static fromEnvironment(env: NodeJS.ProcessEnv = process.env, botToken: string): GatewayTelegramUpdateStore {
@@ -48,40 +62,37 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, Telegram
     const privateRoot = join(realpathSync(stateRoot), "private-state");
     const directory = join(privateRoot, "telegram-inbox");
     for (const dir of [privateRoot, directory]) {
-      mkdirSync(dir, { recursive: true });
-      if (lstatSync(dir).isSymbolicLink()) throw new Error("telegram_inbox_state_directory_must_not_be_symlink");
-      if (process.platform !== "win32") chmodSync(dir, 0o700);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const stat = lstatSync(dir);
+      if (!stat.isDirectory()) throw new Error("telegram_inbox_state_directory_must_not_be_symlink");
+      if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
     }
-    const filepath = join(directory, "telegram-inbox.sqlite");
-    try {
-      if (lstatSync(filepath).isSymbolicLink()) throw new Error("telegram_inbox_state_file_must_not_be_symlink");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    return new GatewayTelegramUpdateStore(filepath, botToken);
+    return new GatewayTelegramUpdateStore(join(directory, "telegram-inbox.sqlite"), botToken);
   }
 
-  private initializeDatabase(): void {
-    if (process.platform !== "win32") chmodSync(this.filepath, 0o600);
+  private initializeDatabase(databasePath: string, existing: boolean): void {
     try {
-      this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA");
-      this.db.exec(`CREATE TABLE IF NOT EXISTS telegram_update_cursor (
-        bot_scope_digest TEXT PRIMARY KEY CHECK(length(bot_scope_digest) = 64),
-        update_id INTEGER NOT NULL CHECK(update_id >= 0),
-        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
-        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
-        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS telegram_outbound_delivery (
-        bot_scope_digest TEXT NOT NULL CHECK(length(bot_scope_digest) = 64),
-        delivery_digest TEXT NOT NULL CHECK(length(delivery_digest) = 64),
-        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','delivered','not_delivered','outcome_unknown')),
-        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
-        PRIMARY KEY(bot_scope_digest, delivery_digest)
-      ) STRICT;`);
-      const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
-      if (!integrity || Object.values(integrity)[0] !== "ok") throw new Error("telegram_inbox_integrity_check_failed");
+      this.db.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=EXTRA");
+      if (this.db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete") {
+        throw new Error("telegram_inbox_journal_mode_invalid");
+      }
       this.transaction(() => {
+        let hasOutbound = false;
+        if (existing) {
+          const integrity = this.db.prepare("PRAGMA quick_check(1)").get();
+          if (!integrity || Object.values(integrity)[0] !== "ok") throw new Error("telegram_inbox_integrity_check_failed");
+          hasOutbound = validateExistingSchema(this.db);
+          this.readCursor();
+          if (hasOutbound && this.db.prepare(`SELECT 1 FROM telegram_outbound_delivery WHERE bot_scope_digest=? AND
+            (delivery_digest GLOB '*[^0-9a-f]*' OR updated_at_ms>?) LIMIT 1`)
+            .get(this.botScopeDigest, Number.MAX_SAFE_INTEGER)) {
+            throw new Error("telegram_outbound_delivery_state_invalid");
+          }
+          if (process.platform !== "win32" && (lstatSync(databasePath).mode & 0o777) !== 0o600) chmodSync(databasePath, 0o600);
+        } else {
+          this.db.exec(CREATE_CURSOR);
+        }
+        if (!hasOutbound) this.db.exec(CREATE_OUTBOUND);
         const nowMs = Date.now();
         // A process interrupted after admission cannot prove whether Gateway
         // began acting. Keep the cursor and suppress replay as outcome-unknown.
@@ -99,20 +110,14 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, Telegram
 
   latestUpdateId(): number | null {
     this.assertOpen();
-    const row = this.db.prepare(`SELECT update_id,payload_digest,delivery_state,updated_at_ms
-      FROM telegram_update_cursor WHERE bot_scope_digest=?`).get(this.botScopeDigest) as TelegramUpdateCursorRow | undefined;
-    if (!row) return null;
-    validateCursorRow(row);
-    return row.update_id;
+    return this.readCursor()?.update_id ?? null;
   }
 
   claim(updateId: number, payloadDigest: string, nowMs = Date.now()): TelegramUpdateClaim {
     validateIdentity(updateId, payloadDigest, nowMs);
     return this.transaction(() => {
-      const current = this.db.prepare(`SELECT update_id,payload_digest,delivery_state,updated_at_ms
-        FROM telegram_update_cursor WHERE bot_scope_digest=?`).get(this.botScopeDigest) as TelegramUpdateCursorRow | undefined;
+      const current = this.readCursor();
       if (current) {
-        validateCursorRow(current);
         if (updateId < current.update_id) return { status: "stale" } as const;
         if (updateId === current.update_id) {
           if (payloadDigest !== current.payload_digest) return { status: "identity_conflict" } as const;
@@ -140,9 +145,7 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, Telegram
         WHERE bot_scope_digest=? AND update_id=? AND payload_digest=? AND delivery_state='dispatching'`)
         .run(state, nowMs, this.botScopeDigest, updateId, payloadDigest);
       if (Number(update.changes) === 1) return;
-      const current = this.db.prepare(`SELECT update_id,payload_digest,delivery_state,updated_at_ms
-        FROM telegram_update_cursor WHERE bot_scope_digest=?`).get(this.botScopeDigest) as TelegramUpdateCursorRow | undefined;
-      if (current) validateCursorRow(current);
+      const current = this.readCursor();
       if (!current || current.update_id !== updateId || current.payload_digest !== payloadDigest || current.delivery_state !== state) {
         throw new Error("telegram_inbox_settlement_conflict");
       }
@@ -205,6 +208,13 @@ export class GatewayTelegramUpdateStore implements TelegramUpdateInbox, Telegram
 
   isClosed(): boolean { return this.closed; }
 
+  private readCursor(): TelegramUpdateCursorRow | undefined {
+    const row = this.db.prepare(`SELECT update_id,payload_digest,delivery_state,updated_at_ms
+      FROM telegram_update_cursor WHERE bot_scope_digest=?`).get(this.botScopeDigest) as TelegramUpdateCursorRow | undefined;
+    if (row) validateCursorRow(row);
+    return row;
+  }
+
   private readOutboundState(deliveryDigest: string): TelegramOutboundDeliveryState | undefined {
     const row = this.db.prepare(`SELECT delivery_state FROM telegram_outbound_delivery
       WHERE bot_scope_digest=? AND delivery_digest=?`).get(this.botScopeDigest, deliveryDigest);
@@ -241,6 +251,30 @@ interface TelegramUpdateCursorRow {
   updated_at_ms: number;
 }
 
+function prepareDatabaseFile(filepath: string): boolean {
+  try {
+    const file = lstatSync(filepath);
+    if (!file.isFile()) throw new Error("telegram_inbox_state_file_not_regular");
+    if (file.size === 0) throw new Error("telegram_inbox_existing_database_empty");
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    closeSync(openSync(filepath, "wx", 0o600));
+    return false;
+  }
+}
+
+function validateExistingSchema(database: DatabaseType): boolean {
+  const objects = database.prepare("SELECT name,type,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").all();
+  const canonical = (sql: string): string => sql.trim().replace(/\s+/gu, " ").replace(/\s*([(),=<>])\s*/gu, "$1");
+  const expectedTables = new Map([["telegram_update_cursor", CREATE_CURSOR], ["telegram_outbound_delivery", CREATE_OUTBOUND]]);
+  if (!objects.some(row => row.name === "telegram_update_cursor") || objects.some(row => {
+    const expected = typeof row.name === "string" ? expectedTables.get(row.name) : undefined;
+    return row.type !== "table" || typeof row.sql !== "string" || expected === undefined || canonical(row.sql) !== canonical(expected);
+  })) throw new Error("telegram_inbox_schema_invalid");
+  return objects.some(row => row.name === "telegram_outbound_delivery");
+}
+
 function validateIdentity(updateId: number, payloadDigest: string, nowMs: number): void {
   if (!Number.isSafeInteger(updateId) || updateId < 0 || updateId >= Number.MAX_SAFE_INTEGER ||
       !DIGEST.test(payloadDigest) || !Number.isSafeInteger(nowMs) || nowMs < 0) {
@@ -249,7 +283,8 @@ function validateIdentity(updateId: number, payloadDigest: string, nowMs: number
 }
 
 function validateCursorRow(row: TelegramUpdateCursorRow): void {
-  if (!Number.isSafeInteger(row.update_id) || row.update_id < 0 || !DIGEST.test(row.payload_digest) ||
+  if (!Number.isSafeInteger(row.update_id) || row.update_id < 0 || row.update_id >= Number.MAX_SAFE_INTEGER ||
+      !validDigest(row.payload_digest) ||
       !["dispatching", "handler_returned", "outcome_unknown"].includes(row.delivery_state) ||
       !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
     throw new Error("telegram_inbox_cursor_invalid");

@@ -21,6 +21,7 @@ import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
 import { storeBlueTanukiSecret } from "../src/secret_store.js";
 import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_config.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { GatewayTelegramUpdateStore } from "../src/telegram_update_store.js";
 const ROOT = process.cwd();
 const WEBCHAT_TOKEN = "f1003-synthetic-inbound-token";
 const OWNER_TOKEN = "f1003-synthetic-owner-token";
@@ -793,6 +794,206 @@ require("node:module").syncBuiltinESMExports();
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
   }, 240_000);
+
+  it("keeps WebChat working while an invalid Telegram ledger is held, and uses the verified ledger on restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-telegram-state-fault-"));
+    const stateRoot = join(root, "state");
+    const inboxPath = join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite");
+    const envFile = join(root, "fixture.env");
+    const capture = join(root, "held-capture.jsonl");
+    const restoredCapture = join(root, "restored-capture.jsonl");
+    const networkPreload = join(root, "telegram-fetch-fixture.cjs");
+    const holdObserver = join(root, "observe-telegram-state-hold.mjs");
+    const probeFile = join(root, "probe-telegram-output");
+    const shutdownFile = join(root, "request-shutdown");
+    const user = "synthetic-telegram-fault-webchat";
+    const webchatTask = "青い花の名前を一つ説明してください。";
+    const webchatReply = "WebChat経由で青い花の合成回答を返します。";
+    const oldTelegramTask = "すでに受付済みの合成メッセージ";
+    const newTelegramTask = "新しく受付する合成メッセージ";
+    const telegramReply = "Telegram経由で新しい合成回答を返します。";
+    const message = { message_thread_id: TELEGRAM_THREAD_ID,
+      chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" }, from: { id: Number(TELEGRAM_USER_ID), is_bot: false } };
+    const original = { update_id: 775, message: { ...message, message_id: 775, text: oldTelegramTask } };
+    const fresh = { update_id: 776, message: { ...message, message_id: 776, text: newTelegramTask } };
+    const corruptBytes = Buffer.from("synthetic-invalid-telegram-ledger\n", "utf8");
+    const providerBodies: string[] = [];
+    const provider = createServer((request, response) => {
+      void readRequest(request).then(body => {
+        providerBodies.push(body);
+        if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+          response.writeHead(404).end();
+          return;
+        }
+        const answer = body.includes(newTelegramTask) ? telegramReply : body.includes(webchatTask) ? webchatReply : null;
+        if (answer === null) {
+          response.writeHead(500).end();
+          return;
+        }
+        const content = body.includes("blue-tanuki.memory-citation-response.v1") ? JSON.stringify({
+          schema_version: "blue-tanuki.memory-citation-response.v1", answer, citations: [],
+        }) : answer;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "telegram-fault-fixture", object: "chat.completion", created: 1,
+          model: "f1003-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+      }).catch(() => response.writeHead(500).end());
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    try {
+      const seed = GatewayTelegramUpdateStore.fromEnvironment({ BLUE_TANUKI_STATE_ROOT: stateRoot }, TELEGRAM_TOKEN);
+      const digest = createHash("sha256").update(JSON.stringify(original)).digest("hex");
+      try {
+        expect(seed.claim(original.update_id, digest)).toMatchObject({ status: "accepted" });
+        seed.settle(original.update_id, digest, "handler_returned");
+      } finally {
+        seed.close();
+      }
+      const verified = readFileSync(inboxPath);
+      const verifiedSha = createHash("sha256").update(verified).digest("hex");
+      writeFileSync(inboxPath, corruptBytes);
+      const corruptMtime = statSync(inboxPath).mtimeMs;
+      const expectCorruptPreserved = () => {
+        expect(readFileSync(inboxPath)).toEqual(corruptBytes);
+        expect(statSync(inboxPath).mtimeMs).toBe(corruptMtime);
+        expect(readdirSync(dirname(inboxPath))).toEqual([basename(inboxPath)]);
+      };
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const env = isolatedEnvironment(providerPort, gatewayPort, join(root, "audit"), stateRoot,
+        join(root, "memory.jsonl"), join(root, "history.jsonl"), join(root, "sessions"), capture, JSON.stringify([original, fresh]));
+      env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
+      writeFileSync(envFile, "# isolated fixture\n");
+      writeFileSync(networkPreload, telegramFetchPreload(), "utf8");
+      const dispatcherModule = pathToFileURL(join(ROOT, "packages/channel-base/dist/index.js")).href;
+      writeFileSync(holdObserver, `
+import { appendFileSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { OutboundDispatcher } from ${JSON.stringify(dispatcherModule)};
+createRequire(import.meta.url)(${JSON.stringify(networkPreload)});
+function record(event) {
+  appendFileSync(process.env.BT_F1003_TELEGRAM_CAPTURE, JSON.stringify(event) + "\\n");
+}
+const fixtureFetch = globalThis.fetch;
+globalThis.fetch = function (input, init) {
+  const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (new URL(rawUrl).hostname === "api.telegram.org") record({ method: "telegramHeldFetchAttempt" });
+  return fixtureFetch(input, init);
+};
+const register = OutboundDispatcher.prototype.register;
+let gatewayDispatcher;
+OutboundDispatcher.prototype.register = function (channel) {
+  if (channel.name === "webchat") gatewayDispatcher = this;
+  return register.call(this, channel);
+};
+const timer = setInterval(async () => {
+  if (!gatewayDispatcher || !existsSync(${JSON.stringify(probeFile)})) return;
+  clearInterval(timer);
+  const result = await gatewayDispatcher.dispatch({
+    channel: "telegram", target: ${JSON.stringify(TELEGRAM_CHAT_ID)}, content: "合成停止中返信",
+  }, { command_id: "synthetic-state-hold-probe", upstream_commit_hash: "a".repeat(64) });
+  record({ method: "telegramHeldDispatch", delivered: result.delivered, error_code: result.error_code });
+}, 20);
+timer.unref();
+`, "utf8");
+
+      const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+      const status = (route: string, token: string) => fetch(baseUrl + route, {
+        headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000),
+      });
+      const telegramMethods = (file: string) => readCaptureEvents(file)
+        .filter(event => ["getUpdates", "sendMessage"].includes(String(event.method)));
+      gateway = spawnGateway(env, holdObserver, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const heldSnapshot = await status("/runtime/snapshot", WEBCHAT_TOKEN);
+      expect(heldSnapshot.status).toBe(200);
+      expect(await heldSnapshot.json()).toMatchObject({ telegram_configured: true, telegram_state_unavailable: true });
+      const owner = await status("/notifications", OWNER_TOKEN);
+      expect(owner.status).toBe(200);
+      expect(owner.headers.get("cache-control")).toBe("no-store");
+      const ownerText = await owner.text();
+      expect(JSON.parse(ownerText)).toMatchObject({ scope: "owner", telegram_delivery: {
+        status: "unavailable", unknown_count: null, recent_unknown: [], reason: "state_store_unavailable",
+      } });
+      for (const sensitive of [TELEGRAM_TOKEN, inboxPath, corruptBytes.toString().trim()]) expect(ownerText).not.toContain(sensitive);
+      const ordinary = await status("/notifications", WEBCHAT_TOKEN);
+      expect(ordinary.status).toBe(200);
+      expect(await ordinary.json()).not.toHaveProperty("telegram_delivery");
+
+      const webchatFrames: WebSocketFrame[] = [];
+      socket = await connectWebChat(gatewayPort, webchatFrames, user);
+      const task = await fetch(baseUrl + "/inbound", {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user, content: webchatTask }), signal: AbortSignal.timeout(8_000),
+      });
+      expect(task.status).toBe(202);
+      await waitFor(() => webchatFrames.find(frame => frame.kind === "channel_send" && frame.content?.includes(webchatReply)) ?? null,
+        gateway, "Telegram台帳保留中にWebChatの実返信を受け取れなかった");
+      expect(providerBodies).toHaveLength(1);
+      expect(providerBodies[0]).toContain(webchatTask);
+      writeFileSync(probeFile, "check outbound\n", "utf8");
+      const blocked = await waitFor(() => readCaptureEvents(capture).find(event => event.method === "telegramHeldDispatch") ?? null,
+        gateway, "Telegram配信が登録されていないことを観測できなかった");
+      expect(blocked).toEqual({ method: "telegramHeldDispatch", delivered: false, error_code: "no_channel_registered" });
+      expect(readCaptureEvents(capture).some(event => event.method === "telegramHeldFetchAttempt")).toBe(false);
+      expectCorruptPreserved();
+
+      socket.terminate();
+      socket = undefined;
+      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
+      writeFileSync(shutdownFile, "stop\n", "utf8");
+      expect(await stopped).toEqual([0, null]);
+      gateway = undefined;
+      expectCorruptPreserved();
+      expect(readCaptureEvents(capture).some(event => event.method === "telegramHeldFetchAttempt")).toBe(false);
+
+      // Only the test harness replaces the stopped fixture's bad bytes.
+      const quarantined = join(root, "preserved-fault.sqlite");
+      renameSync(inboxPath, quarantined);
+      writeFileSync(inboxPath, verified, { flag: "wx" });
+      expect(createHash("sha256").update(readFileSync(inboxPath)).digest("hex")).toBe(verifiedSha);
+      delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
+      env.BT_F1003_TELEGRAM_CAPTURE = restoredCapture;
+      gateway = spawnGateway(env, networkPreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const sent = await waitFor(() => telegramMethods(restoredCapture).find(event => event.method === "sendMessage") ?? null,
+        gateway, "照合済みTelegram台帳の再起動後に新規受付への返信がなかった");
+      expect(sent).toMatchObject({ chat_id: TELEGRAM_CHAT_ID, message_thread_id: TELEGRAM_THREAD_ID,
+        text: expect.stringContaining(telegramReply) });
+      const nextCursor = await waitFor(() => {
+        const rows = readTelegramInboxCursor(stateRoot);
+        return rows[0]?.delivery_state === "handler_returned" ? rows : null;
+      }, gateway, "復元した台帳へ新しい受付の処理結果が記録されなかった");
+      expect(nextCursor).toEqual([{ update_id: fresh.update_id, delivery_state: "handler_returned",
+        payload_digest: createHash("sha256").update(JSON.stringify(fresh)).digest("hex") }]);
+      expect(readTelegramOutboundDeliveries(stateRoot)).toEqual([expect.objectContaining({ delivery_state: "delivered" })]);
+      const recovered = await status("/runtime/snapshot", WEBCHAT_TOKEN);
+      expect(recovered.status).toBe(200);
+      const recoveredBody = await recovered.json();
+      expect(recoveredBody).toMatchObject({ telegram_configured: true });
+      expect(recoveredBody).not.toMatchObject({ telegram_state_unavailable: true });
+      const ownerRecovered = await status("/notifications", OWNER_TOKEN);
+      expect(ownerRecovered.status).toBe(200);
+      expect(await ownerRecovered.json()).toMatchObject({
+        telegram_delivery: { status: "available", unknown_count: 0, recent_unknown: [] },
+      });
+      const restoredMethods = telegramMethods(restoredCapture);
+      expect(restoredMethods.find(event => event.method === "getUpdates"))
+        .toMatchObject({ offset: original.update_id + 1, update_ids: [fresh.update_id] });
+      expect(restoredMethods.filter(event => event.method === "sendMessage")).toHaveLength(1);
+      expect(providerBodies).toHaveLength(2);
+      expect(providerBodies[1]).toContain(newTelegramTask);
+      expect(providerBodies.join("")).not.toContain(oldTelegramTask);
+      expect(readFileSync(quarantined)).toEqual(corruptBytes);
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 120_000);
 
   it("preserves Telegram admission as outcome unknown when Gateway stops during getFile", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-shutdown-"));

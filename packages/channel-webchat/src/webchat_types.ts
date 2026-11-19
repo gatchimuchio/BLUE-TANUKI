@@ -1898,6 +1898,7 @@ export type WebChatTelegramDeliverySnapshot = {
   status: "unavailable";
   unknown_count: null;
   recent_unknown: readonly [];
+  reason?: "state_store_unavailable";
 };
 
 export interface WebChatNotificationSurface {

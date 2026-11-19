@@ -154,7 +154,8 @@ tool:schedule.create channel=webchat target=local-user content="runtime smoke" i
 | resume token が inbound token と同じ | gateway は起動しない | resume 用 token を別に生成する |
 | port `8787` が使用中 | gateway は bind できない | 既存 process を止めるか `WEBCHAT_PORT` を変える |
 | `doctor` exit code `2` | 安全に起動できない | `pnpm run doctor` の error check を直してから再起動する |
-| Telegram が応答しない | WebChat には影響しない | token、`/start`、chat_id、BotFather privacy mode を確認する |
+| 稼働中にTelegramだけが応答しない | WebChatの作業は継続できる | token、`/start`、chat_id、BotFather privacy mode を確認する |
+| Telegramの台帳を起動時に確認できない | Telegramの送受信を停止し、WebChatの作業は継続できる | 所有者向け通知を確認し、既存の受信・送信記録を保全する。台帳の整合性と復元に使う記録を確認してからGatewayを再起動する |
 | audit chain が broken | boot を止めるべき状態 | [AUDIT.md](../AUDIT.md) と [UPDATE_ROLLBACK_RUNBOOK.md](./UPDATE_ROLLBACK_RUNBOOK.md) の quarantine 手順へ |
 
 ## 9. 初回後に必ず読むもの

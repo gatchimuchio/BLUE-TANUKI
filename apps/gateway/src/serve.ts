@@ -188,6 +188,7 @@ import type {
   WebChatHistoryReplayFilter,
   WebChatHistorySnapshot,
   WebChatResumeContext,
+  WebChatTelegramDeliverySnapshot,
 } from "@blue-tanuki/channel-webchat";
 import { countOwnerTasksWithSavedResults, projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
@@ -5445,6 +5446,7 @@ async function serveWithOwnerLease(
               runtime_schedules_count: runtimeSchedulesCount,
               pending_schedule_approvals_count: pendingScheduleApprovalsCount,
             }),
+            ...(telegramStateUnavailable ? { telegram_state_unavailable: true } : {}),
             hds: hdsSnapshot,
             emergency_stop: emergencyStopSnapshot(),
             pending_approvals: pendingApprovals,
@@ -5549,8 +5551,12 @@ async function serveWithOwnerLease(
       notifications: {
         list: async () => residentNotificationSnapshot(),
         listOwnerSavedResults: async () => ownerSavedResultNotificationSnapshot(),
-        telegramDelivery: () => telegramUpdateStore?.unknownDeliverySnapshot() ??
-          { status: "unavailable", unknown_count: null, recent_unknown: [] },
+        telegramDelivery: (): WebChatTelegramDeliverySnapshot => telegramUpdateStore?.unknownDeliverySnapshot() ?? {
+          status: "unavailable",
+          unknown_count: null,
+          recent_unknown: [],
+          ...(telegramStateUnavailable ? { reason: "state_store_unavailable" } : {}),
+        },
       },
       history: {
         replay: async (filter: WebChatHistoryReplayFilter) => completeHistorySnapshot(filter),
@@ -8395,9 +8401,18 @@ async function serveWithOwnerLease(
   const telegramInboundGrants = telegramBotToken
     ? parseTelegramInboundGrants(process.env.TELEGRAM_INBOUND_GRANTS_JSON)
     : [];
-  const telegramUpdateStore = telegramBotToken
-    ? GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken)
-    : null;
+  let telegramUpdateStore: GatewayTelegramUpdateStore | null = null;
+  if (telegramBotToken) {
+    try {
+      telegramUpdateStore = GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken);
+    } catch {
+      telegramLog.error("Telegram channel held", {
+        reason_code: "telegram_state_store_unavailable",
+        used_for_authority: false,
+      });
+    }
+  }
+  const telegramStateUnavailable = Boolean(telegramBotToken && !telegramUpdateStore);
   const slackBotToken = resolveSecretMaterial(process.env, "SLACK_BOT_TOKEN");
   const slackAppToken = resolveSecretMaterial(process.env, "SLACK_APP_TOKEN");
   const slackLiveConfigured = Boolean(slackBotToken && slackAppToken);
@@ -8447,7 +8462,7 @@ async function serveWithOwnerLease(
   const lineEventStore = (lineIngressConfigured || lineSenderConfigured)
     ? GatewayLineEventStore.fromEnvironment(process.env, lineDestination, lineChannelAccessToken)
     : null;
-  const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
+  const telegram = telegramStateUnavailable ? null : plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
     action: "register telegram channel",
@@ -8531,12 +8546,12 @@ async function serveWithOwnerLease(
   ].filter((channel): channel is InboundChannel & OutboundChannel => channel !== null);
 
   router.register(webchat);
-  router.register(telegram);
+  if (telegram) router.register(telegram);
   for (const channel of previewChannels) router.register(channel);
   router.register(cron);
 
   dispatcher.register(webchat);
-  dispatcher.register(telegram);
+  if (telegram) dispatcher.register(telegram);
   for (const channel of previewChannels) dispatcher.register(channel);
 
   const computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);

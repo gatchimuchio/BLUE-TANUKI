@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegr
 import { GatewayTelegramUpdateStore } from "../src/telegram_update_store.js";
 
 const roots: string[] = [];
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -66,6 +68,73 @@ describe("GatewayTelegramUpdateStore", () => {
     } finally {
       reopened.close();
     }
+  });
+
+  it.each([Buffer.alloc(0), Buffer.from("synthetic invalid database bytes")])("refuses invalid pre-existing database bytes without changing them (%j)", bytes => {
+    const { filepath, store } = makeStore();
+    store.close();
+    writeFileSync(filepath, bytes);
+    expect(() => new GatewayTelegramUpdateStore(filepath, "fixture-bot-token")).toThrow();
+    expect(readFileSync(filepath)).toEqual(bytes);
+  });
+
+  it("rejects a malformed pre-existing schema without reinitializing the ledger", () => {
+    const { filepath, store } = makeStore();
+    store.close();
+    const database = new DatabaseSync(filepath);
+    try {
+      database.exec("DROP TABLE telegram_update_cursor; CREATE TABLE telegram_update_cursor (unrelated TEXT) STRICT;");
+    } finally { database.close(); }
+    const before = readFileSync(filepath);
+    expect(() => new GatewayTelegramUpdateStore(filepath, "fixture-bot-token")).toThrow("telegram_inbox_schema_invalid");
+    expect(readFileSync(filepath)).toEqual(before);
+  });
+
+  it("validates the current cursor before converting either durable in-flight row", () => {
+    const { filepath, store } = makeStore();
+    expect(store.claim(36, digest("fixture claimed update"))).toEqual({ status: "accepted" });
+    expect(store.beginDelivery("fixture initiated reply")).toMatchObject({ status: "accepted" });
+    store.close();
+    const database = new DatabaseSync(filepath);
+    try {
+      // The legacy CHECK validates the length, so this bad digest passes SQLite's integrity check.
+      database.prepare("UPDATE telegram_update_cursor SET payload_digest=?").run("x".repeat(64));
+    } finally { database.close(); }
+    const before = readFileSync(filepath);
+    expect(() => new GatewayTelegramUpdateStore(filepath, "fixture-bot-token")).toThrow("telegram_inbox_cursor_invalid");
+    expect(readFileSync(filepath)).toEqual(before);
+
+    const reader = new DatabaseSync(filepath, { readOnly: true });
+    try {
+      expect(reader.prepare("SELECT delivery_state FROM telegram_update_cursor").get()?.delivery_state).toBe("dispatching");
+      expect(reader.prepare("SELECT delivery_state FROM telegram_outbound_delivery").get()?.delivery_state).toBe("dispatching");
+    } finally { reader.close(); }
+  });
+
+  it("migrates the valid legacy inbox and recovers its unresolved cursor", () => {
+    const { filepath, store } = makeStore();
+    const payloadDigest = digest("fixture legacy queued update");
+    store.close();
+    const database = new DatabaseSync(filepath);
+    try {
+      database.exec(`DROP TABLE telegram_update_cursor; DROP TABLE telegram_outbound_delivery;
+        CREATE TABLE IF NOT EXISTS telegram_update_cursor (
+            bot_scope_digest TEXT PRIMARY KEY CHECK(length(bot_scope_digest) = 64),
+            update_id INTEGER NOT NULL CHECK(update_id >= 0),
+            payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+            delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+            updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+        ) STRICT;`);
+      database.prepare("INSERT INTO telegram_update_cursor VALUES (?,37,?,'dispatching',100)")
+        .run(digest("telegram-bot-scope.v1\0fixture-bot-token"), payloadDigest);
+    } finally { database.close(); }
+
+    const migrated = new GatewayTelegramUpdateStore(filepath, "fixture-bot-token");
+    try {
+      expect(migrated.latestUpdateId()).toBe(37);
+      expect(migrated.claim(37, payloadDigest)).toEqual({ status: "duplicate", delivery_state: "outcome_unknown" });
+      expect(migrated.beginDelivery("fixture first delivery after migration")).toMatchObject({ status: "accepted" });
+    } finally { migrated.close(); }
   });
 
   it("preserves outbound attempts and outcome evidence across restart without retaining their command IDs", () => {
