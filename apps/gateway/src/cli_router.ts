@@ -97,13 +97,34 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
     return;
   }
   if (backupArg !== -1) args.splice(backupArg, 2);
+  const restorePlan = args.includes("--restore-plan");
+  let manifestSha256: string | undefined;
+  if (restorePlan) {
+    const pinIndex = args.indexOf("--manifest-sha256");
+    const pin = pinIndex < 0 ? undefined : args[pinIndex + 1]?.toLowerCase();
+    if (!backupId || !pin || !/^[a-f0-9]{64}$/.test(pin) || pinIndex !== args.lastIndexOf("--manifest-sha256") ||
+        args.indexOf("--restore-plan") !== args.lastIndexOf("--restore-plan")) {
+      writeStdout(json ? JSON.stringify({ status: "invalid_arguments" }) : "復元計画にはバックアップIDとマニフェストSHA-256が必要です。");
+      process.exitCode = 2;
+      return;
+    }
+    manifestSha256 = pin;
+    args.splice(pinIndex, 2);
+    args.splice(args.indexOf("--restore-plan"), 1);
+  }
   if (args.some((arg) => arg !== "--recovery-inspect" && arg !== "--json")) {
     writeStdout(json ? JSON.stringify({ status: "invalid_arguments" }) : "復旧診断の引数に未対応の項目があります。");
     process.exitCode = 2;
     return;
   }
   try {
-    await loadEnvFileFromArgv(argv, env);
+    const config = await loadEnvFileFromArgv(argv, env);
+    if (restorePlan) {
+      if (!config || (env.BLUE_TANUKI_ENV_FILE && relative(config.path, env.BLUE_TANUKI_ENV_FILE) !== "")) {
+        throw new Error("configuration_unavailable");
+      }
+      env.BLUE_TANUKI_ENV_FILE = config.path;
+    }
   } catch {
     writeStdout(json ? JSON.stringify({ status: "configuration_unavailable" }) : "診断に使用する環境設定を読み込めません。");
     process.exitCode = 2;
@@ -111,6 +132,21 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   }
   const { inspectRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
   const runtimeRecoveryFence = inspectRuntimeRecoveryFence(env);
+  if (backupId !== undefined && manifestSha256 !== undefined) {
+    const { planOfflineRecoveryRestore } = await import("./recovery_surface.js");
+    const plan = await planOfflineRecoveryRestore(env, backupId, manifestSha256);
+    if (json) {
+      writeStdout(JSON.stringify({ ...plan, runtime_recovery_fence_status: runtimeRecoveryFence.status }, null, 2));
+    } else {
+      writeStdout(`復元計画 ${plan.status}`);
+      if (plan.plan_sha256) writeStdout(`計画SHA-256 ${plan.plan_sha256}`);
+      for (const item of plan.items) writeStdout(`${item.role} ${item.disposition}`);
+      for (const store of plan.canonical_stores) writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}`);
+      writeStdout(`復旧処理の照合状態 ${runtimeRecoveryFence.status}。読み取り専用です。`);
+    }
+    process.exitCode = runtimeRecoveryFence.status === "clear" && plan.status === "planned" ? 0 : 2;
+    return;
+  }
   if (!json) {
     writeStdout(`復旧処理の照合状態 ${runtimeRecoveryFence.status}`);
     if (runtimeRecoveryFence.status === "pending") {

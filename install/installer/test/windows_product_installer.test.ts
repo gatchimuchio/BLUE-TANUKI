@@ -710,6 +710,13 @@ describe("Windows product installer package", () => {
       const absent = runPowerShellFile(command, launcher, arguments_, temp, env);
       expect(absent.status, absent.stderr).toBe(2);
       expect(JSON.parse(absent.stdout)).toMatchObject({ status: "not_found", mode: "read_only", may_execute: false });
+      const plan = runPowerShellFile(command, launcher, [
+        "recovery-inspect", "--restore-plan", "--backup-id", "absent-backup-id", "--manifest-sha256", "0".repeat(64), "--json",
+      ], temp, env);
+      expect(plan.status, plan.stderr).toBe(2);
+      expect(JSON.parse(plan.stdout)).toMatchObject({
+        surface: "offline_recovery_restore_plan", status: "invalid", plan_sha256: null, may_execute: false,
+      });
       writeFileSync(join(dist, "main.js"), "console.log(JSON.stringify(process.argv.slice(2)))\n", "utf8");
       const reconcile = runPowerShellFile(command, launcher, ["recovery-reconcile", "--json"], temp, env);
       expect(reconcile.status, reconcile.stderr).toBe(0);

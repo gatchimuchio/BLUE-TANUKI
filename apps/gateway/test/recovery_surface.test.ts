@@ -1178,6 +1178,94 @@ describe("buildRecoverySnapshot", () => {
     }
   });
 
+  it("plans a pinned whole-pack restore through the built diagnostic without applying it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-offline-restore-plan-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const failureDir = path.join(root, "failure");
+      const memoryFile = path.join(root, "memory.json");
+      const grants = path.join(root, "grants.json");
+      const stateRoot = path.join(root, "state");
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+        BLUE_TANUKI_MEMORY_FILE: memoryFile,
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: path.join(failureDir, "records.jsonl"),
+        BLUE_TANUKI_FAILURE_MEMORY_DIR: failureDir,
+        BLUE_TANUKI_SCHEDULES_DIR: path.join(root, "schedules-not-captured"),
+        BLUE_TANUKI_APPROVALS_FILE: grants,
+        OPENAI_API_KEY: "synthetic-private-plan-sentinel",
+      };
+      const config = Object.entries(env).map(([key, value]) => key + "=" + JSON.stringify(value)).join("\n") + "\n";
+      await mkdir(failureDir);
+      await writeFile(envFile, config);
+      await writeFile(grants, "synthetic grant");
+      await writeFile(memoryFile, "before-backup");
+      await writeFile(env.BLUE_TANUKI_FAILURE_MEMORY_FILE, "synthetic failure");
+      await createCanonicalDatabase(stateRoot, CANONICAL_DATABASES[0]![1], "synthetic canonical snapshot");
+      const backup = await createRecoveryBackup(env);
+      const manifestFile = backup.backup_manifest_path!;
+      const original = await readFile(manifestFile);
+      const pin = createHash("sha256").update(original).digest("hex");
+      const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
+      const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+        /^(Path|SystemRoot|windir|SystemDrive|ComSpec|Temp|Tmp|Home|USERPROFILE|APPDATA|LOCALAPPDATA)$/i.test(key)));
+      const run = (expectedDigest: string) => spawnSync(process.execPath, [
+        "--", main, "--recovery-inspect", "--restore-plan", "--backup-id", backup.backup_id!,
+        "--manifest-sha256", expectedDigest, "--env-file", envFile, "--json",
+      ], { cwd: root, encoding: "utf8", env: inherited, timeout: 15_000, windowsHide: true });
+      const snapshot = async () => {
+        const inventory = await readdir(root, { recursive: true, withFileTypes: true });
+        const files = await Promise.all(inventory.map(async entry => {
+          const file = path.join(entry.parentPath, entry.name);
+          const digest = entry.isFile() ? createHash("sha256").update(await readFile(file)).digest("hex") : "directory";
+          return [path.relative(root, file), digest] as const;
+        }));
+        return files.sort(([left], [right]) => left.localeCompare(right));
+      };
+      const before = await snapshot();
+      const result = run(pin);
+      expect(result.status, result.stderr).toBe(0);
+      const plan = JSON.parse(result.stdout);
+      expect(plan).toMatchObject({
+        surface: "offline_recovery_restore_plan", status: "planned", manifest_sha256: pin,
+        plan_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
+        items: expect.arrayContaining([
+          { role: "env_file", disposition: "preserve_current" },
+          { role: "approval_grants_file", disposition: "preserve_current" },
+          { role: "schedules_dir", disposition: "not_captured" },
+          { role: "failure_memory_file", disposition: "overlapping_targets" },
+          { role: "failure_memory_dir", disposition: "overlapping_targets" },
+          { role: "memory_file", disposition: "candidate_only" },
+        ]),
+        canonical_stores: expect.arrayContaining([
+          { store_key: CANONICAL_DATABASES[0]![0], archive_status: "verified", disposition: "requires_store_reconciliation" },
+        ]),
+      });
+      expect(result.stdout).not.toContain("synthetic-private-plan-sentinel");
+      expect(result.stdout).not.toContain("before-backup");
+      expect(result.stdout).not.toContain("product.env");
+      expect(await snapshot()).toEqual(before);
+      await writeFile(memoryFile, "new-current-value");
+      const changed = JSON.parse(run(pin).stdout);
+      expect(changed.status).toBe("planned");
+      expect(changed.plan_sha256).not.toBe(plan.plan_sha256);
+      expect(await readFile(memoryFile, "utf8")).toBe("new-current-value");
+
+      const replacement = Buffer.concat([original, Buffer.from("\n")]);
+      await writeFile(manifestFile, replacement);
+      await writeFile(`${manifestFile}.sha256`, createHash("sha256").update(replacement).digest("hex") + "  manifest.json\n");
+      const mismatch = run(pin);
+      expect(mismatch.status, mismatch.stderr).toBe(2);
+      expect(JSON.parse(mismatch.stdout)).toMatchObject({ status: "manifest_changed", plan_sha256: null, items: [] });
+      expect(await readFile(manifestFile)).toEqual(replacement);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 45_000);
+
   it("captures and verifies per-store SQLite snapshots without mutating sources or applying them through generic restore", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-snapshot-"));
     try {

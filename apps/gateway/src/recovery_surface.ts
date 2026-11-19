@@ -320,6 +320,24 @@ export interface PreUpdateRecoveryBackupInspection {
   readonly manifest_path_matches: boolean;
 }
 
+type RecoveryPlanTargetDisposition = "not_configured" | "preserve_current" | "overlapping_targets" |
+  "not_captured" | "requires_domain_review" | "candidate_only" | "unverified_target";
+
+export interface OfflineRecoveryRestorePlan {
+  surface: "offline_recovery_restore_plan";
+  schema_version: 1;
+  status: "planned" | "manifest_changed" | "invalid";
+  manifest_sha256: string | null;
+  plan_sha256: string | null;
+  items: readonly { role: string; disposition: RecoveryPlanTargetDisposition }[];
+  canonical_stores: readonly { store_key: CanonicalStateStoreKey; archive_status: CanonicalStateSnapshotEntryStatus | "not_included";
+    disposition: "requires_store_reconciliation" | "preserve_current" }[];
+  offline_lease_verified: false;
+  cross_store_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface RecoveryScopeApplicabilityRequest {
   readonly backup_id_digest: string;
   readonly scope_kind: "request_scope" | "operation_plan" | "task_identity";
@@ -1147,7 +1165,9 @@ async function assertArchiveTreeHasNoSymlinks(archivePath: string, kind: "file" 
   await walk(archivePath);
 }
 
-async function preflightRestoreManifest(env: NodeJS.ProcessEnv, manifest: RecoveryBackupManifest): Promise<void> {
+async function preflightRestoreManifest(
+  env: NodeJS.ProcessEnv, manifest: RecoveryBackupManifest, requireFixedArchivePaths = false,
+): Promise<void> {
   const rawItems: unknown = manifest.items;
   const expectedSpecs = sourceSpecs(env);
   if (!Array.isArray(rawItems) || rawItems.length !== expectedSpecs.length) {
@@ -1219,6 +1239,10 @@ async function preflightRestoreManifest(env: NodeJS.ProcessEnv, manifest: Recove
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error("invalid_backup_manifest_archive_path");
     }
+    if (requireFixedArchivePaths && (archive !== archivePath(packDir, spec, item.kind) ||
+        await recoveryPathKind(archive) !== item.kind)) {
+      throw new Error("invalid_backup_manifest_archive_path");
+    }
     await assertArchiveTreeHasNoSymlinks(archive, item.kind);
     const digest = await sha256Path(archive, item.kind);
     if (digest.sha256 !== item.sha256 || digest.bytes !== item.bytes) {
@@ -1227,6 +1251,18 @@ async function preflightRestoreManifest(env: NodeJS.ProcessEnv, manifest: Recove
   }
 
   if (seen.size !== expectedByPair.size) throw new Error("invalid_backup_manifest_items");
+}
+
+function assertRecoveryManifestBoundary(manifest: RecoveryBackupManifest): void {
+  if (manifest.action !== "backup" && manifest.action !== "pre_restore" && manifest.action !== "pre_factory_reset") {
+    throw new Error("invalid_backup_manifest_action");
+  }
+  if (manifest.secret_material !== true || manifest.used_for_authority !== false ||
+      manifest.hds_brain_remains_authority !== true ||
+      JSON.stringify(manifest.authority_boundary) !== JSON.stringify(AUTHORITY_BOUNDARY) ||
+      JSON.stringify(manifest.evidence_source) !== JSON.stringify(["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"])) {
+    throw new Error("invalid_backup_manifest_boundary");
+  }
 }
 
 async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
@@ -1454,15 +1490,7 @@ async function inspectRecoveryBackup(
       };
     }
     const manifest = await readManifest(env, backupId);
-    if (manifest.action !== "backup" && manifest.action !== "pre_restore" && manifest.action !== "pre_factory_reset") {
-      throw new Error("invalid_backup_manifest_action");
-    }
-    if (manifest.secret_material !== true || manifest.used_for_authority !== false ||
-        manifest.hds_brain_remains_authority !== true ||
-        JSON.stringify(manifest.authority_boundary) !== JSON.stringify(AUTHORITY_BOUNDARY) ||
-        JSON.stringify(manifest.evidence_source) !== JSON.stringify(["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"])) {
-      throw new Error("invalid_backup_manifest_boundary");
-    }
+    assertRecoveryManifestBoundary(manifest);
     await preflightRestoreManifest(env, manifest);
     const canonicalState = manifest.canonical_state_snapshot
       ? await inspectCanonicalStateSnapshots(path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot)
@@ -1540,6 +1568,104 @@ export async function inspectRecoveryBackupById(
     assertBackupId(backupId);
     return backupIdForDigest(env, createHash("sha256").update(backupId).digest("hex"));
   });
+}
+
+/** Plan against one pinned pack without claiming an offline lease or granting execution. */
+export async function planOfflineRecoveryRestore(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  manifestSha256: string,
+): Promise<OfflineRecoveryRestorePlan> {
+  const base = {
+    surface: "offline_recovery_restore_plan",
+    schema_version: 1,
+    status: "invalid",
+    manifest_sha256: null,
+    plan_sha256: null,
+    items: [],
+    canonical_stores: [],
+    offline_lease_verified: false,
+    cross_store_atomic: false,
+    used_for_authority: false,
+    may_execute: false,
+  } as const;
+  try {
+    assertBackupId(backupId);
+    if (!/^[a-f0-9]{64}$/.test(manifestSha256)) return base;
+    const manifestPath = path.join(recoveryRoot(env), backupId, "manifest.json");
+    if (await recoveryPathKind(manifestPath) !== "file" ||
+        await recoveryPathKind(`${manifestPath}.sha256`) !== "file") return base;
+    const manifest = await readManifest(env, backupId);
+    if (manifest.manifest_sha256 !== manifestSha256) return { ...base, status: "manifest_changed" };
+    assertRecoveryManifestBoundary(manifest);
+    await preflightRestoreManifest(env, manifest, true);
+    const packDir = path.dirname(manifest.manifest_path);
+    if (manifest.canonical_state_snapshot) {
+      await inspectCanonicalStateSnapshots(packDir, manifest.canonical_state_snapshot);
+    }
+
+    const privateRoot = path.resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki", "private-state");
+    const specs = sourceSpecs(env);
+    const currentTargets = configuredRuntimeTargets(env);
+    const protectedRoles = new Set(["env_file", "audit_dir", "log_dir", "approval_grants_file"]);
+    const protectedPaths = [
+      recoveryRoot(env), env.BLUE_TANUKI_COMPLETE_HISTORY_FILE, env.BLUE_TANUKI_FILE_ROOT, env.BLUE_TANUKI_INSTALL_ROOT,
+      path.join(privateRoot, "gateway-runtime"),
+      ...CANONICAL_STATE_STORE_PATHS.map(({ relative_path }) => path.join(privateRoot, relative_path)),
+      ...specs.filter(({ key }) => protectedRoles.has(key)).map(({ source_path }) => source_path),
+    ].filter((value): value is string => Boolean(value)).map(trimTrailingSeparators);
+    const overlaps = (left: string, right: string): boolean =>
+      isSameOrInside(left, right) || isSameOrInside(right, left);
+
+    const items = [];
+    const bindings = [];
+    for (const spec of specs) {
+      const identity = `${spec.key}:${spec.env_key}`;
+      const target = currentTargets.get(identity);
+      const item = manifest.items.find(entry => entry.key === spec.key && entry.env_key === spec.env_key)!;
+      let archiveProof: RecoveryPathProof = null;
+      if (item.copied && (item.kind === "file" || item.kind === "directory")) {
+        const archive = archivePath(packDir, spec, item.kind);
+        archiveProof = await readRecoveryPathProof(archive);
+        if (!archiveProof || archiveProof.kind !== item.kind || archiveProof.bytes !== item.bytes ||
+            (archiveProof.kind === "file" && archiveProof.sha256 !== item.sha256)) return base;
+      }
+      let disposition: RecoveryPlanTargetDisposition;
+      let observedTarget: RecoveryPathProof = null;
+      if (!target) disposition = "not_configured";
+      else if (protectedRoles.has(spec.key) || protectedPaths.some(protectedPath => overlaps(target, protectedPath))) {
+        disposition = "preserve_current";
+      } else if (!archiveProof) disposition = "not_captured";
+      else if ([...currentTargets].some(([other, otherTarget]) => other !== identity && overlaps(target, otherTarget))) {
+        disposition = "overlapping_targets";
+      } else if (spec.key === "session_dir" || spec.key === "schedules_dir") disposition = "requires_domain_review";
+      else {
+        try {
+          observedTarget = await readRecoveryPathProof(target);
+          disposition = !observedTarget || observedTarget.kind === archiveProof.kind ? "candidate_only" : "unverified_target";
+        } catch {
+          disposition = "unverified_target";
+        }
+      }
+      items.push({ role: spec.key, disposition });
+      bindings.push([identity, target ?? null, disposition, archiveProof, observedTarget]);
+    }
+
+    const canonical_stores = CANONICAL_STATE_STORE_PATHS.map(({ key }) => {
+      const entry = manifest.canonical_state_snapshot?.entries.find(({ store_key }) => store_key === key);
+      return { store_key: key, archive_status: entry?.status ?? "not_included",
+        disposition: entry?.status === "verified" ? "requires_store_reconciliation" : "preserve_current" } as const;
+    });
+    if ((await readManifest(env, backupId)).manifest_sha256 !== manifestSha256) {
+      return { ...base, status: "manifest_changed" };
+    }
+    const planSha256 = createHash("sha256").update(JSON.stringify([
+      "offline-recovery-restore-plan.v1", manifestSha256, privateRoot, bindings, canonical_stores,
+    ])).digest("hex");
+    return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256, items, canonical_stores };
+  } catch {
+    return base;
+  }
 }
 
 /** Verify the exact recovery pack and manifest path recorded by an update rollback plan. */
@@ -2993,7 +3119,7 @@ type FactoryResetTarget = {
   kind: "file" | "directory" | null;
 };
 
-async function factoryResetPathKind(filepath: string): Promise<FactoryResetTarget["kind"]> {
+async function recoveryPathKind(filepath: string): Promise<FactoryResetTarget["kind"]> {
   let current = filepath;
   for (;;) {
     try {
@@ -3063,11 +3189,11 @@ async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryRes
       throw new Error("factory_reset_backup_target_overlap");
     }
   }
-  for (const protectedPath of protectedPaths) await factoryResetPathKind(protectedPath);
+  for (const protectedPath of protectedPaths) await recoveryPathKind(protectedPath);
 
   const targets: FactoryResetTarget[] = [];
   for (const { path: target, kind: expected } of resetTargets.sort((a, b) => a.path.length - b.path.length)) {
-    const kind = await factoryResetPathKind(target);
+    const kind = await recoveryPathKind(target);
     if (kind && kind !== expected) throw new Error("factory_reset_target_unverified");
     if (targets.some(existing => isSameOrInside(target, existing.path))) continue;
     if (kind) await assertArchiveTreeHasNoSymlinks(target, kind);
@@ -3080,7 +3206,7 @@ async function verifyFactoryResetTarget(
   target: FactoryResetTarget,
   snapshot: RecoveryBackupManifest,
 ): Promise<void> {
-  if (await factoryResetPathKind(target.path) !== target.kind) throw new Error("factory_reset_target_changed");
+  if (await recoveryPathKind(target.path) !== target.kind) throw new Error("factory_reset_target_changed");
   if (!target.kind) return;
   const entry = snapshot.items.find(item => item.source_path && path.relative(item.source_path, target.path) === "");
   if (!entry?.copied || entry.kind !== target.kind || !entry.sha256 || !entry.archive_rel_path) {
@@ -3088,7 +3214,7 @@ async function verifyFactoryResetTarget(
   }
   const pack = path.dirname(snapshot.manifest_path);
   const archive = await assertArchivePath(pack, path.resolve(pack, entry.archive_rel_path), "factory_reset_backup");
-  if (await factoryResetPathKind(archive) !== target.kind) throw new Error("factory_reset_backup_unverified");
+  if (await recoveryPathKind(archive) !== target.kind) throw new Error("factory_reset_backup_unverified");
   await assertArchiveTreeHasNoSymlinks(archive, target.kind);
   const backedUp = await sha256Path(archive, target.kind);
   if (backedUp.sha256 !== entry.sha256 || backedUp.bytes !== entry.bytes) throw new Error("factory_reset_backup_unverified");
@@ -3097,10 +3223,10 @@ async function verifyFactoryResetTarget(
   if (current.sha256 !== entry.sha256 || current.bytes !== entry.bytes) throw new Error("factory_reset_target_changed");
 }
 
-type FactoryResetPathProof = { kind: "file" | "directory"; sha256: string; bytes: number } | null;
+type RecoveryPathProof = { kind: "file" | "directory"; sha256: string; bytes: number } | null;
 
-async function factoryResetPathProof(filepath: string): Promise<FactoryResetPathProof> {
-  const kind = await factoryResetPathKind(filepath);
+async function readRecoveryPathProof(filepath: string): Promise<RecoveryPathProof> {
+  const kind = await recoveryPathKind(filepath);
   if (!kind) return null;
   await assertArchiveTreeHasNoSymlinks(filepath, kind);
   return { kind, ...await sha256Path(filepath, kind, "state") };
@@ -3108,23 +3234,23 @@ async function factoryResetPathProof(filepath: string): Promise<FactoryResetPath
 
 function factoryResetStateDigest(
   envFile: string,
-  envProof: FactoryResetPathProof,
-  targetProofs: readonly (readonly [string, FactoryResetPathProof])[],
+  envProof: RecoveryPathProof,
+  targetProofs: readonly (readonly [string, RecoveryPathProof])[],
 ): string {
   const sorted = [...targetProofs].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   return createHash("sha256").update(JSON.stringify(["factory-reset-state.v1", envFile, envProof, sorted])).digest("hex");
 }
 
 async function readFactoryResetStateDigest(envFile: string, targets: readonly FactoryResetTarget[]): Promise<string> {
-  const envProof = await factoryResetPathProof(envFile);
-  const targetProofs: Array<[string, FactoryResetPathProof]> = [];
-  for (const target of targets) targetProofs.push([target.path, await factoryResetPathProof(target.path)]);
+  const envProof = await readRecoveryPathProof(envFile);
+  const targetProofs: Array<[string, RecoveryPathProof]> = [];
+  for (const target of targets) targetProofs.push([target.path, await readRecoveryPathProof(target.path)]);
   return factoryResetStateDigest(envFile, envProof, targetProofs);
 }
 
 async function factoryResetBackupItem(snapshot: RecoveryBackupManifest, source: string): Promise<{
   archive: string | null;
-  proof: FactoryResetPathProof;
+  proof: RecoveryPathProof;
 }> {
   const item = snapshot.items.find(entry => entry.source_path && path.relative(entry.source_path, source) === "");
   if (item?.kind === "missing" && !item.copied) return { archive: null, proof: null };
@@ -3133,7 +3259,7 @@ async function factoryResetBackupItem(snapshot: RecoveryBackupManifest, source: 
   }
   const pack = path.dirname(snapshot.manifest_path);
   const archive = await assertArchivePath(pack, path.resolve(pack, item.archive_rel_path), "factory_reset_backup");
-  const proof = await factoryResetPathProof(archive);
+  const proof = await readRecoveryPathProof(archive);
   if (!proof || proof.kind !== item.kind || proof.bytes !== item.bytes ||
       (proof.kind === "file" && proof.sha256 !== item.sha256)) {
     throw new Error("factory_reset_backup_unverified");
@@ -3158,7 +3284,7 @@ async function prepareFactoryResetVerification(
       createHash("sha256").update(envBytes).digest("hex") !== savedEnv.proof.sha256)) {
     throw new Error("factory_reset_backup_unverified");
   }
-  const beforeTargets: Array<[string, FactoryResetPathProof]> = [];
+  const beforeTargets: Array<[string, RecoveryPathProof]> = [];
   for (const target of targets) beforeTargets.push([target.path, (await factoryResetBackupItem(snapshot, target.path)).proof]);
   const beforeSha256 = factoryResetStateDigest(envFile, savedEnv.proof, beforeTargets);
   if (await readFactoryResetStateDigest(envFile, targets) !== beforeSha256) {
@@ -3217,7 +3343,7 @@ export async function factoryResetRecovery(
       await verifyFactoryResetTarget(target, preFactory);
       if (!target.kind) continue;
       await fs.rm(target.path, { recursive: target.kind === "directory" });
-      if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
+      if (await recoveryPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
       removed += 1;
     }
     if (fence && prepared) {

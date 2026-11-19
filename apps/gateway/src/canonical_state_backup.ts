@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 
 const { DatabaseSync, backup } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -581,7 +582,10 @@ export async function inspectCanonicalStateSnapshots(
     let database: DatabaseSyncType | undefined;
     let isValid = false;
     try {
-      database = new DatabaseSync(archivePath, { readOnly: true });
+      // Archived SQLite files are self-contained. Prevent the inspection itself from creating WAL sidecars.
+      const url = pathToFileURL(archivePath);
+      url.searchParams.set("immutable", "1");
+      database = new DatabaseSync(url.href, { readOnly: true });
       isValid = integrityCheck(database);
     } catch {
       isValid = false;
