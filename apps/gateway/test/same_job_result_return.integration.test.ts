@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1052,6 +1053,186 @@ Executor.prototype.execute = function (command, context) {
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
   }, 90_000);
+
+  it("資料整理の第2周期を対応するD4受付から取り消し、Jのチェックポイントを保持する", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-d4-organize-cancel-"));
+    const token = "synthetic-d4-organize-cancellation-token";
+    const backend = "d4-organize-cancel-fixture";
+    const scope = { runtime_id: "blue_tanuki", session_id: "synthetic-d4-organize-cancellation" };
+    const input = { ...scope, submission_id: "96147c5d-73e6-4cd7-b4fd-c834c5439057" };
+    const newInput = { ...scope, submission_id: "e12dfc04-266d-49b7-b110-e490c3df75aa" };
+    const firstExcerpt = "決定事項:青";
+    const secondExcerpt = "未確認:期限";
+    const source = `${firstExcerpt}\n${secondExcerpt}`;
+    const intent = `/organize ${source}`;
+    const firstSpan = { start: 0, end: firstExcerpt.length };
+    const secondSpan = { start: firstExcerpt.length + 1, end: source.length };
+    const firstSection = { label: "決定事項", excerpts: [{ ...firstSpan, quote: firstExcerpt }] };
+    const secondSection = { label: "未確認事項", excerpts: [{ ...secondSpan, quote: secondExcerpt }] };
+    const flags = { used_for_authority: false, may_execute: false };
+    let providerRequests = 0;
+    let secondCycleDisconnected = false;
+    const provider = createServer((request, response) => {
+      if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+        response.writeHead(404).end();
+        return;
+      }
+      request.resume();
+      request.once("end", () => {
+        providerRequests += 1;
+        if (providerRequests === 2) {
+          response.once("close", () => { secondCycleDisconnected = !response.writableFinished; });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"choices":');
+          return;
+        }
+        const sections = providerRequests === 1 ? [firstSection] : [firstSection, secondSection];
+        const content = JSON.stringify({
+          schema_version: "blue-tanuki.memory-citation-response.v1", citations: [],
+          answer: JSON.stringify({ schema_version: "blue-tanuki.document-organization.candidate.v1", sections }),
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: backend, object: "chat.completion", created: 1, model: backend,
+          choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+      });
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    const frames: WebSocketFrame[] = [];
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const envFile = join(root, "fixture.env");
+      const fileRoot = join(root, "files");
+      const memoryFile = join(root, "memory.jsonl");
+      writeFileSync(envFile, "# 隔離した試験設定\n", "utf8");
+      mkdirSync(fileRoot);
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: "synthetic-d4-organize-cancellation-resume",
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-d4-organize-cancellation-maintenance",
+        BLUE_TANUKI_D4_RUNTIME_ID: scope.runtime_id, BLUE_TANUKI_D4_RUNTIME_TOKEN: token,
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: fileRoot, BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: memoryFile, BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"),
+        BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl"),
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_BACKEND_HINT: backend,
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ [backend]: {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: backend, LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: backend, type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: backend, aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+      });
+      const connect = async (): Promise<WebSocket> => {
+        const ticket = await post("/runtime/ws-ticket", scope);
+        expect(ticket.status).toBe(200);
+        const { ticket: ticketValue } = await ticket.json() as { ticket: string };
+        const connected = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticketValue)}`);
+        socket = connected;
+        connected.on("message", data => frames.push(JSON.parse(String(data)) as WebSocketFrame));
+        await once(connected, "open");
+        return connected;
+      };
+
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      expect(statSync(memoryFile, { throwIfNoEntry: false })).toBeUndefined();
+      socket = await connect();
+      const accepted = await post("/runtime/intent", { ...input, intent });
+      expect(accepted.status).toBe(202);
+      const { request_id: requestId } = await accepted.json() as { request_id: string };
+      await waitFor(() => providerRequests === 2 ? true : null, gateway, () =>
+        `資料整理の第2周期が計算先に届かなかった。providerRequests=${providerRequests} frames=${JSON.stringify(frames)}`);
+
+      expect((await post("/runtime/intent/cancel", input, WEBCHAT_TOKEN)).status).toBe(401);
+      expect((await post("/runtime/intent/cancel", { ...input, runtime_id: "other_runtime" })).status).toBe(403);
+      expect((await post("/runtime/intent/cancel", { ...input, session_id: "other-d4-session" })).status).toBe(404);
+      expect(secondCycleDisconnected).toBe(false);
+      const cancellation = await post("/runtime/intent/cancel", input);
+      expect(cancellation.status, await cancellation.clone().text()).toBe(202);
+      expect(await cancellation.json()).toMatchObject({ found: true, accepted: true, cancellation: {
+        status: "cancel_requested", cancel_request_accepted: true, execution_signal_aborted: true,
+        executor_settled: false, external_processing_stop: "unknown", ...flags,
+      } });
+      await waitFor(() => secondCycleDisconnected ? true : null, gateway, "実行中の計算接続が中断されなかった");
+      const settled = await waitFor(async () => {
+        const response = await post("/runtime/intent/status", input);
+        if (response.status === 429) return null;
+        expect(response.status).toBe(200);
+        const status = await response.json() as { state: string; cancellation?: { status: string } };
+        return status.state === "handler_returned" && status.cancellation?.status === "execution_observed" ? status : null;
+      }, gateway, "受付の状態に実行終了を伴う取消が記録されなかった");
+      expect(settled).toMatchObject({ found: true, request_id: requestId, cancellation: {
+        cancel_request_accepted: true, executor_settled: true, external_processing_stop: "unknown", ...flags,
+      }, result: { status: "unavailable", ...flags } });
+      expect(providerRequests).toBe(2);
+      expect(frames.filter(frame => frame.kind === "channel_send")).toEqual([]);
+
+      socket?.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      socket = await connect();
+      const afterRestart = await post("/runtime/intent/status", input);
+      expect(afterRestart.status).toBe(200);
+      expect(await afterRestart.json()).toMatchObject({ found: true, request_id: requestId,
+        cancellation: settled.cancellation, result: { status: "unavailable", ...flags },
+      });
+      const replay = await post("/runtime/intent", { ...input, intent });
+      expect(replay.status).toBe(202);
+      expect(await replay.json()).toMatchObject({ accepted: true, duplicate: true, request_id: requestId });
+      expect(providerRequests).toBe(2);
+
+      const fresh = await post("/runtime/intent", { ...newInput, intent });
+      expect(fresh.status).toBe(202);
+      const { request_id: newRequestId } = await fresh.json() as { request_id: string };
+      expect(newRequestId).not.toBe(requestId);
+      const freshReply = await waitFor(() => frames.find(frame => frame.kind === "channel_send" &&
+        frame.request_id === newRequestId) ?? null, gateway, "同じ原文を持つ別の受付が独立して完了しなかった");
+      expect(freshReply.content).toContain(firstExcerpt);
+      expect(freshReply.content).toContain(secondExcerpt);
+      expect(providerRequests).toBe(3);
+      expect(frames.filter(frame => frame.kind === "channel_send")).toEqual([freshReply]);
+
+      socket?.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      gateway = undefined;
+      const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+      const database = new DatabaseSync(join(fileRoot, "document-organization", "j-checkpoints.sqlite"), { readOnly: true });
+      try {
+        const rows = database.prepare("SELECT checkpoint_json FROM document_organization_checkpoints").all();
+        const checkpoints = rows.map(row => JSON.parse(String(row.checkpoint_json)) as { request_id: string });
+        expect(checkpoints).toHaveLength(2);
+        expect(checkpoints.find(checkpoint => checkpoint.request_id === requestId)).toMatchObject({
+          status: "held", terminal_reason: "task_cancelled", completed_cycles: 1, accepted_spans: [firstSpan],
+        });
+        expect(checkpoints.find(checkpoint => checkpoint.request_id === newRequestId)).toMatchObject({
+          status: "completed", completed_cycles: 1, accepted_spans: [firstSpan, secondSpan],
+        });
+      } finally {
+        database.close();
+      }
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 120_000);
 
   it("interrupts scoped compute and withdraws pending approval, retaining both observations after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));

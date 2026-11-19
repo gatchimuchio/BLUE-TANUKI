@@ -8850,6 +8850,11 @@ async function serveWithOwnerLease(
     }
 
     if (documentCoordinator && documentSession && command) {
+      const executionController = new AbortController();
+      if (gatewayShuttingDown) executionController.abort();
+      const d4Binding = d4RuntimeExecutionBinding(command, log, authorityReq);
+      let cycleTask: Promise<ExecuteFeedback> | undefined;
+      let explicitCancellation = false;
       const result = await runDocumentOrganizationTask({
         coordinator: documentCoordinator,
         origin: authorityReq,
@@ -8862,7 +8867,30 @@ async function serveWithOwnerLease(
         first_decision: { log, command },
         persist_checkpoint: documentSession.persist_checkpoint,
         current_memory_version: () => hds.documentOrganizationMemoryVersion(),
-        emergency_stop_active: emergencyStop.active,
+        emergency_stop_active: () => emergencyStop.active || gatewayShuttingDown,
+        execution: {
+          signal: executionController.signal,
+          retainCheckpointOnAbort: () => gatewayShuttingDown && !explicitCancellation,
+          onCycleStart: activeCommand => {
+            ownerLease.assertActive();
+            activeTaskExecutions.register(activeCommand.id, executionController, Date.now(), d4Binding);
+          },
+          onCycleTask: task => {
+            cycleTask = task;
+            executionTasks.add(task);
+          },
+          onCycleSettled: (activeCommand, status) => {
+            try {
+              activeTaskExecutions.markExecutorSettled(activeCommand.id, status);
+              const finished = activeTaskExecutions.finish(activeCommand.id);
+              explicitCancellation ||= finished !== null;
+              recordTaskExecutionCancellationSettlement(finished);
+            } finally {
+              if (cycleTask) executionTasks.delete(cycleTask);
+              cycleTask = undefined;
+            }
+          },
+        },
       });
       if (!result) return;
 
@@ -8909,7 +8937,7 @@ async function serveWithOwnerLease(
           },
         });
       }
-      if (result.rendered_output) {
+      if (result.rendered_output && !executionController.signal.aborted) {
         await dispatcher.dispatch({
           ...replyPayload(authorityReq, result.rendered_output),
         }, {

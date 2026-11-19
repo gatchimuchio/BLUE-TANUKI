@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExecuteCommand, ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
-import { normalizeInboundRequestForAuthority } from "@blue-tanuki/protocol";
+import { isGatewayInternalD4RuntimeIntentRequest, normalizeInboundRequestForAuthority } from "@blue-tanuki/protocol";
 import {
   DocumentOrganizationCoordinator,
   HDSUpperController,
@@ -38,7 +38,14 @@ export interface DocumentOrganizationTaskInput {
   readonly first_decision: { readonly log: DecisionLog; readonly command: ExecuteCommand | null };
   readonly persist_checkpoint: () => void;
   readonly current_memory_version: () => DocumentOrganizationMemoryVersion;
-  readonly emergency_stop_active?: boolean;
+  readonly emergency_stop_active?: boolean | (() => boolean);
+  readonly execution?: {
+    readonly signal: AbortSignal;
+    readonly onCycleStart: (command: ExecuteCommand) => void;
+    readonly onCycleTask?: (task: Promise<ExecuteFeedback>) => void;
+    readonly onCycleSettled: (command: ExecuteCommand, status: ExecuteFeedback["status"] | "unknown") => void;
+    readonly retainCheckpointOnAbort?: () => boolean;
+  };
   readonly transient_content?: "document_organization" | "google_drive_document_organization";
 }
 
@@ -79,9 +86,9 @@ export function createDocumentOrganizationCoordinator(
   });
 }
 
-/** Load or create the HDS-owned, content-free J checkpoint for one actor/source pair. */
+/** ローカルはactorと原文、D4 Runtimeは検証済み受付IDも照合してJ checkpointを開く。 */
 export function prepareDocumentOrganizationSession(input: {
-  readonly request: Pick<InboundRequest, "id" | "channel" | "user">;
+  readonly request: InboundRequest;
   readonly source_text: string;
   readonly hds: HDSUpperController;
   readonly store: DocumentOrganizationCheckpointStore;
@@ -93,6 +100,7 @@ export function prepareDocumentOrganizationSession(input: {
     channel: input.request.channel as "cli" | "webchat",
     actor: input.request.user,
     source_sha256: initialCheckpoint.source_sha256,
+    ...(isGatewayInternalD4RuntimeIntentRequest(input.request) ? { d4_runtime_request_id: input.request.id } : {}),
   };
   let stored: ReturnType<DocumentOrganizationCheckpointStore["getOrCreate"]>;
   try {
@@ -178,6 +186,7 @@ export function presentRestoredDocumentOrganizationProjection(input: {
 export async function runDocumentOrganizationTask(
   input: DocumentOrganizationTaskInput,
 ): Promise<DocumentOrganizationTaskResult | null> {
+  const { execution } = input;
   let decision = input.first_decision;
   let lastCommand: ExecuteCommand | null = null;
   let lastFeedback: ExecuteFeedback | null = null;
@@ -185,6 +194,13 @@ export async function runDocumentOrganizationTask(
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
     const { log, command } = decision;
+    if (execution?.signal.aborted) {
+      if (command) input.hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: input.origin.user,
+        reason: "document_organization_task_cancelled_before_executor",
+      });
+      return cancelDocumentOrganizationTask(input);
+    }
     if (!command) {
       if (!lastCommand || !lastFeedback) return null;
       projection = input.coordinator.rejectCycle("j_decision_no_command");
@@ -217,7 +233,9 @@ export async function runDocumentOrganizationTask(
       });
     }
 
-    if (input.emergency_stop_active) {
+    const emergencyStopActive = typeof input.emergency_stop_active === "function"
+      ? input.emergency_stop_active() : input.emergency_stop_active;
+    if (emergencyStopActive) {
       input.hds.onAuthorityEvent("emergency_stop_blocked", {
         request_id: log.request_id,
         command_id: command.id,
@@ -295,7 +313,27 @@ export async function runDocumentOrganizationTask(
       final_review_required: evaluation.final_review_required,
       reason: evaluation.reason,
     }, reviewed.command_digest, input.hds.createExecutionAuthorityBinding(command));
-    const feedback = await input.executor.execute(approvedCommand);
+    execution?.onCycleStart(command);
+    let feedback: ExecuteFeedback | undefined;
+    try {
+      const task = input.executor.execute(approvedCommand, execution ? { signal: execution.signal } : undefined);
+      execution?.onCycleTask?.(task);
+      feedback = await task;
+    } catch (error) {
+      if (!execution?.signal.aborted) throw error;
+    } finally {
+      execution?.onCycleSettled(command, feedback?.status ?? "unknown");
+    }
+    if (!feedback || execution?.signal.aborted) {
+      // Executorの実状態はsettlementに残し、Jには取消後の結果本文や提案を渡さない。
+      input.hds.onFeedback({
+        command_id: command.id,
+        status: feedback?.status === "failed" ? "failed" : "suspended",
+        error: "document_organization_result_discarded_after_task_cancel",
+        metrics: { duration_ms: feedback?.metrics.duration_ms ?? 0 },
+      });
+      return cancelDocumentOrganizationTask(input);
+    }
     lastFeedback = feedback;
     const reviewedFeedback = input.hds.reviewMemoryCitations(command, feedback);
     input.hds.onFeedback(feedback);
@@ -353,18 +391,33 @@ export async function runDocumentOrganizationTask(
   };
 }
 
+function cancelDocumentOrganizationTask(input: DocumentOrganizationTaskInput): DocumentOrganizationTaskResult | null {
+  if (input.execution?.retainCheckpointOnAbort?.()) return null;
+  input.coordinator.cancel();
+  input.persist_checkpoint();
+  return projectionOutputResult({
+    coordinator: input.coordinator,
+    request_id: input.origin.id,
+    upstream_commit_hash: input.first_decision.log.commit.hash,
+    hds: input.hds,
+    target_surface: input.target_surface,
+    rendered_output: "資料整理を取り消しました。確認済みの引用範囲は保持しています。",
+  });
+}
+
 function projectionOutputResult(input: {
   readonly coordinator: DocumentOrganizationCoordinator;
   readonly request_id: string;
   readonly upstream_commit_hash: string;
   readonly hds: HDSUpperController;
   readonly target_surface: OutputTargetSurface;
+  readonly rendered_output?: string;
 }): DocumentOrganizationTaskResult {
   const projection = input.coordinator.snapshot();
   if (projection.status !== "completed" && projection.status !== "held") {
     throw new Error("document organization projection output is not terminal");
   }
-  const rendered_output = renderDocumentOrganizationProjection(projection);
+  const rendered_output = input.rendered_output ?? renderDocumentOrganizationProjection(projection);
   const output_audit = input.hds.onDocumentOrganizationProjectionOutputAudit({
     request_id: input.request_id,
     upstream_commit_hash: input.upstream_commit_hash,

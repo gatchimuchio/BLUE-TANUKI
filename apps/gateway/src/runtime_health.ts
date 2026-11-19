@@ -18,17 +18,16 @@ export async function probeGatewaySelfHealth(
     resolveRuntimeSchedulesDirectory(env),
   ].filter((item): item is string => Boolean(item && item.trim().length > 0));
 
-  const storagePaths = [
-    memoryFileFromEnv(env),
-    resolveFailureMemoryFilePath(env),
-  ].filter((item): item is string => Boolean(item));
+  const memoryFile = memoryFileFromEnv(env);
+  const failureMemoryFile = resolveFailureMemoryFilePath(env);
 
   const required_directories = await Promise.all(
     requiredDirectories.map((dir) => probeDirectory(dir, mode)),
   );
-  const storage_paths = await Promise.all(
-    storagePaths.map((file) => probeAppendableFile(file, mode)),
-  );
+  const storage_paths = await Promise.all([
+    ...(memoryFile ? [probeHdsMemoryFile(memoryFile, mode)] : []),
+    ...(failureMemoryFile ? [probeAppendableFile(failureMemoryFile, mode)] : []),
+  ]);
   const audit_appendable = env.BLUE_TANUKI_AUDIT_DIR
     ? (await probeAppendableFile(path.join(path.resolve(env.BLUE_TANUKI_AUDIT_DIR), AUDIT_FILENAME), mode)).writable === true
     : "memory_only";
@@ -83,6 +82,24 @@ async function probeAppendableFile(file: string, mode: RuntimeHealthProbeMode): 
   } catch {
     return { path: resolved, readable: false, writable: false };
   }
+}
+
+// Mのファイル作成は、パスの同一性を監視するHDSの最初の書き込みに任せる。
+async function probeHdsMemoryFile(file: string, mode: RuntimeHealthProbeMode): Promise<RuntimePathCheck> {
+  const resolved = path.resolve(file);
+  try {
+    const stat = await fs.lstat(resolved);
+    if (stat.isFile() && stat.nlink === 1) {
+      await fs.access(resolved, fsConstants.R_OK | fsConstants.W_OK);
+      return { path: resolved, readable: true, writable: true };
+    }
+  } catch (error) {
+    if (mode === "repair_capable" && error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      const parent = await probeDirectory(path.dirname(resolved), mode);
+      return { ...parent, path: resolved };
+    }
+  }
+  return { path: resolved, readable: false, writable: false };
 }
 
 function memoryFileFromEnv(env: Env): string | null {

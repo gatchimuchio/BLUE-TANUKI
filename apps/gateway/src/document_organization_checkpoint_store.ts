@@ -12,6 +12,7 @@ export interface DocumentOrganizationCheckpointIdentity {
   readonly channel: "cli" | "webchat";
   readonly actor: string;
   readonly source_sha256: string;
+  readonly d4_runtime_request_id?: string;
 }
 
 export interface StoredDocumentOrganizationCheckpoint {
@@ -241,15 +242,19 @@ function validateBinding(identity: DocumentOrganizationCheckpointIdentity, check
       typeof identity.actor !== "string" || identity.actor.length === 0 || identity.actor.length > 256 ||
       !/^[a-f0-9]{64}$/u.test(identity.source_sha256) ||
       checkpoint.source_sha256 !== identity.source_sha256 ||
+      (identity.d4_runtime_request_id !== undefined && identity.d4_runtime_request_id !== checkpoint.request_id) ||
       typeof checkpoint.task_id !== "string" || typeof checkpoint.request_id !== "string") {
     throw new DocumentOrganizationCheckpointIntegrityError();
   }
 }
 
 function actorDigest(identity: DocumentOrganizationCheckpointIdentity): string {
-  return createHash("sha256")
-    .update(`${identity.channel.length}:${identity.channel}|${identity.actor.length}:${identity.actor}`)
-    .digest("hex");
+  const digest = createHash("sha256")
+    .update(`${identity.channel.length}:${identity.channel}|${identity.actor.length}:${identity.actor}`);
+  if (identity.d4_runtime_request_id !== undefined) {
+    digest.update(`|d4-runtime-request:${identity.d4_runtime_request_id}`);
+  }
+  return digest.digest("hex");
 }
 
 function checkpointDigest(identity: DocumentOrganizationCheckpointIdentity, checkpointJson: string): string {

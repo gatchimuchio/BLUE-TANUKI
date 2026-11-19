@@ -181,13 +181,19 @@ export class DocumentOrganizationCoordinator {
   }
 
   holdForRecovery(reason: "memory_state_changed" | "memory_state_unverified" | "checkpoint_capacity" | "checkpoint_integrity_failed"): DocumentOrganizationProjection {
+    return this.holdWithoutCompletingCycle(reason);
+  }
+
+  cancel(): DocumentOrganizationProjection {
+    return this.holdWithoutCompletingCycle("task_cancelled");
+  }
+
+  private holdWithoutCompletingCycle(reason: string): DocumentOrganizationProjection {
     if (this.status !== "ready" && this.status !== "continuing") {
       return this.snapshot();
     }
-    this.status = "held";
-    this.nextQuestion = null;
     this.issueCodes = [reason];
-    this.terminalReason = reason;
+    this.hold(reason);
     return this.snapshot();
   }
 
@@ -373,22 +379,23 @@ export class DocumentOrganizationCoordinator {
       throw new Error("document organization completed checkpoint is inconsistent");
     }
     if (this.status === "held") {
-      const recoveryReasons = new Set([
+      const holdWithoutCycleReasons = new Set([
         "memory_state_changed",
         "memory_state_unverified",
         "checkpoint_capacity",
         "checkpoint_integrity_failed",
+        "task_cancelled",
       ]);
       const validReason = this.terminalReason === "candidate_rejected" ||
         this.terminalReason === "cycle_failed" ||
         this.terminalReason === "cycle_limit_reached" ||
         this.terminalReason === "cycle_limit_with_uncovered_source" ||
-        (this.terminalReason !== null && recoveryReasons.has(this.terminalReason));
+        (this.terminalReason !== null && holdWithoutCycleReasons.has(this.terminalReason));
       const validIssues = this.terminalReason === "candidate_rejected"
         ? this.issueCodes.length > 0
         : this.terminalReason === "cycle_failed"
           ? this.issueCodes.length === 1
-          : this.terminalReason !== null && recoveryReasons.has(this.terminalReason)
+          : this.terminalReason !== null && holdWithoutCycleReasons.has(this.terminalReason)
             ? this.issueCodes.length === 1 && this.issueCodes[0] === this.terminalReason
             : this.issueCodes.length === 0;
       if (!validReason || !validIssues || this.nextQuestion !== null || this.terminalReason === null) {
@@ -520,6 +527,8 @@ function documentOrganizationHoldNextAction(reason: string | null): string {
       return "保存領域とterminal checkpointの保持方針を確認する。進行中checkpointは自動削除されていない。";
     case "checkpoint_integrity_failed":
       return "checkpointを編集・削除せず、保存状態と回復点を確認する。";
+    case "task_cancelled":
+      return "この資料整理は取り消し済みです。確認済みの引用範囲は保持し、このタスクは再開しません。";
     default:
       return "未被覆範囲と問題理由を確認し、原資料を見直してからowner判断で次のtaskを開始する。";
   }

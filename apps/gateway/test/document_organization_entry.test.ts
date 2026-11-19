@@ -76,7 +76,8 @@ describe("document organization ordinary entries", () => {
         runtimeEnv,
       );
       const cliOutput = extractProjection(cli.stdout.join(""));
-      expect(cliOutput, JSON.stringify({ upstreamCallCount, upstreamPrompts })).toContain("状態: completed");
+      expect(cliOutput, JSON.stringify({ upstreamCallCount, upstreamPrompts })).toContain("資料整理状態（引用範囲）: completed");
+      expect(cliOutput).toContain("目的達成判定: 未判定");
       expect(cliOutput).toContain("決定事項:青");
       expect(cliOutput).toContain("未確認:期限");
       expect(cliOutput).toContain("分類意味:未検証");
@@ -114,7 +115,7 @@ describe("document organization ordinary entries", () => {
       resolveInboundRequestId(inboundAccepted.request_id);
       const webchatOutput = await received;
 
-      expect(webchatOutput).toContain("状態: completed");
+      expect(webchatOutput).toContain("資料整理状態（引用範囲）: completed");
       expect(webchatOutput).toContain("決定事項:青");
       expect(webchatOutput).toContain("未確認:期限");
       expect(webchatOutput).toContain("分類意味:未検証");
@@ -141,7 +142,8 @@ describe("document organization ordinary entries", () => {
       if (typeof ownerAccepted.request_id !== "string") throw new Error("owner inbound did not return a request identity");
       resolveOwnerRequestId(ownerAccepted.request_id);
       const ownerOutput = await ownerReceived;
-      expect(ownerOutput).toContain("状態: completed");
+      expect(ownerOutput).toContain("資料整理状態（引用範囲）: completed");
+      expect(ownerOutput).toContain("目的達成判定: 未判定");
       expect(ownerOutput).toContain("決定事項:青");
       expect(ownerOutput).toContain("未確認:期限");
       expect(ownerOutput).toContain("権限利用: false / 実行可能: false / 永続記憶反映: false");
