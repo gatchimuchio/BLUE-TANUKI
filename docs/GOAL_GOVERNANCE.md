@@ -21,15 +21,15 @@ protocolの`blue-tanuki.goal-governance.v1`は、目的参照・原文参照・�
 
 ## HDSへの接続
 
-owner管理下の明示的な`HDSUpperController`構築設定だけから`GoalGovernanceLedger`を生成し、`decide()`ごとに時刻基準の凍結projectionを`FrameResult.goal_governance`へ添付する。projectionは`DecisionLog`および既存hash-chain `AuditLog`を通る。受信metadata、UI、LLM、memory、executor feedbackは設定や承認を作成・置換できない。未設定時はoptional fieldを省略し、不正な構築設定は安全側に拒否する。
+`HDSUpperController` は既存のowner管理下構築設定と、Jが採用して監査に記録した最初の委任目的を読み分ける。`decide()` ごとにその時点の投影を `FrameResult.goal_governance` へ添付し、`DecisionLog` と既存のhash-chain `AuditLog` に記録する。受信metadata、UI、LLM、memory、executor feedbackに設定や承認の権限はない。未設定時は目的の投影を省き、不正な構築設定は拒否する。
 
-projectionは監査・後続の帰属参照用であり、model、commit、Approval Gate、command executionへ渡さない。通常の判断入力、権限、final review、F→M→C、監査chainを変えない。`purposeVersionForEventTime`は遅延結果の発生時刻を既知版へ照合できるが、この単位ではGateway/executorの結果consumerへ新しい帰属経路を接続しない。親scenario全体は別受入である。
+投影は非権威の参照情報である。`purposeVersionForEventTime` は遅延結果の発生時刻を当時の目的版へ照合できる。通常の仕事は、Gatewayが依頼を選択された現行の委任目的へ束縛してから、既存のJ計画・Approval Gate・実行権限の検査を通る。
 
 ## 承認経路と限界
 
-この単位で検査する承認記録は、HDSのowner管理下構築設定として渡される事前検証済みレコードであり、event digestへの束縛を示す。レコードの存在や`authority_kind`文字列だけで本人性を証明せず、署名検証器や対話的owner承認経路を新設しない。実運用でこの設定を生成するL3/owner承認接続は現状未接続であり、recordを直接受信しただけでは承認済みとみなせない。
+最初の委任目的は、Control CenterのTasksで使用者が入力する。認証済みの提出でL3審査待ちとなり、承認画面で同じ原文を確認してから明示承認する。Jは対象・原文SHA-256・審査内容・承認の対応を確認し、原文を私有Mへ保存して版1を採用する。最初の解釈は `unidentified`。承認待ちの本文はブラウザーの審査応答とGatewayのメモリに限定される。本文の永続保存先は私有Mで、監査には参照と照合値を記録する。
 
-運用目的・下位目的の親階層と権限ラベルは機械検査するが、digestだけから意味的に上位目的の範囲内かを証明しない。自然言語の同定、動的更新、永続DB、UI、owner identity認証、実結果の目的帰属、Installed/Live経路、親C02全scenarioは対象外である。監査への保存は既存`AuditLog`設定に従い、この機能が永続保存先を保証しない。
+Gateway再起動時には、採用記録とL3、Mの対応を再照合する。採用後に目的を変えるときは、既存の目的変更経路で現行版に結び付いた新しいL3承認が必要。目的の採用でファイルや外部サービスの実行権限が増えることはない。運用目的と下位目的の親階層は機械検査し、意味的な範囲への適合は結果ごとの根拠で判断する。
 
 ## 検証
 

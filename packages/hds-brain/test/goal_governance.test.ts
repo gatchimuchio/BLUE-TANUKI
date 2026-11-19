@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent, OperationPlan } from "@blue-tanuki/protocol";
-import { createGatewayInternalInboundRequest, GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
-import { evaluateApproval } from "../src/approval_policy.js";
+import { canonicalExecutorCommandBytes, createGatewayInternalInboundRequest,
+  GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
+import { evaluateApproval, goalPurposeAdoptionReviewDigest } from "../src/approval_policy.js";
 import { AuditLog } from "../src/audit.js";
 import { HDSUpperController } from "../src/controller.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, purposeVersionForEventTime } from "../src/goal_governance.js";
@@ -450,6 +451,85 @@ describe("HDS goal governance consumer", () => {
       metadata: trusted.metadata,
     });
     expect(forged.command?.type === "tool_call" && forged.command.payload.tool_name === "goal.governance.change").toBe(false);
+  });
+
+  it("adopts the first delegated purpose only from the issued command and exact L3 content review", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-purpose-adoption-"));
+    const filepath = join(root, "audit.jsonl");
+    const memoryStorage = purposeMemoryStorage(root);
+    const purpose_text = "保管資料を整理し、未確認事項と出典を区別する。";
+    const args = { goal_ref: `goal_${"a".repeat(32)}`, purpose_digest: contentDigest(purpose_text) };
+    const request_id = "f8032347-a870-47e6-8829-dbd41f24b2fb";
+    const proposal_actor = "webchat-owner-token-holder";
+    const actor = "webchat-resume-token-holder";
+    let controller: HDSUpperController | undefined;
+    let restarted: HDSUpperController | undefined;
+    try {
+      controller = new HDSUpperController({ audit: new AuditLog({ filepath }), goal_purpose_memory: memoryStorage });
+      expect(controller.getGoalGovernanceProjection()).toBeUndefined();
+      const origin = createGatewayInternalInboundRequest({
+        id: request_id,
+        user: proposal_actor,
+        channel: "webchat",
+        content: "Owner submitted an initial delegated purpose for L3 review.",
+        timestamp: Date.now(),
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.goal_purpose_adoption.version": "v1",
+          "blue_tanuki.tool_call": { tool_name: "goal.governance.adopt", arguments: args },
+        },
+      });
+      const forged = controller.decide({ ...origin, metadata: origin.metadata });
+      expect(forged.command?.type === "tool_call" && forged.command.payload.tool_name === "goal.governance.adopt").toBe(false);
+      const { command } = controller.decide(origin);
+      if (!command) throw new Error("initial purpose did not issue an HDS command");
+      expect(command).toMatchObject({ type: "tool_call", payload: { tool_name: "goal.governance.adopt", arguments: args } });
+      const command_digest = createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex");
+      const binding = { ...args, request_id, command_id: command.id, command_digest, proposal_actor };
+      const review_digest = goalPurposeAdoptionReviewDigest(binding);
+      const evaluation = evaluateApproval(command, [], { actor: proposal_actor, default_mode: "full_access" });
+      expect(evaluation).toMatchObject({ decision: "ask", approval_level: "L3_final_review", final_review_required: true });
+      const commit = { ...binding, content_review_digest: review_digest, purpose_text, actor, evaluation };
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest })).toBe(false);
+      controller.onApprovalEvaluation(evaluation, { request_id });
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest: digest("f") })).toBe(false);
+      const forgedBinding = { ...binding, command_digest: digest("b") };
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...forgedBinding,
+        review_digest: goalPurposeAdoptionReviewDigest(forgedBinding) })).toBe(false);
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest })).toBe(true);
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest })).toBe(true);
+      expect(controller.commitGoalPurposeAdoptionAfterL3(commit)).toMatchObject({ ok: false, reason: "approval_not_verified" });
+      controller.onCommandLifecycle(command.id, "approval_approved", { actor, request_id, reason: "human_approval:approve" });
+      expect(controller.commitGoalPurposeAdoptionAfterL3({ ...commit, purpose_text: "別の目的" }))
+        .toMatchObject({ ok: false, reason: "approval_not_verified" });
+      expect(controller.commitGoalPurposeAdoptionAfterL3(commit)).toMatchObject({ ok: true, ...args, version: 1 });
+      expect(controller.commitGoalPurposeAdoptionAfterL3(commit)).toMatchObject({ ok: false, reason: "goal_already_configured" });
+      expect(controller.getGoalGovernanceProjection()?.goals).toMatchObject([{
+        goal_ref: args.goal_ref,
+        source_ref: `F:${request_id}`,
+        current_version: 1,
+        current_purpose_digest: args.purpose_digest,
+        current_interpretation_revision: 0,
+        interpretation_revisions: [{ status: "unidentified" }],
+      }]);
+      expect(controller.getGoalGovernanceProjection()?.goals[0]?.current_interpretation_digest).toBeUndefined();
+      expect(controller.readGoalPurposeContent(args.goal_ref, 1)).toMatchObject({ ...args, version: 1, purpose_text, used_for_authority: false });
+      expect(JSON.stringify(controller.getAudit().list())).not.toContain(purpose_text);
+      controller.close();
+      controller = undefined;
+
+      restarted = new HDSUpperController({ audit: new AuditLog({ filepath }), goal_purpose_memory: memoryStorage });
+      expect(restarted.readGoalPurposeContent(args.goal_ref, 1)).toMatchObject({ ...args, version: 1, purpose_text, used_for_authority: false });
+      expect(restarted.getGoalGovernanceProjection()?.goals).toMatchObject([{ goal_ref: args.goal_ref, current_version: 1 }]);
+      expect(restarted.getAudit().verify()).toBe(true);
+    } finally {
+      restarted?.close();
+      controller?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("commits a delegated purpose change only from the exact L3 review and replays it from the durable audit chain", () => {
@@ -947,6 +1027,8 @@ function purposeChangeCommand(new_purpose_digest: string): ExecuteCommand {
 
 function operationPlanCandidate(requestId: string): OperationPlan {
   const target = { kind: "external_service" as const, id: "gmail" };
+  const parameters = { operation: "message.send", to: "inspection@example.invalid", subject: "synthetic fixture",
+    body_text: "local plan candidate only" };
   return {
     version: "operation-core.v1",
     plan_id: `purpose-plan-${requestId}`,
@@ -963,11 +1045,14 @@ function operationPlanCandidate(requestId: string): OperationPlan {
       adapter: "external_api",
       adapter_is_authority: false,
       command_generated_by_adapter_only: false,
-      parameters: { operation: "message.send", to: "inspection@example.invalid", subject: "synthetic fixture",
-        body_text: "local plan candidate only" },
+      parameters,
       preparation: { depends_on: [], bindings: [], preconditions: [],
-        validation: [{ check_id: "synthetic-accepted", method: "result_equals", target,
-          expected: { mutation_status: "confirmed" } }],
+        validation: [{ check_id: "synthetic-accepted", method: "gmail_message_send_result_matches", target,
+          expected: { schema_version: "blue-tanuki.gmail-message-send-result-validation.v1", operation: "message.send",
+            target_identity_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v4",
+              service: "gmail", operation: parameters.operation, recipients: { to: parameters.to } }),
+            request_payload_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-intent.v2",
+              ...parameters, cc: null, bcc: null, reply_to: null, from: null, attachments: [] }) } }],
         compensation: { available: false, reason: "an external send cannot be recalled" } },
     }],
     rollback: { available: false },

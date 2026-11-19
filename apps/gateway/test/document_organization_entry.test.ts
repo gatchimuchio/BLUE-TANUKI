@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_CANVAS_GENERATION_HTML, SYNTHETIC_CANVAS_GENERATION_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import type { OperationPlanStatusProjection } from "../src/serve_projection.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -341,6 +342,227 @@ describe("document organization ordinary entries", () => {
 });
 
 describe("delegated goal purpose owner review", () => {
+  it("adopts a first-use delegated purpose through exact L3 review and records a verified local result after restart", async () => {
+    const gatewayPort = await reserveLoopbackPort();
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-first-delegated-purpose-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const purposeFile = join(stateRoot, "private-state", "goal-governance.json");
+    const fileRoot = join(tempRoot, "workspace");
+    const purpose = "初回委任の合成確認として、指定されたファイルを読み取り専用で調べる。";
+    const purposeDigest = createHash("sha256").update(purpose, "utf8").digest("hex");
+    const relativePath = "first-task.txt";
+    const fileContent = "初回依頼の合成マーカー\n";
+    const user = "first-task-owner";
+    const task = `sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ${relativePath}\n検索語: 合成マーカー`;
+    const env = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
+    env.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    env.BLUE_TANUKI_FILE_ROOT = fileRoot;
+    env.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+    env.LLM_BACKEND = "synthetic-file-write-plan";
+    env.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+    delete env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    delete env.LLM_PROVIDERS_JSON;
+
+    const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+    const request = (route: string, bearer: string, method = "GET", body?: Record<string, unknown>) =>
+      fetch(`${baseUrl}${route}`, {
+        method,
+        headers: { authorization: `Bearer ${bearer}`, ...(body ? { "content-type": "application/json" } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(10_000),
+      });
+    const loadGoals = async () => {
+      const response = await request("/owner/task-goals", ownerToken);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return (await response.json() as { goals: { goal_ref: string; purpose_version: number; purpose_preview: string }[] }).goals;
+    };
+    const pendingApproval = async (commandId: string) => {
+      const queue = await request("/approval", resumeToken);
+      expect(queue.status).toBe(200);
+      const queueText = await queue.text();
+      expect(queueText).not.toContain(purpose);
+      const pending = (JSON.parse(queueText) as { pending_approvals: Record<string, unknown>[] }).pending_approvals
+        .find((entry) => entry.command_id === commandId);
+      expect(pending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        content_review_required: true, approval_token: expect.any(String) });
+      return pending!;
+    };
+    const approvalRoute = (commandId: string) => `/approval/${encodeURIComponent(commandId)}`;
+    const approve = (commandId: string, approvalToken: unknown, contentReviewDigest?: string) =>
+      request(approvalRoute(commandId), resumeToken, "POST", {
+        verdict: "approve", approval_token: approvalToken,
+        ...(contentReviewDigest ? { content_review_digest: contentReviewDigest } : {}),
+      });
+    const loadPlans = async () => {
+      const response = await request("/runtime/snapshot", token);
+      if (!response.ok) return [];
+      const payload = await response.text();
+      expect(payload).not.toContain(purpose);
+      const snapshot = JSON.parse(payload) as { operation_plan_status?: OperationPlanStatusProjection };
+      return snapshot.operation_plan_status?.plans ?? [];
+    };
+    const adoptionRoute = "/owner/goal-purpose-adoption";
+    let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
+    const webchatContents: string[] = [];
+    try {
+      mkdirSync(fileRoot);
+      writeFileSync(join(fileRoot, relativePath), fileContent, "utf8");
+      expect(existsSync(purposeFile)).toBe(false);
+      const pastClock = join(tempRoot, "past-clock");
+      const clockPreload = join(tempRoot, "clock.cjs");
+      writeFileSync(pastClock, "");
+      writeFileSync(clockPreload, [
+        'const { existsSync } = require("node:fs");',
+        "const now = Date.now;",
+        `Date.now = () => now() - (existsSync(${JSON.stringify(pastClock)}) ? 11 * 60_000 : 0);`,
+      ].join("\n"));
+      gateway = spawnCaptured(["--require", clockPreload, gatewayEntry, "--serve"], env);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await loadGoals()).toEqual([]);
+      expect((await request(adoptionRoute, token, "POST", { purpose_text: purpose })).status).toBe(401);
+      expect((await request(adoptionRoute, ownerToken, "POST", { purpose_text: "" })).status).toBe(400);
+      expect((await request(adoptionRoute, ownerToken, "POST", { purpose_text: purpose, actor: "forged" })).status)
+        .toBe(400);
+
+      const issuedBeforeExpiry = await request(adoptionRoute, ownerToken, "POST", { purpose_text: purpose });
+      expect(issuedBeforeExpiry.status).toBe(202);
+      const expiredAdoptionId = (await issuedBeforeExpiry.json() as { command_id: string }).command_id;
+      const expiredPending = await pendingApproval(expiredAdoptionId);
+      unlinkSync(pastClock);
+      expect(expiredPending.approval_token_expires_at_ms).toBeLessThan(Date.now());
+
+      const proposed = await request(adoptionRoute, ownerToken, "POST", { purpose_text: purpose });
+      const proposalBody = await proposed.json() as { command_id?: string };
+      expect(proposed.status, JSON.stringify(proposalBody)).toBe(202);
+      expect(proposalBody.command_id).toBeTypeOf("string");
+      expect(JSON.stringify(proposalBody)).not.toContain(purpose);
+      expect(await loadGoals()).toEqual([]);
+
+      const adoptionId = proposalBody.command_id!;
+      expect(adoptionId).not.toBe(expiredAdoptionId);
+      const currentQueue = await request("/approval", resumeToken);
+      expect(currentQueue.status).toBe(200);
+      const currentItems = (await currentQueue.json() as { pending_approvals: { command_id: string }[] }).pending_approvals;
+      expect(currentItems.map(({ command_id }) => command_id)).not.toContain(expiredAdoptionId);
+      const pending = await pendingApproval(adoptionId);
+      const legacyResume = await request("/resume", resumeToken, "POST", {
+        request_id: adoptionId, verdict: "approve", approval_token: pending.approval_token,
+      });
+      expect(legacyResume.status).toBe(409);
+      expect(await legacyResume.json()).toMatchObject({ error: "approval_endpoint_required" });
+      const beforeReview = await approve(adoptionId, pending.approval_token);
+      expect(beforeReview.status).toBe(409);
+      expect(await beforeReview.json()).toMatchObject({ error: "approval_content_review_required" });
+      expect((await request(`${approvalRoute(adoptionId)}/content`, ownerToken, "POST")).status).toBe(401);
+      const reviewed = await request(`${approvalRoute(adoptionId)}/content`, resumeToken, "POST");
+      expect(reviewed.status).toBe(200);
+      expect(reviewed.headers.get("cache-control")).toBe("no-store");
+      const review = await reviewed.json() as { review_digest?: string; command_digest?: string };
+      expect(review).toMatchObject({ kind: "goal_purpose_adoption", purpose_text: purpose, used_for_authority: false });
+      const reviewDigest = review.review_digest ?? review.command_digest;
+      expect(reviewDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect((await approve(adoptionId, pending.approval_token, "0".repeat(64))).status).toBe(409);
+      expect(await loadGoals()).toEqual([]);
+      const approved = await approve(adoptionId, pending.approval_token, reviewDigest);
+      expect(approved.status).toBe(200);
+      expect(await approved.json()).toMatchObject({ ok: true, result: { approval: "approve", executed: false } });
+      const goals = await loadGoals();
+      expect(goals).toEqual([{ goal_ref: expect.stringMatching(/^goal_[a-f0-9]{16,64}$/), purpose_version: 1,
+        purpose_preview: purpose }]);
+
+      await stopChild(gateway.child);
+      const firstProcessOutput = [...gateway.stdout, ...gateway.stderr];
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await loadGoals()).toEqual(goals);
+      const goalRef = goals[0]!.goal_ref;
+      const ticketResponse = await request("/ws-ticket", token, "POST", { user });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      taskWebSocket.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as { kind?: unknown; content?: unknown };
+        if (message.kind === "channel_send" && typeof message.content === "string") webchatContents.push(message.content);
+      });
+      await once(taskWebSocket, "open");
+      const submitted = await request("/owner/task-compute", ownerToken, "POST", {
+        user, task, goal_ref: goalRef, purpose_version: 1,
+        submission_id: "01a119c0-5b35-4491-ae00-000000000808",
+      });
+      const submission = await submitted.json() as { request_id?: string };
+      expect(submitted.status, JSON.stringify(submission)).toBe(202);
+      expect(submission).toMatchObject({ accepted: true, status: "queued_for_hds_decision", request_id: expect.any(String) });
+      const plan = await waitFor(async () => (await loadPlans())
+        .find((candidate) => candidate.goal_purpose_binding?.goal_ref === goalRef) ?? null,
+      gateway, "first-use C did not return a J plan for the approved purpose", 20_000);
+      expect(plan).toMatchObject({ owner_authentication_required: true,
+        goal_purpose_binding: { goal_ref: goalRef, purpose_version: 1, purpose_digest: purposeDigest },
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "unknown" },
+        steps: [expect.objectContaining({ operation: "file.search", status: "not_selected" })] });
+
+      const { plan_id, revision_digest, goal_purpose_binding } = plan;
+      const step_id = plan.steps.find((step) => step.operation === "file.search")?.step_id;
+      expect(step_id).toMatch(/^[a-f0-9]{64}$/);
+      const relationProposal = await request("/owner/goal-purpose-relation-review", ownerToken, "POST", {
+        plan_id_digest: plan_id, revision_digest, outcome: "supports",
+      });
+      const relation = await relationProposal.json() as { command_id?: string };
+      expect(relationProposal.status, JSON.stringify(relation)).toBe(202);
+      expect(relation.command_id).toBeTypeOf("string");
+      const relationId = relation.command_id!;
+      const relationPending = await pendingApproval(relationId);
+      expect(relationPending).toMatchObject({ goal_purpose_relation_review: { outcome: "supports", may_execute: false } });
+      const relationContent = await request(`${approvalRoute(relationId)}/content`, resumeToken, "POST");
+      expect(relationContent.status).toBe(200);
+      expect(relationContent.headers.get("cache-control")).toBe("no-store");
+      const relationReview = await relationContent.json() as { command_digest: string };
+      expect(relationReview).toMatchObject({ kind: "goal_purpose_relation", task, purpose_text: purpose,
+        used_for_authority: false, may_execute: false });
+      const relationApproval = await approve(relationId, relationPending.approval_token, relationReview.command_digest);
+      expect(relationApproval.status).toBe(200);
+      expect(await relationApproval.json()).toMatchObject({ ok: true, result: { executed: false,
+        status: "goal_purpose_relation_review_committed", outcome: "supports" } });
+
+      const reviewStep = await request("/owner/inbound", ownerToken, "POST", { user, plan_id, revision_digest,
+        content: `plan:review ${JSON.stringify({ plan_id, revision_digest, step_id, goal_purpose_binding })}` });
+      expect(reviewStep.status).toBe(202);
+      const verified = await waitFor(async () => {
+        const current = (await loadPlans()).find((candidate) => candidate.plan_id === plan_id);
+        const step = current?.steps.find((candidate) => candidate.step_id === step_id);
+        return current?.status === "results_verified" && step?.status === "verified" &&
+          step.binding?.memory_status === "receipt_confirmed" ? { current, step } : null;
+      }, gateway, "first-use local search did not reach a verified M receipt", 20_000);
+      expect(verified.current).toMatchObject({ goal_purpose_relation: { status: "owner_reviewed_supports" },
+        task_outcome: { status: "held", reason_code: "goal_completion_rules_missing", may_execute: false } });
+      expect(verified.step).toMatchObject({ operation: "file.search", binding: { result_digest: expect.any(String),
+        memory_status: "receipt_confirmed" } });
+
+      const savedResult = await request("/owner/inbound", ownerToken, "POST", { user, plan_id, revision_digest,
+        content: `plan:result ${JSON.stringify({ plan_id, revision_digest, step_id })}` });
+      expect(savedResult.status).toBe(202);
+      const resultReply = await waitFor(() => webchatContents.find((content) => content.includes("保存時点のfile.search結果")) ?? null,
+        gateway, "owner did not receive the saved first-use search result", 15_000);
+      expect(resultReply).toContain(relativePath);
+      expect(resultReply).toContain(fileContent.trim());
+      expect(resultReply).not.toContain(fileRoot);
+      expect(readFileSync(join(fileRoot, relativePath), "utf8")).toBe(fileContent);
+      const ordinaryLogs = [...firstProcessOutput, gateway.stdout.join(""), gateway.stderr.join(""),
+        readFileSync(join(auditDir, "audit.jsonl"), "utf8"), readFileSync(historyFile, "utf8"),
+        existsSync(sessionDir) ? readRegularFilesRecursively(sessionDir).join("\n") : ""].join("\n");
+      expect(ordinaryLogs).not.toContain(purpose);
+      expect(ordinaryLogs).toContain(purposeDigest);
+    } finally {
+      taskWebSocket?.close();
+      if (gateway) await stopChild(gateway.child);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it("BT-U-E2E-01: keeps synthetic file.delete behind reviewed L3 and stops on a stale target", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-file-delete-review-"));
     const auditDir = join(tempRoot, "audit");

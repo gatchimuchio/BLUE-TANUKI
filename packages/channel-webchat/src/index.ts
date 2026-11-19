@@ -11,6 +11,7 @@ export {
   type WebChatApprovalQueueItem,
   type WebChatApprovalContentReview,
   type WebChatApprovalContentReviewValidation,
+  type WebChatGoalPurposeAdoptionContentReview,
   type WebChatGoalPurposeChangeContentReview,
   type WebChatGoalPurposeChangeCandidate,
   type WebChatTaskGoalOption,

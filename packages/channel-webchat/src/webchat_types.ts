@@ -773,6 +773,19 @@ export interface WebChatGoogleDriveFileTrashContentReview {
   may_execute: false;
 }
 
+export interface WebChatGoalPurposeAdoptionContentReview {
+  kind: "goal_purpose_adoption";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  operation: "goal.governance.adopt";
+  goal_ref: string;
+  purpose_text: string;
+  purpose_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -1432,7 +1445,7 @@ export type WebChatComposioExecuteContentReview = ComposioActionContentReview & 
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   WebChatGmailMessageModifyContentReview |
-  WebChatGoalPurposeChangeContentReview |
+  WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview | WebChatSettingsWriteContentReview | WebChatMcpCallContentReview |
   WebChatComposioExecuteContentReview |
@@ -1558,6 +1571,8 @@ export interface WebChatExecutionCancellationResult extends WebChatActiveExecuti
 export interface WebChatApprovalSurface {
   /** Return pending human approval work for the local console. */
   list: () => Promise<readonly WebChatApprovalQueueItem[]>;
+  /** Route approvals that require the dedicated review endpoint away from legacy /resume. */
+  requiresApprovalEndpoint?: (approval_id: string) => boolean;
   /** Return redacted metadata for currently executing commands. */
   activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
   /** Request cancellation by exact active command identity; null means no current match. */
@@ -1914,6 +1929,8 @@ export interface WebChatOptions {
   /** Request abort for the single active command bound to an authenticated owner task request. */
   onOwnerTaskSubmissionCancellation?: (input: { request_id: string }) =>
     Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null>;
+  /** Request L3 review of an owner-authored initial delegated purpose. */
+  onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
   onGoalPurposeChangeProposal?: (input: {
     goal_ref: string;

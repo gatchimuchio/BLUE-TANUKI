@@ -32,6 +32,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.runtime_ingress.used_for_authority",
   "blue_tanuki.failure_review",
   "blue_tanuki.goal_purpose_change.version",
+  "blue_tanuki.goal_purpose_adoption.version",
   "blue_tanuki.meaning_update_adoption.version",
   "blue_tanuki.memory_judgment_reassessment.version",
   "actor_kind",
@@ -73,6 +74,7 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.failure_review.signature_id"?: string;
   "blue_tanuki.failure_review.projection_json"?: string;
   "blue_tanuki.goal_purpose_change.version"?: "v1";
+  "blue_tanuki.goal_purpose_adoption.version"?: "v1";
   "blue_tanuki.meaning_update_adoption.version"?: "v1";
   "blue_tanuki.memory_judgment_reassessment.version"?: "v1";
 }

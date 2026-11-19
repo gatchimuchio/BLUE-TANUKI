@@ -605,6 +605,7 @@ function findAotanuAssetRoot(): string {
  *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
+ *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
@@ -1289,6 +1290,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (url.pathname === "/owner/goal-purpose-adoption") {
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+    }
     if (req.method !== "POST") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
@@ -1299,6 +1304,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       url.pathname === "/resume"
         ? "resume"
         : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change" ||
+          url.pathname === "/owner/goal-purpose-adoption" ||
           url.pathname === "/owner/audio-transcribe" ||
           url.pathname === "/owner/task-compute" ||
           url.pathname === "/owner/task-submission-status" ||
@@ -1342,10 +1348,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     let body: Record<string, unknown> | null;
+    const isGoalPurposeAdoption = url.pathname === "/owner/goal-purpose-adoption";
     try {
       body = await readJson(req, url.pathname === "/owner/task-compute" || url.pathname === "/runtime/intent"
         ? MAX_MULTIMODAL_TASK_JSON_BYTES :
-        url.pathname === "/owner/audio-transcribe" ? MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES : undefined);
+        url.pathname === "/owner/audio-transcribe" ? MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES :
+        isGoalPurposeAdoption ? 128 * 1024 : undefined, isGoalPurposeAdoption);
     } catch (error) {
       if (error instanceof Error && error.message === "body_too_large") {
         res.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
@@ -1567,7 +1575,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
           (hasMcpCatalogSelection && typeof body?.include_mcp_catalog !== "boolean") ||
           (hasPurposeVersion && (typeof requestedPurposeVersion !== "number" ||
-            !Number.isSafeInteger(requestedPurposeVersion) || requestedPurposeVersion < 2))) {
+            !Number.isSafeInteger(requestedPurposeVersion) || requestedPurposeVersion < 1))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_input" }));
         return;
@@ -2177,6 +2185,49 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (isGoalPurposeAdoption) {
+      const headers = { "content-type": "application/json", "cache-control": "no-store" };
+      const purpose_text = body?.purpose_text;
+      if (!this.opts.onGoalPurposeAdoption) {
+        res.writeHead(404, headers);
+        res.end(JSON.stringify({ error: "goal_purpose_adoption_not_configured" }));
+        return;
+      }
+      if (Object.keys(body ?? {}).length !== 1 || typeof purpose_text !== "string" ||
+          !purpose_text.trim() || !isWellFormedUnicode(purpose_text)) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ error: "valid purpose_text is required" }));
+        return;
+      }
+      if (Buffer.byteLength(purpose_text, "utf8") > 16 * 1024) {
+        res.writeHead(413, headers);
+        res.end(JSON.stringify({ error: "purpose_text_too_large" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-goal-purpose-token-holder", res)) return;
+      try {
+        const result = await this.opts.onGoalPurposeAdoption({ purpose_text, actor: OWNER_TOKEN_ACTOR });
+        if (result.accepted !== true) {
+          res.writeHead(409, headers);
+          res.end(JSON.stringify({ accepted: false, status: "goal_purpose_adoption_not_accepted" }));
+          return;
+        }
+        const { command_id, request_id, goal_ref, purpose_digest } = result;
+        if (typeof command_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(command_id) ||
+            typeof request_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(request_id) ||
+            typeof goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(goal_ref) ||
+            typeof purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(purpose_digest)) {
+          throw new Error("invalid_goal_purpose_adoption_receipt");
+        }
+        res.writeHead(202, headers);
+        res.end(JSON.stringify({ accepted: true, status: "approval_required", command_id, request_id, goal_ref, purpose_digest }));
+      } catch {
+        res.writeHead(503, headers);
+        res.end(JSON.stringify({ accepted: false, status: "goal_purpose_adoption_unavailable" }));
+      }
+      return;
+    }
+
     if (url.pathname === "/owner/goal-purpose-change") {
       const goal_ref = typeof body?.goal_ref === "string" ? body.goal_ref : "";
       const purpose_text = typeof body?.purpose_text === "string" ? body.purpose_text : "";
@@ -2457,6 +2508,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const actor = RESUME_TOKEN_ACTOR;
       if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
         return;
+      if (this.opts.approval?.requiresApprovalEndpoint?.(request_id)) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_endpoint_required" }));
+        return;
+      }
       if (this.resumeApprovalTokenStore) {
         if (!(await this.consumeResumeApprovalToken(request_id, body, res)))
           return;

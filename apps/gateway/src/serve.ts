@@ -9,6 +9,9 @@ import {
   DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
+  goalPurposeAdoptionApprovalTarget,
+  goalPurposeAdoptionReviewDigest,
+  parseGoalPurposeAdoptionArguments,
   goalPurposeChangeApprovalTarget,
   goalPurposeRelationReviewApprovalTarget,
   meaningUpdateAdoptionApprovalTarget,
@@ -33,6 +36,7 @@ import type {
   MeaningUpdateAdoptionArguments,
   MemoryJudgmentReassessmentArguments,
   OwnerMemoryJudgmentReassessmentProposal,
+  GoalPurposeAdoptionArguments,
 } from "@blue-tanuki/hds-brain";
 import {
   buildOperationCoreApprovalTrace,
@@ -150,6 +154,7 @@ import type {
   WebChatApprovalContentReviewValidation,
   WebChatGoalPurposeRelationContentReview,
   WebChatGoalPurposeChangeCandidate,
+  WebChatGoalPurposeAdoptionContentReview,
   WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
@@ -336,6 +341,7 @@ interface PendingApproval {
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
+  goal_purpose_adoption?: GoalPurposeAdoptionArguments & { purpose_text: string; proposal_actor: string };
   goal_purpose_proposal?: {
     goal_ref: string;
     purpose_text: string;
@@ -735,6 +741,10 @@ function getMemoryJudgmentReassessmentArguments(command: ExecuteCommand): Memory
     target_record_id: args.target_record_id, target_version: args.target_version,
     interpretation_id: args.interpretation_id, judgment_ref: args.judgment_ref,
     citation_audit_digest: args.citation_audit_digest };
+}
+
+function isGoalPurposeAdoptionCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "goal.governance.adopt";
 }
 
 function isGoalPurposeChangeCommand(command: ExecuteCommand): boolean {
@@ -1465,6 +1475,7 @@ async function serveWithOwnerLease(
   for (const tool of runtimeSchedules.tools()) tools.register(tool);
   const approval = buildApprovalRuntime(process.env);
   const pendingApprovals = new Map<string, PendingApproval>();
+  let initialPurposeSubmissionInFlight = false;
   const activeTaskExecutions = new ActiveTaskExecutionRegistry();
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
   const activeCommandFinalizations = new Set<Promise<void>>();
@@ -2153,6 +2164,7 @@ async function serveWithOwnerLease(
     browser_form_input_review_digest?: string;
     browser_form_input_operation_plan_binding_digest?: string;
     browser_form_submit_receipt_pending?: PendingApproval;
+    goal_purpose_adoption?: PendingApproval["goal_purpose_adoption"];
     goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
     goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
@@ -2439,6 +2451,12 @@ async function serveWithOwnerLease(
         });
         return { status: "goal_purpose_change_requires_l3_final_review" };
       }
+      if (isGoalPurposeAdoptionCommand(cmd) && (!opts.goal_purpose_adoption || evaluation.decision !== "ask" ||
+          evaluation.risk !== "high" || evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
+        hds.onCommandLifecycle(cmd.id, "approval_rejected", { actor,
+          reason: "goal_purpose_adoption_requires_l3_final_review", request_id: log.request_id });
+        return { status: "goal_purpose_adoption_requires_l3_final_review" };
+      }
       if (isMeaningUpdateAdoptionCommand(cmd) &&
           (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
            evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
@@ -2565,6 +2583,7 @@ async function serveWithOwnerLease(
           approval_token_expires_at_ms: issued?.expires_at_ms,
           ...(opts.recovery_archive_sha256 ? { recovery_archive_sha256: opts.recovery_archive_sha256 } : {}),
           ...(cronEvent ? { cron_event: cronEvent } : {}),
+          ...(opts.goal_purpose_adoption ? { goal_purpose_adoption: opts.goal_purpose_adoption } : {}),
           ...(opts.goal_purpose_proposal ? { goal_purpose_proposal: opts.goal_purpose_proposal } : {}),
           ...(opts.goal_purpose_relation_review_proposal
             ? { goal_purpose_relation_review_proposal: opts.goal_purpose_relation_review_proposal } : {}),
@@ -2632,6 +2651,11 @@ async function serveWithOwnerLease(
         request_id: log.request_id,
       });
       return { status: "goal_purpose_change_has_no_executor_path" };
+    }
+    if (isGoalPurposeAdoptionCommand(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor,
+        reason: "goal_purpose_adoption_has_no_executor_path", request_id: log.request_id });
+      return { status: "goal_purpose_adoption_has_no_executor_path" };
     }
     if (isMeaningUpdateAdoptionCommand(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor,
@@ -3859,7 +3883,7 @@ async function serveWithOwnerLease(
       (command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create", "release.publish"].includes(String(command.payload.arguments.operation)))
     );
-    return isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
+    return isGoalPurposeAdoptionCommand(command) || isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
       isBrowserLinkNavigationReviewCommand(command) || isGmailWriteContentReviewCommand(command) ||
       isGmailDraftSendReviewCommand(command) || isGmailMessageTrashReviewCommand(command) ||
       requiresToolContentReview;
@@ -3941,7 +3965,8 @@ async function serveWithOwnerLease(
       }
       const missingGoalPurposeProposal = hds.getAudit().list().some(({ log }) =>
         "kind" in log && log.kind === "approval_gate" && log.command_id === command_id &&
-        (log.evaluation.context.target?.startsWith("goal.governance.change:") ||
+        (log.evaluation.context.target?.startsWith("goal.governance.adopt:") ||
+         log.evaluation.context.target?.startsWith("goal.governance.change:") ||
          log.evaluation.context.target?.startsWith("goal.governance.review_task_purpose:") ||
          log.evaluation.context.target?.startsWith("memory.meaning.adopt:")));
       if (missingGoalPurposeProposal) {
@@ -4402,6 +4427,26 @@ async function serveWithOwnerLease(
         completeApprovalResolution(command_id);
         return { approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
           plan_id_digest: args.plan_id_digest, outcome: committed.outcome };
+      }
+      if (pending.goal_purpose_adoption) {
+        if (validateGoalPurposeAdoptionContentReview(pending, ctx.content_review_digest) !== "valid") {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "goal_purpose_adoption_stale" };
+        }
+        const committed = hds.commitGoalPurposeAdoptionAfterL3({
+          ...pending.goal_purpose_adoption,
+          request_id: pending.log.request_id,
+          command_id,
+          command_digest: pending.command_digest,
+          content_review_digest: pending.content_review_digest!,
+          actor: approvalActor,
+          evaluation: pending.evaluation,
+        });
+        completeApprovalResolution(command_id);
+        if (!committed.ok) return { approval: "approve", executed: false, status: `goal_purpose_adoption_${committed.reason}` };
+        return { approval: "approve", executed: false, status: "goal_purpose_adoption_committed",
+          goal_ref: committed.goal_ref, version: committed.version, purpose_digest: committed.purpose_digest,
+          effective_from: committed.effective_from };
       }
       if (pending.goal_purpose_proposal) {
         const proposal = pending.goal_purpose_proposal;
@@ -4897,6 +4942,7 @@ async function serveWithOwnerLease(
             },
           }
         : {}),
+      onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
         source_command_id?: string }) =>
         submitGoalPurposeChangeProposal(input),
@@ -4913,8 +4959,7 @@ async function serveWithOwnerLease(
         const projection = hds.getGoalGovernanceProjection();
         if (!projection || projection.used_for_authority !== false) return [];
         return projection.goals.flatMap((goal): WebChatTaskGoalOption[] => {
-          if (goal.goal_kind !== "delegated" || goal.parent_alignment_status === "requires_review" ||
-              goal.current_version < 2) return [];
+          if (goal.goal_kind !== "delegated" || goal.parent_alignment_status === "requires_review") return [];
           const purpose = hds.readGoalPurposeContent(goal.goal_ref, goal.current_version);
           if (!purpose || purpose.used_for_authority !== false || purpose.goal_ref !== goal.goal_ref ||
               purpose.version !== goal.current_version || purpose.purpose_digest !== goal.current_purpose_digest ||
@@ -4989,6 +5034,7 @@ async function serveWithOwnerLease(
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
+        requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption),
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
           requestTaskExecutionCancellation(command_id, ctx),
@@ -5404,6 +5450,94 @@ async function serveWithOwnerLease(
     return { accepted: true, status: "approval_required", request_id: log.request_id, command_id: command.id };
   }
 
+  function initialGoalPurposeAvailable(): boolean {
+    return (hds.getGoalGovernanceProjection()?.goals.length ?? 0) === 0 &&
+      goalGovernanceConfigFromEnvironment(process.env) === undefined;
+  }
+
+  function expireInitialGoalPurposeApproval(pending: PendingApproval): boolean {
+    const { command, log, approval_token_expires_at_ms: expiresAt } = pending;
+    if (!pending.goal_purpose_adoption || expiresAt === undefined || expiresAt >= Date.now() ||
+        approvalRecoveryStore.state(command.id) !== "pending") return false;
+    discardPendingApproval(command.id);
+    hds.onCommandLifecycle(command.id, "approval_cancelled", {
+      actor: "gateway", request_id: log.request_id, reason: "initial_goal_purpose_approval_expired",
+    });
+    return true;
+  }
+
+  async function submitGoalPurposeAdoption(input: { purpose_text: string; actor: string }): Promise<Record<string, unknown>> {
+    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR || !input.purpose_text.trim() ||
+        !isWellFormedUnicode(input.purpose_text) || Buffer.byteLength(input.purpose_text, "utf8") > 16 * 1024) {
+      return { accepted: false, status: "goal_purpose_adoption_input_invalid" };
+    }
+    if (!initialGoalPurposeAvailable()) return { accepted: false, status: "initial_goal_purpose_already_set" };
+    if (initialPurposeSubmissionInFlight || [...pendingApprovals.values()].some(item =>
+      item.goal_purpose_adoption && !expireInitialGoalPurposeApproval(item))) {
+      return { accepted: false, status: "goal_purpose_adoption_approval_pending" };
+    }
+    const audit = hds.getAudit();
+    if (!audit.isPersistent() || !audit.verify()) return { accepted: false, status: "goal_purpose_adoption_audit_unavailable" };
+
+    initialPurposeSubmissionInFlight = true;
+    try {
+      const args = {
+        goal_ref: `goal_${randomUUID().replaceAll("-", "")}`,
+        purpose_digest: digestString(input.purpose_text),
+      };
+      const inbound = createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: input.actor, timestamp: Date.now(),
+        content: "Owner submitted an initial delegated purpose for L3 review.",
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.goal_purpose_adoption.version": "v1",
+          "blue_tanuki.tool_call": { tool_name: "goal.governance.adopt", arguments: args },
+        },
+      });
+      const boundary = planGatewayInboundBoundary(inbound);
+      if (!boundary.boundary_ok) return { accepted: false, status: "goal_purpose_adoption_boundary_rejected" };
+      const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+      recordCompleteHistory({ kind: "user_input", request_id: inbound.id, actor: input.actor,
+        source: "webchat-owner-goal-purpose-adoption", timestamp: inbound.timestamp, payload: {
+          ...args, purpose_text_bytes: Buffer.byteLength(input.purpose_text, "utf8"),
+          raw_payload_exposed: false, used_for_authority: false,
+        } });
+      recordCompleteHistory({ kind: "hds_decision", request_id: log.request_id, command_id: command?.id, actor: input.actor,
+        source: "hds-brain", timestamp: log.timestamp, payload: hdsDecisionHistoryPayload(log, command) });
+      const routed = command?.type === "tool_call" && command.payload.tool_name === "goal.governance.adopt"
+        ? parseGoalPurposeAdoptionArguments(command.payload.arguments) : null;
+      if (!command || routed?.goal_ref !== args.goal_ref || routed?.purpose_digest !== args.purpose_digest) {
+        if (command) hds.onCommandLifecycle(command.id, "approval_rejected", { actor: input.actor,
+          reason: "goal_purpose_adoption_hds_operation_mismatch", request_id: log.request_id });
+        return { accepted: false, status: "goal_purpose_adoption_authority_rejected" };
+      }
+      const evaluation = approval.evaluate(command, input.actor);
+      if (evaluation.context.target !== goalPurposeAdoptionApprovalTarget(args) || evaluation.context.operation !== "tool.call" ||
+          evaluation.context.actor !== input.actor || evaluation.context.command_id !== command.id || evaluation.decision !== "ask" ||
+          evaluation.risk !== "high" || evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
+        hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+        hds.onCommandLifecycle(command.id, "approval_rejected", { actor: input.actor,
+          reason: "goal_purpose_adoption_l3_review_unavailable", request_id: log.request_id });
+        return { accepted: false, status: "goal_purpose_adoption_l3_review_unavailable" };
+      }
+      const result = await executeAndEcho(command, log, inbound, {
+        actor: input.actor, approval_evaluation: evaluation, quiet_approval_notice: true,
+        goal_purpose_adoption: { ...args, purpose_text: input.purpose_text, proposal_actor: input.actor },
+      });
+      const pending = pendingApprovals.get(command.id);
+      if (result.status !== "approval_required" || !pending?.goal_purpose_adoption || !pending.approval_token) {
+        if (pending) discardPendingApproval(command.id);
+        hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: input.actor,
+          reason: "goal_purpose_adoption_approval_queue_unavailable", request_id: log.request_id });
+        return { accepted: false, status: "goal_purpose_adoption_approval_unavailable" };
+      }
+      return { accepted: true, status: "approval_required", request_id: log.request_id, command_id: command.id, ...args };
+    } finally {
+      initialPurposeSubmissionInFlight = false;
+    }
+  }
+
   async function submitGoalPurposeChangeProposal(input: {
     goal_ref: string;
     purpose_text: string;
@@ -5741,6 +5875,30 @@ async function serveWithOwnerLease(
       ? "valid" : "stale";
   }
 
+  function goalPurposeAdoptionReview(pending: PendingApproval): WebChatGoalPurposeAdoptionContentReview | null {
+    const proposal = pending.goal_purpose_adoption;
+    const command = pending.command;
+    if (!proposal || expireInitialGoalPurposeApproval(pending) ||
+        command.type !== "tool_call" || command.payload.tool_name !== "goal.governance.adopt" ||
+        executorCommandDigest(command) !== pending.command_digest || !initialGoalPurposeAvailable()) return null;
+    const args = parseGoalPurposeAdoptionArguments(command.payload.arguments);
+    if (!args || args.goal_ref !== proposal.goal_ref || args.purpose_digest !== proposal.purpose_digest ||
+        digestString(proposal.purpose_text) !== args.purpose_digest) return null;
+    const reviewDigest = goalPurposeAdoptionReviewDigest({ ...args,
+      request_id: pending.log.request_id, command_id: command.id, command_digest: pending.command_digest });
+    return { kind: "goal_purpose_adoption", operation: "goal.governance.adopt", ...args,
+      command_id: command.id, command_digest: pending.command_digest, review_digest: reviewDigest,
+      purpose_text: proposal.purpose_text, used_for_authority: false, may_execute: false };
+  }
+
+  function validateGoalPurposeAdoptionContentReview(pending: PendingApproval, digest: string | undefined):
+    WebChatApprovalContentReviewValidation {
+    const review = goalPurposeAdoptionReview(pending);
+    if (!review) return "stale";
+    if (!digest || !pending.content_review_digest) return "required";
+    return digest === review.review_digest && digest === pending.content_review_digest ? "valid" : "stale";
+  }
+
   function validateGoalPurposeChangeContentReview(
     pending: PendingApproval,
     content_review_digest: string | undefined,
@@ -5792,6 +5950,15 @@ async function serveWithOwnerLease(
 
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
+    if (pending?.goal_purpose_adoption) {
+      const review = goalPurposeAdoptionReview(pending);
+      if (!review || approvalRecoveryStore.state(command_id) !== "pending" || !hds.recordGoalPurposeAdoptionContentReview({
+        request_id: pending.log.request_id, command_id, command_digest: review.command_digest, review_digest: review.review_digest,
+        goal_ref: review.goal_ref, purpose_digest: review.purpose_digest, proposal_actor: pending.goal_purpose_adoption.proposal_actor,
+      })) return null;
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+      return review;
+    }
     if (pending && isBrowserFormInputReviewCommand(pending.command)) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return null;
@@ -6566,6 +6733,7 @@ async function serveWithOwnerLease(
         return signal?.aborted ? "cancelled" : "unavailable";
       }
     }
+    if (pending.goal_purpose_adoption) return validateGoalPurposeAdoptionContentReview(pending, content_review_digest);
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
     }
@@ -6674,8 +6842,9 @@ async function serveWithOwnerLease(
   }
 
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {
-    for (const [id, p] of pendingApprovals) if (!hds.operationPlanCommandIsCurrent(p.command)) {
-      resolveCronApprovalHandoff(p, "cancelled");
+    for (const [id, pending] of pendingApprovals) {
+      if (expireInitialGoalPurposeApproval(pending) || hds.operationPlanCommandIsCurrent(pending.command)) continue;
+      resolveCronApprovalHandoff(pending, "cancelled");
       discardPendingApproval(id);
       hds.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_binding_stale" });
     }
@@ -7230,7 +7399,7 @@ async function serveWithOwnerLease(
     const requestId = pending.log.request_id;
     if (pendingApprovals.get(commandId) !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command) || pending.cron_event ||
-        pending.goal_purpose_proposal || pending.goal_purpose_relation_review_proposal ||
+        pending.goal_purpose_adoption || pending.goal_purpose_proposal || pending.goal_purpose_relation_review_proposal ||
         pending.meaning_update_proposal || pending.memory_judgment_reassessment_proposal) return null;
     // Race approval admission on the same durable journal transition before touching the pending entry.
     if (!approvalRecoveryStore.beginResolution(commandId)) return null;

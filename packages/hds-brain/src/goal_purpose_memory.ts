@@ -3,6 +3,7 @@ import {
   MEMORY_COMMIT_V2_SCHEMA_VERSION,
   memoryCommitContentDigest,
   type GoalGovernanceEvent,
+  type GoalPurposeAdoptionEvent,
   type MemoryCommitJsonValue,
   type MemoryCommitV2,
 } from "@blue-tanuki/protocol";
@@ -10,8 +11,9 @@ import type { OperationPlanMemoryStorage } from "./operation_plan.js";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference, JMemoryApprovalReader } from "./保存取引.js";
 import { goalGovernanceEventDigest } from "./goal_governance.js";
+import type { GoalPurposeAdoptionReviewBinding } from "./types.js";
 
-type GoalPurposeChangeEvent = Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
+type GoalPurposeContentEvent = GoalPurposeAdoptionEvent | Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
 
 interface GoalPurposeMemoryRecord {
   readonly schema_version: "blue-tanuki.goal-purpose-memory.v1";
@@ -34,6 +36,7 @@ export interface GoalPurposeMemoryApprovalContext extends JMemoryApprovalReferen
   readonly actor: string;
   readonly target: string;
   readonly evaluation: unknown;
+  readonly adoption_review?: GoalPurposeAdoptionReviewBinding;
 }
 
 export class GoalPurposeMemoryConsumer {
@@ -48,7 +51,7 @@ export class GoalPurposeMemoryConsumer {
    * exact MemoryCommitV2 content. The M value is evidence/content, never authority.
    */
   commit(
-    event: GoalPurposeChangeEvent,
+    event: GoalPurposeContentEvent,
     purposeText: string,
     authorize: (reference: JMemoryApprovalReference) => void,
   ): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
@@ -134,7 +137,7 @@ export class GoalPurposeMemoryConsumer {
   }
 
   /** Resolve an audit event's opaque M reference and verify the exact content binding. */
-  read(event: GoalPurposeChangeEvent): GoalPurposeMemoryRecord | null {
+  read(event: GoalPurposeContentEvent): GoalPurposeMemoryRecord | null {
     const recordId = recordIdForReference(event.purpose_memory_ref);
     if (!recordId) return null;
     const stored = this.coordinator.readMemoryRecord(recordId);
@@ -191,7 +194,7 @@ function recordIdForReference(reference: string | undefined): string | null {
 function matchesPurposeRecord(
   value: unknown,
   expected: GoalPurposeMemoryRecord,
-  event: GoalPurposeChangeEvent,
+  event: GoalPurposeContentEvent,
 ): boolean {
   return purposeRecordMismatchFields(value, expected, event).length === 0;
 }
@@ -199,7 +202,7 @@ function matchesPurposeRecord(
 function purposeRecordMismatchFields(
   value: unknown,
   expected: GoalPurposeMemoryRecord,
-  event: GoalPurposeChangeEvent,
+  event: GoalPurposeContentEvent,
 ): string[] {
   const parsed = parsePurposeMemoryRecord(value);
   if (!parsed) return ["record_schema"];
@@ -225,7 +228,7 @@ function digestText(value: string): string {
   return createHash("sha256").update(Buffer.from(value, "utf8")).digest("hex");
 }
 
-function digestEvent(event: GoalPurposeChangeEvent): string {
+function digestEvent(event: GoalPurposeContentEvent): string {
   return goalGovernanceEventDigest(event);
 }
 

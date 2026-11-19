@@ -5,6 +5,7 @@ import type {
   ExecuteFeedback,
   GoalGovernanceAuthorization,
   GoalGovernanceEvent,
+  GoalPurposeAdoptionEvent,
   GoalCriteriaProjection,
   OperationRequest,
 } from "@blue-tanuki/protocol";
@@ -614,6 +615,8 @@ export type AuthorityEventKind =
   | "composio_execution_completed"
   | "composio_execution_failed"
   | "cron_event_no_replay_acknowledged"
+  | "goal_purpose_adoption_content_reviewed"
+  | "goal_purpose_adoption_committed"
   | "goal_purpose_change_committed"
   | "approval_asked"
   | "approval_allowed"
@@ -644,7 +647,16 @@ export interface AuthorityEventLog {
   audit_gap_recovered?: boolean;
   goal_governance_event?: Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
   goal_governance_authorization?: GoalGovernanceAuthorization;
+  goal_purpose_adoption_event?: GoalPurposeAdoptionEvent;
+  goal_purpose_adoption_review?: GoalPurposeAdoptionReviewBinding;
   timestamp: number;
+}
+
+export interface GoalPurposeAdoptionReviewBinding {
+  readonly goal_ref: string;
+  readonly purpose_digest: string;
+  readonly command_digest: string;
+  readonly review_digest: string;
 }
 
 export type ScheduleLifecycleEvent =

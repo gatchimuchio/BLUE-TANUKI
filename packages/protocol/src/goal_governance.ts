@@ -17,7 +17,7 @@ export const GoalGovernanceGoalSchema = z.object({
   parent_goal_ref: GoalRefSchema.optional(),
   parent_goal_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   initial_purpose_digest: DigestSchema,
-  initial_interpretation_digest: DigestSchema,
+  initial_interpretation_digest: DigestSchema.nullable(),
   adopted_at: TimestampSchema,
 }).strict();
 
@@ -76,6 +76,21 @@ export const GoalGovernanceEventSchema = z.union([
   GoalInterpretationCorrectionEventSchema,
   GoalPurposeChangeEventSchema,
 ]);
+
+/** 初回委任は構築設定でなく、Jが監査とMを照合してから再現する。 */
+export const GoalPurposeAdoptionEventSchema = z.object({
+  event_ref: EventRefSchema,
+  event_kind: z.literal("purpose_adoption"),
+  goal_ref: GoalRefSchema,
+  source_ref: SourceRefSchema,
+  new_version: z.literal(1),
+  new_purpose_digest: DigestSchema,
+  purpose_memory_ref: GoalPurposeMemoryRefSchema,
+  authority_kind: z.literal("owner"),
+  authorization_ref: AuthorizationRefSchema,
+  recorded_at: TimestampSchema,
+  effective_from: TimestampSchema,
+}).strict();
 
 export const GoalGovernanceAuthorizationSchema = z.object({
   authorization_ref: AuthorizationRefSchema,
@@ -144,6 +159,7 @@ export const GoalGovernanceConfigSchema = z.object({
 
 export type GoalGovernanceGoal = z.infer<typeof GoalGovernanceGoalSchema>;
 export type GoalGovernanceEvent = z.infer<typeof GoalGovernanceEventSchema>;
+export type GoalPurposeAdoptionEvent = z.infer<typeof GoalPurposeAdoptionEventSchema>;
 export type GoalGovernanceAuthorization = z.infer<typeof GoalGovernanceAuthorizationSchema>;
 export type GoalGovernanceConfig = z.infer<typeof GoalGovernanceConfigSchema>;
 

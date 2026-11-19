@@ -2,6 +2,7 @@ import type { InboundRequest } from "@blue-tanuki/protocol";
 import { getToolOperationDescriptor, isGatewayInternalInboundRequest,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema } from "@blue-tanuki/protocol";
 import { DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS } from "./document_organization.js";
+import { parseGoalPurposeAdoptionArguments } from "./approval_policy.js";
 
 export interface ToolActionRoute {
   type: "tool_call";
@@ -119,6 +120,9 @@ function routeMetadata(req: InboundRequest): ActionRoute {
   if (toolName === "goal.governance.change") {
     return routeInternalGoalPurposeChange(req, argsRaw);
   }
+  if (toolName === "goal.governance.adopt") {
+    return routeInternalGoalPurposeAdoption(req, argsRaw);
+  }
   if (toolName === "goal.governance.review_task_purpose") {
     return routeInternalGoalPurposeRelationReview(req, argsRaw);
   }
@@ -129,6 +133,21 @@ function routeMetadata(req: InboundRequest): ActionRoute {
     return routeInternalMemoryCitationReassessment(req, argsRaw);
   }
   return buildToolRoute(toolName, { ...argsRaw });
+}
+
+function routeInternalGoalPurposeAdoption(req: InboundRequest, args: Record<string, unknown>): ActionRoute {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) || req.channel !== "webchat" ||
+      metadata["blue_tanuki.authority_context"] !== "gateway_internal_v1" || metadata["blue_tanuki.actor_kind"] !== "owner" ||
+      metadata["blue_tanuki.trust_level"] !== "owner" || metadata["blue_tanuki.process_kind"] !== "approval" ||
+      metadata["blue_tanuki.goal_purpose_adoption.version"] !== "v1" ||
+      req.content !== "Owner submitted an initial delegated purpose for L3 review.") {
+    return { type: "noop", reason: "goal purpose adoption requires a trusted Gateway approval request" };
+  }
+  const purpose = parseGoalPurposeAdoptionArguments(args);
+  if (!purpose) return { type: "noop", reason: "goal purpose adoption arguments are invalid" };
+  return { type: "tool_call", tool_name: "goal.governance.adopt", arguments: { ...purpose },
+    allowed_capabilities: ["tool:goal.governance.adopt"], timeout_ms: 10_000 };
 }
 
 function routeInternalGoalPurposeChange(req: InboundRequest, args: Record<string, unknown>): ActionRoute {

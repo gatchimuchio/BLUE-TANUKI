@@ -1077,18 +1077,57 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const response = await fetchJson("/owner/task-goals", ownerToken, { cache: "no-store" });
         const goals = Array.isArray(response.goals) ? response.goals : [];
         const select = byId("owner-task-goal-ref");
-        select.replaceChildren(new Option(goals.length ? "委任目的を選択" : "利用できる委任目的がありません", ""));
+        const placeholder = new Option("委任目的を選択", "");
+        select.replaceChildren(placeholder);
+        let hasGoal = false;
         goals.forEach(function (goal) {
           if (!isObject(goal) || typeof goal.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(goal.goal_ref) ||
-              !Number.isSafeInteger(goal.purpose_version) || goal.purpose_version < 2 ||
+              !Number.isSafeInteger(goal.purpose_version) || goal.purpose_version < 1 ||
               typeof goal.purpose_preview !== "string" || goal.purpose_preview.length > 500) return;
           const option = new Option(goal.goal_ref + " · v" + goal.purpose_version + " · " + goal.purpose_preview,
             goal.goal_ref);
           option.dataset.purposeVersion = String(goal.purpose_version);
           select.add(option);
+          hasGoal = true;
         });
-        status.textContent = goals.length ? "現在の委任目的を読み込みました" : "利用できる委任目的がありません";
-        status.className = goals.length ? "badge good" : "badge warn";
+        if (!hasGoal) placeholder.text = "利用できる委任目的がありません";
+        status.textContent = hasGoal ? "現在の委任目的を読み込みました" : "委任目的が未登録です。初めての委任目的を登録してください。";
+        status.className = hasGoal ? "badge good" : "badge warn";
+      }
+
+      async function submitOwnerTaskAdoption() {
+        const tokenInput = byId("owner-task-token");
+        const token = tokenInput.value.trim();
+        const input = byId("owner-task-adoption-purpose");
+        const status = byId("owner-task-adoption-status");
+        const button = byId("submit-owner-task-adoption");
+        const openReview = byId("open-owner-task-adoption-review");
+        const purposeText = input.value;
+        if (!token || !purposeText.trim() || new TextEncoder().encode(purposeText).byteLength > 16 * 1024) {
+          status.textContent = "owner tokenと、16 KiB以内の委任目的を入力してください。";
+          return;
+        }
+        button.disabled = true;
+        status.textContent = "審査を申請しています。";
+        try {
+          const result = await postJson("/owner/goal-purpose-adoption", token, { purpose_text: purposeText });
+          if (result?.accepted !== true || result.status !== "approval_required" ||
+              typeof result.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(result.goal_ref) ||
+              typeof result.purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(result.purpose_digest) ||
+              typeof result.command_id !== "string" || !result.command_id) {
+            throw new Error("invalid_goal_purpose_adoption_receipt");
+          }
+          if (input.value === purposeText) input.value = "";
+          status.textContent = "承認待ちです。承認画面で委任目的の原文を確認してください。";
+          openReview.hidden = false;
+          // The first task still needs the owner credential in this tab's password field.
+        } catch {
+          if (tokenInput.value.trim() === token) tokenInput.value = "";
+          status.textContent = "審査の受付を確認できませんでした。承認画面を確認してください。";
+          openReview.hidden = false;
+        } finally {
+          button.disabled = false;
+        }
       }
 
       let ownerTaskSubmissionIdMemory = null;
@@ -1990,7 +2029,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("返信を受け取るため、WebChatへ接続してから仕事を開始してください");
         }
         if (!task || !goalRef) throw new Error("計画する仕事の内容と現在の委任目的を指定してください");
-        if (!Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
+        if (!Number.isSafeInteger(purposeVersion) || purposeVersion < 1) {
           throw new Error("委任目的を再読み込みして選び直してください");
         }
         const submissionId = pendingOwnerTaskSubmissionId();
@@ -3626,16 +3665,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const meaningUpdateReview = isObject(item.meaning_update_review) &&
                 item.meaning_update_review.kind === "meaning_update_adoption" ? item.meaning_update_review : null;
               const isRecoveryRestore = item.operation === "recovery.restore";
+              const isGoalPurposeAdoption = typeof item.target === "string" && item.target.startsWith("goal.governance.adopt:");
               const recoveryArchiveSha = isRecoveryRestore && typeof item.recovery_archive_sha256 === "string" &&
                 /^[a-f0-9]{64}$/.test(item.recovery_archive_sha256) ? item.recovery_archive_sha256 : null;
               const requiresContentReview = item.content_review_required === true;
-              const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true) ||
+              const approveBlocked = requiresContentReview || isGoalPurposeAdoption || Boolean(cronReview && cronReview.eligible !== true) ||
                 Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale") ||
                 (isRecoveryRestore && recoveryArchiveSha === null);
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '"' +
+                 (isGoalPurposeAdoption ? ' data-goal-purpose-adoption="' + escapeHtml(item.target) + '"' : '') +
                  (meaningUpdateReview ? ' data-proposal-digest="' + escapeHtml(meaningUpdateReview.proposal_digest) +
                    '" data-candidate-digest="' + escapeHtml(meaningUpdateReview.candidate_digest) +
                    '" data-target-record-id="' + escapeHtml(meaningUpdateReview.target_record_id) +
@@ -3707,7 +3748,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   : '') +
                 (requiresContentReview
                   ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' +
-                     (goalPurposeReview ? 'Review exact purpose' : goalPurposeRelationReview ? 'task・目的の内容を確認' :
+                     (isGoalPurposeAdoption ? '登録する委任目的の原文を確認' : goalPurposeReview ? 'Review exact purpose' :
+                       goalPurposeRelationReview ? 'task・目的の内容を確認' :
                        meaningUpdateReview ? '候補本文を確認' : item.operation === 'tool.file.edit' ? '変更差分を確認' :
                          item.operation === 'tool.file.delete' ? '削除対象を確認' : 'Review exact content') +
                     '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
@@ -6173,7 +6215,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
             throw new Error("候補の受付状態を確認するため、WebChatへ接続してください");
           }
-          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
+          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 1) {
             throw new Error("Owner Taskから現在の委任目的を読み込み、選択してください");
           }
           const candidateFingerprint = JSON.stringify([task, goalRef, purposeVersion, state.chatUser]);
@@ -6453,6 +6495,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       async function submitApproval(commandId, verdict, approvalToken) {
         const token = byId("approval-token").value.trim();
+        const adoptionCard = Array.from(document.querySelectorAll(".queue-item[data-command][data-goal-purpose-adoption]"))
+          .find(function (item) { return item.getAttribute("data-command") === commandId; });
         const response = await fetch("/approval/" + encodeURIComponent(commandId), {
           method: "POST",
           headers: {
@@ -6470,6 +6514,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!response.ok) {
           const text = await response.text();
           throw new Error("approval failed: HTTP " + response.status + " " + text);
+        }
+        if (adoptionCard) {
+          const result = (await response.json().catch(function () { return null; }))?.result;
+          const status = byId("owner-task-adoption-review-status");
+          status.textContent = result?.status === "goal_purpose_adoption_committed" && result.version === 1
+            ? "委任目的を登録しました。Tasksで「委任目的を読込」を選んでください。"
+            : "今回の操作で委任目的の登録は確認できませんでした。";
         }
         await loadApprovals();
       }
@@ -6514,6 +6565,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
+        if ((card.getAttribute("data-goal-purpose-adoption") !== null) !== (review.kind === "goal_purpose_adoption")) {
+          throw new Error("委任目的の登録対象と審査内容が一致しません。");
+        }
         if (review.kind === "mcp_call") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const requestKind = review.request_kind;
@@ -7173,6 +7227,39 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "変更差分を再確認";
+          return;
+        }
+        if (review.kind === "goal_purpose_adoption") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const purposeBytes = typeof review.purpose_text === "string" ? new TextEncoder().encode(review.purpose_text) : null;
+          const cacheControl = response.headers.get("cache-control") || "";
+          if (review.command_id !== commandId || review.operation !== "goal.governance.adopt" ||
+              !cacheControl.split(",").some(function (value) { return value.trim().toLowerCase() === "no-store"; }) ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) || !isDigest(review.purpose_digest) ||
+              typeof review.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(review.goal_ref) ||
+              card.getAttribute("data-goal-purpose-adoption") !== "goal.governance.adopt:" + review.goal_ref + ":" + review.purpose_digest ||
+              !purposeBytes || !review.purpose_text.trim() || purposeBytes.byteLength > 16 * 1024) {
+            throw new Error("委任目的の審査内容を照合できませんでした。");
+          }
+          const hash = await crypto.subtle.digest("SHA-256", purposeBytes);
+          const purposeDigest = Array.from(new Uint8Array(hash), function (byte) {
+            return byte.toString(16).padStart(2, "0");
+          }).join("");
+          if (purposeDigest !== review.purpose_digest || !card.isConnected) {
+            throw new Error("委任目的の原文とダイジェストが一致しません。承認画面を再読み込みしてください。");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "登録する委任目的の原文";
+          const purpose = document.createElement("pre");
+          purpose.textContent = review.purpose_text;
+          const binding = document.createElement("small");
+          binding.textContent = "目的参照 " + review.goal_ref + " · 原文 SHA-256 " + purposeDigest;
+          view.append(heading, purpose, binding);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "委任目的の原文を再確認";
           return;
         }
         if (review.kind === "goal_purpose_change") {
@@ -10020,6 +10107,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.className = "badge bad";
           byId("owner-task-token").value = "";
         });
+      });
+      byId("submit-owner-task-adoption").addEventListener("click", submitOwnerTaskAdoption);
+      byId("open-owner-task-adoption-review").addEventListener("click", function () {
+        setActiveScreen("approvals");
+        if (byId("approval-token").value.trim()) void loadApprovals();
       });
       byId("submit-owner-task").addEventListener("click", function () {
         submitOwnerTask().catch(function (error) {

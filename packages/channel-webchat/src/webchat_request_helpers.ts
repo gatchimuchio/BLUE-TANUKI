@@ -108,6 +108,7 @@ export function readWebhookContent(body: Record<string, unknown> | null): string
 export async function readJson(
   req: IncomingMessage,
   maxBytes = 1024 * 1024,
+  strictUtf8 = false,
 ): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -120,9 +121,10 @@ export async function readJson(
     chunks.push(chunk);
   }
   if (chunks.length === 0) return null;
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text.trim()) return null;
   try {
+    const bytes = Buffer.concat(chunks);
+    const text = strictUtf8 ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) : bytes.toString("utf8");
+    if (!text.trim()) return null;
     const v = JSON.parse(text);
     return typeof v === "object" && v !== null
       ? (v as Record<string, unknown>)

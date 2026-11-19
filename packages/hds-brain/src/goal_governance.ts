@@ -6,6 +6,7 @@ import {
   type GoalGovernanceConfig,
   type GoalGovernanceEvent,
   type GoalGovernanceGoal,
+  type GoalPurposeAdoptionEvent,
 } from "@blue-tanuki/protocol";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -99,6 +100,23 @@ export class GoalGovernanceLedger {
     return { ok: true, ledger: new GoalGovernanceLedger(parsed.config, compiledGoals) };
   }
 
+  /** Materializes the initial ledger from a first adoption already verified by J. */
+  static fromVerifiedAdoption(event: GoalPurposeAdoptionEvent): GoalGovernanceBuildResult {
+    return GoalGovernanceLedger.create({
+      schema_version: GOAL_GOVERNANCE_SCHEMA_VERSION,
+      goals: [{
+        goal_ref: event.goal_ref,
+        goal_kind: "delegated",
+        source_ref: event.source_ref,
+        initial_purpose_digest: event.new_purpose_digest,
+        initial_interpretation_digest: null,
+        adopted_at: event.effective_from,
+      }],
+      events: [],
+      authorizations: [],
+    });
+  }
+
   /** Rebuilds an immutable ledger after an independently verified J-owned event append. */
   appendAuthorizedEvent(
     event: GoalGovernanceEvent,
@@ -152,7 +170,7 @@ export class GoalGovernanceLedger {
 }
 
 /** A stable SHA-256 binding for a validated event, independent of object key order. */
-export function goalGovernanceEventDigest(event: GoalGovernanceEvent): string {
+export function goalGovernanceEventDigest(event: GoalGovernanceEvent | GoalPurposeAdoptionEvent): string {
   return createHash("sha256").update(canonicalJson(event), "utf8").digest("hex");
 }
 
@@ -241,7 +259,7 @@ function validateAuthorizations(config: GoalGovernanceConfig): GoalGovernanceBui
     let version = 1;
     let purposeDigest = goal.initial_purpose_digest;
     let interpretationDigest: string | null = goal.initial_interpretation_digest;
-    let interpretationRevision = 1;
+    let interpretationRevision = interpretationDigest === null ? 0 : 1;
     let boundParentVersion = goal.parent_goal_version;
     for (const event of events) {
       if (event.effective_from <= previousEffectiveFrom || event.recorded_at < previousRecordedAt) {
@@ -303,8 +321,8 @@ function projectGoal(goal: GoalGovernanceGoal, events: readonly GoalGovernanceEv
   let currentVersion = 1;
   let currentPurposeDigest = goal.initial_purpose_digest;
   let parentGoalVersion = goal.parent_goal_version;
-  let currentInterpretationRevision = 1;
-  let currentInterpretationDigest: string | undefined = goal.initial_interpretation_digest;
+  let currentInterpretationDigest = goal.initial_interpretation_digest ?? undefined;
+  let currentInterpretationRevision = currentInterpretationDigest === undefined ? 0 : 1;
   let effectiveFrom = goal.adopted_at;
   const purposeVersions: GoalGovernanceVersionProjection[] = [{
     version: 1,
@@ -312,9 +330,9 @@ function projectGoal(goal: GoalGovernanceGoal, events: readonly GoalGovernanceEv
     effective_from: goal.adopted_at,
   }];
   const interpretationRevisions: GoalGovernanceInterpretationProjection[] = [{
-    revision: 1,
-    status: "identified",
-    interpretation_digest: goal.initial_interpretation_digest,
+    revision: currentInterpretationRevision,
+    status: currentInterpretationDigest === undefined ? "unidentified" : "identified",
+    ...(currentInterpretationDigest !== undefined ? { interpretation_digest: currentInterpretationDigest } : {}),
     effective_from: goal.adopted_at,
   }];
 

@@ -170,6 +170,17 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="">現在の委任目的を読み込んでください</option>
               </select>
             </div>
+            <details>
+              <summary>初めての委任目的を登録</summary>
+              <p class="muted">BLUE-TANUKIへ任せる目的を自分の言葉で記入してください。承認画面で原文を確認し、承認後に「委任目的を読込」を選びます。</p>
+              <label for="owner-task-adoption-purpose">委任目的の原文</label>
+              <textarea id="owner-task-adoption-purpose" rows="4" maxlength="16384" autocomplete="off"></textarea>
+              <div class="row">
+                <button id="submit-owner-task-adoption" type="button">登録を審査に送る</button>
+                <button id="open-owner-task-adoption-review" type="button" hidden>承認画面を開く</button>
+                <span id="owner-task-adoption-status" role="status" class="muted"></span>
+              </div>
+            </details>
             <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
             <label><input id="owner-task-include-mcp-catalog" type="checkbox" /> MCP catalog metadataを計画入力へ含める</label>
             <p class="muted">既定はOFFです。有効にすると、設定済みcredentialless loopback MCP接続からtool・固定resource・prompt・対応するscalar resource-templateのcatalog metadataを取得し、この計画のC providerへ送信します。raw resource URI/template URI、resource／prompt本文やcredentialはこのcatalog取得では読み取らず、MCP requestも送信しません。出力は未実行の計画候補です。request候補の実行には通常のJ再審査、現在catalogとの再照合、必要なL3最終確認が残ります。</p>
@@ -698,6 +709,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="activate-emergency-stop" class="danger" type="button">Emergency Stop</button>
             <button id="clear-emergency-stop" type="button">Clear Stop</button>
           </div>
+          <p id="owner-task-adoption-review-status" class="muted" role="status"></p>
           <h3>Active executions</h3>
           <p class="muted">Cancel requests signal the matching command only. Request acceptance, executor settlement, local process-tree evidence, and external-provider stop are separate observations.</p>
           <div class="status-grid">

@@ -148,6 +148,7 @@ async function setup(
   opts: Partial<
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
+      onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
       onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }) => Promise<{
         accepted: boolean;
         status: string;
@@ -240,6 +241,7 @@ async function setup(
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
+    onGoalPurposeAdoption: opts.onGoalPurposeAdoption,
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
@@ -1996,6 +1998,86 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(purposePre?.textContent).toBe(purposeText);
     expect(state.approvalContentDigests["goal-purpose-command"]).toBe(commandDigest);
     expect(approve.disabled).toBe(false);
+  });
+
+  it("uses the same owner credential to submit and then load the first delegated purpose", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function loadOwnerTaskGoals(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("let ownerTaskSubmissionIdMemory", start);
+    const purpose = "  委任目的の原文\n";
+    const goal = { goal_ref: "goal_" + "a".repeat(32), purpose_version: 1, purpose_preview: purpose.trim() };
+    const ownerToken = { value: "synthetic-launch-owner-token" };
+    const input = { value: purpose };
+    const options: Array<{ dataset: { purposeVersion?: string } }> = [];
+    const nodes = {
+      "owner-task-token": ownerToken, "owner-task-adoption-purpose": input, "owner-task-adoption-status": {},
+      "submit-owner-task-adoption": { disabled: false }, "open-owner-task-adoption-review": { hidden: true },
+      "owner-task-status": {}, "owner-task-goal-ref": {
+        replaceChildren() { options.length = 0; }, add(option: typeof options[number]) { options.push(option); },
+      },
+    };
+    const script = new Script(CONTROL_CENTER_SCRIPT.slice(start, end) + "\nsubmitOwnerTaskAdoption().then(loadOwnerTaskGoals)");
+    await script.runInNewContext({
+      byId: (id: keyof typeof nodes) => nodes[id], TextEncoder, isObject: (v: unknown) => typeof v === "object" && v !== null,
+      Option: class { dataset = {}; },
+      postJson: async (path: string, token: string, body: unknown) => {
+        expect([path, token, body]).toEqual(["/owner/goal-purpose-adoption", ownerToken.value, { purpose_text: purpose }]);
+        return { accepted: true, status: "approval_required", command_id: "approval", goal_ref: goal.goal_ref, purpose_digest: "b".repeat(64) };
+      },
+      fetchJson: async (path: string, token: string) => {
+        expect([path, token]).toEqual(["/owner/task-goals", "synthetic-launch-owner-token"]);
+        return { goals: [goal] };
+      },
+    });
+    expect(input.value).toBe("");
+    expect(options.map(option => option.dataset.purposeVersion)).toEqual(["1"]);
+  });
+
+  it("requires the no-store first-goal original and matching digest before enabling L3 approval", async () => {
+    const commandId = "goal-adopt-command";
+    const purposeText = '<img src=x onerror="alert(1)">\n  委任目的 ';
+    const review = {
+      kind: "goal_purpose_adoption", operation: "goal.governance.adopt", command_id: commandId,
+      command_digest: "b".repeat(64), review_digest: "c".repeat(64), goal_ref: "goal_0000000000000001",
+      purpose_text: purposeText, purpose_digest: createHash("sha256").update(purposeText).digest("hex"),
+      used_for_authority: false, may_execute: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName, textContent: "", children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      isConnected: true,
+      getAttribute: (name: string) => name === "data-command" ? commandId : name === "data-goal-purpose-adoption"
+        ? `goal.governance.adopt:${review.goal_ref}:${review.purpose_digest}` : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    const render = new Script(`
+      function byId() { return { value: "resume-token" }; }
+      function authHeaders(value) { return { authorization: "Bearer " + value }; }
+      const document = { querySelectorAll: () => [card], createElement: makeNode };
+      const fetch = async () => ({ ok: true, headers: { get: () => cacheControl }, json: async () => review });
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      reviewApprovalContent(commandId, { textContent: "委任目的の原文を確認" });
+    `);
+    const evaluate = (reviewData: typeof review, cacheControl = "private, no-store") => render.runInNewContext({
+      state, card, makeNode, commandId, review: reviewData, cacheControl, TextEncoder, crypto: webcrypto,
+    });
+    await evaluate(review);
+    expect(view.children.find((child) => child.tagName === "pre")?.textContent).toBe(purposeText);
+    expect(approve.disabled).toBe(false);
+    expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
+    await expect(evaluate({ ...review, purpose_text: purposeText + "changed" })).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    await expect(evaluate(review, "private, max-age=60")).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
   });
 
   it("renders task-purpose relation review against its queued digests without treating it as execution authority", async () => {
@@ -5217,6 +5299,43 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
+  it("accepts only the exact bounded first-goal purpose from the dedicated owner credential", async () => {
+    const path = "/owner/goal-purpose-adoption";
+    const purposeText = "  維持する委任目的\n不明な項目を明示する。  ";
+    const owner = { authorization: `Bearer ${OWNER_TOKEN}` };
+    const receipt = { accepted: true, status: "approval_required", command_id: "goal-adopt-command", request_id: "goal-adopt-request",
+      goal_ref: `goal_${"c".repeat(16)}`, purpose_digest: createHash("sha256").update(purposeText).digest("hex") };
+    const proposals: Array<{ purpose_text: string; actor: string }> = [];
+    const context = await setup({ owner_token: OWNER_TOKEN, onGoalPurposeAdoption: async (input) => {
+      proposals.push(input);
+      return { ...receipt, purpose_text: input.purpose_text, review_digest: "e".repeat(64) };
+    } });
+    try {
+      await context.ch.start(async (request) => { context.received.push(request); });
+      const unauthorized = await postJson(context.port, path, { purpose_text: purposeText }, { authorization: `Bearer ${TOKEN}` });
+      expect(unauthorized.status).toBe(401);
+      expect(unauthorized.headers.get("cache-control")).toBe("no-store");
+      expect((await postJson(context.port, path, { purpose_text: purposeText, actor: "forged" }, owner)).status).toBe(400);
+      expect((await postJson(context.port, path, { purpose_text: "\uD800" }, owner)).status).toBe(400);
+      expect((await postJson(context.port, path, { purpose_text: "あ".repeat(5462) }, owner)).status).toBe(413);
+      const invalidUtf8 = await fetch(`http://127.0.0.1:${context.port}${path}`, {
+        method: "POST", headers: { ...owner, "content-type": "application/json" },
+        body: Buffer.concat([Buffer.from('{"purpose_text":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}')]),
+      });
+      expect(invalidUtf8.status).toBe(400);
+      await invalidUtf8.arrayBuffer();
+      expect(proposals).toHaveLength(0);
+      const accepted = await postJson(context.port, path, { purpose_text: purposeText }, owner);
+      expect(accepted.status).toBe(202);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      expect(accepted.body).toEqual(receipt);
+      expect(proposals).toEqual([{ purpose_text: purposeText, actor: "webchat-owner-token-holder" }]);
+      expect(context.received).toHaveLength(0);
+    } finally {
+      await context.teardown();
+    }
+  });
+
   it("routes a bounded delegated-purpose proposal only through the dedicated owner credential", async () => {
     const proposalText = "Exact purpose proposal: retain the delegated objective and record uncertainty.";
     const proposals: Array<{ goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }> = [];
@@ -5427,7 +5546,7 @@ describe("WebChatChannel — HTTP inbound", () => {
   });
 
   it("routes explicit task intent through owner-authenticated internal J planning with a current delegated purpose", async () => {
-    const goal = { goal_ref: `goal_${"a".repeat(16)}`, purpose_version: 2,
+    const goal = { goal_ref: `goal_${"a".repeat(16)}`, purpose_version: 1,
       purpose_preview: "Read-only maintenance", purpose_digest: "b".repeat(64) };
     const observedActors: string[] = [];
     const expectedImageBytes = new Uint8Array(1024 * 1024 + 1);
@@ -5467,6 +5586,7 @@ describe("WebChatChannel — HTTP inbound", () => {
         user: "untrusted-reply-destination",
         task: "Plan one bounded synthetic observation.",
         goal_ref: goal.goal_ref,
+        purpose_version: goal.purpose_version,
         submission_id: "8e396c37-7a67-470f-9d90-0054215cecb2",
         goal_completion_rules: { schema_version: "blue-tanuki.goal-completion-rules.v1",
           rules: [{ rule_id: "one-search", operation: "file.search", output_pointer: "/matches/0/line", expected_value: "blue" }] },

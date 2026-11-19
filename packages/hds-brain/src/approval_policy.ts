@@ -165,6 +165,30 @@ export function goalPurposeChangeApprovalTarget(input: {
   ].join(":");
 }
 
+export interface GoalPurposeAdoptionArguments {
+  readonly goal_ref: string;
+  readonly purpose_digest: string;
+}
+
+export function parseGoalPurposeAdoptionArguments(args: Record<string, unknown>): GoalPurposeAdoptionArguments | null {
+  if (Object.keys(args).length !== 2 || !Object.hasOwn(args, "goal_ref") || !Object.hasOwn(args, "purpose_digest") ||
+      typeof args.goal_ref !== "string" || !/^goal_[a-f0-9]{32}$/.test(args.goal_ref) ||
+      typeof args.purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.purpose_digest)) return null;
+  return { goal_ref: args.goal_ref, purpose_digest: args.purpose_digest };
+}
+
+export function goalPurposeAdoptionApprovalTarget(input: GoalPurposeAdoptionArguments): string {
+  return `goal.governance.adopt:${input.goal_ref}:${input.purpose_digest}`;
+}
+
+export function goalPurposeAdoptionReviewDigest(input: GoalPurposeAdoptionArguments & {
+  readonly request_id: string; readonly command_id: string; readonly command_digest: string;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "goal-purpose-adoption-review.v1", input.request_id, input.command_id, input.command_digest, input.goal_ref, input.purpose_digest,
+  ])).digest("hex");
+}
+
 export function goalPurposeRelationReviewApprovalTarget(input: OperationPlanGoalPurposeRelationReviewArguments): string {
   const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(input);
   return ["goal.governance.review_task_purpose", parsed.plan_id_digest, parsed.task_digest, parsed.revision_digest,
@@ -414,6 +438,10 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
   if (command.type === "channel_send") return { target_scope: "channel", channel: command.payload.channel, target: `${command.payload.channel}:${command.payload.target}` };
   if (command.type === "tool_call") {
     const args = command.payload.arguments;
+    if (command.payload.tool_name === "goal.governance.adopt") {
+      const purpose = parseGoalPurposeAdoptionArguments(args);
+      return { target_scope: "task_type", target: purpose ? goalPurposeAdoptionApprovalTarget(purpose) : "goal.governance.adopt:invalid" };
+    }
     if (command.payload.tool_name === "goal.governance.change") {
       const goal_ref = typeof args.goal_ref === "string" ? args.goal_ref : "invalid-goal";
       const prior_version = typeof args.prior_version === "number" && Number.isSafeInteger(args.prior_version) && args.prior_version > 0

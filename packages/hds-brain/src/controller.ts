@@ -3,6 +3,7 @@ import type {
   GoalGovernanceAuthorization,
   GoalGovernanceEvent,
   GoalGovernanceConfig,
+  GoalPurposeAdoptionEvent,
   InboundRequest,
   ExecuteCommand,
   ExecuteFeedback,
@@ -25,6 +26,8 @@ import type {
 import { ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema, getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
+  canonicalExecutorCommandBytes,
+  GoalPurposeAdoptionEventSchema,
   isGatewayInternalInboundRequest,
   isGatewayInternalTransientAudioRequest,
   parseInboundRequestAtBoundary,
@@ -139,6 +142,7 @@ import type {
   DecisionLog,
   FailureReviewAuditTrace,
   FailureLearningLineageAuditTrace,
+  GoalPurposeAdoptionReviewBinding,
   ModelResult,
   MemoryReferenceLog,
   PolicyConfig,
@@ -157,7 +161,8 @@ import type {
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, type ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
-import { goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget,
+import { goalPurposeAdoptionApprovalTarget, goalPurposeAdoptionReviewDigest, goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget,
+  parseGoalPurposeAdoptionArguments,
   meaningUpdateAdoptionApprovalTarget, memoryJudgmentReassessmentApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
@@ -512,6 +517,19 @@ type GoalPurposeChangeCommitResult =
   | { readonly ok: true; readonly event_ref: string; readonly goal_ref: string; readonly version: number; readonly purpose_digest: string; readonly effective_from: number }
   | { readonly ok: false; readonly reason: "goal_governance_unavailable" | "goal_purpose_memory_unavailable" | "audit_not_persistent" | "audit_invalid" | "approval_not_verified" | "purpose_version_conflict" | "event_invalid" | "purpose_memory_commit_failed" | "audit_append_failed" };
 
+type GoalPurposeAdoptionCommitResult =
+  | { readonly ok: true; readonly goal_ref: string; readonly version: 1; readonly purpose_digest: string; readonly effective_from: number }
+  | { readonly ok: false; readonly reason: "goal_already_configured" | Extract<GoalPurposeChangeCommitResult, { ok: false }>["reason"] };
+
+interface GoalPurposeAdoptionContentReviewInput extends GoalPurposeAdoptionReviewBinding {
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly proposal_actor: string;
+}
+
+const GOAL_OWNER_ACTOR = "webchat-owner-token-holder";
+const GOAL_REVIEWER_ACTOR = "webchat-resume-token-holder";
+
 interface PendingMeaningUpdateCandidate {
   readonly request_id: string;
   readonly source_command_id: string;
@@ -712,6 +730,25 @@ function isGoalPurposeChangeCommitMarker(log: AuditRecord): log is AuthorityEven
   return "kind" in log && log.kind === "authority_event" && log.event === "goal_purpose_change_committed";
 }
 
+function isGoalPurposeAdoptionCommitMarker(log: AuditRecord): log is AuthorityEventLog {
+  return "kind" in log && log.kind === "authority_event" && log.event === "goal_purpose_adoption_committed";
+}
+
+function goalPurposeApprovalAsk(entries: readonly AuditEntry[], input: {
+  request_id: string;
+  command_id: string;
+  proposal_actor: string;
+  target: string;
+  before_index?: number;
+}): AuditEntry | undefined {
+  return entries.find(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
+    "kind" in log && log.kind === "approval_gate" && log.request_id === input.request_id &&
+    log.command_id === input.command_id && log.evaluation.decision === "ask" &&
+    log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === input.command_id &&
+    log.evaluation.context.actor === input.proposal_actor && log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+}
+
 function goalPurposeChangeApprovalEvidence(
   entries: readonly AuditEntry[],
   input: {
@@ -722,21 +759,44 @@ function goalPurposeChangeApprovalEvidence(
     target: string;
     before_index?: number;
   },
-): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
-  const asks = entries.filter(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
-    "kind" in log && log.kind === "approval_gate" && log.request_id === input.request_id &&
-    log.command_id === input.command_id && log.evaluation.decision === "ask" &&
-    log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === input.command_id &&
-    log.evaluation.context.actor === input.proposal_actor && log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
-    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
-  const approvals = entries.filter(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
+): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation; readonly askIndex: number;
+  readonly approvalIndex: number } | null {
+  const ask = goalPurposeApprovalAsk(entries, input);
+  if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate") return null;
+  const approval = entries.find(({ index, log }) => index > ask.index && index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
     "kind" in log && log.kind === "command_lifecycle" && log.request_id === input.request_id &&
     log.command_id === input.command_id && log.phase === "approval_approved" &&
     log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
-  const ask = asks[0];
-  const approved = approvals.find(({ index }) => !ask || index > ask.index);
-  const askLog = ask && "kind" in ask.log && ask.log.kind === "approval_gate" ? ask.log : null;
-  return askLog && approved ? { timestamp: approved.log.timestamp, evaluation: askLog.evaluation } : null;
+  return approval ? { timestamp: approval.log.timestamp, evaluation: ask.log.evaluation,
+    askIndex: ask.index, approvalIndex: approval.index } : null;
+}
+
+function goalPurposeAdoptionReviews(entries: readonly AuditEntry[], input: GoalPurposeAdoptionContentReviewInput): AuditEntry[] {
+  return entries.filter(({ log }) => "kind" in log && log.kind === "authority_event" &&
+    log.event === "goal_purpose_adoption_content_reviewed" && log.request_id === input.request_id &&
+    log.command_id === input.command_id && log.actor === input.proposal_actor);
+}
+
+function goalPurposeAdoptionReviewMatches(entry: AuditEntry, input: GoalPurposeAdoptionContentReviewInput): boolean {
+  const log = entry.log;
+  const review = "kind" in log && log.kind === "authority_event" ? log.goal_purpose_adoption_review : undefined;
+  return review !== undefined && Object.keys(review).length === 4 &&
+    review.goal_ref === input.goal_ref && review.purpose_digest === input.purpose_digest &&
+    review.command_digest === input.command_digest && review.review_digest === input.review_digest;
+}
+
+function goalPurposeAdoptionApprovalEvidence(entries: readonly AuditEntry[], input: GoalPurposeAdoptionContentReviewInput & {
+  readonly reviewer_actor: string;
+  readonly before_index?: number;
+}): ReturnType<typeof goalPurposeChangeApprovalEvidence> {
+  if (input.proposal_actor !== GOAL_OWNER_ACTOR || input.reviewer_actor !== GOAL_REVIEWER_ACTOR ||
+      input.review_digest !== goalPurposeAdoptionReviewDigest(input)) return null;
+  const evidence = goalPurposeChangeApprovalEvidence(entries, { ...input, target: goalPurposeAdoptionApprovalTarget(input) });
+  if (!evidence) return null;
+  const reviews = goalPurposeAdoptionReviews(entries, input).filter(({ index }) => index < evidence.approvalIndex);
+  if (reviews.length !== 1 || reviews[0]!.index <= evidence.askIndex || reviews[0]!.log.timestamp > evidence.timestamp ||
+      !goalPurposeAdoptionReviewMatches(reviews[0]!, input)) return null;
+  return evidence;
 }
 
 function goalPurposeRelationReviewApprovalEvidence(
@@ -897,12 +957,14 @@ function replayGoalPurposeChanges(
   audit: AuditLog,
   initial: GoalGovernanceLedger,
   purposeMemory?: GoalPurposeMemoryConsumer,
+  adoptedIndex?: number,
 ): GoalGovernanceLedger {
   let ledger = initial;
   const entries = audit.list();
   for (const { index, log } of entries) {
     if (!isGoalPurposeChangeCommitMarker(log)) continue;
     if (!isGoalPurposeChangeCommitLog(log)) throw new Error("persisted goal purpose change record is malformed");
+    if (adoptedIndex !== undefined && index <= adoptedIndex) throw new Error("persisted goal purpose change precedes initial adoption");
     const event = log.goal_governance_event;
     const authorization = log.goal_governance_authorization;
     const target = goalPurposeChangeReviewTarget({
@@ -935,6 +997,59 @@ function replayGoalPurposeChanges(
     ledger = appended.ledger;
   }
   return ledger;
+}
+
+function initialGoalPurposeEvent(input: {
+  request_id: string;
+  command_id: string;
+  goal_ref: string;
+  purpose_digest: string;
+}, approvalTime: number): GoalPurposeAdoptionEvent {
+  const identity = createHash("sha256").update(JSON.stringify([
+    "goal-purpose-adoption.v1", input.request_id, input.command_id, input.goal_ref, input.purpose_digest,
+  ])).digest("hex");
+  return GoalPurposeAdoptionEventSchema.parse({
+    event_ref: `ge_${identity.slice(0, 32)}`,
+    event_kind: "purpose_adoption",
+    goal_ref: input.goal_ref,
+    source_ref: `F:${input.request_id}`,
+    new_version: 1,
+    new_purpose_digest: input.purpose_digest,
+    purpose_memory_ref: `F:${identity.slice(32)}`,
+    authority_kind: "owner",
+    authorization_ref: `ga_${identity.slice(0, 32)}`,
+    recorded_at: approvalTime,
+    effective_from: approvalTime,
+  });
+}
+
+function replayInitialGoalPurposeAdoption(audit: AuditLog, purposeMemory?: GoalPurposeMemoryConsumer):
+  { ledger: GoalGovernanceLedger; index: number } | null {
+  const entries = audit.list();
+  const markers = entries.filter(({ log }) => isGoalPurposeAdoptionCommitMarker(log));
+  if (markers.length === 0) return null;
+  const { log, index } = markers[0]!;
+  if (markers.length !== 1 || !isGoalPurposeAdoptionCommitMarker(log) || !audit.isPersistent() || !audit.verify() || !purposeMemory ||
+      !log.request_id || !log.command_id || !log.proposal_actor) {
+    throw new Error("persisted initial goal adoption cannot be verified");
+  }
+  const event = GoalPurposeAdoptionEventSchema.parse(log.goal_purpose_adoption_event);
+  const review = log.goal_purpose_adoption_review;
+  if (!review || Object.keys(review).length !== 4 || review.goal_ref !== event.goal_ref ||
+      review.purpose_digest !== event.new_purpose_digest || !/^[a-f0-9]{64}$/.test(review.command_digest)) {
+    throw new Error("persisted initial goal adoption has invalid review binding");
+  }
+  const evidence = goalPurposeAdoptionApprovalEvidence(entries, { ...review,
+    request_id: log.request_id, command_id: log.command_id, proposal_actor: log.proposal_actor,
+    reviewer_actor: log.actor, before_index: index });
+  if (!evidence || log.timestamp !== evidence.timestamp || goalGovernanceEventDigest(event) !==
+      goalGovernanceEventDigest(initialGoalPurposeEvent({ ...review, request_id: log.request_id, command_id: log.command_id },
+        evidence.timestamp)) || !purposeMemory.read(event)) {
+    throw new Error("persisted initial goal adoption lacks an exact approved purpose");
+  }
+  const initial = GoalGovernanceLedger.fromVerifiedAdoption(event);
+  if (!initial.ok) throw new Error("persisted initial goal adoption does not establish a ledger");
+  return { ledger: initial.ledger, index };
 }
 
 function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdateMemoryConsumer): void {
@@ -1160,7 +1275,9 @@ export class HDSUpperController {
     this.goal_relation_tree = opts.goal_relation_graph === undefined
       ? undefined
       : buildGoalRelationTreeView(opts.goal_relation_graph);
+    const adopted = replayInitialGoalPurposeAdoption(this.audit, this.goalPurposeMemory);
     if (opts.goal_governance !== undefined) {
+      if (adopted) throw new Error("configured goal governance conflicts with persisted initial adoption");
       const built = GoalGovernanceLedger.create(opts.goal_governance);
       if (!built.ok) throw new Error("invalid goal governance configuration");
       if (!this.audit.verify()) throw new Error("goal governance requires a valid audit chain");
@@ -1171,6 +1288,8 @@ export class HDSUpperController {
         }
       }
       this.goal_governance = replayGoalPurposeChanges(this.audit, built.ledger, this.goalPurposeMemory);
+    } else if (adopted) {
+      this.goal_governance = replayGoalPurposeChanges(this.audit, adopted.ledger, this.goalPurposeMemory, adopted.index);
     } else if (this.audit.list().some(({ log }) => isGoalPurposeChangeCommitMarker(log))) {
       throw new Error("persisted goal purpose changes require a base goal governance ledger");
     }
@@ -2312,12 +2431,126 @@ ${planControl.question}`,
     this.audit.append(log);
   }
 
-  /**
-   * Commit a delegated goal purpose change only after a matching, recorded L3
-   * review. The audit chain is the durable J event source; caller-supplied
-   * identity labels are compared with the reviewed lifecycle record and are
-   * not treated as proof of a person's identity.
-   */
+  private matchesIssuedGoalPurposeAdoption(input: GoalPurposeAdoptionContentReviewInput): boolean {
+    if (input.proposal_actor !== GOAL_OWNER_ACTOR ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(input.request_id) ||
+        input.review_digest !== goalPurposeAdoptionReviewDigest(input)) return false;
+    const issued = this.issuedExecutionCommandsById.get(input.command_id);
+    const command = issued?.command;
+    if (!issued || issued.owner !== input.proposal_actor || issued.channel !== "webchat" ||
+        command?.type !== "tool_call" || command.payload.tool_name !== "goal.governance.adopt" ||
+        command.upstream_decision.request_id !== input.request_id ||
+        this.issuedExecutionCommands.get(command)?.request_id !== input.request_id ||
+        this.inflight.get(command.id)?.request_id !== input.request_id) return false;
+    const arguments_ = parseGoalPurposeAdoptionArguments(command.payload.arguments);
+    if (arguments_?.goal_ref !== input.goal_ref || arguments_.purpose_digest !== input.purpose_digest) return false;
+    return createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex") === input.command_digest;
+  }
+
+  recordGoalPurposeAdoptionContentReview(input: GoalPurposeAdoptionContentReviewInput): boolean {
+    if (this.goal_governance || !this.goalPurposeMemory || !this.audit.isPersistent() || !this.audit.verify() ||
+        !this.matchesIssuedGoalPurposeAdoption(input)) return false;
+    const entries = this.audit.list();
+    const ask = goalPurposeApprovalAsk(entries, { ...input, target: goalPurposeAdoptionApprovalTarget(input) });
+    if (!ask || entries.some(({ index, log }) => index > ask.index && "kind" in log && log.kind === "command_lifecycle" &&
+        log.command_id === input.command_id && ["approval_approved", "approval_rejected", "approval_cancelled"].includes(log.phase))) {
+      return false;
+    }
+    const reviews = goalPurposeAdoptionReviews(entries, input);
+    if (reviews.length > 0) {
+      return reviews.length === 1 && reviews[0]!.index > ask.index && goalPurposeAdoptionReviewMatches(reviews[0]!, input);
+    }
+    const { request_id, command_id, proposal_actor, goal_ref, purpose_digest, command_digest, review_digest } = input;
+    try {
+      this.audit.append({
+        kind: "authority_event",
+        event: "goal_purpose_adoption_content_reviewed",
+        request_id,
+        command_id,
+        actor: proposal_actor,
+        reason: "initial_delegated_goal_content_bound_for_l3_review",
+        goal_purpose_adoption_review: { goal_ref, purpose_digest, command_digest, review_digest },
+        timestamp: this.nowMs(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  commitGoalPurposeAdoptionAfterL3(input: Omit<GoalPurposeAdoptionContentReviewInput, "review_digest"> & {
+    readonly content_review_digest: string;
+    readonly purpose_text: string;
+    readonly actor: string;
+    readonly evaluation: ApprovalEvaluation;
+  }): GoalPurposeAdoptionCommitResult {
+    if (this.goal_governance) return { ok: false, reason: "goal_already_configured" };
+    if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
+    if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
+    const { request_id, command_id, proposal_actor, actor, evaluation, goal_ref, purpose_digest, command_digest } = input;
+    const review = { goal_ref, purpose_digest, command_digest, review_digest: input.content_review_digest };
+    const reviewInput = { ...review, request_id, command_id, proposal_actor };
+    const entries = this.audit.list();
+    if (entries.some(({ log }) => isGoalPurposeAdoptionCommitMarker(log))) return { ok: false, reason: "goal_already_configured" };
+    if (!this.matchesIssuedGoalPurposeAdoption(reviewInput) || !isWellFormedUnicodeText(input.purpose_text) ||
+        !input.purpose_text.trim() || Buffer.byteLength(input.purpose_text, "utf8") > 16 * 1024 ||
+        createHash("sha256").update(input.purpose_text, "utf8").digest("hex") !== purpose_digest) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    const evidence = goalPurposeAdoptionApprovalEvidence(entries, { ...reviewInput, reviewer_actor: actor });
+    if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(evaluation)) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    if (!this.goalPurposeMemory) return { ok: false, reason: "goal_purpose_memory_unavailable" };
+    const event = initialGoalPurposeEvent(reviewInput, evidence.timestamp);
+    const ledger = GoalGovernanceLedger.fromVerifiedAdoption(event);
+    if (!ledger.ok) return { ok: false, reason: "event_invalid" };
+    try {
+      const stored = this.goalPurposeMemory.commit(event, input.purpose_text, (reference) => {
+        this.goalPurposeMemoryApprovalContext = {
+          ...reference,
+          request_id,
+          command_id,
+          proposal_actor,
+          actor,
+          target: goalPurposeAdoptionApprovalTarget(reviewInput),
+          evaluation,
+          adoption_review: review,
+        };
+      });
+      if (!stored.ok) return { ok: false, reason: "purpose_memory_commit_failed" };
+    } catch {
+      return { ok: false, reason: "purpose_memory_commit_failed" };
+    } finally {
+      this.goalPurposeMemoryApprovalContext = undefined;
+    }
+    try {
+      this.audit.append({
+        kind: "authority_event",
+        event: "goal_purpose_adoption_committed",
+        request_id,
+        command_id,
+        actor,
+        proposal_actor,
+        reason: "matching_l3_review_committed_initial_delegated_goal",
+        operation: evaluation.context.operation,
+        target_scope: evaluation.context.target_scope,
+        risk: evaluation.risk,
+        authority_trace: evaluation.authority_trace,
+        goal_purpose_adoption_event: event,
+        goal_purpose_adoption_review: review,
+        timestamp: evidence.timestamp,
+      });
+    } catch {
+      return { ok: false, reason: "audit_append_failed" };
+    }
+    this.goal_governance = ledger.ledger;
+    this.inflight.delete(command_id);
+    this.issuedExecutionCommandsById.delete(command_id);
+    return { ok: true, goal_ref, version: 1, purpose_digest, effective_from: event.effective_from };
+  }
+
+  /** The audit chain binds each purpose change to its independently recorded L3 review. */
   commitGoalPurposeChangeAfterL3(input: {
     readonly goal_ref: string;
     readonly prior_version: number;
@@ -2484,13 +2717,17 @@ ${planControl.question}`,
     const context = this.goalPurposeMemoryApprovalContext;
     if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
         context.content_digest !== reference.content_digest || !this.audit.isPersistent() || !this.audit.verify()) return null;
-    const evidence = goalPurposeChangeApprovalEvidence(this.audit.list(), {
+    const input = {
       request_id: context.request_id,
       command_id: context.command_id,
       proposal_actor: context.proposal_actor,
       reviewer_actor: context.actor,
       target: context.target,
-    });
+    };
+    const entries = this.audit.list();
+    const evidence = context.adoption_review
+      ? goalPurposeAdoptionApprovalEvidence(entries, { ...input, ...context.adoption_review })
+      : goalPurposeChangeApprovalEvidence(entries, input);
     if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(context.evaluation)) return null;
     return Object.freeze({ ...reference });
   }
@@ -5100,11 +5337,13 @@ ${planControl.question}`,
     readonly used_for_authority: false;
   } | null {
     if (!this.goalPurposeMemory || !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
-        !Number.isSafeInteger(version) || version < 2) return null;
-    const event = this.audit.list().map(({ log }) => log)
-      .filter(isGoalPurposeChangeCommitLog)
-      .map((log) => log.goal_governance_event)
-      .find((candidate) => candidate.goal_ref === goalRef && candidate.new_version === version);
+        !Number.isSafeInteger(version) || version < 1) return null;
+    const logs = this.audit.list().map(({ log }) => log);
+    const event = version === 1
+      ? logs.filter(isGoalPurposeAdoptionCommitMarker).map((log) => log.goal_purpose_adoption_event)
+        .find((candidate) => candidate?.goal_ref === goalRef)
+      : logs.filter(isGoalPurposeChangeCommitLog).map((log) => log.goal_governance_event)
+        .find((candidate) => candidate.goal_ref === goalRef && candidate.new_version === version);
     if (!event?.purpose_memory_ref) return null;
     const record = this.goalPurposeMemory.read(event);
     if (!record) return null;
