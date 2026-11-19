@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -352,6 +352,8 @@ describe("delegated goal purpose owner review", () => {
     const stateRoot = join(tempRoot, "state");
     const purposeFile = join(stateRoot, "private-state", "goal-governance.json");
     const fileRoot = join(tempRoot, "workspace");
+    const envFile = join(tempRoot, "fixture.env");
+    const recoveryRoot = join(tempRoot, "recovery");
     const purpose = "初回委任の合成確認として、指定されたファイルを読み取り専用で調べる。";
     const purposeDigest = createHash("sha256").update(purpose, "utf8").digest("hex");
     const relativePath = "first-task.txt";
@@ -360,6 +362,9 @@ describe("delegated goal purpose owner review", () => {
     const submissionId = "01a119c0-5b35-4491-ae00-000000000808";
     const task = `sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ${relativePath}\n検索語: 合成マーカー`;
     const env = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
+    env.BLUE_TANUKI_ENV_FILE = envFile;
+    env.BLUE_TANUKI_RECOVERY_DIR = recoveryRoot;
+    env.BLUE_TANUKI_FAILURE_MEMORY_FILE = join(tempRoot, "failure-memory.json");
     env.BLUE_TANUKI_STATE_ROOT = stateRoot;
     env.BLUE_TANUKI_FILE_ROOT = fileRoot;
     env.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
@@ -413,6 +418,7 @@ describe("delegated goal purpose owner review", () => {
     const webchatContents: string[] = [];
     try {
       mkdirSync(fileRoot);
+      writeFileSync(envFile, "# Isolated recovery diagnostic fixture\n", "utf8");
       writeFileSync(join(fileRoot, relativePath), fileContent, "utf8");
       expect(existsSync(purposeFile)).toBe(false);
       const pastClock = join(tempRoot, "past-clock");
@@ -583,9 +589,57 @@ describe("delegated goal purpose owner review", () => {
       expect(await privateResult.json()).toEqual(expectedPrivateResult);
       expect(webchatContents).toHaveLength(outgoingCount);
 
+      const backupResponse = await request("/recovery/backup", maintenanceToken, "POST", {});
+      expect(backupResponse.status).toBe(200);
+      const { result: { backup_id: backupId } } = await backupResponse.json() as { result: { backup_id: string } };
+      const backupInspection = await request("/recovery/backup-inspection", maintenanceToken);
+      expect(backupInspection.status).toBe(200);
+      expect(await backupInspection.json()).toMatchObject({ operation_plan_archive_dependencies: {
+        status: "correlated", plan_scope_count: 1, residual_plan_scope_count: 0, unobserved_plan_scope_count: 0,
+        used_for_authority: false, may_execute: false,
+      } });
+      const backupManifest = join(recoveryRoot, backupId, "manifest.json");
+      const manifestBytes = readFileSync(backupManifest);
+      const manifestSha = createHash("sha256").update(manifestBytes).digest("hex");
+      const inspectStoppedBackup = () => {
+        const cli = spawnSync(process.execPath, [gatewayEntry, "--recovery-inspect", "--restore-plan", "--verify-offline",
+          "--backup-id", backupId, "--manifest-sha256", manifestSha, "--env-file", envFile, "--json"], {
+          cwd: repositoryRoot, env, encoding: "utf8", timeout: 15_000, windowsHide: true,
+        });
+        if (cli.error) throw cli.error;
+        expect(cli.status, cli.stderr).toBe(0);
+        for (const privateValue of [purpose, relativePath, fileContent.trim(), resultRef, resultReply, fileRoot]) {
+          expect(cli.stdout).not.toContain(privateValue);
+        }
+        expect(readFileSync(backupManifest)).toEqual(manifestBytes);
+        const inspection = JSON.parse(cli.stdout);
+        expect(inspection).toMatchObject({ status: "planned", manifest_sha256: manifestSha,
+          offline_lease_verified: true, cross_store_atomic: false, used_for_authority: false, may_execute: false });
+        return inspection.offline_ledger_comparison;
+      };
       taskWebSocket.close();
       taskWebSocket = undefined;
       await stopChild(gateway.child);
+      const matchedEvidence = inspectStoppedBackup();
+      expect(matchedEvidence).toMatchObject({ status: "matched",
+        ledgers: { j_control: "matched", m_state: "matched", broker: "matched", operation_plans: "matched" },
+        current: { broker_unresolved_count: 0, memory_pending_count: 0 },
+        archived: { broker_unresolved_count: 0, memory_pending_count: 0,
+          operation_plan_dependency_residual_scope_count: 0, operation_plan_dependency_unobserved_scope_count: 0 },
+        used_for_authority: false, may_execute: false });
+      const currentMemory = join(stateRoot, "private-state", "result-memory", "m-state.sqlite");
+      const hiddenMemory = join(tempRoot, "fixture-current-m-state.sqlite");
+      renameSync(currentMemory, hiddenMemory);
+      try {
+        const missingEvidence = inspectStoppedBackup();
+        expect(missingEvidence).toMatchObject({ status: "unverified",
+          ledgers: { j_control: "matched", m_state: "unverified", broker: "matched", operation_plans: "matched" },
+          current: { memory_pending_count: null }, archived: matchedEvidence.archived,
+          used_for_authority: false, may_execute: false });
+        expect(existsSync(currentMemory)).toBe(false);
+      } finally {
+        renameSync(hiddenMemory, currentMemory);
+      }
       const changedFile = "保存後に入れ替えた合成データ\n";
       writeFileSync(join(fileRoot, relativePath), changedFile, "utf8");
       gateway = spawnGateway(env);
@@ -611,6 +665,36 @@ describe("delegated goal purpose owner review", () => {
         existsSync(sessionDir) ? readRegularFilesRecursively(sessionDir).join("\n") : ""].join("\n");
       expect(ordinaryLogs).not.toContain(purpose);
       expect(ordinaryLogs).toContain(purposeDigest);
+
+      const laterTicketResponse = await request("/ws-ticket", token, "POST", { user });
+      expect(laterTicketResponse.status).toBe(200);
+      const { ticket: laterTicket } = await laterTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(laterTicket)}`);
+      await once(taskWebSocket, "open");
+      const laterSubmissionId = "01a119c0-5b35-4491-ae00-000000000817";
+      const laterWork = await request("/owner/task-compute", ownerToken, "POST", {
+        user, task: task.replace("合成マーカー", "入れ替えた合成データ"), goal_ref: goalRef, purpose_version: 1,
+        submission_id: laterSubmissionId,
+      });
+      expect(laterWork.status).toBe(202);
+      const { request_id: laterRequestId } = await laterWork.json() as { request_id: string };
+      const laterRequestDigest = createHash("sha256").update(`operation-request:${laterRequestId}`).digest("hex");
+      const laterPlan = await waitFor(async () => {
+        const receipt = await request("/owner/task-submission-status", ownerToken, "POST", { submission_id: laterSubmissionId });
+        expect(receipt.status).toBe(200);
+        const status = await receipt.json() as { state: string; execution_observation?: unknown };
+        if (status.state !== "handler_returned") return null;
+        expect(status.execution_observation).toMatchObject({ status: "adapter_returned", feedback_status: "success" });
+        return (await loadPlans()).find((candidate) => candidate.request_id_digest === laterRequestDigest) ?? null;
+      }, gateway, "new Work did not retain and settle the J candidate");
+      expect(laterPlan.steps).toMatchObject([{ operation: "file.search", status: "not_selected" }]);
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      const newerEvidence = inspectStoppedBackup();
+      expect(newerEvidence).toMatchObject({ status: "review_required",
+        ledgers: { m_state: "matched", broker: "different", operation_plans: "different" },
+        archived: matchedEvidence.archived, used_for_authority: false, may_execute: false });
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);

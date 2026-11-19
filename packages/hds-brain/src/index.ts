@@ -2,6 +2,7 @@ export * from "./types.js";
 export { inspectJControlRecoveryLedger } from "./制御状態.js";
 export {
   inspectMemoryRecoveryLedger,
+  standaloneRecoveryDatabaseUrl,
   type PersistenceLedgerInspection,
   type PersistenceLedgerInspectionUpdate,
 } from "./保存取引.js";

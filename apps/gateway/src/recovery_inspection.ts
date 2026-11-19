@@ -1285,7 +1285,9 @@ interface StateDatabasePaths {
   readonly cronEventsPath: string | null;
 }
 
-function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths | null {
+function hasSafeExistingStatePaths(
+  env: NodeJS.ProcessEnv, verifiedStoreKeys?: ReadonlySet<CanonicalStateStoreKey>,
+): StateDatabasePaths | null {
   try {
     const configuredRoot = path.resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
     const rootStat = lstatSync(configuredRoot);
@@ -1294,19 +1296,13 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     const privateRoot = path.join(stateRoot, "private-state");
     const privateStat = lstatSync(privateRoot);
     if (privateStat.isSymbolicLink() || !privateStat.isDirectory()) return null;
-    const canonicalPath = (key: CanonicalStateStoreKey): string => {
+    const safeDatabasePath = (key: CanonicalStateStoreKey): string | null => {
+      if (verifiedStoreKeys && !verifiedStoreKeys.has(key)) return null;
       const store = CANONICAL_STATE_STORE_PATHS.find((item) => item.key === key);
       if (!store) throw new Error("canonical_state_store_path_missing");
-      return path.join(privateRoot, store.relative_path);
-    };
-    const jPath = canonicalPath("j_control");
-    const mPath = canonicalPath("m_state");
-    const executionPath = canonicalPath("broker");
-    const operationPlansPath = canonicalPath("operation_plans");
-    const cronEventsPath = canonicalPath("cron_events");
-    const safeDatabasePath = (directory: string, databasePath: string): string | null => {
+      const databasePath = path.join(privateRoot, store.relative_path);
       try {
-        const directoryStat = lstatSync(directory);
+        const directoryStat = lstatSync(path.dirname(databasePath));
         if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -1318,11 +1314,11 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     };
     return {
       privateRoot,
-      jPath: safeDatabasePath(path.dirname(jPath), jPath),
-      mPath: safeDatabasePath(path.dirname(mPath), mPath),
-      executionPath: safeDatabasePath(path.dirname(executionPath), executionPath),
-      operationPlansPath: safeDatabasePath(path.dirname(operationPlansPath), operationPlansPath),
-      cronEventsPath: safeDatabasePath(path.dirname(cronEventsPath), cronEventsPath),
+      jPath: safeDatabasePath("j_control"),
+      mPath: safeDatabasePath("m_state"),
+      executionPath: safeDatabasePath("broker"),
+      operationPlansPath: safeDatabasePath("operation_plans"),
+      cronEventsPath: safeDatabasePath("cron_events"),
     };
   } catch {
     return null;
@@ -1374,6 +1370,7 @@ function hasSafeCanonicalArchiveStatePaths(
 function inspectGatewayRecoveryStateFromPaths(
   paths: StateDatabasePaths | null,
   env: NodeJS.ProcessEnv,
+  immutableSnapshot = false,
 ): GatewayRecoveryInspectionReport {
   const unavailable = (owner: "J" | "M"): PersistenceLedgerInspection => ({
     owner,
@@ -1421,17 +1418,18 @@ function inspectGatewayRecoveryStateFromPaths(
     unverified_result_receipt_count: null, omitted_result_receipt_count: null, orphan_result_receipt_count: null,
     residual_count: 1, used_for_authority: false,
   };
+  const readOptions = immutableSnapshot ? { immutable_snapshot: true } : {};
   const j = paths?.jPath
-    ? inspectJControlRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.jPath })
+    ? inspectJControlRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.jPath, ...readOptions })
     : unavailable("J");
   const m = paths?.mPath
-    ? inspectMemoryRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.mPath })
+    ? inspectMemoryRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.mPath, ...readOptions })
     : unavailable("M");
   const execution = paths?.executionPath
-    ? inspectExecutionIntentRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.executionPath })
+    ? inspectExecutionIntentRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.executionPath, ...readOptions })
     : unavailableExecution;
   const operationPlans = paths?.operationPlansPath
-    ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath })
+    ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath, ...readOptions })
     : unavailableOperationPlans;
   const cronCommandIdDigests = operationPlans.bindings
     .filter((binding) => binding.integrity === "verified")
@@ -1445,10 +1443,15 @@ function inspectGatewayRecoveryStateFromPaths(
         database_path: paths.cronEventsPath,
         command_id_digests: cronCommandIdDigests,
         request_id_digests: cronRequestIdDigests,
+        ...readOptions,
       })
     : { ...unavailableCronEvents, approval_command_matches: [], event_request_matches: [] };
   const { approval_command_matches: cronApprovalMatches, event_request_matches: cronEventMatches, ...cronEvents } = cronInspection;
-  const documentOrganizationCheckpoints = inspectDocumentOrganizationCheckpointLedger(env);
+  const documentOrganizationCheckpoints: DocumentOrganizationCheckpointRecoveryInspection = immutableSnapshot
+    ? { status: "unavailable", reason: "store_unavailable", checkpoint_count: null, verified_checkpoint_count: null,
+        residual_checkpoint_count: null, omitted_checkpoint_count: null, unresolved_checkpoint_count: null,
+        residual_count: 1, records: [], used_for_authority: false }
+    : inspectDocumentOrganizationCheckpointLedger(env);
   const residuals = correlateRecoveryUpdates(j, m);
   const operationPlanCorrelations = correlateOperationPlanBindings(
     operationPlans, execution, j, m, cronEvents, cronApprovalMatches, cronEventMatches,
@@ -1544,16 +1547,125 @@ export function inspectGatewayRecoveryState(
   return inspectGatewayRecoveryStateFromPaths(hasSafeExistingStatePaths(env), env);
 }
 
+/** 停止中に検証した固定ストアだけを読み取る。書き込みや権限は伴わない。 */
+export function inspectGatewayRecoveryOfflineCurrent(
+  env: NodeJS.ProcessEnv,
+  verifiedStoreKeys: ReadonlySet<CanonicalStateStoreKey>,
+): GatewayRecoveryInspectionReport {
+  return inspectGatewayRecoveryStateFromPaths(hasSafeExistingStatePaths(env, verifiedStoreKeys), env, true);
+}
+
 /** Inspect only manifest-verified canonical archive entries through the existing read-only recovery path. */
 export function inspectGatewayRecoveryCanonicalArchive(
   packDirectory: string,
   snapshot: CanonicalStateSnapshotManifest,
+  immutableSnapshot = false,
 ): GatewayRecoveryInspectionReport {
   const archiveRoot = path.resolve(packDirectory, "canonical-state");
   return inspectGatewayRecoveryStateFromPaths(
     hasSafeCanonicalArchiveStatePaths(packDirectory, snapshot),
     { BLUE_TANUKI_FILE_ROOT: archiveRoot },
+    immutableSnapshot,
   );
+}
+
+type OfflineRecoveryLedgerRelation = "matched" | "different" | "unverified";
+
+export interface OfflineRecoveryLedgerComparison {
+  readonly status: "matched" | "review_required" | "unverified";
+  readonly ledgers: Readonly<Record<"j_control" | "m_state" | "broker" | "operation_plans", OfflineRecoveryLedgerRelation>>;
+  readonly current: {
+    readonly broker_unresolved_count: number | null;
+    readonly memory_pending_count: number | null;
+  };
+  readonly archived: {
+    readonly broker_unresolved_count: number | null;
+    readonly memory_pending_count: number | null;
+    readonly operation_plan_dependency_residual_scope_count: number | null;
+    readonly operation_plan_dependency_unobserved_scope_count: number | null;
+  };
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+type OfflineRecoveryLedgerHead = readonly (number | string | null)[];
+
+function persistenceLedgerHead(ledger: PersistenceLedgerInspection): OfflineRecoveryLedgerHead | null {
+  if (ledger.status !== "verified" || ledger.unverified_event_count !== 0 || ledger.first_unverified_ordinal !== null) return null;
+  const { last_verified_event_digest: digest, verified_event_count: count, last_verified_revision: revision } = ledger;
+  if (count === 0 && revision === 0 && digest === "GENESIS") return [count, revision, digest];
+  return Number.isSafeInteger(count) && count > 0 && Number.isSafeInteger(revision) && revision > 0 && fixedDigest(digest)
+    ? [count, revision, digest] : null;
+}
+
+function brokerLedgerHead(ledger: ExecutionIntentRecoveryInspection): OfflineRecoveryLedgerHead | null {
+  if (ledger.status !== "verified" || !ledger.current_state_available || ledger.unverified_event_count !== 0 ||
+      ledger.first_unverified_ordinal !== null || ledger.verified_event_count !== ledger.total_event_count ||
+      ledger.receipt_projection_mismatch_count !== 0 || ledger.outbox_mismatch_count !== 0) return null;
+  const { last_verified_event_digest: digest, verified_event_count: count } = ledger;
+  if (count === 0 && digest === null) return [count, digest];
+  return Number.isSafeInteger(count) && count > 0 && fixedDigest(digest) ? [count, digest] : null;
+}
+
+function operationPlanLedgerHead(ledger: OperationPlanRecoveryInspection): OfflineRecoveryLedgerHead | null {
+  const digest = fixedDigest(ledger.checkpoint_digest);
+  if (!digest || !["verified", "residuals_present"].includes(ledger.status) || ledger.plan_integrity_residual_count !== 0 ||
+      ledger.residual_binding_count !== 0 || ledger.schema_invalid_plan_count !== 0) return null;
+  return [digest, ledger.plan_count, ledger.binding_count];
+}
+
+function compareLedgerHeads(current: OfflineRecoveryLedgerHead | null, archived: OfflineRecoveryLedgerHead | null): OfflineRecoveryLedgerRelation {
+  if (!current || !archived) return "unverified";
+  return current.length === archived.length && current.every((value, index) => value === archived[index]) ? "matched" : "different";
+}
+
+/** 検証済みの台帳末尾と計画を照合し、未決作用の件数を返す。 */
+export function compareOfflineRecoveryLedgers(
+  current: GatewayRecoveryInspectionReport,
+  archived: GatewayRecoveryInspectionReport | null,
+): OfflineRecoveryLedgerComparison {
+  const inspect = (report: GatewayRecoveryInspectionReport | null) => {
+    const j = report ? persistenceLedgerHead(report.ledgers.j) : null;
+    const m = report ? persistenceLedgerHead(report.ledgers.m) : null;
+    const execution = report?.ledgers.execution;
+    const broker = execution ? brokerLedgerHead(execution) : null;
+    const plans = report ? operationPlanLedgerHead(report.ledgers.operation_plans) : null;
+    const updates = j && m ? report?.update_residuals : undefined;
+    const dependencies = report && plans && report.plan_dependency_scopes.length === report.ledgers.operation_plans.plan_count
+      ? report.plan_dependency_scopes : undefined;
+    const unresolved = broker ? execution?.unresolved_record_count : undefined;
+    return {
+      j, m, broker, plans,
+      brokerUnresolvedCount: typeof unresolved === "number" && Number.isSafeInteger(unresolved) && unresolved >= 0 ? unresolved
+        : broker && execution?.omitted_record_count === 0 ? execution.records.filter(record => record.reconciliation_required).length : null,
+      memoryPendingCount: updates?.filter(update => ["pending_m_commit", "pending_j_receipt"].includes(update.disposition)).length ?? null,
+      memoryResidual: updates?.some(update => update.disposition !== "paired") ?? false,
+      dependencyResidualScopeCount: dependencies?.filter(scope => scope.residual_dependencies.length > 0).length ?? null,
+      dependencyUnobservedScopeCount: dependencies?.filter(scope => scope.unobserved_dependencies.length > 0).length ?? null,
+    };
+  };
+  const live = inspect(current);
+  const backup = inspect(archived);
+  const ledgers = {
+    j_control: compareLedgerHeads(live.j, backup.j),
+    m_state: compareLedgerHeads(live.m, backup.m),
+    broker: compareLedgerHeads(live.broker, backup.broker),
+    operation_plans: compareLedgerHeads(live.plans, backup.plans),
+  };
+  const relations = Object.values(ledgers);
+  const counts = [live.brokerUnresolvedCount, backup.brokerUnresolvedCount, live.memoryPendingCount, backup.memoryPendingCount,
+    live.dependencyResidualScopeCount, live.dependencyUnobservedScopeCount, backup.dependencyResidualScopeCount, backup.dependencyUnobservedScopeCount];
+  const status = relations.includes("unverified") || counts.includes(null) ? "unverified"
+    : relations.includes("different") || counts.some(count => count !== 0) || live.memoryResidual || backup.memoryResidual
+      ? "review_required" : "matched";
+  return {
+    status, ledgers,
+    current: { broker_unresolved_count: live.brokerUnresolvedCount, memory_pending_count: live.memoryPendingCount },
+    archived: { broker_unresolved_count: backup.brokerUnresolvedCount, memory_pending_count: backup.memoryPendingCount,
+      operation_plan_dependency_residual_scope_count: backup.dependencyResidualScopeCount,
+      operation_plan_dependency_unobserved_scope_count: backup.dependencyUnobservedScopeCount },
+    used_for_authority: false, may_execute: false,
+  };
 }
 
 export type RecoverySelectedStoreLedgerStatus =

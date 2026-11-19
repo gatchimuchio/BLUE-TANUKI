@@ -46,6 +46,31 @@ const key = (id: string): string => createHash("sha256").update(JSON.stringify([
 const executionIntentWorkerFixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "execution_intent_worker.ts");
 
 describe("固定承認→永続消費・開始意思→実呼出し→receipt", () => {
+  it("不変Broker診断は表示上限より古い未決receiptも全数に含める", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-intent-immutable-count-"));
+    const filepath = join(root, "execution-intents", "executor.sqlite");
+    const store = new GatewayExecutionIntentStore(filepath, randomUUID());
+    try {
+      const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
+      const computation = (id: string): ExecuteCommand => ({ ...command(id), type: "llm_call",
+        payload: { messages: [{ role: "user", content: "青" }], session_id: "fixture" } });
+      const old = computation("older-unresolved-command");
+      const approved = authority.approve(old, proof(old));
+      store.consume(authority.receipt(approved)!, Date.now());
+      for (let index = 0; index < 200; index++) {
+        const newer = computation(`newer-unconsumed-command-${index}`);
+        authority.approve(newer, proof(newer));
+      }
+      const options = { private_state_root: root, database_path: filepath };
+      const report = inspectExecutionIntentRecoveryLedger({ ...options, immutable_snapshot: true });
+      expect(report).toMatchObject({ status: "verified", omitted_record_count: 1, unresolved_record_count: 1,
+        used_for_authority: false, execution_eligible: false });
+      expect(report.records).toHaveLength(200);
+      expect(report.records.every(receipt => receipt.reconciliation_required === false)).toBe(true);
+      expect(inspectExecutionIntentRecoveryLedger(options)).not.toHaveProperty("unresolved_record_count");
+    } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("CompleteHistory未設定・保存失敗時のtool lifecycleを回復し、永続確認後だけ配送済みにする", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-lifecycle-recovery-"));
     const filepath = join(root, "execution-intents", "executor.sqlite");

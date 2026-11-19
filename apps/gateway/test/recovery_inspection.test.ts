@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildRecoveryPlanDependencyScopes,
   buildRecoveryRequestScopeCorrelation,
+  compareOfflineRecoveryLedgers,
   correlateRecoveryUpdates,
+  inspectGatewayRecoveryOfflineCurrent,
   inspectGatewayRecoveryState,
   projectGatewayRecoveryInspectionForOperator,
 } from "../src/recovery_inspection.js";
@@ -424,6 +426,46 @@ describe("Gateway read-only recovery inspection", () => {
       .toEqual([{ update_id_digest: "a".repeat(64), disposition: "missing_verified_j_link" }]);
     expect(correlateRecoveryUpdates(ledgerInspection("J", [jPending]), ledgerInspection("M", [{ ...mCommit, content_digest: "e".repeat(64) }])))
       .toEqual([{ update_id_digest: "a".repeat(64), disposition: "content_mismatch" }]);
+  });
+
+  it("keeps matching offline ledger heads under review while retained work is pending or unobserved", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-comparison-"));
+    const base = inspectGatewayRecoveryOfflineCurrent({ BLUE_TANUKI_STATE_ROOT: temporaryRoot }, new Set());
+    const pending: PersistenceLedgerInspectionUpdate = {
+      update_id_digest: "a".repeat(64), j_event_id_digest: "b".repeat(64), content_digest: "c".repeat(64),
+      phase: "pending", expected_version: 0,
+    };
+    const j = ledgerInspection("J", [pending]);
+    const m = { ...ledgerInspection("M", []), last_verified_event_digest: "GENESIS" };
+    const execution = { ...base.ledgers.execution, status: "verified" as const, reason: null,
+      total_event_count: 201, verified_event_count: 201, last_verified_event_digest: "d".repeat(64),
+      current_state_available: true, omitted_record_count: 1, unresolved_record_count: 2 };
+    const operation_plans = { ...base.ledgers.operation_plans, status: "verified" as const, reason: null,
+      checkpoint_digest: "e".repeat(64) };
+    const current = { ...base, ledgers: { ...base.ledgers, j, m, execution, operation_plans },
+      update_residuals: correlateRecoveryUpdates(j, m) };
+
+    const comparison = compareOfflineRecoveryLedgers(current, current);
+    expect(comparison).toEqual({
+      status: "review_required",
+      ledgers: { j_control: "matched", m_state: "matched", broker: "matched", operation_plans: "matched" },
+      current: { broker_unresolved_count: 2, memory_pending_count: 1 },
+      archived: { broker_unresolved_count: 2, memory_pending_count: 1,
+        operation_plan_dependency_residual_scope_count: 0, operation_plan_dependency_unobserved_scope_count: 0 },
+      used_for_authority: false, may_execute: false,
+    });
+    expect(JSON.stringify(comparison)).not.toContain(pending.update_id_digest);
+
+    const omitted = { ...current, ledgers: { ...current.ledgers,
+      execution: { ...execution, unresolved_record_count: undefined } } };
+    expect(compareOfflineRecoveryLedgers(omitted, current)).toMatchObject({
+      status: "unverified", ledgers: { broker: "matched" },
+      current: { broker_unresolved_count: null, memory_pending_count: 1 },
+    });
+    expect(compareOfflineRecoveryLedgers(current, null)).toMatchObject({
+      status: "unverified", ledgers: { j_control: "unverified", m_state: "unverified", broker: "unverified", operation_plans: "unverified" },
+      archived: { broker_unresolved_count: null, memory_pending_count: null },
+    });
   });
 });
 

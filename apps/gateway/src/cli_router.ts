@@ -184,6 +184,14 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
       for (const store of plan.canonical_stores) {
         writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}${store.target_status ? ` 現在=${store.target_status}` : ""}`);
       }
+      const comparison = plan.offline_ledger_comparison;
+      if (comparison) {
+        writeStdout(`現行とアーカイブの台帳照合 ${comparison.status}`);
+        for (const [ledger, status] of Object.entries(comparison.ledgers)) writeStdout(`${ledger} ${status}`);
+        writeStdout(`現行の未決実行 ${comparison.current.broker_unresolved_count ?? "未確認"}／未確定の記憶更新 ${comparison.current.memory_pending_count ?? "未確認"}`);
+        writeStdout(`アーカイブの未決実行 ${comparison.archived.broker_unresolved_count ?? "未確認"}／未確定の記憶更新 ${comparison.archived.memory_pending_count ?? "未確認"}`);
+        writeStdout(`アーカイブの計画依存　残差 ${comparison.archived.operation_plan_dependency_residual_scope_count ?? "未確認"}／未観測 ${comparison.archived.operation_plan_dependency_unobserved_scope_count ?? "未確認"}`);
+      }
       if (plan.goal_purpose_replay) {
         writeStdout(`委任目的と現行監査の照合 ${plan.goal_purpose_replay.status} ${plan.goal_purpose_replay.verified_purpose_count}件`);
       }

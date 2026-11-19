@@ -972,6 +972,7 @@ interface MemoryRecoveryLedgerPaths {
   readonly private_state_root: string;
   readonly database_path: string;
   readonly standalone_schema?: boolean;
+  readonly immutable_snapshot?: boolean;
 }
 
 export function inspectMemoryRecoveryLedger(options: MemoryRecoveryLedgerPaths): PersistenceLedgerInspection {
@@ -1006,7 +1007,8 @@ function inspectMemoryRecoveryLedgerInternal(
     if (hasSQLiteRecoverySidecars(databasePath)) {
       return unavailableLedgerInspection("M", "store_unavailable");
     }
-    database = new DatabaseSync(options.standalone_schema ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
+    database = new DatabaseSync(options.standalone_schema || options.immutable_snapshot
+      ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,

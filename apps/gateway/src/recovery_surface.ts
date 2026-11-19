@@ -31,9 +31,12 @@ import {
 } from "./operation_plan_recovery_inspection.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
 import {
+  compareOfflineRecoveryLedgers,
   inspectCanonicalStateStoreLedger,
   inspectGatewayRecoveryCanonicalArchive,
+  inspectGatewayRecoveryOfflineCurrent,
   inspectGatewayRecoveryState,
+  type OfflineRecoveryLedgerComparison,
   type RecoveryPlanDependencyCategory,
   type RecoverySelectedPlanResidualObservation,
   type RecoverySelectedStoreLedgerStatus,
@@ -358,6 +361,7 @@ export interface OfflineRecoveryRestorePlan {
   manifest_sha256: string | null;
   plan_sha256: string | null;
   target_state_sha256?: string;
+  offline_ledger_comparison?: OfflineRecoveryLedgerComparison;
   items: readonly { role: string; disposition: RecoveryPlanTargetDisposition; target_status?: RecoveryPlanPathTargetStatus }[];
   canonical_stores: readonly { store_key: CanonicalStateStoreKey; archive_status: CanonicalStateSnapshotEntryStatus | "not_included";
     disposition: "requires_store_reconciliation" | "preserve_current";
@@ -1368,7 +1372,7 @@ async function inspectBackupOperationPlanDependencies(
     return emptyBackupOperationPlanDependencyInventory("snapshot_unverified", { reason: "snapshot_unverified" });
   }
 
-  const report = inspectGatewayRecoveryCanonicalArchive(packDirectory, snapshot);
+  const report = inspectGatewayRecoveryCanonicalArchive(packDirectory, snapshot, true);
   const verifiedEntries = snapshot.entries.filter((entry) => entry.status === "verified");
   const afterInspection = await Promise.all(verifiedEntries.map(async (entry) => {
     if (!entry.archive_rel_path || !entry.sha256) return null;
@@ -1427,7 +1431,9 @@ async function inspectBackupOperationPlanInventory(
   }
 
   const archivePath = path.resolve(packDirectory, entry.archive_rel_path);
-  const inspected = inspectOperationPlanRecoveryLedger({ private_state_root: packDirectory, database_path: archivePath });
+  const inspected = inspectOperationPlanRecoveryLedger({
+    private_state_root: packDirectory, database_path: archivePath, immutable_snapshot: true,
+  });
   const afterInspection = await sha256Path(archivePath, "file").catch(() => null);
   if (!afterInspection || afterInspection.bytes !== entry.bytes || afterInspection.sha256 !== entry.sha256) {
     return emptyBackupOperationPlanInventory("snapshot_unverified", "snapshot_unverified");
@@ -2113,7 +2119,14 @@ export async function planOfflineRecoveryRestore(
     const targetBinding = options && offlineTargets
       ? [options.offline_owner_scope_sha256, observedRoles.map(role => role.targetBinding), offlineTargets.stores] : undefined;
     let targetStateSha256: string | undefined;
+    let offlineLedgerComparison: OfflineRecoveryLedgerComparison | undefined;
     if (targetBinding && offlineTargets) {
+      const verifiedStoreKeys = new Set(offlineTargets.stores.flatMap(([key, target]) =>
+        target.status === "verified" ? [key] : []));
+      const current = inspectGatewayRecoveryOfflineCurrent(env, verifiedStoreKeys);
+      const archived = latestManifest.canonical_state_snapshot
+        ? inspectGatewayRecoveryCanonicalArchive(packDir, latestManifest.canonical_state_snapshot, true) : null;
+      offlineLedgerComparison = compareOfflineRecoveryLedgers(current, archived);
       const repeatedArchiveProofs = new Map<string, NonNullable<RecoveryPathProof>>();
       await preflightRestoreManifest(env, latestManifest, repeatedArchiveProofs);
       if (latestManifest.canonical_state_snapshot) await inspectCanonicalStateSnapshots(packDir, latestManifest.canonical_state_snapshot);
@@ -2128,14 +2141,15 @@ export async function planOfflineRecoveryRestore(
       }
     }
     const planSha256 = recoveryDigest([
-      targetBinding ? "offline-recovery-restore-plan.v4" : "offline-recovery-restore-plan.v3",
+      targetBinding ? "offline-recovery-restore-plan.v5" : "offline-recovery-restore-plan.v3",
       manifestSha256, privateRoot, observedRoles.map(role => role.planBinding), canonical_stores,
       goalPurpose.observation, goalPurpose.binding, goalPurposeRepair ?? null,
-      ...(targetBinding ? [targetBinding] : []),
+      ...(targetBinding ? [targetBinding, offlineLedgerComparison] : []),
     ]);
     return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256,
       items: observedRoles.map(role => role.item), canonical_stores,
       ...(targetStateSha256 ? { target_state_sha256: targetStateSha256 } : {}),
+      ...(offlineLedgerComparison ? { offline_ledger_comparison: offlineLedgerComparison } : {}),
       goal_purpose_replay: goalPurpose.observation, ...(goalPurposeRepair && { goal_purpose_repair: goalPurposeRepair }) };
   } catch {
     return base;

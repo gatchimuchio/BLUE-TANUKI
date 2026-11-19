@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { isDeepStrictEqual } from "node:util";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { standaloneRecoveryDatabaseUrl } from "@blue-tanuki/hds-brain";
 import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity,
   ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
@@ -1059,6 +1060,8 @@ export interface ExecutionIntentRecoveryInspection {
   readonly outbox_mismatch_count: number;
   readonly current_state_available: boolean;
   readonly omitted_record_count: number;
+  /** Exact count across the verified immutable snapshot, independent of the displayed rows. */
+  readonly unresolved_record_count?: number;
   readonly records: readonly {
     readonly ticket_digest: string;
     readonly command_key_digest: string;
@@ -1161,10 +1164,16 @@ function verifyExecutionRecoverySchema(database: DatabaseType): boolean {
   });
 }
 
+function executionReceiptRequiresReconciliation(receipt: ExecutionIntentReceipt): boolean {
+  return ["intent_committed", "invocation_attempted", "outcome_unknown"].includes(receipt.state) ||
+    receipt.result_delivery_acknowledged === false;
+}
+
 /** Inspect the private Broker execution ledger without creating or repairing a store. */
 export function inspectExecutionIntentRecoveryLedger(options: {
   readonly private_state_root: string;
   readonly database_path: string;
+  readonly immutable_snapshot?: boolean;
 }): ExecutionIntentRecoveryInspection {
   let database: DatabaseType | undefined;
   let databasePath: string;
@@ -1173,7 +1182,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
     if (!databasePath || ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
       return unavailableExecutionInspection();
     }
-    database = new DatabaseSync(databasePath, {
+    database = new DatabaseSync(options.immutable_snapshot ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,
@@ -1294,6 +1303,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
     }
 
     let outboxMismatchCount = 0;
+    let unresolvedRecordCount = 0;
     try {
       const outbox = database.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox ORDER BY rowid")
         .all() as { ticket_id: string; delivery_json: string; delivery_digest: string }[];
@@ -1317,6 +1327,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
       }
       for (const [ticketId, { receipt }] of latest) {
         if (receipt.result_delivery_digest !== undefined && !seen.has(ticketId)) outboxMismatchCount++;
+        if (options.immutable_snapshot && executionReceiptRequiresReconciliation(receipt)) unresolvedRecordCount++;
       }
     } catch {
       return unavailableExecutionInspection("schema_mismatch", "schema_mismatch");
@@ -1332,8 +1343,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
         execution_epoch_digest: digest(receipt.execution_epoch),
         admission_digest: executionAdmissionDigest(receipt),
         state: receipt.state,
-        reconciliation_required: ["intent_committed", "invocation_attempted", "outcome_unknown"].includes(receipt.state) ||
-          receipt.result_delivery_acknowledged === false,
+        reconciliation_required: executionReceiptRequiresReconciliation(receipt),
         result_delivery_pending: receipt.result_delivery_acknowledged === false,
         result_delivery_digest: receipt.result_delivery_digest ?? null,
         result_delivery_disposition: receipt.result_delivery_disposition ?? null,
@@ -1352,6 +1362,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
       outbox_mismatch_count: outboxMismatchCount,
       current_state_available: !mismatch,
       omitted_record_count: Math.max(0, latest.size - records.length),
+      ...(options.immutable_snapshot && !mismatch ? { unresolved_record_count: unresolvedRecordCount } : {}),
       records,
       used_for_authority: false,
       execution_eligible: false,

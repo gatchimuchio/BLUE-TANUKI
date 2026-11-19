@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { standaloneRecoveryDatabaseUrl } from "@blue-tanuki/hds-brain";
 import { parseCronEventResultReceipt, type CronEventResultReceipt } from "./cron_event_result_receipt.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -355,6 +356,7 @@ export function inspectCronEventRecoveryLedger(options: {
   readonly database_path: string;
   readonly command_id_digests?: readonly string[];
   readonly request_id_digests?: readonly string[];
+  readonly immutable_snapshot?: boolean;
 }): CronEventRecoveryLedgerInspection {
   let database: DatabaseType | undefined;
   let databasePath = "";
@@ -363,7 +365,7 @@ export function inspectCronEventRecoveryLedger(options: {
     if (!databasePath || hasCronSqliteSidecar(databasePath)) {
       return unavailableInspection("unavailable", "store_unavailable");
     }
-    database = new DatabaseSync(databasePath, {
+    database = new DatabaseSync(options.immutable_snapshot ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,

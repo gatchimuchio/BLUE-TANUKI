@@ -1584,8 +1584,10 @@ describe("buildRecoverySnapshot", () => {
         cwd: root, encoding: "utf8", env: { SystemRoot: process.env.SystemRoot }, timeout: 15_000, windowsHide: true,
       });
       expect(cli.status, cli.stderr).toBe(0);
-      expect(JSON.parse(cli.stdout)).toMatchObject({ offline_lease_verified: true, plan_sha256: plan.plan_sha256,
+      const stoppedPlan = JSON.parse(cli.stdout);
+      expect(stoppedPlan).toMatchObject({ offline_lease_verified: true, plan_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         goal_purpose_replay: { status: "matched", verified_purpose_count: 1 }, may_execute: false });
+      expect(stoppedPlan.plan_sha256).not.toBe(plan.plan_sha256);
       expect(cli.stdout).not.toContain(purpose);
 
       const configPath = path.join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "goal-governance.json");

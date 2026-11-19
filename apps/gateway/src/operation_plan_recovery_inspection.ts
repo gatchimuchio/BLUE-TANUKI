@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { operationPlanCheckpointPlanIdDigest, operationPlanDigest, operationPlanResultValidationMatches, operationPlanTaskIdentityDigest, partitionOperationPlanCheckpointForRuntime,
-  receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
+  receiptForResultCommit, standaloneRecoveryDatabaseUrl, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointEnvelopeSchema, OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema,
   type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import { executionAdmissionDigest } from "./execution_intent_store.js";
@@ -41,6 +41,8 @@ export interface OperationPlanRecoveryInspection {
   readonly owner: "J";
   readonly status: "verified" | "residuals_present" | "corrupt" | "unavailable" | "schema_mismatch";
   readonly reason: "checkpoint_missing" | "checkpoint_integrity_mismatch" | "binding_mismatch" | "cross_ledger_unverified" | "store_unavailable" | "schema_mismatch" | null;
+  /** The digest of a complete, locally valid persisted checkpoint in immutable inspection. */
+  readonly checkpoint_digest?: string;
   readonly plan_count: number;
   readonly plan_integrity_residual_count: number;
   readonly binding_count: number;
@@ -381,6 +383,7 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
 export function inspectOperationPlanRecoveryLedger(options: {
   readonly private_state_root: string;
   readonly database_path: string;
+  readonly immutable_snapshot?: boolean;
 }): OperationPlanRecoveryInspection {
   let database: DatabaseType | undefined;
   let databasePath: string;
@@ -389,7 +392,7 @@ export function inspectOperationPlanRecoveryLedger(options: {
     if (!databasePath || ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
       return unavailablePlanInspection();
     }
-    database = new DatabaseSync(databasePath, {
+    database = new DatabaseSync(options.immutable_snapshot ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,
@@ -454,12 +457,20 @@ export function inspectOperationPlanRecoveryLedger(options: {
     }
     const residual = inspected.residualCount > 0 || inspected.residualPlanCount > 0 || inspected.unverifiedMemoryLinkCount > 0 ||
       schemaInvalidPlans.length > 0;
+    let checkpointDigest: string | undefined;
+    if (options.immutable_snapshot && schemaInvalidPlans.length === 0 && inspected.residualCount === 0 && inspected.residualPlanCount === 0) {
+      try {
+        const partition = partitionOperationPlanCheckpointForRuntime(raw, true);
+        if (operationPlanDigest(partition.checkpoint) === row.digest) checkpointDigest = row.digest;
+      } catch { /* A checkpoint that cannot be loaded in full has no equality observation. */ }
+    }
     return {
       owner: "J",
       status: residual ? "residuals_present" : "verified",
       reason: schemaInvalidPlans.length > 0 ? "schema_mismatch"
         : inspected.residualCount > 0 || inspected.residualPlanCount > 0 ? "binding_mismatch"
         : inspected.unverifiedMemoryLinkCount > 0 ? "cross_ledger_unverified" : null,
+      ...(checkpointDigest ? { checkpoint_digest: checkpointDigest } : {}),
       plan_count: envelope.data.plans.length,
       plan_integrity_residual_count: inspected.residualPlanCount + schemaInvalidPlans.length,
       binding_count: inspected.bindings.length,
