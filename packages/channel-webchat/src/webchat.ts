@@ -2120,7 +2120,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           res.end(JSON.stringify({ found: false }));
           return;
         }
-        const cancellation = await this.opts.onD4RuntimeIntentCancellation({ request_id: status.request_id });
+        const cancellation = await this.opts.onD4RuntimeIntentCancellation({
+          request_id: status.request_id,
+          runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
+          session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id),
+        });
         if (!cancellation) {
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));

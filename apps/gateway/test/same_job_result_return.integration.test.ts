@@ -492,6 +492,101 @@ describe("served Telegram result return and request-bound media ingress", () => 
   }, 45_000);
 });
 
+describe("served D4 Runtime cancellation", () => {
+  it("interrupts the admitted compute of its exact scoped intent without claiming external stop", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));
+    const token = "synthetic-d4-runtime-cancellation-token-only";
+    const runtime = "blue_tanuki";
+    const session = "synthetic-runtime-cancel-session";
+    const submission = "e5348667-4150-49c6-b011-2b2942090f1a";
+    let providerRequests = 0;
+    let disconnected = false;
+    const providerPaths: string[] = [];
+    const frames: string[] = [];
+    const provider = createServer((request, response) => {
+      providerPaths.push(request.url ?? "");
+      if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+        response.writeHead(404).end();
+        return;
+      }
+      request.resume();
+      providerRequests += 1;
+      response.once("close", () => { disconnected = !response.writableFinished; });
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      mkdirSync(join(root, "files"));
+      const envFile = join(root, "fixture.env");
+      writeFileSync(envFile, "# isolated test configuration\n", "utf8");
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: "synthetic-d4-runtime-tests-resume",
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-d4-runtime-tests-maintenance",
+        BLUE_TANUKI_D4_RUNTIME_ID: runtime, BLUE_TANUKI_D4_RUNTIME_TOKEN: token,
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: join(root, "files"), BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl"),
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_BACKEND_HINT: "d4-cancel-fixture",
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ "d4-cancel-fixture": {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: "d4-cancel-fixture", LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: "d4-cancel-fixture", type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: "d4-cancel-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+      });
+      const input = { runtime_id: runtime, session_id: session, submission_id: submission };
+      const ticket = await post("/runtime/ws-ticket", { runtime_id: runtime, session_id: session });
+      expect(ticket.status).toBe(200);
+      const { ticket: ticketValue } = await ticket.json() as { ticket: string };
+      socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticketValue)}`);
+      socket.on("message", (data) => frames.push(String(data)));
+      await once(socket, "open");
+      const submitted = await post("/runtime/intent", { ...input, intent: "合成テストで短い文章を要約してください。" });
+      expect(submitted.status, await submitted.text()).toBe(202);
+      await waitFor(() => providerRequests === 1 ? true : null, gateway, () =>
+        `the exact D4 intent did not reach compute; paths=${JSON.stringify(providerPaths)}` +
+        ` frames=${JSON.stringify(frames)} stdout=${gateway?.stdout.join("") ?? ""}`);
+      const wrongToken = await post("/runtime/intent/cancel", input, WEBCHAT_TOKEN);
+      expect(wrongToken.status).toBe(401);
+      const wrongSession = await post("/runtime/intent/cancel", { ...input, session_id: "unrelated-d4-session" });
+      expect(wrongSession.status).toBe(404);
+      expect(disconnected).toBe(false);
+      const cancelled = await post("/runtime/intent/cancel", input);
+      expect(cancelled.status).toBe(202);
+      expect(await cancelled.json()).toEqual({ found: true, accepted: true, cancellation: {
+        status: "cancel_requested", cancel_request_accepted: true, executor_settled: false,
+        execution_signal_aborted: true, executor_state: "cancel_requested", local_worker_stop: "not_observed",
+        external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+      } });
+      await waitFor(() => disconnected ? true : null, gateway, "compute connection did not receive the abort");
+      expect(providerRequests).toBe(1);
+      const status = await post("/runtime/intent/status", input);
+      expect(status.status).toBe(200);
+      expect(await status.json()).toMatchObject({ found: true, cancellation: { status: "unknown", may_execute: false } });
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 70_000);
+});
+
 function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): {
   readonly waitId: string;
   readonly planIdDigest: string;
@@ -620,15 +715,19 @@ globalThis.fetch = async (input, init) => {
 `;
 }
 
-function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir: string, stateRoot: string,
-  memoryFile: string, historyFile: string, sessionDir: string, captureFile: string, updates: string): NodeJS.ProcessEnv {
+function fixtureOsEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
     "HOMEDRIVE", "HOMEPATH", "ComSpec"]) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  return { ...env, WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort),
+  return env;
+}
+
+function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir: string, stateRoot: string,
+  memoryFile: string, historyFile: string, sessionDir: string, captureFile: string, updates: string): NodeJS.ProcessEnv {
+  return { ...fixtureOsEnvironment(), WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort),
     WEBCHAT_TOKEN, WEBCHAT_RESUME_TOKEN: "f1003-synthetic-resume-token", BLUE_TANUKI_OWNER_TOKEN: OWNER_TOKEN,
     BLUE_TANUKI_MAINTENANCE_TOKEN: "f1003-synthetic-maintenance-token",
     BLUE_TANUKI_FILE_ROOT: join(auditDir, "file-root"), BLUE_TANUKI_STATE_ROOT: stateRoot,
@@ -650,8 +749,8 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
     LINE_CHANNEL_SECRET: "" };
 }
 
-function spawnGateway(env: NodeJS.ProcessEnv, preloadFile: string): CapturedProcess {
-  const child = spawn(process.execPath, ["--import", pathToFileURL(preloadFile).href,
+function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string): CapturedProcess {
+  const child = spawn(process.execPath, [...(preloadFile ? ["--import", pathToFileURL(preloadFile).href] : []),
     "apps/gateway/dist/main.js", "--serve"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   childProcesses.add(child);
   const stdout: string[] = [];
@@ -753,8 +852,8 @@ function providerErrorText(gateway: CapturedProcess): string {
   return failure.includes("synthetic_provider_fixture_failed") ? failure : "";
 }
 
-async function waitForHealth(port: number, gateway: CapturedProcess): Promise<void> {
-  const deadline = Date.now() + 15_000;
+async function waitForHealth(port: number, gateway: CapturedProcess, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let lastConnectionError = "not attempted";
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);

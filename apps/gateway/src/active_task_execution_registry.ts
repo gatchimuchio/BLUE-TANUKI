@@ -9,6 +9,12 @@ export type LocalWorkerStopObservation =
 
 export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime" | "owner_task";
 
+export interface D4RuntimeExecutionBinding {
+  readonly request_id: string;
+  readonly runtime_ref_digest: string;
+  readonly session_ref_digest: string;
+}
+
 export interface ActiveTaskExecutionSnapshot {
   command_id: string;
   started_at_ms: number;
@@ -39,6 +45,7 @@ export interface FinishedTaskExecutionCancellation {
 
 interface ActiveTaskExecution {
   command_id: string;
+  d4_runtime?: D4RuntimeExecutionBinding;
   controller: AbortController;
   started_at_ms: number;
   cancel_requested_at_ms: number | null;
@@ -54,13 +61,20 @@ interface ActiveTaskExecution {
 export class ActiveTaskExecutionRegistry {
   private readonly active = new Map<string, ActiveTaskExecution>();
 
-  register(command_id: string, controller: AbortController, started_at_ms = Date.now()): void {
+  register(
+    command_id: string, controller: AbortController, started_at_ms = Date.now(), d4_runtime?: D4RuntimeExecutionBinding,
+  ): void {
     if (!command_id || command_id.length > 200 || !Number.isSafeInteger(started_at_ms) || started_at_ms <= 0) {
       throw new Error("active_task_execution_identity_invalid");
+    }
+    if (d4_runtime && (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(d4_runtime.request_id) ||
+        !/^[0-9a-f]{64}$/u.test(d4_runtime.runtime_ref_digest) || !/^[0-9a-f]{64}$/u.test(d4_runtime.session_ref_digest))) {
+      throw new Error("active_task_execution_runtime_binding_invalid");
     }
     if (this.active.has(command_id)) throw new Error("active_task_execution_identity_conflict");
     this.active.set(command_id, {
       command_id,
+      ...(d4_runtime ? { d4_runtime: { ...d4_runtime } } : {}),
       controller,
       started_at_ms,
       cancel_requested_at_ms: null,
@@ -70,6 +84,15 @@ export class ActiveTaskExecutionRegistry {
       executor_status: "unknown",
       local_worker_state: "not_observed",
       local_worker_observed_at_ms: 0,
+    });
+  }
+
+  d4RuntimeCommands(binding: D4RuntimeExecutionBinding): string[] {
+    return [...this.active.values()].flatMap((execution) => {
+      const scope = execution.d4_runtime;
+      return scope && !execution.executor_settled && scope.request_id === binding.request_id &&
+        scope.runtime_ref_digest === binding.runtime_ref_digest && scope.session_ref_digest === binding.session_ref_digest
+        ? [execution.command_id] : [];
     });
   }
 

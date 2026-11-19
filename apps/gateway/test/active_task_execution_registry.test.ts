@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 import { ActiveTaskExecutionRegistry } from "../src/active_task_execution_registry.js";
 
 describe("ActiveTaskExecutionRegistry", () => {
+  it("matches only executing commands from the exact D4 receipt and runtime/session scope", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const scope = { request_id: "e5348667-4150-49c6-b011-2b2942090f1a",
+      runtime_ref_digest: "a".repeat(64), session_ref_digest: "b".repeat(64) };
+    const target = new AbortController();
+    const other = new AbortController();
+    registry.register("scoped", target, 100, scope);
+    registry.register("unrelated-session", other, 200, { ...scope, session_ref_digest: "c".repeat(64) });
+    registry.register("internal-unscoped", new AbortController(), 300);
+
+    expect(registry.d4RuntimeCommands(scope)).toEqual(["scoped"]);
+    expect(registry.d4RuntimeCommands({ ...scope, runtime_ref_digest: "d".repeat(64) })).toEqual([]);
+    expect(registry.d4RuntimeCommands({ ...scope, request_id: "748d3a75-eb9d-46c6-8892-e73cc6d15da4" })).toEqual([]);
+    expect(registry.snapshot()[0]).not.toHaveProperty("d4_runtime");
+    registry.markExecutorSettled("scoped", "success");
+    expect(registry.d4RuntimeCommands(scope)).toEqual([]);
+    expect(target.signal.aborted || other.signal.aborted).toBe(false);
+  });
+
   it("retains the authenticated token kind for cancellation settlement evidence", () => {
     const registry = new ActiveTaskExecutionRegistry();
     const controller = new AbortController();

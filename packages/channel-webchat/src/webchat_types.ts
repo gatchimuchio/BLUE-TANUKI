@@ -1871,7 +1871,7 @@ export interface WebChatOptions {
   onD4RuntimeIntentCancellationStatus?: (input: { request_id: string }) => Promise<WebChatD4RuntimeCancellationStatus>;
   /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */
   onD4RuntimeIntentCancellation?: (
-    input: { request_id: string },
+    input: { request_id: string; runtime_ref_digest: string; session_ref_digest: string },
   ) => Promise<WebChatD4RuntimeIntentCancellation | null>;
   /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;

@@ -253,7 +253,8 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { GatewayTelegramUpdateStore } from "./telegram_update_store.js";
-import { ActiveTaskExecutionRegistry, type TaskExecutionCancellationTokenKind } from "./active_task_execution_registry.js";
+import { ActiveTaskExecutionRegistry, type D4RuntimeExecutionBinding,
+  type TaskExecutionCancellationTokenKind } from "./active_task_execution_registry.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import {
   brokerRestorePlanDependencyIsCurrent,
@@ -925,6 +926,18 @@ function validateGoogleDriveOrganizationFeedback(
   const stateDigest = result.document_content_state_digest;
   if (typeof stateDigest !== "string" || !/^[a-f0-9]{64}$/u.test(stateDigest)) return null;
   return { file_id: fileId, text, sha256: digest, bytes };
+}
+
+function d4RuntimeExecutionBinding(
+  command: ExecuteCommand, log: DecisionLog, origin: InboundRequest,
+): D4RuntimeExecutionBinding | undefined {
+  if (!isGatewayInternalD4RuntimeIntentRequest(origin) || origin.id !== log.request_id ||
+      command.upstream_decision.request_id !== origin.id) return undefined;
+  const runtimeRef = origin.metadata?.["blue_tanuki.runtime_ingress.runtime_id_digest"];
+  const sessionRef = origin.metadata?.["blue_tanuki.runtime_ingress.session_id_digest"];
+  if (typeof runtimeRef !== "string" || typeof sessionRef !== "string" ||
+      origin.session_id !== `d4-runtime:${sessionRef}` || origin.metadata?.reply_to !== origin.session_id) return undefined;
+  return { request_id: origin.id, runtime_ref_digest: runtimeRef, session_ref_digest: sessionRef };
 }
 
 export function selectGatewayInboundEphemeralContext(
@@ -2161,7 +2174,7 @@ async function serveWithOwnerLease(
       result = await executeAndEchoCore(cmd, log, origin, finalization, opts, ephemeralContext, executionController,
         () => {
           if (taskExecutionRegistered) return;
-          activeTaskExecutions.register(cmd.id, executionController);
+          activeTaskExecutions.register(cmd.id, executionController, Date.now(), d4RuntimeExecutionBinding(cmd, log, origin));
           taskExecutionRegistered = true;
         });
     } finally {
@@ -3861,7 +3874,8 @@ async function serveWithOwnerLease(
 
     const executionController = new AbortController();
     try {
-      activeTaskExecutions.register(command_id, executionController);
+      activeTaskExecutions.register(command_id, executionController, Date.now(),
+        d4RuntimeExecutionBinding(pending.command, pending.log, pending.origin));
     } catch (error) {
       if (error instanceof Error && error.message === "active_task_execution_identity_conflict") {
         return { executed: false, status: "approval_resolution_in_progress", fresh_request_required: false };
@@ -4798,11 +4812,16 @@ async function serveWithOwnerLease(
                 return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
               }
             },
-            onD4RuntimeIntentCancellation: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeIntentCancellation | null> => {
+            onD4RuntimeIntentCancellation: async (scope: D4RuntimeExecutionBinding): Promise<WebChatD4RuntimeIntentCancellation | null> => {
+              ownerLease.assertActive();
+              const commands = new Set(activeTaskExecutions.d4RuntimeCommands(scope));
               const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
-              const binding = projectD4RuntimeActiveCommand(hds.getRuntimeSnapshot().operation_plans, request_id, activeCommandIds);
-              if (binding.status !== "matched") return null;
-              const cancellation = requestTaskExecutionCancellation(binding.command_id, {
+              const binding = projectD4RuntimeActiveCommand(hds.getRuntimeSnapshot().operation_plans, scope.request_id, activeCommandIds);
+              if (binding.status === "ambiguous") return null;
+              if (binding.status === "matched") commands.add(binding.command_id);
+              const [commandId] = commands;
+              if (commands.size !== 1 || !commandId) return null;
+              const cancellation = requestTaskExecutionCancellation(commandId, {
                 actor: "d4-runtime-adapter-token-holder",
                 token_kind: "d4_runtime",
               });
